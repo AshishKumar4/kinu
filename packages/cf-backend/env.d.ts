@@ -13,6 +13,7 @@ import type { OrchestratorAgent } from "./src/orchestrator.js";
 import type { ExplorationAgent } from "./src/exploration.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
+import type { MonitorDO } from "./src/monitor/monitor-do.js";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
 
 // This file has top-level imports (for the DO class generics below), which
@@ -28,6 +29,8 @@ declare global {
     ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
     /** Per-user DO: profile + agent registry + credentials + defaults. */
     UserDO: DurableObjectNamespace<UserDO>;
+    /** Singleton DO holding synthetic monitoring's open incidents + alert outbox. */
+    MonitorDO: DurableObjectNamespace<MonitorDO>;
     /** Nimbus SDK session DO — built-in lightweight dev environment. */
     NIMBUS_SESSION: DurableObjectNamespace<NimbusSession>;
     /** Sandbox container DO — @cloudflare/sandbox. One per agent.
@@ -73,8 +76,12 @@ declare global {
      *  pointing at this Worker — see docs/EMAIL-INGRESS.md. OPTIONAL: unset
      *  disables the Mission Inbox. */
     EMAIL_DOMAIN?: string;
-    /** Public origin for unauthenticated CLI install/auth endpoints. */
+    /** Public origin for unauthenticated CLI install/auth endpoints. Also the
+     *  origin synthetic monitoring probes. */
     CLI_PUBLIC_ORIGIN?: string;
+    /** Where synthetic-monitoring alerts go. Unset (as in staging) leaves the
+     *  monitor observing and recording, but silent. */
+    OPS_ALERT_EMAIL?: string;
     /** Browser approval origin for CLI auth. In production this should be the
      *  public app origin so approval uses the user's browser session. */
     CLI_APPROVAL_ORIGIN?: string;

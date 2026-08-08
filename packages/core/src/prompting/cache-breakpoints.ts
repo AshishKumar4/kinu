@@ -23,30 +23,63 @@
  * providerMetadata.anthropic.cacheReadInputTokens — already accumulated per
  * step by orchestrator/turn-accumulator.ts (the `cached=` figure in the
  * step_finish activity line).
+ *
+ * How LONG a written prefix is kept is the caller's call ({@link CacheRetention}),
+ * not a constant: an agent that works in bursts minutes apart re-prefills every
+ * turn under the providers' default 5-minute TTL, while an agent that never
+ * idles pays the extended-TTL write premium for nothing.
  */
 import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
 
 /** The AI SDK's provider-options bag (not re-exported by `ai` itself). */
 type ProviderOptions = NonNullable<ModelMessage['providerOptions']>;
 
+/**
+ * How long a provider should keep the prefix this turn writes.
+ *
+ *   none   don't address the provider's cache at all — no breakpoints, no
+ *          cache key. The escape hatch for a turn that must not write a cache
+ *          entry (and not pay a cache-write premium for one read).
+ *   short  the provider's default TTL (Anthropic/OpenRouter 5m, OpenAI
+ *          in-memory). Sends nothing extra, so the request bytes are exactly
+ *          what a caller with no opinion produced.
+ *   long   the extended TTL — Anthropic `ttl: '1h'`, OpenAI
+ *          `prompt_cache_retention: '24h'`. Costs more per cache WRITE and
+ *          pays for itself only when turns are minutes-to-hours apart.
+ */
+export type CacheRetention = 'none' | 'short' | 'long';
+
+export const CACHE_RETENTIONS: readonly CacheRetention[] = ['none', 'short', 'long'];
+
+/** The default every caller gets: cache normally, at the provider's own TTL. */
+export const DEFAULT_CACHE_RETENTION: CacheRetention = 'short';
+
+export function isCacheRetention(value: unknown): value is CacheRetention {
+  return typeof value === 'string' && (CACHE_RETENTIONS as readonly string[]).includes(value);
+}
+
 /** How a provider's prompt cache is addressed. Closed union — every provider
  *  id the registries can resolve maps to exactly one entry; unknown ids are
- *  `none` (providers with no request-level cache concept are a no-op). */
+ *  `none` (providers with no request-level cache concept are a no-op).
+ *
+ *  `ttl` carries the provider's OWN extended-retention wire value and is
+ *  present only for `long` — the short default omits it, so its requests stay
+ *  byte-identical to a caller that never asked. */
 export type PromptCacheStrategy =
   /** No request-level cache concept (workers-ai rides x-session-affinity
    *  headers; claude-cli's binary owns its own context; unknown providers). */
   | { kind: 'none' }
   /** @ai-sdk/anthropic native breakpoints via providerOptions.anthropic. */
-  | { kind: 'anthropic' }
+  | { kind: 'anthropic'; ttl?: '1h' }
   /** @ai-sdk/openai (openai + codex): providerOptions.openai.promptCacheKey —
    *  the SDK's typed param, serialized as `prompt_cache_key`. */
-  | { kind: 'openai-cache-key' }
+  | { kind: 'openai-cache-key'; ttl?: '24h' }
   /** @ai-sdk/openai-compatible endpoint: `prompt_cache_key` spread into the
    *  request body through the provider's own options namespace. `markers`
    *  additionally places Anthropic-style `cache_control` breakpoints through
    *  the SDK's fixed `openaiCompatible` message metadata — set when the
    *  underlying model is a Claude one (OpenRouter passes them through). */
-  | { kind: 'openai-compat'; bodyNamespace: string; markers: boolean };
+  | { kind: 'openai-compat'; bodyNamespace: string; markers: boolean; ttl?: '1h' };
 
 /** Anthropic rejects requests with more than 4 `cache_control` blocks. One is
  *  spent on the tool surface (markLastToolForAnthropicCache), one on the
@@ -54,7 +87,11 @@ export type PromptCacheStrategy =
 export const ANTHROPIC_MAX_BREAKPOINTS = 4;
 const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 2;
 
-const EPHEMERAL = { type: 'ephemeral' } as const;
+/** One `cache_control` block. The TTL is omitted for the short default so the
+ *  wire bytes match a request that never asked about retention. */
+function ephemeral(ttl?: '1h'): { type: 'ephemeral'; ttl?: '1h' } {
+  return ttl ? { type: 'ephemeral', ttl } : { type: 'ephemeral' };
+}
 
 /** Where message-level markers ride for a strategy, or null when the strategy
  *  has no marker concept. `anthropic` is parsed by @ai-sdk/anthropic into
@@ -64,6 +101,11 @@ function markerNamespace(strategy: PromptCacheStrategy): 'anthropic' | 'openaiCo
   if (strategy.kind === 'anthropic') return 'anthropic';
   if (strategy.kind === 'openai-compat' && strategy.markers) return 'openaiCompatible';
   return null;
+}
+
+/** The extended TTL a marker strategy asks for, or undefined at the default. */
+function markerTtl(strategy: PromptCacheStrategy): '1h' | undefined {
+  return strategy.kind === 'anthropic' || strategy.kind === 'openai-compat' ? strategy.ttl : undefined;
 }
 
 /** Whether the strategy places per-message cache markers (and therefore needs
@@ -81,16 +123,31 @@ const ANTHROPIC_MODEL_ID = /claude|anthropic/i;
  * The closed provider-id → cache-strategy map. Provider ids are the registry
  * ids both backends resolve model specs with (core/providers + cf-backend
  * workers-ai/my-gateway/ai-gateway + cli-backend claude-cli).
+ *
+ * `retention: 'none'` resolves to the no-op strategy for EVERY provider — a
+ * turn that opts out writes no breakpoints and routes no cache key, which is
+ * the only way to genuinely not touch the provider's cache.
  */
-export function resolvePromptCacheStrategy(providerId?: string, modelId?: string): PromptCacheStrategy {
+export function resolvePromptCacheStrategy(
+  providerId?: string,
+  modelId?: string,
+  retention: CacheRetention = DEFAULT_CACHE_RETENTION,
+): PromptCacheStrategy {
+  if (retention === 'none') return { kind: 'none' };
+  const long = retention === 'long';
   switch (providerId) {
     case 'anthropic':
-      return { kind: 'anthropic' };
+      return { kind: 'anthropic', ...(long ? { ttl: '1h' as const } : {}) };
     case 'openai':
     case 'codex':
-      return { kind: 'openai-cache-key' };
-    case 'openrouter':
-      return { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: ANTHROPIC_MODEL_ID.test(modelId ?? '') };
+      return { kind: 'openai-cache-key', ...(long ? { ttl: '24h' as const } : {}) };
+    case 'openrouter': {
+      const markers = ANTHROPIC_MODEL_ID.test(modelId ?? '');
+      return {
+        kind: 'openai-compat', bodyNamespace: 'openrouter', markers,
+        ...(long && markers ? { ttl: '1h' as const } : {}),
+      };
+    }
     case 'my-gateway':
     case 'ai-gateway':
       return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
@@ -102,10 +159,10 @@ export function resolvePromptCacheStrategy(providerId?: string, modelId?: string
   }
 }
 
-function markerOptions(ns: 'anthropic' | 'openaiCompatible'): ProviderOptions {
+function markerOptions(ns: 'anthropic' | 'openaiCompatible', ttl?: '1h'): ProviderOptions {
   return ns === 'anthropic'
-    ? { anthropic: { cacheControl: EPHEMERAL } }
-    : { openaiCompatible: { cache_control: EPHEMERAL } };
+    ? { anthropic: { cacheControl: ephemeral(ttl) } }
+    : { openaiCompatible: { cache_control: ephemeral(ttl) } };
 }
 
 /**
@@ -118,7 +175,7 @@ function markerOptions(ns: 'anthropic' | 'openaiCompatible'): ProviderOptions {
 export function cacheableSystem(system: string, strategy: PromptCacheStrategy): string | SystemModelMessage {
   const ns = markerNamespace(strategy);
   if (!ns || system.length === 0) return system;
-  return { role: 'system', content: system, providerOptions: markerOptions(ns) };
+  return { role: 'system', content: system, providerOptions: markerOptions(ns, markerTtl(strategy)) };
 }
 
 /** Replace a message's providerOptions immutably, preserving its role type. */
@@ -185,9 +242,9 @@ function withoutCacheMarker(message: ModelMessage): ModelMessage {
   return withProviderOptions(message, strippedPo);
 }
 
-function mergeMarker(po: ProviderOptions | undefined, ns: 'anthropic' | 'openaiCompatible'): ProviderOptions {
+function mergeMarker(po: ProviderOptions | undefined, ns: 'anthropic' | 'openaiCompatible', ttl?: '1h'): ProviderOptions {
   const merged: ProviderOptions = { ...po };
-  merged[ns] = { ...merged[ns], ...markerOptions(ns)[ns] };
+  merged[ns] = { ...merged[ns], ...markerOptions(ns, ttl)[ns] };
   return merged;
 }
 
@@ -201,14 +258,14 @@ function mergeMarker(po: ProviderOptions | undefined, ns: 'anthropic' | 'openaiC
  *   metadata spread, and tool results only read part metadata), message level
  *   for system/assistant (spread verbatim into the wire message).
  */
-function withCacheMarker(message: ModelMessage, ns: 'anthropic' | 'openaiCompatible'): ModelMessage {
+function withCacheMarker(message: ModelMessage, ns: 'anthropic' | 'openaiCompatible', ttl?: '1h'): ModelMessage {
   if (ns === 'openaiCompatible' && message.role === 'user') {
     const parts = typeof message.content === 'string'
       ? [{ type: 'text' as const, text: message.content }]
       : [...message.content];
     const last = parts[parts.length - 1];
     if (last !== undefined) {
-      parts[parts.length - 1] = { ...last, providerOptions: mergeMarker(last.providerOptions, ns) };
+      parts[parts.length - 1] = { ...last, providerOptions: mergeMarker(last.providerOptions, ns, ttl) };
       return { ...message, content: parts };
     }
   }
@@ -216,11 +273,11 @@ function withCacheMarker(message: ModelMessage, ns: 'anthropic' | 'openaiCompati
     const parts = [...message.content];
     const last = parts[parts.length - 1];
     if (last !== undefined && last.type === 'tool-result') {
-      parts[parts.length - 1] = { ...last, providerOptions: mergeMarker(last.providerOptions, ns) };
+      parts[parts.length - 1] = { ...last, providerOptions: mergeMarker(last.providerOptions, ns, ttl) };
       return { ...message, content: parts };
     }
   }
-  return withProviderOptions(message, mergeMarker(message.providerOptions, ns));
+  return withProviderOptions(message, mergeMarker(message.providerOptions, ns, ttl));
 }
 
 /**
@@ -237,11 +294,12 @@ function withCacheMarker(message: ModelMessage, ns: 'anthropic' | 'openaiCompati
 export function markCacheTail(messages: ReadonlyArray<ModelMessage>, strategy: PromptCacheStrategy): ModelMessage[] {
   const ns = markerNamespace(strategy);
   if (!ns) return [...messages];
+  const ttl = markerTtl(strategy);
   const next = messages.map(withoutCacheMarker);
   let remaining = TAIL_BREAKPOINTS;
   for (let i = next.length - 1; i >= 0 && remaining > 0; i--) {
     if (next[i].role === 'system') continue;
-    next[i] = withCacheMarker(next[i], ns);
+    next[i] = withCacheMarker(next[i], ns, ttl);
     remaining--;
   }
   return next;
@@ -257,7 +315,12 @@ export function promptCacheOptions(strategy: PromptCacheStrategy, sessionKey: st
   if (!sessionKey) return undefined;
   switch (strategy.kind) {
     case 'openai-cache-key':
-      return { openai: { promptCacheKey: sessionKey } };
+      return {
+        openai: {
+          promptCacheKey: sessionKey,
+          ...(strategy.ttl ? { promptCacheRetention: strategy.ttl } : {}),
+        },
+      };
     case 'openai-compat':
       return { [strategy.bodyNamespace]: { prompt_cache_key: sessionKey } };
     case 'anthropic':
@@ -274,6 +337,8 @@ export interface CacheBreakpointInput {
   messages: ReadonlyArray<ModelMessage>;
   /** Stable per-conversation cache key. */
   sessionKey: string;
+  /** How long the provider should keep this turn's prefix. Default `short`. */
+  retention?: CacheRetention;
 }
 
 export interface CacheBreakpointPlan {
@@ -287,7 +352,7 @@ export interface CacheBreakpointPlan {
  *  request-level cache routing. `none` strategies pass everything through
  *  untouched (system stays a plain string). */
 export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpointPlan {
-  const strategy = resolvePromptCacheStrategy(input.providerId, input.modelId);
+  const strategy = resolvePromptCacheStrategy(input.providerId, input.modelId, input.retention);
   return {
     strategy,
     system: cacheableSystem(input.system, strategy),
@@ -304,13 +369,20 @@ export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpo
  * set it unconditionally at tool-build time (the tool set is cached by craft
  * state, not by model). Mutates in place — the caller's tool set is rebuilt
  * only on craft changes.
+ *
+ * `retention` is the agent's, not the model's: the tool set is assembled before
+ * a spec is resolved. `none` leaves the tools unmarked.
  */
-export function markLastToolForAnthropicCache(tools: ToolSet): void {
+export function markLastToolForAnthropicCache(
+  tools: ToolSet,
+  retention: CacheRetention = DEFAULT_CACHE_RETENTION,
+): void {
+  if (retention === 'none') return;
   const keys = Object.keys(tools);
   if (keys.length === 0) return;
   const last = tools[keys[keys.length - 1]] as { providerOptions?: Record<string, unknown> };
   last.providerOptions = {
     ...last.providerOptions,
-    anthropic: { cacheControl: EPHEMERAL },
+    anthropic: { cacheControl: ephemeral(retention === 'long' ? '1h' : undefined) },
   };
 }

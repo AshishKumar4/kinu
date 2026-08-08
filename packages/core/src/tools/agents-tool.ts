@@ -33,9 +33,11 @@ import {
   type AgentsToolAction,
 } from './registry.js';
 import { FORK_STRATEGY_ID } from '../strategy/heads.js';
+import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
 import type { StrategyContext, StrategyRegistry } from '../strategy/types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MergeStrategy } from '../heads/types.js';
+import { nanoid } from '../utils/nanoid.js';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace DO's facet substrate: spawn =
@@ -58,6 +60,40 @@ export interface SubordinateRosterEntry {
   dismissedAt: number | null;
 }
 
+/**
+ * How a handoff reaches a subordinate's model context.
+ *
+ * This is NOT a mode the caller picks — there is one delivery policy (the
+ * subordinate's own drain decides), and this reports which branch it took.
+ *
+ * - `steering_live_turn` — the subordinate was mid-turn, so the event splices
+ *   into the next step of the turn it is already running.
+ * - `starts_now` — the subordinate was idle; the drain turns the event into a
+ *   turn immediately.
+ * - `queued` — admission deduped against work already waiting; it lands with
+ *   that backlog.
+ */
+export type SubordinateDelivery = 'steering_live_turn' | 'starts_now' | 'queued';
+
+/** What the subordinate was doing when the handoff landed. */
+export interface SubordinatePhase {
+  busy: boolean;
+  lastActivityAt: number | null;
+  /** The most recent activity line, or null when it has done nothing yet. */
+  workingOn: string | null;
+}
+
+/**
+ * The sender's half of a handoff. `eventId` is the id the eventual
+ * `subordinate_report` cites, which is what lets a caller correlate an answer
+ * arriving turns later with the thing it asked for.
+ */
+export interface SubordinateHandoff {
+  eventId: string;
+  delivery: SubordinateDelivery;
+  phase: SubordinatePhase;
+}
+
 export interface TeamToolDeps {
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
@@ -74,13 +110,15 @@ export interface TeamToolDeps {
     name: string; displayName: string;
   }>;
   /** Enqueue a task on the subordinate (drained as its next turn). */
-  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<{
-    ok: true; name: string;
-  }>;
+  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<
+    { ok: true; name: string } & SubordinateHandoff
+  >;
   /** Roster row + live snapshot for one subordinate, or the whole roster. */
   status(input: { name?: string }): Promise<unknown>;
   /** Conversational injection into the subordinate's next turn. */
-  message(input: { name: string; content: string }): Promise<{ ok: true; name: string }>;
+  message(input: { name: string; content: string }): Promise<
+    { ok: true; name: string } & SubordinateHandoff
+  >;
   /** Retire a subordinate. Default is ARCHIVE (facet + context kept, no
    *  longer addressed); storage is wiped only on explicit keepHistory=false. */
   dismiss(input: { name: string; keepHistory?: boolean }): Promise<{
@@ -131,6 +169,25 @@ function askTimeoutMs(timeoutSeconds: number | undefined): number {
   return Math.min(ASK_TIMEOUT_MAX_MS, Math.max(ASK_TIMEOUT_MIN_MS, Math.round(timeoutSeconds * 1000)));
 }
 
+/** What the sender is told about a handoff, in the tool's snake_case shape. */
+function renderHandoff(handoff: SubordinateHandoff): {
+  event_id: string;
+  delivery: SubordinateDelivery;
+  subordinate_phase: SubordinatePhase;
+} {
+  return {
+    event_id: handoff.eventId,
+    delivery: handoff.delivery,
+    subordinate_phase: handoff.phase,
+  };
+}
+
+const ASSIGN_NOTES: Record<SubordinateDelivery, string> = {
+  steering_live_turn: 'Assigned. The subordinate is mid-turn, so this steers it at its next step rather than waiting for it to go idle.',
+  starts_now: 'Assigned. The subordinate was idle and starts on it now.',
+  queued: 'Already waiting for the subordinate — it picks this up with the work it has queued.',
+};
+
 // ── Fork (exploration strategy) deps contract ───────────────────────────────
 
 export interface AgentsForkDeps {
@@ -152,10 +209,16 @@ export interface AgentsToolDeps {
   team?: TeamToolDeps;
   /** Cross-workspace peer messaging — workspace-orchestrator only. */
   peers?: PeersToolDeps;
+  /** The actor's mission budget governor. Wired, it makes this the SPAWN seam:
+   *  no helper is launched under an exhausted label, and a fork's own declared
+   *  cap nests under the mission that spawned it. Unwired (or unscoped, the
+   *  default) changes nothing. */
+  budget?: MissionGovernor;
 }
 
 /** Which actions this deps set structurally supports. The single gating rule
- *  shared by the tool schema and the system prompt's Delegation section.
+ *  shared by the tool schema, the system prompt's Delegation section and the
+ *  `agents.*` codemode namespace.
  *  Presence-typed so prompt assembly can ask without building fork deps. */
 export function agentsActionsFor(deps: { fork?: unknown; team?: unknown; peers?: unknown }): AgentsToolAction[] {
   const converse = !!deps.team || !!deps.peers;
@@ -220,6 +283,14 @@ export interface AgentsToolInput {
   budget?: number;
   wall_clock_ms?: number;
   options?: Record<string, unknown>;
+  /** Cumulative spend cap for everything this helper transitively spawns.
+   *  Nests under the caller's mission scope, so an inner cap can only ever be
+   *  tighter than the outer one. Omit for the uncapped default. */
+  budget_usd?: number;
+  budget_tokens?: number;
+  /** Name the sub-ledger. Defaults to a generated label under the caller's
+   *  mission; naming it lets a run keep one budget across several calls. */
+  budget_label?: string;
   // staff / converse
   agent?: string;
   role?: string;
@@ -283,10 +354,31 @@ function readAbortSignal(options: unknown): AbortSignal | undefined {
 
 // ── Fork dispatch (the former think tool, verbatim semantics) ───────────────
 
+/**
+ * The mission scope this fork runs under: the caller's, narrowed to a fresh
+ * child label when the call declared its own cap. Returns null when there is no
+ * governor or no scope at all — the uncapped default, where nothing below this
+ * point does any budget work.
+ */
+function forkMissionScope(
+  budget: MissionGovernor | undefined,
+  input: AgentsToolInput,
+): { governor: MissionGovernor; labels: string[] } | null {
+  if (!budget) return null;
+  const limits = readMissionLimits(input);
+  if (limits) {
+    const label = input.budget_label?.trim() || `fork-${nanoid()}`;
+    budget.declare(label, limits);
+    return { governor: budget, labels: [label] };
+  }
+  return budget.scope.length > 0 ? { governor: budget, labels: [...budget.scope] } : null;
+}
+
 async function runFork(
   deps: AgentsForkDeps,
   input: AgentsToolInput,
   toolOptions: unknown,
+  budget?: MissionGovernor,
 ): Promise<unknown> {
   if (!input.task) return { error: 'fork requires task' };
   const settle = input.settle ?? 'merge';
@@ -319,9 +411,24 @@ async function runFork(
     };
   }
 
+  // The fork's mission scope, and with it the model-call seam for everything
+  // the exploration reaches a model through: branch evaluation, the judge
+  // ensemble, convergence. Metering and enforcement ride the same wrapper, so
+  // an exhausted label stops the search mid-flight rather than after it.
+  const mission = forkMissionScope(budget, input);
+  const rt: AgentRuntime = mission
+    ? {
+        ...deps.rt,
+        llm: mission.governor.govern(deps.rt.llm, mission.labels),
+        ...(deps.rt.judgeModel
+          ? { judgeModel: mission.governor.govern(deps.rt.judgeModel, mission.labels) }
+          : {}),
+      }
+    : deps.rt;
+
   const ctx: StrategyContext = {
     task: input.task,
-    rt: deps.rt,
+    rt,
     model: deps.model,
     signal: readAbortSignal(toolOptions),
     budget: {
@@ -337,12 +444,17 @@ async function runFork(
   };
   try {
     const result = await strat.explore(ctx);
+    // The sub-agents' own spend, reported by the strategy rather than seen at
+    // this seam — the heads runtime counts its heads' tokens, so the fork's
+    // total lands on the ledger (and every ancestor label) exactly once.
+    mission?.governor.debit(result.cost.tokens ?? 0, { labels: mission.labels, spawns: 1 });
     return {
       strategy: result.strategy,
       text: result.best.text,
       score: result.best.score,
       trace: result.trace,
       cost: result.cost,
+      ...(mission ? { mission_budget: mission.governor.snapshot(mission.labels[0]!)[0] } : {}),
     };
   } catch (err) {
     return { error: `Fork (settle=${settle}) failed: ${(err as Error).message}` };
@@ -391,6 +503,22 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
     budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
     wall_clock_ms: { type: 'integer', minimum: 1000, description: 'For action=fork: wall-clock cap in ms.' },
     options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },
+    // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
+    // the exploration's model calls and can therefore enforce it; a subordinate
+    // runs on its own storage, so `staff` is gated at the spawn seam instead of
+    // being handed a cap nothing could hold it to.
+    budget_usd: {
+      type: 'number', minimum: 0,
+      description: 'For action=fork: cumulative USD cap for everything this fork transitively spends — its exploration, its judging, and anything it spawns. Enforced by the host, not by the fork. Omit for no cap.',
+    },
+    budget_tokens: {
+      type: 'integer', minimum: 1,
+      description: 'For action=fork: cumulative token cap, same transitive scope as budget_usd.',
+    },
+    budget_label: {
+      type: 'string', maxLength: 120,
+      description: 'For action=fork: name the sub-ledger so several fork calls share one cumulative budget. Omit for a fresh one per call.',
+    },
   };
 }
 
@@ -431,13 +559,28 @@ function converseProperties(deps: AgentsToolDeps): SchemaProps {
   };
 }
 
-/** Build the `agents` tool for whatever deps this actor wires. At least one
- *  deps group must be present — callers gate on that, not this function. */
-export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
+/**
+ * The one delegation dispatch. Both surfaces that can delegate — the `agents`
+ * tool the model calls directly, and the `agents.*` namespace its codemode
+ * script calls — run this exact function over the exact same deps, so there is
+ * no second spawn/join implementation to drift.
+ *
+ * The codemode caller hands over an object the sandbox built, with none of the
+ * AI SDK's schema validation behind it, so every read of `input` happens inside
+ * the try: a malformed field comes back as an inspectable error rather than
+ * throwing into the model's script.
+ *
+ * `toolOptions` is the AI SDK tool-call options bag; only `abortSignal` is
+ * read (fork cancellation).
+ */
+export async function dispatchAgentsAction(
+  deps: AgentsToolDeps,
+  input: AgentsToolInput,
+  toolOptions?: unknown,
+): Promise<unknown> {
   const actions = agentsActionsFor(deps);
   const team = deps.team;
   const peers = deps.peers;
-
   const isSubordinate = async (name: string): Promise<boolean> => {
     if (!team) return false;
     try {
@@ -446,6 +589,130 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
       return false;
     }
   };
+
+  if (!actions.includes(input.action)) {
+    return { error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}` };
+  }
+  // The spawn seam. Launching a helper is what turns one exhausted run into
+  // many, so the cap is checked before the launch — for every action that
+  // creates or wakes an agent, not just fork. `list`, `dismiss` and `reply`
+  // spend nothing and stay available so a stopped run can still wind itself up.
+  if (input.action === 'fork' || input.action === 'staff' || input.action === 'ask' || input.action === 'send') {
+    const refusal = deps.budget?.guard('spawn');
+    if (refusal) return refusal;
+  }
+  try {
+    const topic = input.topic?.trim() || 'message';
+    if (topic === PEER_REPLY_TOPIC) {
+      return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
+    }
+    switch (input.action) {
+      case 'fork':
+        return await runFork(deps.fork!, input, toolOptions, deps.budget);
+
+      case 'staff': {
+        if ((input.scope ?? 'subordinate') === 'workspace') {
+          if (!peers) return { error: 'staff scope=workspace needs the peer transport, which this actor does not have' };
+          if (!input.mission || !input.message) return { error: 'staff scope=workspace requires mission and message' };
+          return await peers.spawnWorkspace({
+            ...(input.agent ? { name: input.agent } : {}),
+            purpose: input.mission,
+            message: input.message,
+            timeoutMs: askTimeoutMs(input.timeout_seconds),
+          });
+        }
+        if (!team) return { error: 'staffing subordinates is not available on this actor' };
+        if (!input.role || !input.mission) return { error: 'staff requires role and mission' };
+        return await team.spawn({
+          ...(input.agent ? { name: input.agent } : {}),
+          role: input.role,
+          mission: input.mission,
+          ...(input.model ? { model: input.model } : {}),
+        });
+      }
+
+      case 'ask': {
+        if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
+        if (team && await isSubordinate(input.agent)) {
+          const handoff = await team.assign({
+            name: input.agent,
+            task: input.message,
+            ...(input.deliverable ? { deliverable: input.deliverable } : {}),
+            ...(input.deadline_hint ? { deadlineHint: input.deadline_hint } : {}),
+          });
+          return {
+            status: 'working',
+            agent: input.agent,
+            ...renderHandoff(handoff),
+            note: `${ASSIGN_NOTES[handoff.delivery]} The subordinate's report arrives as an event that wakes you, citing ${handoff.eventId}.`,
+          };
+        }
+        if (peers) {
+          return await peers.ask({
+            agent: input.agent, topic, message: input.message,
+            timeoutMs: askTimeoutMs(input.timeout_seconds),
+          });
+        }
+        return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
+      }
+
+      case 'send': {
+        if (!input.agent || !input.message) return { error: 'send requires agent and message' };
+        if (team && await isSubordinate(input.agent)) {
+          const handoff = await team.message({ name: input.agent, content: input.message });
+          // Same delivered/queued vocabulary the peer transport already uses:
+          // delivered = it reached the target's context, queued = it waits
+          // behind work already admitted.
+          return {
+            status: handoff.delivery === 'queued' ? 'queued' : 'delivered',
+            agent: input.agent,
+            ...renderHandoff(handoff),
+          };
+        }
+        if (peers) {
+          return await peers.send({ agent: input.agent, topic, message: input.message });
+        }
+        return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
+      }
+
+      case 'reply':
+        if (!peers) return { error: 'reply needs the peer transport, which this actor does not have' };
+        if (!input.event_id || !input.message) return { error: 'reply requires event_id and message' };
+        return await peers.reply({ eventId: input.event_id, message: input.message });
+
+      case 'list': {
+        if (input.agent && team && await isSubordinate(input.agent)) {
+          return await team.status({ name: input.agent });
+        }
+        const subordinates = team ? await team.list() : undefined;
+        const peerRoster = peers ? await peers.listPeers() : undefined;
+        const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
+        return {
+          ...(subordinates ? { subordinates } : {}),
+          ...(peerRoster ? { peers: peerRoster } : {}),
+          ...(empty ? { note: 'No helper agents yet — create one with action:"staff".' } : {}),
+        };
+      }
+
+      case 'dismiss':
+        if (!team) return { error: 'dismiss applies to subordinates, which this actor does not have' };
+        if (!input.agent) return { error: 'dismiss requires agent' };
+        return await team.dismiss({
+          name: input.agent,
+          keepHistory: input.keep_history ?? true,
+        });
+    }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** Build the `agents` tool for whatever deps this actor wires. At least one
+ *  deps group must be present — callers gate on that, not this function. */
+export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
+  const actions = agentsActionsFor(deps);
+  const team = deps.team;
+  const peers = deps.peers;
 
   return tool({
     description: renderAgentsToolDescription(deps),
@@ -469,106 +736,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
         ...converseProperties(deps),
       },
     }),
-    execute: async (input: AgentsToolInput, toolOptions?: unknown) => {
-      if (!actions.includes(input.action)) {
-        return { error: `action "${input.action}" is not available here. Available: ${actions.join(', ')}` };
-      }
-      const topic = input.topic?.trim() || 'message';
-      if (topic === PEER_REPLY_TOPIC) {
-        return { error: `topic "${PEER_REPLY_TOPIC}" is reserved for transport reply envelopes` };
-      }
-      try {
-        switch (input.action) {
-          case 'fork':
-            return await runFork(deps.fork!, input, toolOptions);
-
-          case 'staff': {
-            if ((input.scope ?? 'subordinate') === 'workspace') {
-              if (!peers) return { error: 'staff scope=workspace needs the peer transport, which this actor does not have' };
-              if (!input.mission || !input.message) return { error: 'staff scope=workspace requires mission and message' };
-              return await peers.spawnWorkspace({
-                ...(input.agent ? { name: input.agent } : {}),
-                purpose: input.mission,
-                message: input.message,
-                timeoutMs: askTimeoutMs(input.timeout_seconds),
-              });
-            }
-            if (!team) return { error: 'staffing subordinates is not available on this actor' };
-            if (!input.role || !input.mission) return { error: 'staff requires role and mission' };
-            return await team.spawn({
-              ...(input.agent ? { name: input.agent } : {}),
-              role: input.role,
-              mission: input.mission,
-              ...(input.model ? { model: input.model } : {}),
-            });
-          }
-
-          case 'ask': {
-            if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
-            if (team && await isSubordinate(input.agent)) {
-              await team.assign({
-                name: input.agent,
-                task: input.message,
-                ...(input.deliverable ? { deliverable: input.deliverable } : {}),
-                ...(input.deadline_hint ? { deadlineHint: input.deadline_hint } : {}),
-              });
-              return {
-                status: 'working',
-                agent: input.agent,
-                note: 'Assigned. The subordinate\'s report arrives as an event that wakes you.',
-              };
-            }
-            if (peers) {
-              return await peers.ask({
-                agent: input.agent, topic, message: input.message,
-                timeoutMs: askTimeoutMs(input.timeout_seconds),
-              });
-            }
-            return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
-          }
-
-          case 'send': {
-            if (!input.agent || !input.message) return { error: 'send requires agent and message' };
-            if (team && await isSubordinate(input.agent)) {
-              await team.message({ name: input.agent, content: input.message });
-              return { status: 'delivered', agent: input.agent };
-            }
-            if (peers) {
-              return await peers.send({ agent: input.agent, topic, message: input.message });
-            }
-            return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
-          }
-
-          case 'reply':
-            if (!peers) return { error: 'reply needs the peer transport, which this actor does not have' };
-            if (!input.event_id || !input.message) return { error: 'reply requires event_id and message' };
-            return await peers.reply({ eventId: input.event_id, message: input.message });
-
-          case 'list': {
-            if (input.agent && team && await isSubordinate(input.agent)) {
-              return await team.status({ name: input.agent });
-            }
-            const subordinates = team ? await team.list() : undefined;
-            const peerRoster = peers ? await peers.listPeers() : undefined;
-            const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
-            return {
-              ...(subordinates ? { subordinates } : {}),
-              ...(peerRoster ? { peers: peerRoster } : {}),
-              ...(empty ? { note: 'No helper agents yet — create one with action:"staff".' } : {}),
-            };
-          }
-
-          case 'dismiss':
-            if (!team) return { error: 'dismiss applies to subordinates, which this actor does not have' };
-            if (!input.agent) return { error: 'dismiss requires agent' };
-            return await team.dismiss({
-              name: input.agent,
-              keepHistory: input.keep_history ?? true,
-            });
-        }
-      } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
-      }
-    },
+    execute: async (input: AgentsToolInput, toolOptions?: unknown) =>
+      dispatchAgentsAction(deps, input, toolOptions),
   });
 }

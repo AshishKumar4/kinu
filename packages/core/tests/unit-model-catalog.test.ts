@@ -65,6 +65,39 @@ describe('provider model catalogs', () => {
     }]);
   });
 
+  test('models.dev per-model prices reach ModelInfo, and half-priced entries do not', async () => {
+    const provider = createOpenAIProvider();
+    const fetchFn = async () => Response.json({
+      openai: {
+        models: {
+          priced: {
+            id: 'priced', name: 'Priced', tool_call: true, limit: { context: 1000 },
+            cost: { input: 5, output: 30, cache_read: 1.25 },
+          },
+          free: {
+            id: 'free', name: 'Free', tool_call: true, limit: { context: 1000 },
+            cost: { input: 0, output: 0 },
+          },
+          'output-only': {
+            id: 'output-only', name: 'Half', tool_call: true, limit: { context: 1000 },
+            cost: { output: 30 },
+          },
+        },
+      },
+    });
+
+    const models = await provider.listModels(deps({
+      [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } },
+    }, fetchFn as unknown as typeof fetch));
+    const byId = new Map(models.map((m) => [m.id, m]));
+
+    expect(byId.get('priced')?.cost).toEqual({ input: 5, output: 30, cacheRead: 1.25 });
+    // Free is a PRICE, not a missing one.
+    expect(byId.get('free')?.cost).toEqual({ input: 0, output: 0 });
+    // One side of a token priced is no price at all — better to blend and say so.
+    expect(byId.get('output-only')?.cost).toBeUndefined();
+  });
+
   test('Codex model menu uses the ChatGPT Codex model endpoint', async () => {
     const provider = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' });
     const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {

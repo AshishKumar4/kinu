@@ -37,6 +37,7 @@ import { handleAuthRequest } from "./auth/routes.js";
 import { handleLandingRequest } from "./landing-route.js";
 import { handleHubRequest } from "./events/routes.js";
 import { handleInboundEmail } from "./email/handler.js";
+import { MONITOR_SINGLETON } from "./monitor/monitor-do.js";
 import { handleNimbusPreviewRequest } from "./nimbus-route.js";
 import {
   authenticateRequest, AuthError, isPublicPath,
@@ -64,6 +65,8 @@ export { ExplorationAgent } from "./exploration.js";
 export { SubordinateAgent } from "./subordinate-agent.js";
 export { ProteusSandbox } from "./proteus-sandbox.js";
 export { UserDO } from "./user/user-do.js";
+// Synthetic monitoring's durable state: open incidents + the alert outbox.
+export { MonitorDO } from "./monitor/monitor-do.js";
 export {
   NimbusSession,
   SupervisorRPC,
@@ -196,7 +199,7 @@ export default {
     if (cliResp) return cliResp;
 
     // 6. Public — build-info health.
-    const healthResp = handleHealthRequest(request);
+    const healthResp = await handleHealthRequest(request, env);
     if (healthResp) return healthResp;
 
     // 6b. MCP server — its own auth (CLI bearer token for external MCP
@@ -287,6 +290,25 @@ export default {
   // live in email/handler.ts + the agent's acceptEmailDelivery RPC.
   async email(message: ForwardableEmailMessage, env: Env) {
     await handleInboundEmail(message, env);
+  },
+
+  // Synthetic monitoring — the cron trigger in wrangler.jsonc. Probes the
+  // public surface (health/build stamp, the CLI download checksum pair, the
+  // sign-in page) and emails the owner when something breaks, so an outage is
+  // self-reported rather than user-reported. All state and alert dedupe live
+  // in MonitorDO; a failed run must not take the schedule down with it.
+  async scheduled(_event: ScheduledController, env: Env, ctx: ExecutionContext) {
+    ctx.waitUntil((async () => {
+      try {
+        const monitor = env.MonitorDO.get(env.MonitorDO.idFromName(MONITOR_SINGLETON));
+        const result = await monitor.check();
+        if (result.failing.length > 0 || result.recovered.length > 0) {
+          console.warn('[proteus-monitor]', JSON.stringify(result));
+        }
+      } catch (e) {
+        console.error('[proteus-monitor] check failed:', e instanceof Error ? e.message : e);
+      }
+    })());
   },
 } satisfies ExportedHandler<Env>;
 

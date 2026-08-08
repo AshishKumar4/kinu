@@ -46,6 +46,8 @@ import {
   migrateWorkspaceStorage,
   // Fork feature
   forkWorkspaceStorage, readForkLineage,
+  // Workspace archive — the owner's portable copy of this workspace's storage
+  readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, initHeadsTables, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
@@ -698,7 +700,7 @@ export class OrchestratorAgent extends ActorAgent {
         },
         async assign(name, input) {
           const stub = await orchestrator.subAgent(SubordinateAgent, name);
-          await stub.enqueueSubordinateTask({
+          return stub.enqueueSubordinateTask({
             kind: 'task',
             body: input.body,
             ...(input.deliverable ? { deliverable: input.deliverable } : {}),
@@ -710,7 +712,7 @@ export class OrchestratorAgent extends ActorAgent {
           return (await orchestrator.subAgent(SubordinateAgent, name)).getSubordinateStatus();
         },
         async message(name, content) {
-          await (await orchestrator.subAgent(SubordinateAgent, name))
+          return (await orchestrator.subAgent(SubordinateAgent, name))
             .enqueueSubordinateTask({ kind: 'message', body: content });
         },
         async dismiss(name, keepHistory) {
@@ -1475,7 +1477,7 @@ export class OrchestratorAgent extends ActorAgent {
       const due = this.triggerRegistry.due(now);
       for (const trigger of due) {
         const spec = trigger.spec as {
-          label?: string; payload?: unknown; cron?: string;
+          label?: string; payload?: unknown; cron?: string; mission_label?: string;
         };
         const scheduled_fire_at = trigger.next_fire_at ?? now;
 
@@ -1488,6 +1490,7 @@ export class OrchestratorAgent extends ActorAgent {
               scheduled_fire_at,
               label: spec.label,
               user_payload: spec.payload,
+              mission_label: spec.mission_label,
             },
             trigger_creator_trust: trigger.creator_trust,
           },
@@ -2703,6 +2706,29 @@ export class OrchestratorAgent extends ActorAgent {
     try { return this.headJournal.listRuns(limit); } catch { return []; }
   }
 
+  /**
+   * One page of this workspace's portable archive — the owner's own copy of
+   * everything the workspace durably holds, in the same format the local
+   * backend writes and `proteus import` reads.
+   *
+   * Paged because a workspace's SQLite (transcripts, run events, VFS blobs) has
+   * no bounded size, and neither a DO response nor an isolate's memory should
+   * have to hold all of it: the caller walks `next` until it is null and
+   * appends each page's lines to a file. Owner-scoped by the RPC access table
+   * ('interactive' — a scoped CI token is denied on every transport) on top of
+   * the ownership check every workspace route already makes. Workspace
+   * capability tiers do not gate it: this reads the workspace's own storage
+   * for the owner who asked, and reaches nothing in the wider account.
+   */
+  @callable()
+  async exportWorkspaceArchive(cursor?: unknown): Promise<ArchivePage> {
+    return readWorkspaceArchivePage(this.ctx.storage.sql, {
+      workspace: this.name,
+      source: 'cloud',
+      cursor: parseArchiveCursor(cursor),
+    });
+  }
+
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
    *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and no
    *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
@@ -3565,6 +3591,8 @@ export class OrchestratorAgent extends ActorAgent {
     label?: string;
     payload?: Record<string, unknown>;
     trust?: 'authenticated' | 'owner';
+    /** The mission budget every turn this schedule wakes spends against. */
+    missionLabel?: string;
 	  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
 	    const now = Date.now();
 	    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
@@ -3573,7 +3601,7 @@ export class OrchestratorAgent extends ActorAgent {
 	    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
 	    const id = this.triggerRegistry.register({
 	      kind,
-	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
       creator_trust: opts.trust ?? 'authenticated',
       next_fire_at: nextFireAt ?? undefined,
     }, now);
@@ -4018,6 +4046,17 @@ export class OrchestratorAgent extends ActorAgent {
 
 // ── Module-scope helpers (referenced by OrchestratorAgent) ────────
 
+/** An export cursor arrives from a client, so it is claimed, not trusted:
+ *  anything that is not the shape the previous page returned starts a fresh
+ *  archive rather than binding junk into the row query. */
+function parseArchiveCursor(value: unknown): ArchiveCursor | null {
+  if (value === null || typeof value !== 'object') return null;
+  const { table, after, rows } = value as Record<string, unknown>;
+  if (typeof table !== 'string' || !table) return null;
+  if (after !== null && !Number.isSafeInteger(after)) return null;
+  if (!Number.isSafeInteger(rows) || (rows as number) < 0) return null;
+  return { table, after: after as number | null, rows: rows as number };
+}
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;

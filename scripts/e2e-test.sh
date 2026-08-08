@@ -90,31 +90,44 @@ echo ""
 # ═══════════════════════════════════════════════════════════════════
 echo -e "${BOLD}§2. Architecture Verification${NC}"
 
-# Execution layer module completeness
-EXEC_FILES="packages/core/src/execution/types.ts packages/core/src/execution/router.ts packages/core/src/execution/inline.ts packages/core/src/execution/nimbus.ts packages/core/src/execution/sandbox.ts packages/core/src/execution/ssh.ts packages/core/src/execution/index.ts"
-ALL_EXEC=true
-for f in $EXEC_FILES; do
-  [ -f "$f" ] || ALL_EXEC=false
+# Execution layer completeness: the barrel must resolve (every module it
+# re-exports still exists) and must still expose the router plus a factory for
+# each ExecutorKind — workspace/nimbus/sandbox/laptop.
+EXEC_DIR="packages/core/src/execution"
+EXEC_BARREL="$EXEC_DIR/index.ts"
+EXEC_MISSING=""
+for mod in $(grep -oE "from '\./[a-z0-9-]+\.js'" "$EXEC_BARREL" 2>/dev/null | sed "s|from './||; s|\.js'||" | sort -u); do
+  [ -f "$EXEC_DIR/$mod.ts" ] || EXEC_MISSING="$EXEC_MISSING $mod"
 done
-if $ALL_EXEC; then
-  RESULTS+=("${GREEN}✅ PASS${NC}: Execution layer module complete (7 files)")
+EXEC_EXPORTS="DefaultExecutionRouter createInlineExecutor createNimbusExecutor createSandboxExecutor createDeviceTunnelExecutor"
+EXEC_UNEXPORTED=""
+for sym in $EXEC_EXPORTS; do
+  grep -qE "\b$sym\b" "$EXEC_BARREL" 2>/dev/null || EXEC_UNEXPORTED="$EXEC_UNEXPORTED $sym"
+done
+if [ -f "$EXEC_BARREL" ] && [ -z "$EXEC_MISSING" ] && [ -z "$EXEC_UNEXPORTED" ]; then
+  RESULTS+=("${GREEN}✅ PASS${NC}: Execution layer barrel resolves and exports the router + all 4 executor factories")
   ((PASS++))
 else
-  RESULTS+=("${RED}❌ FAIL${NC}: Execution layer missing files")
+  RESULTS+=("${RED}❌ FAIL${NC}: Execution layer — missing modules:${EXEC_MISSING:- none} unexported:${EXEC_UNEXPORTED:- none}")
   ((FAIL++))
 fi
 
-# Canonical built-in architecture (tool construction lives in @proteus/core/tools/builtins)
-REGISTRY_TOOLS=$(grep -cE "'(execute_tools|run|skills|think|memory|fact|product_change)'" packages/core/src/tools/registry.ts 2>/dev/null; echo 0 | head -1)
-REGISTRY_TOOLS=$(printf '%s' "$REGISTRY_TOOLS" | head -n 1)
-CF_USES_FACTORY=$(grep -cE 'buildBuiltinTools\(\{' packages/cf-backend/src/orchestrator.ts 2>/dev/null || printf 0)
-CLI_USES_FACTORY=$(grep -cE 'buildBuiltinTools\(\{' packages/cli-backend/src/local-session.ts 2>/dev/null || printf 0)
-LEGACY_FACTORY=$(cat packages/cf-backend/src/orchestrator.ts packages/cli-backend/src/local-session.ts packages/cli/src/chat-loop.ts packages/cli/src/tui/chat-app.tsx 2>/dev/null | grep -cE 'buildAgentTools')
-if [ "${REGISTRY_TOOLS:-0}" -ge 7 ] 2>/dev/null && [ "${CF_USES_FACTORY:-0}" -ge 1 ] 2>/dev/null && [ "${CLI_USES_FACTORY:-0}" -ge 1 ] 2>/dev/null && [ "${LEGACY_FACTORY:-0}" -eq 0 ] 2>/dev/null; then
-  RESULTS+=("${GREEN}✅ PASS${NC}: Built-in tool architecture (registry + CF + CLI backend consume buildBuiltinTools)")
+# Canonical built-in architecture: one registry declares the built-in tool
+# surface, and every backend builds its tools from @proteus/core's
+# buildBuiltinTools — no backend-local tool factory, no legacy buildAgentTools.
+REGISTRY_PROBE="import { BUILTIN_TOOLS } from './packages/core/src/tools/registry.ts'; console.log([...BUILTIN_TOOLS].sort().join(','))"
+EXPECTED_TOOLS='agents,execute_tools,experience,fact,memory,product_change,report,run,skills,web_fetch,web_search'
+REGISTRY_TOOLS=$(bun -e "$REGISTRY_PROBE" 2>/dev/null | tail -n 1)
+CF_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cf-backend/src/actor-agent.ts packages/cf-backend/src/heads/head-tools.ts 2>/dev/null | wc -l)
+CLI_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cli-backend/src/local-session.ts 2>/dev/null | wc -l)
+LEGACY_FACTORY=$(grep -rlE 'buildAgentTools\(' packages/*/src 2>/dev/null | wc -l)
+if [ "$REGISTRY_TOOLS" = "$EXPECTED_TOOLS" ] && [ "$CF_USES_FACTORY" -eq 2 ] && [ "$CLI_USES_FACTORY" -eq 1 ] && [ "$LEGACY_FACTORY" -eq 0 ]; then
+  RESULTS+=("${GREEN}✅ PASS${NC}: Built-in tool architecture (11-tool registry; CF actor + heads and CLI backend consume buildBuiltinTools)")
   ((PASS++))
 else
-  RESULTS+=("${RED}❌ FAIL${NC}: Tool architecture — registry=$REGISTRY_TOOLS cf=$CF_USES_FACTORY cli=$CLI_USES_FACTORY legacy=$LEGACY_FACTORY")
+  RESULTS+=("${RED}❌ FAIL${NC}: Tool architecture — registry=${REGISTRY_TOOLS:-<unreadable>} cf=$CF_USES_FACTORY/2 cli=$CLI_USES_FACTORY/1 legacy=$LEGACY_FACTORY")
+  RESULTS+=("         expected registry: $EXPECTED_TOOLS")
+  RESULTS+=("         registry probe:    bun -e \"\$REGISTRY_PROBE\"")
   ((FAIL++))
 fi
 
@@ -127,14 +140,11 @@ else
   ((SKIP++))
 fi
 
-# TSLean checksums
-if [ -f "lean/generated/.ts-checksums" ]; then
-  RESULTS+=("${GREEN}✅ PASS${NC}: TSLean checksum manifest exists")
-  ((PASS++))
-else
-  RESULTS+=("${RED}❌ FAIL${NC}: TSLean checksum manifest missing")
-  ((FAIL++))
-fi
+# Lean↔TypeScript traceability manifest. lean/traceability.yaml replaced the
+# old lean/generated/.ts-checksums drift manifest; --manifest-only runs every
+# toolchain-free check (well-formedness, tsRefs resolve, claimed theorems exist
+# as source declarations) without needing lake.
+check_output "Lean↔TS traceability manifest (lean/traceability.yaml)" node lean/check-traceability.mjs --manifest-only
 
 # Lean proof files
 LEAN_COUNT=$(find lean/Proteus -name "*.lean" 2>/dev/null | wc -l)

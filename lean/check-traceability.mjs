@@ -16,10 +16,23 @@ const allowedStatuses = new Set([
   "specified-not-modeled",
 ]);
 const qualifiedNamePattern = /^Proteus(?:\.[A-Za-z_][A-Za-z0-9_']*)+$/;
+// --manifest-only stops before the kernel axiom audit, which needs a built Lean
+// toolchain. Everything up to that point is pure file reading: the manifest is
+// well-formed, every tsRef still resolves to a real line of TypeScript, and
+// every claimed theorem/axiom exists as an exact source declaration. That is
+// the drift check a deploy gate can afford; scripts/verify-lean.sh runs the
+// full audit.
+const manifestOnly = process.argv.includes("--manifest-only");
 const failures = [];
 
 function fail(message) {
   failures.push(message);
+}
+
+function exitOnFailures() {
+  if (failures.length === 0) return;
+  for (const failure of failures) console.error(`✗ ${failure}`);
+  process.exit(1);
 }
 
 function parseTraceability(source) {
@@ -352,6 +365,15 @@ for (const name of declarations.axioms) {
   if (!axiomOwners.has(name)) fail(`source axiom is not enrolled as a trusted model assumption: ${name}`);
 }
 
+if (manifestOnly) {
+  exitOnFailures();
+  console.log(
+    `check-traceability: manifest OK — ${requirements.size} requirements, ` +
+    `${theoremOwners.size} claimed theorems (kernel axiom audit skipped: --manifest-only)`,
+  );
+  process.exit(0);
+}
+
 const build = spawnSync("lake", ["build", "Proteus.Axioms"], {
   cwd: leanRoot,
   encoding: "utf8",
@@ -422,10 +444,7 @@ for (const name of expectedReports.values()) {
   if (!reported.has(name)) fail(`#print axioms command produced no matching audit record: ${name}`);
 }
 
-if (failures.length > 0) {
-  for (const failure of failures) console.error(`✗ ${failure}`);
-  process.exit(1);
-}
+exitOnFailures();
 
 const statusCounts = new Map();
 for (const requirement of requirements.values()) {

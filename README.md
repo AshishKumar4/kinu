@@ -110,6 +110,17 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 ## Documentation
 
+**Using it**
+
+| Document | Description |
+|----------|-------------|
+| [Quick start](QUICKSTART.md) | Install, sign in, first workspace — the two-minute version |
+| [User guide](docs/USER-GUIDE.md) | The path from install to daily use: talking to a workspace, giving it your machine, triggers, backup, troubleshooting |
+| [CLI reference](docs/CLI.md) | Every command and flag, generated from the command registry |
+| [Configuration](docs/CONFIG.md) | `~/.proteus/config.json` fields and environment variables |
+
+**How it works**
+
 | Document | Description |
 |----------|-------------|
 | [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (mounts, identity, sessions), agents = actors inside it |
@@ -122,6 +133,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | [Deployment](docs/DEPLOYMENT.md) | Local dev, Cloudflare deploy, AI Gateway setup, secrets |
 | [Formal Spec](docs/FORMAL-SPEC.md) | Lean 4 abstract models, assumptions, traceability, and CI gates |
 | [Bench](docs/BENCH.md) | Machine-scored harness for whether self-evolution helps: sealed split, paired stats, rejection by default |
+| [Changelog](CHANGELOG.md) | What changed in each version, and the release checklist every user-visible change runs |
 
 ## Packages
 

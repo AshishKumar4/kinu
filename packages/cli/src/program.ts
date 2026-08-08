@@ -7,6 +7,7 @@
 
 import { Command, Option } from 'commander';
 import { createCommand } from './commands/create.js';
+import { acpCommand } from './commands/acp.js';
 import { chatCommand } from './commands/chat.js';
 import { execCommand, runCommand } from './commands/run.js';
 import { authCommand, logoutCommand, whoamiCommand } from './commands/auth.js';
@@ -39,7 +40,7 @@ import { labelCommand } from './commands/label.js';
 import { exportCommand, importCommand } from './commands/export-import.js';
 import { tokensCommand } from './commands/tokens.js';
 import { workspaceDeleteCommand } from './commands/workspace.js';
-import { printError, VERSION } from './display.js';
+import { printFailure, VERSION } from './display.js';
 
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */
@@ -176,15 +177,15 @@ export function buildProgram(): Command {
   program
     .command('export <name>')
     .helpGroup(WORKSPACES)
-    .description('Export workspace database')
+    .description('Back up a workspace — local or cloud — to a portable archive')
     .option('-o, --output <file>', 'Output file path')
     .action(wrapAction(exportCommand));
 
   program
     .command('import <file>')
     .helpGroup(WORKSPACES)
-    .description('Import workspace database')
-    .option('-n, --name <name>', 'Workspace name (default: derived from filename)')
+    .description('Restore a workspace archive into a local workspace')
+    .option('-n, --name <name>', 'Workspace name (default: the name recorded in the archive)')
     .action(wrapAction(importCommand));
 
   // ── Running ────────────────────────────────────────────────────
@@ -217,6 +218,15 @@ export function buildProgram(): Command {
       .option('--session-dir <dir>', 'Override CLI session storage directory')
       .option('--no-session', 'Do not record this CLI chat'),
   ).action(wrapAction(chatCommand));
+
+  llmOpts(
+    program
+      .command('acp <name>')
+      .helpGroup(RUNNING)
+      .description('Serve a workspace over the Agent Client Protocol on stdio (Zed, JetBrains, neovim)')
+      .option('--no-auto-evolve', 'Run without turn/session auto-evolution (local workspaces)')
+      .option('--session-dir <dir>', 'Override CLI session storage directory'),
+  ).action(wrapAction(acpCommand));
 
   llmOpts(
     program
@@ -383,13 +393,17 @@ export function buildProgram(): Command {
     .action(wrapAction(alignmentCommand));
 
   program
-    .command('label [action] <name> [file]')
+    .command('label [action] [name] [file]')
     .helpGroup(INSPECT)
-    .description('Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the classifier')
-    .option('--out <file>', 'Where to write the labeling file (export)')
+    .description('Hand-label turn outcomes (export | ingest | ensemble | report) to measure and correct the ' +
+      'classifier; mine | score for the free behavioural corpus')
+    .option('--out <file>', 'Where to write the labeling file (export) or the corpus report (mine, score)')
     .option('--size <n>', 'Turns to draw (export)')
     .option('--labeler <name>', 'Who is labeling (ingest)')
-    .option('--models <a,b>', 'Judges to run, comma-separated (ensemble; default: one per connected vendor)')
+    .option('--models <a,b>', 'Judges to run, comma-separated (ensemble, score; default: one per connected vendor)')
+    .option('--root <dir>', 'Claude Code transcript root (mine, score; default: ~/.claude/projects)')
+    .option('--projects <a,b>', 'Only projects whose directory name contains one of these (mine, score)')
+    .option('--limit <n>', 'Labeled turns to put to the raters (score; default: 25)')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(labelCommand));
 
@@ -450,8 +464,8 @@ export function buildProgram(): Command {
 /** Wrap async actions with consistent error handling. */
 function wrapAction(fn: (...args: any[]) => Promise<void>) {
   return (...args: any[]) => {
-    fn(...args).catch((err: Error) => {
-      printError(err.message);
+    fn(...args).catch((err: unknown) => {
+      printFailure(err);
       process.exit(1);
     });
   };

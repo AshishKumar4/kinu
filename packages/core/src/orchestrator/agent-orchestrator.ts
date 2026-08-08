@@ -15,6 +15,7 @@ import type { EventLog } from '../events/hub/log.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
 import type { CompletedTurn } from '../evolution/types.js';
+import { MISSION_LABELS_METADATA_KEY, type MissionGovernor } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
 
 export interface AgentOrchestratorDeps {
@@ -23,6 +24,9 @@ export interface AgentOrchestratorDeps {
   eventLog: EventLog;
   /** Per-turn accounting side-effects (activity log, durable run-event recorder). */
   sinks?: TurnSinks;
+  /** The actor's mission budget governor. Absent = this backend wires no
+   *  governor at all; present-but-unscoped is the normal uncapped turn. */
+  budget?: MissionGovernor;
   /** Turns between session-level reflections (default 5). */
   sessionReflectionInterval?: number;
 }
@@ -39,7 +43,7 @@ export class AgentOrchestrator {
   private readonly inFlight = new Set<Promise<void>>();
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
-    this.acc = new TurnAccumulator(deps.sinks);
+    this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.reflectionInterval = deps.sessionReflectionInterval ?? 5;
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
@@ -59,9 +63,12 @@ export class AgentOrchestrator {
     return this.window.size();
   }
 
-  /** Reset per-turn accounting at the start of a turn. */
-  beginTurn(now: number): void {
+  /** Reset per-turn accounting at the start of a turn and bind its mission
+   *  scope — the labels the turn's model calls and spawns debit. Omitted (the
+   *  chat path and every unbudgeted wake) leaves the turn uncapped. */
+  beginTurn(now: number, missionLabels: readonly string[] = []): void {
     this.acc.reset(now);
+    this.deps.budget?.activate(missionLabels);
   }
 
   /**
@@ -196,7 +203,13 @@ export class AgentOrchestrator {
       // events it consumed (e.g. email_thread → outbound email reply).
       const result = await this.deps.host.enqueueTurn({
         text: batch.text,
-        metadata: { proteusEvent: 'event_drain', drainTurnId: turnId },
+        metadata: {
+          proteusEvent: 'event_drain',
+          drainTurnId: turnId,
+          // The mission scope the woken turn spends under — the link between a
+          // schedule that declared a budget and the ledger its turn debits.
+          ...(batch.missions.length > 0 ? { [MISSION_LABELS_METADATA_KEY]: batch.missions } : {}),
+        },
       });
       if (result.status === 'skipped') {
         console.warn('[proteus] drainPendingEvents (turn) skipped; returning events to pending');

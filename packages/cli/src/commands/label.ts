@@ -18,23 +18,38 @@
  * whether it may stand in for the owner next time. It refuses to run before
  * there is anything to score it against — an unmeasured stand-in would be the
  * same unmeasured judge the calibration flow exists to eliminate.
+ *
+ * And, off to one side, a free second opinion on the same raters:
+ *
+ *   proteus label mine                    # weak-label the owner's CC history
+ *   proteus label score <agent>           # run both raters over it
+ *
+ * which mines the owner's own Claude Code transcripts for turns their BEHAVIOUR
+ * already labeled — interrupts, refused tools, re-pasted requests — and scores
+ * the same classifier and panel against those. It complements the flow above
+ * and cannot replace it: those turns are off-distribution and selected rather
+ * than sampled, so they license no corrected rate. See
+ * evolution/behavior-labels.ts.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
 import {
-  DEFAULT_LABEL_BUDGET, describeEnsembleGap, parseLabelingFile, renderCalibrationReport,
-  renderEnsembleReport, renderLabelingFile,
-  type CalibrationReport, type EnsembleReport, type EnsembleRunResult,
+  DEFAULT_LABEL_BUDGET, corpusStats, describeEnsembleGap, parseLabelingFile,
+  renderCalibrationReport, renderCorpusReport, renderEnsembleReport, renderLabelingFile,
+  weakLabel,
+  type CalibrationReport, type CorpusEvalReport, type EnsembleReport, type EnsembleRunResult,
   type LabelIngestResult, type LabelingItem,
 } from '@proteus/core';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
+import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript.js';
 import { requireAuthConfig } from '../config.js';
 import { callAgentRpc } from '../cloud-api.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import {
-  getLocalCalibration, getLocalEnsemble, recordLocalOutcomeLabels, runLocalOutcomeEnsemble,
-  sampleLocalLabeling,
+  getLocalCalibration, getLocalEnsemble, recordLocalOutcomeLabels, runLocalCorpusEval,
+  runLocalOutcomeEnsemble, sampleLocalLabeling,
 } from '../local-inspection.js';
 
 interface LabelOpts {
@@ -43,9 +58,12 @@ interface LabelOpts {
   labeler?: string;
   models?: string;
   json?: boolean;
+  root?: string;
+  projects?: string;
+  limit?: string;
 }
 
-const USAGE = 'Usage: proteus label <export|ingest|ensemble|report> <agent> [file]';
+const USAGE = 'Usage: proteus label <export|ingest|ensemble|report|mine|score> [agent] [file]';
 
 export async function labelCommand(
   action: string | undefined,
@@ -53,6 +71,9 @@ export async function labelCommand(
   file: string | undefined,
   opts: LabelOpts = {},
 ): Promise<void> {
+  // `mine` reads the owner's own transcripts and no agent's ledger, so it is
+  // the one action that names no agent.
+  if (action === 'mine') return mineCorpus(opts);
   if (!name) throw new Error(USAGE);
   const target = resolveAgentTarget(name);
   switch (action) {
@@ -60,8 +81,11 @@ export async function labelCommand(
     case 'ingest': return ingestLabels(target, file, opts);
     case 'ensemble': return ensembleLabels(target, opts);
     case 'report': return reportLabels(target, opts);
+    case 'score': return scoreCorpus(target, opts);
     default:
-      throw new Error(`Unknown action "${action ?? ''}" — use export, ingest, ensemble, or report.`);
+      throw new Error(
+        `Unknown action "${action ?? ''}" — use export, ingest, ensemble, report, mine, or score.`,
+      );
   }
 }
 
@@ -181,6 +205,124 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
   }
   console.log('');
   console.log(renderEnsembleReport(await fetchEnsemble(target)));
+}
+
+// ── mine / score (the behavioural corpus) ────────────────────────
+
+/** Where mined reports land by default: outside every repository, because they
+ *  describe the owner's private sessions. `.gitignore` also covers `.cc-corpus/`
+ *  and `CC-CORPUS-*.md` for a run deliberately pointed at the repo. */
+function defaultCorpusDir(): string {
+  const cache = process.env.XDG_CACHE_HOME ?? join(homedir(), '.cache');
+  return join(cache, 'proteus', 'cc-corpus');
+}
+
+function corpusReportPath(opts: LabelOpts): string {
+  if (opts.out) return resolve(opts.out);
+  return join(defaultCorpusDir(), `CC-CORPUS-${new Date().toISOString().slice(0, 10)}.md`);
+}
+
+function writeReport(path: string, markdown: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, markdown, 'utf8');
+}
+
+/** Mine and weak-label, with the options both actions share. Read-only over
+ *  the transcripts, and the same deterministic order every run, so `score`
+ *  measures the corpus `mine` reported. */
+function mineAndLabel(opts: LabelOpts): {
+  mined: MineResult;
+  labels: ReturnType<typeof weakLabel>[];
+} {
+  const mined = mineTranscripts({
+    root: opts.root ? resolve(opts.root) : defaultTranscriptRoot(homedir()),
+    projects: (opts.projects ?? '').split(',').map((p) => p.trim()).filter((p) => p !== ''),
+  });
+  return { mined, labels: mined.turns.map(weakLabel) };
+}
+
+/** The report shape for a pass with no rater — the mining half on its own. */
+function miningOnly(mined: MineResult, labels: ReturnType<typeof weakLabel>[]): CorpusEvalReport {
+  return {
+    stats: corpusStats(mined.turns, labels),
+    classifier: null, panel: null, judges: [], panelSplit: 0, cost: [],
+  };
+}
+
+async function mineCorpus(opts: LabelOpts): Promise<void> {
+  const { mined, labels } = mineAndLabel(opts);
+  const report = miningOnly(mined, labels);
+  if (opts.json) {
+    console.log(JSON.stringify({ ...report, provenance: mined.skips, versions: mined.versions }, null, 2));
+    return;
+  }
+
+  const path = corpusReportPath(opts);
+  const markdown = renderCorpusReport(report, {
+    title: `Claude Code transcript corpus — ${new Date().toISOString().slice(0, 10)}`,
+    provenance: renderMineSkips(mined),
+  });
+  writeReport(path, markdown);
+  console.log(markdown);
+  console.log(`${OK('wrote')} ${ACCENT(path)}`);
+  if (report.stats.labeled === 0) {
+    console.log(`${WARN('no labels')} no rule fired on any mined turn — nothing to score a rater against.`);
+    return;
+  }
+  console.log(DIM(`Score the classifier and the panel against these with:  ` +
+    `proteus label score <agent>  (${report.stats.labeled} labeled turns available)`));
+}
+
+/** Labeled turns scored per run when the owner does not say. Small on purpose:
+ *  a pass is one classifier call plus one call per judge per turn, so the
+ *  default is a few tens of cents at worst and the number is the ONLY thing
+ *  standing between a typo and a large bill. */
+const DEFAULT_SCORE_LIMIT = 25;
+
+async function scoreCorpus(target: AgentTarget, opts: LabelOpts): Promise<void> {
+  if (target.mode !== 'local') {
+    throw new Error(
+      `The transcript corpus lives on this machine, so it is scored with a local agent's models — ` +
+      `"${target.requestedName}" is a cloud agent.`,
+    );
+  }
+  const limit = parsePositiveInt(opts.limit, DEFAULT_SCORE_LIMIT, 'limit');
+  const specs = (opts.models ?? '').split(',').map((s) => s.trim()).filter((s) => s !== '');
+
+  const { mined, labels } = mineAndLabel(opts);
+  // Only labeled turns are put to a rater, so the budget is spent where an
+  // answer can be checked. Trimming the LABELS rather than the turns keeps the
+  // corpus composition in the report honest about what was mined.
+  const scored = new Set(labels.filter((label) => label.label !== null).slice(0, limit)
+    .map((label) => label.turnId));
+  const budgeted = labels.map((label) =>
+    scored.has(label.turnId) ? label : { ...label, label: null });
+
+  if (scored.size === 0) {
+    console.log(`${WARN('nothing to score')} no rule fired on any mined turn.`);
+    return;
+  }
+  if (!opts.json) {
+    console.log(DIM(`Scoring ${scored.size} labeled turn${scored.size === 1 ? '' : 's'} — one classifier`));
+    console.log(DIM('call plus one call per judge each. Every rater sees only the turn, never a rule.'));
+    console.log('');
+  }
+
+  const report = await runLocalCorpusEval(target.localName, {
+    turns: mined.turns, labels: budgeted, specs: specs.length > 0 ? specs : null,
+  });
+  if (opts.json) {
+    console.log(JSON.stringify({ ...report, provenance: mined.skips, versions: mined.versions }, null, 2));
+    return;
+  }
+  const path = corpusReportPath(opts);
+  const markdown = renderCorpusReport(report, {
+    title: `Claude Code transcript corpus, scored — ${new Date().toISOString().slice(0, 10)}`,
+    provenance: renderMineSkips(mined),
+  });
+  writeReport(path, markdown);
+  console.log(markdown);
+  console.log(`${OK('wrote')} ${ACCENT(path)}`);
 }
 
 // ── report ───────────────────────────────────────────────────────

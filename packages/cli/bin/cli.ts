@@ -5,7 +5,7 @@
 
 import { buildProgram } from '../src/program.js';
 import { chatCommand } from '../src/commands/chat.js';
-import { printHelp, printError, DIM } from '../src/display.js';
+import { printHelp, printFailure, DIM } from '../src/display.js';
 import { runStartupUpdateCheck } from '../src/version-check.js';
 
 const program = buildProgram();
@@ -18,7 +18,7 @@ if (topLevelArgs.length === 0) {
     try {
       await chatCommand(undefined, {});
     } catch (err) {
-      printError(err instanceof Error ? err.message : String(err));
+      printFailure(err);
       process.exit(1);
     }
   } else {

@@ -20,6 +20,10 @@ as the local execution engine, or `--mode local` for a fully local bun:sqlite
 workspace. Either way you get a workspace — the container that owns the files,
 execution environments, and sessions — with its default agent inside.
 
+From here, [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use,
+[docs/CLI.md](docs/CLI.md) is the full command reference, and
+[docs/CONFIG.md](docs/CONFIG.md) documents `~/.proteus/config.json`.
+
 ## Providers & models
 
 ```bash

@@ -1,6 +1,5 @@
 {
   "name": "proteus",
-  "version": "0.1.0",
   "private": true,
   "description": "Self-evolving agent with MCTS parallel exploration, mutable scaffolding, and durable skill evolution",
   "license": "MIT",
@@ -9,8 +8,10 @@
   "scripts": {
     "test": "bun test --cwd packages/agent-utils && bun test --cwd packages/core && bun test --cwd packages/compaction",
     "check": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p scripts/tsconfig.bench.json && node --check packages/pc-agent/src/index.js",
+    "deploy": "bash scripts/deploy.sh",
     "dev": "bun run --cwd packages/cf-backend start",
     "cli": "bun run packages/cli/bin/cli.ts",
+    "docs:cli": "bun run scripts/gen-cli-docs.ts",
     "layergate": "bun run scripts/layergate.ts",
     "layergate:lock": "bun run scripts/layergate.ts --lock",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",

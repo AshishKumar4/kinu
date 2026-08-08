@@ -13,23 +13,29 @@ import {
   assertToolsSupportedByModel,
   type PromptModelContext,
 } from './prompting/model-profile.js';
-import { applyCacheBreakpoints, hasCacheMarkers } from './prompting/cache-breakpoints.js';
+import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints.js';
 import { composePrepareStep } from './prompting/prepare-step.js';
+import type { MissionGovernor } from './mission-budget.js';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
 import { assembleTurnMessages } from './orchestrator/turn-context.js';
 import { contextWindowForModel } from './context-window.js';
 import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
+import { describeProviderError } from './providers/util.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
+  /** `toolCallId` is the provider's own id for the call — the key that pairs
+   *  this event with its 'tool-result'. Surfaces that report calls out of band
+   *  (ACP's tool_call/tool_call_update) need it; name alone cannot pair
+   *  concurrent calls to the same tool. */
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
   /** A tool call settled. `result` is the stringified output on success or the
    *  error text on failure; `success`/`error` carry the discriminator the
    *  evolution signal reads (hadError, outcome review) — matching the cf
    *  backend's afterToolCall. */
-  | { type: 'tool-result'; toolName: string; result: string; success: boolean; error?: string }
+  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean; error?: string }
   /** `inputTokens`/`outputTokens`/`cachedInputTokens` = the step request's
    *  provider-reported totals, when reported — inputTokens doubles as the
    *  caller's measured compaction signal, cachedInputTokens feeds cache
@@ -85,11 +91,16 @@ export interface ChatOptions {
    *  through + a stable per-conversation key. When present, provider-native
    *  cache markers land on the wire — Anthropic breakpoints (end-of-system +
    *  a tail rolled forward every step) or prompt_cache_key routing for the
-   *  OpenAI-compatible family. See prompting/cache-breakpoints.ts. */
-  cache?: { providerId?: string; modelId?: string; sessionKey: string };
+   *  OpenAI-compatible family. `retention` sets how long the provider keeps
+   *  the prefix (default `short`). See prompting/cache-breakpoints.ts. */
+  cache?: { providerId?: string; modelId?: string; sessionKey: string; retention?: CacheRetention };
   /** Request-level provider options contributed by the caller. They are
    *  merged by provider namespace with the cache options assembled here. */
   providerOptions?: NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
+  /** The actor's mission budget governor. When the turn runs under a label
+   *  whose cumulative cap is spent, the step pipeline declines the next
+   *  request instead of issuing it. Unscoped turns are unaffected. */
+  budget?: MissionGovernor;
 }
 
 /**
@@ -145,9 +156,17 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     system: opts.system,
     messages: turnMessages,
     sessionKey: opts.cache?.sessionKey ?? '',
+    ...(opts.cache?.retention ? { retention: opts.cache.retention } : {}),
   });
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
+
+  // streamText routes provider failures into the stream as an in-band error
+  // chunk instead of throwing — captured here and rethrown VERBATIM after the
+  // loop, so callers' failure handling (the overflow-recovery classifier)
+  // sees the provider's actual error text, never the opaque
+  // AI_NoOutputGeneratedError that awaiting result.response would raise.
+  let streamError: unknown;
 
   const result = streamText({
     model: opts.model,
@@ -156,6 +175,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     tools,
     stopWhen: stepCountIs(maxSteps),
     abortSignal: opts.signal,
+    // The SDK's default onError is `console.error(error)`, which dumped the
+    // raw provider payload to the terminal alongside our own rendering of it.
+    // Capture instead: the error still reaches callers through the rethrow
+    // below, so there is exactly one place that decides how a failure reads.
+    onError: ({ error }) => { streamError = error; },
     ...(providerOptions ? { providerOptions } : {}),
     // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
     // first, then step-boundary tool-output pruning against the window budget,
@@ -164,7 +188,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
       composePrepareStep(extensions, { stepNumber, messages },
         rollTail ? { strategy: cache.strategy } : null,
-        { contextWindow }),
+        { contextWindow }, opts.budget),
     onStepFinish: (step) => {
       stepCount++;
       const inputTokens = step.usage?.inputTokens;
@@ -187,12 +211,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   });
 
   let allText = '';
-  // streamText routes provider failures into the stream as an in-band error
-  // chunk instead of throwing — captured here and rethrown VERBATIM after the
-  // loop, so callers' failure handling (the overflow-recovery classifier)
-  // sees the provider's actual error text, never the opaque
-  // AI_NoOutputGeneratedError that awaiting result.response would raise.
-  let streamError: unknown;
 
   for await (const chunk of result.fullStream) {
     if (opts.signal?.aborted) break;
@@ -209,24 +227,24 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       case 'tool-call': {
         const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
         await extensions?.emitToolCall({ toolName: chunk.toolName, args });
-        yield { type: 'tool-call', toolName: chunk.toolName, args };
+        yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
         break;
       }
       case 'tool-result': {
         const raw = (chunk as any).output ?? (chunk as any).result ?? '';
         const result = String(raw).slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
-        yield { type: 'tool-result', toolName: chunk.toolName, result, success: true };
+        yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
         break;
       }
       case 'tool-error': {
         // A tool threw: the error is the durable outcome the evolution signal
         // reads. The extension seam sees the error text as the result (same as
         // the cf afterToolCall), and the discriminator rides success/error.
-        const error = errorText((chunk as any).error);
+        const error = describeProviderError((chunk as any).error);
         const result = error.slice(0, 1000);
         await extensions?.emitToolResult({ toolName: chunk.toolName, result });
-        yield { type: 'tool-result', toolName: chunk.toolName, result, success: false, error };
+        yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
         break;
       }
       case 'error': {
@@ -243,7 +261,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   }
 
   if (streamError !== undefined) {
-    throw streamError instanceof Error ? streamError : new Error(String(streamError));
+    throw streamError instanceof Error ? streamError : new Error(describeProviderError(streamError));
   }
 
   // Await the full result to get response messages
@@ -272,9 +290,4 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   await extensions?.emitTurnEnd({ text: allText, responseMessages });
   yield { type: 'done', text: allText, responseMessages };
-}
-
-/** The message of a thrown tool error, from whatever shape the SDK carries. */
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

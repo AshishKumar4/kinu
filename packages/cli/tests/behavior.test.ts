@@ -396,6 +396,157 @@ function startFailingLlm(): { port: number; stop(): void } {
   return { port: server.port, stop: () => server.stop(true) };
 }
 
+/** 200 OK, then an OpenAI-shaped error object in the SSE body — the shape a
+ *  provider uses to reject a request mid-stream, and the one that reached
+ *  users as `[object Object]`. */
+function startInBandErrorLlm(payload: unknown): { port: number; stop(): void } {
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      const body = await request.json().catch(() => ({})) as { stream?: boolean };
+      if (!body.stream) return Response.json(payload, { status: 400 });
+      return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {
+        headers: { "content-type": "text/event-stream" },
+      });
+    },
+  });
+  return { port: server.port, stop: () => server.stop(true) };
+}
+
+/** The Proteus worker as far as the CLI's provider registry cares: a model
+ *  menu. An empty one is a signed-in account whose Cloudflare AI was never
+ *  granted — the case that produced a workspace nothing could run. */
+function startEmptyModelMenuOrigin(): { port: number; stop(): void } {
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch(request) {
+      if (new URL(request.url).pathname === "/api/cli/models") return Response.json([]);
+      return new Response("not found", { status: 404 });
+    },
+  });
+  return { port: server.port, stop: () => server.stop(true) };
+}
+
+describe("proteus create — an unusable model is named at creation", () => {
+  test("warns when the workspace's model has no connected provider", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-unusable-"));
+    tempDirs.push(home);
+    const origin = startEmptyModelMenuOrigin();
+    try {
+      writeConfig(home, {
+        origin: `http://127.0.0.1:${origin.port}`,
+        accessToken: "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz",
+        user: { id: "user_123", email: "ashish@example.com" },
+      });
+
+      // OPENAI_API_KEY in the ambient environment would supply a working
+      // credential path and correctly suppress the warning.
+      const proc = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
+        home,
+        env: { OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", OPENROUTER_API_KEY: "" },
+      });
+
+      expect(proc.exitCode).toBe(0);
+      const stdout = proc.stdout.toString();
+      expect(stdout).toContain("has no connected provider");
+      expect(stdout).toContain("proteus provider connect");
+    } finally {
+      origin.stop();
+    }
+  }, 120_000);
+
+  test("stays quiet when the model resolves through a working provider", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-usable-"));
+    tempDirs.push(home);
+    const server = startMockLlm("ok");
+    try {
+      const proc = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
+        home,
+        env: {
+          PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
+          PROTEUS_AUTH: "Bearer mock",
+          PROTEUS_MODEL: "mock-model",
+        },
+      });
+
+      expect(proc.exitCode).toBe(0);
+      expect(proc.stdout.toString()).not.toContain("has no connected provider");
+    } finally {
+      server.stop();
+    }
+  }, 120_000);
+});
+
+// A provider rejection used to reach the terminal twice — once as the AI SDK's
+// default `console.error(rawPayload)` dump, once as our own `error
+// [object Object]` — and never said which command fixed it.
+describe("proteus exec — provider failures are legible and actionable", () => {
+  const BILLING_ERROR = {
+    error: { message: "Your account is not active.", type: "invalid_request_error", code: "billing_not_active" },
+  };
+
+  test("renders the provider's own words once, with the command that resolves it", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-provider-err-"));
+    tempDirs.push(home);
+    const good = startMockLlm("ok");
+    const bad = startInBandErrorLlm(BILLING_ERROR);
+    try {
+      const env = {
+        PROTEUS_BASE_URL: `http://127.0.0.1:${good.port}`,
+        PROTEUS_AUTH: "Bearer mock",
+        PROTEUS_MODEL: "mock-model",
+      };
+      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+
+      const proc = runCli(["exec", "--workspace", "smokey", "Say hello"], {
+        home,
+        env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
+      });
+
+      const output = `${proc.stdout.toString()}${proc.stderr.toString()}`;
+      expect(proc.exitCode).toBe(1);
+      expect(output).not.toContain("[object Object]");
+      expect(output.split("Your account is not active.").length - 1).toBe(1);
+      expect(output).toContain("proteus provider");
+    } finally {
+      good.stop();
+      bad.stop();
+    }
+  }, 120_000);
+
+  test("--json carries the guidance as a field, not just as terminal decoration", () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-provider-err-json-"));
+    tempDirs.push(home);
+    const good = startMockLlm("ok");
+    const bad = startInBandErrorLlm(BILLING_ERROR);
+    try {
+      const env = {
+        PROTEUS_BASE_URL: `http://127.0.0.1:${good.port}`,
+        PROTEUS_AUTH: "Bearer mock",
+        PROTEUS_MODEL: "mock-model",
+      };
+      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+
+      const proc = runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], {
+        home,
+        env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
+      });
+
+      expect(proc.exitCode).toBe(1);
+      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      const error = events.find((event) => event.type === "error");
+      expect(error).toBeDefined();
+      expect(String(error!.message)).toContain("Your account is not active.");
+      expect(String(error!.hint)).toContain("proteus provider");
+    } finally {
+      good.stop();
+      bad.stop();
+    }
+  }, 120_000);
+});
+
 // `proteus exec "prompt"` blocked on stdin until EOF whenever stdin was not a
 // TTY. A harness or CI runner that spawns the CLI with an inherited, idle pipe
 // never sends EOF, so every scripted use hung forever and needed a `</dev/null`

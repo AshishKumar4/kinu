@@ -24,8 +24,19 @@
  *   outcome                           multiplier·judge      range
  *   code ran & PASSED                 0.60 + 0.40·j         [0.60, 1.00]
  *   code ran & FAILED                 0.05 + 0.25·j         [0.05, 0.30]
+ *   code did not PARSE                0.05 (no judge)        0.05
  *   prose only (no sibling code)      0.75·j                [0.00, 0.75]
  *   prose only (a sibling HAS code)   0.30·j                [0.00, 0.30]
+ *
+ * The parse row is the evaluation cascade, kept to its cheapest honest form:
+ * a branch whose code the engine could not even parse has DECIDED its own
+ * verdict, and no judge opinion can move it inside the fail band — so the
+ * ensemble's k calls are spent on nothing. Skipping them lands the branch on
+ * the band floor, which is the exact score the "no judge sample survived"
+ * path already assigns, so this changes no score outside the branches whose
+ * spend it skips. Everything that parses — including code that ran and threw
+ * — is judged exactly as before, because there the judge's placement inside
+ * the band is real information.
  *
  * The last row closes the loophole: without it a branch that dodged code
  * (prose, cap 0.75) outscored one that attempted code and FAILED (cap 0.30),
@@ -98,8 +109,55 @@ export interface BranchEvaluation {
   grounding: 'execution' | 'judge';
   /** Execution verdict when grounding === 'execution'. */
   execution?: { passed: boolean; error?: string; assertionsGenerated: boolean };
-  /** Judge samples that parsed successfully (out of those attempted). */
+  /** Judge samples that parsed successfully (out of those attempted). Zero
+   *  when the cascade short-circuited before the ensemble was sampled. */
   judgeSamplesUsed: number;
+}
+
+/** Engine messages for source that never became a program. Substring match
+ *  (case-insensitive) because the two executors surface a thrown error's
+ *  `.message` and the CLI subprocess surfaces stderr, so the `SyntaxError`
+ *  name is present in some paths and absent in others. Conservative by
+ *  construction: anything unrecognised falls through to the full judge path,
+ *  i.e. to the behaviour that existed before the cascade. */
+const PARSE_FAILURE_SIGNATURES = [
+  'syntaxerror',
+  'unexpected token',
+  'unexpected end of input',
+  'unexpected end of script',
+  'unexpected identifier',
+  'unexpected reserved word',
+  'unexpected string',
+  'invalid or unexpected token',
+  'missing ) after',
+  'missing } after',
+] as const;
+
+/** True when an execution error says the source did not parse. */
+export function isParseFailure(error: string): boolean {
+  const text = error.toLowerCase();
+  return PARSE_FAILURE_SIGNATURES.some((sig) => text.includes(sig));
+}
+
+/**
+ * Cascade stage 0's verdict: did THIS BRANCH's code fail to parse?
+ *
+ * The judge-written assertion harness shares the branch's parse unit, so a bad
+ * assertion snippet fails the whole run with a parse error that is not the
+ * branch's fault. When assertions were appended, the code is re-run alone to
+ * attribute the failure before the branch is charged with it — one extra
+ * sandbox call, only ever on the already-failing path, and never on the path
+ * where the branch keeps its judge ensemble.
+ */
+async function codeFailedToParse(
+  executor: Executor,
+  execution: NonNullable<BranchEvaluation['execution']>,
+  code: string,
+): Promise<boolean> {
+  if (execution.passed || !execution.error || !isParseFailure(execution.error)) return false;
+  if (!execution.assertionsGenerated) return true;
+  const bare = await runForVerdict(executor, code, null);
+  return !bare.passed && !!bare.error && isParseFailure(bare.error);
 }
 
 export async function evaluateWithMultiModelJudging(
@@ -130,6 +188,11 @@ export async function evaluateWithMultiModelJudging(
       assertions = await generateAssertions(judge, opts.task, code);
     }
     execution = await runForVerdict(opts.executor, code, assertions);
+    // Cascade stage 0: source that never parsed has decided its own verdict.
+    // Spend no judge calls placing it inside a band it cannot leave.
+    if (await codeFailedToParse(opts.executor, execution, code)) {
+      return { score: FAIL_FLOOR, grounding: 'execution', execution, judgeSamplesUsed: 0 };
+    }
   }
 
   // Layer 2: judge ensemble (median, parse-failure-robust).

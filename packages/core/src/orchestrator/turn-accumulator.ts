@@ -9,6 +9,7 @@
 
 import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
+import type { MissionGovernor } from '../mission-budget.js';
 
 /** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
  *  StepResult, minus the fields we don't use). */
@@ -60,7 +61,13 @@ export class TurnAccumulator {
    *  the durable `context_budget` row. Reset with the rest of the turn. */
   readonly context = new TurnContextBudget();
 
-  constructor(private readonly sinks: TurnSinks = {}) {}
+  constructor(
+    private readonly sinks: TurnSinks = {},
+    /** The actor's mission governor. Present or not, the accounting is the
+     *  same — the governor simply also debits the active mission scope from
+     *  the numbers this already counts, so there is one usage measurement. */
+    private readonly budget?: MissionGovernor,
+  ) {}
 
   /** Reset for a new turn. The caller stamps backend-specific state separately. */
   reset(now: number): void {
@@ -128,6 +135,14 @@ export class TurnAccumulator {
     this.usage.input += inTok;
     this.usage.output += outTok;
     this.usage.cached += cached;
+    // The model-call debit, taken from the provider's own report of the step
+    // just paid for. `cached` is a subset of `inputTokens` (ai v6 reports the
+    // cache-inclusive total), so it is not added again — but it IS handed over
+    // so the ledger can charge it at the model's cache-read rate.
+    this.budget?.debit(inTok + outTok, {
+      calls: 1,
+      usage: { input: inTok, output: outTok, ...(cached > 0 ? { cached } : {}) },
+    });
     // Each step is one request, so the newest reporting step carries the
     // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
     // total). Keep the last non-zero report: a trailing step with absent

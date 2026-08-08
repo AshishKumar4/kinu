@@ -23,7 +23,8 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
-  AgentsForkDeps,
+  ShellApprovalRequest, ShellApprovalOutcome,
+  AgentsForkDeps, AgentsToolDeps,
   IngressDescriptor, ProteusEvent, EventVariant,
   RunEvent, RunEventInput, RunEventQuery,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
@@ -55,6 +56,8 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
+  createAgentsCodemodeProvider,
+  MissionGovernor, readMissionLabels,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -74,7 +77,7 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
   isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort,
+  type ReasoningEffort, type CacheRetention,
 } from '@proteus/core';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -118,12 +121,17 @@ export interface LocalSessionDb {
 export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; args: Record<string, unknown> }
-  | { type: 'tool-result'; toolName: string; result: string }
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
+  | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent };
+
+/** An interactive answer to a gated shell command. Resolving null declines to
+ *  decide, leaving the standing approval mode's own answer in force. */
+export type ShellApprovalHandler =
+  (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
 export interface LocalPublishEventInput {
   descriptor: IngressDescriptor;
@@ -142,6 +150,8 @@ export interface LocalTimerTriggerOpts {
   label?: string;
   payload?: Record<string, unknown>;
   trust?: 'authenticated' | 'owner';
+  /** The mission budget every turn this schedule wakes spends against. */
+  missionLabel?: string;
 }
 
 export interface LocalTriggerView {
@@ -222,6 +232,10 @@ export class LocalAgentSession implements BackendHost {
   private readonly eventLog: EventLog;
   /** Durable per-run event log (run_events) — parity with the DO's recorder. */
   private readonly eventRecorder: RunEventRecorder;
+  /** The actor's cumulative, label-scoped spend governor (opt-in). Public so
+   *  the `agent.*` self-direction namespace declares and reads budgets through
+   *  the same object the two enforcement seams hold. */
+  readonly budget: MissionGovernor;
   /** The run the in-flight turn belongs to; null between turns. */
   private currentRunId: string | null = null;
   private readonly triggerRegistry: TriggerRegistry;
@@ -235,6 +249,7 @@ export class LocalAgentSession implements BackendHost {
   private _headRuntime: HeadRuntime;
   private headController: HeadController;
   private readonly onEvent: (event: SessionEvent) => void;
+  private shellApprovalHandler: ShellApprovalHandler | null = null;
   private readonly sessionId: string;
   private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
@@ -391,10 +406,22 @@ export class LocalAgentSession implements BackendHost {
     initRunEventTables(this.rt.storage.execRaw);
     this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
 
+    // The cumulative spend governor — a scheduled run or a fork opts into a
+    // label, and its refusals land in this run's durable event log. No label
+    // means no cap, which is every ordinary session.
+    this.budget = new MissionGovernor({
+      storage: this.rt.storage,
+      // Real USD: the catalog rates for whatever model the next turn resolves
+      // to. Null until the lookup lands — the ledger then blends, and says so.
+      pricing: () => this.modelCatalog.pricing(),
+      onExhausted: ({ error: _error, ...refusal }) =>
+        this.recordRunEvent({ type: 'budget_exhausted', ...refusal }),
+    });
     this.orch = new AgentOrchestrator({
       host: this,
       engine: this.engine,
       eventLog: this.eventLog,
+      budget: this.budget,
       sessionReflectionInterval: opts.sessionReflectionInterval,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
@@ -479,6 +506,15 @@ export class LocalAgentSession implements BackendHost {
     return { ok: true, mode };
   }
 
+  /** Install the interactive approval channel for gated shell commands, or
+   *  null to remove it. Surfaces that own a live user (ACP) set this; without
+   *  one, 'strict' keeps rejecting gate hits with its explanatory message.
+   *  Returns a disposer so a surface can detach on disconnect. */
+  setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
+    this.shellApprovalHandler = handler;
+    return () => { if (this.shellApprovalHandler === handler) this.shellApprovalHandler = null; };
+  }
+
   /** Stored model spec, or null when unset (parity with DO getStoredModelSpec). */
   getStoredModelSpec(): { spec: string | null } {
     return { spec: this.config.getModel() };
@@ -556,7 +592,7 @@ export class LocalAgentSession implements BackendHost {
     if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
     const id = this.triggerRegistry.register({
       kind,
-      spec: { cron: opts.cron, label: opts.label, payload: opts.payload },
+      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
       creator_trust: opts.trust ?? 'authenticated',
       next_fire_at: nextFireAt ?? undefined,
     }, now);
@@ -571,7 +607,7 @@ export class LocalAgentSession implements BackendHost {
     for (const trigger of due) {
       if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
       fired += 1;
-      const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string };
+      const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string; mission_label?: string };
       const scheduled_fire_at = trigger.next_fire_at ?? now;
 
       this.eventLog.publish({
@@ -583,6 +619,7 @@ export class LocalAgentSession implements BackendHost {
             scheduled_fire_at,
             label: spec.label,
             user_payload: spec.payload,
+            mission_label: spec.mission_label,
           },
           trigger_creator_trust: trigger.creator_trust,
         },
@@ -1039,7 +1076,9 @@ export class LocalAgentSession implements BackendHost {
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
 
     const startedAt = Date.now();
-    this.orch.beginTurn(startedAt);
+    // Per-turn accounting reset + the turn's mission scope, together: what the
+    // turn is allowed to spend is part of what the turn is.
+    this.orch.beginTurn(startedAt, readMissionLabels(item.metadata));
     // Open this turn's run in the durable event log (core turn-lifecycle).
     // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
     // one names its trigger.
@@ -1126,7 +1165,7 @@ export class LocalAgentSession implements BackendHost {
     };
     const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
 
-    const pendingCalls: Array<{ toolName: string; args: Record<string, unknown> }> = [];
+    const pendingCalls: Array<{ toolName: string; toolCallId: string; args: Record<string, unknown> }> = [];
     let fullText = '';
     /** The turn's terminal failure text, persisted on run_end so a post-hoc
      *  read of the log carries the same evidence the cf run_end does. */
@@ -1194,6 +1233,7 @@ export class LocalAgentSession implements BackendHost {
       signal: abort.signal,
       extensions,
       cache,
+      budget: this.budget,
       ...(providerOptions ? { providerOptions } : {}),
     });
 
@@ -1224,11 +1264,13 @@ export class LocalAgentSession implements BackendHost {
             this.emit({ type: 'text-delta', delta: ev.delta });
             break;
           case 'tool-call':
-            pendingCalls.push({ toolName: ev.toolName, args: ev.args });
-            this.emit({ type: 'tool-call', toolName: ev.toolName, args: ev.args });
+            pendingCalls.push({ toolName: ev.toolName, toolCallId: ev.toolCallId, args: ev.args });
+            this.emit({ type: 'tool-call', toolName: ev.toolName, toolCallId: ev.toolCallId, args: ev.args });
             break;
           case 'tool-result': {
-            const idx = findLastIndexBy(pendingCalls, (c) => c.toolName === ev.toolName);
+            // Pair on the provider's call id — concurrent calls to the same
+            // tool make name matching ambiguous.
+            const idx = findLastIndexBy(pendingCalls, (c) => c.toolCallId === ev.toolCallId);
             const call = idx >= 0 ? pendingCalls.splice(idx, 1)[0] : undefined;
             // Real success/error into the accumulator — the outcome signal
             // (hadError, turn-outcome review) reads it, matching the cf
@@ -1236,7 +1278,7 @@ export class LocalAgentSession implements BackendHost {
             this.orch.acc.recordToolCall(ev.success
               ? { toolName: ev.toolName, input: call?.args ?? {}, success: true, output: ev.result }
               : { toolName: ev.toolName, input: call?.args ?? {}, success: false, error: ev.error ?? ev.result });
-            this.emit({ type: 'tool-result', toolName: ev.toolName, result: ev.result });
+            this.emit({ type: 'tool-result', toolName: ev.toolName, toolCallId: ev.toolCallId, result: ev.result, success: ev.success });
             break;
           }
           case 'step-finish':
@@ -1402,17 +1444,19 @@ export class LocalAgentSession implements BackendHost {
     this.compactionState.armForceCompaction(this.cacheIdentity().sessionKey);
   }
 
-  /** Prompt-cache identity for runChat: the resolved provider/model plus a
-   *  stable per-conversation key (the agent's affinity key + session id —
-   *  same `proteus-<name>` scheme Workers AI affinity pins with). */
-  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string } {
+  /** Prompt-cache identity for runChat: the resolved provider/model, a stable
+   *  per-conversation key (the agent's affinity key + session id — same
+   *  `proteus-<name>` scheme Workers AI affinity pins with), and the agent's
+   *  configured retention. */
+  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string; retention: CacheRetention } {
     const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
+    const retention = this.config.getCacheRetention();
     const spec = this.effectiveModelSpec();
     try {
       const { provider, modelId } = parseModelSpec(spec);
-      return { providerId: provider, modelId, sessionKey };
+      return { providerId: provider, modelId, sessionKey, retention };
     } catch {
-      return { sessionKey };
+      return { sessionKey, retention };
     }
   }
 
@@ -1654,6 +1698,16 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
+  /** This session's delegation deps. `team` / `peers` are deliberately absent:
+   *  staffing and peer messaging need a cross-agent transport, and local agents
+   *  are one-per-process SQLite sessions with no daemon to route between them.
+   *  Absent deps → those actions are structurally missing from the `agents`
+   *  tool, from the `agents.*` sandbox namespace, and from the prompt ladder.
+   *  Hosted agents get the full surface. */
+  private agentsToolDeps(): AgentsToolDeps {
+    return { fork: this.buildAgentsForkDeps(), budget: this.budget };
+  }
+
   /** The recent conversation handed to each spawned head as inherited context
    *  (core heads-support; capped to bound the head's LLM context). */
   private readInheritedContext(): SerializedMessage[] {
@@ -1789,6 +1843,15 @@ export class LocalAgentSession implements BackendHost {
     const rawTools = buildBuiltinTools({
       rt: this.rt,
       shellApprovalMode: this.config.getShellApprovalMode(),
+      // Stable indirection: the toolset is rebuilt only on model change, so it
+      // must read the handler live rather than capture whichever was installed
+      // when the model was resolved.
+      requestShellApproval: async (req) => {
+        const outcome = await this.shellApprovalHandler?.(req) ?? null;
+        if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
+        else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
+        return outcome;
+      },
       // The turn's cumulative bulk budget — held on the accumulator so this
       // toolset (rebuilt only on model change) reads the live turn's state.
       contextBudget: this.orch.acc.context,
@@ -1796,6 +1859,9 @@ export class LocalAgentSession implements BackendHost {
       createExecuteTool: createNodeExecuteToolFactory({
         extraProviders: [
           createLocalAgentSelfProvider(this),
+          // `agents.*` — the delegation tool projected into the sandbox, over
+          // the same deps the top-level tool holds. Locally that is fork only.
+          createAgentsCodemodeProvider(() => this.agentsToolDeps()),
           createWebCodemodeProvider(this.getWebSearchProvider()),
           // llm.query (RLM) — CLI parity with the cf backend. Needs a real
           // resolver to spawn sub-calls; static-model sessions have none.
@@ -1805,7 +1871,7 @@ export class LocalAgentSession implements BackendHost {
         ],
       }),
       codemodeLoader: { __cli: true },
-      agents: { fork: this.buildAgentsForkDeps() },
+      agents: this.agentsToolDeps(),
       facts: this.factsStore,
       skills: {
         vfs: this.getSkillsVfs(),
@@ -1813,12 +1879,6 @@ export class LocalAgentSession implements BackendHost {
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
       productChanges: this.productChangeToolDeps(),
-      // agents.team / agents.peers are deliberately NOT wired: staffing and
-      // peer messaging need a cross-agent transport, and local agents are
-      // one-per-process SQLite sessions with no daemon to route between them.
-      // Absent deps → those ACTIONS are structurally missing from the agents
-      // tool and the prompt ladder never advertises them. Hosted agents get
-      // the full surface.
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;

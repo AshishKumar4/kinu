@@ -1,4 +1,6 @@
-import type { ModelCapability, ModelInfo, ModelInputModality, ProviderDeps } from './types.js';
+import type {
+  ModelCapability, ModelInfo, ModelInputModality, ModelPricing, ProviderDeps,
+} from './types.js';
 import { MODEL_INPUT_MODALITIES } from './types.js';
 import { cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
 
@@ -42,6 +44,13 @@ interface ModelsDevModel {
   modalities?: {
     input?: string[];
     output?: string[];
+  };
+  /** USD per 1M tokens. */
+  cost?: {
+    input?: number;
+    output?: number;
+    cache_read?: number;
+    cache_write?: number;
   };
 }
 
@@ -181,13 +190,35 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
   const inputModalities = (model.modalities?.input ?? [])
     .filter((m): m is ModelInputModality => (MODEL_INPUT_MODALITIES as readonly string[]).includes(m));
 
+  const cost = pricingFromModelsDev(model.cost);
   return {
     id,
     label: nonEmptyString(model.name) ?? id,
     capabilities,
     contextWindow: positiveInteger(model.limit?.context),
+    ...(cost ? { cost } : {}),
     ...(inputModalities.length > 0 ? { inputModalities } : {}),
   };
+}
+
+/** models.dev `cost`, kept only when BOTH sides of a token are priced —
+ *  half a rate prices nothing, and a partial answer would read as authority. */
+function pricingFromModelsDev(cost: ModelsDevModel['cost']): ModelPricing | undefined {
+  const input = usdRate(cost?.input);
+  const output = usdRate(cost?.output);
+  if (input === undefined || output === undefined) return undefined;
+  const cacheRead = usdRate(cost?.cache_read);
+  const cacheWrite = usdRate(cost?.cache_write);
+  return {
+    input, output,
+    ...(cacheRead !== undefined ? { cacheRead } : {}),
+    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+  };
+}
+
+/** A USD-per-1M rate. Zero is a real price (free tiers); negative is not. */
+function usdRate(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
 function orderModels(models: ModelInfo[], preferredIds: readonly string[] | undefined): ModelInfo[] {

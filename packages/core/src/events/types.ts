@@ -10,6 +10,7 @@
  */
 
 import type { ContextBudgetSnapshot } from '../context-budget.js';
+import type { MissionBudgetRefusal } from '../mission-budget.js';
 
 export type RunEventType =
   | 'run_start'
@@ -24,6 +25,7 @@ export type RunEventType =
   | 'scaffold_rollback'
   | 'memory_write'
   | 'context_budget'
+  | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
   | 'turn_end'
@@ -62,6 +64,10 @@ export type RunEvent =
    *  any of it back. Written once per turn by the settle spine (M1 trip
    *  counters); `turn_end` is the denominator. */
   | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
+  /** A mission budget ran out and a host seam declined the work. Written once
+   *  per label by the governor (mission-budget.ts), so the durable trail says
+   *  which cap stopped which run rather than leaving an unexplained short turn. */
+  | (RunEventBase & { type: 'budget_exhausted' } & Omit<MissionBudgetRefusal, 'error'>)
   | (RunEventBase & { type: 'fiber_recovered'; fiberName: string; fiberId: string; snapshot?: unknown })
   | (RunEventBase & { type: 'error'; message: string; details?: unknown })
   | (RunEventBase & { type: 'turn_end'; turnIndex: number; tokenUsage?: { input: number; output: number; cached?: number } })

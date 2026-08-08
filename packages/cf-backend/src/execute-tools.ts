@@ -5,17 +5,22 @@
  * The LLM's code runs in a codemode sandbox where each provider is a namespace:
  * `codemode.*` (crafted tools, spliced in as a `const tools = {…}` preamble by
  * PreambleCraftedExecutor so mid-turn saves are callable on the next step),
- * `llm.*` (recursive LM calls), `web.*`, plus one namespace per registered
- * ExecutionRouter provider (`workspace`, `sandbox`, `nimbus`, `laptop`).
+ * `llm.*` (recursive LM calls), `agents.*` (delegation), `web.*`, plus one
+ * namespace per registered ExecutionRouter provider (`workspace`, `sandbox`,
+ * `nimbus`, `laptop`).
  *
  * Actors differ only in the fields of `ExecuteToolsOptions`: an orchestrator
- * adds its MCP providers and records the last-active executor for the UI; a
- * head (an ExplorationAgent fork) supplies neither.
+ * adds its MCP providers, its delegation deps, and records the last-active
+ * executor for the UI; a head (an ExplorationAgent fork) supplies none of them,
+ * so `split_subheads` stays its only way to start anything.
  */
 
 import { createCodeTool } from "@cloudflare/codemode/ai";
-import type { SqlExecutor } from "@proteus/core";
-import { createWebCodemodeProvider, createRLMProvider, type WebSearchProvider, type CodemodeProvider } from "@proteus/core";
+import type { AgentsToolDeps, SqlExecutor } from "@proteus/core";
+import {
+  createAgentsCodemodeProvider, createWebCodemodeProvider, createRLMProvider,
+  type WebSearchProvider, type CodemodeProvider,
+} from "@proteus/core";
 import { PreambleCraftedExecutor, selectInjectableCraftedTools } from "./crafted-tool-registry.js";
 import type { AgentProviderRegistry } from "./providers/agent-registry.js";
 import type { CFRuntime } from "./runtime.js";
@@ -32,6 +37,11 @@ export interface ExecuteToolsOptions {
   /** The actor's configured model spec, read per call (llm.query default). */
   modelSpec: () => string | null;
   webSearch: WebSearchProvider;
+  /** The actor's delegation deps, read per call so a re-bound model or a fresh
+   *  MCTS session lands without rebuilding the tool. Omitted by actors that
+   *  cannot delegate (heads), which is what keeps `agents.*` out of their
+   *  sandbox — absent deps, the same containment as the top-level tool. */
+  agents?: () => AgentsToolDeps;
   /** Providers beyond the shared set (the orchestrator's MCP namespaces).
    *  Spliced between `llm` and `web` so provider order — and therefore the
    *  LLM-visible type description — is stable across actor kinds. */
@@ -68,6 +78,11 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
   // Recursive Language Models — `llm.query(text, opts?)` in the sandbox.
   // Sub-call has no llm.query in scope, so depth is bounded at 1.
   const rlmProvider = createRLMProvider(registry, () => registry.normalizeSpecSync(modelSpec()));
+  // `agents.*` — the delegation tool projected into the sandbox, so a workflow
+  // is a crafted tool scripting agents/llm/workspace rather than a new engine.
+  // Ahead of extraProviders: this namespace's shape is fixed by the actor's
+  // wired transports, while the MCP set behind it varies per user connection.
+  const agentsProvider = options.agents ? createAgentsCodemodeProvider(options.agents) : null;
   // `web.*` — same web search/fetch provider that backs the web_* tools.
   const webProvider = createWebCodemodeProvider(webSearch);
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
@@ -90,6 +105,7 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
     tools: [
       craftedProvider,
       rlmProvider,
+      ...(agentsProvider ? [agentsProvider] : []),
       ...(options.extraProviders?.() ?? []),
       webProvider,
       ...executorProviders,

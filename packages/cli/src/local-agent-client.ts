@@ -173,6 +173,7 @@ export class LocalAgentClient implements AgentClient {
       setAlwaysActiveSkills: (names) => this.session.setAlwaysActiveSkills(names),
       getShellApprovalMode: () => this.session.getShellApprovalMode().mode,
       setShellApprovalMode: (mode: ShellApprovalMode) => this.session.setShellApprovalMode(mode).mode,
+      setShellApprovalHandler: (handler) => this.session.setShellApprovalHandler(handler),
       listModelProviders: async () => (await this.session.listModelProviders()).map((provider) => ({
         id: provider.id,
         available: provider.available,
@@ -462,9 +463,9 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
     case 'text-delta':
       return { type: 'text-delta', delta: event.delta };
     case 'tool-call':
-      return { type: 'tool-call', toolName: event.toolName, args: event.args };
+      return { type: 'tool-call', toolName: event.toolName, toolCallId: event.toolCallId, args: event.args };
     case 'tool-result':
-      return { type: 'tool-result', toolName: event.toolName, result: event.result };
+      return { type: 'tool-result', toolName: event.toolName, toolCallId: event.toolCallId, result: event.result, success: event.success };
     case 'turn-end':
       return {
         type: 'turn-end',

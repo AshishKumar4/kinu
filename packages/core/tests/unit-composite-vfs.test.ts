@@ -145,13 +145,29 @@ describe("Phase 1 — synthetic read-only '/'", () => {
     await vfs.mkdir('/'); // '/' always exists — a no-op, never an error
   });
 
-  test("THE OWNER'S QUESTION: a bare top-level create at '/' is refused with EROFS", async () => {
+  test("THE OWNER'S QUESTION: a bare top-level FILE create at '/' is refused with EROFS", async () => {
     const { vfs } = createComposite();
     const err = await vfs.writeFile('/x', 'stray').catch((e: Error & { code?: string }) => e);
     expect((err as { code?: string }).code).toBe('EROFS');
     expect((err as Error).message).toContain("'/' is the workspace mount table; write under a mount (e.g. /local/x)");
-    expect(await vfs.mkdir('/newdir').catch((e: { code?: string }) => e.code)).toBe('EROFS');
     expect(await vfs.unlink('/x').catch((e: { code?: string }) => e.code)).toBe('EROFS');
+  });
+
+  test('but a top-level DIRECTORY is the head of the COMPAT namespace, so mkdir routes to /local', async () => {
+    const { vfs } = createComposite();
+    // The bug this closes: writeFile('/workspace/x') has always landed in
+    // /local/workspace, yet mkdir('/workspace') — what every parent-creating
+    // writer (ensureDir) calls first — was refused as a mount-table entry.
+    await vfs.mkdir('/newdir');
+    expect(await vfs.readdir('/local/newdir')).toEqual([]);
+    await vfs.writeFile('/newdir/a.txt', 'body');
+    expect(await vfs.readFile('/local/newdir/a.txt', { encoding: 'utf8' })).toBe('body');
+
+    // It is the same /local mkdir, so the live-mount shadowing guard applies.
+    const sandbox = recordingVFS();
+    vfs.mount('sandbox', { vfs: sandbox.vfs, policy: envPolicy });
+    expect(await vfs.mkdir('/sandbox')).toBeUndefined(); // the mount root already exists
+    expect(sandbox.calls).toEqual([]);
   });
 
   test('single top-level non-mount reads resolve against the mount table, not /local', async () => {

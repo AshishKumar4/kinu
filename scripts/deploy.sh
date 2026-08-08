@@ -1,12 +1,32 @@
 #!/usr/bin/env bash
-# Proteus deploy pipeline.
+# Proteus deploy pipeline — THE deploy path. `bun run deploy` runs this.
+#
+# Deploying any other way is how production once shipped without the CLI
+# download assets: the site was fine, but /downloads/* answered with the SPA
+# shell and every fresh install died on a checksum mismatch. Nothing here is
+# optional-with-a-flag except SKIP_E2E; the gate below is what makes the
+# difference between "the Worker uploaded" and "the product works".
 #
 # Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
 # Sandbox DO + Container binding, the NimbusSession DO, and the local-device
 # executor routes. Pipeline: e2e verification → vite build → CLI source
 # archive → wrangler deploy → smoke test.
 #
+# Where the static assets come from (settled by reading wrangler 4.97 source +
+# `wrangler deploy --dry-run`, 2026-08-07):
+#   - The vite plugin writes packages/cf-backend/.wrangler/deploy/config.json,
+#     and `wrangler deploy` DOES follow it (the command declares
+#     useConfigRedirectIfAvailable) — it deploys dist/proteus/wrangler.json.
+#   - That generated config's assets.directory is "../client", and the user
+#     config's is "dist/client". Both resolve to the SAME directory:
+#     packages/cf-backend/dist/client. There is one assets dir, not two.
+#   - dist/proteus/assets/ is NOT an assets dir. It is the worker bundle's
+#     code-split chunk output, which wrangler attaches as worker modules.
+#     Writing downloads there publishes nothing.
+# Step 2 asserts this from wrangler's own output rather than trusting it.
+#
 # Usage:
+#   bun run deploy                           # preferred
 #   bash scripts/deploy.sh
 #   SKIP_E2E=1 bash scripts/deploy.sh        # skip pre-deploy verification
 #   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh
@@ -29,6 +49,11 @@ export CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID:-f44999d1ddda7012e9a87729e
 # Captured during deploy for final summary
 PROTEUS_URL="https://proteus.ashishkumarsingh.com/"
 PROTEUS_VERSION=""
+# The one directory wrangler publishes as static assets (see header).
+PROTEUS_ASSETS_DIR="$PROTEUS_ROOT/packages/cf-backend/dist/client"
+# build-cli-source-archive.sh stamps this sha into the archive, the published
+# version.json, and therefore /api/health's build stamp.
+PROTEUS_SHA="$(git -C "$PROTEUS_ROOT" rev-parse --short HEAD 2>/dev/null || echo dev)"
 
 # Temp log file — trap cleans up on any exit.
 PROTEUS_DEPLOY_LOG=""
@@ -37,10 +62,22 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM
 
+# Read one dotted JSON field from stdin. Prints nothing when the body is not
+# JSON — which is exactly what a smoke test needs, because "not JSON" is how a
+# missing asset used to present itself (the SPA shell under a JSON
+# content-type).
+json_field() {
+  node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
+}
+
 echo -e "${BOLD}Proteus Deploy Pipeline${NC}"
 echo "========================"
 echo "Proteus root: $PROTEUS_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
+echo "Build sha:    $PROTEUS_SHA"
+if [ -n "$(git -C "$PROTEUS_ROOT" status --porcelain 2>/dev/null)" ]; then
+  echo -e "${YELLOW}Worktree is dirty — the published build stamp ($PROTEUS_SHA) will not describe what shipped.${NC}"
+fi
 echo ""
 
 # ── Pre-flight: verify npx + wrangler auth ───────────────────────
@@ -93,6 +130,17 @@ fi
 echo "Building CLI source archive"
 bash "$PROTEUS_ROOT/scripts/build-cli-source-archive.sh" || { echo -e "${RED}CLI source archive build failed${NC}"; exit 1; }
 
+# Nothing may reach production without the three CLI download assets sitting in
+# the directory wrangler publishes. A deploy missing them bricks every fresh
+# install and update.
+for asset in proteus-source.tar.gz proteus-source.tar.gz.sha256 proteus-version.json; do
+  if [ ! -s "$PROTEUS_ASSETS_DIR/downloads/$asset" ]; then
+    echo -e "${RED}❌ Missing build output: $PROTEUS_ASSETS_DIR/downloads/$asset${NC}"
+    exit 1
+  fi
+done
+echo -e "${GREEN}✅ CLI download assets staged in $PROTEUS_ASSETS_DIR/downloads${NC}"
+
 PROTEUS_DEPLOY_LOG="$(mktemp -t proteus-deploy.XXXXXX.log)"
 echo ""
 echo "Running: npx wrangler deploy (log → $PROTEUS_DEPLOY_LOG)"
@@ -120,6 +168,20 @@ else
   exit 1
 fi
 
+# Wrangler names the assets directory it actually read. Assert it is the one we
+# staged the downloads into, so a future config or plugin change that moves the
+# assets dir fails here instead of silently shipping an assetless site.
+DEPLOYED_ASSETS_DIR="$(grep -oE 'Read [0-9]+ files from the assets directory .*' "$PROTEUS_DEPLOY_LOG" | head -1 | sed 's|.*assets directory ||' | tr -d '\r')"
+if [ "$DEPLOYED_ASSETS_DIR" = "$PROTEUS_ASSETS_DIR" ]; then
+  echo -e "${GREEN}✅ Wrangler published assets from $PROTEUS_ASSETS_DIR${NC}"
+else
+  echo -e "${RED}❌ Wrangler published assets from '${DEPLOYED_ASSETS_DIR:-<not reported>}'${NC}"
+  echo "   Expected: $PROTEUS_ASSETS_DIR (the directory the CLI downloads were staged into)."
+  echo "   Reconcile packages/cf-backend/wrangler.jsonc, the vite plugin's"
+  echo "   .wrangler/deploy/config.json redirect, and this script's header."
+  exit 1
+fi
+
 cd "$PROTEUS_ROOT" || exit 1
 
 # ── Step 3: Post-deploy smoke test ───────────────────────────────
@@ -144,6 +206,41 @@ if echo "$LIVE_HTML" | grep -qi 'proteus'; then
   echo -e "${GREEN}✅ Proteus live site serves Proteus app${NC}"
 else
   echo -e "${RED}❌ Proteus live site content missing 'Proteus'${NC}"
+  SMOKE_FAIL=1
+fi
+
+# One GET that answers "did my deploy land?". /api/health reads its build stamp
+# out of the deployed asset bundle, so a mismatch here also means the CLI
+# download assets are stale or missing. Edge rollout takes up to ~2 minutes,
+# so the stamp check retries with backoff before calling the deploy bad —
+# a stamp that NEVER converges is the real failure this guards.
+HEALTH_SHA=""
+for _try in 1 2 3 4 5 6 7 8; do
+  HEALTH_JSON=$(curl -s --max-time 15 "${PROTEUS_URL}api/health?smoke=$_try" 2>/dev/null)
+  HEALTH_SHA=$(printf '%s' "$HEALTH_JSON" | json_field build.sha)
+  [ "$HEALTH_SHA" = "$PROTEUS_SHA" ] && break
+  sleep 15
+done
+if [ "$HEALTH_SHA" = "$PROTEUS_SHA" ]; then
+  echo -e "${GREEN}✅ /api/health reports the deployed build ($PROTEUS_SHA)${NC}"
+else
+  echo -e "${RED}❌ /api/health build stamp is '${HEALTH_SHA:-<none>}', expected '$PROTEUS_SHA'${NC}"
+  echo "   Body: ${HEALTH_JSON:0:200}"
+  SMOKE_FAIL=1
+fi
+
+# The §0 regression: this asset once came back as the SPA shell wearing an
+# application/json content-type, so `proteus update` could never see a version.
+VERSION_SHA=""
+for _try in 1 2 3 4 5 6 7 8; do
+  VERSION_SHA=$(curl -fsSL --max-time 15 "${PROTEUS_URL}downloads/proteus-version.json?smoke=$_try" 2>/dev/null | json_field sha)
+  [ "$VERSION_SHA" = "$PROTEUS_SHA" ] && break
+  sleep 15
+done
+if [ "$VERSION_SHA" = "$PROTEUS_SHA" ]; then
+  echo -e "${GREEN}✅ Published proteus-version.json is real JSON for this build${NC}"
+else
+  echo -e "${RED}❌ Published proteus-version.json sha is '${VERSION_SHA:-<unparseable>}', expected '$PROTEUS_SHA'${NC}"
   SMOKE_FAIL=1
 fi
 
@@ -197,5 +294,6 @@ echo -e "${BOLD}Deploy complete.${NC}"
 echo "================================="
 echo "Proteus:  $PROTEUS_URL"
 echo "          version ${PROTEUS_VERSION:-unknown}"
+echo "          build   $PROTEUS_SHA"
 echo ""
 echo -e "${GREEN}✅ Proteus Worker deployed and verified.${NC}"

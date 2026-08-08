@@ -100,6 +100,18 @@ describe('ChatEvent tool success/error fidelity', () => {
     expect(result).toMatchObject({ type: 'tool-result', toolName: 'ok', result: 'fine', success: true });
     expect(result?.type === 'tool-result' && result.error).toBeUndefined();
   });
+
+  test('the call and its result both carry the provider toolCallId', async () => {
+    const model = toolThenTextModel({ toolName: 'ok' });
+    const tools = {
+      ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),
+    };
+    const events = await collect(model, tools);
+    // 'tc1' is what the fake model's stream part declares — surfaces that
+    // report calls out of band (ACP tool_call/tool_call_update) pair on it.
+    expect(events.find((e) => e.type === 'tool-call')).toMatchObject({ toolCallId: 'tc1' });
+    expect(events.find((e) => e.type === 'tool-result')).toMatchObject({ toolCallId: 'tc1' });
+  });
 });
 
 describe('ChatEvent cached-token fidelity', () => {

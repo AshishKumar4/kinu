@@ -69,6 +69,7 @@ export function cloneModelInfos(models: readonly ModelInfo[] | undefined): Model
   return (models ?? []).map((model) => ({
     ...model,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
+    ...(model.cost ? { cost: { ...model.cost } } : {}),
     ...(model.inputModalities ? { inputModalities: [...model.inputModalities] } : {}),
   }));
 }
@@ -102,6 +103,48 @@ export function positiveInteger(value: unknown): number | undefined {
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
+}
+
+/** How deep to follow nested `{ error: … }` envelopes. OpenAI-shaped bodies
+ *  nest once; two spare levels cover the gateways that re-wrap them. */
+const PROVIDER_ERROR_MAX_DEPTH = 3;
+const PROVIDER_ERROR_MAX_CHARS = 800;
+
+/**
+ * Human-readable text for anything a provider can fail with.
+ *
+ * The AI SDK routes provider failures into the stream as an `error` chunk whose
+ * payload is whatever the endpoint sent — frequently a plain object
+ * (`{error: {message, code}}` from an OpenAI-shaped SSE body), not an `Error`.
+ * `String(thatObject)` is `"[object Object]"`, which is exactly the message
+ * users were shown. Dig the message out instead, and fall back to the JSON
+ * rather than to a stringification that carries no information.
+ */
+export function describeProviderError(error: unknown, depth = 0): string {
+  if (error instanceof Error) return error.message || error.name;
+  if (typeof error === 'string') return error.trim() || 'unknown provider error';
+  if (isRecord(error)) {
+    const message = nonEmptyString(error.message)
+      ?? nonEmptyString(error.error_description)
+      ?? nonEmptyString(error.detail);
+    if (message) {
+      const code = nonEmptyString(error.code) ?? nonEmptyString(error.type);
+      return code && !message.toLowerCase().includes(code.toLowerCase()) ? `${message} (${code})` : message;
+    }
+    if (error.error !== undefined && depth < PROVIDER_ERROR_MAX_DEPTH) {
+      return describeProviderError(error.error, depth + 1);
+    }
+  }
+  return jsonOrString(error).slice(0, PROVIDER_ERROR_MAX_CHARS);
+}
+
+function jsonOrString(value: unknown): string {
+  try {
+    const json = JSON.stringify(value);
+    if (typeof json === 'string') return json;
+  } catch { /* circular — fall through */ }
+  if (isRecord(value)) return `unserializable provider error (${Object.keys(value).join(', ') || 'no fields'})`;
+  return String(value);
 }
 
 /** "131k" / "1M" / "1.05M" — compact context-window text shared by the web

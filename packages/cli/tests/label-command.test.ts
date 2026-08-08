@@ -233,7 +233,8 @@ describe('proteus label', () => {
 
   test('unknown actions and missing arguments say what to type', () => {
     const { home } = seedWorkspace('demo');
-    expect(runCli(home, ['label', 'summarise', 'demo']).stdout).toContain('use export, ingest, ensemble, or report');
+    expect(runCli(home, ['label', 'summarise', 'demo']).stdout)
+      .toContain('use export, ingest, ensemble, report, mine, or score');
     expect(runCli(home, ['label', 'ingest', 'demo']).stdout).toContain('proteus label ingest <agent> <file>');
   });
 });

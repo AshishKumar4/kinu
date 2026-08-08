@@ -89,20 +89,15 @@ printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_
 ### 3. Build and Deploy
 
 ```bash
-bash scripts/deploy.sh        # full pipeline (recommended; see "Deploy Script")
+bun run deploy                # the only supported production deploy path
 ```
 
-Or by hand, from `packages/cf-backend`:
-
-```bash
-bunx vite build
-bash ../../scripts/build-cli-source-archive.sh
-bunx wrangler deploy
-```
-
-The CLI source archive step matters: `/downloads/proteus-source.tar.gz` and
-its `.sha256` are static assets baked into the deploy, and the CLI shim
-verifies that checksum by default on install/update.
+That runs `scripts/deploy.sh` (see "Deploy Script" below). Do not deploy
+production with a bare `wrangler deploy`: it uploads a Worker without checking
+that the CLI download assets were built, and production has already shipped
+that way once — the site was fine while `/downloads/proteus-source.tar.gz`,
+its `.sha256`, and `proteus-version.json` all answered with the SPA shell, so
+every fresh install and update died on a checksum mismatch.
 
 ### 4. Custom Domain (Optional)
 
@@ -264,6 +259,7 @@ exhausted budget returns the original response rather than throwing.
 | `CLOUDFLARE_AI_GATEWAY_ID` | wrangler.jsonc `vars` | User account AI Gateway id for Workers AI routing; defaults to `default` |
 | `GOOGLE_OAUTH_SCOPES` / `GITHUB_OAUTH_SCOPES` | optional override | Per-provider scope overrides |
 | `EMAIL_DOMAIN` | wrangler.jsonc `vars` | Mission Inbox domain; unset disables email entirely (as on staging) |
+| `OPS_ALERT_EMAIL` | wrangler.jsonc `vars` | Where synthetic-monitoring alerts go; unset leaves the monitor silent (as on staging) |
 | `DEV_USER_EMAIL` | wrangler env var | Local/staging-only synthetic auth identity. Production must leave this unset. |
 | `PROTEUS_ORIGIN` | CLI shell env | Override CLI app origin for alternate deployments |
 | `PROTEUS_BASE_URL` | CLI shell env | Advanced direct LLM override for local agents |
@@ -280,6 +276,7 @@ exhausted budget returns the original response rather than throwing.
 | `OrchestratorAgent` | Durable Object | The workspace agent (extends `ActorAgent` → `Think`) |
 | `ExplorationAgent` | Durable Object | MCTS branches and heads (Facets) |
 | `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, product changes |
+| `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk` — built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox) — one container per agent |
 | `AUTH_DB` | D1 database | OAuth users, sessions, one-time OAuth state, and CLI browser approval state |
@@ -294,19 +291,21 @@ exhausted budget returns the original response rather than throwing.
 `OrchestratorAgent`, reached through the agents SDK's sub-agent mechanism.
 
 `compatibility_date` is `2025-12-01` with `nodejs_compat`. Durable Object
-migrations are two tags in production (`v1` registering `OrchestratorAgent`,
-`ExplorationAgent`, `ProteusSandbox`, `UserDO`; `v2` adding `NimbusSession`) but
-a **different four-tag sequence** under `env.staging`, because the two
-deployments registered their classes in a different order. Wrangler does not
+migrations are three tags in production (`v1` registering `OrchestratorAgent`,
+`ExplorationAgent`, `ProteusSandbox`, `UserDO`; `v2` adding `NimbusSession`;
+`v3` adding `MonitorDO`) but a **different five-tag sequence** under
+`env.staging`, because the two deployments registered their classes in a
+different order. Wrangler does not
 inherit `env.*` config, so every binding is re-specified there.
 
 ## Deploy Script
 
+`scripts/deploy.sh` is the deploy path — `bun run deploy` at the repo root.
 Everything ships as one Worker (name `proteus`); `NimbusSession` is a local
 DO class deployed with it — there is no separate Nimbus deploy.
 
 ```bash
-bash scripts/deploy.sh
+bun run deploy
 ```
 
 ### Order of operations
@@ -314,14 +313,50 @@ bash scripts/deploy.sh
 1. **Pre-deploy verification** — runs `scripts/e2e-test.sh`. Skip with
    `SKIP_E2E=1` for doc-only or config-only deploys.
 2. **Build** — `bun install` (if root `node_modules` missing), `vite build`,
-   then `scripts/build-cli-source-archive.sh` (CLI source tarball + `.sha256`).
-3. **Deploy** — `npx wrangler deploy`. Verifies the `ProteusSandbox`
-   binding appears in wrangler output.
+   then `scripts/build-cli-source-archive.sh` (CLI source tarball, `.sha256`,
+   `proteus-version.json`). Fails if any of the three is missing from
+   `packages/cf-backend/dist/client/downloads/`.
+3. **Deploy** — `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
+   appears in wrangler output, and that the assets directory wrangler reports
+   reading is the one the downloads were staged into.
 4. **Smoke test** — asserts HTTP 200 + app content on the production URL,
+   that `/api/health` reports the build stamp of the commit being deployed,
+   that `/downloads/proteus-version.json` parses as JSON for that same build,
    that the CLI shim points at the deployed source archive, that the archive
    downloads and lists expected files, and that the published `.sha256`
    matches the served archive (the shim verifies it by default).
-5. **Summary** — prints the URL and Version ID.
+5. **Summary** — prints the URL, Version ID, and build sha.
+
+### Static assets
+
+There is exactly one assets directory: `packages/cf-backend/dist/client`.
+
+`wrangler deploy` follows the redirect the Vite plugin writes to
+`packages/cf-backend/.wrangler/deploy/config.json` and deploys the generated
+`dist/proteus/wrangler.json`, whose `assets.directory` is `../client`. The
+hand-written `wrangler.jsonc` says `dist/client`. Both resolve to the same
+place, so the choice of config does not change which files are published.
+
+`dist/proteus/assets/` is not an assets directory — it is the Worker bundle's
+code-split chunk output, which wrangler attaches as Worker modules. Anything
+written there is never served over HTTP.
+
+Step 2 of the deploy asserts the downloads exist in `dist/client/downloads/`,
+and step 3 asserts wrangler read that same directory, so a future config or
+plugin change that moves the assets dir fails the deploy instead of silently
+shipping an assetless site.
+
+### Build stamp
+
+`scripts/build-cli-source-archive.sh` stamps the short HEAD sha into the CLI
+package version (`0.1.0+<sha>`) and writes `dist/client/downloads/proteus-version.json`
+(`{version, sha, builtAt}`) from that same stamped `package.json`. The Worker
+reads that file back through the `ASSETS` binding and reports it as `build` on
+`GET /api/health`, so one unauthenticated GET answers both "which commit is
+live?" and "did the asset half of the deploy land?". `/api/health` reports
+`ok: false` when there is no build stamp, because a deployment without one has
+broken CLI download endpoints. Deploying from a dirty worktree prints a warning:
+the stamp names a commit that does not describe what shipped.
 
 ### Environment variables
 
@@ -337,15 +372,61 @@ D1 database, `DEV_USER_EMAIL` headless identity) is configured under
 `env.staging` in `wrangler.jsonc`:
 
 ```bash
-cd packages/cf-backend && bunx wrangler deploy --env staging
+bun run --cwd packages/cf-backend deploy:staging
 ```
+
+It rebuilds with `CLOUDFLARE_ENV=staging` so the Vite plugin generates the
+staging config the deploy redirect points at, then rebuilds for production so
+the working tree is not left holding a staging bundle.
+
+### Synthetic monitoring
+
+The deploy smoke gate above only runs at deploy time, and the outage it was
+written for happened to a deploy that never went through it. So the same checks
+run on a schedule: a cron trigger (`*/15 * * * *` in `wrangler.jsonc`) calls
+`MonitorDO.check()`, which probes the live origin and emails `OPS_ALERT_EMAIL`
+through the Mission Inbox's outbound path when something breaks.
+
+| Probe | Passes when |
+|-------|-------------|
+| `health` | `/api/health` returns `ok:true` JSON with a build identifier that matches the one `/downloads/proteus-version.json` advertises |
+| `downloads` | `/downloads/proteus-source.tar.gz` hashes to exactly what `…​.sha256` declares — the check the installer itself makes |
+| `login` | `/login` renders the sign-in page with at least one provider link |
+
+One email per incident, not per tick: a failing probe opens an incident (one
+alert), stays open silently while it keeps failing, and closes with one recovery
+notice. Delivery rides `EmailOutbox`, so a send that fails is re-driven with the
+same Message-ID rather than lost or duplicated.
+
+Unset `OPS_ALERT_EMAIL` (as in staging) leaves the monitor recording incidents
+but silent. Staging also has no cron trigger: its sign-in providers and mail
+route are absent on purpose, so probing it would report a site that is missing
+by design.
 
 ### Rollback
 
-Cloudflare keeps the last 10 Worker versions:
+Cloudflare keeps the last 10 Worker versions. Static assets are part of a
+version, so a rollback moves the Worker code and the published `/downloads/*`
+assets together:
 
 ```bash
 cd packages/cf-backend
 npx wrangler versions list
 npx wrangler rollback --version-id <version-id>
 ```
+
+Then confirm the rollback took, the same way the deploy gate does — the build
+stamp must name the commit you rolled back to, and the CLI download path must
+still verify:
+
+```bash
+curl -s https://proteus.ashishkumarsingh.com/api/health | jq '.ok, .build'
+curl -fsSL https://proteus.ashishkumarsingh.com/downloads/proteus-source.tar.gz -o /tmp/p.tgz
+curl -fsSL https://proteus.ashishkumarsingh.com/downloads/proteus-source.tar.gz.sha256
+sha256sum /tmp/p.tgz
+```
+
+A rollback that leaves `ok: false`, an unexpected `build.sha`, or a 404 on the
+downloads is not a recovery — redeploy forward with `bun run deploy` instead.
+This rehearsal has not been run against production; the commands are the ones
+`scripts/deploy.sh` runs, reduced to what a rollback needs.

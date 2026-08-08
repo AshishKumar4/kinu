@@ -6,13 +6,17 @@
  * the event→turn reactor). Registered exactly like the RLM provider — zero new
  * top-level builtins, so it respects the 6-tool surface.
  *
- * Deliberately NOT here: fork (forkAgent rejects while a turn is in flight, so
- * it can't run mid-codemode) and spawn/join (the agents fork already
- * is the imperative parallel spawn+join facade over the sole sub-agent path —
- * a second one would be a drift-prone shadow system).
+ * Deliberately NOT here: `forkAgent` — the workspace-clone RPC behind the UI's
+ * fork-chat, which copies the whole agent DO at a message and rejects while a
+ * turn is in flight. Cloning the actor mid-script is not delegation.
+ *
+ * Delegation itself is NOT absent from the sandbox — it just isn't duplicated
+ * here. The `agents.*` namespace projects the existing `agents` tool over the
+ * actor's own deps (core tools/agents-codemode.ts), so there is still exactly
+ * one spawn/join implementation, with one more caller.
  */
-import type { CodemodeProvider } from '@proteus/core';
-import { nextCronFire } from '@proteus/core';
+import type { CodemodeProvider, MissionGovernor } from '@proteus/core';
+import { nanoid, nextCronFire, readMissionLimits } from '@proteus/core';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
@@ -26,7 +30,11 @@ export interface AgentSelfHost {
   listScaffoldVersions(limit?: number): Promise<unknown>;
   createTimerTrigger(opts: {
     cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown>;
+    missionLabel?: string;
   }): { id: string; kind: string; nextFireAt: number | null };
+  /** The cumulative spend governor — a schedule declares its mission budget
+   *  here, and `agent.budget` reads it back. */
+  readonly budget: MissionGovernor;
   cancelTrigger(id: string): Promise<unknown> | unknown;
   jobResult(jobId: string): Promise<unknown>;
   listBackgroundJobs(limit?: number): Promise<unknown>;
@@ -59,11 +67,24 @@ const TYPES = `export declare const agent: {
   scaffoldVersions(limit?: number): Promise<unknown>;
   /** Schedule a future autonomous turn. Pass { cron } for recurring OR
    *  { atMs } (epoch ms) for one-shot; optional label + payload. The reactor
-   *  wakes you when it fires. */
-  schedule(opts: { cron?: string; atMs?: number; label?: string; payload?: object }):
-    Promise<{ id: string; kind: string; nextFireAt: number | null }>;
+   *  wakes you when it fires.
+   *  Optionally give the whole schedule a CUMULATIVE spend cap with
+   *  budget_usd / budget_tokens: every turn it wakes, every fork those turns
+   *  run and everything they spawn debit one durable ledger, and the host
+   *  declines further model calls and spawns once it is spent — a long
+   *  autonomous run cannot outspend it by writing code that forgets to stop.
+   *  Recurring schedules accumulate across fires; name budget_label to share
+   *  one ledger across several schedules. Omit for no cap. */
+  schedule(opts: {
+    cron?: string; atMs?: number; label?: string; payload?: object;
+    budget_usd?: number; budget_tokens?: number; budget_label?: string;
+  }): Promise<{ id: string; kind: string; nextFireAt: number | null; budget?: unknown }>;
   /** Cancel a previously-scheduled trigger by id. */
   cancelSchedule(id: string): Promise<{ ok: boolean }>;
+  /** Read a mission budget: one label, or everything the CURRENT turn spends
+   *  against when called with no argument. Returns [] when this run is
+   *  uncapped, which is the default. */
+  budget(label?: string): Promise<unknown>;
   /** Read a background job's status + result. When a long tool call is
    *  auto-backgrounded you get a { jobId }; you are woken on completion — call
    *  this to fetch the result, then synthesize/continue. */
@@ -140,21 +161,43 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       schedule: {
-        description: 'Schedule a future autonomous turn: { cron } recurring OR { atMs } one-shot (epoch ms), with optional label/payload. The reactor wakes you when it fires.',
+        description: 'Schedule a future autonomous turn: { cron } recurring OR { atMs } one-shot (epoch ms), with optional label/payload. The reactor wakes you when it fires. Optional budget_usd / budget_tokens give the whole schedule a cumulative host-enforced spend cap covering every turn it wakes and everything those turns spawn.',
         execute: async (...args: unknown[]) => {
-          const opts = (args[0] ?? {}) as { cron?: unknown; atMs?: unknown; label?: unknown; payload?: unknown };
+          const opts = (args[0] ?? {}) as {
+            cron?: unknown; atMs?: unknown; label?: unknown; payload?: unknown; budget_label?: unknown;
+          };
           const cron = typeof opts.cron === 'string' && opts.cron ? opts.cron : undefined;
           const atMs = typeof opts.atMs === 'number' && Number.isFinite(opts.atMs) ? opts.atMs : undefined;
           if (!cron && atMs === undefined) return { error: 'agent.schedule: provide { cron } or { atMs }' };
           if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
           if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
+          // The ledger is declared BEFORE the trigger so the schedule can carry
+          // its label from the first fire; a named label re-enters the existing
+          // cumulative row rather than starting a fresh one.
+          const limits = readMissionLimits(opts as { budget_usd?: unknown; budget_tokens?: unknown });
+          const missionLabel = limits
+            ? (typeof opts.budget_label === 'string' && opts.budget_label.trim() ? opts.budget_label.trim() : `schedule-${nanoid()}`)
+            : undefined;
           try {
-            return host.createTimerTrigger({
-              cron, atMs,
-              label: typeof opts.label === 'string' ? opts.label : undefined,
-              payload: opts.payload && typeof opts.payload === 'object' ? opts.payload as Record<string, unknown> : undefined,
-            });
+            const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
+            return {
+              ...host.createTimerTrigger({
+                cron, atMs, missionLabel,
+                label: typeof opts.label === 'string' ? opts.label : undefined,
+                payload: opts.payload && typeof opts.payload === 'object' ? opts.payload as Record<string, unknown> : undefined,
+              }),
+              ...(budget ? { budget } : {}),
+            };
           } catch (err) { return { error: `agent.schedule: ${(err as Error).message}` }; }
+        },
+      },
+      budget: {
+        description: 'Read a mission budget: pass a label, or omit to read whatever the current turn spends against. Returns [] when this run is uncapped (the default).',
+        execute: async (...args: unknown[]) => {
+          const label = args[0];
+          if (label !== undefined && typeof label !== 'string') return { error: 'agent.budget: label must be a string when given' };
+          try { return host.budget.snapshot(label); }
+          catch (err) { return { error: `agent.budget: ${(err as Error).message}` }; }
         },
       },
       cancelSchedule: {

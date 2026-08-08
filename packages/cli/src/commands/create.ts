@@ -1,6 +1,7 @@
 import { ensureAgentHome, pathHint, type AgentMode } from '../config.js';
 import { createCliAgent } from '../agent-create.js';
-import { ACCENT, DIM, OK, createSpinner, printCreatedCard, printError } from '../display.js';
+import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } from '../display.js';
+import { findUnusableModel } from '../local-model-resolver.js';
 import { ask, canPrompt } from '../prompt.js';
 
 export async function createCommand(name: string | undefined, opts: {
@@ -33,8 +34,8 @@ export async function createCommand(name: string | undefined, opts: {
       if (hint) console.log(DIM(hint));
       console.log(`\n${DIM('Run:')} ${ACCENT(alias || `proteus run ${name}`)} ${DIM('"do something"')}\n`);
     } catch (err) {
-      spinner.stop('Create failed');
-      printError(err instanceof Error ? err.message : String(err));
+      spinner.fail('Create failed');
+      printFailure(err);
       process.exit(1);
     }
     return;
@@ -46,13 +47,23 @@ export async function createCommand(name: string | undefined, opts: {
     const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
     spinner.stop('Workspace created');
     printCreatedCard(name, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
+    await warnUnusableModel({ ...(opts.model ? { model: opts.model } : {}), agentName: name });
     const hint = pathHint();
     if (hint) console.log(DIM(hint));
   } catch (err) {
-    spinner.stop('Create failed');
-    printError(err instanceof Error ? err.message : String(err));
+    spinner.fail('Create failed');
+    printFailure(err);
     process.exit(1);
   }
+}
+
+/** The workspace exists either way — this is the difference between learning
+ *  the model is unusable now and learning it when the first turn dies. */
+async function warnUnusableModel(opts: { model?: string; agentName: string }): Promise<void> {
+  const unusable = await findUnusableModel(opts);
+  if (!unusable) return;
+  console.log(`\n${WARN('!')} ${unusable.spec} ${DIM('has no connected provider.')} ${unusable.reason}`);
+  console.log(DIM(`  Connect one with: proteus provider connect <provider>, then set the model with /model in chat.`));
 }
 
 async function resolveMode(raw: string | undefined, interactive: boolean): Promise<AgentMode> {

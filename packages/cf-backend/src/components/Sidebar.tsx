@@ -16,7 +16,7 @@
  */
 import { useEffect, useState, useCallback, useRef, type FormEvent } from "react";
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
-import { BrainIcon, PlusIcon, GearIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
+import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-proteus";
@@ -194,10 +194,19 @@ export default function Sidebar() {
     <div className="flex h-full min-h-0 flex-col">
       {/* Logo + new workspace */}
       <div className="px-3 pt-4 pb-2 flex flex-col gap-2">
-        <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
-          <BrainIcon size={22} weight="duotone" className="p-accent" />
-          <span className="font-medium tracking-tight">Proteus</span>
-        </Link>
+        <div className="flex items-center justify-between">
+          <Link to="/" className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:p-card transition-colors">
+            <BrainIcon size={22} weight="duotone" className="p-accent" />
+            <span className="font-medium tracking-tight">Proteus</span>
+          </Link>
+          <a
+            href="https://github.com/AshishKumar4/Proteus"
+            target="_blank" rel="noopener noreferrer" aria-label="GitHub repository"
+            className="flex size-8 items-center justify-center rounded-md p-text-2 hover:p-card-hover hover:p-text transition-colors"
+          >
+            <GithubLogoIcon size={17} />
+          </a>
+        </div>
         <button
           onClick={() => setShowCreate(true)}
           className="flex items-center gap-2 px-3 py-2 rounded-lg p-card hover:p-card-hover transition-colors text-sm cursor-pointer"

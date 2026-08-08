@@ -142,12 +142,18 @@ describe('scaffoldChatTransform', () => {
       run: runOpts(runtime(), TOOL_SCAFFOLD, async () => ({ hits: 2 })),
     }));
 
-    expect(events.find((e) => e.type === 'tool-call')).toEqual({
-      type: 'tool-call', toolName: 'search', args: { q: 'the task' },
+    const call = events.find((e) => e.type === 'tool-call');
+    const result = events.find((e) => e.type === 'tool-result');
+    expect(call).toEqual({
+      type: 'tool-call', toolName: 'search', toolCallId: expect.any(String), args: { q: 'the task' },
     });
-    expect(events.find((e) => e.type === 'tool-result')).toEqual({
-      type: 'tool-result', toolName: 'search', result: '{"hits":2}', success: true,
+    expect(result).toEqual({
+      type: 'tool-result', toolName: 'search', toolCallId: expect.any(String),
+      result: '{"hits":2}', success: true,
     });
+    // The pair carries the dispatch's own call id, so a surface reporting the
+    // call out of band can settle the right one.
+    expect(result?.toolCallId).toBe(call?.toolCallId);
   });
 
   test('a failing tool dispatch is reported as an unsuccessful tool-result', async () => {

@@ -32,6 +32,23 @@ export interface ApprovalResult {
   readonly hits: readonly ApprovalRuleHit[];
 }
 
+/** What an interactive approval channel is asked about: the command that hit
+ *  the gate and the review explaining why. */
+export interface ShellApprovalRequest {
+  readonly command: string;
+  readonly review: ApprovalResult;
+}
+
+/** A channel's answer. 'allow'/'deny' apply to this command only; the
+ *  '_always' variants also carry the user's intent to change the session's
+ *  standing shell approval mode. */
+export type ShellApprovalOutcome = 'allow' | 'allow_always' | 'deny' | 'deny_always';
+
+/** Whether an outcome lets the command run. */
+export function approvalGrants(outcome: ShellApprovalOutcome): boolean {
+  return outcome === 'allow' || outcome === 'allow_always';
+}
+
 interface Rule {
   pattern: RegExp;
   decision: ApprovalDecision;

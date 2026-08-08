@@ -52,6 +52,7 @@ import { describePromptAttachment, resolvePromptAttachments } from '../attachmen
 import { watchDeviceConsents } from '../consent-watch.js';
 import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
 import { requireInteractiveTerminal } from '../prompt.js';
+import { guideFailure } from '../provider-guidance.js';
 import { openBrowser } from '../commands/auth.js';
 import type { CliSessionInfo } from '../session.js';
 import { StatusBar } from './status-bar.js';
@@ -546,7 +547,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       case 'error':
         // Informational: the lifecycle settles through the paired turn-end.
         sealSegment();
-        addMessage({ role: 'system', content: `Error: ${event.message}` });
+        addMessage({ role: 'system', content: errorLine(event.message) });
         break;
       case 'turn-end': {
         // Flush the trailing streamed text into the live segment, then seal it.
@@ -656,7 +657,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         signal.addEventListener('abort', () => settle('cancelled'), { once: true });
       }),
       note: (kind, message) => {
-        addMessage({ role: 'system', content: kind === 'error' ? `Error: ${message}` : message });
+        addMessage({ role: 'system', content: kind === 'error' ? errorLine(message) : message });
       },
     });
     return () => watcher.stop();
@@ -922,6 +923,14 @@ export function handleHistoryScrollKey(
   history.scrollTo(history.scrollTop + direction * delta);
   event.preventDefault();
   return true;
+}
+
+/** A failure as a transcript entry: the provider's own words, plus the next
+ *  command when the failure class implies one. Plain text — the TUI styles
+ *  system messages itself, so no ANSI here. */
+function errorLine(message: string): string {
+  const guided = guideFailure(message);
+  return guided.hint ? `Error: ${guided.message}\n${guided.hint}` : `Error: ${guided.message}`;
 }
 
 /** Extract the last URL from assistant message content. */

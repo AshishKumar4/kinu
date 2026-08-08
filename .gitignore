@@ -35,6 +35,13 @@ packages/core/tests/helpers.d.ts.map
 # Useful locally, not part of the published project.
 /*-2[0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md
 
+# Mined Claude Code transcript corpora (`proteus label mine`). These describe
+# the owner's private sessions and must never be committed; the default output
+# lives outside any repository, and these patterns cover a run pointed at one.
+# `packages/cli/tests/cc-corpus.test.ts` asserts both.
+.cc-corpus/
+CC-CORPUS-*.md
+
 # External benchmark corpora (downloaded via harbor, not our source)
 /deep-swe/
 /terminal-bench/

@@ -14,6 +14,13 @@ export {
 export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
 export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
+// Workspace archive — one portable backup format for both backends.
+export {
+  WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
+  archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
+  type ArchiveCursor, type ArchiveExportOptions, type ArchivePage,
+  type ArchiveRestoreResult, type ArchiveSql,
+} from './identity/archive.js';
 export {
   WORKSPACE_IDENTITY_SYSTEM_PROMPT,
   workspaceIdentityPrompt,
@@ -91,6 +98,16 @@ export {
   type EnsembleJudge, type EnsembleRun, type EnsembleRunResult, type EnsembleGap,
   type EnsembleReport, type EnsembleMember, type StandInCondition,
 } from './evolution/ensemble.js';
+// Behavioural weak labels — turns judged by what the user DID (interrupts,
+// refusals, re-asks, approvals), and the harness that scores the classifier and
+// the panel against them. Complements the on-distribution calibration above; it
+// never replaces it.
+export {
+  BEHAVIOR_RULES, weakLabel, corpusStats, runCorpusEval, renderCorpusReport,
+  type BehaviorRule, type CorpusTurn, type TurnSignals, type WeakLabel,
+  type CorpusStats, type CorpusEvalInput, type CorpusEvalReport, type RaterScore,
+  type RaterCost,
+} from './evolution/behavior-labels.js';
 // Replay-eval harness — outcome-labeled turns re-run against the current
 // config; the persisted loss curve.
 export {
@@ -247,7 +264,7 @@ export {
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
 export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM } from './llm.js';
-export type { LLMProviderConfig, ChatModelConfig } from './llm.js';
+export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm.js';
 export { contextWindowForModel } from './context-window.js';
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
 export {
@@ -260,6 +277,22 @@ export {
   type ContextBudgetSnapshot,
   type SpillTrip,
 } from './context-budget.js';
+// The cumulative, label-scoped spend governor — the outer integral over every
+// call-scoped budget. Opt-in: no label, no cap, no storage traffic.
+export {
+  MissionGovernor,
+  MissionBudgetExhausted,
+  MISSION_LABELS_METADATA_KEY,
+  readMissionLabels,
+  readMissionLimits,
+  type MissionBudgetLimits,
+  type MissionBudgetRefusal,
+  type MissionBudgetSnapshot,
+  type MissionCallUsage,
+  type MissionGovernorDeps,
+  type MissionSeam,
+  type MissionSpendProvenance,
+} from './mission-budget.js';
 export {
   buildCompactionSummaryPrompt,
   wrapCompactionSummary,
@@ -289,11 +322,14 @@ export {
   createAgentsTool, agentsActionsFor, renderAgentsToolDescription, resumableForkInput,
   type AgentsToolInput,
 } from './tools/agents-tool.js';
+// The same delegation dispatch, projected into the codemode sandbox.
+export { createAgentsCodemodeProvider } from './tools/agents-codemode.js';
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,
   type BuiltinToolDeps, type ProductChangeToolDeps,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
+  type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps, type ReportToolDeps,
   type PeerAskOutcome, type PeerSendOutcome, type PeerReplyOutcome, type PeerSpawnOutcome,
 } from './tools/builtins.js';
@@ -380,9 +416,13 @@ export {
   markLastToolForAnthropicCache,
   promptCacheOptions,
   resolvePromptCacheStrategy,
+  isCacheRetention,
   ANTHROPIC_MAX_BREAKPOINTS,
+  CACHE_RETENTIONS,
+  DEFAULT_CACHE_RETENTION,
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
+  type CacheRetention,
   type PromptCacheStrategy,
 } from './prompting/cache-breakpoints.js';
 export {
@@ -688,9 +728,12 @@ export {
   reviewCommand,
   formatApproval,
   withApprovalGate,
+  approvalGrants,
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
+  type ShellApprovalRequest,
+  type ShellApprovalOutcome,
   argumentDigest,
   sha256Hex,
   stableStringify,

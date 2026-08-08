@@ -1,4 +1,4 @@
-import { appendFileSync, chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
@@ -19,6 +19,7 @@ import {
   resolveProviderCredentials,
 } from '../config.js';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
+import { appendDaemonLog, readDaemonLogTail } from '../daemon-log.js';
 import { DIM, OK, WARN } from '../display.js';
 
 const PID_PATH = join(AGENT_HOME, 'daemon.pid');
@@ -61,11 +62,8 @@ export async function daemonCommand(action: string | undefined): Promise<void> {
     return;
   }
   if (sub === 'logs') {
-    if (!existsSync(LOG_PATH)) {
-      console.log(DIM(`No daemon log at ${LOG_PATH}`));
-      return;
-    }
-    console.log(readFileSync(LOG_PATH, 'utf-8').split('\n').slice(-120).join('\n'));
+    const tail = readDaemonLogTail(LOG_PATH, 120);
+    console.log(tail === null ? DIM(`No daemon log at ${LOG_PATH}`) : tail);
     return;
   }
   if (sub === 'run') {
@@ -252,7 +250,7 @@ function writePid(pid: number | undefined): void {
 }
 
 function log(message: string): void {
-  appendFileSync(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
+  appendDaemonLog(LOG_PATH, `${new Date().toISOString()} ${message}\n`);
 }
 
 function sleep(ms: number): Promise<void> {

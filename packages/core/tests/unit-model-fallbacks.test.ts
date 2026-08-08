@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { contextWindowForModel, resolvePromptModelProfile } from '../src/index.ts';
+import {
+  ModelCatalogSession, contextWindowForModel, resolvePromptModelProfile,
+  type ModelInfo,
+} from '../src/index.ts';
 
 // These are the FALLBACK paths used when the live models.dev catalog is
 // unreachable (the catalog's reported contextWindow/capabilities always win).
@@ -30,5 +33,36 @@ describe('model fallbacks track new releases', () => {
       capabilities: ['tools', 'streaming'],
     });
     expect([...profile.capabilities].sort()).toEqual(['streaming', 'tools']);
+  });
+});
+
+// The catalog session is what turns an async lookup into a synchronous answer
+// for the whole turn: the static fallbacks hold until it lands, and nothing
+// ever blocks on it. Pricing joins the window and the media policy there —
+// null until the catalog answers, so the budget ledger blends and says so.
+describe('ModelCatalogSession.pricing', () => {
+  test('null until the lookup lands, then the catalog rates', async () => {
+    let resolveLookup: (info: ModelInfo | null) => void = () => {};
+    const landed = new Promise<ModelInfo | null>((r) => { resolveLookup = r; });
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'anthropic/claude-sonnet-4-6',
+      lookup: () => landed,
+    });
+
+    expect(session.pricing()).toBeNull();
+    resolveLookup({ id: 'claude-sonnet-4-6', cost: { input: 3, output: 15, cacheRead: 0.3 } });
+    await landed;
+    expect(session.pricing()).toEqual({ input: 3, output: 15, cacheRead: 0.3 });
+  });
+
+  test('a model the catalog does not price stays null rather than guessing', async () => {
+    const session = new ModelCatalogSession({
+      effectiveSpec: () => 'workers-ai/@cf/moonshotai/kimi-k2.6',
+      lookup: async () => ({ id: '@cf/moonshotai/kimi-k2.6', contextWindow: 262_144 }),
+    });
+    session.pricing();
+    await Promise.resolve();
+    expect(session.pricing()).toBeNull();
+    expect(session.contextWindow()).toBe(262_144);
   });
 });

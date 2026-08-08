@@ -11,6 +11,10 @@
  *                     toward sanitizing, never toward a rejected request); the
  *                     catalog's input modalities narrow it once the lookup
  *                     lands.
+ *   pricing()         the model's real per-1M USD rates, for the mission
+ *                     budget's ledger. Null until the lookup lands (or when
+ *                     the catalog prices nothing) — the caller falls back to
+ *                     the blended rate and RECORDS that it did.
  *
  * Both backends previously carried this whole block verbatim, differing only
  * in the lookup function (provider registry vs LocalModelResolver).
@@ -18,7 +22,7 @@
 
 import { contextWindowForModel } from '../context-window.js';
 import { acceptedMediaForModel, type MediaModality } from '../prompting/attachment-sanitizer.js';
-import { parseModelSpec, type ModelInfo } from '../providers/types.js';
+import { parseModelSpec, type ModelInfo, type ModelPricing } from '../providers/types.js';
 
 export class ModelCatalogSession {
   private cached: { spec: string; info: ModelInfo | null } | null = null;
@@ -44,6 +48,12 @@ export class ModelCatalogSession {
 
   contextWindow(): number {
     return this.info()?.contextWindow ?? contextWindowForModel(this.deps.effectiveSpec());
+  }
+
+  /** What the resolved model charges, or null when the catalog has not landed
+   *  (or does not price it). */
+  pricing(): ModelPricing | null {
+    return this.info()?.cost ?? null;
   }
 
   acceptedMedia(): ReadonlySet<MediaModality> {

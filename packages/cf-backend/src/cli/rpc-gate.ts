@@ -122,6 +122,9 @@ export const AGENT_RPC_ACCESS = {
   decideProductChangeApproval: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubordinate: 'interactive',
+  // The owner's backup of their own workspace. Interactive-only: a CI token
+  // that can run a task must not be able to walk off with the whole database.
+  exportWorkspaceArchive: 'interactive',
   forkAgent: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
