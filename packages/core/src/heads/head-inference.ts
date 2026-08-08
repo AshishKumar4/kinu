@@ -18,21 +18,8 @@ import {
   budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
-import type { Shell } from '../types/primitives.js';
-import type { WebSearchProvider, WebSearchResponse } from '../web/index.js';
-import { WebFetchError } from '../web/index.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
-
-/** The VFS surface a head's private sandbox needs — narrowed to the `'utf8'`
- *  encoding literal so BOTH the cf SqliteFS and the core VFS satisfy it without
- *  an adapter (their readFile encoding params differ only in that literal). */
-export interface HeadSandboxVfs {
-  readFile(path: string, opts?: { encoding?: 'utf8' }): Promise<Uint8Array | string>;
-  writeFile(path: string, data: string | Uint8Array): Promise<void>;
-  readdir(path: string): Promise<string[]>;
-  mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
-}
 
 /** Hard ceiling on a head's reasoning steps (budget derives a tighter cap). */
 export const MAX_HEAD_STEPS = 16;
@@ -138,173 +125,22 @@ export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): 
   return out;
 }
 
-/** A head's private ephemeral sandbox — sandbox_exec/read/write/list over a Shell
- *  + VFS the backend owns (cf: a per-Facet SqliteFS; CLI: a per-head ephemeral
- *  runtime). Siblings can't see it. Writes record a file ArtifactRef. */
-export function buildHeadSandboxTools(shell: Shell, vfs: HeadSandboxVfs, capture: HeadCapture): ToolSet {
-  return {
-    sandbox_exec: tool({
-      description: "Run a shell command in this head's ephemeral sandbox.",
-      inputSchema: jsonSchema<{ command: string }>({
-        type: 'object', required: ['command'], properties: { command: { type: 'string' } },
-      }),
-      execute: async ({ command }) => {
-        const r = await shell.exec(command);
-        capture.recordToolCall('sandbox_exec', { command }, `exit=${r.exitCode}`);
-        if (r.exitCode !== 0) return `Exit ${r.exitCode}${r.stderr ? ': ' + r.stderr : ''}`;
-        return r.stdout || '(no output)';
-      },
-    }),
-    sandbox_read: tool({
-      description: "Read a file from this head's ephemeral sandbox.",
-      inputSchema: jsonSchema<{ path: string }>({
-        type: 'object', required: ['path'], properties: { path: { type: 'string' } },
-      }),
-      execute: async ({ path }) => {
-        try {
-          const c = await vfs.readFile(path, { encoding: 'utf8' });
-          capture.recordToolCall('sandbox_read', { path }, 'ok');
-          return typeof c === 'string' ? c : new TextDecoder().decode(c);
-        } catch (err) {
-          capture.recordToolCall('sandbox_read', { path }, 'error');
-          return `read error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    }),
-    sandbox_write: tool({
-      description: "Write content to a file in this head's ephemeral sandbox.",
-      inputSchema: jsonSchema<{ path: string; content: string }>({
-        type: 'object', required: ['path', 'content'],
-        properties: { path: { type: 'string' }, content: { type: 'string' } },
-      }),
-      execute: async ({ path, content }) => {
-        try {
-          const dir = path.split('/').slice(0, -1).join('/');
-          if (dir) { try { await vfs.mkdir(dir, { recursive: true }); } catch { /* exists */ } }
-          await vfs.writeFile(path, content);
-          capture.recordArtifact({ kind: 'file', ref: path, description: `head-written (${content.length}b)` });
-          capture.recordToolCall('sandbox_write', { path, contentLen: content.length }, 'ok');
-          return `wrote ${content.length} bytes to ${path}`;
-        } catch (err) {
-          capture.recordToolCall('sandbox_write', { path }, 'error');
-          return `write error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    }),
-    sandbox_list: tool({
-      description: "List directory contents in this head's ephemeral sandbox.",
-      inputSchema: jsonSchema<{ path: string }>({
-        type: 'object', required: ['path'], properties: { path: { type: 'string' } },
-      }),
-      execute: async ({ path }) => {
-        try {
-          const names = await vfs.readdir(path);
-          capture.recordToolCall('sandbox_list', { path }, 'ok');
-          return names.join('\n');
-        } catch (err) {
-          capture.recordToolCall('sandbox_list', { path }, 'error');
-          return `list error: ${err instanceof Error ? err.message : String(err)}`;
-        }
-      },
-    }),
-  };
-}
-
-/** web_search / web_fetch over the shared WebSearchProvider seam — the same
- *  key-less-by-default discovery+retrieval surface the main loop gets, so a
- *  research head can actually gather live information instead of reasoning from
- *  clipped inherited context alone. Both backends thread their own provider
- *  (cf: env.AI markdown + Tavily auth; cli: node fetch) through here. */
-export function buildHeadWebTools(provider: WebSearchProvider, capture: HeadCapture): ToolSet {
-  return {
-    web_search: tool({
-      description:
-        'Search the web for ranked results (title, url, snippet). Key-less by default; loop with web_fetch to read the promising URLs.',
-      inputSchema: jsonSchema<{ query: string; limit?: number }>({
-        type: 'object', required: ['query'],
-        properties: {
-          query: { type: 'string' },
-          limit: { type: 'number', description: 'Max results (default 5, max 20).' },
-        },
-      }),
-      execute: async ({ query, limit }) => {
-        try {
-          const res = await provider.search(query, limit !== undefined ? { limit } : undefined);
-          capture.recordToolCall('web_search', { query, limit }, `${res.results.length} results`);
-          return formatHeadSearchResults(res);
-        } catch (err) {
-          capture.recordToolCall('web_search', { query, limit }, 'error');
-          return headWebError(err);
-        }
-      },
-    }),
-    web_fetch: tool({
-      description: 'Fetch one absolute http(s) URL as clean markdown. Use after web_search to read a result.',
-      inputSchema: jsonSchema<{ url: string }>({
-        type: 'object', required: ['url'], properties: { url: { type: 'string' } },
-      }),
-      execute: async ({ url }) => {
-        try {
-          const res = await provider.fetch(url);
-          capture.recordToolCall('web_fetch', { url }, 'ok');
-          capture.recordArtifact({ kind: 'note', ref: res.url, description: res.title ?? res.url });
-          return `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n${res.markdown}`;
-        } catch (err) {
-          capture.recordToolCall('web_fetch', { url }, 'error');
-          return headWebError(err);
-        }
-      },
-    }),
-  };
-}
-
-/** Render search results model-ready — mirrors the main loop's web_search shape
- *  (ranked title + url + snippet, synthesized answer first when present). */
-function formatHeadSearchResults(res: WebSearchResponse): string {
-  if (res.results.length === 0) return `No web results for "${res.query}".`;
-  const lines: string[] = [];
-  if (res.answer) lines.push(`Answer: ${res.answer}`, '');
-  for (const r of res.results) {
-    const date = r.date ? ` (${r.date})` : '';
-    lines.push(`${r.position}. ${r.title}${date}\n   ${r.url}\n   ${r.snippet}`);
-  }
-  lines.push('', `[${res.results.length} results via ${res.source}]`);
-  return lines.join('\n');
-}
-
-/** Honest, model-actionable web failure string (heads return plain strings). */
-function headWebError(err: unknown): string {
-  if (err instanceof WebFetchError) {
-    return err.retriable ? `web error (retriable): ${err.message}` : `web error: ${err.message}`;
-  }
-  return `web error: ${err instanceof Error ? err.message : String(err)}`;
-}
-
 /** The head's system prompt — task framing + the head conventions (record_*,
- *  private sandbox vs shared scratch, web research, recursive split, isolation). */
+ *  the forked real runtime, web research, recursive split, isolation). */
 const HEAD_PROMPT_TOOL_NAMES = [
   'record_evidence',
   'record_decision',
   'execute_tools',
   'run',
-  'sandbox_exec',
-  'sandbox_read',
-  'sandbox_write',
-  'sandbox_list',
   'web_search',
   'web_fetch',
-  'shared_write',
-  'shared_read',
-  'shared_list',
   'split_subheads',
 ] as const;
 
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = [
-  'execute_tools', 'run', 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list',
-] as const;
+const HEAD_WORK_TOOLS = ['execute_tools', 'run'] as const;
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
   return names.some((name) => tools.has(name));
@@ -334,14 +170,8 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
       + 'the default `workspace` runtime is only YOUR private scratch shell.',
     );
   }
-  if (hasHeadTool(tools, 'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list')) {
-    lines.push('- sandbox_exec / sandbox_read / sandbox_write / sandbox_list = YOUR PRIVATE scratch (siblings can\'t see it).');
-  }
   if (hasHeadTool(tools, 'web_search', 'web_fetch')) {
     lines.push('- Loop web_search to gather, then web_fetch to read the promising results; record_evidence each finding worth surfacing.');
-  }
-  if (hasHeadTool(tools, 'shared_write', 'shared_read', 'shared_list')) {
-    lines.push('- shared_write / shared_read / shared_list = the COMMON scratch (shared/findings/), visible to sibling heads and the main agent. Put results worth sharing here; your writes are head-namespaced so siblings can\'t clobber them.');
   }
   if (hasHeadTool(tools, 'split_subheads')) {
     lines.push('- split_subheads to recursively explore deeper if needed (depth-budgeted).');
@@ -350,11 +180,9 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
     '- Final text response: 2-4 sentences summarizing what you found + recommending what should happen next.',
     '- Stay focused on YOUR task. Don\'t try to do sibling heads\' work.',
   );
-  if (!hasHeadTool(tools, 'shared_write', 'shared_read', 'shared_list')) {
-    lines.push('- If you need to share findings but no shared scratch tool exists, put the finding in your final response and record_evidence if available.');
-  }
+  lines.push('- If you need to share findings but no shared scratch tool exists, put the finding in your final response and record_evidence if available.');
   if (!hasHeadTool(tools, ...HEAD_WORK_TOOLS)) {
-    lines.push('- You have no filesystem or command tool in this run: reason from inherited context and the available accumulator/shared tools only.');
+    lines.push('- You have no filesystem or command tool in this run: reason from inherited context and the available accumulator tools only.');
   }
   if (!hasHeadTool(tools, 'split_subheads')) {
     lines.push('- Do not propose recursive subheads; split_subheads is not available in this run.');
@@ -362,7 +190,7 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   return [
     ...lines,
     '',
-    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace) or use shared_write when available. Read-only inspection of shared resources is always fine.`,
+    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace). Read-only inspection of shared resources is always fine.`,
   ];
 }
 

@@ -14,7 +14,7 @@
  * can never acquire the think/team/peers surface and open an unbounded spawn
  * tree (unit-exploration-containment.test.ts). Routing every spawn of it
  * through this module keeps that one class the only thing a head can start —
- * a head forks its parent's RESOURCES (heads/head-tools.ts), never its
+ * a head forks its parent's RESOURCES (@proteus/core head-tools), never its
  * authority to create actors.
  *
  * Subordinates are not spawned here on purpose: SubordinateAgent drags in the

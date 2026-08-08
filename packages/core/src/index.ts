@@ -769,10 +769,12 @@ export {
   type SplitPhaseEvent,
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
   extractHeadSteps, extractFinalText, synthesizeHeadSummary,
-  HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   MAX_HEAD_STEPS,
-  type HeadInferenceDeps, type HeadSandboxVfs,
+  type HeadInferenceDeps,
+  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
+  type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
 } from './heads/index.js';
 
 // Background-job system — auto-background >30s tool calls + wake-on-completion.

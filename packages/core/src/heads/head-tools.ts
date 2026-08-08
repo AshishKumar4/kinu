@@ -1,12 +1,12 @@
 /**
- * A head's tool surface — the single declaration of what a fork of the parent
- * workspace may do.
+ * A head's tool surface — the single, backend-agnostic declaration of what a
+ * fork of the parent workspace may do. Both backends build heads from this one
+ * function: the cf ExplorationAgent Facet and the CLI in-process head runtime.
  *
- * A head IS a fork: it runs on the parent's exec planes (same sandbox container,
- * same Nimbus session, same device consent) with the parent's workspace mounted
- * at `/workspace`, so it reaches the real files and the real executor through
- * exactly the tools the parent agent uses. Before this, a head got a
- * freshly-created empty SqliteFS behind tools NAMED `sandbox_*`, so a head asked
+ * A head IS a fork: it runs on the parent's real execution surface (the parent's
+ * exec planes and workspace files) and reaches them through exactly the tools the
+ * parent agent uses — `run`, `execute_tools`, `web_*`. Before this, a head got a
+ * freshly-created empty scratch behind tools NAMED `sandbox_*`, so a head asked
  * to study a repo in the workspace truthfully reported finding nothing.
  *
  * Containment is two independent mechanisms, both structural:
@@ -23,30 +23,24 @@
  * is budget-gated (HeadController derives each child's budget from its parent's;
  * budgetExhausted refuses once depth, tokens or wall-clock run out).
  *
- * This module deliberately imports nothing from `agents`: the facet supplies the
- * runtime and the spawn substrate as plain values, so the surface it produces is
- * directly constructible — and therefore directly assertable — in a unit test.
+ * The `allowedTools` filter runs LAST over the head's real vocabulary, so a
+ * parent fork request naming `run` / `execute_tools` / `web_search` maps onto the
+ * head's actual tools instead of silently emptying the set (the old bug: the
+ * parent's vocabulary was filtered against a disjoint `sandbox_*` head surface).
  */
 
 import { jsonSchema, tool, type ToolSet } from 'ai';
-import {
-  buildBuiltinTools,
-  buildHeadAccumulatorTools,
-  budgetExhausted,
-  withHeadCaptureRecording,
-  type AgentRuntime,
-  type Decision,
-  type HeadCapture,
-  type HeadId,
-  type HeadInput,
-  type MergeStrategy,
-  type WebSearchProvider,
-} from '@proteus/core';
+import { buildBuiltinTools } from '../tools/builtins.js';
+import { buildHeadAccumulatorTools, HeadCapture, withHeadCaptureRecording } from './head-inference.js';
+import { budgetExhausted } from './types.js';
+import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { Decision, HeadId, HeadInput, MergeStrategy } from './types.js';
+import type { WebSearchProvider } from '../web/index.js';
 
 /** The builtin tools a head keeps. `execute_tools` is the file plane + the
  *  crafted/`llm`/`web` namespaces; `run` is the real executor; `web_*` is live
  *  research. `memory`, `skills` and `fact` are withheld: they would address this
- *  facet's OWN stores, which nothing outside a single head run ever reads. */
+ *  head's OWN stores, which nothing outside a single head run ever reads. */
 export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'web_search', 'web_fetch'] as const;
 
 export interface HeadSplitRequest {
@@ -67,14 +61,15 @@ export interface HeadToolDeps {
   input: HeadInput;
   /** The findings accumulator every tool in the surface writes into. */
   capture: HeadCapture;
-  /** The head's forked runtime — parent-keyed exec planes, `/workspace` mounted. */
+  /** The head's forked runtime — parent exec planes + workspace files, private
+   *  durable scratch. Backs `run` and the `execute_tools` file plane. */
   rt: AgentRuntime;
-  /** Pre-built `execute_tools`; the facet owns it because codemode needs
-   *  `env.LOADER`, which is not on the runtime. */
+  /** Pre-built `execute_tools`; the backend owns it because codemode
+   *  construction differs per platform (cf: LOADER Worker; CLI: Node eval). */
   executeTool: unknown;
   webSearch: WebSearchProvider;
-  /** Recursive split. The facet owns the facet-spawn substrate; the budget gate
-   *  in front of it lives here, with the rest of the head's policy. */
+  /** Recursive split. The backend owns the spawn substrate; the budget gate in
+   *  front of it lives here, with the rest of the head's policy. */
   split(request: HeadSplitRequest): Promise<HeadSplitResult>;
 }
 

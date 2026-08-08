@@ -42,8 +42,12 @@ export {
 } from './controller.js';
 export { extractHeadSteps, extractFinalText, synthesizeHeadSummary } from './head-summary.js';
 export {
-  HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   MAX_HEAD_STEPS,
-  type HeadInferenceDeps, type HeadSandboxVfs,
+  type HeadInferenceDeps,
 } from './head-inference.js';
+export {
+  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
+  type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
+} from './head-tools.js';

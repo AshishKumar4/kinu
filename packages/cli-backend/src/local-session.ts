@@ -56,7 +56,7 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
-  createAgentsCodemodeProvider,
+  createAgentsCodemodeProvider, type CodemodeProvider,
   MissionGovernor, readMissionLabels,
   EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
   type MediaModality,
@@ -377,8 +377,10 @@ export class LocalAgentSession implements BackendHost {
     this._headRuntime = createCLIHeadRuntime({
       model: this.fallbackModel,
       providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
-      sharedVfs: this.rt.storage.vfs,
+      parentRuntime: this.rt,
+      cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
+      codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
     });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
@@ -756,6 +758,19 @@ export class LocalAgentSession implements BackendHost {
       explorer: this.rt.llm,
       ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
     };
+  }
+
+  /** The codemode namespaces a head's execute_tools gets beyond its runtime's
+   *  own executors: `web.*` and (when a resolver exists) `llm.query`. Pointedly
+   *  NOT `agents.*`/`agent.*` — a head forks its parent's resources, never its
+   *  authority to delegate. */
+  private headCodemodeExtras(): CodemodeProvider[] {
+    return [
+      createWebCodemodeProvider(this.getWebSearchProvider()),
+      ...(this.modelResolver
+        ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
+        : []),
+    ];
   }
 
   /** Alternate-Takes capture of a completed heads run (core heads-support). */
@@ -1834,8 +1849,10 @@ export class LocalAgentSession implements BackendHost {
     this._headRuntime = createCLIHeadRuntime({
       model,
       providerFamily: providerFamilyForSpec(this.effectiveModelSpec()),
-      sharedVfs: this.rt.storage.vfs,
+      parentRuntime: this.rt,
+      cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
+      codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
     });
     this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
