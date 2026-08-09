@@ -8,6 +8,7 @@
  */
 
 import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
+import { combineAbortSignals } from '@proteus/agent-utils';
 import { resolveMaxSteps } from './config.js';
 import {
   assertToolsSupportedByModel,
@@ -101,7 +102,18 @@ export interface ChatOptions {
    *  whose cumulative cap is spent, the step pipeline declines the next
    *  request instead of issuing it. Unscoped turns are unaffected. */
   budget?: MissionGovernor;
+  /** Stream-inactivity watchdog override (tests). Default STALL_TIMEOUT_MS. */
+  stallTimeoutMs?: number;
 }
+
+/** Abort the turn when NOTHING flows for this long — no provider chunk, no
+ *  tool result. A provider stream that stalls mid-step otherwise hangs the
+ *  turn forever: the AI SDK's own chunk timeout only arms once a first chunk
+ *  has arrived, so a request that goes silent from the start is unguarded.
+ *  Generously above every legitimate gap: inline tool calls detach to the
+ *  background at 30s, and even cold-route reasoning models first-chunk well
+ *  under five minutes. */
+export const STALL_TIMEOUT_MS = 300_000;
 
 /**
  * Run one chat turn. Yields streaming events and finishes with a 'done'
@@ -168,13 +180,36 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // AI_NoOutputGeneratedError that awaiting result.response would raise.
   let streamError: unknown;
 
+  // Stream-inactivity watchdog: a provider stream that goes silent mid-turn
+  // (no chunk, no tool result) is aborted after stallTimeoutMs and surfaced
+  // as a turn failure — otherwise the turn hangs until whatever supervises
+  // the process kills it, with no error recorded anywhere.
+  const stallTimeoutMs = opts.stallTimeoutMs ?? STALL_TIMEOUT_MS;
+  const watchdog = new AbortController();
+  let stalled = false;
+  let stallTimer: ReturnType<typeof setTimeout> | undefined;
+  const armStallTimer = () => {
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    stallTimer = setTimeout(() => {
+      stalled = true;
+      watchdog.abort();
+    }, stallTimeoutMs);
+  };
+  const clearStallTimer = () => {
+    if (stallTimer !== undefined) clearTimeout(stallTimer);
+    stallTimer = undefined;
+  };
+  const stallError = () => new Error(
+    `Model stream stalled: no data from the provider for ${Math.round(stallTimeoutMs / 1000)}s — the turn was aborted.`,
+  );
+
   const result = streamText({
     model: opts.model,
     system: cache.system,
     messages: cache.messages,
     tools,
     stopWhen: stepCountIs(maxSteps),
-    abortSignal: opts.signal,
+    abortSignal: opts.signal ? combineAbortSignals([opts.signal, watchdog.signal]) : watchdog.signal,
     // The SDK's default onError is `console.error(error)`, which dumped the
     // raw provider payload to the terminal alongside our own rendering of it.
     // Capture instead: the error still reaches callers through the rethrow
@@ -212,56 +247,94 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   let allText = '';
 
-  for await (const chunk of result.fullStream) {
-    if (opts.signal?.aborted) break;
+  // Dead-stream detection state: a step that finishes with no mapped finish
+  // reason ('other'/'unknown') AND produced nothing is a provider stream that
+  // died mid-request — the SDK records it as a normal empty step and ends the
+  // turn as if the model chose to stop (observed: a bench turn "completed"
+  // cleanly, hadError:false, after its second request returned a dead SSE).
+  let stepHadOutput = false;
+  let deadFinalStep = false;
 
-    switch (chunk.type) {
-      case 'text-delta': {
-        const delta = (chunk as any).textDelta ?? (chunk as any).text ?? '';
-        if (delta) {
-          allText += delta;
-          yield { type: 'text-delta', delta };
+  armStallTimer();
+  try {
+    for await (const chunk of result.fullStream) {
+      armStallTimer();
+      if (opts.signal?.aborted) break;
+
+      switch (chunk.type) {
+        case 'text-delta': {
+          const delta = (chunk as any).textDelta ?? (chunk as any).text ?? '';
+          if (delta) {
+            stepHadOutput = true;
+            allText += delta;
+            yield { type: 'text-delta', delta };
+          }
+          break;
         }
-        break;
+        case 'tool-call': {
+          stepHadOutput = true;
+          const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
+          await extensions?.emitToolCall({ toolName: chunk.toolName, args });
+          yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
+          break;
+        }
+        case 'tool-result': {
+          const raw = (chunk as any).output ?? (chunk as any).result ?? '';
+          const result = renderToolResult(raw).slice(0, 1000);
+          await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: true });
+          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
+          break;
+        }
+        case 'tool-error': {
+          // A tool threw: the error is the durable outcome the evolution signal
+          // reads. The extension seam sees the error text as the result (same as
+          // the cf afterToolCall), and the discriminator rides success/error.
+          const error = describeProviderError((chunk as any).error);
+          const result = error.slice(0, 1000);
+          await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: false });
+          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
+          break;
+        }
+        case 'finish-step': {
+          // A finished step with no mapped finish reason and no output is a
+          // provider stream that died (closed early, empty SSE, dropped route):
+          // the model never chose to stop. Reasoning-only steps count as dead
+          // too — a turn cannot proceed from thinking that never landed.
+          const reason = String((chunk as { finishReason?: unknown }).finishReason ?? '');
+          deadFinalStep = !stepHadOutput && (reason === 'other' || reason === 'unknown' || reason === '');
+          stepHadOutput = false;
+          break;
+        }
+        case 'error': {
+          streamError = (chunk as { error: unknown }).error;
+          break;
+        }
       }
-      case 'tool-call': {
-        const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
-        await extensions?.emitToolCall({ toolName: chunk.toolName, args });
-        yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
-        break;
-      }
-      case 'tool-result': {
-        const raw = (chunk as any).output ?? (chunk as any).result ?? '';
-        const result = renderToolResult(raw).slice(0, 1000);
-        await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: true });
-        yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
-        break;
-      }
-      case 'tool-error': {
-        // A tool threw: the error is the durable outcome the evolution signal
-        // reads. The extension seam sees the error text as the result (same as
-        // the cf afterToolCall), and the discriminator rides success/error.
-        const error = describeProviderError((chunk as any).error);
-        const result = error.slice(0, 1000);
-        await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: false });
-        yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
-        break;
-      }
-      case 'error': {
-        streamError = (chunk as { error: unknown }).error;
-        break;
-      }
-    }
 
-    // Yield any step-finish events that fired via onStepFinish callback
-    while (pendingStepEvents.length > 0) {
-      const ev = pendingStepEvents.shift();
-      if (ev) yield { type: 'step-finish' as const, ...ev };
+      // Yield any step-finish events that fired via onStepFinish callback
+      while (pendingStepEvents.length > 0) {
+        const ev = pendingStepEvents.shift();
+        if (ev) yield { type: 'step-finish' as const, ...ev };
+      }
     }
+  } catch (err) {
+    // The watchdog abort usually surfaces as an opaque AbortError from the
+    // stream — name the stall instead of leaking the mechanism.
+    if (stalled) throw stallError();
+    throw err;
+  } finally {
+    clearStallTimer();
   }
 
+  if (stalled) throw stallError();
   if (streamError !== undefined) {
     throw streamError instanceof Error ? streamError : new Error(describeProviderError(streamError));
+  }
+  if (deadFinalStep && !opts.signal?.aborted) {
+    throw new Error(
+      'Model stream ended without output: the provider stream terminated prematurely ' +
+      '(no finish reason, no content). The turn did not complete.',
+    );
   }
 
   // Await the full result to get response messages
