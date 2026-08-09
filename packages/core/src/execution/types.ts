@@ -35,6 +35,22 @@ export type ExecutorLifecycleStatus =
   | 'disconnected'
   | 'error';
 
+/**
+ * What an executor's environment actually grants a process, when the
+ * environment says so. Reported only where it is MEASURED — a container's
+ * cgroup — because the failure this exists to prevent is a confident guess:
+ * `nproc` inside a 1-CPU cgroup reports the host's cores, so `make -j$(nproc)`
+ * forks 32 compilers into 2GB and the OOM killer ends the task. An executor
+ * with no declared limits carries none, and the prompt says nothing.
+ */
+export interface ResourceLimits {
+  /** CPUs the cgroup allows, quota/period rounded UP to a whole worker (a
+   *  0.5-CPU quota still runs one job). Absent when the cgroup sets no cap. */
+  readonly cpus?: number;
+  /** Memory cap in bytes. Absent when the cgroup sets no cap. */
+  readonly memBytes?: number;
+}
+
 export interface ExecutorStatus {
   /** Binding/config exists, so the executor can be selected/provisioned. */
   configured: boolean;
@@ -62,6 +78,11 @@ export interface ExecutorProvider {
 
   /** Declared capabilities — immutable after construction */
   readonly capabilities: ReadonlySet<ExecutorCapability>;
+
+  /** The measured limits of the environment this executor's processes run in.
+   *  Set by whoever supplies that environment (the CLI backend reads its own
+   *  cgroup); omitted everywhere the limits are unknown. */
+  readonly resourceLimits?: ResourceLimits;
 
   /** Check if this executor is currently reachable */
   isAvailable(): boolean;
@@ -159,6 +180,7 @@ export interface ExecutorInfo {
   active: boolean;
   status: ExecutorLifecycleStatus;
   reason?: string;
+  resourceLimits?: ResourceLimits;
 }
 
 /**

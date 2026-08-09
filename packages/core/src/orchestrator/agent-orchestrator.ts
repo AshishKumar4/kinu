@@ -9,6 +9,7 @@
 // control plane stay on each backend; this owns the LOGIC.
 
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
+import { DelegationNudge } from './delegation-nudge.js';
 import { DrainScheduler } from './drain-scheduler.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
@@ -34,6 +35,11 @@ export interface AgentOrchestratorDeps {
 export class AgentOrchestrator {
   /** Per-turn accounting — tool calls, steps, token usage, errors. */
   readonly acc: TurnAccumulator;
+  /** Per-turn mechanical delegation steering. Backends register it on the
+   *  turn's ExtensionHost (it observes tool calls/results and splices its one
+   *  nudge at a step boundary) and hand it to closeTurnRun for the durable
+   *  `delegation_nudge` row. */
+  readonly nudge = new DelegationNudge();
   private readonly reflectionInterval: number;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -68,6 +74,7 @@ export class AgentOrchestrator {
    *  chat path and every unbudgeted wake) leaves the turn uncapped. */
   beginTurn(now: number, missionLabels: readonly string[] = []): void {
     this.acc.reset(now);
+    this.nudge.reset();
     this.deps.budget?.activate(missionLabels);
   }
 

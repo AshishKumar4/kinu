@@ -120,6 +120,43 @@ describe('renderSystemStateBlock', () => {
     expect(renderSystemStateBlock({ factsBlock: '  ' })).toBeNull();
   });
 
+  test('an executor that KNOWS its cgroup reports it; one that does not stays silent', () => {
+    // The caffe OOM: `nproc` inside a 1-CPU/2GB cgroup answers with the host's
+    // cores. The measured ceiling has to be in the status line, and only where
+    // it was actually measured.
+    const text = renderSystemStateBlock({
+      executors: [
+        { ...workspace, resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 } },
+        connectedLaptop,
+      ],
+    })!;
+    expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
+    expect(text).toEndWith('- laptop: connected');
+  });
+
+  test('a half-declared cgroup reports only the half it measured', () => {
+    const cpuOnly = renderSystemStateBlock({ executors: [{ ...workspace, resourceLimits: { cpus: 4 } }] })!;
+    expect(cpuOnly).toContain('- workspace: active (cpus=4)');
+    const memOnly = renderSystemStateBlock({
+      executors: [{ ...workspace, resourceLimits: { memBytes: 1536 * 1024 ** 2 } }],
+    })!;
+    expect(memOnly).toContain('- workspace: active (mem=1.5G)');
+    // An empty limits object is not a limit.
+    expect(renderSystemStateBlock({ executors: [{ ...workspace, resourceLimits: {} }] })!)
+      .toEndWith('- workspace: active');
+  });
+
+  test('memory renders in the unit it was set in, and never rounds a cap upward', () => {
+    const render = (memBytes: number) =>
+      renderSystemStateBlock({ executors: [{ ...workspace, resourceLimits: { memBytes } }] })!;
+    expect(render(512 * 1024 ** 2)).toContain('mem=512M');
+    expect(render(64 * 1024)).toContain('mem=64K');
+    expect(render(900)).toContain('mem=900B');
+    // 2.99GiB must not read as 3G — a cap that reads bigger than it is would
+    // be worse than no cap at all.
+    expect(render(Math.floor(2.99 * 1024 ** 3))).toContain('mem=2.9G');
+  });
+
   test('executorAvailabilityLabel mirrors the lifecycle states', () => {
     expect(executorAvailabilityLabel(connectedLaptop)).toBe('connected');
     expect(executorAvailabilityLabel(activeSandbox)).toBe('active');

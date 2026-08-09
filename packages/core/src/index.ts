@@ -589,7 +589,7 @@ export {
   createNimbusExecutor, type NimbusExecutorOpts, type NimbusSandboxHandle,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
-  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
+  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
 } from './execution/index.js';
 
 // File plane — CompositeVFS mount table + raw-handle mount adapters
@@ -675,6 +675,7 @@ export {
 // SSE-stream compatibility. New code uses the EventsHub directly.
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,
+  DelegationNudgeRecord, DelegationNudgeTrigger,
 } from './events/index.js';
 export {
   initRunEventTables,
@@ -794,6 +795,10 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
 export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
+export {
+  DelegationNudge, isFailingToolResult,
+  CONSECUTIVE_FAILURES_BEFORE_NUDGE, LONG_TURN_STEPS_BEFORE_NUDGE, DELEGATION_NUDGE_HEADER,
+} from './orchestrator/delegation-nudge.js';
 export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context.js';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,

@@ -70,6 +70,39 @@ export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   return 'available';
 }
 
+/**
+ * The measured resource ceiling of an executor's environment, as a status
+ * suffix — `(cpus=1 mem=2G)`.
+ *
+ * Volatile like the availability label (a container is provisioned mid-session,
+ * a device connects), and load-bearing rather than decorative: inside a cgroup
+ * `nproc` reports the HOST's cores, so a model that sizes `-j` from it forks
+ * dozens of compilers into a 2GB cap. Rendered ONLY from limits the environment
+ * actually declared — an executor whose environment sets no cap says nothing
+ * rather than inviting a guess.
+ */
+function executorLimitsSuffix(exec: PromptExecutorInfo): string {
+  const parts: string[] = [];
+  const cpus = exec.resourceLimits?.cpus;
+  const memBytes = exec.resourceLimits?.memBytes;
+  if (cpus !== undefined) parts.push(`cpus=${cpus}`);
+  if (memBytes !== undefined) parts.push(`mem=${formatBytes(memBytes)}`);
+  return parts.length > 0 ? ` (${parts.join(' ')})` : '';
+}
+
+/** Bytes as the unit a memory cap is usually written in. One decimal at most,
+ *  and never a rounded-UP figure: a cap must not read as more than it is. */
+function formatBytes(bytes: number): string {
+  for (const [unit, scale] of [['G', 1024 ** 3], ['M', 1024 ** 2], ['K', 1024]] as const) {
+    if (bytes >= scale) return `${trimZero(Math.floor((bytes / scale) * 10) / 10)}${unit}`;
+  }
+  return `${bytes}B`;
+}
+
+function trimZero(value: number): string {
+  return Number.isInteger(value) ? String(value) : value.toFixed(1);
+}
+
 function describeActivationReason(r: ActivationReason): string {
   switch (r.kind) {
     case 'explicit':      return `explicit /${r.matched_token}`;
@@ -93,7 +126,8 @@ export function renderSystemStateBlock(ctx: SystemStateContext): string | null {
     sections.push([
       '## Execution status',
       'Live availability for the runtimes described in the system prompt:',
-      ...executors.map((exec) => `- ${exec.name}: ${executorAvailabilityLabel(exec)}`),
+      ...executors.map((exec) =>
+        `- ${exec.name}: ${executorAvailabilityLabel(exec)}${executorLimitsSuffix(exec)}`),
     ].join('\n'));
   }
 

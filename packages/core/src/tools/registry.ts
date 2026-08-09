@@ -36,6 +36,10 @@ export interface BuiltinToolSpec {
   summary: string;
   whenToUse: string;
   whenNotToUse: string;
+  /** A standing fact about the tool's environment that changes how a call
+   *  should be written — not when to reach for it. Optional: most tools have
+   *  none, and inventing one per tool is prompt bloat. */
+  doctrine?: string;
   result: string;
 }
 
@@ -116,6 +120,12 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     summary: 'Run one shell command in one explicitly selected available runtime.',
     whenToUse: 'Use for a direct command in the same runtime where its files and dependencies live.',
     whenNotToUse: 'Do not use for multi-step logic, cross-runtime file access, or a runtime that is not explicitly listed as available.',
+    // The caffe OOM: `nproc` inside a 1-CPU/2GB cgroup reports the HOST's
+    // cores, so `make -j$(nproc)` forked 32 compilers into 2GB. The live
+    // execution-status block carries the measured cpus/mem when the runtime
+    // declares them; this is the sentence that tells the model to use them.
+    doctrine:
+      'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them.',
     result: 'Returns stdout, an exit-code error, or a structured runtime_not_provisioned error.',
   },
   skills: {
@@ -210,6 +220,7 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
     spec.summary,
     `Use when: ${spec.whenToUse}`,
     `Avoid when: ${spec.whenNotToUse}`,
+    ...(spec.doctrine ? [spec.doctrine] : []),
     `Returns: ${spec.result}`,
   ].join('\n');
 }

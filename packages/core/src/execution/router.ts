@@ -63,6 +63,7 @@ export class DefaultExecutionRouter implements ExecutionRouter {
         active: status.active,
         status: status.status,
         ...(status.reason ? { reason: status.reason } : {}),
+        ...(p.resourceLimits ? { resourceLimits: p.resourceLimits } : {}),
       };
     });
   }

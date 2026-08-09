@@ -31,6 +31,11 @@ export interface ToolCallContext {
 export interface ToolResultContext {
   readonly toolName: string;
   readonly result: string;
+  /** How the call settled. A tool that catches its own failure and RETURNS it
+   *  (the `run` tool's `Error (exit N)`) still reports success here, so a
+   *  consumer that cares about failure reads the text too — see
+   *  isFailingToolResult in orchestrator/delegation-nudge.ts. */
+  readonly success: boolean;
 }
 
 export interface TurnEndContext {

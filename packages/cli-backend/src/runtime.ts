@@ -9,7 +9,7 @@
 import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
 import type { Storage, Schedule, Memory, VFS, SqlExecutor, SqlValue, RawSqlExec } from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
-import type { ExecutorProvider } from '@proteus/core';
+import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -24,6 +24,7 @@ import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createShell } from '@proteus/agent-utils/shell';
 import { createSandboxedExecutor } from './executor.js';
 import { createHostCheckpoints } from './checkpoints.js';
+import { hostResourceLimits } from './cgroup-limits.js';
 import { createHostMountVFS } from './host-mount.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
@@ -226,8 +227,14 @@ export function createCLIRuntime(
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const shell: Shell = withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd());
   const executionRouter = new DefaultExecutionRouter();
-  executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
-  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints));
+  // Both local executors run their commands in THIS process's container, so
+  // both carry its measured cgroup limits — the truth `nproc` cannot tell the
+  // model. Null off a cgroup, and then nothing is claimed.
+  const limits = hostResourceLimits();
+  executionRouter.register(createInlineExecutor({
+    vfs, memory, craftStore, shell, ...(limits ? { resourceLimits: limits } : {}),
+  }));
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints, limits));
   // The laptop executor's FILE plane, at the same /pc prefix the cloud backend
   // reaches the user's machine through (EXECUTOR_MOUNT_PREFIX.laptop). Live
   // unconditionally: the machine is right here. Unscoped, like the `run` tool
@@ -384,12 +391,15 @@ export function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints
   };
 }
 
-function createLocalLaptopExecutor(cwd: string, shell: Shell, checkpoints: FileCheckpoints): ExecutorProvider {
+function createLocalLaptopExecutor(
+  cwd: string, shell: Shell, checkpoints: FileCheckpoints, resourceLimits: ResourceLimits | null,
+): ExecutorProvider {
   const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
   return {
     name: 'laptop',
     kind: 'laptop',
     capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
+    ...(resourceLimits ? { resourceLimits } : {}),
     positionalArgs: true,
     isAvailable: () => true,
     connect: async () => {},

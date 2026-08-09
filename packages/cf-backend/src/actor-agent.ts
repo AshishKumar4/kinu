@@ -413,6 +413,17 @@ export abstract class ActorAgent extends Think<Env> {
       name: 'proteus.event-injection',
       prepareStep: (ctx) => this._eventInjections.prepareStep(ctx),
     });
+    // Mechanical delegation steering (core orchestrator/delegation-nudge.ts) —
+    // the same instance the settle spine reads for the durable row. Registered
+    // through closures because `orch` is built lazily and this runs in the
+    // constructor; LAST, so its splice never shifts an earlier extension's
+    // recorded indices.
+    this.extensions.register({
+      name: 'proteus.delegation-nudge',
+      onToolCall: (ctx) => this.orch.nudge.onToolCall(ctx),
+      onToolResult: (ctx) => this.orch.nudge.onToolResult(ctx),
+      prepareStep: (ctx) => this.orch.nudge.prepareStep(ctx),
+    });
   }
 
   /** Drain batches bound to the LIVE turn (BackendHost.injectIntoActiveTurn),
@@ -516,6 +527,7 @@ export abstract class ActorAgent extends Think<Env> {
         turnIndex: this.orch.sessionTurnIndex,
         usage: this.acc.usage,
         context: this.acc.context,
+        nudge: this.orch.nudge.snapshot(),
         reason: result.status,
         error: errorText,
       });
@@ -2084,6 +2096,7 @@ export abstract class ActorAgent extends Think<Env> {
       toolName: ctx.toolName,
       // Same shape the CLI seam emits: stringified, capped at 1000 chars.
       result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? '').slice(0, 1000),
+      success: ctx.success,
     });
   }
 

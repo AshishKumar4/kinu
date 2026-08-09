@@ -1101,6 +1101,7 @@ export class LocalAgentSession implements BackendHost {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
       context: this.orch.acc.context,
+      nudge: this.orch.nudge.snapshot(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1240,9 +1241,12 @@ export class LocalAgentSession implements BackendHost {
     // The compaction extension + the steer-drain ride the public extension
     // seam — the same host external plugins register on. One hook path, not
     // a private callback + a plugin API.
+    // The mechanical delegation nudge registers LAST: its splice must never
+    // shift the indices the user-steer drain replays into durable history.
     const extensions = new ExtensionHost()
       .register(this.compactionExtension)
-      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
+      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages })
+      .register(this.orch.nudge);
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
     const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');

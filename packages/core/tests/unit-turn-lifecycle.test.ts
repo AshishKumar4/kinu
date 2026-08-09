@@ -8,7 +8,7 @@ import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
-  TurnAccumulator,
+  TurnAccumulator, DelegationNudge,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
   type CompactionTriggerState, type ProgrammaticTurn,
@@ -90,6 +90,35 @@ describe('openTurnRun / closeTurnRun', () => {
       turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed', context: acc.context,
     });
     expect(rec.read('run-3').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
+  });
+
+  test('a nudged turn writes its delegation_nudge row; an unnudged one writes none', () => {
+    const rec = recorder();
+    const nudge = new DelegationNudge();
+    nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
+    nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
+    nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
+    nudge.prepareStep({ stepNumber: 4, messages: [{ role: 'user', content: 'q' }] });
+    nudge.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
+
+    closeTurnRun(rec, 'run-n', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      nudge: nudge.snapshot(),
+    });
+    const events = rec.read('run-n');
+    expect(events.map((e) => e.type)).toEqual(['delegation_nudge', 'turn_end', 'run_end']);
+    const row = events[0] as Extract<typeof events[number], { type: 'delegation_nudge' }>;
+    expect(row.trigger).toBe('repeated_failure');
+    expect(row.tool).toBe('run');
+    expect(row.step).toBe(4);
+    // The conversion numerator: the model reached for the ladder afterwards.
+    expect(row.converted).toBe(true);
+
+    closeTurnRun(rec, 'run-quiet', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      nudge: new DelegationNudge().snapshot(),
+    });
+    expect(rec.read('run-quiet').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
 
   test('a recorder failure never throws into the turn', () => {

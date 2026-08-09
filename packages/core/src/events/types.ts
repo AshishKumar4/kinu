@@ -25,6 +25,7 @@ export type RunEventType =
   | 'scaffold_rollback'
   | 'memory_write'
   | 'context_budget'
+  | 'delegation_nudge'
   | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
@@ -64,6 +65,22 @@ export type RunEvent =
    *  any of it back. Written once per turn by the settle spine (M1 trip
    *  counters); `turn_end` is the denominator. */
   | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
+  /** The harness mechanically steered the turn toward delegation, and whether
+   *  the model then reached for it. At most one per turn, written by the settle
+   *  spine like `context_budget`; `turn_end` is the denominator, `converted`
+   *  the conversion numerator. Declared here rather than imported from the
+   *  producer (orchestrator/delegation-nudge.ts): this union is reachable from
+   *  most of the turn pipeline, and the producer holds mid-turn injection
+   *  machinery no other layer may reach. */
+  | (RunEventBase & { type: 'delegation_nudge';
+      /** Which mechanical trigger fired. */
+      trigger: 'repeated_failure' | 'long_turn_no_delegation';
+      /** Step boundary the nudge was spliced into. */
+      step: number;
+      /** The tool that kept failing (repeated_failure only). */
+      tool?: string;
+      /** The model reached for `agents` after seeing the nudge. */
+      converted: boolean })
   /** A mission budget ran out and a host seam declined the work. Written once
    *  per label by the governor (mission-budget.ts), so the durable trail says
    *  which cap stopped which run rather than leaving an unexplained short turn. */
@@ -77,6 +94,13 @@ export type RunEvent =
        *  (Think persists only the LAST terminal error, which a later failure
        *  overwrites). */
       error?: string });
+
+/** One turn's delegation nudge — what the nudge reports and what the settle
+ *  spine writes, derived from the durable schema so there is one declaration. */
+export type DelegationNudgeRecord =
+  Omit<Extract<RunEvent, { type: 'delegation_nudge' }>, keyof RunEventBase | 'type'>;
+
+export type DelegationNudgeTrigger = DelegationNudgeRecord['trigger'];
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {
