@@ -243,7 +243,12 @@ export {
   type PrepareStepContext,
   type TransformContext,
 } from './extension.js';
-export { composePrepareStep, type StepCachePlan } from './prompting/prepare-step.js';
+export {
+  composePrepareStep,
+  type StepCachePlan,
+  type StepDynamicContext,
+  type StepPipeline,
+} from './prompting/prepare-step.js';
 export {
   pruneStepToolOutputs,
   STEP_CONTEXT_BUDGET_RATIO,
@@ -396,16 +401,20 @@ export {
   type MediaModality,
 } from './prompting/attachment-sanitizer.js';
 export {
-  EphemeralContextLedger,
+  DynamicContextLedger,
   executorAvailabilityLabel,
   fnv1a64,
+  forkDelegates,
   fnv1a64Bytes,
-  renderSystemStateBlock,
+  renderDynamicContextBlock,
   renderTurnLocalContext,
   turnLocalContextMessage,
-  EPHEMERAL_CONTEXT_HEADER,
+  DYNAMIC_CONTEXT_HEADER,
   TURN_CONTEXT_HEADER,
-  type SystemStateContext,
+  type DynamicApproval,
+  type DynamicContext,
+  type DynamicDelegate,
+  type DynamicTask,
   type TurnLocalContext,
 } from './prompting/volatile-context.js';
 export {
@@ -589,7 +598,7 @@ export {
   createNimbusExecutor, type NimbusExecutorOpts, type NimbusSandboxHandle,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
-  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps,
+  type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
 } from './execution/index.js';
 
 // File plane — CompositeVFS mount table + raw-handle mount adapters
@@ -675,6 +684,7 @@ export {
 // SSE-stream compatibility. New code uses the EventsHub directly.
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,
+  DelegationNudgeRecord, DelegationNudgeTrigger,
 } from './events/index.js';
 export {
   initRunEventTables,
@@ -764,15 +774,17 @@ export {
   DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
   deriveChildBudget, budgetExhausted,
   initHeadsTables,
-  HeadJournal, type HeadJournalRow,
+  HeadJournal, type HeadJournalRow, type LiveHeadRun,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
   extractHeadSteps, extractFinalText, synthesizeHeadSummary,
-  HeadCapture, runHeadInference, buildHeadAccumulatorTools, buildHeadSandboxTools,
-  buildHeadWebTools, buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
+  HeadCapture, runHeadInference, buildHeadAccumulatorTools,
+  buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
   MAX_HEAD_STEPS,
-  type HeadInferenceDeps, type HeadSandboxVfs,
+  type HeadInferenceDeps,
+  buildHeadToolSet, HEAD_BUILTIN_TOOLS,
+  type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
 } from './heads/index.js';
 
 // Background-job system — auto-background >30s tool calls + wake-on-completion.
@@ -792,6 +804,10 @@ export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
 export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
+export {
+  DelegationNudge, isFailingToolResult,
+  CONSECUTIVE_FAILURES_BEFORE_NUDGE, LONG_TURN_STEPS_BEFORE_NUDGE, DELEGATION_NUDGE_HEADER,
+} from './orchestrator/delegation-nudge.js';
 export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context.js';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,

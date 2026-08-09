@@ -26,7 +26,7 @@ import {
   type SqlExecutor,
   type WebSearchProvider,
 } from '@proteus/core';
-import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest } from '../src/heads/head-tools.js';
+import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest } from '@proteus/core';
 
 function makeSql(db: Database): SqlExecutor {
   return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {

@@ -329,6 +329,42 @@ describe('HeadController.run', () => {
   });
 });
 
+describe('HeadJournal.listLive — the live fork roster', () => {
+  const spawn = (journal: HeadJournal, rootId: string, id: string) => journal.insertSpawn({
+    id, parentId: null, rootId, depth: 1, task: `t-${id}`, rationale: 'why',
+    inheritedContext: [], mergeStrategy: 'consensus',
+    budget: { maxDepth: 2, maxTokens: 10, maxWallClockMs: 10, spawnedAt: Date.now() },
+  });
+
+  test('a run with heads still running is reported with its progress and its split rationale', () => {
+    const { journal } = newJournal();
+    journal.recordSplit('root-a', 'explore two angles', Date.now());
+    spawn(journal, 'root-a', 'h1');
+    spawn(journal, 'root-a', 'h2');
+    journal.recordReport(fakeReport('h1'));
+
+    expect(journal.listLive()).toEqual([
+      { rootId: 'root-a', rationale: 'explore two angles', running: 1, total: 2 },
+    ]);
+  });
+
+  test('a run whose heads have all settled is no longer live', () => {
+    const { journal } = newJournal();
+    journal.recordSplit('root-a', 'why', Date.now());
+    spawn(journal, 'root-a', 'h1');
+    journal.recordReport(fakeReport('h1'));
+    expect(journal.listLive()).toEqual([]);
+  });
+
+  test('an unlabelled split still reports, and the roster is capped', () => {
+    const { journal } = newJournal();
+    for (let i = 0; i < 4; i++) spawn(journal, `root-${i}`, `h${i}`);
+    const live = journal.listLive(2);
+    expect(live).toHaveLength(2);
+    expect(live.every((run) => run.rationale === '')).toBe(true);
+  });
+});
+
 describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
   test('a top-level split (synthetic root, all heads parent_id NULL) is ONE run, not N', async () => {
     const { journal } = newJournal();

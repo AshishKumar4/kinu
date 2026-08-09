@@ -167,4 +167,11 @@ export class BackgroundJobStore {
     return this.sql<Row>`SELECT id, kind, label, status, result, error, created_at, settled_at, epoch, resume_attempts
       FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
   }
+
+  /** Only the jobs still in flight, newest first — the dynamic-context roster.
+   *  Narrower than `list`, which a settled backlog can crowd out entirely. */
+  listRunning(limit = 20): BackgroundJob[] {
+    return this.sql<Row>`SELECT id, kind, label, status, result, error, created_at, settled_at, epoch, resume_attempts
+      FROM background_jobs WHERE status='running' ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
+  }
 }

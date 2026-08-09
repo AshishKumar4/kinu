@@ -260,6 +260,12 @@ export interface AgentClient {
    *  not dropped silently. Empty when nothing was pending (cloud steers
    *  persist server-side immediately, so the cloud client always returns []). */
   stop(): string[];
+  /** Drain in-flight background work (detached jobs + the wake turns they
+   *  trigger) to completion. A one-shot surface calls this after its turn and
+   *  before it stops listening/closes, so a turn that backgrounded work streams
+   *  its second half instead of being cut off at process exit. Local only —
+   *  cloud jobs settle server-side in the DO, which outlives the CLI. */
+  settleBackgroundWork?(): Promise<void>;
   close(): Promise<void>;
 
   /** Canonical conversation history: the DO chat projection for cloud, the

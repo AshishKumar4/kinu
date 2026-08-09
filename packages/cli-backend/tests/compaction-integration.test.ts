@@ -3,7 +3,7 @@
  * backends share: an overflowing history driven through runChat with the
  * better-compact extension wired exactly as LocalAgentSession (and the DO's
  * beforeTurn) wires it — real CompositeVFS over SqliteFS in agent.db, real
- * compaction_state rows, a real EphemeralContextLedger.
+ * compaction_state rows, a real DynamicContextLedger.
  *
  * Proves the four 2B guarantees:
  *  1. the transform rewrites the model-visible history (fewer tokens, tail
@@ -26,10 +26,9 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import {
-  EphemeralContextLedger,
+  DynamicContextLedger,
   ExtensionHost,
   runChat,
-  EPHEMERAL_CONTEXT_HEADER,
 } from '@proteus/core';
 import {
   createCompactionExtension,
@@ -110,7 +109,7 @@ function messageText(m: PromptMessage): string {
 function ephemeralBlocks(prompt: PromptMessage[]): number[] {
   const indices: number[] = [];
   prompt.forEach((m, i) => {
-    if (m.role === 'user' && messageText(m).startsWith(EPHEMERAL_CONTEXT_HEADER)) indices.push(i);
+    if (m.role === 'user' && messageText(m).startsWith('<dynamic_context fingerprint="')) indices.push(i);
   });
   return indices;
 }
@@ -125,7 +124,7 @@ describe('default compaction over the real storage plane', () => {
 
     initCompactionStateTable(rt.storage.execRaw);
     const state = createCompactionStateStore(rt.storage.sql);
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
     let summarizeCalls = 0;
     // Wired EXACTLY as both backends wire it: shared stores + model-transport
@@ -167,7 +166,7 @@ describe('default compaction over the real storage plane', () => {
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
         system: 'system prompt',
         history: messages,
-        systemState: { ledger, context: { factsBlock: '- the user prefers TypeScript' } },
+        dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- the user prefers TypeScript' }) },
         tools: {},
         maxSteps: 1,
         extensions: new ExtensionHost().register(extension),

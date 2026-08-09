@@ -7,6 +7,8 @@ export type {
   RunEventBase,
   RunEventInput,
   RunEventType,
+  DelegationNudgeRecord,
+  DelegationNudgeTrigger,
 } from './types.js';
 
 export {

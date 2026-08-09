@@ -17,7 +17,7 @@
 
 import type { ModelMessage } from 'ai';
 import type { PrepareStepContext } from '../extension.js';
-import { EphemeralContextLedger, type SystemStateContext } from '../prompting/volatile-context.js';
+import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile-context.js';
 import { StepInjections, type RecordedInjection } from '../prompting/step-injections.js';
 import { LAYERS, type Layer } from './layers.js';
 import { observePipeline, scoreAgainstBaseline } from './gate.js';
@@ -51,14 +51,14 @@ export interface FaultImpact {
   readonly localized: boolean;
 }
 
-/** The ledger stops recognising an unchanged state and appends every turn —
- *  the prefix-cache regression the fingerprint gate exists to prevent. */
-class UndedupedLedger extends EphemeralContextLedger {
+/** The ledger stops recognising an unchanged state and appends every step —
+ *  the prefix-cache regression the append gate exists to prevent. */
+class UndedupedLedger extends DynamicContextLedger {
   private appended = 0;
   override get size(): number {
     return this.appended;
   }
-  override weave(history: ReadonlyArray<ModelMessage>, state: SystemStateContext): ModelMessage[] {
+  override weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
     this.appended += 1;
     return [...history, { role: 'user', content: JSON.stringify(state) }];
   }
@@ -107,13 +107,13 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   {
     id: 'volatile-context/plane-regresses',
     layer: 'volatile-context',
-    patches: ['renderSystemStateBlock', 'turnLocalContextMessage', 'EphemeralContextLedger'],
-    models: 'the memory tail falls out of the system-state block, the device notice falls out of the turn tail, and the ledger stops deduplicating',
+    patches: ['renderDynamicContextBlock', 'turnLocalContextMessage', 'DynamicContextLedger'],
+    models: 'the memory tail falls out of the dynamic-context block, the device notice falls out of the turn tail, and the ledger stops deduplicating',
     inject: (s) => ({
       ...s,
-      renderSystemStateBlock: (ctx) => s.renderSystemStateBlock({ ...ctx, memoryTail: undefined }),
+      renderDynamicContextBlock: (ctx) => s.renderDynamicContextBlock({ ...ctx, memoryTail: undefined }),
       turnLocalContextMessage: (ctx) => s.turnLocalContextMessage({ ...ctx, deviceNotice: null }),
-      EphemeralContextLedger: UndedupedLedger,
+      DynamicContextLedger: UndedupedLedger,
     }),
   },
   {
@@ -123,7 +123,7 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     models: 'the step pipeline drops the extension chain, pruning silently no-ops, and cache breakpoints stop being placed',
     inject: (s) => ({
       ...s,
-      composePrepareStep: (_extensions, ctx, plan, prune) => s.composePrepareStep(undefined, ctx, plan, prune),
+      composePrepareStep: (pipeline, ctx) => s.composePrepareStep({ ...pipeline, extensions: undefined }, ctx),
       pruneStepToolOutputs: () => undefined,
       markCacheTail: (messages) => [...messages],
       cacheableSystem: (system) => system,

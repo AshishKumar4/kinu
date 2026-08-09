@@ -21,8 +21,8 @@ import { renderAgentsMdSection } from '../prompting/agents-md.js';
 import { renderActiveSkillsSection } from '../skills/render.js';
 import { resolveActiveSkills } from '../skills/loader.js';
 import {
-  EphemeralContextLedger,
-  renderSystemStateBlock,
+  DynamicContextLedger,
+  renderDynamicContextBlock,
   turnLocalContextMessage,
 } from '../prompting/volatile-context.js';
 import { renderFactsBlock } from '../memory/facts.js';
@@ -82,9 +82,9 @@ export interface PipelineSubjects {
   readonly resolveActiveSkills: typeof resolveActiveSkills;
 
   // ── volatile context ──
-  readonly renderSystemStateBlock: typeof renderSystemStateBlock;
+  readonly renderDynamicContextBlock: typeof renderDynamicContextBlock;
   readonly turnLocalContextMessage: typeof turnLocalContextMessage;
-  readonly EphemeralContextLedger: typeof EphemeralContextLedger;
+  readonly DynamicContextLedger: typeof DynamicContextLedger;
   readonly renderFactsBlock: typeof renderFactsBlock;
 
   // ── per-step pipeline ──
@@ -166,9 +166,9 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   renderActiveSkillsSection: 'skills/render.ts',
   resolveActiveSkills: 'skills/loader.ts',
 
-  renderSystemStateBlock: 'prompting/volatile-context.ts',
+  renderDynamicContextBlock: 'prompting/volatile-context.ts',
   turnLocalContextMessage: 'prompting/volatile-context.ts',
-  EphemeralContextLedger: 'prompting/volatile-context.ts',
+  DynamicContextLedger: 'prompting/volatile-context.ts',
   renderFactsBlock: 'memory/facts.ts',
 
   composePrepareStep: 'prompting/prepare-step.ts',
@@ -240,9 +240,9 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     renderActiveSkillsSection,
     resolveActiveSkills,
 
-    renderSystemStateBlock,
+    renderDynamicContextBlock,
     turnLocalContextMessage,
-    EphemeralContextLedger,
+    DynamicContextLedger,
     renderFactsBlock,
 
     composePrepareStep,

@@ -1,13 +1,42 @@
-// createCLIHeadRuntime — local in-process branching heads (re-arch P6b). Drives a
-// full HeadController split → run → merge cycle through the CLI runtime with a
-// prompt-aware fake model, so the whole local-heads path (spawn ephemeral runtime
-// → runHeadInference → mergeLLM JSON) is covered without a network LLM.
+// createCLIHeadRuntime — local in-process branching heads. A head is a FORK of
+// the parent runtime: the parent's real host executor + files, a private durable
+// scratch. These tests drive a full HeadController split → run → merge cycle with
+// a prompt-aware fake model, assert the head's real tool surface, and prove the
+// runtime-level fork capability (real /workspace files + real `run laptop` exec)
+// that the caffe fork lacked — all without a network LLM.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
-import { HeadController, HeadJournal, initHeadsTables, type HeadInput } from '@proteus/core';
-import { createCLIHeadRuntime } from '../src/head-runtime.js';
-import { makeSql, makeExecRaw, createCLIRuntime } from '../src/runtime.js';
+import {
+  HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
+  type HeadInput, type WebSearchProvider, type AgentRuntime,
+} from '@proteus/core';
+import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
+import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime.js';
+
+/** A never-called web provider — the surface tests only inspect tool NAMES. */
+const stubWeb: WebSearchProvider = {
+  search: async () => ({ query: '', results: [], source: 'stub' as never }),
+  fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
+};
+
+/** A parent CLI runtime — the real execution surface every head forks. */
+function makeParent(): AgentRuntime {
+  return createCLIRuntime(new Database(':memory:') as never, {
+    dbPath: '/tmp/parent.db', llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
+  });
+}
+
+/** Head-runtime deps around a fresh parent, with test overrides. */
+function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLIHeadRuntimeDeps {
+  return {
+    model, parentRuntime: makeParent(), cwd: process.cwd(),
+    webSearch: stubWeb, codemodeExtras: () => [], ...over,
+  };
+}
 
 /** Records the tool names the SDK hands a head's generateText call. */
 function capturingHeadModel(answer: string, sink: (names: string[]) => void): LanguageModel {
@@ -66,7 +95,7 @@ function controllerWithCLIRuntime(model: LanguageModel, providerFamily?: string)
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
   const journal = new HeadJournal(makeSql(db));
-  return new HeadController(createCLIHeadRuntime({ model, providerFamily }), journal);
+  return new HeadController(createCLIHeadRuntime(headDeps(model, providerFamily ? { providerFamily } : {})), journal);
 }
 
 describe('createCLIHeadRuntime — full split → run → merge', () => {
@@ -114,27 +143,25 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(mergeOptions?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
   });
 
-  test('a head is offered the FULL surface: record + sandbox + shared + split', async () => {
+  test('a head is offered the real fork surface: run + execute_tools + web + record + split', async () => {
     let captured: string[] = [];
-    const db = new Database(':memory:');
-    const sharedVfs = createCLIRuntime(db as never, { dbPath: '/tmp/h.db', llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' } }).storage.vfs;
-    const runtime = createCLIHeadRuntime({ model: capturingHeadModel('done', (t) => { captured = t; }), sharedVfs });
+    const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
     await (await runtime.spawnHead(aHeadInput())).run();
     expect(new Set(captured)).toEqual(new Set([
       'record_evidence', 'record_decision',
-      'sandbox_exec', 'sandbox_read', 'sandbox_write', 'sandbox_list',
-      'shared_write', 'shared_read', 'shared_list',
+      'execute_tools', 'run', 'web_search', 'web_fetch',
       'split_subheads',
     ]));
   });
 
-  test('without a shared VFS, shared_* are omitted (sandbox + split remain)', async () => {
+  test('allowedTools maps the PARENT vocabulary onto real tools (never empties)', async () => {
+    // The old bug: a fork with allowedTools:["run"] was filtered against a
+    // disjoint sandbox_* head surface and silently ran with ZERO tools. Now the
+    // head's vocabulary IS the parent's, so ["run"] resolves to exactly run.
     let captured: string[] = [];
-    const runtime = createCLIHeadRuntime({ model: capturingHeadModel('done', (t) => { captured = t; }) });
-    await (await runtime.spawnHead(aHeadInput())).run();
-    expect(captured).not.toContain('shared_write');
-    expect(captured).toContain('sandbox_exec');
-    expect(captured).toContain('split_subheads');
+    const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
+    await (await runtime.spawnHead(aHeadInput({ allowedTools: ['run'] }))).run();
+    expect(captured).toEqual(['run']);
   });
 
   test('phase events fire on split and merge', async () => {
@@ -148,5 +175,50 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
       onPhase: (e) => phases.push(e.kind),
     });
     expect(phases).toEqual(['split', 'merge']);
+  });
+});
+
+describe('a local head forks the parent runtime (the caffe-fork capability)', () => {
+  test('sees real workspace files, runs real commands, keeps /local private', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'proteus-head-'));
+    writeFileSync(join(dir, 'hello.txt'), 'from the real workspace');
+    const parent = makeParent();
+    const headDb = new Database(':memory:');
+    const rt = buildCLIHeadRuntime(headDb as never, {
+      parentRuntime: parent, cwd: dir, agentId: 'h', agentName: 'head-h',
+    });
+
+    // Real workspace files are visible through the /workspace mount — the exact
+    // thing the old :memory:-backed fork could not see.
+    const seen = await rt.storage.vfs.readFile('/workspace/hello.txt', { encoding: 'utf8' });
+    expect(seen).toBe('from the real workspace');
+
+    // Real commands run through the parent's shared laptop executor.
+    const laptop = rt.executionRouter!.getProvider('laptop')!;
+    const out = await laptop.tools.exec!.execute(`cat ${join(dir, 'hello.txt')}`);
+    expect(String(out)).toContain('from the real workspace');
+
+    // /local is a PRIVATE scratch overlay, not a window onto the host.
+    await rt.storage.vfs.writeFile('/local/scratch.txt', 'private');
+    expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
+    headDb.close();
+  });
+
+  test('the head run tool reaches the real host with runtime=laptop', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'proteus-head-'));
+    writeFileSync(join(dir, 'note.txt'), 'real file content');
+    const rt = buildCLIHeadRuntime(new Database(':memory:') as never, {
+      parentRuntime: makeParent(), cwd: dir, agentId: 'h2', agentName: 'head-h2',
+    });
+    const capture = new HeadCapture();
+    const tools = buildHeadToolSet({
+      input: aHeadInput(), capture, rt,
+      executeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
+      webSearch: stubWeb,
+      split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }),
+    }) as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
+
+    const out = await tools.run!.execute({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' }, {});
+    expect(String(out)).toContain('real file content');
   });
 });

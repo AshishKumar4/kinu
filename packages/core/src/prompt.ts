@@ -79,12 +79,11 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- Treat ambiguous "do this" requests as work to perform, not as invitations to only describe a plan.',
     '- Inspect current code, state, logs, or tool results before making claims about them.',
     '- Keep changes scoped to the user request and the existing architecture.',
-    '- Verify meaningful changes with the narrowest reliable checks available, then report what passed or failed.',
     '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
   ];
 
   if (hasTool(surface.builtinTools, 'agents')) {
-    lines.push('- For multi-part or long-running work, pick a rung of the delegation ladder below instead of grinding through it inline.');
+    lines.push('- For multi-part or long-running work, or when you are unsure which approach is right, pick a rung of the delegation ladder below instead of grinding through it inline.');
   }
 
   if (family === 'kimi') {
@@ -354,6 +353,22 @@ function renderAgentStateSection(surface: PromptSurface): string {
       'When the user asks Proteus to modify its own app, route the work through `product_change`: bind source, record the plan, run checks, create a preview, request approval, deploy only after approval, and keep rollback metadata.',
     ].join('\n'));
   }
+
+  // Last doctrine before the answer, because that is when it applies. Each
+  // line targets an observed failure where the model solved the problem and
+  // then fumbled the deliverable: reasoning the causal structure out correctly
+  // and writing every row of it transposed; building an API to its own
+  // convenient signature and self-grading it green against its own tests.
+  const verification = [
+    '## Verification',
+    'Before you call work done, check what you produced against what was asked. Reasoning it out correctly is not evidence that you wrote it down correctly.',
+    "- Re-read the artifact itself — the file, the diff, the final answer — against the request's own words: every deliverable it names, and the exact shape it names (column order, direction, units, filenames).",
+    '- Build to the interface the task states, not the one that was convenient: exercise your own work the way the task says it will be called, with the signature, entry point, and arguments it specifies.',
+  ];
+  if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools')) {
+    verification.push('- Run the real check and report what passed or failed. Tests you wrote against your own interface prove only that it is self-consistent; an unexecuted claim is not a result.');
+  }
+  parts.push(verification.join('\n'));
 
   parts.push([
     '## Output format',

@@ -12,7 +12,7 @@
  *   workspace.listTools()
  */
 
-import type { ExecutorProvider, ExecutorCapability } from './types.js';
+import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types.js';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import { appendMemoryNote } from '../memory/note.js';
@@ -28,6 +28,10 @@ export interface InlineExecutorDeps {
   memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
+  /** The measured limits of wherever `shell` really runs. The cf backend's
+   *  workspace shell is emulated in the Worker and declares none; the CLI's is
+   *  the host process, so it passes its own cgroup's. */
+  resourceLimits?: ResourceLimits;
   /** Optional — used to look up craft_scores for listTools(). Falls back to 0.7 if missing. */
   sql?: SqlExecutor;
   /**
@@ -40,7 +44,7 @@ export interface InlineExecutorDeps {
 }
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
-  const { vfs, memory, craftStore, shell, sql, onToolRegistered } = deps;
+  const { vfs, memory, craftStore, shell, sql, resourceLimits, onToolRegistered } = deps;
 
   const tools: ExecutorProvider['tools'] = {
     readFile: {
@@ -207,6 +211,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     name: 'workspace',
     kind: 'workspace',
     capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
+    ...(resourceLimits ? { resourceLimits } : {}),
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},

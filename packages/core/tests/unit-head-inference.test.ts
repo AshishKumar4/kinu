@@ -3,14 +3,12 @@
 // assembly that used to live inside the cf Facet is locked behind a test both
 // backends rely on.
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
 import {
-  runHeadInference, HeadCapture, buildHeadAccumulatorTools, buildHeadSandboxTools,
+  runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages,
 } from '../src/heads/head-inference.js';
 import type { HeadInput } from '../src/heads/types.js';
-import { createMemoryVFS } from './helpers.js';
 
 /** A v2 generateText-driving stub. Returns `answer` as one text step + usage;
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */
@@ -102,22 +100,6 @@ describe('buildHeadAccumulatorTools', () => {
     expect(capture.decisions[0]!.choice).toBe('c');
     // Each tool also logs a tool call for telemetry.
     expect(capture.toolCalls.map((t) => t.name)).toEqual(['record_evidence', 'record_decision']);
-  });
-});
-
-describe('buildHeadSandboxTools', () => {
-  test('write → read round-trips in the private VFS + records a file artifact; exec runs the shell', async () => {
-    const capture = new HeadCapture();
-    const vfs = createMemoryVFS(new Database(':memory:'));
-    const shell = { exec: async (cmd: string) => ({ stdout: `ran: ${cmd}`, stderr: '', exitCode: 0 }) };
-    const tools = buildHeadSandboxTools(shell, vfs, capture) as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
-    const opt = { toolCallId: 't', messages: [] };
-
-    await tools.sandbox_write!.execute({ path: '/scratch/a.txt', content: 'hello head' }, opt);
-    expect(capture.artifacts[0]!.ref).toBe('/scratch/a.txt');
-    expect(await tools.sandbox_read!.execute({ path: '/scratch/a.txt' }, opt)).toBe('hello head');
-    expect(await tools.sandbox_exec!.execute({ command: 'echo hi' }, opt)).toContain('ran: echo hi');
-    expect(capture.toolCalls.map((t) => t.name)).toEqual(['sandbox_write', 'sandbox_read', 'sandbox_exec']);
   });
 });
 

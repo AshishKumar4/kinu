@@ -1,27 +1,29 @@
-// The stable/ephemeral/turn-local context split (cache-prefix stability):
+// The stable/dynamic/turn-local context split (cache-prefix stability):
 //  - buildSystemPromptSync is byte-stable across rebuilds with unchanged
 //    agent state — live executor labels and skill activation reasons must
 //    never leak into it.
-//  - System state (facts, memory tail, executor status) rides the
-//    EphemeralContextLedger: a block appends only when the state fingerprint
-//    changes, and every block freezes at its birth position forever (the
-//    cache-stability contract).
+//  - Live state (facts, memory tail, executor status, running background work,
+//    the delegate roster, parked approvals) rides the DynamicContextLedger as
+//    a fingerprinted <dynamic_context> block, re-read at EVERY model step: a
+//    block appends only when the render changes, and every block freezes at
+//    its birth position forever (the cache-stability contract).
 //  - Turn-local state (activation reasons, device notice) renders as one
-//    per-turn tail message, never captured by the ledger fingerprint.
+//    per-turn tail message, never captured by the ledger's append gate.
 //  - fnv1a64 (the telemetry + fingerprint hash) changes only on real events.
 import { describe, test, expect } from 'bun:test';
-import type { ModelMessage } from 'ai';
+import { tool, type LanguageModelV2StreamPart, type ModelMessage } from 'ai';
+import { z } from 'zod';
 import {
   buildSystemPromptSync,
   runChat,
-  EphemeralContextLedger,
-  renderSystemStateBlock,
+  DynamicContextLedger,
+  renderDynamicContextBlock,
   renderTurnLocalContext,
   turnLocalContextMessage,
   executorAvailabilityLabel,
   fnv1a64,
   renderActiveSkillsSection,
-  EPHEMERAL_CONTEXT_HEADER,
+  DYNAMIC_CONTEXT_HEADER,
   TURN_CONTEXT_HEADER,
   type PromptExecutorInfo,
 } from '../src/index.ts';
@@ -39,6 +41,14 @@ function skill(name: string): ParsedSkill {
     auto_activate: false, disable_model_invocation: false, user_invocable: true,
     body: `Body of ${name}`, ext: {}, source: 'vfs',
   };
+}
+
+/** The wire shape of a dynamic block: an XML-ish tag whose attribute digests
+ *  the body, so the model can see live state as state and tell a re-statement
+ *  from a real change. */
+const BLOCK_OPEN = /^<dynamic_context fingerprint="[0-9a-f]{16}">\n/;
+function isDynamicBlock(text: string): boolean {
+  return BLOCK_OPEN.test(text) && text.endsWith('\n</dynamic_context>');
 }
 
 function messageText(m: ModelMessage): string {
@@ -98,15 +108,16 @@ describe('byte-stable system prefix', () => {
   });
 });
 
-describe('renderSystemStateBlock', () => {
-  test('renders facts, memory tail, and live executor labels under the ephemeral header', () => {
-    const text = renderSystemStateBlock({
+describe('renderDynamicContextBlock', () => {
+  test('renders facts, memory tail, and live executor labels inside one tagged block', () => {
+    const text = renderDynamicContextBlock({
       factsBlock: '- user.tz = Europe/Berlin',
       memoryTail: '### Lesson: verify before claiming',
       executors: [connectedLaptop, idleSandbox, workspace],
     });
     expect(text).not.toBeNull();
-    expect(text!).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(isDynamicBlock(text!)).toBe(true);
+    expect(text!).toContain(DYNAMIC_CONTEXT_HEADER);
     expect(text!).toContain('user.tz = Europe/Berlin');
     expect(text!).toContain('verify before claiming');
     expect(text!).toContain('- laptop: connected');
@@ -115,9 +126,46 @@ describe('renderSystemStateBlock', () => {
 
   test('unselectable executors are omitted; empty state renders nothing', () => {
     const offline: PromptExecutorInfo = { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' };
-    expect(renderSystemStateBlock({ executors: [offline] })).toBeNull();
-    expect(renderSystemStateBlock({})).toBeNull();
-    expect(renderSystemStateBlock({ factsBlock: '  ' })).toBeNull();
+    expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();
+    expect(renderDynamicContextBlock({})).toBeNull();
+    expect(renderDynamicContextBlock({ factsBlock: '  ' })).toBeNull();
+  });
+
+  test('an executor that KNOWS its cgroup reports it; one that does not stays silent', () => {
+    // The caffe OOM: `nproc` inside a 1-CPU/2GB cgroup answers with the host's
+    // cores. The measured ceiling has to be in the status line, and only where
+    // it was actually measured.
+    const text = renderDynamicContextBlock({
+      executors: [
+        { ...workspace, resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 } },
+        connectedLaptop,
+      ],
+    })!;
+    expect(text).toContain('- workspace: active (cpus=1 mem=2G)');
+    expect(text).toEndWith('- laptop: connected\n</dynamic_context>');
+  });
+
+  test('a half-declared cgroup reports only the half it measured', () => {
+    const cpuOnly = renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: { cpus: 4 } }] })!;
+    expect(cpuOnly).toContain('- workspace: active (cpus=4)');
+    const memOnly = renderDynamicContextBlock({
+      executors: [{ ...workspace, resourceLimits: { memBytes: 1536 * 1024 ** 2 } }],
+    })!;
+    expect(memOnly).toContain('- workspace: active (mem=1.5G)');
+    // An empty limits object is not a limit.
+    expect(renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: {} }] })!)
+      .toEndWith('- workspace: active\n</dynamic_context>');
+  });
+
+  test('memory renders in the unit it was set in, and never rounds a cap upward', () => {
+    const render = (memBytes: number) =>
+      renderDynamicContextBlock({ executors: [{ ...workspace, resourceLimits: { memBytes } }] })!;
+    expect(render(512 * 1024 ** 2)).toContain('mem=512M');
+    expect(render(64 * 1024)).toContain('mem=64K');
+    expect(render(900)).toContain('mem=900B');
+    // 2.99GiB must not read as 3G — a cap that reads bigger than it is would
+    // be worse than no cap at all.
+    expect(render(Math.floor(2.99 * 1024 ** 3))).toContain('mem=2.9G');
   });
 
   test('executorAvailabilityLabel mirrors the lifecycle states', () => {
@@ -144,6 +192,57 @@ describe('renderSystemStateBlock', () => {
     // A configured-but-disconnected laptop is NOT 'ready on demand': the user's
     // machine has to actually be there.
     expect(executorAvailabilityLabel({ name: 'laptop', configured: true })).toBe('available');
+  });
+});
+
+describe('the dynamic block carries every genuinely-live plane', () => {
+  const task = (i: number) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` });
+
+  test('running work, delegates and parked approvals each render as their own roster', () => {
+    const text = renderDynamicContextBlock({
+      tasks: [task(1)],
+      delegates: [
+        { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
+        { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: null },
+      ],
+      approvals: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }],
+    })!;
+    expect(isDynamicBlock(text)).toBe(true);
+    expect(text).toContain('- job-1 (think_heads): explore option 1');
+    expect(text).toContain('- ana (subordinate) — working: survey the prior art');
+    expect(text).toContain('- run-7 (fork) — 2 of 3 heads running');
+    expect(text).toContain('- device consent: laptop: git push origin main');
+  });
+
+  test('each roster is capped, and what was dropped is counted honestly', () => {
+    const text = renderDynamicContextBlock({
+      tasks: Array.from({ length: 12 }, (_, i) => task(i)),
+    })!;
+    expect(text).toContain('- job-0 (think_heads)');
+    expect(text).toContain('- job-7 (think_heads)');
+    expect(text).not.toContain('- job-8 (think_heads)');
+    expect(text).toContain('- …and 4 more, not shown');
+  });
+
+  test('long free text from a store is clipped to one line', () => {
+    const text = renderDynamicContextBlock({
+      tasks: [{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }],
+    })!;
+    expect(text).toContain('…');
+    expect(text.split('\n').every((line) => line.length < 200)).toBe(true);
+  });
+
+  test('empty rosters say nothing at all', () => {
+    expect(renderDynamicContextBlock({ tasks: [], delegates: [], approvals: [] })).toBeNull();
+  });
+
+  test('the fingerprint digests the body: same state ⇒ same tag, changed state ⇒ changed tag', () => {
+    const fingerprintOf = (text: string) => BLOCK_OPEN.exec(text)![0];
+    const a = renderDynamicContextBlock({ factsBlock: '- k = v' })!;
+    const b = renderDynamicContextBlock({ factsBlock: '- k = v' })!;
+    const c = renderDynamicContextBlock({ factsBlock: '- k = w' })!;
+    expect(fingerprintOf(a)).toBe(fingerprintOf(b));
+    expect(fingerprintOf(a)).not.toBe(fingerprintOf(c));
   });
 });
 
@@ -191,22 +290,22 @@ describe('renderTurnLocalContext', () => {
   });
 });
 
-describe('EphemeralContextLedger (the cache-stability contract)', () => {
+describe('DynamicContextLedger (the cache-stability contract)', () => {
   const state = { factsBlock: '- k = v', executors: [idleSandbox] };
 
   test('(a) empty ledger + first turn → exactly one block at the tail', () => {
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'hi' }];
     const out = ledger.weave(history, state);
     expect(history).toHaveLength(1); // input never mutated
     expect(out).toHaveLength(2);
     expect(out[1]).toMatchObject({ role: 'user' });
-    expect(String(out[1]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(isDynamicBlock(String(out[1]!.content))).toBe(true);
     expect(ledger.size).toBe(1);
   });
 
   test('(b) unchanged fingerprint across N turns → still one block, frozen bytes AND index as history grows', () => {
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     const first = ledger.weave(history, state);
     const frozen = first[1]!;
@@ -227,7 +326,7 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
   });
 
   test('(c) fingerprint change → a SECOND block appends at the new tail; the first stays put', () => {
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     const first = ledger.weave(history, state);
     const frozen = first[1]!;
@@ -239,7 +338,7 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
     expect(ledger.size).toBe(2);
     expect(out[1]).toBe(frozen); // old block frozen at its birth position
     const tail = out[out.length - 1]!;
-    expect(String(tail.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(isDynamicBlock(String(tail.content))).toBe(true);
     expect(String(tail.content)).toContain('new.fact = learned');
     expect(out.map(messageText)).toEqual([
       'turn-1', String(frozen.content), 'answer-1', 'turn-2', String(tail.content),
@@ -247,7 +346,7 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
   });
 
   test('(d) reset (cold start / compaction) → back to exactly one fresh block at the tail', () => {
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     ledger.weave([{ role: 'user', content: 'a' }], state);
     ledger.weave(
       [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' }],
@@ -261,11 +360,11 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(compacted, state);
     expect(ledger.size).toBe(1);
     expect(out).toHaveLength(3);
-    expect(String(out[2]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(isDynamicBlock(String(out[2]!.content))).toBe(true);
   });
 
   test('a shorter rewritten history self-heals stale frozen indices without duplicating messages', () => {
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const oldHistory: ModelMessage[] = [
       { role: 'user', content: 'old-user-1' },
       { role: 'assistant', content: 'old-assistant-1' },
@@ -278,7 +377,7 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
 
     const replacement: ModelMessage[] = [{ role: 'user', content: 'new-user-1' }];
     const freshState = { ...state, factsBlock: '- fresh = yes' };
-    const freshBlock = renderSystemStateBlock(freshState)!;
+    const freshBlock = renderDynamicContextBlock(freshState)!;
     const out = ledger.weave(replacement, freshState);
 
     expect(out).toEqual([
@@ -294,7 +393,7 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
     // discards every earlier block on the very next turn — the tree of frozen
     // positions collapses to one, silently undoing the cache-stability
     // contract while every "history grew" test still passes.
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [{ role: 'user', content: 'turn-1' }];
     ledger.weave(history, state);                                  // block @ 1
     history.push({ role: 'assistant', content: 'a1' }, { role: 'user', content: 'turn-2' });
@@ -307,12 +406,12 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
     const out = ledger.weave(history, changed);
     expect(ledger.size).toBe(2);
     expect(out.map(messageText)).toEqual([
-      'turn-1', renderSystemStateBlock(state)!, 'a1', 'turn-2', renderSystemStateBlock(changed)!,
+      'turn-1', renderDynamicContextBlock(state)!, 'a1', 'turn-2', renderDynamicContextBlock(changed)!,
     ]);
   });
 
   test('nothing to say → no block is born and none is removed', () => {
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const out = ledger.weave([{ role: 'user', content: 'hi' }], {});
     expect(out.map(messageText)).toEqual(['hi']);
     expect(ledger.size).toBe(0);
@@ -324,7 +423,7 @@ describe('EphemeralContextLedger (the cache-stability contract)', () => {
     const after = ledger.weave([{ role: 'user', content: 'hi' }, { role: 'assistant', content: 'yo' }], {});
     expect(ledger.size).toBe(1);
     expect(after).toHaveLength(3);
-    expect(String(after[1]!.content)).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(isDynamicBlock(String(after[1]!.content))).toBe(true);
   });
 });
 
@@ -367,7 +466,7 @@ function promptTexts(prompt: Array<{ role: string; content: unknown }>): string[
 describe('the ledger + turn-local split through real runChat turns', () => {
   test('stable state across turns keeps ONE frozen block; turn-local tail re-renders per turn', async () => {
     const { model, prompts } = promptCapturingModel();
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [];
     const state = { factsBlock: '- k = v' };
 
@@ -378,7 +477,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
         model: model as never,
         system: 'sys',
         history,
-        systemState: { ledger, context: state },
+        dynamicContext: { ledger, snapshot: () => state },
         turnLocal: tail ? [tail] : undefined,
         tools: {},
         maxSteps: 1,
@@ -392,26 +491,27 @@ describe('the ledger + turn-local split through real runChat turns', () => {
     await turn('turn-3', 'PC disconnected.');
 
     const [p1, p2, p3] = prompts.map(promptTexts);
-    // Turn 1: user, ephemeral block, turn-local tail.
+    // Turn 1: user message, turn-local tail, then the step's dynamic block —
+    // the block is woven per STEP, so it lands after everything turn assembly
+    // produced.
     expect(p1![0]).toBe('turn-1');
-    expect(p1![1]).toStartWith(EPHEMERAL_CONTEXT_HEADER);
-    expect(p1![2]).toStartWith(TURN_CONTEXT_HEADER);
-    expect(p1![2]).toContain('PC connected.');
-    // Turns 2 and 3: the block's bytes AND index are untouched (index 1 —
-    // right after turn-1's user message) while history grows after it. The
-    // varying turn-local state never spawned a second block.
+    expect(p1![1]).toStartWith(TURN_CONTEXT_HEADER);
+    expect(p1![1]).toContain('PC connected.');
+    expect(isDynamicBlock(p1![2]!)).toBe(true);
+    // Turns 2 and 3: the block's bytes AND index are untouched while history
+    // grows after it. The varying turn-local state never spawned a second one.
     expect(ledger.size).toBe(1);
-    expect(p2![1]).toBe(p1![1]!);
-    expect(p3![1]).toBe(p1![1]!);
+    expect(p2![2]).toBe(p1![2]!);
+    expect(p3![2]).toBe(p1![2]!);
     // Turn 2 had nothing turn-local → no tail at all.
     expect(p2!.some((t) => t.startsWith(TURN_CONTEXT_HEADER))).toBe(false);
-    // Turn 3's tail is fresh per-turn state at the very end.
-    expect(p3![p3!.length - 1]).toContain('PC disconnected.');
+    // Turn 3's tail is fresh per-turn state, before the frozen block.
+    expect(p3!.find((t) => t.startsWith(TURN_CONTEXT_HEADER))).toContain('PC disconnected.');
   });
 
   test('a state change mid-conversation appends a second block at the new tail', async () => {
     const { model, prompts } = promptCapturingModel();
-    const ledger = new EphemeralContextLedger();
+    const ledger = new DynamicContextLedger();
     const history: ModelMessage[] = [];
 
     const turn = async (userText: string, factsBlock: string) => {
@@ -420,7 +520,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
         model: model as never,
         system: 'sys',
         history,
-        systemState: { ledger, context: { factsBlock } },
+        dynamicContext: { ledger, snapshot: () => ({ factsBlock }) },
         tools: {},
         maxSteps: 1,
       })) {
@@ -437,10 +537,10 @@ describe('the ledger + turn-local split through real runChat turns', () => {
     expect(p2![1]).toBe(p1![1]!);
     expect(p2![p2!.length - 1]).toContain('learned = later');
     // The durable history never captured any block.
-    expect(history.some((m) => messageText(m).startsWith(EPHEMERAL_CONTEXT_HEADER))).toBe(false);
+    expect(history.some((m) => isDynamicBlock(messageText(m)))).toBe(false);
   });
 
-  test('cold start (fresh ledger over the same durable history) attaches exactly one block', async () => {
+  test('(d) cold start (fresh ledger over the same durable history) attaches exactly one block', async () => {
     const { model, prompts } = promptCapturingModel();
     const history: ModelMessage[] = [
       { role: 'user', content: 'old-1' },
@@ -451,14 +551,156 @@ describe('the ledger + turn-local split through real runChat turns', () => {
       model: model as never,
       system: 'sys',
       history,
-      systemState: { ledger: new EphemeralContextLedger(), context: { factsBlock: '- k = v' } },
+      dynamicContext: {
+        ledger: new DynamicContextLedger(),
+        snapshot: () => ({ factsBlock: '- k = v' }),
+      },
       tools: {},
       maxSteps: 1,
     })) { /* drain */ }
 
     const texts = promptTexts(prompts[0]!);
-    expect(texts.filter((t) => t.startsWith(EPHEMERAL_CONTEXT_HEADER))).toHaveLength(1);
-    expect(texts[texts.length - 1]).toStartWith(EPHEMERAL_CONTEXT_HEADER);
+    expect(texts.filter(isDynamicBlock)).toHaveLength(1);
+    expect(isDynamicBlock(texts[texts.length - 1]!)).toBe(true);
+  });
+});
+
+/** A three-step model: two tool calls, then text. Captures the exact wire
+ *  prompt of every request so a test can compare request N and N+1 byte for
+ *  byte. */
+function threeStepToolModel() {
+  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
+  const prompts: Array<Array<{ role: string; content: unknown }>> = [];
+  let step = 0;
+  const model = {
+    specificationVersion: 'v2' as const,
+    provider: 'fake',
+    modelId: 'fake-model',
+    supportedUrls: {},
+    doStream: async (options: { prompt: Array<{ role: string; content: unknown }> }) => {
+      prompts.push(options.prompt);
+      const n = step++;
+      const stream = n < 2
+        ? new ReadableStream<LanguageModelV2StreamPart>({
+            start(c) {
+              c.enqueue({ type: 'stream-start', warnings: [] });
+              c.enqueue({ type: 'tool-call', toolCallId: `tc${n}`, toolName: 'ping', input: '{}' });
+              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              c.close();
+            },
+          })
+        : new ReadableStream<LanguageModelV2StreamPart>({
+            start(c) {
+              c.enqueue({ type: 'stream-start', warnings: [] });
+              c.enqueue({ type: 'text-start', id: 't1' });
+              c.enqueue({ type: 'text-delta', id: 't1', delta: 'done' });
+              c.enqueue({ type: 'text-end', id: 't1' });
+              c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              c.close();
+            },
+          });
+      return { stream, response: { headers: {} } };
+    },
+  };
+  return { model, prompts };
+}
+
+const PING = { ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }) };
+
+/** Everything the provider is charged for on one message EXCEPT this module's
+ *  rolling cache markers, which move to the tail by design every step. */
+function cacheableBytes(message: { role: string; content: unknown }): string {
+  return JSON.stringify({ role: message.role, content: message.content });
+}
+
+describe('the per-step weave (the cache-coherence proof)', () => {
+  test('(a) unchanged state across the steps of ONE turn appends nothing', async () => {
+    const { model, prompts } = threeStepToolModel();
+    const ledger = new DynamicContextLedger();
+    for await (const _ of runChat({
+      model: model as never,
+      system: 'sys',
+      history: [{ role: 'user', content: 'go' }],
+      dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- k = v' }) },
+      tools: PING,
+      maxSteps: 5,
+    })) { /* drain */ }
+
+    expect(prompts).toHaveLength(3);
+    expect(ledger.size).toBe(1);
+    for (const prompt of prompts) {
+      expect(promptTexts(prompt).filter(isDynamicBlock)).toHaveLength(1);
+    }
+    // The one block sits at its birth index (right after the user message) in
+    // every request, with the tool traffic accumulating AFTER it.
+    for (const prompt of prompts) {
+      expect(isDynamicBlock(promptTexts(prompt)[1]!)).toBe(true);
+    }
+  });
+
+  test('(b)+(c) state that changes mid-turn appends exactly one block, and every byte before it is untouched', async () => {
+    const { model, prompts } = threeStepToolModel();
+    const ledger = new DynamicContextLedger();
+    let step = 0;
+    for await (const _ of runChat({
+      model: model as never,
+      system: 'sys',
+      history: [{ role: 'user', content: 'go' }],
+      // A background job appears while step 1 is being prepared.
+      dynamicContext: {
+        ledger,
+        snapshot: () => (step++ === 0
+          ? { factsBlock: '- k = v' }
+          : { factsBlock: '- k = v', tasks: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }] }),
+      },
+      tools: PING,
+      // Anthropic markers: the rolling tail breakpoints are what make the
+      // prefix claim measurable rather than notional.
+      cache: { providerId: 'anthropic', sessionKey: 'sess' },
+      maxSteps: 5,
+    })) { /* drain */ }
+
+    expect(prompts).toHaveLength(3);
+    expect(ledger.size).toBe(2);
+
+    const [r0, r1, r2] = prompts.map(promptTexts);
+    // (b) exactly ONE new block, and the first block is byte-identical and
+    // still at its birth index.
+    expect(r0!.filter(isDynamicBlock)).toHaveLength(1);
+    expect(r1!.filter(isDynamicBlock)).toHaveLength(2);
+    expect(r2!.filter(isDynamicBlock)).toHaveLength(2);
+    expect(r1![1]).toBe(r0![1]!);
+    expect(r2![1]).toBe(r0![1]!);
+    expect(r1!.find((t) => t.includes('job-1'))).toBeDefined();
+
+    // (c) the cached prefix: request N+1 repeats request N's messages verbatim
+    // and only appends. Cache markers are excluded — they roll to the tail on
+    // purpose, and a breakpoint is not content.
+    const bytes = prompts.map((prompt) => prompt.map(cacheableBytes));
+    expect(bytes[1]!.slice(0, bytes[0]!.length)).toEqual(bytes[0]!);
+    expect(bytes[2]!.slice(0, bytes[1]!.length)).toEqual(bytes[1]!);
+    expect(bytes[2]!.length).toBeGreaterThan(bytes[0]!.length);
+  });
+
+  test('the newest block always ends the request, so the rolling cache breakpoint lands on it', async () => {
+    const { model, prompts } = threeStepToolModel();
+    const ledger = new DynamicContextLedger();
+    let step = 0;
+    for await (const _ of runChat({
+      model: model as never,
+      system: 'sys',
+      history: [{ role: 'user', content: 'go' }],
+      dynamicContext: { ledger, snapshot: () => ({ factsBlock: `- step = ${step++}` }) },
+      tools: PING,
+      cache: { providerId: 'anthropic', sessionKey: 'sess' },
+      maxSteps: 5,
+    })) { /* drain */ }
+
+    for (const prompt of prompts) {
+      const texts = promptTexts(prompt);
+      expect(isDynamicBlock(texts[texts.length - 1]!)).toBe(true);
+    }
+    expect(ledger.size).toBe(3);
   });
 });
 

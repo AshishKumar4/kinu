@@ -112,7 +112,7 @@ the orchestrator gets `agent.*` and a subordinate does not), and
 `isClientRpcMethodDenied(method)` (RPCs a browser socket must not reach).
 
 Everything else — the CF runtime assembly, the `BackendHost`, the shared
-`AgentOrchestrator`, `ExtensionHost` + compaction, the ephemeral ledger, the
+`AgentOrchestrator`, `ExtensionHost` + compaction, the dynamic-context ledger, the
 prompt/model/tool caches, and the whole Think hook bridge — you inherit.
 
 The one thing to understand before adding an actor is that **the tool surface
@@ -306,11 +306,13 @@ Inside `execute_tools`, the LLM additionally sees:
   `fact` tool (remember / recall / forget actions). The top 20 most recent facts
   auto-render into the system prompt every turn, capped at 2000 characters.
 - `MEMORY.md` — unstructured prose with FTS5 + Vectorize hybrid search.
-- Ephemeral context — the `EphemeralContextLedger`
-  (`core/src/prompting/volatile-context.ts`) appends a fresh system-state block
-  only when its fingerprint changes, freezing earlier blocks so provider cache
-  breakpoints survive. It is woven in after `transformContext`, so a compaction
-  plugin never sees never-persisted context.
+- Dynamic context — the `DynamicContextLedger`
+  (`core/src/prompting/volatile-context.ts`) re-reads live state (facts, the
+  MEMORY.md tail, executor availability, running background work, the open
+  delegate roster, approvals parked on the user) at EVERY model step and appends
+  a fresh `<dynamic_context>` block only when its render changes, freezing
+  earlier blocks so provider cache breakpoints survive. It is woven in the step
+  pipeline, never at turn assembly, so a compaction plugin never sees it.
 - `crafted_tools` — LLM-authored skill library, EMA-scored.
 
 Credentials are deliberately **not** in this list. They live in `UserDO`'s

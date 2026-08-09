@@ -53,9 +53,9 @@ Three more hooks go beyond observation:
   `messages`, `system`, `contextWindow`, optional `providerReportedTokens`, and
   `trigger: 'auto' | 'force'`. Chained like `prepareStep` but awaited, and
   **fail-open per extension**: a throwing transform is logged and skipped — a
-  plugin can never break a turn. Ephemeral context (the system-state ledger's
-  woven blocks, then the turn-local tail) is added AFTER the transform on both
-  backends, so a transform never sees never-persisted context.
+  plugin can never break a turn. Never-persisted context — the turn-local tail
+  at turn assembly, the dynamic-context blocks at each step — is added AFTER the
+  transform on both backends, so a transform never sees it.
 
 ## Wiring it up
 
@@ -79,7 +79,7 @@ Around one turn the hooks fire in this order:
 
 ```
 onTurnStart
-  → transformContext   ── once, on the durable history (ephemeral spliced after)
+  → transformContext   ── once, on the durable history (volatile spliced after)
   → (registerTools folded into the ToolSet the model receives)
   → prepareStep        ── at each step boundary
   → onToolCall         ── as each tool call streams
@@ -98,7 +98,7 @@ staged pruning ladder once per turn assembly, over shared stores — raw
 transcripts in the workspace CompositeVFS (`/local/.proteus/compaction/…`,
 readable back through the agent's own file tools) and the replayable plan +
 the measured prompt-token trigger in one `compaction_state` row (DO SQLite /
-agent.db). Its `onOutcome` resets the ephemeral ledger whenever the
+agent.db). Its `onOutcome` resets the dynamic-context ledger whenever the
 model-visible stream changed shape (`'planned'` / `'invalidated'`);
 byte-stable replays keep the frozen block positions valid.
 

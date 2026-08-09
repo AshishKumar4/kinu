@@ -6,7 +6,7 @@ import {
   type BuiltinToolName,
 } from '../tools/registry.js';
 import { isMcpToolKey } from '../tools/mcp-naming.js';
-import type { ExecutorLifecycleStatus } from '../execution/types.js';
+import type { ExecutorLifecycleStatus, ResourceLimits } from '../execution/types.js';
 import {
   resolvePromptModelProfile,
   type PromptModelContext,
@@ -41,6 +41,9 @@ export interface PromptExecutorInfo {
   active?: boolean;
   status?: ExecutorLifecycleStatus | string;
   reason?: string;
+  /** Measured limits of the environment this executor's processes run in,
+   *  when its environment declares any. Rendered as a live status suffix. */
+  resourceLimits?: ResourceLimits;
 }
 
 export interface PromptExternalToolInfo {

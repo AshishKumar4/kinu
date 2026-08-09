@@ -40,6 +40,17 @@ describe('BackgroundJobStore', () => {
     expect(s.list().filter((j) => j.status === 'running').map((j) => j.id)).toEqual(['b']);
   });
 
+  test('listRunning returns only in-flight jobs, newest first, capped', () => {
+    // The dynamic-context roster reads this: `list` would let a settled backlog
+    // crowd the still-running work out of the block entirely.
+    const s = newStore();
+    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', now: i });
+    s.settle('j1', 0, 'ok', 9);
+    s.fail('j3', 0, 'boom', 9);
+    expect(s.listRunning().map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
+    expect(s.listRunning(2).map((j) => j.id)).toEqual(['j4', 'j2']);
+  });
+
   test('cancel marks a running job cancelled; no-op once settled', () => {
     const s = newStore();
     s.create({ id: 'c', kind: 'think', now: 1 });

@@ -24,7 +24,7 @@ export const MEMORY_TAIL_MAX_CHARS = 2000;
 
 /**
  * The newest bytes of the append-only MEMORY.md — the live lessons/reflections
- * tail both backends weave into each turn's ephemeral system-state block (never
+ * tail both backends weave into the dynamic-context block (never
  * the byte-stable prefix, where every append would bust the cache). Bounded to
  * the file's END because that is where the newest entries land. Undefined when
  * memory is empty. Single source of truth for the path + bound so the cf and

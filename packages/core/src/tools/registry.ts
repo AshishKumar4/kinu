@@ -36,6 +36,10 @@ export interface BuiltinToolSpec {
   summary: string;
   whenToUse: string;
   whenNotToUse: string;
+  /** A standing fact about the tool's environment that changes how a call
+   *  should be written — not when to reach for it. Optional: most tools have
+   *  none, and inventing one per tool is prompt bloat. */
+  doctrine?: string;
   result: string;
 }
 
@@ -65,9 +69,10 @@ export const DELEGATION_FRAME =
  *  the `agents` docstring and the prompt's Delegation section. */
 export const DELEGATION_RUNGS = {
   fork:
-    'Fork (action=fork) whenever work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
+    'Fork (action=fork) on two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
+    'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is a reason to fork, not a reason to push on alone. ' +
     'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web_search/web_fetch/exec), then merging back and disappearing; takes minutes, may auto-background. ' +
-    'Leave settle unset to merge the forks back into this turn; set settle=mcts only to change how they are settled — scored against each other by execution instead of merged, for competing approaches where the right path is genuinely unclear. mcts branches score TEXT/code and do NOT run your tool loop, but proposed code is executed when scored.',
+    'Leave settle unset to merge the forks back into this turn; set settle=mcts to have them scored against each other by execution instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since each branch\'s proposed code IS executed to earn its score. mcts branches propose text/code rather than running your own tool loop.',
   staff:
     'Staff a subordinate (action=staff) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
     'A subordinate keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
@@ -115,6 +120,12 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     summary: 'Run one shell command in one explicitly selected available runtime.',
     whenToUse: 'Use for a direct command in the same runtime where its files and dependencies live.',
     whenNotToUse: 'Do not use for multi-step logic, cross-runtime file access, or a runtime that is not explicitly listed as available.',
+    // The caffe OOM: `nproc` inside a 1-CPU/2GB cgroup reports the HOST's
+    // cores, so `make -j$(nproc)` forked 32 compilers into 2GB. The live
+    // execution-status block carries the measured cpus/mem when the runtime
+    // declares them; this is the sentence that tells the model to use them.
+    doctrine:
+      'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them.',
     result: 'Returns stdout, an exit-code error, or a structured runtime_not_provisioned error.',
   },
   skills: {
@@ -209,6 +220,7 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
     spec.summary,
     `Use when: ${spec.whenToUse}`,
     `Avoid when: ${spec.whenNotToUse}`,
+    ...(spec.doctrine ? [spec.doctrine] : []),
     `Returns: ${spec.result}`,
   ].join('\n');
 }

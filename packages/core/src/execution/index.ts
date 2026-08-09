@@ -9,6 +9,7 @@ export type {
   ExecutorStatus,
   ExecutorLifecycleStatus,
   ExecutorInfo,
+  ResourceLimits,
   ExecutionRouter,
 } from './types.js';
 

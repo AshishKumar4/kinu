@@ -18,6 +18,7 @@
 
 import type { CodemodeProvider } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
+import { addImplicitReturn } from './executor.js';
 
 export interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
@@ -55,6 +56,16 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         required: ['code'],
       }),
       execute: async (args: { code: string }, options?: unknown) => {
+        // `console` is shadowed by a capturing stand-in: this factory runs the
+        // model's code in-process, so a real console.* would write straight to
+        // the CLI's stdout — which, under `proteus exec --json`, IS the event
+        // stream. Capture the output and return it as `logs` (the CF codemode
+        // sandbox's contract), so the model gets what it printed and the stream
+        // stays clean. Declared out here so the catch below can return partial
+        // output produced before a throw.
+        const logs: string[] = [];
+        const capture = (...a: unknown[]) => { logs.push(a.map(formatLogArg).join(' ')); };
+        const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
         try {
           const signal = readAbortSignal(options);
           const context = signal ? { signal } : undefined;
@@ -73,22 +84,44 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
 
           // Build the arg names / values for the sandboxed function so every
           // registered provider namespace is accessible by name.
-          const extraNamespaces = Object.keys(providerBindings).filter(n => n !== 'workspace');
-          const argNames = ['workspace', 'codemode', ...extraNamespaces];
-          const argValues: unknown[] = [workspace, craftedBindings, ...extraNamespaces.map(n => providerBindings[n])];
+          // 'console' is excluded alongside 'workspace' so a provider namespace
+          // never duplicates the injected capturing console (a `new Function`
+          // duplicate-parameter crash).
+          const extraNamespaces = Object.keys(providerBindings).filter(n => n !== 'workspace' && n !== 'console');
+          const argNames = ['workspace', 'codemode', 'console', ...extraNamespaces];
+          const argValues: unknown[] = [workspace, craftedBindings, sandboxConsole, ...extraNamespaces.map(n => providerBindings[n])];
 
+          // Implicit return (parity with the subprocess executor and the CF
+          // codemode sandbox): a trailing bare expression becomes the tool
+          // result, so `x = compute(); x` returns `x` instead of undefined.
           const fn = new Function(
             ...argNames,
-            `return (async () => {\n${args.code}\n})()`,
+            `return (async () => {\n${addImplicitReturn(args.code)}\n})()`,
           );
           const result = await fn(...argValues);
-          return { result: result === undefined ? '(no return value)' : result };
+          const payload: { result: unknown; logs?: string[] } = {
+            result: result === undefined ? '(no return value)' : result,
+          };
+          if (logs.length > 0) payload.logs = logs;
+          return payload;
         } catch (e) {
-          return { result: undefined, error: (e as Error).message };
+          const payload: { result: undefined; error: string; logs?: string[] } = {
+            result: undefined, error: (e as Error).message,
+          };
+          if (logs.length > 0) payload.logs = logs;
+          return payload;
         }
       },
     });
   };
+}
+
+/** One console argument → its captured-log string, matching how console
+ *  renders it: strings verbatim, everything else JSON (so the model reads the
+ *  object it printed, not "[object Object]"). */
+function formatLogArg(a: unknown): string {
+  if (typeof a === 'string') return a;
+  try { return JSON.stringify(a); } catch { return String(a); }
 }
 
 function readAbortSignal(options: unknown): AbortSignal | undefined {

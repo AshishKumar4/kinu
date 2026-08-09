@@ -11,6 +11,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
 import { CompositeVFS } from '../src/vfs/index.js';
+import { DefaultExecutionRouter } from '../src/execution/router.js';
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return createInlineExecutor({
@@ -219,5 +220,25 @@ describe('workspace.writeFile over the CompositeVFS — the file plane both back
     await exec.tools.writeFile.execute('notes/todo.md', 'b');
     expect(await vfs.readFile('/local/src/main.ts', { encoding: 'utf8' })).toBe('a');
     expect(await vfs.readFile('/local/notes/todo.md', { encoding: 'utf8' })).toBe('b');
+  });
+});
+
+describe('declared resource limits', () => {
+  test('the executor carries the limits of wherever its shell really runs, through listExecutors', () => {
+    // The cf workspace shell is emulated in a Worker and declares nothing; the
+    // CLI's is the host process, so it passes its own cgroup's limits — and
+    // the router must carry them to the prompt's execution-status block.
+    const { rt } = createTestRuntime();
+    const router = new DefaultExecutionRouter();
+    router.register(createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      resourceLimits: { cpus: 1, memBytes: 2 * 1024 ** 3 },
+    }));
+    expect(router.listExecutors()[0]?.resourceLimits).toEqual({ cpus: 1, memBytes: 2 * 1024 ** 3 });
+
+    const unbounded = new DefaultExecutionRouter();
+    unbounded.register(buildExec(rt));
+    expect(unbounded.listExecutors()[0]).not.toHaveProperty('resourceLimits');
   });
 });

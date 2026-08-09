@@ -119,6 +119,9 @@ import {
   // Shared turn lifecycle
   snapshotCompletedTurn,
   spillEventContent,
+  type DynamicApproval,
+  type DynamicContext,
+  type DynamicDelegate,
 } from "@proteus/core";
 import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
@@ -332,6 +335,30 @@ export class OrchestratorAgent extends ActorAgent {
       this._emailOutbox.ensureSchema();
     }
     return this._emailOutbox;
+  }
+
+  /** The orchestrator's half of the per-step dynamic context: the delegates it
+   *  alone can have (spawned subordinates, listed before the forked head runs
+   *  the base class contributes) and the decisions parked on the user. */
+  protected override dynamicContextSnapshot(): DynamicContext {
+    const base = super.dynamicContextSnapshot();
+    const subordinates: DynamicDelegate[] = this.subordinateRoster.list().map((entry) => ({
+      kind: 'subordinate' as const,
+      name: entry.name,
+      phase: entry.status,
+      task: entry.currentTask,
+    }));
+    const approvals: DynamicApproval[] = [...this._pendingConsents.entries()]
+      .map(([consentId, pending]) => ({
+        id: consentId,
+        kind: 'device consent',
+        detail: `${pending.deviceLabel}: ${pending.command}`,
+      }));
+    return {
+      ...base,
+      delegates: [...subordinates, ...(base.delegates ?? [])],
+      approvals,
+    };
   }
 
   private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {

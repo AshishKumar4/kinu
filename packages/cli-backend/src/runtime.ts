@@ -9,7 +9,7 @@
 import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
 import type { Storage, Schedule, Memory, VFS, SqlExecutor, SqlValue, RawSqlExec } from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
-import type { ExecutorProvider } from '@proteus/core';
+import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -21,8 +21,10 @@ import {
 import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
+import { createShell } from '@proteus/agent-utils/shell';
 import { createSandboxedExecutor } from './executor.js';
 import { createHostCheckpoints } from './checkpoints.js';
+import { hostResourceLimits } from './cgroup-limits.js';
 import { createHostMountVFS } from './host-mount.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
@@ -225,8 +227,14 @@ export function createCLIRuntime(
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
   const shell: Shell = withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd());
   const executionRouter = new DefaultExecutionRouter();
-  executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }));
-  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints));
+  // Both local executors run their commands in THIS process's container, so
+  // both carry its measured cgroup limits — the truth `nproc` cannot tell the
+  // model. Null off a cgroup, and then nothing is claimed.
+  const limits = hostResourceLimits();
+  executionRouter.register(createInlineExecutor({
+    vfs, memory, craftStore, shell, ...(limits ? { resourceLimits: limits } : {}),
+  }));
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints, limits));
   // The laptop executor's FILE plane, at the same /pc prefix the cloud backend
   // reaches the user's machine through (EXECUTOR_MOUNT_PREFIX.laptop). Live
   // unconditionally: the machine is right here. Unscoped, like the `run` tool
@@ -242,6 +250,82 @@ export function createCLIRuntime(
     agentId, agentName, memory, craftStore, judgeModel,
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell, checkpoints,
+  });
+}
+
+/**
+ * The runtime a single local head (a fork of the parent workspace) runs over.
+ *
+ * A head is the parent's execution surface with a PRIVATE durable scratch — the
+ * local mirror of the cf head (own facet storage, parent exec planes, parent
+ * files at /workspace). It shares the parent's REAL host executor (the `laptop`
+ * provider → `run laptop` and codemode `laptop.*`), the parent's llm/executor/
+ * schedule, and the parent's shadow-git checkpoints. Its /workspace and /pc
+ * mounts are windows onto the real host — the cwd the CLI was invoked in and the
+ * machine root — so a head can read the code it was spawned to study and run
+ * commands against it, exactly what the doctrine promises a fork.
+ *
+ * What is PRIVATE (a scratch overlay, not an empty world): the head's own
+ * in-memory SqliteFS `/local`, its Memory + CraftStore, and the emulated
+ * `workspace` shell (`run` with runtime omitted). Sibling heads share the real
+ * workspace but never each other's scratch — the same isolation the cf head gets
+ * from its own facet storage.
+ */
+export function buildCLIHeadRuntime(
+  db: {
+    prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
+    exec(sql: string): void;
+  },
+  opts: { parentRuntime: AgentRuntime; cwd: string; agentId: string; agentName: string },
+): AgentRuntime {
+  const { parentRuntime: parent, cwd } = opts;
+  const sql = makeSql(db);
+  const execRaw = makeExecRaw(db);
+
+  const sqliteFs = new SqliteFS(sql);
+  sqliteFs.init();
+  const vfs = new CompositeVFS({ local: sqliteFs });
+
+  // /workspace and /pc are windows onto the REAL host — the same planes the
+  // parent reaches — snapshotting into the parent's shadow-git checkpoints so a
+  // head's host writes are covered by /undo too. /workspace roots at the cwd
+  // (where the task files live); /pc roots at the machine root, as the parent's.
+  const checkpoints = parent.checkpoints;
+  const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared', credentialsStayInHost: true };
+  vfs.mount('workspace', { vfs: createHostMountVFS(checkpoints), policy: livePolicy, workingDir: cwd });
+  vfs.mount('pc', {
+    vfs: createHostMountVFS(checkpoints),
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    workingDir: cwd,
+  });
+  // Cloud-only planes stay reserved so a head addressing them gets the honest
+  // unavailability the parent gives, not a silent compat-route into /local.
+  const remoteOnlyPolicy: MountPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+  vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
+  vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
+
+  const memoryStore = new MemoryStore(sqliteFs, sql);
+  memoryStore.ensureSchema();
+  const memory = adaptMemory(memoryStore, vfs);
+  const craftStoreImpl = new AgentUtilsCraftStore(sql);
+  craftStoreImpl.ensureSchema();
+  const craftStore = adaptCraftStore(craftStoreImpl);
+
+  // The `workspace` run runtime + codemode `workspace.*` is the head's private
+  // emulated scratch shell (mirrors the cf head's createShell over its SqliteFS).
+  const shell = createShell(sqliteFs);
+  const executionRouter = new DefaultExecutionRouter();
+  executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell, sql }));
+  // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
+  // reach the machine at the parent's cwd. This is the fork's real execution.
+  const laptop = parent.executionRouter?.getProvider('laptop');
+  if (laptop) executionRouter.register(laptop);
+
+  return buildRuntime({
+    sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
+    agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
+    spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
+    executionRouter, shell, ...(checkpoints ? { checkpoints } : {}),
   });
 }
 
@@ -307,12 +391,15 @@ export function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints
   };
 }
 
-function createLocalLaptopExecutor(cwd: string, shell: Shell, checkpoints: FileCheckpoints): ExecutorProvider {
+function createLocalLaptopExecutor(
+  cwd: string, shell: Shell, checkpoints: FileCheckpoints, resourceLimits: ResourceLimits | null,
+): ExecutorProvider {
   const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
   return {
     name: 'laptop',
     kind: 'laptop',
     capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
+    ...(resourceLimits ? { resourceLimits } : {}),
     positionalArgs: true,
     isAvailable: () => true,
     connect: async () => {},

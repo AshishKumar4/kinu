@@ -172,15 +172,15 @@ describe('model-call seam — the step pipeline declines the next request', () =
     governor.declare('nightly', { tokens: 5 });
     governor.activate(['nightly']);
     governor.debit(5);
-    expect(() => composePrepareStep(undefined, ctx, null, null, governor)).toThrow(MissionBudgetExhausted);
+    expect(() => composePrepareStep({ budget: governor }, ctx)).toThrow(MissionBudgetExhausted);
   });
 
   test('a mission with room left runs the pipeline unchanged', () => {
     const governor = newGovernor();
     governor.declare('nightly', { tokens: 5_000 });
     governor.activate(['nightly']);
-    expect(composePrepareStep(undefined, ctx, null, null, governor))
-      .toEqual(composePrepareStep(undefined, ctx, null, null));
+    expect(composePrepareStep({ budget: governor }, ctx))
+      .toEqual(composePrepareStep({}, ctx));
   });
 
   test('the refusal is recorded once in the run event log', () => {
@@ -190,7 +190,7 @@ describe('model-call seam — the step pipeline declines the next request', () =
     governor.activate(['nightly']);
     governor.debit(1);
     for (let i = 0; i < 3; i++) {
-      expect(() => composePrepareStep(undefined, ctx, null, null, governor)).toThrow();
+      expect(() => composePrepareStep({ budget: governor }, ctx)).toThrow();
     }
     expect(seen).toHaveLength(1);
     expect(seen[0]?.seam).toBe('model_call');

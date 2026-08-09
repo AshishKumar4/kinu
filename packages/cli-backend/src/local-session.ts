@@ -56,9 +56,9 @@ import {
   persistMeasuredPromptTokens, applyOverflowRecovery,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
-  createAgentsCodemodeProvider,
+  createAgentsCodemodeProvider, type CodemodeProvider,
   MissionGovernor, readMissionLabels,
-  EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
+  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
   listReplayEvals, type ReplayEvalSummary,
@@ -255,14 +255,18 @@ export class LocalAgentSession implements BackendHost {
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
 
-  /** Ephemeral system-state blocks for this CLI session (core
-   *  volatile-context.ts). In-memory only — a new session starts empty, so
-   *  the first turn attaches exactly one fresh block. The compaction
-   *  extension's onOutcome resets it whenever the model-visible stream
-   *  changed shape ('planned'/'invalidated') because the frozen block
-   *  positions are meaningless against a rewritten stream; byte-stable
-   *  replays keep them valid. */
-  private readonly ephemeralLedger = new EphemeralContextLedger();
+  /** Dynamic-context blocks for this CLI session (core volatile-context.ts),
+   *  re-read and re-woven at every model step by the shared step pipeline.
+   *  In-memory only — a new session starts empty, so the first step attaches
+   *  exactly one fresh block. The compaction extension's onOutcome resets it
+   *  whenever the model-visible stream changed shape ('planned'/'invalidated')
+   *  because the frozen block positions are meaningless against a rewritten
+   *  stream; byte-stable replays keep them valid. */
+  private readonly dynamicLedger = new DynamicContextLedger();
+
+  /** The head journal this session's controller writes to — also the live fork
+   *  roster the per-step dynamic context reads. */
+  private readonly headJournal: HeadJournal;
 
   /** Durable per-session compaction state (plan snapshot + the measured
    *  prompt-token trigger signal) in agent.db, and the default compaction
@@ -287,6 +291,9 @@ export class LocalAgentSession implements BackendHost {
    *  wake), drained by a single serialized pump so turns never interleave. */
   private readonly queue: QueueItem[] = [];
   private pumping = false;
+  /** The active pump run's completion, or null when idle — the awaitable
+   *  settleBackgroundWork() joins so a one-shot run can wait for wake turns. */
+  private pumpPromise: Promise<void> | null = null;
   /** The in-flight turn's abort handle — interrupt() aborts it. */
   private currentAbort: AbortController | null = null;
   /** Mid-turn steers awaiting the next step boundary (Hermes steer-drain:
@@ -322,6 +329,7 @@ export class LocalAgentSession implements BackendHost {
     // this session as the BackendHost (enqueueTurn wakes the agent).
     initBackgroundJobsTable(this.rt.storage.execRaw);
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
+    this.headJournal = new HeadJournal(this.rt.storage.sql);
     this.mctsSearchStore = new MctsSearchStore(this.rt.storage.sql);
     // agent_config (typed key/value) — backs always-active skills, etc.
     initAgentConfigTable(this.rt.storage.execRaw);
@@ -353,8 +361,12 @@ export class LocalAgentSession implements BackendHost {
         transcripts: createVfsTranscriptStore(() => this.rt.storage.vfs),
         plans: this.compactionState.plans,
         logger: {
-          info: (message, data) => console.log(`[proteus:compaction] ${message}`, data ?? ''),
-          debug: (message, data) => console.debug(`[proteus:compaction] ${message}`, data ?? ''),
+          // All diagnostics go to stderr: under `proteus exec --json` stdout IS
+          // the event stream, so an info/debug console.log would corrupt the
+          // JSONL (console.info/debug write to stdout in Node). stderr keeps the
+          // stream clean and is still visible on an interactive terminal.
+          info: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
+          debug: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
           warn: (message, data) => console.warn(`[proteus:compaction] ${message}`, data ?? ''),
           error: (message, data) => console.error(`[proteus:compaction] ${message}`, data ?? ''),
         },
@@ -362,11 +374,11 @@ export class LocalAgentSession implements BackendHost {
       archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.ensureModelState()),
       onOutcome: ({ outcome }) => {
-        // Fires inside runTransformContext, BEFORE runChat's ledger weave —
-        // a fresh plan ('planned') or a discarded one ('invalidated')
+        // Fires inside runTransformContext, BEFORE the turn's first step
+        // weave — a fresh plan ('planned') or a discarded one ('invalidated')
         // invalidates the frozen block positions; a byte-stable replay
         // keeps them.
-        if (outcome !== 'replayed') this.ephemeralLedger.reset();
+        if (outcome !== 'replayed') this.dynamicLedger.reset();
       },
     });
 
@@ -377,11 +389,13 @@ export class LocalAgentSession implements BackendHost {
     this._headRuntime = createCLIHeadRuntime({
       model: this.fallbackModel,
       providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
-      sharedVfs: this.rt.storage.vfs,
+      parentRuntime: this.rt,
+      cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
+      codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
     });
-    this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
+    this.headController = new HeadController(this._headRuntime, this.headJournal);
 
     // The EventsHub substrate (reactor source of truth). Local external
     // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
@@ -758,6 +772,19 @@ export class LocalAgentSession implements BackendHost {
     };
   }
 
+  /** The codemode namespaces a head's execute_tools gets beyond its runtime's
+   *  own executors: `web.*` and (when a resolver exists) `llm.query`. Pointedly
+   *  NOT `agents.*`/`agent.*` — a head forks its parent's resources, never its
+   *  authority to delegate. */
+  private headCodemodeExtras(): CodemodeProvider[] {
+    return [
+      createWebCodemodeProvider(this.getWebSearchProvider()),
+      ...(this.modelResolver
+        ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
+        : []),
+    ];
+  }
+
   /** Alternate-Takes capture of a completed heads run (core heads-support). */
   private recordHeadsTake(merge: MergeResult, task: string): void {
     recordGroundedHeadsTake(this.rt.storage.sql, merge, task);
@@ -846,7 +873,7 @@ export class LocalAgentSession implements BackendHost {
     this.ensureModelState();
     initAlternateTakesTable(this.rt.storage.execRaw);
     const id = newBranchId();
-    const handle = startBranchHead(this._headRuntime, new HeadJournal(this.rt.storage.sql), {
+    const handle = startBranchHead(this._headRuntime, this.headJournal, {
       id, task, inheritedContext: this.readInheritedContext(),
     });
     this.pendingBranches.push({ id, task, handle });
@@ -1015,11 +1042,17 @@ export class LocalAgentSession implements BackendHost {
     return upcoming ?? null;
   }
 
-  /** Single serialized drain of the turn queue — idempotent, so a concurrent
-   *  enqueueTurn just appends and the running pump picks it up. */
-  private async pump(): Promise<void> {
+  /** Kick the serialized turn pump if idle — idempotent, so a concurrent
+   *  enqueueTurn just appends and the running pump picks it up. The active
+   *  run's promise is tracked (pumpPromise) so settleBackgroundWork() can
+   *  await wake turns to completion. */
+  private pump(): void {
     if (this.pumping) return;
     this.pumping = true;
+    this.pumpPromise = this.runPump();
+  }
+
+  private async runPump(): Promise<void> {
     try {
       let item: QueueItem | undefined;
       while ((item = this.queue.shift())) {
@@ -1032,7 +1065,28 @@ export class LocalAgentSession implements BackendHost {
         }
       }
     } finally {
+      // Cleared synchronously as the loop exits — NOT in a .finally() callback,
+      // whose microtask would run after a just-resolved send()'s continuation
+      // and leave `pumping` stale-true, so the next send()'s pump() would no-op
+      // and orphan its queued turn.
       this.pumping = false;
+      this.pumpPromise = null;
+    }
+  }
+
+  /** Drain in-flight background work to quiescence: await detached job fibers,
+   *  run the wake turns their settlement enqueues, and repeat until nothing is
+   *  detached, queued, or pumping. Unlike end() this never marks the session
+   *  ended, so the wakes actually run (enqueueTurn only skips once ended) — and
+   *  because a settled fiber awaits its own wake turn (host.enqueueTurn resolves
+   *  when that turn finishes), awaiting the fibers awaits the wakes too. A
+   *  one-shot `proteus run`/`exec` calls this after its turn and before it stops
+   *  listening/closes, so a turn that backgrounded work streams its second half
+   *  instead of being cut off at process exit. */
+  async settleBackgroundWork(): Promise<void> {
+    while (this.pumping || this.queue.length > 0 || this.backgroundFibers.size > 0) {
+      if (this.pumpPromise) await this.pumpPromise;
+      if (this.backgroundFibers.size > 0) await Promise.allSettled([...this.backgroundFibers]);
     }
   }
 
@@ -1052,6 +1106,7 @@ export class LocalAgentSession implements BackendHost {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
       context: this.orch.acc.context,
+      nudge: this.orch.nudge.snapshot(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1101,7 +1156,7 @@ export class LocalAgentSession implements BackendHost {
 
     // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
     // It is per-turn-read live state (lessons/reflections/take-pick
-    // corrections append constantly), so it rides the ephemeral system-state
+    // corrections append constantly), so it rides the dynamic-context
     // ledger: in the stable prefix every append would bust the cache and
     // trip the prompt-hash telemetry with no real agent event.
     const memoryTail = await readMemoryTail(this.rt.memory);
@@ -1120,7 +1175,7 @@ export class LocalAgentSession implements BackendHost {
     // immediately (a handful of stat calls — negligible next to the LLM call).
     const agentsMd = discoverAgentsMd(this.cwd);
     // The byte-stable cache prefix — system state (facts, executor status)
-    // rides the ephemeral ledger and activation reasons ride the turn-local
+    // rides the dynamic ledger and activation reasons ride the turn-local
     // tail below, sharing the seam with the DO backend.
     const systemPrompt = buildSystemPromptSync(this.rt, {
       executors,
@@ -1149,19 +1204,16 @@ export class LocalAgentSession implements BackendHost {
       ? { role: 'user', content: [...fileParts, { type: 'text' as const, text: item.text }] }
       : { role: 'user', content: item.text });
 
-    // System state (facts, memory tail, executor status) rides the ephemeral
-    // ledger — runChat weaves the frozen blocks into the durable history
-    // AFTER the transformContext seam, appending a fresh block only when the
-    // state fingerprint changed. Turn-local state (activation reasons) rides
-    // one trailing message for THIS turn only. Neither is ever pushed into
-    // the durable history, so the stable prefix stays cacheable.
-    const systemState = {
-      ledger: this.ephemeralLedger,
-      context: {
-        factsBlock: this.renderFactsForTurn(),
-        memoryTail,
-        executors,
-      },
+    // Live state (facts, memory tail, executor status, running background work,
+    // the open fork roster) rides the dynamic-context ledger — the shared step
+    // pipeline re-reads it at EVERY model step and appends a block only when
+    // the render changed, weaving the frozen ones back at their birth index.
+    // Turn-local state (activation reasons) rides one trailing message for THIS
+    // turn only. Neither is ever pushed into the durable history, so the stable
+    // prefix stays cacheable.
+    const dynamicContext = {
+      ledger: this.dynamicLedger,
+      snapshot: () => this.dynamicContextSnapshot(memoryTail),
     };
     const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
 
@@ -1191,9 +1243,12 @@ export class LocalAgentSession implements BackendHost {
     // The compaction extension + the steer-drain ride the public extension
     // seam — the same host external plugins register on. One hook path, not
     // a private callback + a plugin API.
+    // The mechanical delegation nudge registers LAST: its splice must never
+    // shift the indices the user-steer drain replays into durable history.
     const extensions = new ExtensionHost()
       .register(this.compactionExtension)
-      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages });
+      .register({ name: 'proteus.steering', prepareStep: prepareStepMessages })
+      .register(this.orch.nudge);
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
     const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
@@ -1224,7 +1279,7 @@ export class LocalAgentSession implements BackendHost {
       attachments: {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.orch.acc.context,
       },
-      systemState,
+      dynamicContext,
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
       ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
@@ -1626,7 +1681,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Re-run a task for the replay-eval harness: the current system prompt
    *  (knowledge tail + soul) and model, the facts world model as the same
-   *  ephemeral system-state block live turns get, isolated history, no tools
+   *  dynamic-context block live turns get, isolated history, no tools
    *  (see the engine-construction note). */
   private async runReplayTask(task: string): Promise<string> {
     const model = this.ensureModelState();
@@ -1645,9 +1700,9 @@ export class LocalAgentSession implements BackendHost {
       history: [{ role: 'user', content: task }],
       // A fresh ledger per replay: the same seam live turns use, isolated
       // from the session's own block positions.
-      systemState: {
-        ledger: new EphemeralContextLedger(),
-        context: { factsBlock: this.renderFactsForTurn(), memoryTail },
+      dynamicContext: {
+        ledger: new DynamicContextLedger(),
+        snapshot: () => ({ factsBlock: this.renderFactsForTurn(), memoryTail }),
       },
       tools: {},
       maxSteps: 1,
@@ -1656,6 +1711,27 @@ export class LocalAgentSession implements BackendHost {
       else if (ev.type === 'done' && !text.trim()) text = ev.text;
     }
     return text;
+  }
+
+  /**
+   * The live state of this session, read fresh for ONE model step — the CLI
+   * peer of the DO's dynamicContextSnapshot.
+   *
+   * Every field comes from its existing store, and nothing is clock-derived: a
+   * wall-clock field would re-fingerprint the block on every request and append
+   * a block per step. `memoryTail` is the turn's read (the one input behind an
+   * await), so the caller closes over it.
+   */
+  private dynamicContextSnapshot(memoryTail: string | undefined): DynamicContext {
+    const factsBlock = this.renderFactsForTurn();
+    return {
+      ...(factsBlock ? { factsBlock } : {}),
+      ...(memoryTail ? { memoryTail } : {}),
+      // Re-listed per step: a sandbox provisioned mid-turn flips availability.
+      executors: this.rt.executionRouter?.listExecutors() ?? [],
+      tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
+      delegates: forkDelegates(this.headJournal.listLive()),
+    };
   }
 
   /** The recent-facts world-model block for the volatile turn context (core
@@ -1834,11 +1910,13 @@ export class LocalAgentSession implements BackendHost {
     this._headRuntime = createCLIHeadRuntime({
       model,
       providerFamily: providerFamilyForSpec(this.effectiveModelSpec()),
-      sharedVfs: this.rt.storage.vfs,
+      parentRuntime: this.rt,
+      cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),
+      codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
     });
-    this.headController = new HeadController(this._headRuntime, new HeadJournal(this.rt.storage.sql));
+    this.headController = new HeadController(this._headRuntime, this.headJournal);
 
     const rawTools = buildBuiltinTools({
       rt: this.rt,

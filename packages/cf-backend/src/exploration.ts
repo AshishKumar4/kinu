@@ -19,7 +19,7 @@
  *               session and device consent, with the parent's workspace files
  *               mounted at /workspace (see headRuntime()). Its tool surface —
  *               and the containment that keeps the delegation surface off it —
- *               is declared in heads/head-tools.ts.
+ *               is declared in @proteus/core head-tools.
  *
  * Both modes share: Facet class, composed owner/model services, lifecycle,
  * and parallel-spawn infrastructure. Heads are a mode of this Facet, not a
@@ -67,7 +67,7 @@ import { OwnedModelServices } from "./owned-model-services.js";
 import { spawnHeadFacet } from "./facet-spawn.js";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
-import { buildHeadToolSet } from "./heads/head-tools.js";
+import { buildHeadToolSet } from "@proteus/core";
 
 export class ExplorationAgent extends Agent<Env> {
   constructor(ctx: AgentContext, env: Env) {
@@ -328,7 +328,7 @@ export class ExplorationAgent extends Agent<Env> {
 
   /** Run the head's inference loop over the forked runtime and return its
    *  HeadReport. The ToolSet — and what is deliberately absent from it — is
-   *  declared in heads/head-tools.ts. */
+   *  declared in @proteus/core head-tools. */
   @callable()
   async runAsHead(): Promise<HeadReport> {
     if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
@@ -428,7 +428,7 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   // The head loop, system prompt, inherited context and report assembly live in
-  // core (runHeadInference); the tool surface lives in heads/head-tools.ts. This
+  // core (runHeadInference); the tool surface lives in @proteus/core head-tools. This
   // Facet supplies the three things only it can: the model, the forked runtime,
   // and the facet-spawn substrate behind split_subheads.
 }
