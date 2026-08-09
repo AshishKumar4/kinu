@@ -41,6 +41,15 @@ export interface HeadJournalRow {
   merge_strategy: MergeStrategy;
 }
 
+/** One still-open head run, as the live fork roster needs it. */
+export interface LiveHeadRun {
+  readonly rootId: HeadId;
+  /** The split's "why", as recorded by recordSplit. Empty when never labelled. */
+  readonly rationale: string;
+  readonly running: number;
+  readonly total: number;
+}
+
 export class HeadJournal {
   constructor(private readonly sql: SqlExecutor) {}
 
@@ -168,6 +177,32 @@ export class HeadJournal {
    *  collapse into ONE run instead of N empty roots. head_runs supplies the
    *  rationale label; head_steps the per-head trace; head_merge_results the
    *  synthesis. */
+  /**
+   * The runs that still have a head in flight — the live fork roster the
+   * dynamic context carries into every model step.
+   *
+   * Deliberately narrower than {@link listRuns}: no per-head steps, no merge
+   * synthesis, one query. It is read on every request of every turn, and a
+   * roster line only has to say which run is open and how far along it is.
+   */
+  listLive(limit = 8): LiveHeadRun[] {
+    return this.sql<{ root_id: string; rationale: string | null; running: number; total: number; spawned_at: number }>`
+      SELECT j.root_id AS root_id,
+             MAX(r.rationale) AS rationale,
+             SUM(CASE WHEN j.status = 'running' THEN 1 ELSE 0 END) AS running,
+             COUNT(*) AS total,
+             MIN(j.spawned_at) AS spawned_at
+      FROM head_journal j LEFT JOIN head_runs r ON r.root_id = j.root_id
+      GROUP BY j.root_id HAVING running > 0
+      ORDER BY spawned_at DESC LIMIT ${limit}`
+      .map((row) => ({
+        rootId: row.root_id,
+        rationale: row.rationale ?? '',
+        running: row.running,
+        total: row.total,
+      }));
+  }
+
   listRuns(limit: number): HeadRunView[] {
     const roots = this.sql<{ root_id: string; spawned_at: number }>`
       SELECT root_id, MIN(spawned_at) AS spawned_at FROM head_journal

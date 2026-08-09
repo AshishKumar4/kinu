@@ -319,10 +319,10 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(JSON.stringify(again!.content)).toBe(referencedJson);
   });
 
-  test('facts ride the ephemeral system-state block, never the system prompt', async () => {
+  test('facts ride the dynamic-context block, never the system prompt', async () => {
     // Cache-prefix stability: the system prompt must stay byte-stable across
-    // turns, so system state (the facts world model, executor status) rides
-    // the ephemeral ledger's frozen blocks in the messages array instead.
+    // turns, so live state (the facts world model, executor status) rides the
+    // dynamic ledger's frozen blocks in the messages array instead.
     let observed: ModelMessage[] = [];
     let system = '';
     const model = historyCapturingModel('ok', (messages) => { observed = messages; });
@@ -339,7 +339,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const factsBefore = observed.map(messageText).join('\n');
     expect(factsBefore).not.toContain('FACT-MARKER');
     // Turn 1 froze one block (executor status renders even with no facts).
-    const turn1Block = observed.map(messageText).find((t) => t.startsWith('[Ephemeral context'));
+    const turn1Block = observed.map(messageText).find(isDynamicBlock);
     expect(turn1Block).toBeDefined();
 
     // Seed a fact, then run another turn — the state fingerprint changed, so
@@ -351,17 +351,17 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(system).not.toContain('FACT-MARKER');
     const texts = observed.map(messageText);
     const tail = texts.at(-1)!;
-    expect(tail).toStartWith('[Ephemeral context');
+    expect(isDynamicBlock(tail)).toBe(true);
     expect(tail).toContain('World model');
     expect(tail).toContain('FACT-MARKER');
     expect(texts).toContain(turn1Block!); // byte-identical, still in place
 
-    // Ephemeral blocks are turn-assembly state — never persisted.
+    // Dynamic blocks are step state — never persisted.
     const rows = db.query(`SELECT content FROM messages`).all() as Array<{ content: string }>;
-    expect(rows.some((r) => r.content.includes('Ephemeral context'))).toBe(false);
+    expect(rows.some((r) => r.content.includes('<dynamic_context'))).toBe(false);
   });
 
-  test('the MEMORY.md tail (newest lessons) rides the ephemeral block, never the system prefix', async () => {
+  test('the MEMORY.md tail (newest lessons) rides the dynamic block, never the system prefix', async () => {
     // Two regressions guarded here: slice(0, 2000) once injected the OLDEST
     // bytes of the append-only MEMORY.md, and the tail once lived in the
     // byte-stable system prefix — where every lesson/reflection/take-pick
@@ -377,7 +377,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     const system = observed.find((m) => m.role === 'system');
     expect(system).toBeDefined();
     expect(String(system!.content)).not.toContain('NEW-LESSON-MARKER');
-    const block = observed.map(messageText).find((t) => t.startsWith('[Ephemeral context'))!;
+    const block = observed.map(messageText).find(isDynamicBlock)!;
     expect(block).toContain('NEW-LESSON-MARKER');
     expect(block).not.toContain('OLD-STALE-MARKER');
   });
@@ -432,9 +432,9 @@ describe('LocalAgentSession.send — a user turn', () => {
     await resumed.send('what did I say?');
     await resumed.end();
 
-    // The ephemeral system-state blocks (executor status etc.) are woven in
-    // at turn assembly and never persisted — filter them for the order checks.
-    const text = observed.map(messageText).filter((t) => !t.startsWith('[Ephemeral context'));
+    // The dynamic-context blocks (executor status etc.) are woven in per step
+    // and never persisted — filter them for the order checks.
+    const text = observed.map(messageText).filter((t) => !isDynamicBlock(t));
     expect(text).toContain('remember this');
     expect(text).toContain('remembered answer');
     expect(text.at(-1)).toBe('what did I say?');
@@ -527,6 +527,12 @@ describe('LocalAgentSession — tool success/error + cache telemetry fidelity', 
     await session.end();
   });
 });
+
+/** The wire shape of one dynamic-context block (core volatile-context.ts). */
+function isDynamicBlock(text: string): boolean {
+  return /^<dynamic_context fingerprint="[0-9a-f]{16}">\n/.test(text)
+    && text.endsWith('\n</dynamic_context>');
+}
 
 function messageText(message: ModelMessage): string {
   if (typeof message.content === 'string') return message.content;

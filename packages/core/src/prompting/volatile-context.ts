@@ -1,39 +1,80 @@
 /**
- * The volatile half of the per-turn context split.
+ * The volatile half of the context split.
  *
  * `buildSystemPromptSync` is a byte-stable prefix: its bytes change only on
  * real agent events (soul edit, model switch, skill/tool surface change,
  * executor registration, AGENTS.md edit), so provider prefix caches survive
- * across turns. Everything that legitimately changes turn-to-turn rides in
- * the messages array instead, split by nature:
+ * across turns. Everything that legitimately changes rides in the messages
+ * array instead, split by nature:
  *
- * SYSTEM STATE (facts world model, MEMORY.md tail, live executor
- * availability) — the EphemeralContextLedger. Each turn the current state is
- * rendered and fingerprinted; a new block is appended at the conversation
- * tail ONLY when the fingerprint differs from the newest block's. Every
- * block freezes at the durable-history position where it was born and never
- * moves or disappears while the activation lives — moving or removing a
- * mid-array message would invalidate every provider cache breakpoint after
- * it. The ledger is in-memory only, never persisted: a cold start (DO reset,
- * new CLI session) begins empty, so the next turn carries exactly one fresh
- * block.
+ * DYNAMIC CONTEXT (facts world model, MEMORY.md tail, live executor
+ * availability, running background work, the open delegate roster, decisions
+ * parked on the user) — the DynamicContextLedger. At EVERY model step the
+ * current state is rendered into one `<dynamic_context fingerprint="…">`
+ * block; a new block is appended at the tail ONLY when that render differs
+ * from the newest block's. Every block freezes at the position where it was
+ * born and never moves, changes or disappears while the activation lives —
+ * moving or removing a mid-array message would invalidate every provider
+ * cache breakpoint after it. The resulting invariant: the context the agent
+ * sees keeps the maximum common prefix across the steps of an activation,
+ * until the caches expire or the DO/CLI resets. The ledger is in-memory
+ * only, never persisted: a cold start (DO reset, new CLI session) begins
+ * empty, so the next step carries exactly one fresh block.
+ *
+ * Only genuinely state-derived facts belong in the block. Nothing clock-
+ * derived (elapsed times, "running for 4m") may render: it would re-fingerprint
+ * every step and append a block per request.
  *
  * TURN-LOCAL state (skill activation reasons — they vary with THIS user
  * message's keywords — and the one-turn device change notice) — one trailing
- * user message for this turn only, appended after the ledger weave and never
+ * user message for this turn only, appended at turn assembly and never
  * fingerprinted (folding it in would defeat block stability).
  *
  * Both backends assemble through the same functions so the seam cannot
- * drift: CF in `beforeTurn` (TurnConfig.messages), CLI via runChat.
+ * drift: the ledger rides the shared step pipeline (prompting/prepare-step.ts),
+ * the turn-local tail rides the shared turn assembly
+ * (orchestrator/turn-context.ts).
  */
 
 import type { ModelMessage } from 'ai';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface.js';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
 
-/** The fingerprint-stable "latest state of the system" — changes only on
- *  real events (fact learned, lesson recorded, executor lifecycle flip). */
-export interface SystemStateContext {
+/** Detached work the agent started and has not collected yet — one row of the
+ *  background-job registry (jobs/store.ts), never a second copy of it. */
+export interface DynamicTask {
+  readonly id: string;
+  /** The producing tool surface — `think_heads`, `execute_tools`, … */
+  readonly kind: string;
+  readonly label: string | null;
+}
+
+/** An agent the agent has working for it right now: a spawned subordinate
+ *  (parent roster) or a forked head run (heads journal). */
+export interface DynamicDelegate {
+  readonly kind: 'subordinate' | 'fork';
+  readonly name: string;
+  /** Where it is — the roster status / head-run phase, as its own store words it. */
+  readonly phase: string;
+  /** What it is working on, when its store knows. */
+  readonly task?: string | null;
+}
+
+/** A decision parked on the user. Live so the agent stops guessing whether a
+ *  gated action is stuck on it or on the human. */
+export interface DynamicApproval {
+  readonly id: string;
+  /** What kind of decision is waiting — 'device consent', … */
+  readonly kind: string;
+  readonly detail: string;
+}
+
+/** The live state of the system at one model step. Every field is read from
+ *  its existing source of truth at render time; this type owns no state.
+ *
+ *  List fields are rendered most-relevant-first and capped, with an honest
+ *  count of what was elided — callers order them, the renderer bounds them. */
+export interface DynamicContext {
   /** Rendered recent-facts block (renderFactsBlock output). */
   factsBlock?: string;
   /** Bounded MEMORY.md tail (newest lessons/reflections). */
@@ -41,6 +82,27 @@ export interface SystemStateContext {
   /** Live executor lifecycle — rendered as status labels only; the executor
    *  doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
+  /** Background work still running (newest first). */
+  tasks?: readonly DynamicTask[];
+  /** Subordinates and forked head runs still open (most recent first). */
+  delegates?: readonly DynamicDelegate[];
+  /** Approvals/consent waiting on the user (oldest first — the one that has
+   *  been blocked longest matters most). */
+  approvals?: readonly DynamicApproval[];
+}
+
+/** The live fork roster as delegates — the ONE mapping both backends apply to
+ *  `HeadJournal.listLive()`, so a fork reads the same on either. Typed
+ *  structurally: how a head run is journalled is not this layer's business. */
+export function forkDelegates(
+  runs: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>,
+): DynamicDelegate[] {
+  return runs.map((run) => ({
+    kind: 'fork',
+    name: run.rootId,
+    phase: `${run.running} of ${run.total} heads running`,
+    task: run.rationale || null,
+  }));
 }
 
 /** State that only makes sense for THIS turn's user message. */
@@ -53,16 +115,16 @@ export interface TurnLocalContext {
   activeSkills?: ActiveSkillSet;
 }
 
-export const EPHEMERAL_CONTEXT_HEADER =
-  '[Ephemeral context — latest system state, maintained by the Proteus runtime, not written by the user. ' +
-  'The newest ephemeral context block supersedes all earlier ones.]';
+export const DYNAMIC_CONTEXT_HEADER =
+  'Live system state, maintained by the Proteus runtime — not conversation, and not written by the user. '
+  + 'A later dynamic_context block supersedes every earlier one.';
 
 export const TURN_CONTEXT_HEADER =
   '[Turn context — live state maintained by the Proteus runtime, not written by the user.]';
 
 /** Live availability label for one executor. Volatile by nature (flips on
  *  device connect/disconnect and sandbox activation), so it renders in the
- *  ephemeral system-state block — never in the cacheable system prefix. */
+ *  dynamic-context block — never in the cacheable system prefix. */
 export function executorAvailabilityLabel(exec: PromptExecutorInfo): string {
   if (exec.name === 'laptop') return exec.active || exec.status === 'active' ? 'connected' : 'available';
   if (exec.active || exec.status === 'active') return 'active';
@@ -111,9 +173,45 @@ function describeActivationReason(r: ActivationReason): string {
   }
 }
 
-/** The ledger-fed system-state block (or null when there is nothing to say). */
-export function renderSystemStateBlock(ctx: SystemStateContext): string | null {
-  const sections: string[] = [];
+/** Per-list caps. The block rides every request of every step, so each roster
+ *  states its head and an honest count of the tail rather than growing without
+ *  bound. */
+const MAX_TASKS = 8;
+const MAX_DELEGATES = 8;
+const MAX_APPROVALS = 5;
+/** Free text from a store (job labels, delegate tasks, gated commands) is one
+ *  line at most — the model needs to recognize the item, not re-read it. */
+const ENTRY_CHARS = 120;
+
+function clip(text: string, max = ENTRY_CHARS): string {
+  const oneLine = text.replace(/\s+/g, ' ').trim();
+  return oneLine.length > max ? `${oneLine.slice(0, max - 1).trimEnd()}…` : oneLine;
+}
+
+/** One capped roster section: `title`, the first `cap` rendered rows, and an
+ *  honest elision line when the caller had more. Null when it had none. */
+function rosterSection<T>(
+  title: string,
+  items: readonly T[],
+  cap: number,
+  row: (item: T) => string,
+): string | null {
+  if (items.length === 0) return null;
+  const lines = items.slice(0, cap).map(row);
+  const elided = items.length - lines.length;
+  if (elided > 0) lines.push(`- …and ${elided} more, not shown`);
+  return [title, ...lines].join('\n');
+}
+
+/**
+ * The ledger-fed dynamic-context block (or null when there is nothing to say).
+ *
+ * The `fingerprint` attribute digests the block BODY, so the model can tell at
+ * a glance which of two blocks is a re-statement and which is a real change,
+ * and a superseded block is visibly stale rather than silently wrong.
+ */
+export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
+  const sections: Array<string | null> = [];
 
   const facts = ctx.factsBlock?.trim();
   if (facts) sections.push(`## World model (facts you remembered)\n${facts}`);
@@ -131,8 +229,28 @@ export function renderSystemStateBlock(ctx: SystemStateContext): string | null {
     ].join('\n'));
   }
 
-  if (sections.length === 0) return null;
-  return [EPHEMERAL_CONTEXT_HEADER, ...sections].join('\n\n');
+  sections.push(rosterSection(
+    '## Background work still running (collect it before you finish)',
+    ctx.tasks ?? [], MAX_TASKS,
+    (task) => `- ${task.id} (${task.kind})${task.label ? `: ${clip(task.label)}` : ''}`,
+  ));
+
+  sections.push(rosterSection(
+    '## Delegates working for you',
+    ctx.delegates ?? [], MAX_DELEGATES,
+    (d) => `- ${d.name} (${d.kind}) — ${clip(d.phase, 40)}${d.task ? `: ${clip(d.task)}` : ''}`,
+  ));
+
+  sections.push(rosterSection(
+    '## Waiting on the user (not on you)',
+    ctx.approvals ?? [], MAX_APPROVALS,
+    (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
+  ));
+
+  const present = sections.filter((section): section is string => section !== null);
+  if (present.length === 0) return null;
+  const body = [DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n');
+  return `<dynamic_context fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
 }
 
 /** The per-turn tail block (or null when there is nothing to say). */
@@ -156,44 +274,52 @@ export function renderTurnLocalContext(ctx: TurnLocalContext): string | null {
 
 /** The turn-local context as one user message (or null). Callers hand it to
  *  the model for THIS turn only — never persisted into durable history, and
- *  appended AFTER the extension transformContext seam and the ledger weave,
- *  so a compaction plugin never sees turn-local state. */
+ *  appended AFTER the extension transformContext seam, so a compaction plugin
+ *  never sees turn-local state. */
 export function turnLocalContextMessage(ctx: TurnLocalContext): ModelMessage | null {
   const text = renderTurnLocalContext(ctx);
   return text ? { role: 'user', content: text } : null;
 }
 
 interface LedgerBlock {
-  /** Durable-history length when the block was born — it renders after this
-   *  many durable messages, forever (the cache-stability contract). */
+  /** Message count of the un-woven array when the block was born — it renders
+   *  after that many messages, forever (the cache-stability contract). */
   index: number;
-  fingerprint: string;
+  /** The rendered block text, which is also the append gate: a step whose
+   *  render is byte-identical to this adds nothing. */
+  text: string;
   message: ModelMessage;
 }
 
 /**
- * Per-activation ledger of ephemeral system-state blocks.
+ * Per-activation ledger of dynamic-context blocks.
  *
- * `weave` is the whole interface: hand it the (transformed) durable history
- * and the current system state each turn. It appends a fresh block at the
- * tail only when the state fingerprint differs from the newest block's, and
- * returns the history with every frozen block woven in at its original
- * position — an unchanged state adds nothing, so the already-frozen block
- * keeps conveying current state from inside the cached prefix.
+ * `weave` is the whole interface, and the shared step pipeline calls it once
+ * per model step: hand it the step's (un-woven) message array and the state
+ * read at that instant. It appends a fresh block at the tail only when the
+ * render differs from the newest block's, and returns the array with every
+ * frozen block woven back in at its original position — an unchanged state
+ * adds nothing, so the already-frozen block keeps conveying current state
+ * from inside the cached prefix, and a changed one supersedes it at the tip
+ * without disturbing a single byte before it.
+ *
+ * `history` must always be the array WITHOUT this ledger's blocks (the AI SDK
+ * rebuilds every step from the original messages plus response messages, so a
+ * woven array is never fed back in).
  *
  * In-memory only, never persisted: construct one per activation. Call
  * `reset()` whenever the durable stream is rewritten (compaction) — the
  * frozen positions are meaningless against the new stream, and the next
  * weave starts over with one fresh block at the tail.
  */
-export class EphemeralContextLedger {
+export class DynamicContextLedger {
   private blocks: LedgerBlock[] = [];
 
   get size(): number {
     return this.blocks.length;
   }
 
-  weave(history: ReadonlyArray<ModelMessage>, state: SystemStateContext): ModelMessage[] {
+  weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {
     let previousIndex = -1;
     for (const block of this.blocks) {
       // History rewrites invalidate frozen positions even when their caller forgot to reset the ledger.
@@ -203,15 +329,11 @@ export class EphemeralContextLedger {
       }
       previousIndex = block.index;
     }
-    const text = renderSystemStateBlock(state);
+    const text = renderDynamicContextBlock(state);
     // A null render appends nothing; frozen blocks stay regardless (removing
     // a mid-array message would break the provider prefix cache).
-    if (text !== null) {
-      const fingerprint = fnv1a64(text);
-      const newest = this.blocks[this.blocks.length - 1];
-      if (newest?.fingerprint !== fingerprint) {
-        this.blocks.push({ index: history.length, fingerprint, message: { role: 'user', content: text } });
-      }
+    if (text !== null && this.blocks[this.blocks.length - 1]?.text !== text) {
+      this.blocks.push({ index: history.length, text, message: { role: 'user', content: text } });
     }
     const woven: ModelMessage[] = [];
     let cursor = 0;
@@ -228,10 +350,10 @@ export class EphemeralContextLedger {
   }
 }
 
-/** FNV-1a 64-bit text hash — the shared fingerprint behind both
- *  cache-stability invariants (the system-prompt byte-stability telemetry
- *  and the ledger's append gate) AND the compaction engine's content-hash
- *  keys, which run over the FULL durable history every turn. Implemented
+/** FNV-1a 64-bit text hash — the shared fingerprint behind the cache-stability
+ *  telemetry (system-prompt byte stability, the dynamic_context block's own
+ *  attribute) AND the compaction engine's content-hash keys, which run over
+ *  the FULL durable history every turn. Implemented
  *  with 16-bit limb multiplies instead of BigInt (~30x faster on megabyte
  *  inputs; the compaction plane made per-char BigInt a per-turn tax) —
  *  digests are byte-identical to the previous BigInt implementation.

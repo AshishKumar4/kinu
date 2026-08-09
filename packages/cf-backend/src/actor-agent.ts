@@ -8,7 +8,7 @@
  * (getOwnerUserId), exec-plane keying (workspaceName), tool surface
  * (actorToolDeps / extraCodemodeProviders), evolution engine, and owner
  * notification. Everything else — the CF runtime assembly, the BackendHost,
- * the shared AgentOrchestrator, ExtensionHost + compaction, the ephemeral
+ * the shared AgentOrchestrator, ExtensionHost + compaction, the dynamic
  * ledger, prompt/model/tool caches, and the Think hook bridge (beforeTurn /
  * beforeStep / tool hooks) — lives here, once.
  *
@@ -53,7 +53,7 @@ import {
   buildSystemPromptSync,
   currentDateForPrompt,
   promptModeForTurnEvent,
-  EphemeralContextLedger, turnLocalContextMessage, fnv1a64,
+  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
@@ -71,7 +71,7 @@ import {
   // Branching heads
   HeadController, HeadJournal,
   type SerializedMessage, type SplitPhaseEvent, type HeadRuntime, type MergeResult,
-  // Canonical memory-note read (the ephemeral MEMORY.md tail)
+  // Canonical memory-note read (the dynamic-context MEMORY.md tail)
   readMemoryTail,
   // Durable run-event log
   RunEventRecorder,
@@ -393,7 +393,7 @@ export abstract class ActorAgent extends Think<Env> {
         return await dispatchMessage.call(this, connection, message);
       } finally {
         if (event?.type === 'clear') {
-          this.ephemeralLedger.reset();
+          this.dynamicLedger.reset();
           this._pendingDrainReplyTurns.clear();
           try {
             await this.compactionState.plans.save(this.name, null);
@@ -581,11 +581,11 @@ export abstract class ActorAgent extends Think<Env> {
       onOutcome: ({ outcome }) => {
         // The model-visible stream changed shape — a NEW plan rewrote it
         // ('planned') or a cached plan was discarded after a history rewrite
-        // ('invalidated') — so the ephemeral ledger's frozen block positions
-        // are meaningless. This fires inside runTransformContext, BEFORE
-        // beforeTurn's weave, so the next weave starts over with one fresh
-        // block at the tail. A byte-stable replay keeps positions valid.
-        if (outcome !== 'replayed') this.ephemeralLedger.reset();
+        // ('invalidated') — so the dynamic ledger's frozen block positions
+        // are meaningless. This fires inside runTransformContext, BEFORE the
+        // turn's first step weave, so the next weave starts over with one
+        // fresh block at the tail. A byte-stable replay keeps positions valid.
+        if (outcome !== 'replayed') this.dynamicLedger.reset();
       },
     }));
   }
@@ -1119,13 +1119,14 @@ export abstract class ActorAgent extends Think<Env> {
    *  construction (registerCompactionExtension). */
   protected readonly extensions = new ExtensionHost();
 
-  /** Ephemeral system-state blocks for this DO activation (core
-   *  volatile-context.ts). In-memory only — hibernation/reset empties it, so
-   *  a cold start attaches exactly one fresh block; the compaction
-   *  extension's onOutcome resets it whenever the model-visible stream
-   *  changed shape ('planned'/'invalidated') because the frozen block
-   *  positions are meaningless against a rewritten stream. */
-  private readonly ephemeralLedger = new EphemeralContextLedger();
+  /** Dynamic-context blocks for this DO activation (core volatile-context.ts),
+   *  re-read and re-woven at every model step by the shared step pipeline.
+   *  In-memory only — hibernation/reset empties it, so a cold start attaches
+   *  exactly one fresh block; the compaction extension's onOutcome resets it
+   *  whenever the model-visible stream changed shape ('planned'/'invalidated')
+   *  because the frozen block positions are meaningless against a rewritten
+   *  stream. */
+  private readonly dynamicLedger = new DynamicContextLedger();
   protected _cliCwd: string | null = null;
   // Current turn identity for the device daemon's pre-mutation shadow-git
   // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
@@ -1710,7 +1711,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   configureSession(session: Session): Session {
     // The agent's durable context is `getSystemPrompt()` (soul + tools) plus
-    // the persisted conversation and the ephemeral/turn-local context split —
+    // the persisted conversation and the dynamic/turn-local context split —
     // a single source of truth, not Think's freezable context blocks. No
     // Session policy attaches here: compaction is the transformContext
     // extension (registerCompactionExtension), which rewrites the turn's
@@ -1892,7 +1893,7 @@ export abstract class ActorAgent extends Think<Env> {
     // this path can reflect the turn's active skills and MCP tools. It is the
     // byte-stable cache prefix: it changes only on real agent events (soul,
     // model, skill set, tool surface, AGENTS.md). System state — facts, the
-    // live executor status — rides the ephemeral ledger's frozen blocks, and
+    // live executor status — rides the dynamic ledger's frozen blocks, and
     // turn-local state — the device notice, activation reasons — rides one
     // trailing message (prompting/volatile-context.ts), so neither ever
     // re-prefills the prefix.
@@ -1930,10 +1931,11 @@ export abstract class ActorAgent extends Think<Env> {
     // consume it — at most one rebuild per arm, never a loop.
     const trigger = this.compactionState.takeForceCompaction(this.name) ? 'force' as const : 'auto' as const;
     if (trigger === 'force') this.logActivity('compaction_forced', 'forced context rebuild');
-    // The newest MEMORY.md lessons/reflections ride the ephemeral block too
-    // (the same bounded tail the CLI weave supplies) — the reflection loop
-    // assumes the model sees its latest lessons in-turn.
-    const memoryTail = await readMemoryTail(this.rt.memory);
+    // The newest MEMORY.md lessons/reflections ride the dynamic block too (the
+    // same bounded tail the CLI supplies) — the reflection loop assumes the
+    // model sees its latest lessons in-turn. Read once here rather than per
+    // step: it is the one dynamic-context input that needs an await.
+    this._turnMemoryTail = await readMemoryTail(this.rt.memory);
     const turnLocal = turnLocalContextMessage({
       deviceNotice,
       ...(this._turnActiveSkills ? { activeSkills: this._turnActiveSkills } : {}),
@@ -1941,7 +1943,8 @@ export abstract class ActorAgent extends Think<Env> {
     // The shared turn-context assembly (core orchestrator/turn-context.ts) —
     // the SAME ordering runChat runs on the CLI: attachment sanitize →
     // extension onTurnStart → awaited transformContext (compaction, over the
-    // DURABLE history only) → ephemeral ledger weave → turn-local tail.
+    // DURABLE history only) → turn-local tail. Dynamic context is NOT assembled
+    // here: it is re-read and re-woven at every step by beforeStep.
     cfg.messages = await assembleTurnMessages({
       system: systemOverride,
       history: rawMessages,
@@ -1949,14 +1952,6 @@ export abstract class ActorAgent extends Think<Env> {
         accepts: this.sessionAcceptedMedia(), vfs: this.rt.storage.vfs, budget: this.acc.context,
       },
       extensions: this.extensions,
-      systemState: {
-        ledger: this.ephemeralLedger,
-        context: {
-          factsBlock: this.renderFactsForTurn(),
-          ...(memoryTail ? { memoryTail } : {}),
-          executors: execs,
-        },
-      },
       turnLocal: turnLocal ? [turnLocal] : [],
       sessionKey: this.name,
       contextWindow: this._turnContextWindow,
@@ -1999,8 +1994,8 @@ export abstract class ActorAgent extends Think<Env> {
     // Shadow-eval context parity + the evolved-scaffold task source (see the
     // _lastTurnOpts field doc): the effective opts the streamText Think runs
     // next will see — final system/messages/merged tools/model. Think only
-    // adds its tool-decision wrapping and the per-step cache markers on top,
-    // both inert for a replay.
+    // adds its tool-decision wrapping and, per step, the cache markers and the
+    // dynamic-context block — all inert for a replay.
     this._lastTurnOpts = {
       model: ctx.model,
       system: systemOverride,
@@ -2022,19 +2017,44 @@ export abstract class ActorAgent extends Think<Env> {
    *  by beforeStep's prune budget every step. */
   protected _turnContextWindow = 0;
 
+  /** The bounded MEMORY.md tail read at turn assembly — the one dynamic-context
+   *  input behind an await, so the per-step snapshot closes over it. */
+  private _turnMemoryTail: string | undefined;
+
+  /**
+   * The live state of this agent, read fresh for ONE model step.
+   *
+   * Every field comes from its existing store — nothing here holds state of its
+   * own — and nothing is clock-derived: a wall-clock field would re-fingerprint
+   * the block on every request and append a block per step.
+   */
+  protected dynamicContextSnapshot(): DynamicContext {
+    const factsBlock = this.renderFactsForTurn();
+    return {
+      ...(factsBlock ? { factsBlock } : {}),
+      ...(this._turnMemoryTail ? { memoryTail: this._turnMemoryTail } : {}),
+      // Re-listed per step: a sandbox provisioned or a device connected mid-turn
+      // flips availability, and the whole point of the block is to say so.
+      executors: this.rt.executionRouter?.listExecutors() ?? [],
+      tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
+      delegates: forkDelegates(this.headJournal.listLive()),
+    };
+  }
+
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
     // The shared step pipeline (core prompting/prepare-step.ts, identical on
     // the CLI): extension prepareStep rewrites first, step-boundary tool-output
-    // pruning against the window budget next, then the cache plan rolls the
-    // tail breakpoints onto the FINAL message array so each request of the
-    // agentic loop reads the prefix the previous step wrote.
-    return composePrepareStep(
-      this.extensions,
-      { stepNumber: ctx.stepNumber, messages: ctx.messages },
-      this._turnCachePlan,
-      this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
-      this.budget,
-    );
+    // pruning against the window budget next, then the dynamic-context weave,
+    // then the cache plan rolls the tail breakpoints onto the FINAL message
+    // array so each request of the agentic loop reads the prefix the previous
+    // step wrote.
+    return composePrepareStep({
+      extensions: this.extensions,
+      cache: this._turnCachePlan,
+      prune: this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
+      budget: this.budget,
+      dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
+    }, { stepNumber: ctx.stepNumber, messages: ctx.messages });
   }
 
   /** The byte-stability invariant as telemetry: the system prompt hash should

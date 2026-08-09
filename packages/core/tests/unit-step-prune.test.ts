@@ -136,7 +136,7 @@ describe('pruneStepToolOutputs', () => {
 describe('composePrepareStep with pruning', () => {
   test('prune applies without extensions or a cache plan', () => {
     const messages = bigTurn();
-    const result = composePrepareStep(undefined, { stepNumber: 3, messages }, null, { contextWindow: WINDOW });
+    const result = composePrepareStep({ prune: { contextWindow: WINDOW } }, { stepNumber: 3, messages });
     expect(result).toBeDefined();
     expect(result!.messages.length).toBe(messages.length);
     expect(outputText(resultPart(result!.messages[2]))).toContain('…[truncated:');
@@ -144,18 +144,16 @@ describe('composePrepareStep with pruning', () => {
 
   test('under budget with no extensions → no step override at all', () => {
     const messages = bigTurn();
-    expect(composePrepareStep(undefined, { stepNumber: 3, messages }, null, { contextWindow: 400_000 }))
+    expect(composePrepareStep({ prune: { contextWindow: 400_000 } }, { stepNumber: 3, messages }))
       .toBeUndefined();
-    expect(composePrepareStep(undefined, { stepNumber: 3, messages }, null, null)).toBeUndefined();
+    expect(composePrepareStep({}, { stepNumber: 3, messages })).toBeUndefined();
   });
 
   test('cache markers land LAST, on the pruned array', () => {
     const messages = bigTurn();
     const result = composePrepareStep(
-      undefined,
+      { cache: { strategy: { kind: 'anthropic' } }, prune: { contextWindow: WINDOW } },
       { stepNumber: 3, messages },
-      { strategy: { kind: 'anthropic' } },
-      { contextWindow: WINDOW },
     );
     expect(result).toBeDefined();
     const out = result!.messages;

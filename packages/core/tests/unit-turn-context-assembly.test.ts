@@ -1,14 +1,15 @@
 // The shared turn-context assembly (orchestrator/turn-context.ts) — the ONE
 // ordering both backends run: sanitize → extension onTurnStart → awaited
-// transformContext → ephemeral ledger weave → turn-local tail. runChat and the
-// cf beforeTurn both delegate here, so these invariants hold on both backends
-// by construction.
+// transformContext → turn-local tail. runChat and the cf beforeTurn both
+// delegate here, so these invariants hold on both backends by construction.
+// Dynamic context is NOT assembled here (it is woven per step); the array this
+// produces is what the ledger's frozen positions are measured against, so it
+// must stay free of blocks.
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { Database } from 'bun:sqlite';
 import { assembleTurnMessages } from '../src/orchestrator/turn-context.js';
 import { ExtensionHost } from '../src/extension.js';
-import { EphemeralContextLedger } from '../src/prompting/volatile-context.js';
 import { createMemoryVFS } from './helpers.js';
 
 const HISTORY: ModelMessage[] = [
@@ -40,36 +41,38 @@ describe('assembleTurnMessages', () => {
         return undefined;
       },
     });
-    const ledger = new EphemeralContextLedger();
     await assembleTurnMessages({
       ...base(),
       extensions,
-      systemState: { ledger, context: { factsBlock: 'a: 1' } },
       turnLocal: [{ role: 'user', content: 'turn-local' }],
     });
     expect(order).toEqual(['turn-start', 'transform']);
-    // The transform never sees a ledger block or the turn-local tail.
+    // The transform never sees the turn-local tail.
     expect(transformSaw).toEqual(HISTORY);
   });
 
-  test('the weave runs over the TRANSFORMED history and the turn-local tail lands last', async () => {
+  test('the turn-local tail lands last, on the TRANSFORMED history', async () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }];
     const extensions = new ExtensionHost().register({
       name: 'test.compact',
       transformContext: () => compacted,
     });
-    const ledger = new EphemeralContextLedger();
     const out = await assembleTurnMessages({
       ...base(),
       extensions,
-      systemState: { ledger, context: { factsBlock: 'a: 1' } },
       turnLocal: [{ role: 'user', content: 'turn-local' }],
     });
-    // compacted history + one ledger block + the turn-local tail
-    expect(out.length).toBe(compacted.length + 2);
-    expect(out[0]).toEqual(compacted[0]!);
-    expect(out.at(-1)).toEqual({ role: 'user', content: 'turn-local' });
-    expect(JSON.stringify(out.at(-2))).toContain('a: 1');
+    expect(out).toEqual([...compacted, { role: 'user', content: 'turn-local' }]);
+  });
+
+  test('no dynamic-context block is ever assembled here', async () => {
+    // The step pipeline owns them. A block appearing in the turn's initial
+    // array would be double-counted by the ledger's frozen indices.
+    const out = await assembleTurnMessages({
+      ...base(),
+      turnLocal: [{ role: 'user', content: 'turn-local' }],
+    });
+    expect(JSON.stringify(out)).not.toContain('<dynamic_context');
   });
 
   test('the transform receives sessionKey, window, trigger, and the measured token signal', async () => {

@@ -243,7 +243,12 @@ export {
   type PrepareStepContext,
   type TransformContext,
 } from './extension.js';
-export { composePrepareStep, type StepCachePlan } from './prompting/prepare-step.js';
+export {
+  composePrepareStep,
+  type StepCachePlan,
+  type StepDynamicContext,
+  type StepPipeline,
+} from './prompting/prepare-step.js';
 export {
   pruneStepToolOutputs,
   STEP_CONTEXT_BUDGET_RATIO,
@@ -396,16 +401,20 @@ export {
   type MediaModality,
 } from './prompting/attachment-sanitizer.js';
 export {
-  EphemeralContextLedger,
+  DynamicContextLedger,
   executorAvailabilityLabel,
   fnv1a64,
+  forkDelegates,
   fnv1a64Bytes,
-  renderSystemStateBlock,
+  renderDynamicContextBlock,
   renderTurnLocalContext,
   turnLocalContextMessage,
-  EPHEMERAL_CONTEXT_HEADER,
+  DYNAMIC_CONTEXT_HEADER,
   TURN_CONTEXT_HEADER,
-  type SystemStateContext,
+  type DynamicApproval,
+  type DynamicContext,
+  type DynamicDelegate,
+  type DynamicTask,
   type TurnLocalContext,
 } from './prompting/volatile-context.js';
 export {
@@ -765,7 +774,7 @@ export {
   DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
   deriveChildBudget, budgetExhausted,
   initHeadsTables,
-  HeadJournal, type HeadJournalRow,
+  HeadJournal, type HeadJournalRow, type LiveHeadRun,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
   MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,

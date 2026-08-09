@@ -76,7 +76,7 @@ graph TB
 
 `ActorAgent` owns everything a full-loop actor needs once: the CF runtime
 assembly, the `BackendHost`, the shared `AgentOrchestrator`, `ExtensionHost` +
-compaction, the ephemeral ledger, the prompt/model/tool caches, and the Think
+compaction, the dynamic-context ledger, the prompt/model/tool caches, and the Think
 hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`,
 `actorToolDeps`, `engine`, `notifyOwner` — plus three optional hooks
 (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
@@ -166,7 +166,7 @@ flowchart TB
         Inj["proteus.event-injection — prepareStep"]
     end
 
-    Assembly["Context assembly (core/src/prompting)<br/>attachment-sanitizer · EphemeralContextLedger<br/>step-prune (0.7 window) · cache-breakpoints"]
+    Assembly["Context assembly (core/src/prompting)<br/>attachment-sanitizer · DynamicContextLedger<br/>step-prune (0.7 window) · cache-breakpoints"]
     Model["streamText → provider · stream-usage-repair"]
     Fail["turn-failure classifier → force-compaction retry"]
 
@@ -179,8 +179,8 @@ What the boxes are:
 
 | Think hook | Proteus binding | Module |
 |---|---|---|
-| `beforeTurn` | `emitTurnStart`, then the awaited `transformContext` chain; the ephemeral ledger + turn-local tail are woven **after** the transform; tools folded into `activeTools` | `orchestrator.ts`, `core/src/extension.ts` |
-| `beforeStep` | `composePrepareStep` — the extension chain runs first, cache-breakpoint markers land last | `core/src/prompting/prepare-step.ts` |
+| `beforeTurn` | `emitTurnStart`, then the awaited `transformContext` chain; the turn-local tail is appended **after** the transform; tools folded into `activeTools` | `orchestrator.ts`, `core/src/extension.ts` |
+| `beforeStep` | `composePrepareStep` — extension chain, then step-pruning, then the dynamic-context weave, cache-breakpoint markers last | `core/src/prompting/prepare-step.ts` |
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult`; the evolution engine records each call | `orchestrator.ts` |
 | `_transformInferenceResult` | the **mutable scaffold** seam — an evolved `agent.js` becomes the turn's inference loop; un-evolved passes through untouched | `core/src/scaffold/inference-transform.ts` |
 | `onChatResponse` | `emitTurnEnd` → fire-and-forget evolution (never blocks the queue); the turn-failure classifier may arm a one-shot force-compaction retry | `orchestrator.ts`, `core/src/turn-failure.ts` |
@@ -203,9 +203,10 @@ The two default registrants attach at construction on both backends:
 Supporting context machinery, all in `core/src/prompting` and shared by both
 backends: the **attachment sanitizer** (`attachment-sanitizer.ts`) offloads
 model-incompatible file parts to `/local/attachments` so a poisoned transcript
-heals byte-stably; the **EphemeralContextLedger** (`volatile-context.ts`) appends
-a fresh system-state block only when its fingerprint changes, freezing earlier
-blocks in place to preserve provider cache breakpoints; **step-prune**
+heals byte-stably; the **DynamicContextLedger** (`volatile-context.ts`) re-reads
+live state at every model step and appends a fresh `<dynamic_context>` block only
+when its render changes, freezing earlier blocks in place to preserve provider
+cache breakpoints; **step-prune**
 (`step-prune.ts`, `STEP_CONTEXT_BUDGET_RATIO = 0.7`) shrinks old tool outputs once
 a step nears the window; **cache-breakpoints** (`cache-breakpoints.ts`) places
 Anthropic `cache_control` / OpenAI `prompt_cache_key`; and **stream-usage-repair**

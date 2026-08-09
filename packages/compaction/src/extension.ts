@@ -69,7 +69,7 @@ export interface CompactionOutcomeEvent {
   /** 'planned' = a NEW plan rewrote the history. 'invalidated' = a cached
    *  plan was discarded after a history rewrite and nothing replaced it, so
    *  the durable view flips back to the raw stream. Both invalidate frozen
-   *  positions derived from the previous stream (the EphemeralContextLedger's
+   *  positions derived from the previous stream (the DynamicContextLedger's
    *  blocks) — reset on anything but 'replayed', the deterministic cache-warm
    *  replay whose transformed prefix is byte-stable. */
   outcome: 'planned' | 'replayed' | 'invalidated';

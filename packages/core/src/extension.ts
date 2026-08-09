@@ -52,9 +52,9 @@ export interface PrepareStepContext {
 export interface TransformContext {
   /** Stable conversation identity — the agent/DO name on cf, the session key on cli. */
   readonly sessionKey: string;
-  /** The durable history about to be sent, BEFORE any turn-local (volatile/
-   *  ephemeral) context is spliced — a transform never sees what is never
-   *  persisted. */
+  /** The durable history about to be sent, BEFORE the turn-local tail is
+   *  spliced and before any dynamic-context block is woven — a transform never
+   *  sees what is never persisted. */
   readonly messages: readonly ModelMessage[];
   /** The assembled system prompt for this turn. */
   readonly system: string;
@@ -92,7 +92,7 @@ export interface ProteusExtension {
   prepareStep?(ctx: PrepareStepContext): ModelMessage[] | undefined;
   /**
    * Async context-transform hook, fired ONCE per turn assembly before the
-   * model streams (and before turn-local ephemeral context is spliced).
+   * model streams (and before the turn-local tail is spliced).
    * Return a replacement history (e.g. a compacted one) or `undefined` to
    * leave it unchanged. Chained like {@link prepareStep}, but awaited — and
    * fail-open: a throwing transform is logged and skipped, never allowed to

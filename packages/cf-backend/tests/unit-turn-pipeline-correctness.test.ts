@@ -38,24 +38,40 @@ describe('turn-pipeline correctness wiring', () => {
     expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
   });
 
-  test('beforeTurn weaves the bounded MEMORY.md tail into the ephemeral system-state block', () => {
-    // Parity with the CLI weave: the reflection loop assumes the model sees its
-    // newest lessons in-turn. The tail is sourced through the shared
-    // readMemoryTail helper and rides the shared turn-context assembly's
-    // systemState (ephemeral block), never the prefix.
-    expect(actor).toContain('readMemoryTail');
+  test('the MEMORY.md tail is read once per turn and rides the per-step dynamic block', () => {
+    // Parity with the CLI: the reflection loop assumes the model sees its
+    // newest lessons in-turn. The tail is the ONE dynamic-context input behind
+    // an await, so it is sourced once at turn assembly and closed over by the
+    // per-step snapshot — never rendered into the cacheable prefix.
     const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages({');
+    const sourceIdx = actor.indexOf('this._turnMemoryTail = await readMemoryTail(this.rt.memory)');
     expect(assembleIdx).toBeGreaterThan(-1);
-    const sourceIdx = actor.indexOf('const memoryTail = await readMemoryTail(this.rt.memory)');
     expect(sourceIdx).toBeGreaterThan(-1);
-    // Sourced BEFORE the assembly, and passed into its ledger weave context
-    // alongside facts + executors.
     expect(sourceIdx).toBeLessThan(assembleIdx);
-    const assembleArgs = actor.slice(assembleIdx, actor.indexOf('});', assembleIdx));
-    expect(assembleArgs).toContain('ledger: this.ephemeralLedger');
-    expect(assembleArgs).toContain('factsBlock: this.renderFactsForTurn()');
-    expect(assembleArgs).toContain('...(memoryTail ? { memoryTail } : {})');
-    expect(assembleArgs).toContain('executors: execs');
+    // The snapshot reads every OTHER plane live, at the step it is called.
+    const snapshot = actor.slice(
+      actor.indexOf('protected dynamicContextSnapshot(): DynamicContext {'),
+      actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
+    );
+    expect(snapshot).toContain('memoryTail: this._turnMemoryTail');
+    expect(snapshot).toContain('this.renderFactsForTurn()');
+    expect(snapshot).toContain('this.rt.executionRouter?.listExecutors()');
+    expect(snapshot).toContain('this.jobs.listRunning()');
+    expect(snapshot).toContain('forkDelegates(this.headJournal.listLive())');
+  });
+
+  test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', () => {
+    // Per-step, because the state it carries changes mid-turn: a job detaches,
+    // a sandbox comes up, a consent card lands. Assembling it once per turn
+    // would show the model a snapshot that is already stale by step 2.
+    const beforeStep = actor.slice(actor.indexOf('beforeStep(ctx: PrepareStepContext)'));
+    expect(beforeStep).toContain('composePrepareStep({');
+    expect(beforeStep).toContain('dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() }');
+    const assembleArgs = actor.slice(
+      actor.indexOf('cfg.messages = await assembleTurnMessages({'),
+      actor.indexOf('});', actor.indexOf('cfg.messages = await assembleTurnMessages({')),
+    );
+    expect(assembleArgs).not.toContain('ledger:');
   });
 
   test('beforeTurn merges user reasoning effort with cache provider options', () => {
@@ -114,13 +130,13 @@ describe('turn-pipeline correctness wiring', () => {
     expect(offenders).toEqual([]);
   });
 
-  test('CHAT_CLEAR resets the ephemeral ledger and durable compaction plan after Think handles it', () => {
+  test('CHAT_CLEAR resets the dynamic-context ledger and durable compaction plan after Think handles it', () => {
     const constructor = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
       actor.indexOf('/** Drain batches bound to the LIVE turn'),
     );
     const dispatch = constructor.indexOf('await dispatchMessage.call');
-    const reset = constructor.indexOf('this.ephemeralLedger.reset()');
+    const reset = constructor.indexOf('this.dynamicLedger.reset()');
     const clearPlan = constructor.indexOf('this.compactionState.plans.save(this.name, null)');
     expect(constructor).toContain('parseProtocolMessage(message)');
     expect(constructor).toContain("event?.type === 'clear'");
@@ -199,12 +215,12 @@ describe('turn-pipeline correctness wiring', () => {
     expect(onStart).toContain('this.orch.scheduleDrain()');
   });
 
-  test('attachment sanitization runs on the whole history BEFORE the extension transform and the ledger weave', () => {
-    // The ordering (sanitize → onTurnStart → transformContext → weave →
-    // turn-local) is owned by core assembleTurnMessages — behaviorally pinned
-    // in core's unit-turn-context-assembly.test.ts. What THIS backend must do
-    // is delegate to it with the sanitizer policy, the extension host, and the
-    // ledger, instead of re-implementing the ordering inline.
+  test('attachment sanitization runs on the whole history BEFORE the extension transform', () => {
+    // The ordering (sanitize → onTurnStart → transformContext → turn-local) is
+    // owned by core assembleTurnMessages — behaviorally pinned in core's
+    // unit-turn-context-assembly.test.ts. What THIS backend must do is delegate
+    // to it with the sanitizer policy and the extension host, instead of
+    // re-implementing the ordering inline.
     const beforeTurn = actor.slice(
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
@@ -216,7 +232,6 @@ describe('turn-pipeline correctness wiring', () => {
     expect(args).toContain('accepts: this.sessionAcceptedMedia()');
     expect(args).toContain('vfs: this.rt.storage.vfs');
     expect(args).toContain('extensions: this.extensions');
-    expect(args).toContain('ledger: this.ephemeralLedger');
     // No parallel inline copy of the ordering survives here.
     expect(beforeTurn).not.toContain('sanitizeAttachmentsForModel(');
     expect(beforeTurn).not.toContain('runTransformContext(');

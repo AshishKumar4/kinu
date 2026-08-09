@@ -17,6 +17,7 @@
 
 import type { ModelMessage } from 'ai';
 import { ExtensionHost } from '../extension.js';
+import { DynamicContextLedger } from '../prompting/volatile-context.js';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
 import { TurnContextBudget } from '../context-budget.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
@@ -349,30 +350,43 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'volatile-context',
-    owns: 'the per-turn, non-cacheable state plane: system-state block, ephemeral ledger, turn-local tail, facts rendering',
+    owns: 'the non-cacheable state plane: dynamic-context block, per-step ledger, turn-local tail, facts rendering',
     subjects: [
-      'renderSystemStateBlock',
+      'renderDynamicContextBlock',
       'turnLocalContextMessage',
-      'EphemeralContextLedger',
+      'DynamicContextLedger',
       'renderFactsBlock',
     ],
     probes: [
       {
         id: 'volatile-context/system-state-block',
-        asserts: 'facts, memory tail and live executor availability render as one ephemeral block',
-        observe: (s) => s.renderSystemStateBlock({
+        asserts: 'facts, memory tail and live executor availability render as one fingerprinted dynamic_context block',
+        observe: (s) => s.renderDynamicContextBlock({
           factsBlock: 'deploy_target: staging\nowner: ashish',
           memoryTail: 'Lesson: always check the migration first.',
           executors: EXECUTORS,
         }),
       },
       {
+        id: 'volatile-context/live-rosters-are-bounded',
+        asserts: 'running tasks, delegates and pending approvals render capped, with an honest elided count',
+        observe: (s) => s.renderDynamicContextBlock({
+          tasks: Array.from({ length: 10 }, (_, i) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` })),
+          delegates: [
+            { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
+            { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: null },
+          ],
+          approvals: [{ id: 'cons-1', kind: 'device consent', detail: 'laptop: git push origin main' }],
+        }),
+      },
+      {
         id: 'volatile-context/empty-state-is-null',
         asserts: 'nothing to say renders nothing — an empty block never enters the stream',
         observe: (s) => ({
-          empty: s.renderSystemStateBlock({}),
-          blank: s.renderSystemStateBlock({ factsBlock: '   ', memoryTail: '' }),
-          unselectableOnly: s.renderSystemStateBlock({ executors: [EXECUTORS[3]] }),
+          empty: s.renderDynamicContextBlock({}),
+          blank: s.renderDynamicContextBlock({ factsBlock: '   ', memoryTail: '' }),
+          unselectableOnly: s.renderDynamicContextBlock({ executors: [EXECUTORS[3]] }),
+          emptyRosters: s.renderDynamicContextBlock({ tasks: [], delegates: [], approvals: [] }),
         }),
       },
       {
@@ -392,7 +406,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'volatile-context/ledger-appends-once-per-change',
         asserts: 'an unchanged system state never appends a second block (prefix stays cached)',
         observe: (s) => {
-          const ledger = new s.EphemeralContextLedger();
+          const ledger = new s.DynamicContextLedger();
           const state = { factsBlock: 'a: 1' };
           const first = ledger.weave(shortHistory(), state);
           const second = ledger.weave([...shortHistory(), { role: 'assistant', content: 'ok' }], state);
@@ -401,10 +415,23 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
+        id: 'volatile-context/frozen-blocks-hold-their-position',
+        asserts: 'a block born mid-run stays at its birth index while later messages accumulate after it',
+        observe: (s) => {
+          const ledger = new s.DynamicContextLedger();
+          const step0 = shortHistory();
+          ledger.weave(step0, { factsBlock: 'a: 1' });
+          const step1 = [...step0, { role: 'assistant' as const, content: 'ok' }];
+          ledger.weave(step1, { factsBlock: 'a: 2' });
+          const step2 = ledger.weave([...step1, { role: 'user' as const, content: 'next' }], { factsBlock: 'a: 2' });
+          return { size: ledger.size, roles: step2.map((m) => m.role), length: step2.length };
+        },
+      },
+      {
         id: 'volatile-context/ledger-resets-on-history-rewrite',
         asserts: 'a compaction that shrinks history invalidates frozen block positions',
         observe: (s) => {
-          const ledger = new s.EphemeralContextLedger();
+          const ledger = new s.DynamicContextLedger();
           ledger.weave(shortHistory(), { factsBlock: 'a: 1' });
           const afterRewrite = ledger.weave([{ role: 'user', content: 'summary' }], { factsBlock: 'a: 1' });
           return { size: ledger.size, woven: afterRewrite.length };
@@ -427,7 +454,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'step-pipeline',
-    owns: 'the per-step message pipeline both backends share: extension chain → tool-output pruning → prompt-cache markers',
+    owns: 'the per-step message pipeline both backends share: extension chain → tool-output pruning → dynamic-context weave → prompt-cache markers',
     subjects: [
       'composePrepareStep',
       'pruneStepToolOutputs',
@@ -447,18 +474,45 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             prepareStep: (ctx) => [...ctx.messages, { role: 'user', content: 'steered' }],
           });
           const out = s.composePrepareStep(
-            host,
+            {
+              extensions: host,
+              cache: { strategy: { kind: 'anthropic' } },
+              prune: { contextWindow: 200_000 },
+            },
             { stepNumber: 1, messages: shortHistory() },
-            { strategy: { kind: 'anthropic' } },
-            { contextWindow: 200_000 },
           );
           return out?.messages;
         },
       },
       {
+        id: 'step-pipeline/dynamic-block-precedes-the-markers',
+        asserts: 'the live-state block is appended before the cache tail rolls, so the newest block carries a breakpoint',
+        observe: (s) => {
+          let step = 0;
+          const dynamic = {
+            ledger: new DynamicContextLedger(),
+            snapshot: () => ({ factsBlock: `a: ${step++}` }),
+          };
+          const first = s.composePrepareStep(
+            { cache: { strategy: { kind: 'anthropic' } }, dynamic },
+            { stepNumber: 0, messages: shortHistory() },
+          );
+          const second = s.composePrepareStep(
+            { cache: { strategy: { kind: 'anthropic' } }, dynamic },
+            { stepNumber: 1, messages: [...shortHistory(), { role: 'assistant', content: 'ok' }] },
+          );
+          return {
+            firstLength: first?.messages.length,
+            secondLength: second?.messages.length,
+            tailMarked: JSON.stringify(second?.messages.at(-1)?.providerOptions ?? {}),
+            blockIsTail: String(second?.messages.at(-1)?.content).startsWith('<dynamic_context'),
+          };
+        },
+      },
+      {
         id: 'step-pipeline/compose-noop-is-undefined',
         asserts: 'nothing to change ⇒ no step override at all (the SDK keeps its own array)',
-        observe: (s) => s.composePrepareStep(undefined, { stepNumber: 0, messages: shortHistory() }, null, null),
+        observe: (s) => s.composePrepareStep({}, { stepNumber: 0, messages: shortHistory() }),
       },
       {
         id: 'step-pipeline/prune-under-budget-noop',

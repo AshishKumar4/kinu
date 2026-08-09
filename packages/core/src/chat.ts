@@ -15,12 +15,11 @@ import {
   type PromptModelContext,
 } from './prompting/model-profile.js';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints.js';
-import { composePrepareStep } from './prompting/prepare-step.js';
+import { composePrepareStep, type StepDynamicContext } from './prompting/prepare-step.js';
 import type { MissionGovernor } from './mission-budget.js';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
 import { assembleTurnMessages } from './orchestrator/turn-context.js';
 import { contextWindowForModel } from './context-window.js';
-import type { EphemeralContextLedger, SystemStateContext } from './prompting/volatile-context.js';
 import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
 import { describeProviderError } from './providers/util.js';
@@ -55,14 +54,13 @@ export interface ChatOptions {
   /** Durable conversation history — what extensions' transformContext sees
    *  (and may rewrite, e.g. compaction). */
   history: ModelMessage[];
-  /** Per-activation ephemeral system-state ledger + this turn's state
-   *  snapshot — woven into the (transformed) durable history at the blocks'
-   *  frozen positions, AFTER transformContext so a compaction plugin never
-   *  sees or persists a block. */
-  systemState?: { ledger: EphemeralContextLedger; context: SystemStateContext };
+  /** Per-activation dynamic-context ledger + the live-state reader. Re-read
+   *  and re-woven at EVERY step by the shared step pipeline, never at turn
+   *  assembly, so a compaction plugin never sees or persists a block. */
+  dynamicContext?: StepDynamicContext;
   /** Turn-local context (skill activation reasons, device notice) — spliced
-   *  after the ledger weave for THIS turn only; never visible to a transform
-   *  and never treated as durable history. */
+   *  at the tail of the turn's initial array for THIS turn only; never visible
+   *  to a transform and never treated as durable history. */
   turnLocal?: readonly ModelMessage[];
   tools: ToolSet;
   /** Model-capability attachment policy: history file/media parts the
@@ -139,8 +137,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
   // sanitize → extension onTurnStart → awaited transformContext (compaction) →
-  // ledger weave → turn-local tail. The cf backend's beforeTurn runs the SAME
-  // function, so the ordering cannot drift per backend.
+  // turn-local tail. The cf backend's beforeTurn runs the SAME function, so the
+  // ordering cannot drift per backend.
   const contextWindow = opts.modelContext?.contextWindow
     ?? contextWindowForModel(opts.modelContext?.id ?? '');
   const turnMessages = await assembleTurnMessages({
@@ -148,7 +146,6 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     history: opts.history,
     ...(opts.attachments ? { attachments: opts.attachments } : {}),
     ...(extensions ? { extensions } : {}),
-    ...(opts.systemState ? { systemState: opts.systemState } : {}),
     ...(opts.turnLocal ? { turnLocal: opts.turnLocal } : {}),
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
@@ -218,12 +215,16 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     ...(providerOptions ? { providerOptions } : {}),
     // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
     // first, then step-boundary tool-output pruning against the window budget,
-    // cache tail markers LAST onto the final array. The cf orchestrator's
-    // beforeStep runs the identical composition.
+    // then the dynamic-context weave, cache tail markers LAST onto the final
+    // array. The cf orchestrator's beforeStep runs the identical composition.
     prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
-      composePrepareStep(extensions, { stepNumber, messages },
-        rollTail ? { strategy: cache.strategy } : null,
-        { contextWindow }, opts.budget),
+      composePrepareStep({
+        ...(extensions ? { extensions } : {}),
+        cache: rollTail ? { strategy: cache.strategy } : null,
+        prune: { contextWindow },
+        ...(opts.budget ? { budget: opts.budget } : {}),
+        ...(opts.dynamicContext ? { dynamic: opts.dynamicContext } : {}),
+      }, { stepNumber, messages }),
     onStepFinish: (step) => {
       stepCount++;
       const inputTokens = step.usage?.inputTokens;
