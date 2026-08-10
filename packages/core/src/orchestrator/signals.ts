@@ -34,7 +34,7 @@
  * names its card through the `signalId` the seam stamped on it). Nothing else
  * broadcasts a card, so it cannot drift from what the model received. The
  * delegation nudge has none, structurally — it is not delivered, so there is
- * no moment at which it "arrived"; its record is the `delegation_nudge` run
+ * no moment at which it "arrived"; its record is the `turn_steering` run
  * event on the turn that derived it.
  *
  * The spliced message is ephemeral, exactly like the dynamic-context block it

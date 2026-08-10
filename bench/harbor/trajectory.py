@@ -11,7 +11,7 @@ Proteus emits a line-delimited event stream (see ``jsonEvents`` in
     {"type":"message_end","role":"assistant","text":...}
     {"type":"turn_end","steps":N,"durationMs":N,"hadError":false,"usage":{...}}
     {"type":"evolution","event":...,"message":...}
-    {"type":"run_event","event":{"type":"delegation_nudge","converted":...,...}}
+    {"type":"run_event","event":{"type":"turn_steering","converted":...,...}}
     {"type":"error","message":...}
 
 Reading that stream is ``bench/clbench/proteus/events.py`` — one reader for the

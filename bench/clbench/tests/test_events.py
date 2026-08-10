@@ -174,7 +174,7 @@ class RunEvents(unittest.TestCase):
         {
             "type": "run_event",
             "event": {
-                "type": "delegation_nudge", "runId": "r1", "eventIndex": 4,
+                "type": "turn_steering", "runId": "r1", "eventIndex": 4,
                 "trigger": "long_turn_no_delegation", "step": 25, "converted": True,
             },
         },
@@ -184,11 +184,11 @@ class RunEvents(unittest.TestCase):
     def test_unwraps_the_ledger_in_order(self) -> None:
         self.assertEqual(
             [row["type"] for row in run_events(self.LEDGER)],
-            ["run_start", "delegation_nudge", "run_end"],
+            ["run_start", "turn_steering", "run_end"],
         )
 
     def test_filters_by_row_kind(self) -> None:
-        nudges = run_events(self.LEDGER, "delegation_nudge")
+        nudges = run_events(self.LEDGER, "turn_steering")
         self.assertEqual(len(nudges), 1)
         self.assertIs(nudges[0]["converted"], True)
         self.assertEqual(nudges[0]["trigger"], "long_turn_no_delegation")

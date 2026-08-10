@@ -469,7 +469,7 @@ shape breaks a test instead of quietly degrading two benchmark scores.
 
 The stream also carries the agent's durable run-event ledger: one `run_event`
 line per row of its `run_events` table, wrapping the row verbatim. That is where
-the harness-side measurements live — `delegation_nudge` (which trigger fired,
+the harness-side measurements live — `turn_steering` (which trigger fired,
 and whether the model then reached for `agents`), `context_budget`,
 `budget_exhausted`. The table itself is inside the container's database and dies
 with the container, so the stream is the only copy: `run_events(events, …)`

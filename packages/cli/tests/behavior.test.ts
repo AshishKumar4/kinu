@@ -381,18 +381,21 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
       const lines = proc.stdout.toString().trim().split("\n");
       const events = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
 
-      const nudges = events
+      const steers = events
         .filter((e) => e.type === "run_event")
         .map((e) => (e as { event: Record<string, unknown> }).event)
-        .filter((e) => e.type === "delegation_nudge");
-      expect(nudges).toHaveLength(1);
-      expect(nudges[0]).toMatchObject({
-        trigger: "repeated_failure",
+        .filter((e) => e.type === "turn_steering");
+      expect(steers).toHaveLength(1);
+      expect(steers[0]).toMatchObject({
+        // repeated_call, not repeated_failure: the mock grinds the SAME call
+        // with the same args and the same output, and the repeat detector
+        // outranks the failure counter because it can name the exact call.
+        trigger: "repeated_call",
         tool: "run",
         // The model was told and pushed on alone — the conversion denominator.
         converted: false,
       });
-      expect(typeof nudges[0]!.step).toBe("number");
+      expect(typeof steers[0]!.step).toBe("number");
     } finally {
       server.stop();
     }
