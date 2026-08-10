@@ -76,7 +76,7 @@ import {
   // Durable run-event log
   RunEventRecorder,
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
-  MissionGovernor, readMissionLabels,
+  MissionGovernor,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -1777,7 +1777,7 @@ export abstract class ActorAgent extends Think<Env> {
     // The continuation flag resets mid-turn signal splice state: a continuation
     // turn re-absorbs the just-settled signals so they ride into it the way the
     // queued path's durable message does. Signals still waiting ride either way.
-    this.orch.beginTurn(Date.now(), this.turnMissionLabels(), ctx.continuation);
+    this.orch.beginTurn(Date.now(), this.turnUserMetadata(), ctx.continuation);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
     this._turnContinuity = readTurnContinuity(ctx.body);
@@ -2069,18 +2069,16 @@ export abstract class ActorAgent extends Think<Env> {
    *  message when one drove the turn, else the last durable user message.
    *  Null for real chat turns. */
   protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
-    const source = programmaticUserMessage
-      ?? (this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined);
-    const metadata = source?.metadata;
+    const metadata = programmaticUserMessage ? programmaticUserMessage.metadata : this.turnUserMetadata();
     return isRecord(metadata) && typeof metadata.proteusEvent === 'string' ? metadata.proteusEvent : null;
   }
 
-  /** The mission budgets this turn spends against — stamped on the injected
-   *  message by the reactor when a schedule that declared one fired. Empty for
-   *  every chat turn and every unbudgeted wake. */
-  protected turnMissionLabels(): string[] {
+  /** What this turn was started BY: the metadata on the message that drives it
+   *  — a signal's `proteusEvent` / `signalId` / mission labels, or nothing at
+   *  all for a chat turn the operator typed. */
+  protected turnUserMetadata(): unknown {
     const source = this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined;
-    return readMissionLabels(source?.metadata);
+    return source?.metadata;
   }
 
   async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {

@@ -322,9 +322,18 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     // the signal carries — the backend dispatches the live turn's answer by it.
     const bound = log.query({ turn_id: injected[0]!.replyTurnId! });
     expect(bound.map((event) => event.id)).toHaveLength(1);
-    // The delivery is observable (clients get a typed fan-out, not silence).
+    // The delivery is observable (clients get a typed fan-out, not silence):
+    // the user's card exists from the moment the batch was DELIVERED, saying
+    // the agent has not read it yet and carrying the mid-turn rendering — then
+    // the step that took the batch in moves that same card to shown.
+    const cardId = (broadcasts[0] as { id: string }).id;
     expect(broadcasts).toEqual([
-      { type: 'background_event_injected', turnId: injected[0]!.replyTurnId!, events: 1 },
+      {
+        type: 'signal_card', id: cardId, state: 'pending',
+        metadata: { proteusEvent: 'event_drain', drainTurnId: injected[0]!.replyTurnId! },
+        text: injected[0]!.stepText,
+      },
+      { type: 'signal_card', id: cardId, state: 'shown' },
     ]);
     expect(enqueued).toHaveLength(0);
   });
@@ -337,9 +346,15 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const orch = new AgentOrchestrator({ host, engine, eventLog: log });
     await orch.drainPendingEvents();
     expect(absorb(orch)).toHaveLength(0);
-    expect(broadcasts).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]!.metadata?.proteusEvent).toBe('event_drain');
+    // Same card, same moment: the queued path is not a silent one. The turn
+    // this signal starts flips it, and it names that card on its own metadata.
+    expect(broadcasts).toEqual([{
+      type: 'signal_card', id: enqueued[0]!.metadata!.signalId, state: 'pending',
+      metadata: { proteusEvent: 'event_drain', drainTurnId: expect.any(String) },
+      text: enqueued[0]!.text,
+    }]);
   });
 
   test('an enqueue rejection re-pends the batch so the next drain retries it', async () => {

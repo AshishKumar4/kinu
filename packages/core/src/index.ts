@@ -151,6 +151,7 @@ export type * from './types/primitives.js';
 export type * from './types/agent-runtime.js';
 export type * from './types/backend-host.js';
 export type * from './types/signals.js';
+export { SIGNAL_ID_METADATA_KEY } from './types/signals.js';
 export type * from './types/mcts.js';
 export type * from './types/craft.js';
 export type * from './types/scaffold.js';

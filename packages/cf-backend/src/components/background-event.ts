@@ -9,7 +9,18 @@
  * apart, and the drain text the reactor composes is itself structured
  * (`- [variant] from source: brief`), so the card can show the events rather
  * than the prompt wrapped around them.
+ *
+ * A card exists from the moment the event HAPPENED, which is not the moment the
+ * agent reads it: the delivery seam broadcasts `signal_card` when it routes a
+ * signal and again when a step (or the turn it started) takes it in, so the
+ * same card shows "to be shown to the agent" and then "shown to the agent".
+ * {@link applySignalCard} is that stream reduced to the live card list. A
+ * signal that starts a turn also becomes a durable message; the two are one
+ * card, joined by `metadata.signalId`, so the list renders only what has no
+ * message yet (or never will — a mid-turn splice is never persisted).
  */
+
+import { SIGNAL_ID_METADATA_KEY, type SignalCardEvent, type SignalCardState } from "@proteus/core";
 
 /** A turn the backend enqueued, never typed by the operator. */
 export type ProgrammaticTurn =
@@ -47,6 +58,62 @@ export function classifyProgrammaticTurn(metadata: unknown): ProgrammaticTurn | 
     default:
       return null;
   }
+}
+
+/** The signal id a programmatic message carries, joining it to its card. */
+export function messageSignalId(metadata: unknown): string | null {
+  if (!isRecord(metadata)) return null;
+  const id = metadata[SIGNAL_ID_METADATA_KEY];
+  return typeof id === "string" && id ? id : null;
+}
+
+/** One live background-event card: an event that has happened, and whether the
+ *  agent has read it yet. */
+export interface SignalCard {
+  readonly id: string;
+  /** Classifier input — the same `proteusEvent` metadata a queued signal's
+   *  durable message carries. */
+  readonly metadata: Readonly<Record<string, unknown>>;
+  /** The signal as the agent will read it. */
+  readonly text: string;
+  readonly state: Exclude<SignalCardState, "undelivered">;
+}
+
+/** How many live cards the chat keeps. A mid-turn splice is never persisted,
+ *  so its card is the only record of it in this session — old ones age out
+ *  rather than being dropped on turn boundaries. */
+const MAX_LIVE_CARDS = 50;
+
+/**
+ * The `signal_card` stream reduced to the chat's live card list: delivery adds
+ * the card, a later event moves that same card, and a delivery that never
+ * landed removes it (its work is compensated back; a later delivery opens a
+ * new card). A transition for an id we never saw opened is ignored — that is
+ * a client which connected mid-flight, and its history already shows the
+ * message.
+ */
+export function applySignalCard(
+  cards: readonly SignalCard[], event: SignalCardEvent,
+): readonly SignalCard[] {
+  if (event.state === "pending") {
+    const card: SignalCard = {
+      id: event.id, metadata: event.metadata, text: event.text, state: "pending",
+    };
+    const existing = cards.findIndex((c) => c.id === card.id);
+    if (existing >= 0) return cards.map((c, i) => i === existing ? card : c);
+    return [...cards.slice(-(MAX_LIVE_CARDS - 1)), card];
+  }
+  if (event.state === "undelivered") return cards.filter((c) => c.id !== event.id);
+  return cards.map((c) => c.id === event.id ? { ...c, state: "shown" } : c);
+}
+
+/** Parse a broadcast frame into a card event, or null when it is not one. */
+export function parseSignalCardEvent(value: unknown): SignalCardEvent | null {
+  if (!isRecord(value) || value.type !== "signal_card" || typeof value.id !== "string") return null;
+  const { id, state } = value;
+  if (state === "shown" || state === "undelivered") return { type: "signal_card", id, state };
+  if (state !== "pending" || !isRecord(value.metadata) || typeof value.text !== "string") return null;
+  return { type: "signal_card", id, state: "pending", metadata: value.metadata, text: value.text };
 }
 
 /** One hub event as the agent was shown it (core's `renderForLLM`). */

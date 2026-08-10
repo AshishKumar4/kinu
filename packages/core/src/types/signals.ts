@@ -56,3 +56,44 @@ export interface SettledSignals {
    *  `replyTurnId`. */
   readonly absorbed: readonly AgentSignal[];
 }
+
+/** The turn-metadata key carrying a signal's card identity into the durable
+ *  message a queued signal becomes — the round trip that lets the turn tell
+ *  the seam which card it is showing (see SignalDelivery.beginTurn). */
+export const SIGNAL_ID_METADATA_KEY = 'signalId';
+
+/** Where a signal is on its way to the agent. Delivery opens the card
+ *  ('pending' — it happened, the agent has not read it yet); the step that
+ *  actually receives it moves the SAME card to 'shown'; a delivery that never
+ *  landed ends at 'undelivered' and the card goes away (the work is
+ *  compensated back and a later delivery opens a new one). */
+export type SignalCardState = 'pending' | 'shown' | 'undelivered';
+
+/**
+ * The chat card for one signal, at each moment its state changes.
+ *
+ * Broadcast by the delivery seam and by nothing else, so the card cannot claim
+ * the agent saw something it did not: 'pending' is emitted where the signal is
+ * routed, 'shown' where the step (or the turn the signal started) actually
+ * takes it in.
+ *
+ * The opening event carries what a surface needs to render it — `metadata` is
+ * the SAME `proteusEvent` shape a queued signal's durable message is stamped
+ * with, so one classifier serves both the live card and the message it becomes.
+ * Later events are pure transitions on the same `id`.
+ */
+export type SignalCardEvent =
+  | {
+    readonly type: 'signal_card';
+    readonly id: string;
+    readonly state: 'pending';
+    /** Turn metadata: `proteusEvent` + the producer's own. */
+    readonly metadata: Readonly<Record<string, unknown>>;
+    /** The signal exactly as this delivery will present it to the model. */
+    readonly text: string;
+  }
+  | {
+    readonly type: 'signal_card';
+    readonly id: string;
+    readonly state: 'shown' | 'undelivered';
+  };

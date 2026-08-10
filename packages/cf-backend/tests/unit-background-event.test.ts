@@ -5,7 +5,8 @@ import { describe, test, expect } from 'bun:test';
 import { buildDrainBatch } from '@proteus/core';
 import type { ProteusEvent } from '@proteus/core';
 import {
-  classifyProgrammaticTurn, eventVariantLabel, parseDrainedEvents,
+  applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
+  parseDrainedEvents, parseSignalCardEvent, type SignalCard,
 } from '../src/components/background-event.ts';
 
 describe('programmatic turn provenance', () => {
@@ -126,5 +127,67 @@ describe('event variant labels', () => {
     expect(eventVariantLabel('subordinate_report')).toBe('Subordinate report');
     expect(eventVariantLabel('timer')).toBe('Scheduled trigger');
     expect(eventVariantLabel('some_future_variant')).toBe('some future variant');
+  });
+});
+
+describe('the card lifecycle', () => {
+  const opened = (id: string, over: Record<string, unknown> = {}) => ({
+    type: 'signal_card', id, state: 'pending',
+    metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', ...over,
+  });
+  const apply = (events: unknown[]): readonly SignalCard[] =>
+    events.reduce<readonly SignalCard[]>((cards, event) => {
+      const parsed = parseSignalCardEvent(event);
+      return parsed ? applySignalCard(cards, parsed) : cards;
+    }, []);
+
+  test('delivery opens the card; consumption moves the SAME one', () => {
+    const cards = apply([opened('s1'), { type: 'signal_card', id: 's1', state: 'shown' }]);
+    expect(cards).toEqual([{
+      id: 's1', metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', state: 'shown',
+    }]);
+  });
+
+  test('a delivery that never landed takes its card away', () => {
+    expect(apply([opened('s1'), { type: 'signal_card', id: 's1', state: 'undelivered' }]))
+      .toEqual([]);
+  });
+
+  test('a re-delivered signal returns to pending on the card it already had', () => {
+    const cards = apply([
+      opened('s1'),
+      { type: 'signal_card', id: 's1', state: 'shown' },
+      opened('s1', { text: 're-delivered' }),
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ id: 's1', state: 'pending', text: 're-delivered' });
+  });
+
+  test('a transition for a card this client never saw open is ignored', () => {
+    // A reload mid-flight: the history it loaded already shows the message.
+    expect(apply([{ type: 'signal_card', id: 'gone', state: 'shown' }])).toEqual([]);
+  });
+
+  test('cards keep arrival order and are bounded', () => {
+    const many = apply(Array.from({ length: 60 }, (_, i) => opened(`s${i}`)));
+    expect(many).toHaveLength(50);
+    expect(many[0]!.id).toBe('s10');
+    expect(many.at(-1)!.id).toBe('s59');
+  });
+
+  test('a frame that is not a well-formed card event is not one', () => {
+    expect(parseSignalCardEvent({ type: 'branch_status', id: 'b1' })).toBeNull();
+    expect(parseSignalCardEvent({ type: 'signal_card', state: 'pending' })).toBeNull();
+    // 'pending' is the card's creation — without its payload there is no card.
+    expect(parseSignalCardEvent({ type: 'signal_card', id: 's1', state: 'pending' })).toBeNull();
+    expect(parseSignalCardEvent({ type: 'signal_card', id: 's1', state: 'elsewhere' })).toBeNull();
+    expect(parseSignalCardEvent(null)).toBeNull();
+  });
+
+  test('the message a queued signal became names the card it belongs to', () => {
+    expect(messageSignalId({ proteusEvent: 'event_drain', signalId: 's1' })).toBe('s1');
+    // A turn the operator typed belongs to no card.
+    expect(messageSignalId({})).toBeNull();
+    expect(messageSignalId(undefined)).toBeNull();
   });
 });

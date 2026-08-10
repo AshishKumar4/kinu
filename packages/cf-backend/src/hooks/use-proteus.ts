@@ -19,6 +19,7 @@ import type {
   SubordinateRosterEntry,
 } from "../lib/protocol";
 import type { ExecutorInfo } from "../lib/executors";
+import { applySignalCard, parseSignalCardEvent, type SignalCard } from "../components/background-event";
 import { touchWorkspace } from "../lib/user-api";
 
 export type { ExecutorInfo };
@@ -184,6 +185,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const [chatError, setChatError] = useState<string | null>(null);
   const [subordinates, setSubordinates] = useState<SubordinateRosterEntry[]>([]);
   const [subordinateEvents, setSubordinateEvents] = useState<SubordinateActivityEvent[]>([]);
+  /** Background-event cards, from the delivery seam's own lifecycle stream. */
+  const [signalCards, setSignalCards] = useState<readonly SignalCard[]>([]);
 
   const agent = useAgent({
     agent: ORCHESTRATOR_AGENT_SLUG,
@@ -430,6 +433,9 @@ export function useProteus(target?: string | ProteusActorAddress) {
               message: typeof msg.message === "string" ? msg.message : undefined,
             },
           ]);
+        } else if (msg.type === "signal_card") {
+          const card = parseSignalCardEvent(msg);
+          if (card) setSignalCards((current) => applySignalCard(current, card));
         } else if (!isSubordinate && msg.type === "subordinates_changed") {
           const roster = parseSubordinateRoster(msg.subordinates);
           if (roster) setSubordinates(roster);
@@ -747,6 +753,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     isSubordinate,
     subordinates,
     subordinateEvents,
+    signalCards,
     refreshSubordinates,
     spawnSubordinate: async (role: string, mission: string) => {
       const result = await rpc<{ name: string; displayName: string }>("spawnSubordinate", [role, mission]);

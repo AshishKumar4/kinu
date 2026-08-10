@@ -855,6 +855,42 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
+        id: 'mid-turn-injection/one-card-per-signal',
+        asserts: 'the user\'s card opens where the signal ARRIVED and moves where the agent took it in — one card, both paths, whatever the kind',
+        observe: async (s) => {
+          const run = async (turnInFlight: boolean) => {
+            const ids: string[] = [];
+            const cards: Array<{ card: number; state: string; text?: string }> = [];
+            let carried: string | undefined;
+            const signals = new s.SignalDelivery({
+              // Card ids are minted per delivery, so the observation records
+              // IDENTITY (first-appearance index) rather than the id itself.
+              broadcast: (event) => {
+                const id = String(event.id);
+                if (!ids.includes(id)) ids.push(id);
+                cards.push({
+                  card: ids.indexOf(id), state: String(event.state),
+                  ...(typeof event.text === 'string' ? { text: event.text } : {}),
+                });
+              },
+              enqueueTurn: async (turn) => {
+                carried = (turn.metadata as { signalId?: string } | undefined)?.signalId;
+                return { status: 'queued' };
+              },
+              turnInFlight: () => turnInFlight,
+              setTimer: () => {},
+            });
+            await signals.deliver({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
+            // The agent takes it in: a step boundary for the splice, and for
+            // the queue the turn it started — which names its own card back.
+            signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
+            signals.beginTurn(false, carried);
+            return { cards, queuedTurnNamesItsCard: carried !== undefined && carried === ids[0] };
+          };
+          return { busyAgent: await run(true), idleAgent: await run(false) };
+        },
+      },
+      {
         id: 'mid-turn-injection/burst-coalesces-into-one-drain',
         asserts: 'an event burst arms ONE debounce window and drains once; a later burst arms a fresh one',
         observe: async (s) => {

@@ -57,7 +57,7 @@ import {
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, type CodemodeProvider,
-  MissionGovernor, readMissionLabels,
+  MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -1229,7 +1229,7 @@ export class LocalAgentSession implements BackendHost {
     const startedAt = Date.now();
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
-    this.orch.beginTurn(startedAt, readMissionLabels(item.metadata));
+    this.orch.beginTurn(startedAt, item.metadata);
     // Open this turn's run in the durable event log (core turn-lifecycle).
     // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
     // one names its trigger.

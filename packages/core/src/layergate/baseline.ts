@@ -49,6 +49,7 @@ export const LOCKED_BASELINE: Baseline = {
   'mid-turn-injection/buffer-absorb-and-requeue': '817dae7f189006a1',
   'mid-turn-injection/burst-coalesces-into-one-drain': 'a41f74a4639f871f',
   'mid-turn-injection/index-is-stable': '7adafdf56bdd108e',
+  'mid-turn-injection/one-card-per-signal': 'f490edc82a8d6e81',
   'mid-turn-injection/one-delivery-time': 'e458628b8dd4c2fa',
   'mid-turn-injection/replay-into-history': '742d070ddb78048b',
   'safety-gate/decision-table': '0c2ab103d97ef0fb',

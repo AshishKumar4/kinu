@@ -6,8 +6,8 @@
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
 import { SignalDelivery } from '../src/orchestrator/signals.js';
-import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
-import type { AgentSignal } from '../src/types/signals.js';
+import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
+import type { AgentSignal, SignalCardEvent } from '../src/types/signals.js';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
@@ -16,8 +16,9 @@ const texts = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.c
 function setup(opts: { turnInFlight?: boolean; enqueue?: 'queued' | 'skipped' | 'throw' } = {}) {
   const queued: ProgrammaticTurn[] = [];
   const activity: Array<{ event: string; detail?: string }> = [];
+  const cards: SignalCardEvent[] = [];
   const host: BackendHost = {
-    broadcast: () => {},
+    broadcast: (event: BroadcastEvent) => { cards.push(event as unknown as SignalCardEvent); },
     enqueueTurn: async (turn) => {
       queued.push(turn);
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
@@ -27,8 +28,14 @@ function setup(opts: { turnInFlight?: boolean; enqueue?: 'queued' | 'skipped' | 
     setTimer: () => {},
   };
   const signals = new SignalDelivery(host, (event, detail) => activity.push({ event, detail }));
-  return { signals, queued, activity };
+  return { signals, queued, activity, cards };
 }
+
+/** The card's journey, without its (random) id: [state, …]. */
+const lifecycle = (cards: readonly SignalCardEvent[]) => cards.map((c) => c.state);
+/** The signal id a queued turn carries — the round trip a backend reads back. */
+const carriedSignalId = (turn: ProgrammaticTurn) =>
+  (turn.metadata as { signalId?: string } | undefined)?.signalId;
 
 const wake = (text: string, over: Partial<AgentSignal> = {}): AgentSignal =>
   ({ kind: 'event_drain', text, ...over });
@@ -46,10 +53,13 @@ describe('SignalDelivery — one delivery time: the next step', () => {
   });
 
   test('the SAME wake starts a turn when the agent is idle — one call site, both backends', async () => {
-    const { signals, queued } = setup({ turnInFlight: false });
+    const { signals, queued, cards } = setup({ turnInFlight: false });
     expect(await signals.deliver(wake('mail from bob', { stepText: 'mid-turn: mail' }))).toBe('queued');
     expect(signals.prepareStep({ stepNumber: 1, messages: [user('q')] })).toBeUndefined();
-    expect(queued).toEqual([{ text: 'mail from bob', metadata: { proteusEvent: 'event_drain' } }]);
+    expect(queued).toEqual([{
+      text: 'mail from bob',
+      metadata: { proteusEvent: 'event_drain', signalId: cards[0]!.id },
+    }]);
   });
 
   test('a settled background job reaches the live turn instead of waiting for a new one', async () => {
@@ -72,6 +82,7 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     })).toBe('queued');
     expect(idle.queued[0]!.metadata).toEqual({
       proteusEvent: 'background_job', jobId: 'bgjob-1', status: 'completed',
+      signalId: idle.cards[0]!.id,
     });
   });
 
@@ -94,7 +105,91 @@ describe('SignalDelivery — one delivery time: the next step', () => {
 
     const queuedPath = setup({ turnInFlight: false });
     await queuedPath.signals.deliver(wake('drain', { replyTurnId: 'evt-1' }));
-    expect(queuedPath.queued[0]!.metadata).toEqual({ proteusEvent: 'event_drain', drainTurnId: 'evt-1' });
+    expect(queuedPath.queued[0]!.metadata).toEqual({
+      proteusEvent: 'event_drain', drainTurnId: 'evt-1', signalId: queuedPath.cards[0]!.id,
+    });
+  });
+});
+
+describe('SignalDelivery — the user\'s card', () => {
+  test('a spliced signal opens a card when it ARRIVES and flips when the step takes it', async () => {
+    const { signals, cards } = setup({ turnInFlight: true });
+    await signals.deliver(wake('turn text', { stepText: 'mid-turn: mail from bob' }));
+
+    // The card exists before the agent has read anything: the event happened.
+    expect(cards).toHaveLength(1);
+    const opened = cards[0]!;
+    expect(opened).toMatchObject({
+      type: 'signal_card', state: 'pending',
+      metadata: { proteusEvent: 'event_drain' },
+      // What the agent will actually read on this path, not the other one's.
+      text: 'mid-turn: mail from bob',
+    });
+    expect(typeof opened.id).toBe('string');
+
+    // Steps that carry nothing move nothing.
+    signals.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    expect(lifecycle(cards)).toEqual(['pending', 'shown']);
+    expect(cards[1]).toEqual({ type: 'signal_card', id: opened.id, state: 'shown' });
+    signals.prepareStep({ stepNumber: 1, messages: [user('q'), assistant('a')] });
+    expect(lifecycle(cards)).toEqual(['pending', 'shown']);
+  });
+
+  test('a queued signal opens the same card, and the turn it starts flips it', async () => {
+    const { signals, queued, cards } = setup({ turnInFlight: false });
+    await signals.deliver(wake('1 event arrived while you were idle'));
+
+    // Delivery-time card, before the platform has even accepted the turn —
+    // and it says what the agent will read as its turn input.
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ state: 'pending', text: '1 event arrived while you were idle' });
+
+    // The backend reads the id off the turn's own metadata and hands it back.
+    const carried = carriedSignalId(queued[0]!);
+    expect(carried).toBe(cards[0]!.id);
+    signals.beginTurn(false, carried);
+    expect(lifecycle(cards)).toEqual(['pending', 'shown']);
+    expect(cards[1]).toEqual({ type: 'signal_card', id: cards[0]!.id, state: 'shown' });
+  });
+
+  test('a turn nothing delivered flips no card', async () => {
+    const { signals, cards } = setup({ turnInFlight: false });
+    signals.beginTurn(false, undefined);
+    expect(cards).toEqual([]);
+  });
+
+  test('the turn\'s own steering never gets a card — nothing arrived', () => {
+    const { signals, cards } = setup({ turnInFlight: true });
+    signals.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]);
+    expect(cards).toEqual([]);
+  });
+
+  test('a signal that never landed takes its card away', async () => {
+    const { signals, cards } = setup({ turnInFlight: false, enqueue: 'skipped' });
+    expect(await signals.deliver(wake('drain'))).toBe('undelivered');
+    expect(lifecycle(cards)).toEqual(['pending', 'undelivered']);
+    expect(cards[1]!.id).toBe(cards[0]!.id);
+  });
+
+  test('a re-delivered signal keeps its card and returns it to pending', async () => {
+    // An aborted turn hands back what it had absorbed: the agent did NOT keep
+    // it, so the card the user is looking at must say so rather than lie.
+    const { signals, cards } = setup({ turnInFlight: true });
+    await signals.deliver(wake('seen but unanswered'));
+    signals.prepareStep({ stepNumber: 0, messages: [user('q')] });
+    signals.settle({ completed: false });
+    await Promise.resolve();
+    expect(lifecycle(cards)).toEqual(['pending', 'shown', 'pending']);
+    expect(new Set(cards.map((c) => c.id)).size).toBe(1);
+  });
+
+  test('one card per signal, whatever else shares the step', async () => {
+    const { signals, cards } = setup({ turnInFlight: true });
+    await signals.deliver(wake('t1', { stepText: 'first' }));
+    await signals.deliver({ kind: 'background_job', text: 't2', metadata: { status: 'completed' } });
+    signals.prepareStep({ stepNumber: 0, messages: [user('q')] }, [nudge('fork now')]);
+    expect(lifecycle(cards)).toEqual(['pending', 'pending', 'shown', 'shown']);
+    expect(cards.map((c) => c.id)).toEqual([cards[0]!.id, cards[1]!.id, cards[0]!.id, cards[1]!.id]);
   });
 });
 
@@ -134,14 +229,14 @@ describe('SignalDelivery — the mid-turn splice', () => {
 
 describe('SignalDelivery — settlement', () => {
   test('a signal that never reached a step boundary re-delivers as a queued turn', async () => {
-    const { signals, queued } = setup({ turnInFlight: true });
+    const { signals, queued, cards } = setup({ turnInFlight: true });
     signals.prepareStep({ stepNumber: 0, messages: [user('q')] });
     await signals.deliver(wake('arrived at the final step', { replyTurnId: 'evt-late' }));
     expect(signals.settle({ completed: true }).absorbed).toEqual([]);
     await Promise.resolve();
     expect(queued).toEqual([{
       text: 'arrived at the final step',
-      metadata: { proteusEvent: 'event_drain', drainTurnId: 'evt-late' },
+      metadata: { proteusEvent: 'event_drain', drainTurnId: 'evt-late', signalId: cards[0]!.id },
     }]);
     // Settle reset the state — the next turn starts clean.
     expect(signals.prepareStep({ stepNumber: 0, messages: [user('next')] })).toBeUndefined();

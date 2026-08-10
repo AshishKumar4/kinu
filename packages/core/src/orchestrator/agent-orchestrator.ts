@@ -41,14 +41,16 @@ import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
 import { DelegationNudge } from './delegation-nudge.js';
 import { DrainScheduler } from './drain-scheduler.js';
-import { SignalDelivery } from './signals.js';
+import { SignalDelivery, readSignalId } from './signals.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
 import type { PrepareStepContext, ProteusExtension } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
 import type { CompletedTurn } from '../evolution/types.js';
-import { MISSION_LABELS_METADATA_KEY, type MissionGovernor } from '../mission-budget.js';
+import {
+  MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
+} from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
 
 /**
@@ -164,17 +166,18 @@ export class AgentOrchestrator {
     return this.window.size();
   }
 
-  /** Reset per-turn accounting at the start of a turn and bind its mission
-   *  scope — the labels the turn's model calls and spawns debit. Omitted (the
-   *  chat path and every unbudgeted wake) leaves the turn uncapped.
-   *  `continuation` marks a turn that continues the previous one (Think
-   *  auto-continue / recovery): its signals ride in again rather than being
-   *  dropped as answered. */
-  beginTurn(now: number, missionLabels: readonly string[] = [], continuation = false): void {
+  /** Reset per-turn accounting at the start of a turn, from the turn's own
+   *  metadata: the mission scope its model calls and spawns debit (absent on
+   *  the chat path and every unbudgeted wake — those turns are uncapped), and
+   *  the card of the signal that started it, whose "shown to the agent" moment
+   *  is exactly here. `continuation` marks a turn that continues the previous
+   *  one (Think auto-continue / recovery): its signals ride in again rather
+   *  than being dropped as answered. */
+  beginTurn(now: number, metadata?: unknown, continuation = false): void {
     this.acc.reset(now);
     this.nudge.reset();
-    this.signals.beginTurn(continuation);
-    this.deps.budget?.activate(missionLabels);
+    this.signals.beginTurn(continuation, readSignalId(metadata));
+    this.deps.budget?.activate(readMissionLabels(metadata));
   }
 
   /**
@@ -366,6 +369,10 @@ export class AgentOrchestrator {
    * same id. A signal that cannot be delivered puts its events back. The woken
    * turn's own post-turn drain re-checks, so this self-terminates once the
    * external backlog is empty. No-op when nothing is pending.
+   *
+   * The user's card for the drain comes from delivery itself (the seam's
+   * `signal_card` broadcast), so it is the same card whichever way the batch
+   * landed — this caller neither knows nor announces the outcome.
    */
   async drainPendingEvents(): Promise<void> {
     let batch: ReturnType<typeof buildDrainBatch>;
@@ -380,7 +387,7 @@ export class AgentOrchestrator {
       return;
     }
     const ids = batch.ids;
-    const outcome = await this.signals.deliver({
+    await this.signals.deliver({
       kind: 'event_drain',
       text: batch.text,
       stepText: batch.midTurnText,
@@ -392,9 +399,6 @@ export class AgentOrchestrator {
         : {}),
       compensate: () => this.returnEventsToPending(ids),
     });
-    if (outcome === 'mid-turn') {
-      this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: ids.length });
-    }
   }
 
   /** Convenience for backends that don't need to interleave: cadence + drain. */
