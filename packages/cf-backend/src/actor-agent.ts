@@ -419,7 +419,7 @@ export abstract class ActorAgent extends Think<Env> {
     // be initialized before the getter caches its closure.
     this.compactionState = createCompactionStateStore(this.boundSql);
     this.registerCompactionExtension();
-    // The orchestrator's per-turn extension: the delegation nudge's observation
+    // The orchestrator's per-turn extension: the turn steering's observation
     // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
     // through closures because `orch` is built lazily and this runs in the
     // constructor.
@@ -499,7 +499,7 @@ export abstract class ActorAgent extends Think<Env> {
         turnIndex: this.orch.sessionTurnIndex,
         usage: this.acc.usage,
         context: this.acc.context,
-        nudge: this.orch.nudge.snapshot(),
+        steering: this.orch.steering.snapshot(),
         reason: result.status,
         error: errorText,
       });
@@ -2096,6 +2096,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.recordToolCall(ctx as unknown as Parameters<TurnAccumulator['recordToolCall']>[0]);
     await this.extensions.emitToolResult({
       toolName: ctx.toolName,
+      args: (ctx.input ?? {}) as Record<string, unknown>,
       // Same shape the CLI seam emits: stringified, capped at 1000 chars.
       result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? '').slice(0, 1000),
       success: ctx.success,

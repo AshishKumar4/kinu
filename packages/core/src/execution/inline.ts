@@ -19,6 +19,7 @@ import { appendMemoryNote } from '../memory/note.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
 import { isVfsError, withVfsErrorHint } from '../vfs/errno.js';
 import { readExecSignal } from './signal.js';
+import { formatExecResult } from './exec-result.js';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
 
 interface ShellExec {
@@ -127,9 +128,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Execute a POSIX shell command. Supports cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq, xargs. Pipes (|) and redirects (>, >>) work.',
       execute: async (command: unknown, context?: unknown) => {
         const signal = readExecSignal(context);
-        const result = await shell.exec(String(command), signal ? { signal } : undefined);
-        if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
-        return result.stdout || '(no output)';
+        return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
       },
     },
 

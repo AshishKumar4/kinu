@@ -14,7 +14,7 @@
  */
 
 import type { TurnContextBudget } from '../context-budget.js';
-import type { DelegationNudgeRecord, RunEventInput } from '../events/types.js';
+import type { CompletionGateRecord, RunEventInput, TurnSteeringRecord } from '../events/types.js';
 import type { CompletedTurn, TurnUsage } from '../evolution/types.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 import {
@@ -53,8 +53,8 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   }
 }
 
-/** Seal the run: the turn's context-budget ledger (when it moved) and its
- *  delegation nudge (when one fired), then turn_end (index + token usage),
+/** Seal the run: the turn's context-budget ledger (when it moved), its
+ *  mechanical steer and its completion gate (when either fired), then turn_end (index + token usage),
  *  then run_end (status + the failure text — the durable evidence trail, since
  *  the platform layers keep only the LAST terminal error). Never throws. */
 export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
@@ -65,16 +65,20 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   /** The turn's bulk-ingestion budget (acc.context). A turn that neither
    *  admitted nor spilled bulk writes no row — `turn_end` is the denominator. */
   context?: TurnContextBudget | undefined;
-  /** The turn's mechanical delegation steering (orch.nudge.snapshot()), or
-   *  null when the turn was never nudged — no row, `turn_end` being the
-   *  denominator here too. */
-  nudge?: DelegationNudgeRecord | null | undefined;
+  /** The turn's mechanical steering (orch.steering.snapshot()), or null when
+   *  the turn was never steered — no row, `turn_end` being the denominator
+   *  here too. */
+  steering?: TurnSteeringRecord | null | undefined;
+  /** The one-shot completion gate's verdict (gate.take()), or null on every
+   *  run that is not the confirming turn — one row per gated run. */
+  completionGate?: CompletionGateRecord | null | undefined;
 }): void {
   try {
     if (opts.context?.active) {
       recorder.emit(runId, { type: 'context_budget', ...opts.context.snapshot() });
     }
-    if (opts.nudge) recorder.emit(runId, { type: 'delegation_nudge', ...opts.nudge });
+    if (opts.steering) recorder.emit(runId, { type: 'turn_steering', ...opts.steering });
+    if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
     recorder.emit(runId, {
       type: 'turn_end',
       turnIndex: opts.turnIndex,

@@ -21,6 +21,7 @@ import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './typ
 import type { DeviceStatus } from './device-status.js';
 import { isDeviceNotConnectedError } from './device-tunnel.js';
 import { readExecSignal } from './signal.js';
+import { formatExecResult } from './exec-result.js';
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
@@ -79,10 +80,7 @@ export function createDeviceTunnelExecutor(transport: DeviceTransport): Executor
             signal,
             'laptop exec aborted — the command may still finish on the device',
           ) as { stdout: string; stderr: string; exitCode: number };
-          if (result.exitCode !== 0) {
-            return `Exit ${result.exitCode}${result.stderr ? ': ' + result.stderr : ''}`;
-          }
-          return result.stdout || '(no output)';
+          return formatExecResult(result);
         } catch (err) {
           if (isAbortError(err)) throw err;
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;

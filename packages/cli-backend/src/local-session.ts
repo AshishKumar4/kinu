@@ -54,6 +54,7 @@ import {
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
+  CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, type CodemodeProvider,
@@ -272,6 +273,10 @@ export class LocalAgentSession implements BackendHost {
   /** True when this process runs one task turn and exits — see the `oneShot`
    *  option. Decides turn continuity and whether the cadence lane may start. */
   private readonly oneShot: boolean;
+  /** The mechanical completion gate (core completion-gate.ts). Armed only by a
+   *  one-shot task turn: on the interactive surface the human reading the
+   *  answer is the check, so it never arms and costs nothing. */
+  private readonly completionGate = new CompletionGate();
   /** Whether a message arriving in THIS process can be a verdict on the turn
    *  before it. A one-shot process holds no conversation: its prompt came from
    *  a caller who never saw the previous answer. */
@@ -1211,7 +1216,8 @@ export class LocalAgentSession implements BackendHost {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
       context: this.orch.acc.context,
-      nudge: this.orch.nudge.snapshot(),
+      steering: this.orch.steering.snapshot(),
+      completionGate: this.completionGate.take(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1258,6 +1264,9 @@ export class LocalAgentSession implements BackendHost {
     // one-shot process the previous turn belongs to an already-exited
     // invocation, so this prompt is a fresh task, not a verdict on it.
     if (item.kind === 'user') this.orch.observeUserTurn(item.text, this.turnContinuity);
+    // A one-shot task turn is graded by whatever it leaves on disk, with nobody
+    // to push back — so it arms the completion gate. Nothing else does.
+    if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
     this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
@@ -1523,6 +1532,10 @@ export class LocalAgentSession implements BackendHost {
         });
       }
 
+      // The completion gate: on the one-shot surface a turn that did work does
+      // not get to be the last word on its own say-so.
+      await this.applyCompletionGate(runError === null);
+
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
       // JSONL transcript recorded them.
@@ -1547,6 +1560,12 @@ export class LocalAgentSession implements BackendHost {
       // Steer-as-Branch redirects launched during this turn settle against its
       // answer — detached, so a slow branch never delays turn-end.
       this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
+
+      // The confirming turn is over: what the agent did with its free re-look
+      // IS the gate's conversion number, and closeRun writes it.
+      if (event === COMPLETION_GATE_EVENT) {
+        this.completionGate.settle({ toolCalls: this.orch.acc.toolCalls.length });
+      }
 
       const turn = snapshotTurn();
       this.closeRun(runError);
@@ -1574,6 +1593,46 @@ export class LocalAgentSession implements BackendHost {
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: snapshotTurn() });
     }
+  }
+
+  /**
+   * The mechanical completion gate (core completion-gate.ts) applied to the
+   * turn that just ended.
+   *
+   * A one-shot run is graded on what it leaves behind, with nobody reading the
+   * answer — so the harness takes its own look before letting the process go.
+   * It reads the working directory through the agent's OWN shell, after the
+   * agent stopped, and hands that back as one more turn. Nothing the model says
+   * reaches this decision: the trigger is that the turn made tool calls and its
+   * stream completed, and the evidence is the harness's own.
+   *
+   * Appended rather than unshifted: it verifies FINAL state, so anything
+   * already queued (a background-job wake, a leftover steer) runs first.
+   *
+   * The probe goes through the checkpointed shell like every other host
+   * command, which is correct in both directions: a turn that already mutated
+   * the host filesystem checkpointed before its first mutation and this
+   * read-only call dedups against that, and a turn that mutated nothing takes
+   * a snapshot of an unmutated tree.
+   */
+  private async applyCompletionGate(completed: boolean): Promise<void> {
+    const shell = this.rt.shell;
+    if (!shell) return;
+    if (!this.completionGate.shouldGate({ completed, toolCalls: this.orch.acc.toolCalls.length })) return;
+    const observed = await observeCompletionState({
+      exec: (command) => shell.exec(command),
+      vfs: this.rt.storage.vfs,
+    }).catch(() => null);
+    // Nothing observable means no evidence to show, and a gate with no evidence
+    // is just "are you sure?" — the doctrine-shaped ask this replaces.
+    if (observed === null) return;
+    this.completionGate.fire();
+    this.queue.push({
+      text: completionGateText({ task: this.completionGate.task, observed }),
+      kind: 'programmatic',
+      metadata: { proteusEvent: COMPLETION_GATE_EVENT },
+      resolve: () => {},
+    });
   }
 
   /** Settle every branch launched during the just-finished turn (detached —

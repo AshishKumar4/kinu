@@ -13,6 +13,10 @@ export type {
   ExecutionRouter,
 } from './types.js';
 
+export {
+  formatExecResult, type ExecOutcome,
+  STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+} from './exec-result.js';
 export { DefaultExecutionRouter } from './router.js';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
 export {

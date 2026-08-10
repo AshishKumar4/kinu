@@ -282,7 +282,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         case 'tool-result': {
           const raw = (chunk as any).output ?? (chunk as any).result ?? '';
           const result = renderToolResult(raw).slice(0, 1000);
-          await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: true });
+          const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
+          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: true });
           yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
           break;
         }
@@ -292,7 +293,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // the cf afterToolCall), and the discriminator rides success/error.
           const error = describeProviderError((chunk as any).error);
           const result = error.slice(0, 1000);
-          await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: false });
+          const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
+          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: false });
           yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
           break;
         }

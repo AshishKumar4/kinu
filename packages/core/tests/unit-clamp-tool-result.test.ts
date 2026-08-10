@@ -133,7 +133,7 @@ describe('run tool result budget (behavior through the public tool surface)', ()
     const tools = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime });
     const run = tools.run as unknown as RunTool;
     const out = await run.execute({ command: 'boom' });
-    expect(out).toStartWith('Error (exit 2):');
+    expect(out).toStartWith('Error (exit 2)\n--- stderr ---');
     expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
     expect(out).toContain('chars omitted');
   });

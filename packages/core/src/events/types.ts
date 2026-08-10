@@ -25,7 +25,8 @@ export type RunEventType =
   | 'scaffold_rollback'
   | 'memory_write'
   | 'context_budget'
-  | 'delegation_nudge'
+  | 'turn_steering'
+  | 'completion_gate'
   | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
@@ -65,21 +66,31 @@ export type RunEvent =
    *  any of it back. Written once per turn by the settle spine (M1 trip
    *  counters); `turn_end` is the denominator. */
   | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
-  /** The harness mechanically steered the turn toward delegation, and whether
-   *  the model then reached for it. At most one per turn, written by the settle
-   *  spine like `context_budget`; `turn_end` is the denominator, `converted`
-   *  the conversion numerator. Declared here rather than imported from the
-   *  producer (orchestrator/delegation-nudge.ts): this union is reachable from
-   *  most of the turn pipeline, and the producer holds mid-turn injection
-   *  machinery no other layer may reach. */
-  | (RunEventBase & { type: 'delegation_nudge';
+  /** The harness mechanically steered the turn, and whether the model then did
+   *  what the steer asked. At most one per turn, written by the settle spine
+   *  like `context_budget`; `turn_end` is the denominator, `converted` the
+   *  conversion numerator. Declared here rather than imported from the producer
+   *  (orchestrator/turn-steering.ts): this union is reachable from most of the
+   *  turn pipeline, and the producer holds mid-turn injection machinery no
+   *  other layer may reach. */
+  | (RunEventBase & { type: 'turn_steering';
       /** Which mechanical trigger fired. */
-      trigger: 'repeated_failure' | 'long_turn_no_delegation';
-      /** Step boundary the nudge was spliced into. */
+      trigger: 'repeated_call' | 'repeated_failure' | 'long_turn_no_delegation';
+      /** Step boundary the steer was spliced into. */
       step: number;
-      /** The tool that kept failing (repeated_failure only). */
+      /** The tool that kept repeating or failing (not the long-turn trigger). */
       tool?: string;
-      /** The model reached for `agents` after seeing the nudge. */
+      /** The model did what the steer asked: reached for `agents` after a
+       *  delegation steer, or called something other than the repeating call
+       *  after a repeat steer. */
+      converted: boolean })
+  /** The one-shot completion gate fired: the harness refused to let the run end
+   *  on the model's own say-so and handed it freshly observed state first.
+   *  At most one per one-shot run, written by the settle spine when the
+   *  confirming turn closes — `converted` says the re-look found real work to
+   *  do rather than confirming a claim. */
+  | (RunEventBase & { type: 'completion_gate';
+      /** The agent made tool calls after seeing the observed state. */
       converted: boolean })
   /** A mission budget ran out and a host seam declined the work. Written once
    *  per label by the governor (mission-budget.ts), so the durable trail says
@@ -95,12 +106,18 @@ export type RunEvent =
        *  overwrites). */
       error?: string });
 
-/** One turn's delegation nudge — what the nudge reports and what the settle
- *  spine writes, derived from the durable schema so there is one declaration. */
-export type DelegationNudgeRecord =
-  Omit<Extract<RunEvent, { type: 'delegation_nudge' }>, keyof RunEventBase | 'type'>;
+/** One turn's mechanical steer — what the steering object reports and what the
+ *  settle spine writes, derived from the durable schema so there is one
+ *  declaration. */
+export type TurnSteeringRecord =
+  Omit<Extract<RunEvent, { type: 'turn_steering' }>, keyof RunEventBase | 'type'>;
 
-export type DelegationNudgeTrigger = DelegationNudgeRecord['trigger'];
+export type TurnSteeringTrigger = TurnSteeringRecord['trigger'];
+
+/** One run's completion gate — derived from the durable schema for the same
+ *  reason as the steering record: one declaration, no drift. */
+export type CompletionGateRecord =
+  Omit<Extract<RunEvent, { type: 'completion_gate' }>, keyof RunEventBase | 'type'>;
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {

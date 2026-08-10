@@ -217,7 +217,7 @@ The two default registrants attach at construction on both backends:
   seam reads to tell them apart. The spliced message is ephemeral exactly like
   the `<dynamic_context>` block beside it: model-visible at the tip, never
   durable history, gone on a cold start. The turn's own mechanical steering
-  (the delegation nudge) is not delivered — it is handed to the step being
+  (`core/src/orchestrator/turn-steering.ts`) is not delivered — it is handed to the step being
   prepared, so it cannot outlive it. One buffer and one splice for every
   signal, so no registration order can shift another producer's recorded
   indices. It is the DO counterpart of the CLI's `proteus.steering` drain —

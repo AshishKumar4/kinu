@@ -40,7 +40,7 @@ const carriedSignalId = (turn: ProgrammaticTurn) =>
 const wake = (text: string, over: Partial<AgentSignal> = {}): AgentSignal =>
   ({ kind: 'event_drain', text, ...over });
 
-const nudge = (text: string): AgentSignal => ({ kind: 'delegation_nudge', text });
+const nudge = (text: string): AgentSignal => ({ kind: 'turn_steering', text });
 
 describe('SignalDelivery — one delivery time: the next step', () => {
   test('a wake rides the live turn when one is running', async () => {

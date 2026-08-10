@@ -2301,3 +2301,128 @@ describe('agents.* codemode namespace — node sandbox', () => {
     await session.end();
   });
 });
+
+// ── the mechanical completion gate ──────────────────────────────────────────
+// A one-shot run is graded on what it leaves behind with nobody reading the
+// answer, so the harness takes its own look before letting the process go. The
+// two properties worth pinning: the trigger is what the turn DID, and the
+// evidence is read by the harness — so no claim of success can satisfy it.
+
+/** A model that runs one shell command, answers, and (on the confirming turn)
+ *  answers again. `confirmWith` is what it does when the gate comes back:
+ *  'text' = it just re-asserts, 'tool' = it goes back to work. */
+function runThenAnswerModel(confirmWith: 'text' | 'tool' = 'text'): LanguageModel {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  let step = 0;
+  const answer = (controller: ReadableStreamDefaultController, text: string) => {
+    controller.enqueue({ type: 'text-start', id: '0' });
+    controller.enqueue({ type: 'text-delta', id: '0', delta: text });
+    controller.enqueue({ type: 'text-end', id: '0' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+  };
+  const call = (controller: ReadableStreamDefaultController, id: string, command: string) => {
+    controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'run', input: JSON.stringify({ command }) });
+    controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+  };
+  return {
+    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+    doStream: async () => {
+      step += 1;
+      const at = step;
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            if (at === 1) call(controller, 'call-1', 'echo working');
+            else if (at === 2) answer(controller, 'all done, the task is complete');
+            else if (at === 3 && confirmWith === 'tool') call(controller, 'call-2', 'echo fixing');
+            else answer(controller, 'confirmed');
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  } as unknown as LanguageModel;
+}
+
+const gateTurn = (events: SessionEvent[]) =>
+  turnStarts(events).find((t) => t.event === 'completion_gate');
+
+describe('LocalAgentSession — the one-shot completion gate', () => {
+  test('a one-shot turn that did work gets one more turn carrying state the HARNESS read', async () => {
+    const { session, events } = setup('unused', runThenAnswerModel(), { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    const gate = gateTurn(events);
+    expect(gate).toBeDefined();
+    // Harness-authored, and the model's "the task is complete" did not prevent it.
+    expect(gate!.text).toContain('[Runtime check');
+    expect(gate!.text).toContain('write the report');
+    // Observed, not asserted: the real probe output from the real shell.
+    expect(gate!.text).toContain('$ pwd');
+    expect(gate!.text).toContain('$ ls -la');
+
+    // Exactly one gate, and it does not gate itself into a loop.
+    expect(turnStarts(events).filter((t) => t.event === 'completion_gate')).toHaveLength(1);
+    await session.end();
+  });
+
+  test('the gate is not armed on the interactive surface, where a human is the check', async () => {
+    const { session, events } = setup('unused', runThenAnswerModel());
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    expect(gateTurn(events)).toBeUndefined();
+    await session.end();
+  });
+
+  test('a turn that called no tools is not gated — it left no state to check', async () => {
+    const { session, events } = setup('just answering', undefined, { oneShot: true });
+    await session.send('what is 2 + 2');
+    await session.settleBackgroundWork();
+
+    expect(gateTurn(events)).toBeUndefined();
+    await session.end();
+  });
+
+  test('a failed turn is not gated — it already reported the failure', async () => {
+    const exploding = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+      doStream: async () => { throw new Error('upstream is on fire'); },
+    } as unknown as LanguageModel;
+    const { session, events } = setup('unused', exploding, { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    expect(gateTurn(events)).toBeUndefined();
+    await session.end();
+  });
+
+  test('the confirming turn records whether the re-look converted into real work', async () => {
+    const { session } = setup('unused', runThenAnswerModel('tool'), { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    const gateRun = session.listRuns()
+      .map((r) => session.getRunEvents(r.runId))
+      .find((evs) => evs.some((e) => e.type === 'completion_gate'));
+    expect(gateRun).toBeDefined();
+    expect(gateRun!.find((e) => e.type === 'completion_gate')).toMatchObject({ converted: true });
+    await session.end();
+  });
+
+  test('a re-look that only re-asserts is recorded as an honest non-conversion', async () => {
+    const { session } = setup('unused', runThenAnswerModel('text'), { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    const rows = session.listRuns()
+      .flatMap((r) => session.getRunEvents(r.runId))
+      .filter((e) => e.type === 'completion_gate');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ converted: false });
+    await session.end();
+  });
+});

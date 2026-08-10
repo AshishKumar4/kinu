@@ -17,8 +17,8 @@
  * and one splice for every signal, so no extension registration order can shift
  * another producer's recorded indices.
  *
- * The turn's OWN steering — the delegation nudge, decided inside the step
- * pipeline from the live turn's state — is not delivered, it is handed to
+ * The turn's OWN steering — decided inside the step pipeline from the live
+ * turn's state — is not delivered, it is handed to
  * {@link SignalDelivery.prepareStep} as the step being prepared. That is the
  * whole distinction, and it is structural rather than declared: steering
  * enters through a step, so it cannot outlive it, cannot start a turn, and
@@ -40,7 +40,7 @@
  * The spliced message is ephemeral, exactly like the dynamic-context block it
  * rides beside: model-visible at the tip, never durable chat history, gone on
  * a cold start. A signal's durable record is its own (the EventLog row consumed
- * by the batch turn id, the `delegation_nudge` run event) plus the absorbing
+ * by the batch turn id, the `turn_steering` run event) plus the absorbing
  * turn's reply; Think's one-assistant-message-per-turn transcript cannot
  * represent a user message between steps, and persisting it after the assistant
  * reply would read as an unanswered event next turn.
@@ -109,8 +109,8 @@ export class SignalDelivery implements SignalDeliverer {
    * The `prepareStep` body: absorb everything buffered into ONE user message at
    * the step tail, re-applied at its entry index on every later step.
    *
-   * `steering` is the turn's own mechanical steering for THIS step (the
-   * delegation nudge), decided by the caller from the live turn's state. It
+   * `steering` is the turn's own mechanical steering for THIS step, decided
+   * by the caller from the live turn's state. It
    * merges into the same message so there is still one splice per step, and it
    * is never buffered: a steer that misses its step is a steer whose moment
    * passed, and it is re-derived at the next one if the condition holds.

@@ -318,9 +318,10 @@ export class LocalAgentClient implements AgentClient {
     return this.session.interrupt();
   }
 
-  /** Let detached background jobs settle and their wake turns run to
-   *  completion, streaming through the live subscription, before the caller
-   *  closes. No-op once closed. */
+  /** Run everything the task turn left queued — detached jobs' wake turns, the
+   *  one-shot completion gate's confirming turn — to completion, streaming
+   *  through the live subscription, before the caller closes. No-op once
+   *  closed. */
   async settleBackgroundWork(): Promise<void> {
     if (this.closed) return;
     await this.session.settleBackgroundWork();

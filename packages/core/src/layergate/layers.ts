@@ -842,7 +842,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           await signals.deliver({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
           const spliced = signals.prepareStep(
             { stepNumber: 0, messages: shortHistory() },
-            [{ kind: 'delegation_nudge', text: 'nudge' }],
+            [{ kind: 'turn_steering', text: 'nudge' }],
           );
           await signals.deliver({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
           const settled = signals.settle({ completed: true });

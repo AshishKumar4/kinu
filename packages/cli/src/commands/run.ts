@@ -190,10 +190,12 @@ async function runOneShot(
       { cwd: process.cwd() },
     );
     if (result.hadError) failed = true;
-    // A tool that auto-detached (>30s) ends the turn early; its result arrives
-    // as a wake turn. This one-shot process exits after send(), so drain those
-    // wake turns to completion HERE — while the subscription is still live, so
-    // their events stream — instead of losing the second half of the work.
+    // send() resolves when the task turn resolves, but the task turn is not
+    // always the last one: a tool that auto-detached ends the turn early and
+    // its result arrives as a wake turn, and the one-shot completion gate
+    // queues a confirming turn against freshly observed state. This process
+    // exits after send(), so drain the rest HERE — while the subscription is
+    // still live, so their events stream — instead of losing the second half.
     await client.settleBackgroundWork?.();
   } catch (err) {
     // In-stream failures already surfaced as an error event; only report

@@ -176,7 +176,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     // declares them; this is the sentence that tells the model to use them.
     doctrine:
       'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them.',
-    result: 'Returns stdout, an exit-code error, or a structured runtime_not_provisioned error.',
+    result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
   },
   skills: {
     name: 'skills',

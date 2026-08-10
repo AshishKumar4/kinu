@@ -61,6 +61,7 @@ import {
   reviewCommand, formatApproval, approvalGrants,
   type ShellApprovalRequest, type ShellApprovalOutcome,
 } from '../safety/approval-gate.js';
+import { formatExecResult } from '../execution/exec-result.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createExperienceTool, type ExperienceToolDeps } from './experience-tool.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
@@ -491,9 +492,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
         if (!shell) return 'Error: no workspace shell available in this runtime.';
-        const result = await shell.exec(args.command, signal ? { signal } : undefined);
-        if (result.exitCode !== 0) return clamp(`Error (exit ${result.exitCode}): ${result.stderr}`);
-        return clamp(result.stdout || '(no output)');
+        return clamp(formatExecResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
       const provider = router?.getProvider(runtimeKey);
       if (!provider) {

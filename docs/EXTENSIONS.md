@@ -29,7 +29,7 @@ const logger: ProteusExtension = {
   name: 'my.logger',
   onTurnStart({ system, history }) { /* before the model is streamed */ },
   onToolCall({ toolName, args }) { /* each tool call the model emits */ },
-  onToolResult({ toolName, result }) { /* each tool result (≤1000 chars) */ },
+  onToolResult({ toolName, args, result }) { /* each tool result (≤1000 chars) */ },
   onTurnEnd({ text, responseMessages }) { /* after the turn settles */ },
 };
 ```
@@ -127,8 +127,8 @@ per activation bridges Think's subclass hooks onto the contract above:
 Both default registrants attach on this host in the `ActorAgent` constructor:
 the compaction extension (`registerCompactionExtension`, registered under the
 name `compaction`) and the orchestrator's signal extension (`proteus.signals`,
-which observes tool calls for the delegation nudge and drains every signal
-delivered for the live turn — a background event, a nudge — into the active
+which observes tool calls for the turn's mechanical steering and drains every
+signal delivered for the live turn — a background event, a steer — into the active
 turn's next step; the DO counterpart of the CLI steering drain, sharing the
 same `StepInjections` splice math).
 

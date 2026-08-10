@@ -16,7 +16,7 @@ import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
   CompositeVFS, type MountPolicy,
-  DefaultExecutionRouter, createInlineExecutor,
+  DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
@@ -436,9 +436,7 @@ function createLocalLaptopExecutor(
         description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
         execute: async (command: unknown, context?: unknown) => {
           const signal = readAbortSignal(context);
-          const result = await shell.exec(String(command), signal ? { signal } : undefined);
-          if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
-          return result.stdout || '(no output)';
+          return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
         },
       },
       readFile: {

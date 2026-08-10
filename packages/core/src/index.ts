@@ -604,6 +604,7 @@ export {
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
+  formatExecResult, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
 } from './execution/index.js';
 
 // File plane — CompositeVFS mount table + raw-handle mount adapters
@@ -689,7 +690,7 @@ export {
 // SSE-stream compatibility. New code uses the EventsHub directly.
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,
-  DelegationNudgeRecord, DelegationNudgeTrigger,
+  CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger,
 } from './events/index.js';
 export {
   initRunEventTables,
@@ -812,9 +813,15 @@ export {
 } from './orchestrator/agent-orchestrator.js';
 export { SignalDelivery } from './orchestrator/signals.js';
 export {
-  DelegationNudge, isFailingToolResult,
-  CONSECUTIVE_FAILURES_BEFORE_NUDGE, LONG_TURN_STEPS_BEFORE_NUDGE, DELEGATION_NUDGE_HEADER,
-} from './orchestrator/delegation-nudge.js';
+  TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
+  IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
+} from './orchestrator/turn-steering.js';
+export {
+  CompletionGate, observeCompletionState, completionGateText,
+  COMPLETION_GATE_EVENT, COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS,
+  COMPLETION_OBSERVATION_MAX_CHARS, COMPLETION_TASK_ECHO_MAX_CHARS,
+  type TurnCompletionFacts,
+} from './orchestrator/completion-gate.js';
 export { assembleTurnMessages, type TurnContextInput } from './orchestrator/turn-context.js';
 export {
   openTurnRun, closeTurnRun, snapshotCompletedTurn,

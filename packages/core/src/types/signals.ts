@@ -19,8 +19,8 @@ export type SignalUndeliveredReason = 'preempted' | 'failed';
 export type SignalOutcome = 'mid-turn' | 'queued' | 'undelivered';
 
 /** One asynchronous nudge at the agent: an event-hub drain, a settled
- *  background job, an overflow retry, a take pick, an MCP task, the mechanical
- *  delegation nudge. */
+ *  background job, an overflow retry, a take pick, an MCP task, the turn's own
+ *  mechanical steer. */
 export interface AgentSignal {
   /** The `proteusEvent` name. It is the queued turn's provenance (run
    *  `caused_by`), and what makes the chat render the turn as an event card

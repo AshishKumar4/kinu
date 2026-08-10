@@ -30,11 +30,15 @@ export interface ToolCallContext {
 
 export interface ToolResultContext {
   readonly toolName: string;
+  /** The call's own input, carried through so a consumer can tell one call of
+   *  a tool from another without re-pairing on ids (the repeat detector in
+   *  orchestrator/turn-steering.ts). Both backends have it at result time. */
+  readonly args: Record<string, unknown>;
   readonly result: string;
   /** How the call settled. A tool that catches its own failure and RETURNS it
    *  (the `run` tool's `Error (exit N)`) still reports success here, so a
    *  consumer that cares about failure reads the text too — see
-   *  isFailingToolResult in orchestrator/delegation-nudge.ts. */
+   *  isFailingToolResult in orchestrator/turn-steering.ts. */
   readonly success: boolean;
 }
 

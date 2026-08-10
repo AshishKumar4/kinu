@@ -10,6 +10,7 @@
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorCapability, ExecutorProvider } from './types.js';
 import { readExecSignal } from './signal.js';
+import { formatExecResult } from './exec-result.js';
 import { shellQuote } from '../utils/shell.js';
 
 export interface NimbusExecOptions {
@@ -82,13 +83,13 @@ const NOT_CONFIGURED =
   'Nimbus executor not configured. Add the NIMBUS_SESSION Durable Object binding ' +
   'and construct the executor with Nimbus.fromEnv(...).sandbox(...).';
 
+/** `success: false` with a zero exit code is Nimbus reporting a transport-level
+ *  failure the exit code cannot express — render it as the failure it is. */
 function normalizeExec(result: NimbusExecResult): string {
-  const stdout = result.stdout ?? '';
-  const stderr = result.stderr ?? '';
-  if (!result.success || result.exitCode !== 0) {
-    return `Exit ${result.exitCode}${stderr ? `\n${stderr}` : ''}${stdout ? `\n${stdout}` : ''}`.trim();
-  }
-  return stdout || stderr || '(no output)';
+  return formatExecResult({
+    ...result,
+    exitCode: !result.success && result.exitCode === 0 ? 1 : result.exitCode,
+  });
 }
 
 function stringifyResult(value: unknown): string {

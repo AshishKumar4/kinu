@@ -39,7 +39,7 @@
 
 import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
-import { DelegationNudge } from './delegation-nudge.js';
+import { TurnSteering } from './turn-steering.js';
 import { DrainScheduler } from './drain-scheduler.js';
 import { SignalDelivery, readSignalId } from './signals.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
@@ -111,22 +111,22 @@ export class AgentOrchestrator {
    *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
    *  time anything reaches it: its next step. Producers state intent only. */
   readonly signals: SignalDelivery;
-  /** Per-turn mechanical delegation steering. Observed through
-   *  {@link turnExtension} and handed to closeTurnRun for the durable
-   *  `delegation_nudge` row. */
-  readonly nudge = new DelegationNudge();
+  /** Per-turn mechanical steering — repeat, repeated failure, long turn.
+   *  Observed through {@link turnExtension} and handed to closeTurnRun for the
+   *  durable `turn_steering` row. */
+  readonly steering = new TurnSteering();
   /** The orchestrator's per-turn extension, registered on the turn's
-   *  ExtensionHost by both backends: the delegation nudge's observation hooks
-   *  plus the ONE mid-turn signal drain every producer feeds. The nudge is
+   *  ExtensionHost by both backends: the steering object's observation hooks
+   *  plus the ONE mid-turn signal drain every producer feeds. The steer is
    *  decided against the step being prepared and handed straight to it, so it
    *  rides the step it was decided on and dies with it. */
   readonly turnExtension: ProteusExtension = {
     name: 'proteus.signals',
-    onToolCall: (ctx) => this.nudge.onToolCall(ctx),
-    onToolResult: (ctx) => this.nudge.onToolResult(ctx),
+    onToolCall: (ctx) => this.steering.onToolCall(ctx),
+    onToolResult: (ctx) => this.steering.onToolResult(ctx),
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
-      const nudge = this.nudge.nudgeFor(ctx.stepNumber);
-      return this.signals.prepareStep(ctx, nudge ? [nudge] : []);
+      const steer = this.steering.steerFor(ctx.stepNumber);
+      return this.signals.prepareStep(ctx, steer ? [steer] : []);
     },
   };
   private readonly reflectionInterval: number;
@@ -175,7 +175,7 @@ export class AgentOrchestrator {
    *  than being dropped as answered. */
   beginTurn(now: number, metadata?: unknown, continuation = false): void {
     this.acc.reset(now);
-    this.nudge.reset();
+    this.steering.reset();
     this.signals.beginTurn(continuation, readSignalId(metadata));
     this.deps.budget?.activate(readMissionLabels(metadata));
   }
