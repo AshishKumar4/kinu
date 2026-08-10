@@ -89,7 +89,7 @@ function renderOperatingGuidance(surface: PromptSurface): string {
   if (family === 'kimi') {
     lines.push(
       '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context, continue from observations, and avoid re-planning after every tool result.',
-      '- For long-horizon coding, write down durable decisions with fact/memory instead of relying on hidden reasoning.',
+      '- For long-horizon coding, write down durable decisions with `memory` instead of relying on hidden reasoning.',
     );
   } else if (family === 'gpt') {
     lines.push(
@@ -255,11 +255,11 @@ function renderAgentStateSection(surface: PromptSurface): string {
     'Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line-by-line — evolve freely and report honestly; nothing you change about yourself is hidden or permanent.',
   ].join('\n'));
 
-  if (hasTool(tools, 'memory') || hasTool(tools, 'fact')) {
+  if (hasTool(tools, 'memory')) {
     parts.push([
       '## Memory and facts',
-      '- Use `fact` for keyed state the agent should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
-      '- Use `memory` for longer prose notes or lessons that are useful across turns.',
+      '- Use `memory` action="remember" for keyed state you should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
+      '- Use `memory` action="save" for longer prose notes or lessons that are useful across turns.',
       '- Use `memory` action="sessions" to search your past session transcripts before re-deriving prior context.',
       '- Your failures are recorded as lessons in memory — search before retrying similar work.',
       '- Prefer updating stale facts over adding contradictory new ones.',
@@ -314,7 +314,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       lines.push(`- Persistent subordinate — ${DELEGATION_RUNGS.staff}`);
     }
     if (has('fork')) {
-      lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.');
+      lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop `web` search then fetch.');
     }
     // The rungs are also a codemode namespace, so a multi-step plan is code
     // rather than a tool-call-at-a-time grind. Gated on the same actions the

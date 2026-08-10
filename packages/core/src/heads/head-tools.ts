@@ -5,7 +5,7 @@
  *
  * A head IS a fork: it runs on the parent's real execution surface (the parent's
  * exec planes and workspace files) and reaches them through exactly the tools the
- * parent agent uses — `run`, `execute_tools`, `web_*`. Before this, a head got a
+ * parent agent uses — `run`, `execute_tools`, `web`. Before this, a head got a
  * freshly-created empty scratch behind tools NAMED `sandbox_*`, so a head asked
  * to study a repo in the workspace truthfully reported finding nothing.
  *
@@ -24,7 +24,7 @@
  * budgetExhausted refuses once depth, tokens or wall-clock run out).
  *
  * The `allowedTools` filter runs LAST over the head's real vocabulary, so a
- * parent fork request naming `run` / `execute_tools` / `web_search` maps onto the
+ * parent fork request naming `run` / `execute_tools` / `web` maps onto the
  * head's actual tools instead of silently emptying the set (the old bug: the
  * parent's vocabulary was filtered against a disjoint `sandbox_*` head surface).
  */
@@ -38,10 +38,10 @@ import type { Decision, HeadId, HeadInput, MergeStrategy } from './types.js';
 import type { WebSearchProvider } from '../web/index.js';
 
 /** The builtin tools a head keeps. `execute_tools` is the file plane + the
- *  crafted/`llm`/`web` namespaces; `run` is the real executor; `web_*` is live
- *  research. `memory`, `skills` and `fact` are withheld: they would address this
- *  head's OWN stores, which nothing outside a single head run ever reads. */
-export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'web_search', 'web_fetch'] as const;
+ *  crafted/`llm`/`web` namespaces; `run` is the real executor; `web` is live
+ *  research. `memory` and `skills` are withheld: they would address this head's
+ *  OWN stores, which nothing outside a single head run ever reads. */
+export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'web'] as const;
 
 export interface HeadSplitRequest {
   rationale: string;

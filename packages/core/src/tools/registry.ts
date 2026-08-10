@@ -15,10 +15,8 @@ export const BUILTIN_TOOLS = [
   'skills',
   'agents',
   'memory',
-  'fact',
   'experience',
-  'web_search',
-  'web_fetch',
+  'web',
   'report',
   'product_change',
 ] as const;
@@ -71,7 +69,7 @@ export const DELEGATION_RUNGS = {
   fork:
     'Fork (action=fork) on two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
     'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is a reason to fork, not a reason to push on alone. ' +
-    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web_search/web_fetch/exec), then merging back and disappearing; takes minutes, may auto-background. ' +
+    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, may auto-background. ' +
     'Leave settle unset to merge the forks back into this turn; set settle=mcts to have them scored against each other by execution instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since each branch\'s proposed code IS executed to earn its score. mcts branches propose text/code rather than running your own tool loop.',
   staff:
     'Staff a subordinate (action=staff) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
@@ -87,6 +85,51 @@ export const DELEGATION_CONVERSE =
   // The delivery contract, stated because it changes how to delegate: there is
   // no waiting for a helper to free up, and no reason to hold work back.
   'A busy agent is never blocked on — your message is spliced into the turn it is already running, so send follow-ups as soon as you have them.';
+
+// ── Durable-state doctrine (single source) ──────────────────────────────────
+// `memory` is ONE tool because it is one concept — state this agent writes down
+// now and reads back in a later turn. Prose notes and keyed facts are two
+// storage shapes of that concept, not two decisions the model should have to
+// make between tools, so they are actions inside it. The keyed-fact actions
+// exist only where a FactsStore is wired, and the docstring is composed from
+// the same gate, so it never advertises an action the runtime cannot perform.
+
+/** Always present: the memory plane is `rt.memory` plus the canonical
+ *  messages table, which every runtime has. */
+export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'sessions'] as const;
+
+/** Present only where a FactsStore is wired. */
+export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
+
+export type MemoryToolAction =
+  | (typeof MEMORY_NOTE_ACTIONS)[number]
+  | (typeof MEMORY_FACT_ACTIONS)[number];
+
+/**
+ * The durable-state spec for a runtime that does (or does not) wire facts.
+ * `BUILTIN_TOOL_SPECS.memory` is the full surface; buildBuiltinTools renders
+ * the gated one when no FactsStore is supplied.
+ */
+export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
+  // The sessions mode contract (query searches, around_message_id scrolls,
+  // neither browses) lives ONLY in the input-schema property descriptions.
+  return {
+    name: 'memory',
+    summary: hasFacts
+      ? 'Durable state you read back in a later turn: keyed facts, prose notes, past session transcripts.'
+      : 'Durable state you read back in a later turn: prose notes, past session transcripts.',
+    whenToUse:
+      'Use for anything that must outlive this turn. '
+      + (hasFacts
+        ? 'remember/recall/forget name state you look up precisely — preferences, project state, URLs, configuration, dates, decisions; update a stale key rather than adding a contradictory second fact. '
+        : '')
+      + 'save/search hold a lesson or note too long to be a value; sessions reads what past sessions said, before re-deriving context you already have.',
+    whenNotToUse: 'Do not store temporary task progress, stale logs, or anything this turn already carries.',
+    result: hasFacts
+      ? 'Returns save or fact-mutation status, recalled fact values, note search hits, or session transcript slices.'
+      : 'Returns save status, note search hits, or session transcript slices.',
+  };
+}
 
 /**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
@@ -159,22 +202,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
   },
-  memory: {
-    name: 'memory',
-    // The sessions mode contract (query searches, around_message_id scrolls,
-    // neither browses) lives ONLY in the input-schema property descriptions.
-    summary: 'Save or search durable prose memory, or recall past session transcripts (action=sessions).',
-    whenToUse: 'Use for compact, durable lessons or notes that should survive future turns, and to search what past sessions actually said before re-deriving context.',
-    whenNotToUse: 'Do not store keyed state, temporary task progress, stale logs, or facts that should be updated by name.',
-    result: 'Returns save status, search hits, or session transcript slices.',
-  },
-  fact: {
-    name: 'fact',
-    summary: 'Remember, recall, or forget typed keyed facts such as preferences, project state, URLs, dates, and configuration.',
-    whenToUse: 'Use for named durable state that should be recalled or updated precisely.',
-    whenNotToUse: 'Do not use for long prose notes; use memory for those.',
-    result: 'Returns fact mutation status or recalled fact values.',
-  },
+  memory: memoryToolSpec(true),
   experience: {
     name: 'experience',
     summary:
@@ -187,20 +215,15 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result:
       'search returns hits with their source workspace and the evidence that earned them; import returns the payload inline, staged provisional until this turn is accepted; publish returns what was shared, or what qualifies.',
   },
-  web_search: {
-    name: 'web_search',
-    summary: 'Search the live web and return ranked results (title, url, snippet, date).',
+  web: {
+    name: 'web',
+    summary: 'Live web access: action=search returns ranked results (title, url, snippet, date); action=fetch returns one URL as clean, citation-ready markdown.',
     whenToUse:
-      'Use to research a topic, find current or post-training-cutoff information, locate documentation/sources, or discover URLs to fetch. Loop it (call again with refined queries) for thorough research.',
-    whenNotToUse: 'Do not use when you already have the URL — call web_fetch directly. Do not use for facts you already know.',
-    result: 'Returns up to ~5 ranked results, each with title, url, snippet, and a freshness date when available (plus a synthesized answer when a Tavily key is connected).',
-  },
-  web_fetch: {
-    name: 'web_fetch',
-    summary: 'Fetch one URL and return its content as clean, citation-ready markdown.',
-    whenToUse: 'Use to read a specific page (a web_search hit, a doc, an article) after you have its URL.',
-    whenNotToUse: 'Do not use to discover pages — that is web_search. Do not fetch private/internal addresses; they are blocked.',
-    result: 'Returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file, or slice it and llm.query each slice inside execute_tools.',
+      'Use for current or post-training-cutoff information, documentation and sources. Search to discover URLs, then fetch the promising ones to actually read them, looping with refined queries until the question is answered; go straight to fetch when you already have the URL.',
+    whenNotToUse: 'Do not use for things you already know. Do not fetch private or internal addresses; they are blocked.',
+    result:
+      'search returns up to ~5 ranked results, each with title, url, snippet, and a freshness date when available (plus a synthesized answer when a Tavily key is connected). '
+      + 'fetch returns the page title, retrieval timestamp, and markdown; oversized pages are saved to the workspace VFS and clamped to a head — re-read the file, or slice it and llm.query each slice inside execute_tools.',
   },
   report: {
     name: 'report',

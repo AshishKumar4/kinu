@@ -20,13 +20,16 @@
  *                       the deps group that powers it (fork / team / peers),
  *                       so a CLI session gets fork only and a subordinate
  *                       actor never sees staff. See tools/agents-tool.ts.
- *   5. memory         — long-term prose notes: save / search (auto-hybrid FTS5
- *                       + Vectorize when a VectorStore is wired).
- *   6. fact           — typed keyed world model: remember / recall / forget.
- *                       Gated on deps.facts.
- *   7. experience     — cross-workspace transfer of proven crafts / lessons /
+ *   5. memory         — the ONE durable-state tool: prose notes (save / search,
+ *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
+ *                       wired), the typed keyed world model (remember / recall
+ *                       / forget, gated on deps.facts) and past session
+ *                       transcripts (sessions).
+ *   6. experience     — cross-workspace transfer of proven crafts / lessons /
  *                       facts through the owner's library. Gated on
  *                       deps.experience (workspace orchestrator only).
+ *   7. web            — live web access: search / fetch. Gated on
+ *                       deps.webSearch.
  *   8. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
@@ -41,7 +44,10 @@
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
-import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
+import {
+  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
+  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
+} from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
 import { TurnContextBudget } from '../context-budget.js';
 import { isMcpToolKey } from './mcp-naming.js';
@@ -144,8 +150,8 @@ export interface BuiltinToolDeps {
    * install one; headless runs leave it unset.
    */
   requestShellApproval?: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
-  /** agent_facts world model. When provided, exposes the `fact` tool
-   *  (remember / recall / forget actions). */
+  /** agent_facts world model. When provided, the `memory` tool also exposes
+   *  the keyed-fact actions (remember / recall / forget). */
   facts?: import('../memory/facts.js').FactsStore;
   /** The owner's cross-workspace experience library. When provided, exposes
    *  the `experience` tool (publish / search / import). */
@@ -177,9 +183,9 @@ export interface BuiltinToolDeps {
    *  on subordinate actors. */
   report?: ReportToolDeps;
   /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
-   *  Tavily-key auth seam differ per backend). Exposes the `web_search` and
-   *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
-   *  same provider in each backend's execute_tools assembly. */
+   *  Tavily-key auth seam differ per backend). Exposes the `web` tool — and the
+   *  codemode `web.*` namespace is wired by the same provider in each backend's
+   *  execute_tools assembly. */
   webSearch?: WebSearchProvider;
   /** The turn's cumulative context budget — the per-result clamp tightens once
    *  a turn has admitted its budget, and every spill trip is counted for the
@@ -315,6 +321,28 @@ function buildCraftedToolSetFromExecute(
   }
 
   return out;
+}
+
+/** The durable-state tool's one input shape. `key` names a fact, `content` /
+ *  `query` address prose, and the rest scope a session read — which of them the
+ *  call needs follows from its action. */
+interface MemoryToolInput {
+  action: MemoryToolAction;
+  key?: string;
+  value?: unknown;
+  confidence?: number;
+  content?: string;
+  query?: string;
+  around_message_id?: string;
+  window?: number;
+  limit?: number;
+}
+
+interface WebToolInput {
+  action: 'search' | 'fetch';
+  query?: string;
+  limit?: number;
+  url?: string;
 }
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
@@ -539,7 +567,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.agents = createAgentsTool(deps.agents);
   }
 
-  // ── 4. memory — long-term prose notes (save / search) ─────────────────────
+  // ── 4. memory — the ONE durable-state tool ────────────────────────────────
+  // Prose notes (save / search), the typed keyed world model (remember /
+  // recall / forget) and past session transcripts (sessions) are one concept —
+  // state written down now to be read back later — so they are actions here
+  // rather than separate tools the model must choose between by storage shape.
   // search auto-hybridises: Vectorize-backed semantic + FTS5 lexical merged via
   // RRF when a VectorStore is wired + available; pure FTS5 otherwise.
   const vs = deps.vectorStore;
@@ -597,23 +629,50 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       return { error: `session search unavailable: ${err instanceof Error ? err.message : String(err)}` };
     }
   };
+  const facts = deps.facts;
+  const runFactAction = (
+    action: (typeof MEMORY_FACT_ACTIONS)[number],
+    args: MemoryToolInput,
+  ): unknown => {
+    if (!facts) return { error: 'the keyed-fact actions are not available on this runtime' };
+    if (typeof args.key !== 'string' || args.key.length === 0) {
+      return { error: 'key must be a non-empty string' };
+    }
+    if (action === 'remember') {
+      // Pre-flight serialize so circular refs / non-serializable values
+      // surface as a clean tool error instead of crashing the turn.
+      try { JSON.stringify(args.value); }
+      catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
+      facts.upsert(args.key, args.value, { confidence: args.confidence });
+      return { ok: true, key: args.key };
+    }
+    if (action === 'recall') {
+      const f = facts.recall(args.key);
+      if (!f) return { found: false, key: args.key };
+      return {
+        found: true, key: f.key, value: f.value, confidence: f.confidence,
+        source: f.source, lastObservedAt: f.lastObservedAt,
+      };
+    }
+    const existed = facts.recall(args.key) !== null;
+    facts.forget(args.key);
+    return { ok: true, key: args.key, existed };
+  };
   tools.memory = tool({
-    description: BUILTIN_TOOL_DESCRIPTIONS.memory,
-    inputSchema: jsonSchema<{
-      action: 'save' | 'search' | 'sessions';
-      content?: string;
-      query?: string;
-      around_message_id?: string;
-      window?: number;
-      limit?: number;
-    }>({
+    description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
+    inputSchema: jsonSchema<MemoryToolInput>({
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['save', 'search', 'sessions'],
-          description: 'save a note, search memory notes, or recall past session transcripts (sessions)',
+          enum: [...MEMORY_NOTE_ACTIONS, ...(facts ? MEMORY_FACT_ACTIONS : [])],
+          description: facts
+            ? 'remember/recall/forget a keyed fact, save/search prose notes, or read past session transcripts (sessions)'
+            : 'save a note, search memory notes, or recall past session transcripts (sessions)',
         },
+        key: { type: 'string', description: 'For action=remember/recall/forget: a stable identifier (e.g. "user.tz", "deploy.target").' },
+        value: { description: 'For action=remember: any JSON value — string, number, object, array.' },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For action=remember: 0..1; default 1.0.' },
         content: { type: 'string', description: 'For action=save: the note text.' },
         query: {
           type: 'string',
@@ -634,119 +693,82 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       },
       required: ['action'],
     }),
-    execute: async (args: {
-      action: 'save' | 'search' | 'sessions';
-      content?: string;
-      query?: string;
-      around_message_id?: string;
-      window?: number;
-      limit?: number;
-    }) => {
-      if (args.action === 'save') {
-        if (!args.content) return 'memory.save requires `content`.';
-        return appendMemoryNote(memory, args.content);
+    execute: async (args: MemoryToolInput) => {
+      switch (args.action) {
+        case 'save':
+          if (!args.content) return 'memory.save requires `content`.';
+          return appendMemoryNote(memory, args.content);
+        case 'search':
+          if (!args.query) return 'memory.search requires `query`.';
+          return searchMemory(args.query);
+        case 'sessions':
+          return runSessionsAction(args);
+        case 'remember':
+        case 'recall':
+        case 'forget':
+          return runFactAction(args.action, args);
+        default:
+          // Only a model that ignored the enum gets here. Naming the action
+          // back is what lets it correct itself; falling through to a
+          // neighbouring branch would mutate state it never asked to touch.
+          return { error: `unknown memory action '${String(args.action)}'` };
       }
-      if (args.action === 'sessions') return runSessionsAction(args);
-      if (!args.query) return 'memory.search requires `query`.';
-      return searchMemory(args.query);
     },
   });
 
-  // ── 5. fact — typed, idempotent, keyed world model (remember/recall/forget) ──
-  const facts = deps.facts;
-  if (facts) {
-    tools.fact = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.fact,
-      inputSchema: jsonSchema<{ action: 'remember' | 'recall' | 'forget'; key: string; value?: unknown; confidence?: number }>({
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['remember', 'recall', 'forget'], description: 'what to do with the keyed fact' },
-          key: { type: 'string', description: 'Stable identifier (e.g. "user.tz", "deploy.target")' },
-          value: { description: 'For action=remember: any JSON value — string, number, object, array' },
-          confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For action=remember: 0..1; default 1.0' },
-        },
-        required: ['action', 'key'],
-      }),
-      execute: async (args) => {
-        if (typeof args.key !== 'string' || args.key.length === 0) {
-          return { error: 'key must be a non-empty string' };
-        }
-        if (args.action === 'remember') {
-          // Pre-flight serialize so circular refs / non-serializable values
-          // surface as a clean tool error instead of crashing the turn.
-          try { JSON.stringify(args.value); }
-          catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
-          facts.upsert(args.key, args.value, { confidence: args.confidence });
-          return { ok: true, key: args.key };
-        }
-        if (args.action === 'recall') {
-          const f = facts.recall(args.key);
-          if (!f) return { found: false, key: args.key };
-          return {
-            found: true, key: f.key, value: f.value, confidence: f.confidence,
-            source: f.source, lastObservedAt: f.lastObservedAt,
-          };
-        }
-        // forget
-        const existed = facts.recall(args.key) !== null;
-        facts.forget(args.key);
-        return { ok: true, key: args.key, existed };
-      },
-    });
-  }
-
-  // ── 6. experience — cross-workspace transfer of proven crafts/lessons/facts ──
+  // ── 5. experience — cross-workspace transfer of proven crafts/lessons/facts ──
   if (deps.experience) {
     tools.experience = createExperienceTool(deps.experience);
   }
 
-  // ── 7. web_search / web_fetch — live web research ─────────────────────────
-  // Two tools, the universal 2026 agent shape: web_search discovers ranked
-  // results, web_fetch retrieves one URL as clean markdown. Both work key-less
-  // (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential upgrades
-  // search quality transparently. Codemode gets the same capability as
-  // `web.search()` / `web.fetch()` via createWebCodemodeProvider, wired in each
-  // backend's execute_tools assembly.
+  // ── 6. web — live web research (search / fetch) ───────────────────────────
+  // One capability used as a pair: search discovers ranked results, fetch
+  // retrieves one URL as clean markdown, and the doctrine is to loop them.
+  // Both work key-less (DuckDuckGo + Markdown-for-Agents); a stored `tavily`
+  // credential upgrades search quality transparently. Codemode gets the same
+  // capability as `web.search()` / `web.fetch()` via createWebCodemodeProvider,
+  // wired in each backend's execute_tools assembly.
   const webSearch = deps.webSearch;
   if (webSearch) {
-    tools.web_search = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.web_search,
-      inputSchema: jsonSchema<{ query: string; limit?: number }>({
+    tools.web = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.web,
+      inputSchema: jsonSchema<WebToolInput>({
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'The search query.' },
-          limit: { type: 'number', description: 'Max results (default 5, max 20).' },
+          action: {
+            type: 'string',
+            enum: ['search', 'fetch'],
+            description: 'search the live web for ranked results, or fetch one URL as markdown',
+          },
+          query: { type: 'string', description: 'For action=search: the search query.' },
+          limit: { type: 'number', description: 'For action=search: max results (default 5, max 20).' },
+          url: { type: 'string', description: 'For action=fetch: the absolute http(s) URL to fetch.' },
         },
-        required: ['query'],
+        required: ['action'],
       }),
-      execute: async (args: { query: string; limit?: number }) => {
+      execute: async (args: WebToolInput) => {
         try {
-          const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
-          return formatSearchResults(res);
-        } catch (err) {
-          return webErrorResult(err);
-        }
-      },
-    });
-
-    tools.web_fetch = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.web_fetch,
-      inputSchema: jsonSchema<{ url: string }>({
-        type: 'object',
-        properties: { url: { type: 'string', description: 'The absolute http(s) URL to fetch.' } },
-        required: ['url'],
-      }),
-      execute: async (args: { url: string }) => {
-        try {
-          const res = await webSearch.fetch(args.url);
-          // Restorable clamp: oversized pages are offloaded to the workspace
-          // VFS and reduced to a re-readable head (see clamp.ts), so a big
-          // page never rots the session.
-          const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
-          const body = await clampToolResult(res.markdown, {
-            vfs: rt.storage.vfs, budget, producer: 'web_fetch',
-          });
-          return header + body;
+          switch (args.action) {
+            case 'search': {
+              if (!args.query) return { error: 'web.search requires `query`' };
+              const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
+              return formatSearchResults(res);
+            }
+            case 'fetch': {
+              if (!args.url) return { error: 'web.fetch requires `url`' };
+              const res = await webSearch.fetch(args.url);
+              // Restorable clamp: oversized pages are offloaded to the
+              // workspace VFS and reduced to a re-readable head (see
+              // clamp.ts), so a big page never rots the session.
+              const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
+              const body = await clampToolResult(res.markdown, {
+                vfs: rt.storage.vfs, budget, producer: 'web_fetch',
+              });
+              return header + body;
+            }
+            default:
+              return { error: `unknown web action '${String(args.action)}'` };
+          }
         } catch (err) {
           return webErrorResult(err);
         }
@@ -754,7 +776,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 8. report — subordinate → parent progress spine ────────────────────────
+  // ── 7. report — subordinate → parent progress spine ────────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = tool({
@@ -782,7 +804,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 9. product_change — governed product/UI self-customization lane ───────
+  // ── 8. product_change — governed product/UI self-customization lane ───────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({

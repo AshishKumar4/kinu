@@ -1210,11 +1210,13 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(text).toContain('busy-0');
   });
 
-  test('toolNames exposes the full surface (agents/fact parity); end() resolves', async () => {
+  test('toolNames exposes the full surface (agents/memory parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    // Full parity with the DO surface: execution + memory + delegation + facts + skills.
-    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'fact', 'skills']) expect(names).toContain(t);
+    // Full parity with the DO surface: execution + durable state + delegation + skills.
+    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'skills']) expect(names).toContain(t);
+    // ...and the keyed-fact actions ride the one durable-state tool.
+    expect(names).not.toContain('fact');
     await session.send('hi');
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
   });

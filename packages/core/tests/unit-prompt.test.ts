@@ -44,7 +44,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('`team`');
     expect(prompt).not.toContain('`peers`');
     // The live-info loop and the forks' durable artifact trail survive.
-    expect(prompt).toMatch(/loop web_search then web_fetch/);
+    expect(prompt).toMatch(/loop `web` search then fetch/);
     expect(prompt).toMatch(/split depth 3/);
     expect(prompt).toContain('shared/findings/');
     expect(prompt).toMatch(/NOT stateless between turns/);
@@ -494,7 +494,7 @@ describe('buildSystemPromptSync', () => {
     // ungated — they apply to any answer.
     const { rt } = createTestRuntime();
     const noExec = buildSystemPromptSync(rt, {
-      availableTools: ['memory', 'fact'],
+      availableTools: ['memory'],
       registeredExecutors: [],
     });
     expect(noExec).toContain('## Verification');
@@ -519,11 +519,11 @@ describe('buildSystemPromptSync', () => {
   test('renders only the available built-in tools for a gated turn', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
-      availableTools: ['memory', 'fact'],
+      availableTools: ['memory', 'web'],
       registeredExecutors: [],
     });
     expect(prompt).toContain('**memory**');
-    expect(prompt).toContain('**fact**');
+    expect(prompt).toContain('**web**');
     expect(prompt).not.toContain('**execute_tools**');
     expect(prompt).not.toContain('agent.schedule');
     // No delegation tool wired → no ladder at all.
@@ -542,7 +542,7 @@ describe('buildSystemPromptSync', () => {
     });
 
     expect(prompt).toContain('**memory**');
-    expect(prompt).not.toContain('**fact**');
+    expect(prompt).not.toContain('**web**');
     expect(prompt).toContain('External tools');
     expect(prompt).toContain('**tool_docs_search** (MCP) — Search project documentation.');
     expect(prompt).toContain('**custom_export** (external)');
@@ -721,7 +721,7 @@ describe('buildSystemPromptSync', () => {
       expect(prompt).toMatch(/- Ephemeral fork — Fork \(action=fork\)/);
       expect(prompt).toMatch(/- Persistent subordinate — Staff a subordinate \(action=staff\)/);
       expect(prompt).toMatch(/set settle=mcts/);
-      expect(prompt).toMatch(/loop web_search then web_fetch/);
+      expect(prompt).toMatch(/loop `web` search then fetch/);
     }
   });
 });

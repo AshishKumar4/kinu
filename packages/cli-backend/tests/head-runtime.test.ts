@@ -149,7 +149,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     await (await runtime.spawnHead(aHeadInput())).run();
     expect(new Set(captured)).toEqual(new Set([
       'record_evidence', 'record_decision',
-      'execute_tools', 'run', 'web_search', 'web_fetch',
+      'execute_tools', 'run', 'web',
       'split_subheads',
     ]));
   });

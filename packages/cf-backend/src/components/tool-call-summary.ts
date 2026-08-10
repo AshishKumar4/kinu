@@ -92,9 +92,22 @@ function summarizeAgents(input: Record<string, unknown>): string {
   }
 }
 
+/** The unified durable-state tool — prose actions read by their content or
+ *  query, keyed-fact actions by their key. */
 function summarizeMemory(input: Record<string, unknown>): string {
   const action = str(input, "action");
   if (action === "save") return actionOn(action, undefined, str(input, "content"));
+  const key = str(input, "key");
+  if (key) return actionOn(action, key);
+  const query = str(input, "query");
+  return query ? `${action} ${quoted(query, 56)}` : action;
+}
+
+/** The unified web tool — a search reads by its query, a fetch by its url. */
+function summarizeWeb(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  const url = str(input, "url");
+  if (url) return `${action} ${clip(url, 56)}`;
   const query = str(input, "query");
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
@@ -169,14 +182,16 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   agents: summarizeAgents,
   memory: summarizeMemory,
-  fact: (input) => actionOn(str(input, "action"), str(input, "key")),
-  web_search: (input) => quoted(str(input, "query")),
-  web_fetch: (input) => clip(str(input, "url")),
-  // think/team/peers were unified into `agents`; their summarizers remain so
-  // tool calls in STORED transcripts keep rendering.
+  web: summarizeWeb,
+  // think/team/peers were unified into `agents`, fact into `memory`, and
+  // web_search/web_fetch into `web`; their summarizers remain so tool calls in
+  // STORED transcripts keep rendering.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
+  fact: (input) => actionOn(str(input, "action"), str(input, "key")),
+  web_search: (input) => quoted(str(input, "query")),
+  web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
   product_change: summarizeProductChange,
 };

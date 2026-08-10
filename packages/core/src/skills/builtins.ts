@@ -19,7 +19,6 @@ description: Multi-head audit of your own recent implementation — correctness,
 allowed-tools:
   - agents
   - memory
-  - fact
 keywords: [audit, review, verify, double-check, audit-this, validate-implementation]
 auto_activate: false
 ---

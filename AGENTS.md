@@ -143,9 +143,10 @@ available bindings. `getProviders()` filters to available-only for `createExecut
   (`getModel` / `getSystemPrompt` / `getTools` / `beforeTurn`) and leaves Think's
   own workspace, skills, actions, channels and scheduled tasks unused
 - `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.6` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
-- `getTools()` builds the 11-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `skills`, `agents`, `memory`, `fact`, `experience`, `web_search`, `web_fetch`, `report`, `product_change`; results are cached per CraftStore version
+- `getTools()` builds the 9-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `skills`, `agents`, `memory`, `experience`, `web`, `report`, `product_change`; results are cached per CraftStore version
 - Only `execute_tools`, `run` and `memory` are unconditional. Every other tool registers when — and only when — the backend wires its deps, which is how a subordinate gets `report` and a head gets no delegation at all. See [docs/TOOLS.md](docs/TOOLS.md)
 - `agents` is the ONE delegation surface (`fork | staff | ask | send | reply | list | dismiss`), and it is projected into the codemode sandbox as the `agents.*` namespace over the same dispatch — so a script can delegate with ordinary control flow. Do not reintroduce `think` / `team` / `peers` as separate tools
+- `memory` is the ONE durable-state surface (`save | search | sessions` prose, `remember | recall | forget` keyed facts — the last three gated on the FactsStore dep) and `web` the ONE live-web surface (`search | fetch`). Prose versus keyed rows is OUR storage shape, and discovery versus retrieval is one capability used as a pair: neither is a tool choice the model should have to make. Do not reintroduce `fact` / `web_search` / `web_fetch`
 - Delegation doctrine is one ladder keyed on lifetime (do it yourself → `llm.query` slices where RLM is wired → `fork` → `staff`); `mcts` is a settle policy inside the fork rung, never a rung. `DELEGATION_FRAME` / `DELEGATION_RUNGS` in `registry.ts` are the single source, rendered verbatim by both the tool docstring and the prompt's Delegation section
 - `getSystemPrompt()` reads `SOUL.md` from VFS
 - `onChatResponse()` fires evolution async (never blocks TurnQueue)

@@ -21,11 +21,9 @@ action of `agents`.
 | `run` | One shell command in one explicitly selected runtime |
 | `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
 | `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
-| `memory` | Save/search durable prose memory; recall past session transcripts (`action=sessions`) |
-| `fact` | Remember/recall/forget typed keyed facts (preferences, project state, URLs) |
+| `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
 | `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
-| `web_search` | Search the live web; ranked results (title, url, snippet, date). Key-less via DuckDuckGo; a stored `tavily` credential upgrades to ranked Tavily results |
-| `web_fetch` | Fetch one URL as clean, citation-ready markdown (Cloudflare markdown service, with a local HTML→markdown fallback) |
+| `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
 | `product_change` | Governed lane for changing the Proteus product/UI itself |
 

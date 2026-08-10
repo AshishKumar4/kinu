@@ -5,7 +5,7 @@
  *   - search returns ranked results (Tavily path + DuckDuckGo key-less path),
  *     capturing the injected fetch stub
  *   - fetch returns clamped markdown + a VFS restore path for big pages
- *   - the web_search / web_fetch builtins are gated on the provider dep
+ *   - the `web` builtin (search / fetch actions) is gated on the provider dep
  *   - codemode `web.search()` / `web.fetch()` reach the same provider
  *   - SSRF + secret-exfil URL guards
  *   - error mapping (rate-limit retriable, http errors)
@@ -264,6 +264,8 @@ describe('url safety (SSRF + exfil guards)', () => {
 
 // ── Tool wiring ────────────────────────────────────────────────────────────
 
+type WebArgs = { action: 'search' | 'fetch'; query?: string; url?: string; limit?: number };
+
 function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?: WebSearchProvider) {
   const provider = webSearch ?? createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: DDG_HTML })).fetch });
   return buildBuiltinTools({
@@ -276,36 +278,41 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
   });
 }
 
-describe('web_search / web_fetch builtins', () => {
+describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
     const without = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
       createExecuteTool: nodeExecFactory as never, codemodeLoader: {} as unknown,
     });
-    expect(Object.keys(without)).not.toContain('web_search');
-    expect(Object.keys(without)).not.toContain('web_fetch');
+    expect(Object.keys(without)).not.toContain('web');
 
     const withWeb = buildWithWeb(rt);
-    expect(Object.keys(withWeb)).toContain('web_search');
-    expect(Object.keys(withWeb)).toContain('web_fetch');
+    expect(Object.keys(withWeb)).toContain('web');
   });
 
-  test('web_search returns ranked, model-ready text', async () => {
+  test('action=search returns ranked, model-ready text', async () => {
     const { rt } = createTestRuntime();
-    const t = buildWithWeb(rt) as { web_search: { execute: (a: { query: string }) => Promise<string> } };
-    const out = await t.web_search.execute({ query: 'the topic' });
+    const t = buildWithWeb(rt) as { web: { execute: (a: WebArgs) => Promise<string> } };
+    const out = await t.web.execute({ action: 'search', query: 'the topic' });
     expect(out).toContain('1. First & Best');
     expect(out).toContain('https://example.com/a');
     expect(out).toContain('via duckduckgo');
   });
 
-  test('web_fetch clamps a big page to a head with a VFS restore path', async () => {
+  test('a call missing the argument its action needs says which', async () => {
+    const { rt } = createTestRuntime();
+    const t = buildWithWeb(rt) as { web: { execute: (a: WebArgs) => Promise<unknown> } };
+    expect(await t.web.execute({ action: 'search' })).toEqual({ error: 'web.search requires `query`' });
+    expect(await t.web.execute({ action: 'fetch' })).toEqual({ error: 'web.fetch requires `url`' });
+  });
+
+  test('action=fetch clamps a big page to a head with a VFS restore path', async () => {
     const { rt } = createTestRuntime();
     const big = '<html><body>' + 'word '.repeat(20000) + '</body></html>';
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
-    const t = buildWithWeb(rt, provider) as { web_fetch: { execute: (a: { url: string }) => Promise<string> } };
-    const out = await t.web_fetch.execute({ url: 'https://example.com/big' });
+    const t = buildWithWeb(rt, provider) as { web: { execute: (a: WebArgs) => Promise<string> } };
+    const out = await t.web.execute({ action: 'fetch', url: 'https://example.com/big' });
 
     expect(out).toContain('Source: https://example.com/big');
     expect(out).toContain('[output truncated');
@@ -317,15 +324,17 @@ describe('web_search / web_fetch builtins', () => {
     expect(String(saved).length).toBeGreaterThan(out.length);
   });
 
-  test('web_search error maps to a structured error object', async () => {
+  test('a provider error maps to a structured error object', async () => {
     const { rt } = createTestRuntime();
     const failing: WebSearchProvider = {
       search: async () => { throw new WebFetchError('rate limited', true); },
       fetch: async () => { throw new WebFetchError('x'); },
     };
-    const t = buildWithWeb(rt, failing) as { web_search: { execute: (a: { query: string }) => Promise<unknown> } };
-    const out = await t.web_search.execute({ query: 'x' });
-    expect(out).toMatchObject({ error: 'rate limited', retriable: true });
+    const t = buildWithWeb(rt, failing) as { web: { execute: (a: WebArgs) => Promise<unknown> } };
+    expect(await t.web.execute({ action: 'search', query: 'x' }))
+      .toMatchObject({ error: 'rate limited', retriable: true });
+    expect(await t.web.execute({ action: 'fetch', url: 'https://example.com' }))
+      .toMatchObject({ error: 'x' });
   });
 
   test('codemode can call web.search() and web.fetch()', async () => {

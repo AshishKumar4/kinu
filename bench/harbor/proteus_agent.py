@@ -2,10 +2,15 @@
 
     PYTHONPATH=<proteus-repo> harbor run \
         --agent bench.harbor.proteus_agent:ProteusAgent \
-        --path ./deep-swe -l 1 \
+        --path ./terminal-bench-2.1 \
         -m deepseek/deepseek-v4-flash \
         --ak evolve=false \
         --allow-agent-host openrouter.ai
+
+``./terminal-bench-2.1`` is the corpus of record: 2.0 is kept alongside as
+``./terminal-bench-2.0`` so older scores stay interpretable, but it is not what
+new runs measure. Each corpus carries a ``corpus.json`` and every trial logs and
+records which one it ran (see ``bench/harbor/corpus.py``).
 
 Glue only: the adapter installs the CLI, creates a local workspace, and hands
 the task instruction to ``proteus exec``. It changes nothing about how the
@@ -28,6 +33,7 @@ from harbor.models.trial.paths import EnvironmentPaths
 from harbor.utils.env import parse_bool_env_value
 
 from bench.harbor.build import REPO_ROOT, build_proteus_binary
+from bench.harbor.corpus import CorpusIdentity, resolve_for_trial
 from bench.harbor.trajectory import build_trajectory, read_events
 
 INSTALL_PATH = PurePosixPath("/installed-agent/proteus")
@@ -70,6 +76,7 @@ class ProteusAgent(BaseInstalledAgent):
         self._workspace = workspace
         self._mission = mission
         self._repo_root = Path(proteus_repo).resolve() if proteus_repo else REPO_ROOT
+        self._corpus_identity: CorpusIdentity | None = None
         # Resolved eagerly so a misconfigured job fails before it builds a
         # container and installs into it.
         self._env = self._resolve_run_env()
@@ -120,11 +127,31 @@ class ProteusAgent(BaseInstalledAgent):
         env["PROTEUS_MODEL"] = self.model_name
         return env
 
+    def _corpus(self) -> CorpusIdentity | None:
+        """The task set this trial is scored on, announced once per trial.
+
+        A Terminal-Bench score means nothing without its release — 2.0 and 2.1
+        share all 89 task names but differ in 28 tasks — so identity is logged
+        and stamped into the result rather than left for a reader to guess.
+        """
+        identity = resolve_for_trial(self.logs_dir)
+        if identity is None:
+            self.logger.warning(
+                "corpus: UNIDENTIFIED — no corpus.json above this task. "
+                "Results from this run cannot be attributed to a benchmark release."
+            )
+        elif not identity.verified:
+            self.logger.warning(str(identity))
+        else:
+            self.logger.info(str(identity))
+        return identity
+
     @override
     @with_prompt_template
     async def run(
         self, instruction: str, environment: BaseEnvironment, context: AgentContext
     ) -> None:
+        self._corpus_identity = self._corpus()
         workspace = shlex.quote(self._workspace)
 
         # A workspace per container, created fresh: nothing carries over between
@@ -194,6 +221,7 @@ class ProteusAgent(BaseInstalledAgent):
         # cost_usd stays unset: Proteus reports tokens, not prices, and an
         # invented number is worse than a missing one.
         context.metadata = {
+            "corpus": self._corpus_identity.as_dict() if self._corpus_identity else None,
             "evolve": self._evolve,
             "tool_calls": summary.tool_calls,
             "turn_steps": summary.turn_steps,

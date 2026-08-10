@@ -140,10 +140,13 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
 /** Calls that only READ state. They prove nothing about whether the turn's
  *  work landed, so a turn made of them alone has no execution verdict — and a
  *  pattern extracted from them encodes nothing reusable, which is why the
- *  extractor skips them too. One definition, both readers. */
+ *  extractor skips them too. One definition, both readers.
+ *
+ *  `fact` was folded into `memory`; stored turns from before that carry the old
+ *  name and must still score the same, so it is recognised too. */
 export function isPureLookupCall(call: { name: string; args: Record<string, unknown> }): boolean {
-  return (call.name === 'memory' && call.args.action === 'search') ||
-    (call.name === 'fact' && call.args.action === 'recall');
+  if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
+  return call.name === 'fact' && call.args.action === 'recall';
 }
 
 /** What the environment reported about a turn: it ran, or it did not. */

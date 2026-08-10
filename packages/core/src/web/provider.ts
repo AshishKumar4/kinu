@@ -3,10 +3,10 @@
  * adapters (cf-backend Worker fetch, cli-backend node fetch).
  *
  * Design (reconciling both research reports):
- *   - TWO model-facing tools, web_search + web_fetch (the universal 2026
- *     agent shape — Claude Code, Codex, opencode, pi all split discovery from
- *     retrieval). The tools live in tools/builtins.ts; this module owns the
- *     network behaviour behind them.
+ *   - ONE model-facing tool, `web`, with a search action and a fetch action:
+ *     discovery and retrieval are distinct operations but a single capability,
+ *     always used as a pair. The tool lives in tools/builtins.ts; this module
+ *     owns the network behaviour behind it.
  *   - KEY-LESS out of the box: search degrades to a DuckDuckGo HTML scrape and
  *     fetch uses plain `fetch` (Markdown-for-Agents `Accept: text/markdown`,
  *     falling back to local HTML→markdown). No credential is required for the

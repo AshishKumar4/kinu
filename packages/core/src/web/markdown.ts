@@ -1,5 +1,5 @@
 /**
- * HTML → agent-ready markdown — the local fallback path for web_fetch.
+ * HTML → agent-ready markdown — the local fallback path for `web` fetch.
  *
  * The preferred path is server-side: a `fetch` with `Accept: text/markdown`
  * gets clean markdown from any Cloudflare-proxied zone (Markdown-for-Agents),

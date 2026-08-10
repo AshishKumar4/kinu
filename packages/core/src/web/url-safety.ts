@@ -3,8 +3,8 @@
  *
  * A malicious prompt, page, or skill can try to make the agent fetch internal
  * resources (cloud metadata at 169.254.169.254, localhost services, private
- * hosts) or smuggle a stored credential out inside a URL. Both tool surfaces
- * (web_search expansion, web_fetch) run every target through `assertSafeUrl`
+ * hosts) or smuggle a stored credential out inside a URL. Both network paths
+ * (search-result expansion, fetch) run every target through `assertSafeUrl`
  * before a single byte leaves the runtime.
  *
  * Ported from hermes-agent/tools/url_safety.py, adapted for the Workers/Bun

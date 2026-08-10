@@ -44,13 +44,11 @@ const TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   run: 'execute',
   execute_tools: 'execute',
   memory: 'think',
-  fact: 'think',
   report: 'think',
   experience: 'think',
   agents: 'think',
   skills: 'read',
-  web_search: 'fetch',
-  web_fetch: 'fetch',
+  web: 'fetch',
   product_change: 'edit',
 };
 

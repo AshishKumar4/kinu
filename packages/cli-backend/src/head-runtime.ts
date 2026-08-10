@@ -36,7 +36,7 @@ export interface CLIHeadRuntimeDeps {
    *  the task's files live. */
   cwd: string;
   /** The shared web research provider — same seam the main loop uses. Backs the
-   *  head's web_search / web_fetch tools. */
+   *  head's `web` tool. */
   webSearch: WebSearchProvider;
   /** Extra codemode namespaces spliced into the head's execute_tools sandbox —
    *  `web.*` and `llm.query`, WITHOUT `agents.*`/`agent.*`: a head forks its

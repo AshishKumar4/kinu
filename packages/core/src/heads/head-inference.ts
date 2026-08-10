@@ -95,7 +95,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
  * The head tool builders in this module record themselves (they also record
  * artifacts, which only they can classify, and per-tool outcomes only they can
  * name). This wrapper is for the SHARED builtin surface a backend hands a head —
- * `run`, `execute_tools`, `web_*` know nothing about heads, and without it
+ * `run`, `execute_tools`, `web` know nothing about heads, and without it
  * `HeadReport.toolCalls` (which the journal persists and the no-prose fallback
  * summary reads) would be empty for exactly the tools a head does its real work
  * with. It records the one outcome a generic wrapper honestly knows — resolved
@@ -132,8 +132,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
   'record_decision',
   'execute_tools',
   'run',
-  'web_search',
-  'web_fetch',
+  'web',
   'split_subheads',
 ] as const;
 
@@ -170,8 +169,8 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
       + 'the default `workspace` runtime is only YOUR private scratch shell.',
     );
   }
-  if (hasHeadTool(tools, 'web_search', 'web_fetch')) {
-    lines.push('- Loop web_search to gather, then web_fetch to read the promising results; record_evidence each finding worth surfacing.');
+  if (hasHeadTool(tools, 'web')) {
+    lines.push('- Loop `web` action=search to gather, then action=fetch to read the promising results; record_evidence each finding worth surfacing.');
   }
   if (hasHeadTool(tools, 'split_subheads')) {
     lines.push('- split_subheads to recursively explore deeper if needed (depth-budgeted).');

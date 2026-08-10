@@ -12,7 +12,7 @@ The threshold is expressed in chars/bytes at two scales: **40,000 chars** for to
 
 | Producer | Digest kept inline | Resolvable reference | Code |
 |---|---|---|---|
-| `run`, `web_fetch`, `execute_tools` results | head + tail (40k) | `/.proteus/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
+| `run`, `web` fetch, `execute_tools` results | head + tail (40k) | `/.proteus/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
 | MCP / external tool results | head + tail (40k) | same | `withClampedToolResults` at each backend's MCP wiring |
 | Attachments the model cannot accept | reference text part | `/local/attachments/<hash>.<ext>` | `core/src/prompting/attachment-sanitizer.ts` |
 | Text attachments over 8 KiB | reference text part | same | same |

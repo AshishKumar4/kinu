@@ -11,8 +11,8 @@ Production-class guarantees in the runtime today. Each item below earns its
 keep: paranoid safety mechanisms that would hurt model UX or performance
 without addressing a real threat were deliberately rejected. Specifically
 rejected: agent_facts secret-pattern redaction (secrets the agent sees are
-already in conversation context — blocking the `fact` tool rejects legitimate
-values), crafted-tool description sanitization (tools are agent-self-authored,
+already in conversation context — blocking the keyed-fact writes rejects
+legitimate values), crafted-tool description sanitization (tools are agent-self-authored,
 no external attacker, and the cap truncates useful "when to use" guidance).
 
 - **Rate-limit resilience on every model fetch.** `withRateLimitRetry`
@@ -286,8 +286,8 @@ an output-token cap, is the cheapness lever for most of these paths.
 ## The agent's runtime surface
 
 The top-level tools are the 12 in `BUILTIN_TOOLS` (`core/src/tools/registry.ts`)
-— `execute_tools`, `run`, `skills`, `think`, `memory`, `fact`, `web_search`,
-`web_fetch`, `team`, `peers`, `report`, `product_change` — narrowed per actor by
+— `execute_tools`, `run`, `skills`, `agents`, `memory`, `experience`, `web`,
+`report`, `product_change` — narrowed per actor by
 `actorActiveTools()`. See [TOOLS.md](./TOOLS.md).
 
 Inside `execute_tools`, the LLM additionally sees:
@@ -302,8 +302,8 @@ Inside `execute_tools`, the LLM additionally sees:
 
 ## The agent's persistent state
 
-- `agent_facts` — typed, idempotent, keyed world model, driven by the single
-  `fact` tool (remember / recall / forget actions). The top 20 most recent facts
+- `agent_facts` — typed, idempotent, keyed world model, driven by the `memory`
+  tool's remember / recall / forget actions. The top 20 most recent facts
   auto-render into the system prompt every turn, capped at 2000 characters.
 - `MEMORY.md` — unstructured prose with FTS5 + Vectorize hybrid search.
 - Dynamic context — the `DynamicContextLedger`

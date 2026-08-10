@@ -92,7 +92,7 @@ because there is no `team` tool in its ToolSet to call.
 `ActorAgent` and never inherits the actor tool surface. Its ToolSet is
 hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`, the
 four `sandbox_*` verbs over its own ephemeral SqliteFS and virtual shell,
-`web_search` / `web_fetch`, three `shared_*` verbs into the root's scratch, and
+`web`, three `shared_*` verbs into the root's scratch, and
 the depth-budgeted `split_subheads`. No `execute_tools`, no `run`, no `think`,
 no `team`, no `peers`. Recursion is bounded by construction: without `think` a
 head cannot start a fresh strategy run, and its one fan-out path,
