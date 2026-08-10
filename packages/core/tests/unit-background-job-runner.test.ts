@@ -36,7 +36,7 @@ function fakeHost() {
       if (rejection) throw rejection;
       return { status };
     },
-    acceptsMidTurnWake: () => false,
+    turnInFlight: () => false,
     setTimer: () => {},
   };
   return {

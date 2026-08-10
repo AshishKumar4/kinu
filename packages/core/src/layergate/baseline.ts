@@ -3,7 +3,7 @@ import type { Baseline } from './gate.js';
 
 export const LOCKED_BASELINE: Baseline = {
   'backend-turn-driver/failure-classification': 'ff4bd2a7b65227c5',
-  'backend-turn-driver/overflow-applied': '158c05b99336633c',
+  'backend-turn-driver/overflow-applied': '5fb734fcf1494a57',
   'backend-turn-driver/overflow-recovery-plan': 'c12c8ada517dfde3',
   'backend-turn-driver/prompt-token-trigger': '1f11659c0558bb43',
   'backend-turn-driver/run-bracket': '1caee029fffee764',
@@ -46,11 +46,11 @@ export const LOCKED_BASELINE: Baseline = {
   'memory-retrieval/hybrid-merges-sources': '9b305a16d1e25c9a',
   'memory-retrieval/rrf-constant': '96e6efb651f04eba',
   'memory-retrieval/rrf-ranking': '73fe0df717556cad',
-  'mid-turn-injection/buffer-absorb-and-requeue': '240f991e7a908008',
+  'mid-turn-injection/buffer-absorb-and-requeue': '817dae7f189006a1',
   'mid-turn-injection/burst-coalesces-into-one-drain': 'a41f74a4639f871f',
   'mid-turn-injection/index-is-stable': '7adafdf56bdd108e',
+  'mid-turn-injection/one-delivery-time': 'e458628b8dd4c2fa',
   'mid-turn-injection/replay-into-history': '742d070ddb78048b',
-  'mid-turn-injection/timing-picks-the-mechanism': 'cb75b9e8b79ac878',
   'safety-gate/decision-table': '0c2ab103d97ef0fb',
   'safety-gate/deny-never-executes': 'cb0b10867ae885e1',
   'safety-gate/digest-ignores-key-order': 'ad812e29ee68b135',

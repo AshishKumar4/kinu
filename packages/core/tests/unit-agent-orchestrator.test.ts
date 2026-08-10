@@ -60,7 +60,7 @@ function fakeHost(opts?: { activeTurn?: boolean }) {
   const host: BackendHost = {
     broadcast: (event) => { broadcasts.push(event); },
     enqueueTurn: async (i) => { enqueued.push(i); return { status: 'queued' }; },
-    acceptsMidTurnWake: () => opts?.activeTurn === true,
+    turnInFlight: () => opts?.activeTurn === true,
     setTimer: (fn, ms) => { timers.push({ fn, ms }); },
   };
   return { host, enqueued, broadcasts, timers };

@@ -193,7 +193,7 @@ describe('applyOverflowRecovery', () => {
     await Promise.resolve();
     // The retry never steers a live turn: the turn that failed is over.
     expect(signals.delivered).toEqual([
-      { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT, timing: 'next-turn' },
+      { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT },
     ]);
   });
 

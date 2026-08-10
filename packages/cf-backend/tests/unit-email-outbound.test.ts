@@ -160,7 +160,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const host: BackendHost = {
       broadcast: () => {},
       enqueueTurn: async () => { throw new Error('must inject, not enqueue — a turn is live'); },
-      acceptsMidTurnWake: () => true,
+      turnInFlight: () => true,
       setTimer: () => {},
     };
     const orch = new AgentOrchestrator({

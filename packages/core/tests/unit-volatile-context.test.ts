@@ -427,6 +427,72 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
   });
 });
 
+describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
+  const state = { factsBlock: '- k = v', executors: [idleSandbox] };
+
+  /** Grow a ledger to `blocks` frozen blocks over a growing history. */
+  function ledgerWith(blocks: number) {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [];
+    const renders: string[] = [];
+    for (let i = 0; i < blocks; i++) {
+      history.push({ role: 'user', content: `turn-${i}` });
+      const at = { ...state, factsBlock: `- k = v${i}` };
+      renders.push(renderDynamicContextBlock(at)!);
+      ledger.weave(history, at);
+      history.push({ role: 'assistant', content: `a${i}` });
+    }
+    return { ledger, history, renders };
+  }
+
+  test('keeps the NEWEST block at its frozen position and drops the rest', () => {
+    const { ledger, history, renders } = ledgerWith(3);
+    expect(ledger.size).toBe(3);
+    const before = ledger.weave(history, {});
+    expect(before.map(messageText)).toEqual([
+      'turn-0', renders[0]!, 'a0', 'turn-1', renders[1]!, 'a1', 'turn-2', renders[2]!, 'a2',
+    ]);
+
+    const freed = ledger.dropSuperseded();
+    expect(ledger.size).toBe(1);
+    // Priced on the ladder's chars/4 scale, over exactly the blocks dropped.
+    expect(freed).toBe(Math.round(renders[0]!.length / 4) + Math.round(renders[1]!.length / 4));
+
+    // The survivor is live state, still at the index it was born at.
+    const after = ledger.weave(history, {});
+    expect(after.map(messageText)).toEqual([
+      'turn-0', 'a0', 'turn-1', 'a1', 'turn-2', renders[2]!, 'a2',
+    ]);
+  });
+
+  test('is a no-op — and free — when there is nothing superseded', () => {
+    const single = ledgerWith(1);
+    expect(single.ledger.dropSuperseded()).toBe(0);
+    expect(single.ledger.size).toBe(1);
+
+    const empty = new DynamicContextLedger();
+    expect(empty.dropSuperseded()).toBe(0);
+    expect(empty.dropSuperseded()).toBe(0);
+  });
+
+  test('a second drop frees nothing — the rung cannot be milked', () => {
+    const { ledger } = ledgerWith(4);
+    expect(ledger.dropSuperseded()).toBeGreaterThan(0);
+    expect(ledger.dropSuperseded()).toBe(0);
+    expect(ledger.size).toBe(1);
+  });
+
+  test('the survivor keeps growing normally afterwards', () => {
+    const { ledger, history } = ledgerWith(3);
+    ledger.dropSuperseded();
+    history.push({ role: 'user', content: 'turn-3' });
+    const changed = { ...state, factsBlock: '- k = later' };
+    const out = ledger.weave(history, changed);
+    expect(ledger.size).toBe(2);
+    expect(messageText(out[out.length - 1]!)).toBe(renderDynamicContextBlock(changed)!);
+  });
+});
+
 /** A one-step text model that captures every prompt it was handed. */
 function promptCapturingModel() {
   const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };

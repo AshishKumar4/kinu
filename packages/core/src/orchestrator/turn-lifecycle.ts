@@ -164,8 +164,6 @@ export function applyOverflowRecovery(opts: {
       void opts.signals.deliver({
         kind: OVERFLOW_RETRY_EVENT,
         text: OVERFLOW_RETRY_TEXT,
-        // The turn that failed is over; the retry is the next one by definition.
-        timing: 'next-turn',
       }).catch((err: unknown) => console.warn('[proteus] overflow retry enqueue failed:', err));
     }
   }

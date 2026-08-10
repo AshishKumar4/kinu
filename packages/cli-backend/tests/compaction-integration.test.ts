@@ -136,6 +136,7 @@ describe('default compaction over the real storage plane', () => {
         logger: silentLogger,
       },
       archive: state.archive,
+      ephemeral: ledger,
       summarize: async () => {
         summarizeCalls++;
         return [
@@ -282,5 +283,106 @@ describe('default compaction over the real storage plane', () => {
     await driveForced(grown);
     expect(state.archive.list(SESSION)).toEqual(ranges);
     expect(JSON.stringify(prompts.at(-1))).toBe(foldedJson);
+  });
+
+  test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {
+    const db = new Database(':memory:');
+    const rt = createCLIRuntime(db as never, {
+      dbPath: `/tmp/proteus-rung-itest-${Math.floor(performance.now())}.db`,
+      llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
+    });
+    initCompactionStateTable(rt.storage.execRaw);
+    const state = createCompactionStateStore(rt.storage.sql);
+    const ledger = new DynamicContextLedger();
+    const outcomes: CompactionOutcomeEvent[] = [];
+    const extension = createCompactionExtension({
+      ports: {
+        transcripts: createVfsTranscriptStore(() => rt.storage.vfs),
+        plans: state.plans,
+        logger: silentLogger,
+      },
+      archive: state.archive,
+      ephemeral: ledger,
+      summarize: async () => { throw new Error('no summary should be needed'); },
+      onOutcome: (event) => {
+        outcomes.push(event);
+        if (event.outcome !== 'replayed') ledger.reset();
+      },
+    });
+
+    const { model, prompts } = capturingModel();
+    // Fat blocks so what the rung frees is decisive rather than marginal.
+    let facts = '';
+    const messages: ModelMessage[] = [];
+    const drive = (providerReportedTokens?: number) => (async () => {
+      for await (const _ of runChat({
+        model,
+        modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
+        system: 'system prompt',
+        history: messages,
+        dynamicContext: { ledger, snapshot: () => ({ factsBlock: facts }) },
+        tools: {},
+        maxSteps: 1,
+        extensions: new ExtensionHost().register(extension),
+        cache: { sessionKey: SESSION },
+        ...(providerReportedTokens !== undefined ? { providerReportedTokens } : {}),
+      })) { /* drain */ }
+    })();
+
+    /** Everything the provider is charged for, minus the rolling cache markers
+     *  that move to the tail by design (unit-volatile-context.test.ts). */
+    const cacheableBytes = (m: PromptMessage) => JSON.stringify({ role: m.role, content: m.content });
+
+    // ── Three unpressured turns, each with different live state, so the
+    // ledger accumulates three frozen blocks.
+    for (let turn = 0; turn < 3; turn++) {
+      facts = `- fact ${turn}: ${'v'.repeat(4_000)}`;
+      messages.push({ role: 'user', content: `turn ${turn}` }, { role: 'assistant', content: 'ok' });
+      await drive();
+    }
+    expect(outcomes).toHaveLength(0);          // the ladder never fired…
+    expect(ledger.size).toBe(3);               // …so nothing was ever dropped.
+    expect(ephemeralBlocks(prompts[2] ?? [])).toHaveLength(3);
+
+    // The cache-prefix invariant on the wire: each request repeats the last
+    // one's messages verbatim and only appends.
+    const bytes = prompts.map((p) => p.map(cacheableBytes));
+    for (let i = 1; i < bytes.length; i++) {
+      expect(bytes[i]!.slice(0, bytes[i - 1]!.length)).toEqual(bytes[i - 1]!);
+      expect(bytes[i]!.length).toBeGreaterThan(bytes[i - 1]!.length);
+    }
+
+    // ── The pressure turn: the provider reports 8_600 against an 8_500
+    // trigger. The rung drops the two superseded blocks (~2k tokens) and the
+    // request lands back under, so no tool output is touched, no plan is
+    // built, and no summary is ever requested (the summarizer throws). Live
+    // state is unchanged this turn, so nothing new is born either.
+    const beforePressure = prompts.length;
+    messages.push({ role: 'user', content: 'turn 3' }, { role: 'assistant', content: 'ok' });
+    await drive(8_600);
+
+    expect(outcomes).toHaveLength(0);
+    expect(ledger.size).toBe(1);
+    const relieved = prompts[beforePressure] ?? [];
+    const remaining = ephemeralBlocks(relieved);
+    expect(remaining).toHaveLength(1);
+    // What survived is the NEWEST block — the live state the model reads —
+    // still at the frozen position it was born at, not re-created at the tail.
+    expect(messageText(relieved[remaining[0]!]!)).toContain('- fact 2:');
+    expect(remaining[0]).toBeLessThan(relieved.length - 1);
+    // The prefix break is real and is the point: this request is CHEAPER than
+    // the one before it, which no append-only weave can ever be.
+    expect(JSON.stringify(relieved).length)
+      .toBeLessThan(JSON.stringify(prompts[beforePressure - 1]).length);
+
+    // ── And the plane keeps working afterwards: new live state supersedes the
+    // survivor at the tail exactly as before.
+    facts = `- fact 3: ${'v'.repeat(4_000)}`;
+    messages.push({ role: 'user', content: 'turn 4' }, { role: 'assistant', content: 'ok' });
+    await drive();
+    expect(ledger.size).toBe(2);
+    const after = prompts.at(-1) ?? [];
+    expect(ephemeralBlocks(after)).toHaveLength(2);
+    expect(messageText(after[after.length - 1]!)).toContain('- fact 3:');
   });
 });

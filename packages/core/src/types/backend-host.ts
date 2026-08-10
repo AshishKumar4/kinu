@@ -68,17 +68,15 @@ export interface BackendHost {
    *  — producers deliver a signal and never pick the mechanism. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
-  /** May an EXTERNAL signal ride the live turn's next agentic step ("injected
-   *  mid turn if a turn is active") rather than queue behind it? Synchronous by
-   *  contract: the answer and the buffer push must be one event-loop tick,
-   *  atomic with the producer's own durable bookkeeping. CF: true while a turn
-   *  is in flight. CLI: false — the local steer-drain owns the live turn's
-   *  injection channel with USER semantics (per-steer durable rows, composer
-   *  restore on interrupt) that a platform wake must not assume, and the local
-   *  pump runs a queued signal as the immediate next turn anyway. Turn-local
-   *  signals (timing 'this-turn', produced inside the running turn's own step
-   *  pipeline) never ask — there is no question of whether a turn is live. */
-  acceptsMidTurnWake(): boolean;
+  /** Is a turn running right now — i.e. will there BE a next agentic step for
+   *  a signal to land on? A fact about the loop, not a policy: the one signal
+   *  delivery time is the agent's next step, and this is what tells the seam
+   *  whether it must start a turn to produce one. Synchronous by contract: the
+   *  answer and the buffer push must be one event-loop tick, atomic with the
+   *  producer's own durable bookkeeping. A false positive strands a signal
+   *  until the turn settles (which re-delivers it), a false negative queues a
+   *  turn behind the live one — so answer it exactly. */
+  turnInFlight(): boolean;
 
   /** One-shot platform timer — the drain-debounce primitive (DrainScheduler).
    *  The implementation MUST keep the platform alive until `fn` settles and

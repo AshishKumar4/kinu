@@ -207,7 +207,7 @@ export class SubordinateAgent extends ActorAgent {
    * The delivery branch is decided here and not guessed by the caller: this DO
    * is the only place that knows whether a turn is live right now, and the
    * drain it schedules will splice into that turn rather than queue behind it
-   * (BackendHost.acceptsMidTurnWake). Reading `_inFlight` before admission
+   * (BackendHost.turnInFlight). Reading `_inFlight` before admission
    * keeps the answer about the turn the batch will actually reach.
    */
   async enqueueSubordinateTask(input: {

@@ -465,7 +465,7 @@ export function admitSubordinateTask(log: EventLog, input: {
  *
  * `turnInFlight` is the subordinate's live-turn flag read at admission time: a
  * drain batch bound while a turn is live splices into that turn's next step
- * (BackendHost.acceptsMidTurnWake) instead of queueing behind it, so a busy
+ * (BackendHost.turnInFlight) instead of queueing behind it, so a busy
  * subordinate is steered rather than blocked. A duplicate admission scheduled
  * no drain of its own — it lands with the backlog that is already waiting.
  */

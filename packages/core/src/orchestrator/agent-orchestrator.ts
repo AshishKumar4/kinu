@@ -106,8 +106,8 @@ export class AgentOrchestrator {
   /** Per-turn accounting — tool calls, steps, token usage, errors. */
   readonly acc: TurnAccumulator;
   /** The ONE way an asynchronous producer reaches the agent — hub drains,
-   *  background-job wakes, overflow retries, take picks, MCP tasks, the
-   *  delegation nudge. Producers state a timing; this picks the mechanism. */
+   *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
+   *  time anything reaches it: its next step. Producers state intent only. */
   readonly signals: SignalDelivery;
   /** Per-turn mechanical delegation steering. Observed through
    *  {@link turnExtension} and handed to closeTurnRun for the durable
@@ -115,17 +115,16 @@ export class AgentOrchestrator {
   readonly nudge = new DelegationNudge();
   /** The orchestrator's per-turn extension, registered on the turn's
    *  ExtensionHost by both backends: the delegation nudge's observation hooks
-   *  plus the ONE mid-turn signal drain every producer feeds. The nudge's
-   *  trigger check runs first so its signal rides the step it was decided on;
-   *  that ordering lives here, not in each backend's registration order. */
+   *  plus the ONE mid-turn signal drain every producer feeds. The nudge is
+   *  decided against the step being prepared and handed straight to it, so it
+   *  rides the step it was decided on and dies with it. */
   readonly turnExtension: ProteusExtension = {
     name: 'proteus.signals',
     onToolCall: (ctx) => this.nudge.onToolCall(ctx),
     onToolResult: (ctx) => this.nudge.onToolResult(ctx),
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
       const nudge = this.nudge.nudgeFor(ctx.stepNumber);
-      if (nudge) void this.signals.deliver(nudge);
-      return this.signals.prepareStep(ctx);
+      return this.signals.prepareStep(ctx, nudge ? [nudge] : []);
     },
   };
   private readonly reflectionInterval: number;
@@ -385,7 +384,6 @@ export class AgentOrchestrator {
       kind: 'event_drain',
       text: batch.text,
       stepText: batch.midTurnText,
-      timing: 'now',
       replyTurnId: turnId,
       // The mission scope the woken turn spends under — the link between a
       // schedule that declared a budget and the ledger its turn debits.

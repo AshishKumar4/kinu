@@ -121,12 +121,12 @@ function shortHistory(): ModelMessage[] {
 }
 
 /** A BackendHost whose only interesting answers are the two SignalDelivery
- *  reads: does this platform take a mid-turn wake, and what did it queue. */
-function fakeSignalHost(queued: string[], acceptsMidTurnWake: boolean): BackendHost {
+ *  reads: is a turn running, and what did it start. */
+function fakeSignalHost(queued: string[], turnInFlight: boolean): BackendHost {
   return {
     broadcast: () => {},
     enqueueTurn: async (turn) => { queued.push(turn.text); return { status: 'queued' }; },
-    acceptsMidTurnWake: () => acceptsMidTurnWake,
+    turnInFlight: () => turnInFlight,
     setTimer: () => {},
   };
 }
@@ -771,7 +771,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'mid-turn-injection',
-    owns: 'delivering an async signal: timing routing, entry-index coordinates across steps, settlement, burst debounce',
+    owns: 'delivering an async signal: one delivery time, entry-index coordinates across steps, settlement, burst debounce',
     subjects: ['StepInjections', 'SignalDelivery', 'DrainScheduler'],
     probes: [
       {
@@ -815,35 +815,36 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
-        id: 'mid-turn-injection/timing-picks-the-mechanism',
-        asserts: 'the seam routes by timing, not by caller: turn-local always splices, an external wake splices only where the backend takes one, next-turn always queues',
+        id: 'mid-turn-injection/one-delivery-time',
+        asserts: 'every signal lands on the next step when a turn is running, and starts a turn when none is — the kind never changes the answer',
         observe: async (s) => {
-          const run = async (acceptsMidTurnWake: boolean) => {
+          const run = async (turnInFlight: boolean) => {
             const queued: string[] = [];
             const signals = new s.SignalDelivery(
-              fakeSignalHost(queued, acceptsMidTurnWake),
+              fakeSignalHost(queued, turnInFlight),
             );
             const outcomes = [
-              await signals.deliver({ kind: 'delegation_nudge', timing: 'this-turn', text: 'local' }),
-              await signals.deliver({ kind: 'event_drain', timing: 'now', text: 'wake' }),
-              await signals.deliver({ kind: 'background_job', timing: 'next-turn', text: 'later' }),
+              await signals.deliver({ kind: 'event_drain', text: 'wake' }),
+              await signals.deliver({ kind: 'background_job', text: 'later' }),
             ];
             return { outcomes, queued };
           };
-          return { midTurnBackend: await run(true), queueOnlyBackend: await run(false) };
+          return { busyAgent: await run(true), idleAgent: await run(false) };
         },
       },
       {
         id: 'mid-turn-injection/buffer-absorb-and-requeue',
-        asserts: 'signals that reached a step boundary settle as absorbed; the rest re-deliver as queued turns, and a turn-local one is dropped',
+        asserts: 'signals that reached a step boundary settle as absorbed; the rest re-deliver as turns of their own, and the step\'s own steering is dropped',
         observe: async (s) => {
           const queued: string[] = [];
           const signals = new s.SignalDelivery(fakeSignalHost(queued, true));
           signals.beginTurn(false);
-          await signals.deliver({ kind: 'event_drain', timing: 'now', text: 'turn-1', stepText: 'step-1' });
-          const spliced = signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
-          await signals.deliver({ kind: 'event_drain', timing: 'now', text: 'turn-2', stepText: 'step-2' });
-          await signals.deliver({ kind: 'delegation_nudge', timing: 'this-turn', text: 'nudge' });
+          await signals.deliver({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
+          const spliced = signals.prepareStep(
+            { stepNumber: 0, messages: shortHistory() },
+            [{ kind: 'delegation_nudge', text: 'nudge' }],
+          );
+          await signals.deliver({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
           const settled = signals.settle({ completed: true });
           await Promise.resolve();
           return {

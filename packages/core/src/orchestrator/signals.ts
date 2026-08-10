@@ -1,25 +1,14 @@
 /**
- * Signal delivery — the ONE way anything asynchronous reaches a running agent.
+ * Signal delivery — the ONE way anything asynchronous reaches a running agent,
+ * at the ONE time anything reaches it: its next step.
  *
- * There used to be two doors and no rule for choosing between them: a producer
- * either queued a programmatic turn (BackendHost.enqueueTurn — hub drains,
- * background-job wakes, overflow retries, take picks, MCP run_task) or spliced
- * a message into the live turn's next step (a private StepInjections buffer per
- * producer — the background-event injection and the delegation nudge). The
- * mechanisms are two TIMINGS of one act, so the timing is now a parameter and
- * the producer states intent only: {@link SignalDelivery.deliver}.
- *
- * Routing (synchronous, before any await — the select→bind→deliver decision a
- * producer makes against durable state must be one event-loop tick):
- *
- *   'this-turn'   turn-local steering, produced INSIDE the running turn's own
- *                 step pipeline (the delegation nudge). Always rides the next
- *                 step boundary; never queues, never survives its turn.
- *   'now'         an external wake that would rather steer the live turn than
- *                 queue behind it. Rides the next step boundary when the
- *                 backend accepts mid-turn wakes (BackendHost.acceptsMidTurnWake),
- *                 otherwise queues as a programmatic turn.
- *   'next-turn'   always a queued programmatic turn.
+ * A producer states intent and nothing else ({@link SignalDelivery.deliver}).
+ * There is no timing to pick, because there is only one: the signal is spliced
+ * into the live turn's next step boundary. When no turn is running there is no
+ * next step, so delivery starts one (BackendHost.enqueueTurn) — that is what
+ * "next step" means to an idle agent, not a second timing. The routing read is
+ * synchronous, before any await, because the select→bind→deliver decision a
+ * producer makes against durable state must be one event-loop tick.
  *
  * Everything buffered for a step boundary drains as ONE synthetic user message
  * at the step tail (after the latest tool results, so role alternation stays
@@ -28,12 +17,22 @@
  * and one splice for every signal, so no extension registration order can shift
  * another producer's recorded indices.
  *
- * The spliced message is model-visible only — never durable chat history. A
- * signal's durable record is its own (the EventLog row consumed by the batch
- * turn id, the `delegation_nudge` run event) plus the absorbing turn's reply;
- * Think's one-assistant-message-per-turn transcript cannot represent a user
- * message between steps, and persisting it after the assistant reply would read
- * as an unanswered event next turn.
+ * The turn's OWN steering — the delegation nudge, decided inside the step
+ * pipeline from the live turn's state — is not delivered, it is handed to
+ * {@link SignalDelivery.prepareStep} as the step being prepared. That is the
+ * whole distinction, and it is structural rather than declared: steering
+ * enters through a step, so it cannot outlive it, cannot start a turn, and
+ * cannot come back after the turn is over (it is re-derived next turn if the
+ * condition still holds). Nothing an asynchronous producer can reach makes
+ * that choice.
+ *
+ * The spliced message is ephemeral, exactly like the dynamic-context block it
+ * rides beside: model-visible at the tip, never durable chat history, gone on
+ * a cold start. A signal's durable record is its own (the EventLog row consumed
+ * by the batch turn id, the `delegation_nudge` run event) plus the absorbing
+ * turn's reply; Think's one-assistant-message-per-turn transcript cannot
+ * represent a user message between steps, and persisting it after the assistant
+ * reply would read as an unanswered event next turn.
  */
 
 import type { ModelMessage } from 'ai';
@@ -64,39 +63,43 @@ export class SignalDelivery implements SignalDeliverer {
   ) {}
 
   /**
-   * Deliver a signal. The routing decision and the buffer push are synchronous
-   * (only the queued path awaits), so a producer that has just bound durable
-   * rows to this signal knows the answer in the same tick it bound them.
+   * Deliver a signal to the agent's next step. The read of whether a turn is
+   * running and the buffer push are synchronous (only the start-a-turn path
+   * awaits), so a producer that has just bound durable rows to this signal
+   * knows the answer in the same tick it bound them.
    */
   deliver(signal: AgentSignal): Promise<SignalOutcome> {
-    if (!this.ridesLiveTurn(signal)) return this.queue(signal);
+    if (!this.host.turnInFlight()) return this.queue(signal);
     this.pending.push(signal);
-    if (signal.timing !== 'this-turn') {
-      this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
-    }
+    this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
     return Promise.resolve('mid-turn');
   }
 
   /**
    * The `prepareStep` body: absorb everything buffered into ONE user message at
-   * the step tail, re-applied at its entry index on every later step. Driven by
-   * the orchestrator's turn extension, which fires the turn-local producers
-   * first so their signals ride the step they were decided on.
+   * the step tail, re-applied at its entry index on every later step.
+   *
+   * `steering` is the turn's own mechanical steering for THIS step (the
+   * delegation nudge), decided by the caller from the live turn's state. It
+   * merges into the same message so there is still one splice per step, and it
+   * is never buffered: a steer that misses its step is a steer whose moment
+   * passed, and it is re-derived at the next one if the condition holds.
    */
-  prepareStep(ctx: PrepareStepContext): ModelMessage[] | undefined {
+  prepareStep(ctx: PrepareStepContext, steering: readonly AgentSignal[] = []): ModelMessage[] | undefined {
     const drained = this.pending.splice(0);
     this.absorbed.push(...drained);
-    return this.injections.drain(ctx, drained.length > 0
-      ? [{ message: { role: 'user', content: drained.map(stepBody).join('\n\n') } }]
+    const bodies = [...drained, ...steering].map(stepBody);
+    return this.injections.drain(ctx, bodies.length > 0
+      ? [{ message: { role: 'user', content: bodies.join('\n\n') } }]
       : []);
   }
 
   /**
    * Turn over: report what the model absorbed and reset for the next turn.
-   * Everything that did NOT reach the model re-delivers as a queued turn —
+   * Everything that did NOT reach the model re-delivers as its own turn —
    * signals still waiting, plus (on an aborted turn, whose answer is gone)
-   * the ones it had absorbed. Turn-local signals are simply dropped: their
-   * turn is over, and a nudge at a turn that already ended is noise.
+   * the ones it had absorbed. The turn's own steering never appears here: it
+   * was handed to a step, not delivered, so it has nothing to come back to.
    *
    * Call exactly once per turn, before anything that can throw. Re-delivery is
    * detached — a turn must never block on the next one's queue slot.
@@ -104,8 +107,8 @@ export class SignalDelivery implements SignalDeliverer {
   settle(opts: { completed: boolean }): SettledSignals {
     const absorbed = this.absorbed;
     const leftover = this.pending.splice(0);
-    const requeue = (opts.completed ? leftover : [...absorbed, ...leftover]).filter(isExternal);
-    this.settled = opts.completed ? absorbed.filter(isExternal) : [];
+    const requeue = opts.completed ? leftover : [...absorbed, ...leftover];
+    this.settled = opts.completed ? absorbed : [];
     this.absorbed = [];
     this.injections.reset();
     for (const signal of requeue) {
@@ -124,14 +127,6 @@ export class SignalDelivery implements SignalDeliverer {
     this.injections.reset();
     if (continuation) this.pending.unshift(...this.settled);
     this.settled = [];
-  }
-
-  /** A turn-local signal is produced inside the running turn's own step
-   *  pipeline, so there is no question of whether a turn is live; only an
-   *  external wake asks the backend. */
-  private ridesLiveTurn(signal: AgentSignal): boolean {
-    if (signal.timing === 'next-turn') return false;
-    return signal.timing === 'this-turn' || this.host.acceptsMidTurnWake();
   }
 
   /** Compensation runs OUTSIDE the enqueue's catch: a producer whose
@@ -162,6 +157,3 @@ export class SignalDelivery implements SignalDeliverer {
 }
 
 const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text;
-
-/** Turn-local signals never queue and never outlive their turn. */
-const isExternal = (signal: AgentSignal): boolean => signal.timing !== 'this-turn';

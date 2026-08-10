@@ -396,6 +396,8 @@ export class LocalAgentSession implements BackendHost {
       },
       archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.ensureModelState()),
+      // The ladder's first rung prunes this plane before any tool output.
+      ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
         // Fires inside runTransformContext, BEFORE the turn's first step
         // weave — a fresh plan ('planned') or a discarded one ('invalidated')
@@ -752,7 +754,6 @@ export class LocalAgentSession implements BackendHost {
       void this.orch.signals.deliver({
         kind: 'take_pick',
         text: buildTakeContinuationPrompt(record.set, record.chosen),
-        timing: 'next-turn',
       });
       continuationQueued = true;
     }
@@ -846,16 +847,22 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** BackendHost seam — the CLI takes no mid-turn wake: the local steer-drain
-   *  owns the live turn's injection channel with USER semantics a platform wake
-   *  must not assume (each steer persists as a verbatim user row for the
-   *  walk-back fork, interrupt() hands pending steers back to the composer, and
-   *  leftover steers rerun as a user-origin turn — which would misgrade the
-   *  outcome review). A signal queues instead, which the local pump runs as the
-   *  immediate next turn. Turn-local signals (the delegation nudge) never ask —
-   *  they ride their own turn's step boundary here exactly as on cf. */
-  acceptsMidTurnWake(): boolean {
-    return false;
+  /** BackendHost seam — will there be a next step for a signal to land on?
+   *
+   *  `currentAbort` is set for exactly the streaming window of one turn and
+   *  cleared in its `finally`, BEFORE settle() runs, so a signal that arrives
+   *  as the turn is ending either buffers for a step that still exists or is
+   *  told there is no turn — never both, never neither.
+   *
+   *  The user steer-drain's USER semantics (each steer persists as a verbatim
+   *  user row for the walk-back fork, interrupt() hands pending steers back to
+   *  the composer, leftover steers rerun as a user-origin turn) are properties
+   *  of `pendingSteers`, which signals do not touch: they ride the core seam's
+   *  own buffer, are never persisted, and settle back into turns of their own.
+   *  Two independent splices land at the same step tail as two adjacent
+   *  user-role messages, which every provider adapter groups into one turn. */
+  turnInFlight(): boolean {
+    return this.currentAbort !== null;
   }
 
   // ── Public driver API ──────────────────────────────────────────────
@@ -1477,10 +1484,9 @@ export class LocalAgentSession implements BackendHost {
 
     // Turn over for signal delivery — the same spine the cf backend runs, and
     // for the same reason: it must happen before anything that can throw, so a
-    // signal the model never saw always re-delivers. This session takes no
-    // mid-turn wake, so today only its own turn-local nudge settles here; the
-    // call is what keeps that a property of the seam rather than of this
-    // backend remembering to be a special case.
+    // signal the model never saw always re-delivers — including one that
+    // arrived after the final step boundary, which is why this runs after
+    // `currentAbort` is cleared rather than inside the stream loop.
     this.orch.signals.settle({ completed: runError === null });
 
     let assistantMsgId: string | null = null;

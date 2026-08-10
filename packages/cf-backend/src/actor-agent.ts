@@ -550,6 +550,8 @@ export abstract class ActorAgent extends Think<Env> {
       },
       archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.getModel()),
+      // The ladder's first rung prunes this plane before any tool output.
+      ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
         // The model-visible stream changed shape — a NEW plan rewrote it
         // ('planned') or a cached plan was discarded after a history rewrite
@@ -867,13 +869,12 @@ export abstract class ActorAgent extends Think<Env> {
             }
           }
         },
-        // Mid-turn delivery: an external wake that lands while a turn is live
-        // rides that turn's next step boundary instead of queueing behind it.
-        // The read is synchronous and the seam's buffer push happens in the
-        // same tick, so the turn observed here is the one whose prepareStep
-        // will drain it (turns are TurnQueue-serialized); a turn that settles
-        // first re-delivers the signal from settle().
-        acceptsMidTurnWake: () => this._inFlight,
+        // A signal lands on the agent's next step, so this answers whether
+        // there will be one. The read is synchronous and the seam's buffer
+        // push happens in the same tick, so the turn observed here is the one
+        // whose prepareStep will drain it (turns are TurnQueue-serialized); a
+        // turn that settles first re-delivers the signal from settle().
+        turnInFlight: () => this._inFlight,
         // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
         // the evolution hooks already rely on) holds the DO through the window
         // + the drain so the debounced drain completes within the live

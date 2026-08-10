@@ -193,16 +193,32 @@ The two default registrants attach at construction on both backends:
   (`compaction/src/engine/`) plus the Proteus codec (`compaction/src/codec.ts`,
   AI-SDK `ModelMessage[]` ⇄ ladder `Turn[]`). It runs once per turn assembly over
   shared stores — raw transcripts in the CompositeVFS, the replayable plan + the
-  measured token trigger in one `compaction_state` row.
-- **Signal delivery** (`proteus.signals`, a `prepareStep` hook) is the live-turn
-  half of the ONE way anything asynchronous reaches the agent
+  measured token trigger in one `compaction_state` row. The trigger is 85% of
+  the model's context window (`COMPACTION_PRESETS.light`, measured against the
+  provider's own reported prompt tokens floored by the history estimate plus the
+  system prompt), and the rungs run cheapest-first: **superseded ephemeral
+  context** → skills → superseded reads → error inputs → old tool output →
+  reasoning → remaining tool output → assistant runs → prefix summary. The first
+  rung is Proteus's own (`relieveEphemeralPressure`): a superseded
+  `<dynamic_context>` block is stale by definition and re-derivable from live
+  state, so it is the cheapest thing in the request to give up — and, being
+  woven per model step, it is the one thing a ladder stage can never see. What
+  it frees is subtracted from the pressure the engine is told about, so relief
+  here can stand the rest of the ladder down.
+- **Signal delivery** (`proteus.signals`, a `prepareStep` hook) is the ONE way
+  anything asynchronous reaches the agent, at the ONE time anything reaches it
   (`core/src/orchestrator/signals.ts`). A producer — the event-hub drain, a
-  settled background job, an overflow retry, a take pick, an MCP task, the
-  mechanical delegation nudge — states a *timing* (`this-turn` / `now` /
-  `next-turn`) and the seam picks the mechanism: splice into the live turn's
-  next step using the `StepInjections` math
-  (`core/src/prompting/step-injections.ts`), or queue a programmatic turn
-  through `BackendHost.enqueueTurn`. One buffer and one splice for every
+  settled background job, an overflow retry, a take pick, an MCP task — states
+  intent and nothing else; the signal is spliced into the live turn's next step
+  using the `StepInjections` math (`core/src/prompting/step-injections.ts`).
+  When no turn is running there is no next step, so delivery starts one
+  (`BackendHost.enqueueTurn`) — that is what "next step" means to an idle
+  agent, not a second timing, and `BackendHost.turnInFlight` is the fact the
+  seam reads to tell them apart. The spliced message is ephemeral exactly like
+  the `<dynamic_context>` block beside it: model-visible at the tip, never
+  durable history, gone on a cold start. The turn's own mechanical steering
+  (the delegation nudge) is not delivered — it is handed to the step being
+  prepared, so it cannot outlive it. One buffer and one splice for every
   signal, so no registration order can shift another producer's recorded
   indices. It is the DO counterpart of the CLI's `proteus.steering` drain —
   same mechanism, one host.
@@ -213,7 +229,8 @@ model-incompatible file parts to `/local/attachments` so a poisoned transcript
 heals byte-stably; the **DynamicContextLedger** (`volatile-context.ts`) re-reads
 live state at every model step and appends a fresh `<dynamic_context>` block only
 when its render changes, freezing earlier blocks in place to preserve provider
-cache breakpoints; **step-prune**
+cache breakpoints (`dropSuperseded`, the compaction ladder's first rung, is the
+only thing that ever unfreezes one); **step-prune**
 (`step-prune.ts`, `STEP_CONTEXT_BUDGET_RATIO = 0.7`) shrinks old tool outputs once
 a step nears the window; **cache-breakpoints** (`cache-breakpoints.ts`) places
 Anthropic `cache_control` / OpenAI `prompt_cache_key`; and **stream-usage-repair**

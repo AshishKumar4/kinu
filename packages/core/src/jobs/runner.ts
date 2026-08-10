@@ -227,10 +227,12 @@ export class BackgroundJobRunner {
     catch { return false; }
   }
 
-  /** Wake the agent with a synthesis signal carrying the settled job. The
-   *  `background_job` kind makes the chat render it as a background-event card,
-   *  not a user bubble. An undelivered wake leaves a durable retry breadcrumb
-   *  the standard drain picks up. Runs once per job (no self-wake loop). */
+  /** Wake the agent with a synthesis signal carrying the settled job — at its
+   *  next step if it is working, as its own turn if it is idle. The
+   *  `background_job` kind makes a woken turn render as a background-event
+   *  card, not a user bubble. An undelivered wake leaves a durable retry
+   *  breadcrumb the standard drain picks up. Runs once per job (no self-wake
+   *  loop). */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
@@ -242,8 +244,6 @@ export class BackgroundJobRunner {
     await this.deps.signals.deliver({
       kind: 'background_job',
       text,
-      // The job settled outside any turn; its synthesis is the next one.
-      timing: 'next-turn',
       metadata: { jobId, kind: job.kind, status: job.status },
       compensate: (reason) => {
         if (reason === 'preempted') {

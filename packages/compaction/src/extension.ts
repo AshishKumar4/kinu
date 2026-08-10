@@ -77,6 +77,14 @@ export interface CompactionOutcomeEvent {
   plan?: BoundaryContextPlan;
 }
 
+/** The ephemeral context plane, as the ladder's first rung reaches it — the
+ *  core DynamicContextLedger, structurally, so this package never imports it.
+ *  `dropSuperseded` drops every superseded `<dynamic_context>` block, keeps the
+ *  newest (live state the model reads), and returns the tokens freed. */
+export interface EphemeralContextPlane {
+  dropSuperseded(): number;
+}
+
 export interface CompactionExtensionDeps {
   /** Engine ports: transcript store (citablePath must be a path the agent's
    *  own file tool can read back), plan store, logger. */
@@ -87,6 +95,8 @@ export interface CompactionExtensionDeps {
   /** One LLM call — prompt in, completion text out. Serves both summary
    *  kinds; failures degrade to deterministic previews, never break a turn. */
   summarize: (prompt: string) => Promise<string>;
+  /** The ephemeral plane the ladder's first rung prunes. */
+  ephemeral: EphemeralContextPlane;
   /** Trigger/target/recent-tool profile. Defaults to the light preset. */
   profile?: CompactionProfile;
   /** Fires whenever the model-visible stream changed shape — the ledger-reset
@@ -122,15 +132,54 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
       concurrency: profile.summarizerConcurrency,
     });
 
-  const buildInputs = (ctx: TransformContext, turns: Turn[]): BuildPlanInputs => ({
+  const buildInputs = (ctx: TransformContext, turns: Turn[], reportedTokens: number): BuildPlanInputs => ({
     sessionKey: ctx.sessionKey,
     contextLimit: ctx.contextWindow,
     triggerRatio: profile.triggerPercent / 100,
     targetRatio: profile.targetPercent / 100,
     recentToolResultBudgetTokens: profile.recentToolTokens,
-    providerReportedTokens: providerReportedTokensWithFloor(ctx, turns),
+    providerReportedTokens: reportedTokens,
     citablePath: deps.ports.transcripts.citablePath,
   });
+
+  /**
+   * The ladder's FIRST rung, above every better-compact stage: under measured
+   * pressure, drop the superseded `<dynamic_context>` blocks.
+   *
+   * They cannot be a ladder stage — they are woven per model STEP and never
+   * reach the durable history a stage operates on — but they are the first
+   * thing that should go: stale by definition, re-derivable from live state,
+   * and paid for on every request until something removes them. Relieving here
+   * means the stages below may not have to run at all, so the tokens freed are
+   * subtracted from the pressure the engine is told about.
+   *
+   * Dropping a frozen block breaks the woven prefix, so this is gated on the
+   * ladder's own trigger and nothing else. What that buys, in the two shapes
+   * pressure takes:
+   *
+   *   a plan gets built — the prefix was going to be rewritten anyway (and
+   *     `onOutcome` resets the whole ledger), so the rung costs nothing extra
+   *     and only gets the accounting right: what it frees is tool output the
+   *     stages below no longer have to stub.
+   *   a cached plan still replays — the durable history is fine and the excess
+   *     is ephemeral. This is the case the rung exists for: the engine's
+   *     regrowth guard prices the prefix with the overhead recorded when the
+   *     plan was BUILT (`snapshot.overheadTokens`), so blocks appended after
+   *     that are invisible to it, and nothing else in the system would ever
+   *     drop them. One prefix rebuild bounds a plane that otherwise only grows.
+   */
+  function relieveEphemeralPressure(ctx: TransformContext, turns: Turn[]): number {
+    const measured = measuredTokens(ctx, turns, 0);
+    const triggerTokens = Math.floor(ctx.contextWindow * profile.triggerPercent / 100);
+    if (ctx.trigger !== 'force' && measured < triggerTokens) return 0;
+    const freed = deps.ephemeral.dropSuperseded();
+    if (freed > 0) {
+      deps.ports.logger.info('Pruned superseded ephemeral context', {
+        sessionKey: ctx.sessionKey, freedTokens: freed, measured, triggerTokens,
+      });
+    }
+    return freed;
+  }
 
   /** Overflow recovery: the request cannot be replayed as-is, so a stale
    *  plan's replay is not enough — rebuild with `force`, carrying the prior
@@ -140,9 +189,10 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     turns: Turn[],
     ctx: TransformContext,
     prior: PlanSnapshot | null,
+    reportedTokens: number,
     summarize: (jobs: BoundarySummaryJob[]) => Promise<Record<string, string>>,
   ): Promise<ProcessResult> {
-    const inputs: BuildPlanInputs = { ...buildInputs(ctx, turns), force: true, priorPlan: prior ?? undefined };
+    const inputs: BuildPlanInputs = { ...buildInputs(ctx, turns, reportedTokens), force: true, priorPlan: prior ?? undefined };
     let plan = buildPlan(turns, inputs, proteusSpec);
     if (!plan) return { outcome: 'unchanged' };
     if (plan.summaryJobs.length > 0) {
@@ -173,6 +223,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     plan: BoundaryContextPlan,
     prior: PlanSnapshot | null,
     ctx: TransformContext,
+    reportedTokens: number,
     rollingSummaryAttempted: boolean,
   ): Promise<Extract<ProcessResult, { outcome: 'planned' }> | null> {
     if (!plan.requiresCustomCompaction) return null;
@@ -208,7 +259,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
     const upgraded = buildPlan(
       turns,
       {
-        ...buildInputs(ctx, turns),
+        ...buildInputs(ctx, turns, reportedTokens),
         force: true,
         // The just-built plan is the floor; its snapshot already carries the
         // assistant summaries and preserved tool ids forward.
@@ -261,9 +312,13 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
         return summaries;
       };
 
+      // Rung one: the superseded ephemeral blocks, before any tool output is
+      // touched. What it frees is what the rest of the ladder no longer has to.
+      const reportedTokens = measuredTokens(ctx, turns, relieveEphemeralPressure(ctx, turns));
+
       const processed =
         ctx.trigger === 'force'
-          ? await forceRebuild(turns, ctx, prior, summarize)
+          ? await forceRebuild(turns, ctx, prior, reportedTokens, summarize)
           : await engine.process({
               sessionKey: ctx.sessionKey,
               turns,
@@ -271,7 +326,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
               triggerRatio: profile.triggerPercent / 100,
               targetRatio: profile.targetPercent / 100,
               recentToolResultBudgetTokens: profile.recentToolTokens,
-              providerReportedTokens: providerReportedTokensWithFloor(ctx, turns),
+              providerReportedTokens: reportedTokens,
               summarize,
             });
       if (processed.outcome === 'unchanged') {
@@ -289,6 +344,7 @@ export function createCompactionExtension(deps: CompactionExtensionDeps): Proteu
               processed.plan,
               prior,
               ctx,
+              reportedTokens,
               rollingSummaryAttempted,
             )) ?? processed)
           : processed;
@@ -320,9 +376,15 @@ function systemOverheadFloor(ctx: TransformContext): number {
   return Math.round(ctx.system.length / 4);
 }
 
-function providerReportedTokensWithFloor(ctx: TransformContext, turns: Turn[]): number {
+/** The pressure the ladder budgets against: the provider's own last total when
+ *  there is one, floored by what the history alone must cost.
+ *
+ *  `ephemeralRelief` is the tokens the first rung just freed. It comes off the
+ *  provider total — which is the only term that ever counted the woven blocks —
+ *  and the floor holds the result honest before the first report lands. */
+function measuredTokens(ctx: TransformContext, turns: Turn[], ephemeralRelief: number): number {
   return Math.max(
-    ctx.providerReportedTokens ?? 0,
+    Math.max(0, (ctx.providerReportedTokens ?? 0) - ephemeralRelief),
     proteusCodec.estimateTurns(turns) + systemOverheadFloor(ctx),
   );
 }

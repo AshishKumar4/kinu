@@ -1930,11 +1930,10 @@ export class OrchestratorAgent extends ActorAgent {
       const result = await this.orch.signals.deliver({
         kind: 'take_pick',
         text: buildTakeContinuationPrompt(record.set, record.chosen),
-        // A pick is the user's verdict on a settled turn; it continues the
-        // conversation rather than steering whatever is running now.
-        timing: 'next-turn',
       });
-      continuationQueued = result === 'queued';
+      // Delivered either way — riding the live turn's next step is the same
+      // continuation, just sooner than a turn of its own.
+      continuationQueued = result !== 'undelivered';
     }
     this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
     return { ...record, continuationQueued };
@@ -2891,9 +2890,9 @@ export class OrchestratorAgent extends ActorAgent {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new Error('run_task requires non-empty text');
     const outcome = await this.orch.signals.deliver({
-      kind: 'mcp', text: trimmed, timing: 'next-turn',
+      kind: 'mcp', text: trimmed,
     });
-    return { status: outcome === 'queued' ? 'queued' : 'skipped' };
+    return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }
 
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other

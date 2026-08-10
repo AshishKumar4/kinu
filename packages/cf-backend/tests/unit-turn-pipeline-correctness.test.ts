@@ -291,14 +291,14 @@ describe('turn-pipeline correctness wiring', () => {
     expect(settleCall).toBeGreaterThan(recordTurn);
   });
 
-  test('pickAlternateTake returns false unless the awaited enqueue actually queues', () => {
+  test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
     const pick = source.slice(
       source.indexOf('async pickAlternateTake('),
       source.indexOf('/**\n   * The unified Run Timeline spine'),
     );
     expect(pick).toContain('let continuationQueued = false');
     expect(pick).toContain('const result = await this.orch.signals.deliver');
-    expect(pick).toContain("continuationQueued = result === 'queued'");
+    expect(pick).toContain("continuationQueued = result !== 'undelivered'");
     expect(pick).not.toContain('continuationQueued = true');
   });
 });

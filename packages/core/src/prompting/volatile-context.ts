@@ -21,6 +21,12 @@
  * only, never persisted: a cold start (DO reset, new CLI session) begins
  * empty, so the next step carries exactly one fresh block.
  *
+ * The one exception is `dropSuperseded`, the compaction ladder's first rung:
+ * under measured context pressure the superseded blocks — stale by definition
+ * and re-derivable from live state — are the cheapest thing in the request to
+ * give up, cheaper than any tool output. It runs only when the ladder was
+ * about to rewrite the prefix anyway, never on the ordinary path.
+ *
  * Only genuinely state-derived facts belong in the block. Nothing clock-
  * derived (elapsed times, "running for 4m") may render: it would re-fingerprint
  * every step and append a block per request.
@@ -317,6 +323,36 @@ export class DynamicContextLedger {
 
   get size(): number {
     return this.blocks.length;
+  }
+
+  /**
+   * Drop every superseded block, keeping the newest — the compaction ladder's
+   * first rung, and the ONLY thing that ever removes a frozen block.
+   *
+   * A superseded block is stale by definition (the header tells the model so)
+   * and fully re-derivable from live state, which makes it the cheapest thing
+   * in the request to give up: cheaper than any tool output, and far cheaper
+   * than a summary. The newest block stays because it is not history — it is
+   * the live state the model reads.
+   *
+   * Removing a mid-array message is exactly what `weave` refuses to do, because
+   * it breaks the provider's prefix cache. So this is a pressure-relief act and
+   * nothing else: only a caller that has already measured the context over the
+   * ladder's trigger may call it. Nothing else in the system ever bounds this
+   * plane — a ladder stage cannot see it (blocks are woven per step and never
+   * reach durable history) and a replayed compaction plan prices the prefix
+   * with the overhead it recorded when it was built — so without this the
+   * superseded blocks accumulate for the life of the activation.
+   *
+   * Returns the tokens freed, on the ladder's chars/4 scale, so the caller can
+   * subtract them from the pressure it measured and let the rest of the ladder
+   * stand down if this rung was enough.
+   */
+  dropSuperseded(): number {
+    if (this.blocks.length <= 1) return 0;
+    const superseded = this.blocks.slice(0, -1);
+    this.blocks = this.blocks.slice(-1);
+    return superseded.reduce((tokens, block) => tokens + Math.round(block.text.length / 4), 0);
   }
 
   weave(history: ReadonlyArray<ModelMessage>, state: DynamicContext): ModelMessage[] {

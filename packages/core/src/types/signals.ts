@@ -5,19 +5,11 @@
 //
 // The mechanism lives in orchestrator/signals.ts (SignalDelivery), which is the
 // only implementation and the only caller of BackendHost.enqueueTurn /
-// acceptsMidTurnWake.
-
-/** When a signal wants to reach the agent.
- *
- *   'this-turn'   turn-local steering, produced INSIDE the running turn's own
- *                 step pipeline (the delegation nudge). Always rides the next
- *                 step boundary; never queues, never survives its turn.
- *   'now'         an external wake that would rather steer the live turn than
- *                 queue behind it. Rides the next step boundary when the
- *                 backend accepts mid-turn wakes, otherwise queues.
- *   'next-turn'   always a queued programmatic turn.
- */
-export type SignalTiming = 'this-turn' | 'now' | 'next-turn';
+// turnInFlight.
+//
+// There is ONE delivery time: the agent's next step. A producer never states
+// it and never picks a mechanism — starting a turn is simply what "next step"
+// means when no turn is running.
 
 /** Why a queued signal never became a turn: 'preempted' = a newer turn
  *  generation won the queue slot; 'failed' = the platform enqueue threw. */
@@ -39,11 +31,10 @@ export interface AgentSignal {
   /** The signal spliced into a live turn's next step, when that reads
    *  differently ("arrived while you were working"). Defaults to `text`. */
   readonly stepText?: string;
-  readonly timing: SignalTiming;
   /** The synthetic turn id the signal's source rows are bound to. Stamped on
    *  the queued turn as `drainTurnId` and reported back on the absorbed signal,
    *  so the backend dispatches the answering turn's reply to their channels
-   *  (email_thread → outbound reply) by one id whichever timing won. */
+   *  (email_thread → outbound reply) by one id whichever way it landed. */
   readonly replyTurnId?: string;
   /** Extra metadata stamped on the queued turn alongside `proteusEvent`. */
   readonly metadata?: Readonly<Record<string, unknown>>;

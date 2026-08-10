@@ -41,9 +41,10 @@
  *
  * Shared by construction: the observation hooks ride the one hook path both
  * backends fire (cf's beforeToolCall/afterToolCall/beforeStep, the CLI's
- * runChat), and the nudge itself is delivered as a turn-local {@link AgentSignal}
- * through the same seam every asynchronous producer uses — the AgentOrchestrator
- * owns both, per turn, next to the rest of the turn's accounting.
+ * runChat), and the nudge itself rides the same splice every asynchronous
+ * producer's signal rides — handed to the step it was decided on, so it can
+ * never outlive the turn. The AgentOrchestrator owns both, per turn, next to
+ * the rest of the turn's accounting.
  */
 
 import type { DelegationNudgeRecord, DelegationNudgeTrigger } from '../events/types.js';
@@ -164,14 +165,14 @@ export class DelegationNudge {
   }
 }
 
-/** A turn-local signal — meaningless outside the turn that produced it, so it
- *  never queues. Its body becomes a user-role message like every other
- *  runtime-authored mid-turn splice: a system message between steps is not
- *  portable across providers, and the header already says who wrote it. */
+/** The turn's own steering — meaningless outside the turn that produced it, so
+ *  it is handed to the step being prepared rather than delivered. Its body
+ *  becomes a user-role message like every other runtime-authored mid-turn
+ *  splice: a system message between steps is not portable across providers,
+ *  and the header already says who wrote it. */
 function signal(text: string): AgentSignal {
   return {
     kind: 'delegation_nudge',
-    timing: 'this-turn',
     text: `${DELEGATION_NUDGE_HEADER}\n\n${text}`,
   };
 }

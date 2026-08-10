@@ -26,7 +26,7 @@ function newNudge(): AgentOrchestrator {
   const host: BackendHost = {
     broadcast: () => {},
     enqueueTurn: async () => { throw new Error('a turn-local nudge must never queue'); },
-    acceptsMidTurnWake: () => false,
+    turnInFlight: () => false,
     setTimer: () => {},
   };
   return new AgentOrchestrator({

@@ -1505,6 +1505,70 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.end();
   });
 
+  test('a background event reaches the LIVE turn at its next step, alongside a user steer', async () => {
+    // One delivery time for everything asynchronous: the agent's next step.
+    // A platform wake and a user steer land in the same window here, and the
+    // two channels stay separate — the wake is model-visible only, the steer
+    // keeps its verbatim durable row, and neither spawns a second turn.
+    const { model, prompts, release } = toolThenAnswerModel('handled both');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    expect(session.turnInFlight()).toBe(true);
+    expect(session.steer('also check X')).toBe(true);
+    await session.publishEvent({
+      descriptor: {
+        ingress: 'chat_ws', variant: 'chat', payload: { text: 'mail from bob' },
+        operator_user_id: 'owner-1', session_id: 'local-test',
+      },
+      now: 123,
+    });
+    await session.flushPendingDrains();
+    release();
+    await turn;
+
+    const second = prompts[1]!;
+    const injected = userTexts(second).filter((text) => text.includes('also check X') || text.includes('mail from bob'));
+    expect(injected).toHaveLength(2);
+    expect(injected[0]).toBe('also check X');
+    expect(injected[1]).toContain('mail from bob');
+    // Both land after the tool results, so role alternation stays valid.
+    const roles = second.map((m) => m.role);
+    expect(roles.lastIndexOf('user')).toBeGreaterThan(roles.lastIndexOf('tool'));
+
+    // ONE turn: the event no longer waits for a programmatic turn of its own.
+    expect(turnStarts(events)).toHaveLength(1);
+    expect(session.pendingEvents()).toEqual([]);
+
+    // The steer persists verbatim; the signal is ephemeral — model-visible at
+    // the tip of the live turn and nowhere in durable history.
+    const rows = db.query(`SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`)
+      .all() as Array<{ role: string; content: string }>;
+    expect(rows.map((r) => r.content)).toContain('also check X');
+    expect(rows.some((r) => r.content.includes('mail from bob'))).toBe(false);
+    await session.end();
+  });
+
+  test('turnInFlight is false once the stream is over, so a late signal starts its own turn', async () => {
+    const { session, events } = setup('answered');
+    expect(session.turnInFlight()).toBe(false);
+    await session.send('question');
+    expect(session.turnInFlight()).toBe(false);
+
+    await session.publishEvent({
+      descriptor: {
+        ingress: 'chat_ws', variant: 'chat', payload: { text: 'arrived after the turn' },
+        operator_user_id: 'owner-1', session_id: 'local-test',
+      },
+      now: 456,
+    });
+    await session.flushPendingDrains();
+    await waitFor(() => turnStarts(events).length >= 2);
+    expect(turnStarts(events)[1]!.kind).toBe('programmatic');
+    await session.end();
+  });
+
   test('a steer with no remaining step boundary runs as the immediate next user turn', async () => {
     const { model, release } = gatedTextModel('first answer');
     const { db, session, events } = setup('unused', model);
