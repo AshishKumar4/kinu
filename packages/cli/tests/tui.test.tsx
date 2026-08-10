@@ -410,14 +410,17 @@ describe('CLI TUI layout', () => {
     }
   });
 
+  // A prohibition, so it is stated as one. The three positive assertions this
+  // used to also carry — that the source contains `focusArea === 'mission'`,
+  // `nextFocus` and `onMouseDown` — constrained nothing: renaming a local
+  // broke them with no behaviour change, and the literal `onMouseDown`
+  // appearing somewhere in a file is not evidence that a mouse does anything.
+  // What is worth locking is that the numeric handler stays gone.
   test('home screen has no global numeric agent selection path', () => {
     const source = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
 
     expect(source).not.toContain('Number(key.name)');
     expect(source).not.toContain('1-9');
-    expect(source).toContain("focusArea === 'mission'");
-    expect(source).toContain('nextFocus');
-    expect(source).toContain('onMouseDown');
   });
 
   test('home model and effort selections persist as global defaults', () => {

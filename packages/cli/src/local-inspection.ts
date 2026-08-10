@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs';
-import { spawn } from 'node:child_process';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
   createProductChangeStore,
@@ -45,7 +44,7 @@ import {
   readSoul,
   summarizeSoul,
 } from '@proteus/core';
-import { makeSql } from '@proteus/cli-backend';
+import { makeSql, createHostShell } from '@proteus/cli-backend';
 import { agentDbPath } from './config.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
@@ -601,19 +600,11 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   if (!['workspace', 'laptop', 'local', 'your-pc'].includes(normalized)) {
     throw new Error(`Executor "${executorId}" is not available for local agents.`);
   }
-  return new Promise((resolve) => {
-    const child = spawn('/bin/sh', ['-lc', command], {
-      cwd: process.cwd(),
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: process.env,
-    });
-    let stdout = '';
-    let stderr = '';
-    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
-    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
-    child.on('error', (err) => resolve({ executor: executorId, command, stdout, stderr: err.message, exitCode: 1 }));
-    child.on('close', (code) => resolve({ executor: executorId, command, stdout, stderr, exitCode: code ?? 0 }));
-  });
+  // The one host-shell implementation: it owns the process contract (group
+  // kill on abort, and settling when the COMMAND exits rather than when a
+  // backgrounded grandchild finally closes the inherited pipe).
+  const result = await createHostShell(process.cwd()).exec(command);
+  return { executor: executorId, command, ...result };
 }
 
 export function getLocalProductBoard(name: string, limit = 20): ProductChangeBoard {

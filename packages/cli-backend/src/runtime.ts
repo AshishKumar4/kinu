@@ -356,6 +356,12 @@ export function buildCLIHeadRuntime(
   });
 }
 
+/** How long after the command's own exit we keep reading its pipes. A pipe
+ *  holds at most one buffer (64KB) of unread output at exit and node drains
+ *  that in microseconds, so this is generous for the command and short enough
+ *  that an orphaned grandchild's inherited pipe never becomes our problem. */
+const EXITED_COMMAND_DRAIN_MS = 250;
+
 export function createHostShell(cwd: string): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
@@ -392,13 +398,33 @@ export function createHostShell(cwd: string): Shell {
         child.stdout.on('data', (d) => { stdout += d.toString(); });
         child.stderr.on('data', (d) => { stderr += d.toString(); });
         child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
-        child.on('close', (code, signalName) => {
+
+        const settle = (code: number | null, signalName: NodeJS.Signals | null) => {
           const aborted = signal?.aborted || signalName === 'SIGTERM' || signalName === 'SIGKILL';
           finish({
             stdout,
             stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
             exitCode: code ?? (aborted ? 130 : 0),
           });
+        };
+
+        // `close` is the clean settle — the command exited AND every pipe it
+        // handed out is closed, so all output is in hand. But a command that
+        // backgrounds anything (`./server &`) leaves a grandchild holding the
+        // inherited stdout pipe, and then `close` never comes until the SERVER
+        // dies. So `exit` — the command itself is over — starts a bounded
+        // drain instead: whatever the command wrote is already in the pipe
+        // buffer and lands within the window; anything still writing after it
+        // is an orphan, not this command's output.
+        child.on('close', settle);
+        child.on('exit', (code, signalName) => {
+          setTimeout(() => {
+            if (settled) return;
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.unref();
+            settle(code, signalName);
+          }, EXITED_COMMAND_DRAIN_MS).unref();
         });
         if (stdin) child.stdin.end(stdin);
         else child.stdin.end();
@@ -436,7 +462,8 @@ function createLocalLaptopExecutor(
         description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
         execute: async (command: unknown, context?: unknown) => {
           const signal = readAbortSignal(context);
-          return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
+          const result = await shell.exec(String(command), signal ? { signal } : undefined);
+          return formatExecResult(result);
         },
       },
       readFile: {

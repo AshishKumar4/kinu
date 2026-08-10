@@ -24,7 +24,7 @@ afterAll(() => rmSync(fixtures, { recursive: true, force: true }));
 const HARNESS = `
 import json, os, pty, sys, time, fcntl, termios, signal, select
 
-mode, cmd = sys.argv[1], sys.argv[2:]
+mode, want, cmd = sys.argv[1], json.loads(sys.argv[2]), sys.argv[3:]
 master, slave = pty.openpty()
 pid = os.fork()
 if pid == 0:
@@ -69,7 +69,21 @@ def wait_for_prompt(deadline=15.0):
     return out
 
 output = wait_for_prompt()
-pending = lflags()
+# The prompt TEXT reaching the pty and the CLI's tcsetattr taking effect are
+# two separate events with no ordering between them, so sampling the flags the
+# instant the marker appears is a race — it caught the terminal mid-transition
+# and reported the state the CLI was about to leave. Settle on the expected
+# state instead, bounded: a CLI that never gets there still reports what it
+# actually did, and the assertions are unchanged.
+def settle(want, deadline=5.0):
+    end = time.time() + deadline
+    seen = lflags()
+    while time.time() < end and any(seen[k] != v for k, v in want.items()):
+        output_ignored = drain(0.1)
+        seen = lflags()
+    return seen
+
+pending = settle(want)
 if mode == "ctrlc":
     os.write(master, b"\\x03")
 else:
@@ -109,12 +123,20 @@ interface HarnessResult {
   exitcode: number | null;
 }
 
-function runInPty(mode: string, driverSource: string): HarnessResult {
+/** `expectPending` is the settle target only — it decides when the harness
+ *  stops waiting for the terminal to reach a steady state, never what is
+ *  asserted. The test still asserts the observed flags itself, so a CLI that
+ *  never reaches that state reports what it really did and fails. */
+function runInPty(
+  mode: string,
+  driverSource: string,
+  expectPending: Partial<{ icanon: boolean; echo: boolean; isig: boolean }>,
+): HarnessResult {
   const harnessPath = join(fixtures, "harness.py");
   writeFileSync(harnessPath, HARNESS);
   const driverPath = join(fixtures, `driver-${Bun.hash(driverSource).toString(16)}.ts`);
   writeFileSync(driverPath, driverSource);
-  const run = spawnSync(python!, [harnessPath, mode, process.execPath, driverPath], {
+  const run = spawnSync(python!, [harnessPath, mode, JSON.stringify(expectPending), process.execPath, driverPath], {
     encoding: "utf8",
     timeout: 40_000,
   });
@@ -138,7 +160,7 @@ process.exit(0);
 
 describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pipe, /dev/tty terminal)", () => {
   test("pending confirm stays canonical: kernel echo, line editing, live Ctrl+C", () => {
-    const result = runInPty("y", CONFIRM_DRIVER);
+    const result = runInPty("y", CONFIRM_DRIVER, { icanon: true, echo: true, isig: true });
     expect(result.pending).toEqual({ icanon: true, echo: true, isig: true });
     expect(result.output).toContain("y"); // kernel echoed the keypress
     expect(result.output).toContain("ANSWER=true");
@@ -148,7 +170,7 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
   }, 45_000);
 
   test("Ctrl+C interrupts a pending confirm and leaves the terminal sane", () => {
-    const result = runInPty("ctrlc", CONFIRM_DRIVER);
+    const result = runInPty("ctrlc", CONFIRM_DRIVER, { isig: true });
     expect(result.pending.isig).toBe(true);
     expect(result.exited).toBe(true);
     expect(result.signaled).toBe(true);
@@ -157,7 +179,7 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
   }, 45_000);
 
   test("askSecret hides input but keeps Ctrl+C live, and restores echo", () => {
-    const result = runInPty("s3cr3t", SECRET_DRIVER);
+    const result = runInPty("s3cr3t", SECRET_DRIVER, { icanon: true, echo: false, isig: true });
     expect(result.pending).toEqual({ icanon: true, echo: false, isig: true });
     expect(result.output.split("SECRET=")[0]).not.toContain("s3cr3t"); // typing never echoed
     expect(result.output).toContain('SECRET="s3cr3t"');
@@ -166,7 +188,7 @@ describe.if(Boolean(python))("prompts under the installer PTY topology (stdin pi
   }, 45_000);
 
   test("Ctrl+C during askSecret kills the CLI and restores echo via the sh trap", () => {
-    const result = runInPty("ctrlc", SECRET_DRIVER);
+    const result = runInPty("ctrlc", SECRET_DRIVER, { echo: false });
     expect(result.pending.echo).toBe(false);
     expect(result.exited).toBe(true);
     expect(result.signaled).toBe(true);

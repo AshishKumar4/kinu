@@ -1,4 +1,9 @@
-@source "../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+/* Kumo ships pre-built components whose Tailwind classes exist only inside its
+   dist bundle, so Tailwind has to scan it or Button/Badge/Loader render bare.
+   The path is the workspace root's node_modules — where bun hoists shared
+   dependencies — and `unit-css-source-globs.test.ts` fails if it stops
+   matching, because a glob that matches nothing is silently a no-op. */
+@source "../../../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
 @import "tailwindcss";
 @import "@cloudflare/kumo/styles/tailwind";
 
