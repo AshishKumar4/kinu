@@ -113,6 +113,13 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
     whenToUse: 'Use for multi-step logic, file operations, crafted tool calls, scheduling, and operations that need shared state.',
     whenNotToUse: 'Do not use for a single shell command when `run` is enough.',
+    // The recurring mental-model error: models read `workspace.*` as the
+    // machine's filesystem and call workspace.readdir('/app') on a container
+    // path, which cannot resolve. Stating what the namespace IS is what stops
+    // the whole class, not a better error on the tenth attempt.
+    doctrine:
+      'workspace.* is the agent\'s OWN virtual filesystem, not the filesystem of the machine or container this agent runs on — a container path such as /app is not reachable through it. '
+      + 'Read and write files that live on a real machine or container by running a shell command there with the `run` tool, in the runtime that owns them.',
     result: 'Returns a structured execution result or error object from the codemode runtime.',
   },
   run: {

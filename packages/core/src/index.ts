@@ -788,11 +788,12 @@ export {
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
 } from './heads/index.js';
 
-// Background-job system — auto-background >30s tool calls + wake-on-completion.
+// Background-job system — auto-background long tool calls + wake-on-completion.
 export {
   BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
-  BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR,
-  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type ThresholdDeps,
+  BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
+  type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
+  type BackgroundPolicy, type DetachOutcome, type SessionSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
 } from './jobs/index.js';
 

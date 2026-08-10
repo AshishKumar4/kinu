@@ -17,6 +17,7 @@ import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
+import { isVfsError, withVfsErrorHint } from '../vfs/errno.js';
 import { readExecSignal } from './signal.js';
 
 interface ShellExec {
@@ -41,6 +42,46 @@ export interface InlineExecutorDeps {
    * can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
+}
+
+/**
+ * Every VFS error out of `workspace.*` carries the correction the model needs.
+ *
+ * `workspace.*` addresses the agent's OWN filesystem; models routinely read it
+ * as the machine's, and a bare `ENOENT: … scandir '/app'` neither says so nor
+ * points anywhere useful. Under a benchmark that mistake ended two whole trials.
+ * The roots are read live from the filesystem itself, so the hint can never
+ * drift from the runtime it describes. The error keeps its code, errno and
+ * path — only what a reader sees changes.
+ */
+function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
+  const guided: ExecutorProvider['tools'] = {};
+  for (const [name, entry] of Object.entries(tools)) {
+    guided[name] = {
+      ...entry,
+      execute: async (...args: unknown[]) => {
+        try {
+          return await entry.execute(...args);
+        } catch (err) {
+          if (!isVfsError(err)) throw err;
+          throw withVfsErrorHint(err, await addressingHint(vfs));
+        }
+      },
+    };
+  }
+  return guided;
+}
+
+async function addressingHint(vfs: VFS): Promise<string> {
+  let roots = '';
+  try { roots = (await vfs.readdir('/')).join(', '); } catch { /* the hint stands without it */ }
+  return (
+    'workspace.* is the agent\'s own virtual filesystem, NOT the machine or container this agent ' +
+    'runs on: a path here is not the machine path of the same name' +
+    (roots ? `, and this filesystem's roots are: ${roots}` : '') +
+    '. To reach files that live on a real machine or container, run a shell command there with the ' +
+    '`run` tool (choosing the runtime that owns them), or address them through the root that maps to it.'
+  );
 }
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
@@ -215,7 +256,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
-    tools,
+    tools: withVfsGuidance(vfs, tools),
     types,
     positionalArgs: true,
     // workspace executor runs INSIDE the Worker — no inbound TCP port

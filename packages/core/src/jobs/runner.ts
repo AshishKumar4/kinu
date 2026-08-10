@@ -14,7 +14,7 @@
 import type { Schedule } from '../types/primitives.js';
 import type { SignalDeliverer } from '../types/signals.js';
 import type { EventLog } from '../events/hub/log.js';
-import type { ThresholdDeps } from './threshold.js';
+import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold.js';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
 import { nanoid } from '../utils/nanoid.js';
 
@@ -47,8 +47,21 @@ export type JobResumer = (kind: string, input: unknown, signal: AbortSignal) => 
  *  this; the cap only bounds pathological non-progressing kinds. */
 const MAX_RESUME_ATTEMPTS = 5;
 
+/**
+ * Ceiling on jobs detached at once. Every detached job is a live process tree
+ * the agent is no longer watching, and a model that sees no result from a slow
+ * call reliably launches another: one benchmark trial forked 52 concurrent
+ * `pystan` builds this way and took the whole container down with an OOM kill.
+ * Past the cap the detach is refused and the work is cancelled, so the storm
+ * cannot compound — the agent is told what is already running instead.
+ */
+export const MAX_CONCURRENT_DETACHED_JOBS = 8;
+
 export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
+  /** How long work may run before it detaches, and how long teardown waits on
+   *  it — fixed by the session's surface. Defaults to the interactive policy. */
+  policy?: BackgroundPolicy;
   /** Durable fiber — AgentRuntime.schedule.fiber. */
   fiber: Schedule['fiber'];
   /** The one signal-delivery seam — the wake at the end of a settled job. */
@@ -69,6 +82,21 @@ export interface BackgroundJobRunnerDeps {
   resume?: JobResumer;
 }
 
+/** What the model reads when a detach is refused. Honest about what happened to
+ *  its call, and specific about the work already in flight, so the answer is
+ *  "wait for these" rather than "try launching it again". */
+function refusalMessage(kind: string, running: readonly BackgroundJob[]): string {
+  const roster = running.map((j) => `${j.id} (${j.kind})`).join(', ');
+  return (
+    `The "${kind}" call ran past the background threshold, but this workspace already has ` +
+    `${running.length} background job(s) running — the maximum — so it was CANCELLED instead of ` +
+    `being detached. Nothing was left running from this call. Already in flight: ${roster}. ` +
+    `Wait for those to finish (you are woken as each one settles, and agent.jobResult('<id>') ` +
+    `reads a settled one), or cancel the ones you no longer need, before starting more ` +
+    `long-running work. Launching another copy will not make the running ones finish sooner.`
+  );
+}
+
 export class BackgroundJobRunner {
   /** Live AbortControllers for in-flight jobs — hard-cancel handles. In-memory:
    *  a DO eviction loses them, and recover() then fails the orphan. */
@@ -86,16 +114,35 @@ export class BackgroundJobRunner {
     return id;
   }
 
-  /** ThresholdDeps for withBackgroundThreshold: create the job on cross, detach. */
+  /** The surface's background policy — the detach threshold and the teardown
+   *  grace, read by the backend that owns the session lifecycle. */
+  get policy(): BackgroundPolicy {
+    return this.deps.policy ?? BACKGROUND_POLICY.interactive;
+  }
+
+  /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep
+   *  the live work alive durably — unless the concurrency cap is already full,
+   *  in which case the work is cancelled and the model is told why. */
   thresholdDeps(kind: string, input: unknown, controller: AbortController): ThresholdDeps {
     return {
-      createJob: (k) => {
-        const id = this.create(k, input, controller);
-        this.deps.logActivity?.('bg_job_started', `${k} → ${id}`);
-        return id;
-      },
-      detach: (jobId, promise) => this.detach(jobId, kind, promise),
+      thresholdMs: this.policy.detachAfterMs,
+      onThreshold: (k, promise) => this.onThreshold(k, input, controller, promise),
     };
+  }
+
+  private onThreshold(
+    kind: string, input: unknown, controller: AbortController, promise: Promise<unknown>,
+  ): DetachOutcome {
+    const running = this.deps.store.countRunning();
+    if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
+      try { controller.abort(new Error('background-job concurrency cap reached')); } catch { /* nop */ }
+      this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
+      return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
+    }
+    const jobId = this.create(kind, input, controller);
+    this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
+    this.detach(jobId, kind, promise);
+    return { detached: true, jobId };
   }
 
   /** Keep a backgrounded promise alive in a durable fiber; on settle, record the

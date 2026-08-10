@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable } from '@proteus/core';
+import type { WorkspaceInfo, AgentRuntime, SearchNode, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, BACKGROUND_POLICY } from '@proteus/core';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
@@ -63,6 +63,9 @@ export interface LocalAgentClientOptions {
   auth?: string;
   noAutoEvolve?: boolean;
   session?: CliSessionOptions;
+  /** Who is driving — fixes the session's background policy. Default:
+   *  'interactive'. */
+  surface?: SessionSurface;
 }
 
 /** Open a local agent database and wrap its LocalAgentSession as an AgentClient. */
@@ -93,6 +96,7 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     mcpServers: resolveMcpServers(),
     noAutoEvolve: opts.noAutoEvolve ?? false,
     sessionOptions: opts.session ?? {},
+    surface: opts.surface ?? 'interactive',
   });
 }
 
@@ -138,6 +142,7 @@ export interface LocalAgentClientDeps {
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   sessionOptions: CliSessionOptions;
+  surface: SessionSurface;
 }
 
 interface PendingLocalTurn {
@@ -443,6 +448,7 @@ export class LocalAgentClient implements AgentClient {
       model: this.deps.model,
       modelResolver: this.deps.modelResolver,
       noAutoEvolve: this.deps.noAutoEvolve,
+      backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
       sessionId,
       persistMessages: this.activeCliSession.mode !== 'none',
       onEvent: (event) => this.handleSessionEvent(event),

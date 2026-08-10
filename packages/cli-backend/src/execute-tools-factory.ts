@@ -17,6 +17,7 @@
  */
 
 import type { CodemodeProvider } from '@proteus/core';
+import { BUILTIN_TOOL_DESCRIPTIONS } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor.js';
 
@@ -39,7 +40,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
   }) => {
     const craftedBindings: Record<string, (arg: unknown) => Promise<unknown>> = {};
     for (const [name, entry] of Object.entries(opts.tools)) {
-      craftedBindings[name] = entry.execute as (arg: unknown) => Promise<unknown>;
+      craftedBindings[name] = containRejection(entry.execute as (arg: unknown) => Promise<unknown>);
     }
 
     const providers = [
@@ -48,8 +49,9 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
     ];
 
     return tool({
-      description:
-        'Execute JavaScript to accomplish tasks. workspace.* for files/shell, codemode.* for learned patterns. (Node fallback — same surface as the CF codemode sandbox.)',
+      // The one description, shared with the CF codemode sandbox: this factory
+      // is that tool on a different runtime, not a different tool.
+      description: BUILTIN_TOOL_DESCRIPTIONS.execute_tools,
       inputSchema: jsonSchema<{ code: string }>({
         type: 'object',
         properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
@@ -74,7 +76,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
             if (!p || typeof p !== 'object' || !('name' in p) || !('tools' in p)) continue;
             const nsp: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = (...a: unknown[]) => t.execute(...a, context);
+              nsp[toolName] = containRejection((...a: unknown[]) => t.execute(...a, context));
             }
             providerBindings[p.name] = nsp;
           }
@@ -113,6 +115,30 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         }
       },
     });
+  };
+}
+
+/**
+ * Every binding the sandbox exposes, made safe to float.
+ *
+ * The code inside `execute_tools` is written by the model, and its most common
+ * slip is a missing `await`. A floated call that then rejects — a VFS ENOENT,
+ * a shell failure — has no handler anywhere, so it surfaced as an
+ * `unhandledRejection` and Bun killed the CLI mid-turn: a solvable benchmark
+ * task died at tool call #13 that way. Attaching a sink to the call marks it
+ * handled at the source, which costs nothing and changes nothing for code that
+ * DOES await — that await still sees the real rejection, and the tool's own
+ * try/catch still turns it into a returned error.
+ */
+function containRejection<A extends unknown[]>(
+  fn: (...args: A) => Promise<unknown>,
+): (...args: A) => Promise<unknown> {
+  return (...args: A) => {
+    let call: Promise<unknown>;
+    try { call = Promise.resolve(fn(...args)); }
+    catch (err) { call = Promise.reject(err); }
+    void call.catch(() => { /* the awaiting caller, if any, still sees it */ });
+    return call;
   };
 }
 

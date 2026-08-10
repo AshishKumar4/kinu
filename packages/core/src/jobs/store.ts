@@ -168,6 +168,14 @@ export class BackgroundJobStore {
       FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
   }
 
+  /** How many jobs are still in flight — the input to the concurrent-detach
+   *  cap. Counted in SQL rather than from `listRunning`, whose limit would
+   *  silently under-report exactly when the cap matters. */
+  countRunning(): number {
+    const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
+    return rows[0]?.n ?? 0;
+  }
+
   /** Only the jobs still in flight, newest first — the dynamic-context roster.
    *  Narrower than `list`, which a settled backlog can crowd out entirely. */
   listRunning(limit = 20): BackgroundJob[] {

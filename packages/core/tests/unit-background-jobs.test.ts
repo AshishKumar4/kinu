@@ -1,7 +1,7 @@
 // BackgroundJobStore + withBackgroundThreshold — the #173 background/async core.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult } from '../src/jobs/index.js';
+import { BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY } from '../src/jobs/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 function newStore() {
@@ -149,36 +149,50 @@ describe('serializeJobResult', () => {
 
 describe('withBackgroundThreshold', () => {
   test('fast work returns its result inline — no job created', async () => {
-    let created = 0;
+    let crossings = 0;
     const out = await withBackgroundThreshold('think', async () => 'fast-result', {
       thresholdMs: 1000,
-      createJob: () => { created++; return 'jX'; },
-      detach: () => { throw new Error('should not detach'); },
+      onThreshold: () => { crossings++; return { detached: true, jobId: 'jX' }; },
     });
     expect(out).toBe('fast-result');
-    expect(created).toBe(0);
+    expect(crossings).toBe(0);
   });
 
   test('slow work returns a BackgroundHandle + detaches the live promise', async () => {
-    let detachedJob: string | null = null;
     let detachedPromise: Promise<unknown> | null = null;
     const out = await withBackgroundThreshold('heads', async () => { await delay(80); return 'slow-result'; }, {
       thresholdMs: 20,
-      createJob: () => 'job-7',
-      detach: (id, p) => { detachedJob = id; detachedPromise = p; },
+      onThreshold: (_kind, p) => { detachedPromise = p; return { detached: true, jobId: 'job-7' }; },
     });
     expect(isBackgroundHandle(out)).toBe(true);
     if (isBackgroundHandle(out)) { expect(out.jobId).toBe('job-7'); expect(out.kind).toBe('heads'); }
-    expect(detachedJob).toBe('job-7');
     // The detached promise is the SAME live work and still resolves.
     await expect(detachedPromise).resolves.toBe('slow-result');
+  });
+
+  test('a refused detach returns the refusal to the model, not a handle', async () => {
+    const out = await withBackgroundThreshold('run', async () => { await delay(80); return 'never read'; }, {
+      thresholdMs: 20,
+      onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
+    });
+    expect(isBackgroundHandle(out)).toBe(false);
+    expect(out).toEqual({ background: false, kind: 'run', message: 'too many jobs already running' });
   });
 
   test('fast rejection propagates inline (no background)', async () => {
     await expect(withBackgroundThreshold('run', async () => { throw new Error('quick fail'); }, {
       thresholdMs: 1000,
-      createJob: () => 'jZ',
-      detach: () => { throw new Error('should not detach'); },
+      onThreshold: () => { throw new Error('should not detach'); },
     })).rejects.toThrow('quick fail');
+  });
+
+  test('the default threshold is the interactive policy', async () => {
+    // No thresholdMs: a caller that does not state a surface gets the one a
+    // human is waiting on, never an unbounded inline wait.
+    expect(BACKGROUND_POLICY.interactive.detachAfterMs).toBe(30_000);
+    const out = await withBackgroundThreshold('run', async () => 'inline', {
+      onThreshold: () => { throw new Error('should not detach'); },
+    });
+    expect(out).toBe('inline');
   });
 });

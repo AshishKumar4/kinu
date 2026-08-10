@@ -47,3 +47,63 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     expect(out.logs).toBeUndefined();
   });
 });
+
+/** A provider namespace whose calls reject, like the host-bridged `workspace.*`
+ *  VFS does when the model addresses a path the agent's filesystem has no idea
+ *  about. */
+function makeToolWithFailingProvider(error: Error) {
+  const calls: string[] = [];
+  const factory = createNodeExecuteToolFactory({
+    extraProviders: [{
+      name: 'workspace',
+      tools: {
+        readdir: { description: 'list', execute: async (path: unknown) => { calls.push(String(path)); throw error; } },
+      },
+    } as never],
+  });
+  return { tool: factory({ tools: {}, providers: [], loader: {} }) as unknown as ExecTool, calls };
+}
+
+describe('createNodeExecuteToolFactory — a failing host call can never kill the process', () => {
+  test('a FLOATED rejecting provider call does not become an unhandled rejection', async () => {
+    // The production crash: the model forgets `await`, workspace.readdir('/app')
+    // rejects with ENOENT, nothing is handling that promise, and Bun kills the
+    // CLI mid-turn. bun:test fails this test if the rejection escapes, which is
+    // exactly the signal we want.
+    const { tool, calls } = makeToolWithFailingProvider(
+      new Error("ENOENT: no such file or directory, scandir '/app'"),
+    );
+    const out = await tool.execute({ code: 'workspace.readdir("/app");\n"kept going"' });
+
+    expect(calls).toEqual(['/app']);
+    expect(out.result).toBe('kept going');
+    // Give the rejection every chance to surface before the test ends.
+    await new Promise((r) => setTimeout(r, 20));
+  });
+
+  test('an AWAITED rejecting provider call still returns the real error to the model', async () => {
+    const { tool } = makeToolWithFailingProvider(
+      new Error("ENOENT: no such file or directory, scandir '/app' — workspace.* is the agent's own virtual filesystem"),
+    );
+    const out = await tool.execute({ code: 'const e = await workspace.readdir("/app");\ne' });
+
+    expect(out.result).toBeUndefined();
+    expect(out.error).toContain('ENOENT');
+    expect(out.error).toContain("workspace.* is the agent's own virtual filesystem");
+  });
+
+  test('a rejection caught by the model\'s own code is handled there, not swallowed', async () => {
+    const { tool } = makeToolWithFailingProvider(new Error('ENOENT: nope'));
+    const out = await tool.execute({
+      code: 'try { await workspace.readdir("/app"); } catch (e) { return "caught:" + e.message }',
+    });
+    expect(out.result).toBe('caught:ENOENT: nope');
+  });
+
+  test('the tool description tells the model what workspace.* actually is', async () => {
+    const factory = createNodeExecuteToolFactory();
+    const built = factory({ tools: {}, providers: [], loader: {} }) as unknown as { description: string };
+    expect(built.description).toContain('OWN virtual filesystem');
+    expect(built.description).toContain('`run` tool');
+  });
+});

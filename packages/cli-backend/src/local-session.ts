@@ -33,7 +33,7 @@ import type {
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, JobNotResumable, initBackgroundJobsTable,
-  wrapToolsForBackground, resumeForkBackgroundJob,
+  wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
   EventLog, initEventsHubTables,
   RunEventRecorder, initRunEventTables,
@@ -194,6 +194,10 @@ export interface LocalAgentSessionOpts {
   /** Working directory for AGENTS.md discovery + the prompt's runtime context.
    *  Default: process.cwd(). */
   cwd?: string;
+  /** How long a tool call may run before it is moved to the background, and how
+   *  long teardown waits on work that has not settled. Fixed by the surface that
+   *  opened the session (BACKGROUND_POLICY). Default: the interactive policy. */
+  backgroundPolicy?: BackgroundPolicy;
 }
 
 interface QueueItem {
@@ -446,6 +450,7 @@ export class LocalAgentSession implements BackendHost {
     });
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
+      policy: opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
       signals: this.orch.signals,
       eventLog: this.eventLog,
@@ -931,15 +936,15 @@ export class LocalAgentSession implements BackendHost {
     await this.orch.drainPendingEvents();
   }
 
-  /** End the session: let the evolution this run started finish, then let any
-   *  detached background fiber settle, then disconnect MCP. Both windows are
-   *  durable, so whatever does not finish carries over to the next run rather
-   *  than being force-closed here. */
+  /** End the session: let the evolution this run started finish, then give any
+   *  detached background fiber its grace to settle, then disconnect MCP. Both
+   *  windows are durable, so whatever does not finish carries over to the next
+   *  run rather than being force-closed here. */
   async end(): Promise<void> {
     this.ended = true;
     this.clearLocalAlarm();
     await this.orch.settleEvolution();
-    await this.settleBackgroundFibers();
+    await this.joinBackgroundFibers(this.drainDeadline());
     try { await this.mcpClose?.(); } catch { /* best effort */ }
   }
 
@@ -948,6 +953,15 @@ export class LocalAgentSession implements BackendHost {
    *  CLI's equivalent is refusing to close the database out from under one,
    *  which would abort the settle write mid-flight. */
   private readonly backgroundFibers = new Set<Promise<unknown>>();
+
+  /** The ONE wall-clock budget this session spends waiting on work that has not
+   *  settled, armed the first time a drain asks for it. settleBackgroundWork()
+   *  and end() share it, so a one-shot run — which calls both, back to back, on
+   *  the same never-settling job — cannot pay the grace twice. */
+  private settleDeadline: number | null = null;
+  private drainDeadline(): number {
+    return this.settleDeadline ??= Date.now() + this.jobRunner.policy.settleGraceMs;
+  }
   private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
     const running = this.rt.schedule.fiber(name, fn);
     this.backgroundFibers.add(running);
@@ -956,17 +970,42 @@ export class LocalAgentSession implements BackendHost {
     return running;
   }
 
-  /** Await every in-flight background fiber, including ones started by the
-   *  settle of an earlier one. Each is a single tool call, so this converges. */
-  private async settleBackgroundFibers(): Promise<void> {
-    if (this.backgroundFibers.size === 0) return;
+  /**
+   * Await in-flight background fibers until they settle or `deadline` passes.
+   *
+   * The wait has to be bounded because the work behind a fiber may never
+   * finish: the calls that detach are the ones that ran long, and the longest
+   * of those are servers and VMs the agent deliberately left running. An
+   * unbounded join on those was 6.4 of 16.2 agent-hours of dead idle across a
+   * benchmark run, every second of it after the agent had already answered.
+   *
+   * Whatever is still running at the deadline is LEFT running — not cancelled.
+   * Its shell children live in their own process groups and outlive this
+   * process, which is the whole point of "I started the server in the
+   * background", and its durable job row stays `running`, so the next start's
+   * orphan recovery treats it exactly as it treats a job interrupted by a kill.
+   * Returns true when everything settled inside the grace.
+   */
+  private async joinBackgroundFibers(deadline: number): Promise<boolean> {
+    if (this.backgroundFibers.size === 0) return true;
     this.emit({
       type: 'evolution', event: 'bg_jobs_settling',
       message: `${this.backgroundFibers.size} background job(s) still running — waiting for their results`,
     });
     while (this.backgroundFibers.size > 0) {
-      await Promise.allSettled([...this.backgroundFibers]);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        this.emit({
+          type: 'evolution', event: 'bg_jobs_abandoned',
+          message:
+            `${this.backgroundFibers.size} background job(s) did not finish in time and were left running; ` +
+            'their results are not part of this run.',
+        });
+        return false;
+      }
+      await raceDeadline(Promise.allSettled([...this.backgroundFibers]), remaining);
     }
+    return true;
   }
 
   /**
@@ -1076,19 +1115,31 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Drain in-flight background work to quiescence: await detached job fibers,
-   *  run the wake turns their settlement enqueues, and repeat until nothing is
-   *  detached, queued, or pumping. Unlike end() this never marks the session
-   *  ended, so the wakes actually run (enqueueTurn only skips once ended) — and
-   *  because a settled fiber awaits its own wake turn (host.enqueueTurn resolves
-   *  when that turn finishes), awaiting the fibers awaits the wakes too. A
-   *  one-shot `proteus run`/`exec` calls this after its turn and before it stops
-   *  listening/closes, so a turn that backgrounded work streams its second half
-   *  instead of being cut off at process exit. */
+  /**
+   * Drain in-flight background work: await detached job fibers, run the wake
+   * turns their settlement enqueues, and repeat until nothing is detached,
+   * queued, or pumping. Unlike end() this never marks the session ended, so the
+   * wakes actually run (enqueueTurn only skips once ended) — and because a
+   * settled fiber awaits its own wake turn (host.enqueueTurn resolves when that
+   * turn finishes), awaiting the fibers awaits the wakes too. A one-shot
+   * `proteus run`/`exec` calls this after its turn and before it stops
+   * listening/closes, so a turn that backgrounded work streams its second half
+   * instead of being cut off at process exit.
+   *
+   * The two waits are bounded differently on purpose. A TURN already in flight
+   * is always run to completion — truncating a wake turn is the exact defect
+   * this method exists to prevent, and a turn is bounded by its own budget.
+   * Waiting on work that has NOT settled is bounded by the surface's grace:
+   * that work may be a server which never settles at all.
+   */
   async settleBackgroundWork(): Promise<void> {
-    while (this.pumping || this.queue.length > 0 || this.backgroundFibers.size > 0) {
-      if (this.pumpPromise) await this.pumpPromise;
-      if (this.backgroundFibers.size > 0) await Promise.allSettled([...this.backgroundFibers]);
+    const deadline = this.drainDeadline();
+    for (;;) {
+      // A queued turn always has a live pump (enqueueTurn kicks it), so awaiting
+      // the pump drains the queue too.
+      if (this.pumpPromise) { await this.pumpPromise; continue; }
+      if (this.backgroundFibers.size === 0) return;
+      if (!await this.joinBackgroundFibers(deadline)) return;
     }
   }
 
@@ -2023,6 +2074,15 @@ function triggerToView(t: TriggerRow): LocalTriggerView {
     last_fire_at: t.last_fire_at,
     fire_count: t.fire_count,
   };
+}
+
+/** Resolve when `work` settles or `ms` elapses, whichever comes first. The timer
+ *  is always cleared, so a fast settle leaves nothing holding the event loop. */
+async function raceDeadline(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+  try { await Promise.race([work, expiry]); }
+  finally { if (timer) clearTimeout(timer); }
 }
 
 /** Last index matching the predicate (ES2023 findLastIndex without the lib dep). */

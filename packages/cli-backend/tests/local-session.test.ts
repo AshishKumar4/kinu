@@ -10,7 +10,7 @@ import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
-  initSearchTables, initAlternateTakesTable, captureAlternateTakes,
+  initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   type AgentsToolDeps, type StrategyContext,
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
@@ -56,6 +56,17 @@ function fakeModel(answer: string): LanguageModel {
       }),
       response: { headers: {} },
     }),
+  } as unknown as LanguageModel;
+}
+
+/** A model whose non-streaming call never resolves — the test's stand-in for a
+ *  detached `run` that started a server: the work is genuinely alive, and it is
+ *  never going to settle. */
+function hangingModel(): LanguageModel {
+  const base = fakeModel('unused') as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    doGenerate: () => new Promise<never>(() => { /* never settles */ }),
   } as unknown as LanguageModel;
 }
 
@@ -1079,6 +1090,124 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(order.slice(wakeStartIdx + 1).some((e) => e.type === 'turn-end')).toBe(true);
     // Quiescent: no background work left in flight once settle returned.
     expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
+  });
+
+  test('settleBackgroundWork gives up on work that never settles, and leaves it running', async () => {
+    // The regression this pins: `proteus exec` detaches a server-style `run`
+    // (a VM, a package server, a training job), the agent correctly ends its
+    // turn, and the process then blocked on Promise.allSettled over a fiber
+    // that never settles — 6.4 of 16.2 agent-hours of dead idle across a
+    // benchmark run, every trial of it ended by the harness SIGKILL.
+    const { db, session, events } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-hang', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fh', 'bg:think', '{"phase":"running","jobId":"bgjob-hang","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    expect(jobStatus(db, 'bgjob-hang')).toBe('running');
+
+    const started = performance.now();
+    await session.settleBackgroundWork();
+    const waited = performance.now() - started;
+
+    // Bounded by the grace, not by the work.
+    expect(waited).toBeGreaterThanOrEqual(140);
+    expect(waited).toBeLessThan(5_000);
+    // Left RUNNING, not cancelled: a server the agent deliberately started has
+    // to outlive the one-shot process that started it, and the durable row is
+    // what the next start's orphan recovery reads.
+    expect(jobStatus(db, 'bgjob-hang')).toBe('running');
+    // Not silent about it either.
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_jobs_abandoned')).toBe(true);
+  });
+
+  test('end() releases the session when a fiber will never settle', async () => {
+    const { db, session } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-e', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fe', 'bg:think', '{"phase":"running","jobId":"bgjob-e","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    const started = performance.now();
+    await session.end();
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(jobStatus(db, 'bgjob-e')).toBe('running');
+  });
+
+  test('a one-shot drain then close pays the grace once, not twice', async () => {
+    // runOneShot calls settleBackgroundWork() and then close() → end(), back to
+    // back, on the same never-settling job. Two independent graces would double
+    // the idle tail this whole change exists to remove.
+    const { db, session } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200 },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-2x', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2x', 'bg:think', '{"phase":"running","jobId":"bgjob-2x","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    const started = performance.now();
+    await session.settleBackgroundWork();
+    await session.end();
+    const total = performance.now() - started;
+
+    expect(total).toBeGreaterThanOrEqual(190);
+    expect(total).toBeLessThan(400);
+  });
+
+  test('a long tool call runs inline under a policy whose threshold it does not cross', async () => {
+    // A one-shot run has no human waiting on a fast turn, so ordinary long work
+    // — a build, a test suite — completes inline. Detaching it would truncate
+    // the turn and force the model into polling its own job instead of working.
+    const { db, session, events } = setup(
+      'unused',
+      executeToolsModel('await new Promise(r => setTimeout(r, 120));\n"computed inline"'),
+      { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 } },
+    );
+    await session.send('do the long thing');
+
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_job_started')).toBe(false);
+    expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 0 });
+    const result = events.find((e) => e.type === 'tool-result') as { result?: unknown } | undefined;
+    expect(JSON.stringify(result?.result)).toContain('computed inline');
+  });
+
+  test('the same call detaches once it crosses the policy threshold', async () => {
+    const { db, session, events } = setup(
+      'unused',
+      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"computed late"'),
+      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000 } },
+    );
+    await session.send('do the long thing');
+    await session.settleBackgroundWork();
+
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_job_started')).toBe(true);
+    expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 1 });
+  });
+
+  test('past the concurrent-job cap a crossing call is refused, and the model is told why', async () => {
+    const { db, session, events } = setup(
+      'unused',
+      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
+      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500 } },
+    );
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      db.exec(`INSERT INTO background_jobs (id, kind, status, created_at) VALUES ('busy-${i}', 'run', 'running', 1)`);
+    }
+
+    await session.send('start another one');
+
+    // No new job minted: the cap held.
+    expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: MAX_CONCURRENT_DETACHED_JOBS });
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_job_refused')).toBe(true);
+    const result = events.find((e) => e.type === 'tool-result') as { result?: unknown } | undefined;
+    const text = JSON.stringify(result?.result);
+    expect(text).toContain('CANCELLED');
+    expect(text).toContain('busy-0');
   });
 
   test('toolNames exposes the full surface (agents/fact parity); end() resolves', async () => {

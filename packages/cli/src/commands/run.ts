@@ -71,7 +71,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
     json: outputMode === 'json',
     headless: false,
   });
-  if (failed) process.exitCode = 1;
+  exitOneShot(failed);
 }
 
 export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
@@ -110,7 +110,26 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     json: opts.json === true,
     headless: true,
   });
-  process.exitCode = failed ? 1 : 0;
+  exitOneShot(failed);
+}
+
+/**
+ * End the one-shot command.
+ *
+ * A one-shot run is over once its turn and its bounded background drain are:
+ * there is nothing left for this process to do. It still cannot simply return,
+ * because the shell it ran commands through keeps a handle on every child it
+ * spawned — so a `run` the agent deliberately left running in the background (a
+ * server, a VM, a training job) holds the process open long after the answer was
+ * printed. That was measured at 6.4 of 16.2 agent-hours of pure idle tail across
+ * an 89-task benchmark run, all of it after the agent had already finished.
+ *
+ * Exiting here does not disturb that work: every child is spawned into its own
+ * process group and outlives us, which is precisely what "I left it running"
+ * has to mean for the task that asked for a running server.
+ */
+function exitOneShot(failed: boolean): never {
+  process.exit(failed ? 1 : 0);
 }
 
 /** exec is non-interactive, so an omitted --workspace only works when there
@@ -142,7 +161,11 @@ async function runOneShot(
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) });
+  const client = createAgentClient(
+    target,
+    { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },
+    'one-shot',
+  );
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;

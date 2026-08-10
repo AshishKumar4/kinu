@@ -1,3 +1,4 @@
+import type { SessionSurface } from '@proteus/core';
 import { requireAuthConfig } from './config.js';
 import type { AgentTarget } from './agent-target.js';
 import type { AgentClient } from './agent-client.js';
@@ -17,8 +18,16 @@ export interface AgentClientFlags {
  * session-scoped local LLM overrides and never mutate an agent durably; cloud
  * turns run in the DO with the agent's stored model, so the flags are rejected
  * there with a pointer to the explicit durable command.
+ *
+ * `surface` is not a user flag: it is which command is driving. A one-shot run
+ * exits after its answer, which changes how long work may run before it is
+ * moved to the background and how long teardown waits for it.
  */
-export function createAgentClient(target: AgentTarget, opts: AgentClientFlags & CliSessionOptions): AgentClient {
+export function createAgentClient(
+  target: AgentTarget,
+  opts: AgentClientFlags & CliSessionOptions,
+  surface: SessionSurface = 'interactive',
+): AgentClient {
   if (target.mode === 'cloud') {
     rejectLocalLlmFlags(opts);
     const auth = requireAuthConfig();
@@ -36,6 +45,7 @@ export function createAgentClient(target: AgentTarget, opts: AgentClientFlags & 
     auth: opts.auth,
     noAutoEvolve: opts.noAutoEvolve,
     session: opts,
+    surface,
   });
 }
 

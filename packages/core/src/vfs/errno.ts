@@ -43,6 +43,17 @@ export function makeVfsError(code: VfsErrorCode, message: string, path: string):
   return err;
 }
 
+/** The same error with guidance appended to its message. Code, errno and path
+ *  are preserved, so callers switching on `code` are unaffected — only what a
+ *  human or a model reads changes. */
+export function withVfsErrorHint(err: VfsError, hint: string): VfsError {
+  const next = new Error(`${err.message} — ${hint}`) as VfsError;
+  next.code = err.code;
+  next.errno = err.errno;
+  next.path = err.path;
+  return next;
+}
+
 /** True when `err` carries a code from the closed taxonomy. */
 export function isVfsError(err: unknown): err is VfsError {
   return err instanceof Error && typeof (err as VfsError).code === 'string'
