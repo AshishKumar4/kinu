@@ -19,7 +19,7 @@ import {
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
-  AgentRuntime, LLMProviderConfig, CompletedTurn, FiberCtx,
+  AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
@@ -183,6 +183,15 @@ export interface LocalAgentSessionOpts {
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
+  /** This process runs ONE task turn and exits (`proteus exec`/`proteus run`).
+   *  Two consequences, both about honesty rather than throttling:
+   *    • the next invocation's prompt is NOT a conversational follow-up, so it
+   *      never grades the previous turn (it would read as `accepted`);
+   *    • the cadence-heavy evolution pass is not started here, because this
+   *      process cannot finish it — the durable window carries the turns to
+   *      the local scheduler daemon instead.
+   *  Default false: the REPL, TUI and daemon are all long-lived. */
+  oneShot?: boolean;
   /** Turns between session-level reflections (default 5, matching the DO). */
   sessionReflectionInterval?: number;
   /** Durable conversation key in the local messages table. Default: `default`. */
@@ -255,6 +264,15 @@ export class LocalAgentSession implements BackendHost {
   private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
   private readonly sessionId: string;
+  /** True when this process runs one task turn and exits — see the `oneShot`
+   *  option. Decides turn continuity and whether the cadence lane may start. */
+  private readonly oneShot: boolean;
+  /** Whether a message arriving in THIS process can be a verdict on the turn
+   *  before it. A one-shot process holds no conversation: its prompt came from
+   *  a caller who never saw the previous answer. */
+  private get turnContinuity(): TurnContinuity {
+    return this.oneShot ? 'independent_task' : 'conversation';
+  }
   private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
@@ -312,6 +330,7 @@ export class LocalAgentSession implements BackendHost {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
     this.sessionId = opts.sessionId ?? 'default';
+    this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? process.cwd();
     this.persistMessagesEnabled = opts.persistMessages !== false;
     this.fallbackModel = opts.model;
@@ -441,6 +460,7 @@ export class LocalAgentSession implements BackendHost {
       eventLog: this.eventLog,
       budget: this.budget,
       sessionReflectionInterval: opts.sessionReflectionInterval,
+      oneShot: opts.oneShot === true,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
         onStepEvent: (ev) => this.recordRunEvent({
@@ -936,10 +956,26 @@ export class LocalAgentSession implements BackendHost {
     await this.orch.drainPendingEvents();
   }
 
-  /** End the session: let the evolution this run started finish, then give any
-   *  detached background fiber its grace to settle, then disconnect MCP. Both
-   *  windows are durable, so whatever does not finish carries over to the next
-   *  run rather than being force-closed here. */
+  /**
+   * Run the session/lifetime evolution pass the durable window is due for, to
+   * completion. This is the CADENCE LANE (AgentOrchestrator's exit contract),
+   * and this method is how a host that CAN afford it claims the work a
+   * one-shot `proteus exec` process deliberately left behind: the scheduler
+   * daemon calls it on its tick, in a process whose wall clock is charged to
+   * nobody's task.
+   *
+   * Resolves immediately when nothing is due. Never rejects — the pass absorbs
+   * its own failures and the window carries forward.
+   */
+  async runDueEvolution(): Promise<void> {
+    if (this.ended) return;
+    await this.orch.runDueSessionEvolution();
+  }
+
+  /** End the session: let the evolution this run started finish, then let any
+   *  detached background fiber settle, then disconnect MCP. Both windows are
+   *  durable, so whatever does not finish carries over to the next run rather
+   *  than being force-closed here. */
   async end(): Promise<void> {
     this.ended = true;
     this.clearLocalAlarm();
@@ -1202,8 +1238,10 @@ export class LocalAgentSession implements BackendHost {
     // substrate — see core checkpoints/types.ts).
     this.rt.checkpoints?.beginTurn({ turnId: crypto.randomUUID(), sessionId: this.sessionId });
     // A real user message grades the previous turn — dispatch the detached
-    // outcome review (same core pipeline as the DO's beforeTurn hook).
-    if (item.kind === 'user') this.orch.observeUserTurn(item.text);
+    // outcome review (same core pipeline as the DO's beforeTurn hook). In a
+    // one-shot process the previous turn belongs to an already-exited
+    // invocation, so this prompt is a fresh task, not a verdict on it.
+    if (item.kind === 'user') this.orch.observeUserTurn(item.text, this.turnContinuity);
     this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
@@ -1498,7 +1536,7 @@ export class LocalAgentSession implements BackendHost {
       const turn = snapshotTurn();
       this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
-      await this.orch.completeTurn(turn);
+      await this.orch.completeTurn(turn, this.turnContinuity);
       // Sampled auto-judge shadow rollout. Tracked rather than fire-and-forget:
       // a `proteus exec` process exits the moment the turn ends, and the
       // evaluation that resolves a pending scaffold must not die with it.

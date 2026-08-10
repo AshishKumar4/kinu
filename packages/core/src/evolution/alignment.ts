@@ -5,7 +5,12 @@
  * benchmark, no judge, and no LLM call: how often the user has to correct the
  * agent, per 100 graded turns, and whether that number is moving.
  *
- * It reads the `turn_outcomes` ledger (owned by outcomes.ts) and nothing else.
+ * It reads the `turn_outcomes` ledger (owned by outcomes.ts) and nothing else —
+ * specifically, the rows a USER produced. Execution-sourced rows live in the
+ * same ledger (the environment's verdict on turns nobody graded) and are
+ * counted separately here rather than folded in: this metric's claim is about
+ * how often a person had to correct the agent, and it would stop being true the
+ * moment a workspace's headless traffic started moving the number.
  * Turns are segmented by the `scaffold_version` that served them, so each
  * segment is "how the agent behaved while it was THAT version of itself" and
  * the boundaries between segments are exactly the self-evolution events.
@@ -41,12 +46,20 @@ export interface RateInterval {
 }
 
 export interface AlignmentTotals {
-  /** Graded turns — the rate's denominator (accepted + corrected + frustrated). */
+  /** Turns a USER graded — the rate's denominator (accepted + corrected +
+   *  frustrated, from explicit/classifier/take_pick rows). */
   turns: number;
-  /** corrected + frustrated. */
+  /** corrected + frustrated, among those. */
   negatives: number;
   /** Recorded but ungraded (no user verdict either way); excluded from the rate. */
   abandoned: number;
+  /** Rows the ENVIRONMENT graded (source `execution`), not a person. Counted
+   *  and reported, never folded into the rate: K_align is defined as how often
+   *  the USER has to correct the agent, and a machine verdict about whether the
+   *  agent's own commands ran answers a different question. Blending them would
+   *  make the headline number drift with how much headless traffic a workspace
+   *  saw. */
+  executionGraded: number;
   rate: RateInterval;
   firstAt: number;
   lastAt: number;
@@ -104,6 +117,7 @@ interface RawSegmentRow {
   graded: number;
   negatives: number;
   abandoned: number;
+  execution_graded: number;
   first_at: number;
   last_at: number;
 }
@@ -114,6 +128,7 @@ function toSegment(row: RawSegmentRow): AlignmentSegment {
     turns: row.graded,
     negatives: row.negatives,
     abandoned: row.abandoned,
+    executionGraded: row.execution_graded,
     rate: rateInterval(row.negatives, row.graded),
     firstAt: row.first_at,
     lastAt: row.last_at,
@@ -128,6 +143,7 @@ function pool(segments: ReadonlyArray<AlignmentSegment>): AlignmentTotals {
     turns,
     negatives,
     abandoned: sum((s) => s.abandoned),
+    executionGraded: sum((s) => s.executionGraded),
     rate: rateInterval(negatives, turns),
     firstAt: segments.length > 0 ? Math.min(...segments.map((s) => s.firstAt)) : 0,
     lastAt: segments.length > 0 ? Math.max(...segments.map((s) => s.lastAt)) : 0,
@@ -186,9 +202,10 @@ export function alignmentConvergence(sql: SqlExecutor): AlignmentConvergence {
   try {
     rows = sql<RawSegmentRow>`
       SELECT scaffold_version,
-             SUM(CASE WHEN outcome != 'abandoned' THEN 1 ELSE 0 END) AS graded,
-             SUM(CASE WHEN outcome IN ('corrected','frustrated') THEN 1 ELSE 0 END) AS negatives,
+             SUM(CASE WHEN outcome != 'abandoned' AND source != 'execution' THEN 1 ELSE 0 END) AS graded,
+             SUM(CASE WHEN outcome IN ('corrected','frustrated') AND source != 'execution' THEN 1 ELSE 0 END) AS negatives,
              SUM(CASE WHEN outcome = 'abandoned' THEN 1 ELSE 0 END) AS abandoned,
+             SUM(CASE WHEN source = 'execution' THEN 1 ELSE 0 END) AS execution_graded,
              MIN(created_at) AS first_at,
              MAX(created_at) AS last_at
       FROM turn_outcomes
@@ -214,8 +231,11 @@ export function renderAlignmentConvergence(k: AlignmentConvergence): string {
     `${k.comparedVersions ? `, v${k.comparedVersions.from ?? '?'} → v${k.comparedVersions.to ?? '?'}` : ''})`;
   const lines = [
     'K_align — correction rate (corrected + frustrated), 95% Wilson intervals',
-    `Overall: ${formatRate(k.overall.rate)} over ${k.overall.turns} graded turns` +
-      (k.overall.abandoned > 0 ? ` (+${k.overall.abandoned} abandoned, ungraded)` : ''),
+    `Overall: ${formatRate(k.overall.rate)} over ${k.overall.turns} user-graded turns` +
+      (k.overall.abandoned > 0 ? ` (+${k.overall.abandoned} abandoned, ungraded)` : '') +
+      (k.overall.executionGraded > 0
+        ? ` (+${k.overall.executionGraded} execution-graded, not a user verdict — excluded)`
+        : ''),
     `Trend: ${k.trend}${delta}`,
     k.note,
   ];

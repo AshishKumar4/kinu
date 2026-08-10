@@ -10,6 +10,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index.js';
 import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes.js';
+import { alignmentConvergence } from '../src/evolution/alignment.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
@@ -152,10 +153,71 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const clean = makeTurn();
     await engine.reviewTurn(clean, null);
     expect(clean.feedback).toBeNull();
-    // The follow-up may still arrive (in headless usage it is the next
-    // `proteus exec` invocation), so nothing is recorded on no evidence.
+    // No follow-up AND no tool work: the user said nothing and the environment
+    // ruled on nothing, so nothing is recorded on no evidence.
     expect(listTurnOutcomes(rt.storage.sql)).toHaveLength(0);
     expect(events.filter(e => e.type === 'reflection')).toHaveLength(0);
+    // The ungraded turn is still VISIBLE — recorded as ungraded, not as a win.
+    const complete = events.filter(e => e.type === 'turn_complete');
+    expect(complete).toHaveLength(1);
+    expect(complete[0]!.message).toContain('ungraded');
+    expect((complete[0]!.data as { graded: boolean; source: unknown }).graded).toBe(false);
+    expect((complete[0]!.data as { source: unknown }).source).toBeNull();
+  });
+
+  test('no follow-up but real tool work: the ENVIRONMENT grades it, and says so', async () => {
+    const { rt } = createTestRuntime({ llmResponses: { 'Extract a reusable pattern': 'not json' } });
+    const engine = new EvolutionEngine(rt);
+
+    const turn = makeTurn({
+      turnId: 'exec-1',
+      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: 'ok' }],
+    });
+    await engine.reviewTurn(turn, null);
+
+    const [row] = listTurnOutcomes(rt.storage.sql);
+    expect(row!.outcome).toBe('accepted');
+    expect(row!.source).toBe('execution');
+    expect(row!.followup).toBeNull();
+    // A headless turn can finally earn a positive — the asymmetry is gone.
+    expect(turn.feedback).toBe('positive');
+  });
+
+  test('a headless turn that errored is graded corrected — but does NOT corroborate lessons', async () => {
+    const { rt } = createTestRuntime();
+    const engine = new EvolutionEngine(rt);
+    recordLesson(rt.storage.sql, {
+      turnIds: ['exec-2'], text: 'earlier provisional lesson',
+      source: 'turn_reflection', status: 'provisional',
+    });
+
+    await engine.reviewTurn(makeTurn({
+      turnId: 'exec-2', hadError: true,
+      toolCalls: [{ name: 'run', args: { command: 'bun test' }, result: { error: 'exit 1' } }],
+    }), null);
+
+    const [row] = listTurnOutcomes(rt.storage.sql);
+    expect(row!.outcome).toBe('corrected');
+    expect(row!.source).toBe('execution');
+    // The corroboration gate is a USER-verdict gate: a machine verdict still
+    // earns a reflection, but nothing is promoted into durable memory by it.
+    const lessons = listLessons(rt.storage.sql);
+    expect(lessons.every(l => l.status === 'provisional')).toBe(true);
+    expect((await rt.memory.read('memory/MEMORY.md')) ?? '').not.toContain('Lesson');
+  });
+
+  test('K_align stays a USER-correction rate — execution rows are counted apart', async () => {
+    const { rt } = createTestRuntime();
+    const engine = new EvolutionEngine(rt);
+    await engine.reviewTurn(makeTurn({
+      turnId: 'exec-3', hadError: true,
+      toolCalls: [{ name: 'run', args: {}, result: { error: 'boom' } }],
+    }), null);
+
+    const k = alignmentConvergence(rt.storage.sql);
+    expect(k.overall.turns).toBe(0);            // no user graded anything
+    expect(k.overall.negatives).toBe(0);
+    expect(k.overall.executionGraded).toBe(1);  // and the row is not lost either
   });
 
   test('ungraded turn with an error: reflects, but the lesson stays provisional and OUT of MEMORY.md', async () => {

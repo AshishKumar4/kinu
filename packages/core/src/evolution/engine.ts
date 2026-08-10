@@ -8,9 +8,12 @@
  * Architecture reference: final-architecture.md §7 (Evolution at Three Timescales)
  *
  * Timescale 1 — Turn-level (reviewTurn, Hermes-style forked review):
- *   When user message N+1 arrives, turn N is graded from the user's actual
- *   follow-up (accepted / corrected / frustrated). A turn with no follow-up
- *   yet records no outcome — an honest absence, never a constant.
+ *   When user message N+1 arrives IN THE SAME CONVERSATION, turn N is graded
+ *   from the user's actual follow-up (accepted / corrected / frustrated). A
+ *   turn no follow-up can grade — a programmatic wake, or a one-shot
+ *   `proteus exec` whose next invocation is an unrelated task — records no
+ *   outcome: an honest absence, never a constant, and never an `accepted`
+ *   inferred from the fact that something else happened next.
  *   The outcome populates turn.feedback, drives craft EMA, gates reflection
  *   (corrected/frustrated turns warrant it; accepted turns extract patterns),
  *   and lands in the durable turn_outcomes ledger that GEPA eval splits,
@@ -23,10 +26,13 @@
  *   engine owns (session-window.ts), so it survives process/instance death.
  *
  * Timescale 3 — Lifetime-level (every N closed session windows):
- *   Replay eval (the loss curve) → CraftStore consolidation → MCTS exploration.
+ *   CraftStore consolidation → MCTS exploration. The replay eval is NOT on
+ *   this cadence: it re-executes the same ledger GEPA's seed scoring already
+ *   re-executes, for a curve no decision reads. It runs on demand instead.
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { LLM } from '../types/primitives.js';
 import type { SessionWriter } from '../mcts/record-node.js';
 import type {
   CompletedTurn,
@@ -45,6 +51,7 @@ import { readSoul, summarizeSoul } from '../identity/soul.js';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
   initTurnOutcomeTables, isTrivialTurn, isNegativeOutcome, classifyTurnOutcome,
+  executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
   outcomeToFeedback, outcomeQuality, feedbackToQuality,
   recordTurnOutcome, hasNegativeOutcome, takePickOutcome,
   listTurnOutcomes, NEGATIVE_TURN_OUTCOMES,
@@ -206,6 +213,30 @@ export class EvolutionEngine {
     this.sessionWindow = createSessionWindowStore(rt.storage.sql);
   }
 
+  /**
+   * The model the MECHANICAL calls run on — outcome classification, pathology
+   * labels, the one-sentence turn reflection, the session reflection, and
+   * pattern extraction. Short, schema-constrained jobs the chat vendor's small
+   * tier does as well as its flagship (providers/fast-model.ts). Falls back to
+   * the chat model when the vendor has no smaller tier, which is what every
+   * backend did before this existed.
+   *
+   * Deliberately NOT used for the scaffold proposal: that call authors the
+   * agent's own control loop, is rare, and already runs at high reasoning
+   * effort — it is the one place in this file where paying for the better
+   * model is the point.
+   */
+  private get fastLlm(): LLM {
+    return this.rt.fastLlm ?? this.rt.llm;
+  }
+
+  /** Whether auto-evolution is on for this workspace session. Read by
+   *  AgentOrchestrator so a `--no-auto-evolve` run records no evolution state
+   *  at all, rather than buffering turns for a later host to evolve. */
+  get enabled(): boolean {
+    return this.config.enabled;
+  }
+
   /** Subscribe to evolution events (for CLI/UI display) */
   onEvent(listener: EvolutionListener): void {
     this.listeners.push(listener);
@@ -228,9 +259,11 @@ export class EvolutionEngine {
 
   /**
    * Grade turn N from the user's follow-up and run turn-level evolution on
-   * the result. `followup` is the NEXT user message; null means no follow-up
-   * exists (a programmatic turn — the reactor and job wakes carry no user
-   * verdict) and the turn records no outcome at all.
+   * the result. `followup` is the NEXT user message; null means no
+   * conversational follow-up can grade this turn — a programmatic turn (the
+   * reactor and job wakes carry no user verdict) or a one-shot invocation
+   * (`proteus exec`, where the next prompt is a different task, written by a
+   * caller who never saw this answer) — and the turn records no outcome at all.
    *
    * One signal pipeline: explicit thumbs (recorded before the follow-up)
    * beat the classifier; trivial turns (greetings) skip the LLM call; a
@@ -263,7 +296,7 @@ export class EvolutionEngine {
     } else if (isTrivialTurn(turn)) {
       return; // pre-filter: nothing to accept or correct, no LLM call
     } else if (followup !== null) {
-      const c: OutcomeClassification | null = await classifyTurnOutcome(this.rt.llm, {
+      const c: OutcomeClassification | null = await classifyTurnOutcome(this.fastLlm, {
         userMessage: turn.userMessage,
         assistantResponse: turn.assistantResponse,
         followup,
@@ -272,14 +305,34 @@ export class EvolutionEngine {
       outcome = c.outcome;
       confidence = c.confidence;
       evidence = c.evidence;
+    } else {
+      // No follow-up can grade this turn, so no USER signal exists — but the
+      // environment may still have returned a verdict on what the turn did.
+      // That is the only evidence a headless run produces, and reading it is
+      // what makes the headless channel symmetric: before this, a turn that
+      // errored fed a punishment and a turn that worked fed nothing at all.
+      const verdict = executionVerdict(turn);
+      if (verdict) {
+        outcome = executionVerdictOutcome(verdict);
+        source = 'execution';
+        evidence = verdict === 'succeeded'
+          ? 'every tool call this turn ran completed'
+          : 'the turn ended in an error';
+        // The observation is certain — the runtime reported it. That the
+        // observation stands in for a verdict is what `source: 'execution'`
+        // and the narrower EXECUTION_QUALITY band already say; saying it a
+        // third time here would just double-discount the same caveat.
+        confidence = 1;
+      }
+      // With no tool work either, the turn stays ungraded. It is NOT written
+      // as 'abandoned': a conversational follow-up may still be coming, and
+      // everything that reads the ledger already discounts abandonment —
+      // alignmentConvergence counts it as ungraded and buildOutcomeEvalSplit
+      // ignores it — so writing it would only pull the crafted-tool EMA toward
+      // a neutral 0.5 on evidence nobody has. The ungraded turn is still
+      // RECORDED, as the `turn_complete` event below with `graded: false`;
+      // what it is not is counted as a success.
     }
-    // else: no follow-up exists yet, so no user signal exists. The turn is NOT
-    // graded 'abandoned' here: the follow-up may still be coming (in headless
-    // usage it is the next `proteus exec` invocation), and everything that
-    // reads the ledger already discounts abandonment — alignmentConvergence
-    // counts it as ungraded and buildOutcomeEvalSplit ignores it — so writing
-    // it would only pull the crafted-tool EMA toward a neutral 0.5 on evidence
-    // nobody has.
 
     if (outcome) {
       if (!preRecorded) {
@@ -296,19 +349,29 @@ export class EvolutionEngine {
       turn.feedback = outcomeToFeedback(outcome);
     }
 
-    // Quality: the outcome IS the signal. An abandoned turn (only ever an
-    // existing ledger row now) that errored is the one case the error
-    // decides; a clean abandonment stays neutral.
+    // Quality: the outcome IS the signal, priced by where the verdict came
+    // from. An abandoned turn (only ever an existing ledger row now) that
+    // errored is the one case the error decides; a clean abandonment stays
+    // neutral.
     const quality: number | null = outcome
-      ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome))
+      ? (outcome === 'abandoned' && turn.hadError ? 0.1 : outcomeQuality(outcome, source))
       : (turn.hadError ? 0.1 : null);
 
+    // `source`/`confidence` describe a verdict, so they are null on an
+    // ungraded turn rather than reporting the classifier default as if a
+    // classification had happened.
     this.emit({
       type: 'turn_complete',
-      message: `Turn outcome: ${outcome ?? 'unobserved'}` +
+      message: `Turn outcome: ${outcome ?? 'ungraded (no follow-up)'}` +
         (quality !== null ? ` | quality ${quality.toFixed(2)}` : '') +
         ` | ${turn.toolCalls.length} tool calls | ${turn.steps} steps | ${turn.hadError ? 'had errors' : 'clean'}`,
-      data: { outcome, source, confidence, evidence, quality, toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs },
+      data: {
+        outcome, graded: outcome !== null,
+        source: outcome ? source : null,
+        confidence: outcome ? confidence : null,
+        evidence, quality,
+        toolCount: turn.toolCalls.length, steps: turn.steps, durationMs: turn.durationMs,
+      },
     });
 
     if (quality === null) return; // programmatic + clean: nothing to learn from
@@ -325,22 +388,30 @@ export class EvolutionEngine {
       }
     }
 
-    // A real negative outcome corroborates any provisional lessons waiting on
-    // this turn (e.g. an earlier error reflection or a session reflection),
-    // and is the same signal that warrants a reflection below.
-    const corroborated = isNegativeOutcome(outcome);
+    const negative = isNegativeOutcome(outcome);
+    // A negative verdict from a PERSON corroborates the provisional lessons
+    // waiting on this turn (an earlier error reflection, a session reflection)
+    // and lands them in MEMORY.md. The environment's verdict deliberately does
+    // not: corroboration is the gate that keeps self-scored prose out of
+    // durable memory until something outside the model backs it, and "the turn
+    // hit an error" is not a reader confirming the lesson drawn from it. It
+    // still warrants the reflection below, provisionally — exactly as an
+    // errored ungraded turn always did.
+    const corroborated = negative && isUserVerdictSource(source);
     if (corroborated) {
       await this.corroborateLessons(turn.turnId);
     }
 
     // Imported experience rides this turn's verdict: accepted adopts it into
-    // this workspace's own stores, anything else discards it.
-    await this.settleImports(turn.turnId, outcome);
+    // this workspace's own stores, anything else discards it. Only a user
+    // verdict settles it — adopting another workspace's craft because a local
+    // command exited zero is not the corroboration that trust boundary asks for.
+    if (isUserVerdictSource(source)) await this.settleImports(turn.turnId, outcome);
 
-    // Reflection is warranted by real negative signal — or by an error on a
-    // turn nobody graded, which stays provisional until an outcome
-    // corroborates it.
-    if (corroborated || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
+    // Reflection is warranted by negative signal of any provenance — or by an
+    // error on a turn nobody graded at all, which stays provisional until a
+    // user outcome corroborates it.
+    if (negative || ((outcome === 'abandoned' || outcome === null) && turn.hadError)) {
       const reflection = await this.generateTurnReflection(turn, outcome, quality, followup);
       recordLesson(this.rt.storage.sql, {
         turnIds: turn.turnId ? [turn.turnId] : [],
@@ -358,7 +429,10 @@ export class EvolutionEngine {
       this.emit({ type: 'reflection', message: corroborated ? reflection : `[provisional] ${reflection}` });
     }
 
-    // Real acceptance with tool usage → extract pattern to CraftStore.
+    // Acceptance with tool usage → extract pattern to CraftStore. Both
+    // provenances qualify: a headless turn whose tools all ran is the one
+    // positive a headless workspace can produce, and it is the counterweight
+    // that keeps the craft EMA from being driven by failures alone.
     if (outcome === 'accepted' && turn.toolCalls.length > 0) {
       await this.extractPattern(turn, quality);
     }
@@ -551,7 +625,7 @@ export class EvolutionEngine {
 
     if (!recentLessons.trim()) return;
 
-    const reflection = await this.rt.llm.complete(
+    const reflection = await this.fastLlm.complete(
       `You are reflecting on your recent interactions to improve yourself.\n\n` +
       `Recent lessons:\n${recentLessons.slice(0, 1500)}\n\n` +
       `In 2-3 bullet points, what patterns do you see? What should you do differently?\n` +
@@ -626,7 +700,7 @@ export class EvolutionEngine {
       // What keeps going wrong, as named cells the proposal can target. The
       // cells are deterministic (evolution/pathology.ts); the model only gets
       // to phrase their titles, and only after they exist.
-      const pathologies = await labelPathologyClusters(this.rt.llm, clusterPathologies(
+      const pathologies = await labelPathologyClusters(this.fastLlm, clusterPathologies(
         listTurnOutcomes(this.rt.storage.sql, { limit: 60, outcomes: NEGATIVE_TURN_OUTCOMES }),
       ));
       const rejections = new Map(
@@ -686,8 +760,14 @@ export class EvolutionEngine {
       message: `Starting evolution cycle (budget=${this.config.lifetimeMCTSBudget})...`,
     });
 
-    // Replay eval first — the loss curve every later step is measured against.
-    await this.runReplayEval();
+    // No replay eval here. It re-executes a 20-turn sample of the SAME
+    // `turn_outcomes` ledger, on the SAME cadence, that GEPA's seed scoring
+    // already re-executes to measure the current config on its val split — one
+    // re-execution bill paid twice for two points on a curve, and the curve is
+    // read by inspection RPCs only (listReplayEvals): no decision anywhere
+    // consumes it. It stays available on demand (`runReplayEval`, the CLI and
+    // DO RPCs) so the number can still be asked for; what it no longer does is
+    // spend twenty full completions per cycle unasked.
 
     // CraftStore consolidation
     await periodicCraftConsolidation(this.rt);
@@ -731,7 +811,12 @@ export class EvolutionEngine {
    * CURRENT config (the backend's replayTaskRunner: scaffold + prompt +
    * tools) and score against the recorded outcome. The system's loss curve,
    * persisted to replay_evals. No-op when the backend supplies no runner or
-   * no labeled turns exist yet. Also invoked by the explicit RPCs.
+   * no labeled turns exist yet.
+   *
+   * ON DEMAND ONLY — the CLI and DO RPCs. It is deliberately off the lifetime
+   * cadence: twenty full re-executions of the same `turn_outcomes` sample that
+   * GEPA's seed scoring already re-executes, for a series read by inspection
+   * surfaces and by no decision in the system.
    */
   async runReplayEval(sampleSize?: number): Promise<ReplayEvalSummary | null> {
     const runTask = this.config.replayTaskRunner;
@@ -793,7 +878,7 @@ export class EvolutionEngine {
       ? `Tools used: ${turn.toolCalls.map(tc => tc.name).join(', ')}`
       : 'No tools used';
 
-    return this.rt.llm.complete(
+    return this.fastLlm.complete(
       `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
       `User asked: "${turn.userMessage.slice(0, 200)}"\n` +
       `Response: "${summary}"\n` +
@@ -811,10 +896,7 @@ export class EvolutionEngine {
    *  state but encode no reusable pattern.
    */
   private async extractPattern(turn: CompletedTurn, quality: number): Promise<void> {
-    const isPureLookup = (tc: { name: string; args: Record<string, unknown> }): boolean =>
-      (tc.name === 'memory' && tc.args.action === 'search') ||
-      (tc.name === 'fact' && tc.args.action === 'recall');
-    const meaningfulCalls = turn.toolCalls.filter(tc => !isPureLookup(tc));
+    const meaningfulCalls = turn.toolCalls.filter(tc => !isPureLookupCall(tc));
     if (meaningfulCalls.length === 0) return;
 
     const callSummary = meaningfulCalls
@@ -822,7 +904,7 @@ export class EvolutionEngine {
       .join('\n');
 
     // Ask the LLM to generalize into a reusable function
-    const generalized = await this.rt.llm.complete(
+    const generalized = await this.fastLlm.complete(
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
       `The user asked: "${turn.userMessage.slice(0, 200)}"\n\n` +
       `Extract a reusable pattern as a JavaScript async arrow function.\n` +

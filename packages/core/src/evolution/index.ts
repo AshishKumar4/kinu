@@ -25,9 +25,11 @@ export {
   realOutcomeScaffoldRates, blendRealOutcomeRates,
   buildOutcomeEvalSplit, describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
-  isNegativeOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
+  isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
+  isPureLookupCall, TURN_OUTCOME_SOURCES,
+  recordOutcomeLabels, listOutcomeLabels, goldLabels,
   type OutcomeLabel, type OutcomeLabelRow,
-  type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
+  type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow, type ExecutionVerdict,
   type OutcomeClassification, type RecordTurnOutcomeInput, type RealOutcomeRate,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
   type OutcomeSplitDegeneracy,
@@ -83,7 +85,7 @@ export {
   type ReplayEvalSummary, type ReplayInstanceResult, type RunReplayEvalOpts,
 } from './replay.js';
 export {
-  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
 } from './session-window.js';
 export {
   buildChangelog, countUnseenChangelog, renderChangelogText,

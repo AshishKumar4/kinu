@@ -11,8 +11,9 @@
  *     evolution, agent.proposeScaffold, GEPA scaffold winners) AND again at
  *     applyPromotionDecision('promote'), so a version file tampered with
  *     after acceptance (the VFS is agent-writable) cannot go live.
- *   • craft    — upsertCraftedTool, before an extracted tool is stored.
- *   • gepa     — runCraftedToolGepa, before a winner replaces a tool body.
+ *   • craft    — upsertCraftedTool, before an EXTRACTED tool is stored.
+ *   • craft_tool — workspace.createTool, before a tool the model wrote itself
+ *     mid-turn is persisted. Narrower by one criterion; see SURFACE_CRITERIA.
  *   • import   — experience/imports.ts, before knowledge published by ANOTHER
  *     of the owner's workspaces is staged in this one. Not just code: an
  *     imported lesson lands in MEMORY.md and an imported fact lands in the
@@ -29,7 +30,7 @@
 
 import type { SqlExecutor } from '../types/primitives.js';
 
-export type MisevolutionSurface = 'scaffold' | 'craft' | 'gepa' | 'import';
+export type MisevolutionSurface = 'scaffold' | 'craft' | 'craft_tool' | 'import';
 
 export interface MisevolutionViolation {
   ok: false;
@@ -91,18 +92,67 @@ const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
   },
 ].map(Object.freeze)) as readonly MisevolutionCriterion[];
 
+/** Criteria 2–5: everything that protects the SAFETY MACHINERY itself —
+ *  promotion, the rollout knobs, the gate's own entry points, and consent.
+ *  Every surface enforces all four, always. */
+const SAFETY_MACHINERY_CRITERIA = [
+  'version-machinery-tamper', 'rollout-config-tamper',
+  'self-modification-reentry', 'consent-weakening',
+] as const;
+
 /**
- * Check an evolved artifact against the fixed criteria. Pure function of the
- * source text — deliberately takes no runtime/SQL/config so the verdict
- * cannot depend on any agent-mutable state.
+ * What each acceptance point enforces. The whole checklist everywhere, with
+ * ONE documented exception.
+ *
+ * `craft_tool` (workspace.createTool) does not enforce `network-egress`. The
+ * asymmetry is deliberate and it is the incoherence being removed, not
+ * introduced: the codemode Worker exposes raw network globals, so the very
+ * same `fetch(...)` the criterion forbids runs freely in an ephemeral
+ * `execute_tools` call one line earlier. Vetoing only the PERSISTED form of
+ * code the agent may already execute buys no containment — it just makes
+ * "wrap this HTTP call as a reusable tool" impossible while "make the HTTP
+ * call" stays trivial. What persistence genuinely changes is blast radius over
+ * TIME: a stored tool is reusable, re-executed by later turns, and publishable
+ * to the owner's other workspaces, which is exactly the laundering path
+ * arXiv:2509.26354 describes — so criteria 2–5 are enforced here in full, and
+ * a `createTool` body that names the promotion tables, the rollout knobs, the
+ * gate entry points, or the consent settings is refused outright.
+ *
+ * `craft` (upsertCraftedTool) keeps the whole checklist including
+ * `network-egress`: an EXTRACTED tool is written by the evolution engine from
+ * a past turn's trace, unread by anyone, and is the pathway the paper's
+ * threat model is actually about.
  */
-export function checkMisevolution(source: string): MisevolutionVerdict {
+const SURFACE_CRITERIA: Readonly<Record<MisevolutionSurface, readonly string[]>> = Object.freeze({
+  scaffold: ['network-egress', ...SAFETY_MACHINERY_CRITERIA],
+  craft: ['network-egress', ...SAFETY_MACHINERY_CRITERIA],
+  import: ['network-egress', ...SAFETY_MACHINERY_CRITERIA],
+  craft_tool: SAFETY_MACHINERY_CRITERIA,
+});
+
+/**
+ * Check an evolved artifact against the criteria its acceptance point
+ * enforces. Pure function of the source text and the surface — deliberately
+ * takes no runtime/SQL/config so the verdict cannot depend on any
+ * agent-mutable state.
+ */
+export function checkMisevolutionForSurface(
+  source: string,
+  surface: MisevolutionSurface,
+): MisevolutionVerdict {
+  const enforced = SURFACE_CRITERIA[surface];
   for (const criterion of MISEVOLUTION_CRITERIA) {
+    if (!enforced.includes(criterion.id)) continue;
     if (criterion.pattern.test(source)) {
       return { ok: false, criterionId: criterion.id, reason: criterion.reason };
     }
   }
   return { ok: true };
+}
+
+/** The full checklist — every surface but `craft_tool`. */
+export function checkMisevolution(source: string): MisevolutionVerdict {
+  return checkMisevolutionForSurface(source, 'scaffold');
 }
 
 /**

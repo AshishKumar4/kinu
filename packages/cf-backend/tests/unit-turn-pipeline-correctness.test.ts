@@ -258,17 +258,23 @@ describe('turn-pipeline correctness wiring', () => {
     );
   });
 
-  test('the DO holds a keepAlive heartbeat until the turn evolution settles', () => {
+  test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {
     // Parity with the CLI, which awaits orch.settleEvolution() before the
     // process exits. Evolution is detached so it never blocks the TurnQueue —
     // but Think's own keepAliveWhile disposes when onChatResponse returns, so
     // without a settle heartbeat the detached LLM calls race DO eviction.
+    //
+    // The DO holds BOTH lanes: the turn lane (settleEvolution) and the
+    // cadence-heavy session pass (runDueSessionEvolution). It is the host that
+    // CAN afford the heavy pass — keepAlive is exactly what a one-shot
+    // `proteus exec` process lacks, which is why that one defers it instead.
     const settle = actor.slice(
       actor.indexOf('protected settleEvolutionInBackground(): void'),
       actor.indexOf("   * The completed turn's evolution spine"),
     );
     expect(settle).toContain('if (this._evolutionSettling) return;');
-    expect(settle).toContain('this.keepAliveWhile(() => this.orch.settleEvolution())');
+    expect(settle).toContain('await this.orch.settleEvolution();');
+    expect(settle).toContain('await this.orch.runDueSessionEvolution();');
     expect(settle).toContain('.finally(() => { this._evolutionSettling = false; });');
     // Detached — awaiting it in onChatResponse would re-block the TurnQueue.
     expect(settle).toContain('void this.keepAliveWhile');
@@ -279,7 +285,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('protected settleCompletedTurn('),
       actor.indexOf('protected async runShadowEvalSampled'),
     );
-    const recordTurn = spine.indexOf('this.orch.recordTurn(turn);');
+    const recordTurn = spine.indexOf('this.orch.recordTurn(turn, this._turnContinuity);');
     const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
     expect(recordTurn).toBeGreaterThan(-1);
     expect(settleCall).toBeGreaterThan(recordTurn);

@@ -23,9 +23,33 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   return finally says so.
 - `proteus create` warns when the new workspace's model has no connected
   provider, instead of leaving the first turn to discover it.
+- Headless turns can now earn a POSITIVE evolution signal, not just a negative
+  one. A `proteus exec` turn that acted on the world and finished clean is
+  recorded as an execution-grounded success (`source: execution` in the outcome
+  ledger); one that errored is recorded as an execution-grounded failure. User
+  feedback is unchanged and still first-class — the two are kept distinguishable
+  rather than blended, and only a person's verdict corroborates a lesson into
+  MEMORY.md or settles imported experience.
+- A `fast_model` workspace setting: the model the mechanical evolution work runs
+  on (outcome classification, failure-cluster labels, one-sentence reflections,
+  pattern extraction, sleep-time compression). Unset, it is the chat vendor's own
+  small tier where it has one — same provider, same credential, cheaper tier —
+  and the chat model where it does not.
 
 ### Changed
 
+- `proteus exec` no longer waits on the heavy evolution cadence before it can
+  exit. The turn-level work (outcome review, the sampled scaffold trial) is
+  still joined, now under a bound that says what it abandoned instead of waiting
+  forever; the session/lifetime pass — reflection, scaffold proposal, MCTS — is
+  left in the durable window for the local scheduler daemon, which is already
+  running for one-shot runs and now picks that work up. On a persisted
+  workspace's 25th turn this was minutes of exit stall charged to the task.
+- The replay eval no longer runs on the lifetime cadence. It re-executed the
+  same graded turns that GEPA's seed scoring already re-executes, for a curve no
+  decision reads. It is still available on demand.
+- `--no-auto-evolve` now means it: the run records no evolution state at all,
+  rather than buffering turns for a later evolution-enabled session to process.
 - CLI failures render through one guidance layer: the provider's own words
   plus the exact next command for the failure class (credential, billing,
   unknown model, rate limit, context overflow). `proteus exec --json` carries
@@ -34,6 +58,26 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   `proteus daemon logs` reads across the roll.
 
 ### Fixed
+
+- The outcome signal is no longer fabricated in headless use. Every `proteus
+  exec` invocation is an independent task, so the next invocation's prompt was
+  being read as a conversational follow-up on the previous turn — and the
+  classifier counts "asked something new that presumes it worked" as acceptance,
+  so essentially every headless turn was labelled `accepted`. That ledger feeds
+  the correction rate, GEPA's train/val split, crafted-tool scoring and
+  retirement. Conversational grading now happens only where a real follow-up
+  exists; elsewhere the turn is graded by the environment or recorded as
+  ungraded.
+- GEPA's candidate scoring runs on the review model instead of the chat model
+  grading its own candidates — the cross-vendor judge selection the shadow eval
+  and MCTS already used.
+- `workspace.createTool` is now checked by the misevolution gate before a tool
+  is persisted: a stored, reusable, shareable tool can no longer name the
+  promotion tables, the rollout knobs, the gate's own entry points, or the
+  consent settings. Wrapping an HTTP call stays allowed — the same request runs
+  unrestricted in an ephemeral code call, so refusing only its saved form bought
+  nothing.
+- Deleted `runCraftedToolGepa`, a GEPA→CraftStore bridge with no callers.
 
 - A provider rejection no longer reaches the terminal as a raw object dump
   followed by `error [object Object]`.

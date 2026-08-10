@@ -160,6 +160,9 @@ async function runOneShot(
   const prompt = await resolvePromptAttachments(rawPrompt);
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
+  // The daemon is this process's deferred-work host: a one-shot run never
+  // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
+  // what eventually runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
   const client = createAgentClient(
     target,

@@ -27,10 +27,6 @@ export {
   type RunScaffoldGepaOpts, type RunScaffoldGepaResult,
 } from './scaffold-bridge.js';
 export {
-  runCraftedToolGepa,
-  type RunCraftedToolGepaOpts, type RunCraftedToolGepaResult,
-} from './tool-bridge.js';
-export {
   initGepaTables, startGepaRun, finishGepaRun,
   persistGepaCandidate, persistGepaParetoSnapshot,
   updateGepaRunCounters,

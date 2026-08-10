@@ -45,7 +45,7 @@ import {
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
   JudgeOutputSchema,
-  type StructuredJudgeFn, effortFor, type CompletedTurn,
+  type StructuredJudgeFn, effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   withClampedToolResults,
@@ -180,6 +180,18 @@ export function extractLastUserText(messages: ReadonlyArray<ModelMessage>): stri
 function readCliCwd(body?: Record<string, unknown>): string | null {
   const cwd = body?.cwd;
   return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null;
+}
+
+/**
+ * Turn continuity for the arriving message (core's TurnContinuity). The CLI's
+ * one-shot surfaces (`proteus exec`/`proteus run` against a cloud workspace)
+ * stamp `oneShot` on the chat request body: each invocation is an independent
+ * task by a process that never saw the previous answer, so its prompt is not a
+ * verdict on the previous turn. Everything else — the web chat, the API, the
+ * REPL over this socket — is a real conversation.
+ */
+function readTurnContinuity(body?: Record<string, unknown>): TurnContinuity {
+  return body?.oneShot === true ? 'independent_task' : 'conversation';
 }
 
 function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
@@ -641,11 +653,20 @@ export abstract class ActorAgent extends Think<Env> {
    * One watcher at a time — settleEvolution() drains whatever is in flight when
    * it runs, so a turn that completes while a watcher is live is already
    * covered by it.
+   *
+   * BOTH evolution lanes are held open here (core's exit contract): the turn
+   * lane via settleEvolution(), and the cadence session-evolution pass via
+   * runDueSessionEvolution(). The DO is the host that CAN afford the heavy
+   * pass — keepAlive is exactly the mechanism a one-shot CLI process lacks —
+   * so unlike `proteus exec` it waits for it rather than carrying it forward.
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling) return;
     this._evolutionSettling = true;
-    void this.keepAliveWhile(() => this.orch.settleEvolution())
+    void this.keepAliveWhile(async () => {
+      await this.orch.settleEvolution();
+      await this.orch.runDueSessionEvolution();
+    })
       .catch((err: unknown) =>
         console.warn('[proteus] evolution settle failed:', err instanceof Error ? err.message : err))
       .finally(() => { this._evolutionSettling = false; });
@@ -669,7 +690,7 @@ export abstract class ActorAgent extends Think<Env> {
     // Evolution hooks make 5-30s LLM calls and onChatResponse runs INSIDE
     // Think's TurnQueue — everything here is detached so the next message is
     // never blocked, and held open by the keepAlive heartbeat instead.
-    this.orch.recordTurn(turn);
+    this.orch.recordTurn(turn, this._turnContinuity);
     this.settleEvolutionInBackground();
     void this.runShadowEvalSampled(texts.userText, texts.assistantText);
   }
@@ -1083,6 +1104,13 @@ export abstract class ActorAgent extends Think<Env> {
    *  stream. */
   private readonly dynamicLedger = new DynamicContextLedger();
   protected _cliCwd: string | null = null;
+  /** Whether the message that opened the CURRENT turn was a conversational
+   *  reply or an independent one-shot task (`proteus exec` against this
+   *  workspace). Set in beforeTurn from the chat request; read at turn end to
+   *  decide whether this turn may be parked awaiting a follow-up verdict.
+   *  Defaults to a conversation — every non-CLI surface (web chat, API, the
+   *  REPL) is one. */
+  private _turnContinuity: TurnContinuity = 'conversation';
   // Current turn identity for the device daemon's pre-mutation shadow-git
   // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
   // turn so background tool continuations keep tagging their originating turn.
@@ -1751,6 +1779,7 @@ export abstract class ActorAgent extends Think<Env> {
     this.orch.beginTurn(Date.now(), this.turnMissionLabels(), ctx.continuation);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
+    this._turnContinuity = readTurnContinuity(ctx.body);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // A real user message is the verdict on the previous turn — dispatch the
@@ -1758,7 +1787,7 @@ export abstract class ActorAgent extends Think<Env> {
     // concurrently with this turn; never blocks it. Programmatic turns
     // (reactor / job wake) are not user verdicts.
     if (!this.lastUserTurnIsProgrammatic()) {
-      this.orch.observeUserTurn(extractLastUserText(ctx.messages));
+      this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
     }
     // Start a new run for the event log, with provenance so cross-run history
     // (Supervise altitude) can show what kicked each run off. This is the chat

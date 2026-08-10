@@ -46,6 +46,7 @@ function fakeEngine() {
   const { sql, execRaw } = createTestSql();
   initSessionWindowTable(execRaw);
   const engine = {
+    enabled: true,
     sessionWindow: createSessionWindowStore(sql),
     reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
@@ -77,11 +78,17 @@ const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTu
 });
 
 describe('AgentOrchestrator.recordTurn — session cadence', () => {
-  test('session reflection fires every N turns', () => {
+  test('session reflection fires every N turns', async () => {
     const { engine, sessions } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 3 });
-    for (let i = 0; i < 7; i++) orch.recordTurn(aTurn(i));
+    for (let i = 0; i < 7; i++) {
+      orch.recordTurn(aTurn(i), 'conversation');
+      // The pass claims the window and settles it only once it has run, so a
+      // second pass cannot start while the first is live. Real turns are
+      // minutes apart; the test just lets the pass finish.
+      await orch.runDueSessionEvolution();
+    }
     expect(sessions).toEqual([3, 3]);         // reflected at turn 3 and 6 (window closes)
     expect(orch.sessionTurnIndex).toBe(1);    // 7th turn left 1 in the new window
   });
@@ -90,7 +97,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { engine, reviews, sessions } = fakeEngine();
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 5 });
-    for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i));   // below the interval — no auto reflection
+    for (let i = 0; i < 2; i++) orch.recordTurn(aTurn(i), 'conversation');   // below the interval
     expect(sessions).toEqual([]);
     await orch.settleEvolution();
     // No session is manufactured out of a 2-turn window, and the last turn's
@@ -108,13 +115,64 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     (engine as unknown as { onSessionComplete: (s: { turns: CompletedTurn[] }) => Promise<void> })
       .onSessionComplete = async (s) => { await gate; sessions.push(s.turns.length); };
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
-    orch.recordTurn(aTurn(0));
-    orch.recordTurn(aTurn(1));
+    orch.recordTurn(aTurn(0), 'conversation');
+    const pass = orch.runDueSessionEvolution();
+    orch.recordTurn(aTurn(1), 'conversation');
     expect(sessions).toEqual([]);            // still in flight
-    const settled = orch.settleEvolution();
+    // The turn lane settles without waiting for the cadence lane — that is the
+    // whole point: one exec invocation must not own a lifetime cycle's clock.
+    await orch.settleEvolution();
+    expect(sessions).toEqual([]);
     release();
-    await settled;
-    expect(sessions).toEqual([2]);           // the process would have killed this before
+    await pass;
+    expect(sessions).toEqual([2]);
+  });
+
+  test('a one-shot host never STARTS the cadence pass — the window carries to the daemon', async () => {
+    const { engine, sessions } = fakeEngine();
+    const { host } = fakeHost();
+    const eventLog = newEventLog();
+    const oneShot = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 2, oneShot: true });
+    oneShot.recordTurn(aTurn(0), 'independent_task');
+    oneShot.recordTurn(aTurn(1), 'independent_task');
+    await oneShot.settleEvolution();
+    expect(sessions).toEqual([]);                    // nothing ran in the exec process
+    expect(oneShot.sessionTurnIndex).toBe(2);        // and nothing was consumed
+
+    // The daemon (a host that can afford the work) picks up the SAME turns.
+    const daemon = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 2 });
+    await daemon.runDueSessionEvolution();
+    expect(sessions).toEqual([2]);
+    expect(daemon.sessionTurnIndex).toBe(0);
+  });
+
+  test('settleEvolution abandons the turn lane at its bound rather than waiting forever', async () => {
+    const { engine } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({
+      host, engine, eventLog: newEventLog(), settleTimeoutMs: 10,
+    });
+    let release = () => {};
+    const stuck = new Promise<void>((resolve) => { release = resolve; });
+    orch.track(stuck, 'Shadow eval');
+    const startedAt = Date.now();
+    await orch.settleEvolution();                    // returns on the bound, not on `stuck`
+    expect(Date.now() - startedAt).toBeLessThan(2000);
+    release();
+    await stuck;
+  });
+
+  test('with auto-evolution off, a turn leaves no evolution state at all', () => {
+    const { engine, reviews, sessions } = fakeEngine();
+    (engine as unknown as { enabled: boolean }).enabled = false;
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
+    orch.recordTurn(aTurn(0), 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');
+    orch.observeUserTurn('anything', 'conversation');
+    expect(sessions).toEqual([]);
+    expect(reviews).toEqual([]);
+    expect(orch.sessionTurnIndex).toBe(0);           // nothing for a later host to evolve
   });
 });
 
@@ -127,7 +185,8 @@ describe('AgentOrchestrator — the durable session window', () => {
     const eventLog = newEventLog();
     for (let i = 0; i < 5; i++) {
       const { host } = fakeHost();
-      new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 }).recordTurn(aTurn(i));
+      new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 })
+        .recordTurn(aTurn(i), 'conversation');
     }
     expect(sessions).toEqual([5]);
   });
@@ -136,12 +195,41 @@ describe('AgentOrchestrator — the durable session window', () => {
     const { engine, reviews } = fakeEngine();
     const eventLog = newEventLog();
     const { host } = fakeHost();
-    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0));
+    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
     expect(reviews).toHaveLength(0);
-    // A new process against the same workspace: its user message IS turn 0's
-    // follow-up, so the turn is graded by real signal instead of a constant.
-    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build');
+    // A new process against the same workspace, continuing the SAME
+    // conversation: its user message IS turn 0's follow-up, so the turn is
+    // graded by real signal instead of a constant.
+    new AgentOrchestrator({ host, engine, eventLog }).observeUserTurn('that broke the build', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'that broke the build' }]);
+  });
+
+  test('a one-shot turn is graded NOW on execution signal — never parked for the next task', () => {
+    const { engine, reviews } = fakeEngine();
+    const eventLog = newEventLog();
+    const { host } = fakeHost();
+    const exec = new AgentOrchestrator({ host, engine, eventLog, oneShot: true });
+    exec.recordTurn(aTurn(0), 'independent_task');
+    // Reviewed immediately, with NO follow-up: the environment's verdict is the
+    // only evidence, and it is all in already.
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
+    // Nothing is left waiting, so the next invocation's unrelated prompt has
+    // nothing to be misread as a verdict on.
+    new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
+      .observeUserTurn('a completely different task', 'independent_task');
+    expect(reviews).toHaveLength(1);
+  });
+
+  test('a turn parked by a conversation is NOT graded from a one-shot prompt', () => {
+    const { engine, reviews } = fakeEngine();
+    const eventLog = newEventLog();
+    const { host } = fakeHost();
+    new AgentOrchestrator({ host, engine, eventLog }).recordTurn(aTurn(0), 'conversation');
+    // `proteus exec` against the same workspace: its prompt is a fresh task
+    // written by a caller who never saw turn 0's answer.
+    new AgentOrchestrator({ host, engine, eventLog, oneShot: true })
+      .observeUserTurn('unrelated task', 'independent_task');
+    expect(reviews).toEqual([{ turn: aTurn(0), followup: null }]);
   });
 });
 
@@ -151,16 +239,16 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
-    orch.observeUserTurn('first message');            // nothing pending yet
+    orch.observeUserTurn('first message', 'conversation');   // nothing pending yet
     expect(reviews).toHaveLength(0);
 
-    orch.recordTurn(aTurn(0));                        // turn 0 completes → pending
+    orch.recordTurn(aTurn(0), 'conversation');        // turn 0 completes → pending
     expect(reviews).toHaveLength(0);                  // not reviewed at completion
 
-    orch.observeUserTurn('actually, that was wrong'); // user turn 1 arrives
+    orch.observeUserTurn('actually, that was wrong', 'conversation');
     expect(reviews).toEqual([{ turn: aTurn(0), followup: 'actually, that was wrong' }]);
 
-    orch.observeUserTurn('another message');          // pending already consumed
+    orch.observeUserTurn('another message', 'conversation'); // pending consumed
     expect(reviews).toHaveLength(1);
   });
 
@@ -169,11 +257,11 @@ describe('AgentOrchestrator — turn-outcome review dispatch', () => {
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
 
-    orch.recordTurn(aTurn(0));                        // user turn pending
-    orch.recordTurn(aTurn(1, 'programmatic'));        // reactor/job-wake turn
+    orch.recordTurn(aTurn(0), 'conversation');        // user turn pending
+    orch.recordTurn(aTurn(1, 'programmatic'), 'conversation'); // reactor/job-wake turn
     expect(reviews).toEqual([{ turn: aTurn(1, 'programmatic'), followup: null }]);
 
-    orch.observeUserTurn('follow-up for the USER turn');
+    orch.observeUserTurn('follow-up for the USER turn', 'conversation');
     expect(reviews[1]).toEqual({ turn: aTurn(0), followup: 'follow-up for the USER turn' });
   });
 });

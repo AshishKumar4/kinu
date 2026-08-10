@@ -23,6 +23,8 @@ import { authCacheKey, cloneModelInfos, isRecord, nonEmptyString, positiveIntege
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
 export const CODEX_DEFAULT_MODEL = 'gpt-5.5';
+/** The small tier the evolution engine's mechanical calls run on. */
+export const CODEX_FAST_MODEL = 'gpt-5.4-mini';
 
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: CODEX_DEFAULT_MODEL, label: 'GPT-5.5 (Codex)',    capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 272_000 },
@@ -47,6 +49,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     id: 'codex',
     label: 'ChatGPT Codex (subscription)',
     defaultModel: CODEX_DEFAULT_MODEL,
+    fastModel: CODEX_FAST_MODEL,
 
     async isAvailable(deps) { return deps.hasCredential(CODEX_CRED_KEY); },
     unavailableReason() {

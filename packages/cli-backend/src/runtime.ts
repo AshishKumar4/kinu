@@ -17,6 +17,7 @@ import {
   type LLMProviderConfig, buildRuntime,
   CompositeVFS, type MountPolicy,
   DefaultExecutionRouter, createInlineExecutor,
+  selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
@@ -28,7 +29,9 @@ import { hostResourceLimits } from './cgroup-limits.js';
 import { createHostMountVFS } from './host-mount.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
-import { createLocalProviderLLM, type LocalProviderCredentials } from './model-resolver.js';
+import {
+  createLocalModelResolver, createLocalProviderLLM, type LocalProviderCredentials,
+} from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
 
@@ -171,6 +174,30 @@ export function createCLIRuntime(
     codexAuthStore: config.codexAuthStore,
     onCodexRefresh: config.onCodexRefresh,
   });
+  // The mechanical-work tier: the chat vendor's own small model, for the
+  // evolution engine's classification/labelling/short-reflection calls. Same
+  // resolver, same credentials — one cheaper model id (core selectFastModel).
+  // Resolved once here: a CLI process is one workspace's session, and a
+  // `fast_model` change takes effect on the next one.
+  const fastResolver = createLocalModelResolver({
+    llm: config.llm, credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+  });
+  initAgentConfigTable(execRaw);
+  const fast = selectFastModel({
+    fastSpec: createAgentConfigStore(sql).getFastModel(),
+    chatSpec: fastResolver.normalizeSpecSync(null),
+    providers: fastResolver.fastModelCandidates(),
+  });
+  // Only when it IS a different model — otherwise leave it unset so every
+  // reader's documented `?? rt.llm` fallback is what runs, rather than a
+  // second identical client.
+  const fastLlm = fast.source === 'chat-model' ? undefined : createLocalProviderLLM({
+    llm: config.llm, credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+    spec: fast.spec,
+  });
+
   // Cross-model judge only when one is actually configured. Leaving this
   // undefined lets consumers apply their documented same-model fallback
   // (mcts/evaluation.ts judge ensemble, local-session auto-judge) instead of
@@ -247,7 +274,7 @@ export function createCLIRuntime(
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
-    agentId, agentName, memory, craftStore, judgeModel,
+    agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell, checkpoints,
   });

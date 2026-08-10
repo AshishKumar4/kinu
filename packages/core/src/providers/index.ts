@@ -15,3 +15,4 @@ export * from './anthropic.js';
 export * from './fetch-shim.js';
 export * from './rate-limit-retry.js';
 export * from './judge-model.js';
+export * from './fast-model.js';

@@ -66,10 +66,12 @@ export {
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy,
   recordLesson, listLessons, corroborateLessonsForTurn,
-  isNegativeOutcome, recordOutcomeLabels, listOutcomeLabels, goldLabels,
+  isNegativeOutcome, isUserVerdictSource, executionVerdict, executionVerdictOutcome,
+  isPureLookupCall, TURN_OUTCOME_SOURCES,
+  recordOutcomeLabels, listOutcomeLabels, goldLabels,
   recordEnsembleLabels, ensembleLabels, type EnsembleLabelRow,
   type OutcomeLabel, type OutcomeLabelRow,
-  type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow,
+  type TurnOutcome, type TurnOutcomeSource, type TurnOutcomeRow, type ExecutionVerdict,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
@@ -117,7 +119,7 @@ export {
 // The durable evolution window + pending outcome review — the state neither
 // backend's instance outlives (one process per `proteus exec`; DO eviction).
 export {
-  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore,
+  initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
 } from './evolution/session-window.js';
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
@@ -504,9 +506,10 @@ export { bootstrapScaffold, INITIAL_SCAFFOLD_SOURCE } from './scaffold/bootstrap
 export { modifyScaffold, type ModifyResult, type ModifyScaffoldOpts } from './scaffold/modify.js';
 export { rollbackScaffold } from './scaffold/rollback.js';
 // Misevolution gate — fixed safety criteria over every evolution surface
-// (scaffold acceptance + promotion, extracted tools, GEPA candidates).
+// (scaffold acceptance + promotion, extracted tools, agent-authored tools,
+// imported experience).
 export {
-  checkMisevolution, recordMisevolutionVeto,
+  checkMisevolution, checkMisevolutionForSurface, recordMisevolutionVeto,
   type MisevolutionSurface, type MisevolutionVerdict, type MisevolutionViolation,
 } from './scaffold/misevolution.js';
 // Variant archive — DGM-style lineage + branch-base selection over the
@@ -804,6 +807,7 @@ export {
 } from './orchestrator/turn-accumulator.js';
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
+  type TurnContinuity, DEFAULT_SETTLE_TIMEOUT_MS, DEFAULT_SESSION_REFLECTION_INTERVAL,
 } from './orchestrator/agent-orchestrator.js';
 export { SignalDelivery } from './orchestrator/signals.js';
 export {
@@ -868,7 +872,7 @@ export type {
 // Only the entry points + persistence + types are public; the algorithm
 // internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
 export {
-  runGepa, runScaffoldGepa, runCraftedToolGepa,
+  runGepa, runScaffoldGepa,
   DEFAULT_GEPA_BUDGET,
   // SQL persistence — needed by the orchestrator to create tables + run.
   initGepaTables, startGepaRun, finishGepaRun,
@@ -879,7 +883,6 @@ export type {
   GepaCandidate, GepaConstraints, GepaBudget, GepaConfig,
   GepaIterationState, GepaResult,
   RunScaffoldGepaOpts, RunScaffoldGepaResult,
-  RunCraftedToolGepaOpts, RunCraftedToolGepaResult,
   GepaRunSummary,
 } from './evolution/gepa/index.js';
 

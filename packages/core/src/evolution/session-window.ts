@@ -13,10 +13,17 @@
 // EvolutionEngine's constructor, which owns this one too).
 //
 // One row is one completed turn with two independent lifetimes: it belongs to
-// the open reflection window until that window closes, and — for user-origin
-// turns — it waits for the follow-up that grades it. The row is dropped once
-// both are done, so the table holds at most the open window plus one pending
-// review.
+// the open reflection window until that window closes, and — when a
+// conversational follow-up that could grade it can still arrive — it waits for
+// that follow-up. The row is dropped once both are done, so the table holds at
+// most the open window plus one pending review.
+//
+// A window is CLAIMED for a session-evolution pass and settled only once that
+// pass has run (`claim()` → `settle()`), never closed up front. That is what
+// lets a host decline to wait for the pass: a `proteus exec` process that
+// exits, or an interactive session the user quits mid-cycle, leaves its turns
+// in the window for the next host that can afford the work — rather than
+// consuming them for a pass that was killed halfway.
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
@@ -33,18 +40,41 @@ export function initSessionWindowTable(execRaw: RawSqlExec): void {
   )`);
 }
 
+/** The open window, handed to ONE session-evolution pass. The turns stay in
+ *  the window until `settle()`, so a host that dies mid-pass leaves them for
+ *  the next host instead of consuming them for work that never happened. */
+export interface ClaimedWindow {
+  /** The claimed turns, oldest first. */
+  readonly turns: CompletedTurn[];
+  /** Epoch ms the window opened (its oldest turn). */
+  readonly startedAt: number;
+  /** Retire exactly the claimed rows. Turns appended while the pass ran stay
+   *  in the window and open the next one. */
+  settle(): void;
+}
+
+/** How a completed turn enters the window. */
+export interface AppendTurnOpts {
+  /** Whether a conversational follow-up that could GRADE this turn can still
+   *  arrive. Only then is the turn parked awaiting review. The caller decides:
+   *  a programmatic turn has no user behind it, and a one-shot host's next
+   *  invocation is an independent task, not a reply — parking either would
+   *  hand the classifier a "follow-up" that is not one. */
+  awaitsFollowup: boolean;
+  /** Epoch ms to stamp the row with. Defaults to now. */
+  now?: number;
+}
+
 export interface SessionWindowStore {
-  /** Buffer a completed turn: it joins the open window, and a user-origin
-   *  turn additionally waits for the user's next message to grade it. */
-  append(turn: CompletedTurn, now?: number): void;
-  /** Turns in the open window, oldest first. */
-  turns(): CompletedTurn[];
+  /** Buffer a completed turn: it joins the open window, and — when a
+   *  conversational follow-up can still grade it — additionally waits for
+   *  that follow-up. */
+  append(turn: CompletedTurn, opts: AppendTurnOpts): void;
   /** How many turns the open window holds. */
   size(): number;
-  /** Epoch ms the open window opened (its oldest turn), or null when empty. */
-  startedAt(): number | null;
-  /** Close the window: its turns, oldest first, removed from the window. */
-  close(): CompletedTurn[];
+  /** Claim the open window for one session-evolution pass, or null when it is
+   *  empty. The caller settles it once the pass has run. */
+  claim(): ClaimedWindow | null;
   /** Take the turn waiting to be graded, if one is waiting. */
   takePendingReview(): CompletedTurn | null;
 }
@@ -62,7 +92,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
     WHERE in_window = 1 ORDER BY created_at ASC, rowid ASC`;
 
   return {
-    append(turn, now) {
+    append(turn, opts) {
       // A turn that cannot be serialized cannot be replayed to the engine
       // later, and losing the whole window to one bad tool result would be
       // worse than losing that turn — so a failed encode drops just this turn.
@@ -73,9 +103,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
         console.warn('[proteus] session window: turn could not be serialized:', (err as Error).message);
         return;
       }
-      // Only a user-origin turn has a follow-up coming; a programmatic turn
-      // (reactor, job wake) is reviewed the moment it completes.
-      const awaitingReview = turn.origin === 'programmatic' ? 0 : 1;
+      const awaitingReview = opts.awaitsFollowup ? 1 : 0;
       // At most one turn waits at a time — the newest user message grades the
       // most recent turn, exactly as the in-memory field did.
       if (awaitingReview === 1) {
@@ -83,29 +111,29 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
         dropSettled();
       }
       sql`INSERT INTO session_window (id, turn, in_window, awaiting_review, created_at)
-          VALUES (${`win-${nanoid()}`}, ${encoded}, 1, ${awaitingReview}, ${now ?? nowMs()})`;
-    },
-
-    turns() {
-      return windowRows().map(decode).filter((t): t is CompletedTurn => t !== null);
+          VALUES (${`win-${nanoid()}`}, ${encoded}, 1, ${awaitingReview}, ${opts.now ?? nowMs()})`;
     },
 
     size() {
       return sql<{ n: number }>`SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1`[0]?.n ?? 0;
     },
 
-    startedAt() {
-      const row = sql<{ at: number | null }>`
-        SELECT MIN(created_at) AS at FROM session_window WHERE in_window = 1`[0];
-      return row?.at ?? null;
-    },
-
-    close() {
+    claim() {
       const rows = windowRows();
-      if (rows.length === 0) return [];
-      sql`UPDATE session_window SET in_window = 0 WHERE in_window = 1`;
-      dropSettled();
-      return rows.map(decode).filter((t): t is CompletedTurn => t !== null);
+      if (rows.length === 0) return null;
+      return {
+        turns: rows.map(decode).filter((t): t is CompletedTurn => t !== null),
+        startedAt: rows[0]!.created_at,
+        settle() {
+          // Retire by claimed id, not by `in_window = 1`: a turn appended while
+          // the pass ran belongs to the NEXT window, and an undecodable row
+          // must still retire or it would wedge the window forever.
+          for (const row of rows) {
+            sql`UPDATE session_window SET in_window = 0 WHERE id = ${row.id}`;
+          }
+          dropSettled();
+        },
+      };
     },
 
     takePendingReview() {

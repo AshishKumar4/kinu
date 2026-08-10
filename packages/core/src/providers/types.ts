@@ -112,6 +112,16 @@ export interface ModelProvider {
   readonly id: string;
   readonly label?: string;
   readonly defaultModel?: string;
+  /** This vendor's small, cheap tier — what the MECHANICAL work runs on
+   *  (outcome classification, pathology labels, short reflections, pattern
+   *  extraction, sleep-time compression: schema-constrained jobs where the
+   *  flagship buys nothing). Same vendor and same credential as the chat
+   *  model, so it introduces no new provider path — only a cheaper tier of the
+   *  one already connected. Omitted where the vendor has no meaningfully
+   *  smaller tier, or where the id set is user-supplied (openai-compat) or an
+   *  entire catalog (openrouter) and naming one would be arbitrary; the chat
+   *  model is then used, exactly as before. */
+  readonly fastModel?: string;
 
   isAvailable(deps: ProviderDeps): Promise<boolean> | boolean;
   unavailableReason?(deps: ProviderDeps): Promise<string | undefined> | string | undefined;

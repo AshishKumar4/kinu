@@ -53,6 +53,10 @@ export interface CloudAgentClientOptions {
   /** DO instance name on the orchestrator-agent namespace. */
   cloudName: string;
   session?: CliSessionOptions;
+  /** One task turn, then exit. Stamped on each chat request so the DO knows
+   *  this prompt is an independent task rather than a conversational
+   *  follow-up, and never grades the previous turn from it. */
+  oneShot?: boolean;
 }
 
 interface ActiveTurn {
@@ -84,6 +88,7 @@ export class CloudAgentClient implements AgentClient {
   private readonly origin: string;
   private readonly token: string;
   private readonly cloudName: string;
+  private readonly oneShot: boolean;
   private readonly sessionOptions: CliSessionOptions;
   private activeCliSession: CliSession;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
@@ -99,6 +104,7 @@ export class CloudAgentClient implements AgentClient {
     this.token = opts.token;
     this.agentName = opts.agentName;
     this.cloudName = opts.cloudName;
+    this.oneShot = opts.oneShot === true;
     this.sessionOptions = opts.session ?? {};
     this.activeCliSession = createCliSession(opts.agentName, this.sessionOptions);
     this.consents = {
@@ -203,6 +209,10 @@ export class CloudAgentClient implements AgentClient {
               messages: [createUserUiMessage(text, files)],
               trigger: 'submit-message',
               ...(opts.cwd ? { cwd: opts.cwd } : {}),
+              // Turn continuity for the DO's outcome ledger: a one-shot
+              // invocation's prompt is an independent task, not a verdict on
+              // whatever this workspace answered last.
+              ...(this.oneShot ? { oneShot: true } : {}),
             }),
           },
           type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,

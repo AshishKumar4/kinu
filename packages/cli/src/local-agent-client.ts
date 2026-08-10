@@ -62,6 +62,8 @@ export interface LocalAgentClientOptions {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
+  /** One task turn, then exit — see LocalAgentClientDeps.oneShot. */
+  oneShot?: boolean;
   session?: CliSessionOptions;
   /** Who is driving — fixes the session's background policy. Default:
    *  'interactive'. */
@@ -142,6 +144,10 @@ export interface LocalAgentClientDeps {
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   sessionOptions: CliSessionOptions;
+  /** Which surface this process is. 'one-shot' (`proteus exec`/`run`) both
+   *  selects the background detach/grace policy AND decides turn continuity
+   *  for the outcome ledger, keeping the cadence-heavy evolution pass off the
+   *  exit path. One fact, one field. */
   surface: SessionSurface;
 }
 
@@ -449,6 +455,7 @@ export class LocalAgentClient implements AgentClient {
       modelResolver: this.deps.modelResolver,
       noAutoEvolve: this.deps.noAutoEvolve,
       backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
+      oneShot: this.deps.surface === 'one-shot',
       sessionId,
       persistMessages: this.activeCliSession.mode !== 'none',
       onEvent: (event) => this.handleSessionEvent(event),

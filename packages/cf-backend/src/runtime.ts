@@ -28,7 +28,7 @@ import {
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
-  createAgentConfigStore,
+  createAgentConfigStore, selectFastModel,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -324,6 +324,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
     storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
     judgeModel: createJudgeLLM(agent, actor),
+    fastLlm: createFastLLM(agent, actor),
     spawnBranch: createFacetSpawner(agent, actor),
     abortBranch: createFacetAborter(agent),
     executionRouter,
@@ -556,6 +557,47 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
         const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
         const result = await generateText({
           model, prompt,
+          ...effortFor('reflection'),
+        });
+        return result.text.trim();
+      } catch { return "(reflection unavailable)"; }
+    },
+  };
+}
+
+/**
+ * The mechanical-work tier (rt.fastLlm): the chat vendor's own small model,
+ * for the evolution engine's classification / labelling / short-reflection /
+ * extraction calls and sleep-time compression. Resolved at CALL time from the
+ * same registry and credentials the chat model uses, so a `fast_model` change
+ * or a provider switch takes effect without a redeploy, and no second provider
+ * path exists — only a cheaper model id on the one already connected.
+ *
+ * Returns null when the vendor has no smaller tier, so the runtime leaves
+ * `fastLlm` unset and every reader's documented `?? rt.llm` fallback runs.
+ */
+function createFastLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM | undefined {
+  const config = createAgentConfigStore(
+    agent.sql.bind(agent) as unknown as CoreSqlExecutor,
+  );
+  const registry = createAgentProviderRegistry({
+    env: agent.env,
+    userDO: userCredentialSourceFor(agent, actor),
+    appTitle: 'Proteus (fast)',
+    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+  });
+  const selected = () => selectFastModel({
+    fastSpec: config.getFastModel(),
+    chatSpec: registry.normalizeSpecSync(readStoredModelSpec(agent)),
+    providers: registry.registry.list(),
+  });
+  if (selected().source === 'chat-model') return undefined;
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      try {
+        const result = await generateText({
+          model: registry.resolveModel(selected().spec), prompt,
           ...effortFor('reflection'),
         });
         return result.text.trim();

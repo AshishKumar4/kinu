@@ -52,10 +52,31 @@ export const OUTCOME_LABELS = [...TURN_OUTCOMES, 'unclear'] as const;
 
 export type OutcomeLabel = (typeof OUTCOME_LABELS)[number];
 
-/** Where an outcome row came from: the user's explicit thumbs, the LLM
- *  follow-up classifier, the session-end (abandoned) rule, or an Alternate
- *  Takes pick (mcts/takes.ts — explicit preference between explored takes). */
-export type TurnOutcomeSource = 'explicit' | 'classifier' | 'session_end' | 'take_pick';
+/** Where an outcome row came from, in the ledger's canonical order — the one
+ *  list, from which the table's CHECK constraint and its widening migration
+ *  both derive:
+ *    explicit    — the user's thumbs.
+ *    classifier  — the LLM verdict on a real conversational follow-up.
+ *    session_end — the session-end (abandoned) rule.
+ *    take_pick   — an Alternate Takes pick (mcts/takes.ts): an explicit
+ *                  preference between explored takes.
+ *    execution   — the ENVIRONMENT's verdict on a turn no user will grade
+ *                  (see `executionVerdict`). Machine evidence, not a person's
+ *                  judgment; every reader that speaks about user opinion must
+ *                  say so and exclude it (alignment.ts does).
+ */
+export const TURN_OUTCOME_SOURCES = [
+  'explicit', 'classifier', 'session_end', 'take_pick', 'execution',
+] as const;
+
+export type TurnOutcomeSource = (typeof TURN_OUTCOME_SOURCES)[number];
+
+/** Sources that carry a HUMAN's opinion of the turn. The complement is
+ *  `execution` — real evidence about what happened, silent about whether the
+ *  user wanted it. */
+export function isUserVerdictSource(source: TurnOutcomeSource): boolean {
+  return source !== 'execution';
+}
 
 /** Single source for the explicit-feedback → turn-quality mapping. Used by
  *  the outcome pipeline AND the async setTurnFeedback re-scoring path
@@ -72,12 +93,26 @@ export function outcomeToFeedback(outcome: TurnOutcome): 'positive' | 'negative'
   return 'negative';
 }
 
+/** What an execution-grounded verdict is worth, against the 0.5 neutral.
+ *
+ *  Strictly inside the poles a USER verdict reaches (0.9 / 0.2): the
+ *  environment reporting that the agent's own actions ran is real evidence and
+ *  is not someone saying the work was right, so a run of green turns can never
+ *  move a crafted tool's score as far as one person actually approving it —
+ *  and a run of failures can never sink it as far as one person complaining. */
+const EXECUTION_QUALITY = { accepted: 0.7, negative: 0.3 } as const;
+
 /** Outcome → turn quality. Accepted/corrected reuse the explicit-feedback
  *  constants (one mapping); frustration is the strongest negative signal;
- *  abandonment is neutral (no signal, not a verdict). */
-export function outcomeQuality(outcome: TurnOutcome): number {
-  if (outcome === 'frustrated') return 0.1;
+ *  abandonment is neutral (no signal, not a verdict). An execution-sourced
+ *  row is scored on its own, narrower band — it is a proxy, and is priced
+ *  as one. */
+export function outcomeQuality(outcome: TurnOutcome, source: TurnOutcomeSource = 'classifier'): number {
   if (outcome === 'abandoned') return 0.5;
+  if (source === 'execution') {
+    return outcome === 'accepted' ? EXECUTION_QUALITY.accepted : EXECUTION_QUALITY.negative;
+  }
+  if (outcome === 'frustrated') return 0.1;
   return feedbackToQuality(outcome === 'accepted' ? 'positive' : 'negative');
 }
 
@@ -98,6 +133,58 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
   const msg = turn.userMessage.trim();
   if (TRIVIAL_MESSAGE.test(msg)) return true;
   return msg.length < 12 && !msg.includes('?');
+}
+
+// ── The execution-grounded verdict (no LLM, no user) ─────────────
+
+/** Calls that only READ state. They prove nothing about whether the turn's
+ *  work landed, so a turn made of them alone has no execution verdict — and a
+ *  pattern extracted from them encodes nothing reusable, which is why the
+ *  extractor skips them too. One definition, both readers. */
+export function isPureLookupCall(call: { name: string; args: Record<string, unknown> }): boolean {
+  return (call.name === 'memory' && call.args.action === 'search') ||
+    (call.name === 'fact' && call.args.action === 'recall');
+}
+
+/** What the environment reported about a turn: it ran, or it did not. */
+export type ExecutionVerdict = 'succeeded' | 'failed';
+
+/**
+ * The ENVIRONMENT's verdict on a turn — the only evidence available for the
+ * turns no user will ever grade (a one-shot `proteus exec`, a reactor or job
+ * wake). Deterministic: no model is asked, and nothing the model WROTE is read.
+ *
+ * The evidence is the tool-execution record the turn already carries — the
+ * same `hadError` flag the accumulator raises when a tool call fails or the
+ * stream dies. What changes here is that it is read SYMMETRICALLY. It used to
+ * be consulted only when it said "something broke", so a headless ledger could
+ * record that a turn went wrong and could never record that one went right:
+ * evolution had a punishment channel and no reward channel, and every
+ * downstream estimate (craft EMA and retirement, GEPA's split, the archive's
+ * real-outcome priors) inherited that pessimism.
+ *
+ *   • no non-lookup tool call → null. The turn never acted on the world, so
+ *     the world returned no verdict, and an ungraded turn is recorded as
+ *     ungraded rather than as a success.
+ *   • the turn errored → 'failed'.
+ *   • otherwise → 'succeeded'.
+ *
+ * It is a PROXY and is priced as one (EXECUTION_QUALITY) and sourced as one
+ * (`source: 'execution'`): it says the agent's own actions against the world
+ * completed, not that the task was solved the way the user wanted. Its worth is
+ * that the model cannot write it — it is produced by the tools and the runtime,
+ * so no amount of confident prose moves it.
+ */
+export function executionVerdict(
+  turn: Pick<CompletedTurn, 'hadError' | 'toolCalls'>,
+): ExecutionVerdict | null {
+  if (!turn.toolCalls.some((call) => !isPureLookupCall(call))) return null;
+  return turn.hadError ? 'failed' : 'succeeded';
+}
+
+/** The ledger outcome an execution verdict records as. */
+export function executionVerdictOutcome(verdict: ExecutionVerdict): TurnOutcome {
+  return verdict === 'succeeded' ? 'accepted' : 'corrected';
 }
 
 // ── The classifier (one cheap LLM call per non-trivial turn) ─────
@@ -168,7 +255,7 @@ const TURN_OUTCOMES_DDL = `(
     session_id TEXT NOT NULL DEFAULT 'default',
     outcome TEXT NOT NULL CHECK (outcome IN (${TURN_OUTCOMES.map((o) => `'${o}'`).join(',')})),
     confidence REAL NOT NULL,
-    source TEXT NOT NULL CHECK (source IN ('explicit','classifier','session_end','take_pick')),
+    source TEXT NOT NULL CHECK (source IN (${TURN_OUTCOME_SOURCES.map((s) => `'${s}'`).join(',')})),
     user_message TEXT NOT NULL,
     assistant_response TEXT NOT NULL,
     followup TEXT,
@@ -200,13 +287,15 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
   }
 
   execRaw(`CREATE TABLE IF NOT EXISTS turn_outcomes ${TURN_OUTCOMES_DDL}`);
-  // Tables created before the 'take_pick' source carry a narrower CHECK that
-  // SQLite cannot ALTER — rebuild them in place (same columns, data kept).
-  // No explicit BEGIN/COMMIT: DO SQLite forbids explicit transaction
-  // statements, so crash-safety comes from the resume branch above instead —
-  // every intermediate state of this sequence is recoverable from it.
+  // A table created before a source was added carries a narrower CHECK that
+  // SQLite cannot ALTER — rebuild it in place (same columns, data kept). The
+  // probe is the source LIST, so adding a member is the only edit a future
+  // widening needs. No explicit BEGIN/COMMIT: DO SQLite forbids explicit
+  // transaction statements, so crash-safety comes from the resume branch
+  // above instead — every intermediate state of this sequence is recoverable
+  // from it.
   const ddl = tableDdl('turn_outcomes');
-  if (ddl !== null && !ddl.includes('take_pick')) {
+  if (ddl !== null && TURN_OUTCOME_SOURCES.some((source) => !ddl.includes(`'${source}'`))) {
     execRaw(`ALTER TABLE turn_outcomes RENAME TO turn_outcomes_legacy`);
     execRaw(`CREATE TABLE turn_outcomes ${TURN_OUTCOMES_DDL}`);
     execRaw(`INSERT OR IGNORE INTO turn_outcomes SELECT * FROM turn_outcomes_legacy`);

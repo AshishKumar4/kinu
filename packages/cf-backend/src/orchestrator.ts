@@ -1069,7 +1069,9 @@ export class OrchestratorAgent extends ActorAgent {
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
-      const update = await runSleepTimeCompute(this.rt.llm, {
+      // Mechanical work — schema-constrained fact upsert/decay over a turn
+      // summary. Runs on the chat vendor's small tier when it has one.
+      const update = await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
         task: task.slice(0, 2000),
         output: output.slice(0, 4000),
         toolCalls: toolCalls.map(tc => tc.name),
@@ -2426,6 +2428,13 @@ export class OrchestratorAgent extends ActorAgent {
     // against the recorded outcome — accepted turns are regression checks
     // against the response the user approved; corrected/frustrated turns are
     // scored on whether the candidate already addresses the user's correction.
+    //
+    // The candidate RUNS on the chat model (it is this agent's own loop being
+    // measured) but is SCORED by the review model — the same cross-family
+    // judge selection the shadow eval and MCTS use. GEPA is the largest judge
+    // consumer in the system; letting the chat model grade its own candidates
+    // is exactly the self-enhancement bias (arXiv:2306.05685) the rest of the
+    // repo already routes around.
     const metric = async (
       candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
     ): Promise<MetricOutcome> => {
@@ -2445,7 +2454,7 @@ export class OrchestratorAgent extends ActorAgent {
           `User's correction:\n${(exp?.followup ?? '(not recorded)').slice(0, 1000)}`;
       try {
         const obj = await generateJson({
-          model,
+          model: await this.getModelForReview(),
           schema: v.object({
             score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
             feedback: v.pipe(v.string(), v.minLength(1)),

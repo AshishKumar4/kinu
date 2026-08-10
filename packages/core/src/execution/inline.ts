@@ -19,6 +19,7 @@ import { appendMemoryNote } from '../memory/note.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
 import { isVfsError, withVfsErrorHint } from '../vfs/errno.js';
 import { readExecSignal } from './signal.js';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -192,6 +193,28 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           const existing = craftStore.get(toolName);
           const desc = String(description);
           const codeStr = String(code);
+          // The misevolution gate, before any write, on the `craft_tool`
+          // surface — the safety-machinery criteria in full, deliberately
+          // without `network-egress` (the same fetch runs unrestricted in an
+          // ephemeral execute_tools call, so vetoing only its persisted form
+          // buys nothing; see SURFACE_CRITERIA). What IS refused is a stored,
+          // reusable, publishable tool that names the promotion tables, the
+          // rollout knobs, the gate entry points, or the consent settings.
+          const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
+          if (!misevolution.ok) {
+            if (sql) {
+              recordMisevolutionVeto(sql, {
+                surface: 'craft_tool', violation: misevolution,
+                detail: `workspace.createTool("${toolName}") rejected`,
+              });
+            }
+            return {
+              ok: false,
+              error:
+                `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason} ` +
+                `Rewrite the tool body without it and call createTool again.`,
+            };
+          }
           if (existing) {
             craftStore.update(toolName, { description: desc, code: codeStr });
             onToolRegistered?.({ name: toolName, description: desc, code: codeStr });

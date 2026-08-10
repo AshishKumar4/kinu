@@ -79,6 +79,10 @@ export interface LocalModelResolver {
    *  judge/panel selection walks (core's `availableJudgeSpecs`, the same rule
    *  the DO backend uses). */
   judgeCandidates(): Promise<string[]>;
+  /** The registered providers' small-tier declarations — what core's
+   *  `selectFastModel` walks to find a cheaper model of the SAME vendor for
+   *  the mechanical evolution calls. */
+  fastModelCandidates(): ReadonlyArray<Pick<ModelProvider, 'id' | 'fastModel'>>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -104,12 +108,20 @@ export interface LocalModelResolverConfig {
   opencode?: OpenCodeProviderOptions;
 }
 
-export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
+/**
+ * The workspace LLM seam over the local registry.
+ *
+ * `spec` overrides which model it resolves — that is how the MECHANICAL
+ * evolution calls reach the chat vendor's small tier (core's selectFastModel)
+ * without a second provider path: same resolver, same credentials, one
+ * different model id. Omitted = the workspace's configured chat model.
+ */
+export function createLocalProviderLLM(opts: LocalModelResolverConfig & { spec?: string | null }): LLM {
   const resolver = createLocalModelResolver(opts);
-  const spec = resolver.normalizeSpecSync(null);
+  const spec = resolver.normalizeSpecSync(opts.spec ?? null);
   const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
   const maxOutputTokens = opts.llm.maxTokens;
-  const model = () => resolver.resolveModel(null);
+  const model = () => resolver.resolveModel(spec);
   return {
     async *stream(input) {
       const result = streamText({
@@ -263,6 +275,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     },
     judgeCandidates() {
       return availableJudgeSpecs(registry, deps);
+    },
+    fastModelCandidates() {
+      return registry.list();
     },
     listModels() {
       return registry.listAllModels(deps);

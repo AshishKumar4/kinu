@@ -11,6 +11,12 @@ export interface AgentClientFlags {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
+  /** This process runs ONE task turn and exits (`proteus exec`/`proteus run`)
+   *  rather than holding a conversation. Not a capability switch — it is a
+   *  statement of fact the outcome ledger needs: the next invocation's prompt
+   *  is a fresh task, not a verdict on the previous answer. Applies to both
+   *  backends (local: session option; cloud: stamped on the chat request). */
+  oneShot?: boolean;
 }
 
 /**
@@ -37,6 +43,7 @@ export function createAgentClient(
       agentName: target.name,
       cloudName: target.cloudName,
       session: opts,
+      oneShot: opts.oneShot,
     });
   }
   return openLocalAgentClient(target.localName, {
@@ -44,6 +51,7 @@ export function createAgentClient(
     baseUrl: opts.baseUrl,
     auth: opts.auth,
     noAutoEvolve: opts.noAutoEvolve,
+    oneShot: opts.oneShot,
     session: opts,
     surface,
   });

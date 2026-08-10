@@ -16,6 +16,8 @@ import { listModelsDevProviderModels } from './models-dev.js';
 export const ANTHROPIC_CRED_KEY = 'anthropic.bearer';
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com/v1';
 export const ANTHROPIC_DEFAULT_MODEL = 'claude-opus-4-7';
+/** The small tier the evolution engine's mechanical calls run on. */
+export const ANTHROPIC_FAST_MODEL = 'claude-haiku-4-5';
 
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: ANTHROPIC_DEFAULT_MODEL, label: 'Claude Opus 4.7',  capabilities: ['tools', 'streaming', 'reasoning', 'vision'], contextWindow: 1_000_000, inputModalities: ['text', 'image', 'pdf'] },
@@ -36,6 +38,7 @@ export function createAnthropicProvider(): ModelProvider {
     id: 'anthropic',
     label: 'Anthropic (direct API)',
     defaultModel: ANTHROPIC_DEFAULT_MODEL,
+    fastModel: ANTHROPIC_FAST_MODEL,
     async isAvailable(deps) { return deps.hasCredential(ANTHROPIC_CRED_KEY); },
     unavailableReason() { return 'No Anthropic API key (cred key: `anthropic.bearer`).'; },
     listModels: (deps) => listModelsDevProviderModels('anthropic', deps, {
