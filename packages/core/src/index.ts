@@ -148,6 +148,7 @@ export {
 export type * from './types/primitives.js';
 export type * from './types/agent-runtime.js';
 export type * from './types/backend-host.js';
+export type * from './types/signals.js';
 export type * from './types/mcts.js';
 export type * from './types/craft.js';
 export type * from './types/scaffold.js';
@@ -803,7 +804,7 @@ export {
 export {
   AgentOrchestrator, type AgentOrchestratorDeps,
 } from './orchestrator/agent-orchestrator.js';
-export { EventInjectionBuffer, type SettledInjections } from './orchestrator/event-injection.js';
+export { SignalDelivery } from './orchestrator/signals.js';
 export {
   DelegationNudge, isFailingToolResult,
   CONSECUTIVE_FAILURES_BEFORE_NUDGE, LONG_TURN_STEPS_BEFORE_NUDGE, DELEGATION_NUDGE_HEADER,

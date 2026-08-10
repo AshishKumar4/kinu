@@ -163,7 +163,7 @@ flowchart TB
 
     subgraph Host["ExtensionHost (core/src/extension.ts) — both backends"]
         Comp["compaction — @proteus/compaction (transformContext)"]
-        Inj["proteus.event-injection — prepareStep"]
+        Inj["proteus.signals — prepareStep"]
     end
 
     Assembly["Context assembly (core/src/prompting)<br/>attachment-sanitizer · DynamicContextLedger<br/>step-prune (0.7 window) · cache-breakpoints"]
@@ -194,11 +194,18 @@ The two default registrants attach at construction on both backends:
   AI-SDK `ModelMessage[]` ⇄ ladder `Turn[]`). It runs once per turn assembly over
   shared stores — raw transcripts in the CompositeVFS, the replayable plan + the
   measured token trigger in one `compaction_state` row.
-- **Mid-turn event injection** (`proteus.event-injection`, a `prepareStep` hook)
-  drains background events that arrived mid-turn into the active turn's next step,
-  using the `StepInjections` splice math (`core/src/orchestrator/event-injection.ts`,
-  `core/src/prompting/step-injections.ts`). It is the DO counterpart of the CLI's
-  `proteus.steering` drain — same mechanism, one host.
+- **Signal delivery** (`proteus.signals`, a `prepareStep` hook) is the live-turn
+  half of the ONE way anything asynchronous reaches the agent
+  (`core/src/orchestrator/signals.ts`). A producer — the event-hub drain, a
+  settled background job, an overflow retry, a take pick, an MCP task, the
+  mechanical delegation nudge — states a *timing* (`this-turn` / `now` /
+  `next-turn`) and the seam picks the mechanism: splice into the live turn's
+  next step using the `StepInjections` math
+  (`core/src/prompting/step-injections.ts`), or queue a programmatic turn
+  through `BackendHost.enqueueTurn`. One buffer and one splice for every
+  signal, so no registration order can shift another producer's recorded
+  indices. It is the DO counterpart of the CLI's `proteus.steering` drain —
+  same mechanism, one host.
 
 Supporting context machinery, all in `core/src/prompting` and shared by both
 backends: the **attachment sanitizer** (`attachment-sanitizer.ts`) offloads
@@ -234,7 +241,7 @@ sequenceDiagram
     loop Agentic step loop
         LLM-->>T: text delta / tool call
         T-->>U: stream chunk (cf_agent_use_chat_response)
-        T->>X: beforeStep → composePrepareStep (event-injection)
+        T->>X: beforeStep → composePrepareStep (signals)
         opt Tool call
             T->>Tools: AI SDK calls tool.execute()
             Tools-->>T: result

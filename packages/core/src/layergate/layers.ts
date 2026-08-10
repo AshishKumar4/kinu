@@ -23,6 +23,7 @@ import { TurnContextBudget } from '../context-budget.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
+import type { BackendHost } from '../types/backend-host.js';
 import type { ProteusEvent } from '../events/hub/types.js';
 import type { LexicalHit } from '../memory/hybrid-search.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
@@ -117,6 +118,17 @@ function shortHistory(): ModelMessage[] {
     { role: 'assistant', content: 'hi' },
     { role: 'user', content: 'and now?' },
   ];
+}
+
+/** A BackendHost whose only interesting answers are the two SignalDelivery
+ *  reads: does this platform take a mid-turn wake, and what did it queue. */
+function fakeSignalHost(queued: string[], acceptsMidTurnWake: boolean): BackendHost {
+  return {
+    broadcast: () => {},
+    enqueueTurn: async (turn) => { queued.push(turn.text); return { status: 'queued' }; },
+    acceptsMidTurnWake: () => acceptsMidTurnWake,
+    setTimer: () => {},
+  };
 }
 
 /** Distributes over the event union so a fixture cannot pair a variant with
@@ -759,8 +771,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'mid-turn-injection',
-    owns: 'splicing a drained batch into a LIVE turn: entry-index coordinates across steps, buffer settlement, burst debounce',
-    subjects: ['StepInjections', 'EventInjectionBuffer', 'DrainScheduler'],
+    owns: 'delivering an async signal: timing routing, entry-index coordinates across steps, settlement, burst debounce',
+    subjects: ['StepInjections', 'SignalDelivery', 'DrainScheduler'],
     probes: [
       {
         id: 'mid-turn-injection/index-is-stable',
@@ -803,19 +815,41 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
-        id: 'mid-turn-injection/buffer-absorb-and-leftover',
-        asserts: 'batches that reached a step boundary settle as absorbed; the rest come back for re-enqueue',
-        observe: (s) => {
-          const buffer = new s.EventInjectionBuffer();
-          buffer.beginTurn(false);
-          buffer.push({ turnId: 't1', ids: ['e1'], stepText: 'step-1', turnText: 'turn-1' });
-          const spliced = buffer.prepareStep({ stepNumber: 0, messages: shortHistory() });
-          buffer.push({ turnId: 't2', ids: ['e2'], stepText: 'step-2', turnText: 'turn-2' });
-          const settled = buffer.settle({ retainForContinuation: false });
+        id: 'mid-turn-injection/timing-picks-the-mechanism',
+        asserts: 'the seam routes by timing, not by caller: turn-local always splices, an external wake splices only where the backend takes one, next-turn always queues',
+        observe: async (s) => {
+          const run = async (acceptsMidTurnWake: boolean) => {
+            const queued: string[] = [];
+            const signals = new s.SignalDelivery(
+              fakeSignalHost(queued, acceptsMidTurnWake),
+            );
+            const outcomes = [
+              await signals.deliver({ kind: 'delegation_nudge', timing: 'this-turn', text: 'local' }),
+              await signals.deliver({ kind: 'event_drain', timing: 'now', text: 'wake' }),
+              await signals.deliver({ kind: 'background_job', timing: 'next-turn', text: 'later' }),
+            ];
+            return { outcomes, queued };
+          };
+          return { midTurnBackend: await run(true), queueOnlyBackend: await run(false) };
+        },
+      },
+      {
+        id: 'mid-turn-injection/buffer-absorb-and-requeue',
+        asserts: 'signals that reached a step boundary settle as absorbed; the rest re-deliver as queued turns, and a turn-local one is dropped',
+        observe: async (s) => {
+          const queued: string[] = [];
+          const signals = new s.SignalDelivery(fakeSignalHost(queued, true));
+          signals.beginTurn(false);
+          await signals.deliver({ kind: 'event_drain', timing: 'now', text: 'turn-1', stepText: 'step-1' });
+          const spliced = signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
+          await signals.deliver({ kind: 'event_drain', timing: 'now', text: 'turn-2', stepText: 'step-2' });
+          await signals.deliver({ kind: 'delegation_nudge', timing: 'this-turn', text: 'nudge' });
+          const settled = signals.settle({ completed: true });
+          await Promise.resolve();
           return {
             spliced: spliced?.map((m) => m.content),
-            absorbed: settled.absorbed.map((b) => b.turnId),
-            leftover: settled.leftover.map((b) => b.turnId),
+            absorbed: settled.absorbed.map((signal) => signal.text),
+            queued,
           };
         },
       },
@@ -1206,20 +1240,20 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const armed: string[] = [];
           const enqueued: unknown[] = [];
           const state = { savePromptTokens: () => {}, armForceCompaction: (key: string) => { armed.push(key); } };
-          const enqueueTurn = (turn: unknown) => { enqueued.push(turn); return Promise.resolve({ status: 'queued' as const }); };
+          const signals = { deliver: (signal: unknown) => { enqueued.push(signal); return Promise.resolve('queued' as const); } };
           const decisions = [
             s.applyOverflowRecovery({
               error: 'prompt is too long: 210000 tokens > 200000 maximum',
               lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
-              state, sessionKey: 'k', enqueueTurn,
+              state, sessionKey: 'k', signals,
             }),
             s.applyOverflowRecovery({
               error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
-              turnWasOverflowRetry: true, state, sessionKey: 'k', enqueueTurn,
+              turnWasOverflowRetry: true, state, sessionKey: 'k', signals,
             }),
             s.applyOverflowRecovery({
               error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
-              turnWasOverflowRetry: false, state, sessionKey: 'k', enqueueTurn,
+              turnWasOverflowRetry: false, state, sessionKey: 'k', signals,
             }),
           ];
           await Promise.resolve();

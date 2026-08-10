@@ -23,9 +23,32 @@ bun run layergate                        # per-layer regression report (no LLM)
 bun run layergate --matrix               # fault-injection localization matrix
 bun run layergate:lock                   # re-lock after an intended change
 bun run deploy                           # production deploy (scripts/deploy.sh)
+bash scripts/setup-worktree.sh           # prepare a git worktree (see below)
 ```
 
 No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
+
+## Working In A Git Worktree
+
+A fresh worktree has no `node_modules`. **Run `bash scripts/setup-worktree.sh` in
+it — once — before anything else.**
+
+Do NOT symlink or copy the main checkout's `node_modules` wholesale. Everything
+inside it, `@proteus` included, then resolves through the main checkout, so
+`@proteus/core` is *main's* core: cross-package tests and `bun run check` run
+green against source nobody edited, and the branch under test is never loaded.
+That has silently cost us a bench run (solver edits graded as if never made),
+the harbor adapter, and a week of agent worktrees.
+
+The script links third-party dependencies per entry and gives the tree its own
+real `@proteus/` scope directory pointing at its own `packages/`. It refuses to
+run when the branch changed `bun.lock` — run `bun install` in the worktree then,
+because borrowed modules would be the wrong ones.
+
+The invariant is enforced, not just documented: every package's suite carries
+`tests/workspace-resolution.test.ts`, which fails loudly with the fix command
+whenever `@proteus/*` resolves outside the tree it is running in
+(`packages/test-utils/src/workspace-resolution.ts`).
 
 ## Deploy Discipline
 

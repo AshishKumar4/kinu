@@ -896,14 +896,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
   // (it binds selected pending events via markConsumed, then injects one
-  // programmatic turn via host.enqueueTurn → saveMessages). Ingress paths use
+  // signal through the core delivery seam). Ingress paths use
   // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
   // immediately via `this.orch.drainPendingEvents()`.
 
   async onChatResponse(result: ChatResponseResult) {
     // The actor-generic settle spine lives on ActorAgent; everything after it
     // here is orchestrator sequencing (takes, branches, evolution, naming).
-    const { drainTurnId, programmaticUserMessage, errorText, completed, injectedEvents } =
+    const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
       this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     if (result.status !== "completed") {
@@ -1006,10 +1006,10 @@ export class OrchestratorAgent extends ActorAgent {
         }
       });
     }
-    // Mid-turn injected batches feed the SAME dispatch, keyed by the batch
-    // turn ids this turn absorbed at its step boundaries.
-    for (const injected of injectedEvents.absorbed) {
-      void this.completeEventBatch(injected.turnId, assistantText);
+    // Signals absorbed at a step boundary feed the SAME dispatch, keyed by the
+    // reply turn id each one carries.
+    for (const injected of injectedSignals.absorbed) {
+      if (injected.replyTurnId) void this.completeEventBatch(injected.replyTurnId, assistantText);
     }
 
     // status is "completed" here (the !== "completed" early-return above), so
@@ -1925,18 +1925,14 @@ export class OrchestratorAgent extends ActorAgent {
     }
     let continuationQueued = false;
     if (record.changedAnswer) {
-      try {
-        const result = await this.host.enqueueTurn({
-          text: buildTakeContinuationPrompt(record.set, record.chosen),
-          metadata: { proteusEvent: 'take_pick' },
-        });
-        continuationQueued = result.status === 'queued';
-        if (result.status === 'skipped') {
-          console.warn('[proteus] take_pick continuation enqueue skipped');
-        }
-      } catch (err) {
-        console.warn('[proteus] take_pick continuation enqueue failed:', err);
-      }
+      const result = await this.orch.signals.deliver({
+        kind: 'take_pick',
+        text: buildTakeContinuationPrompt(record.set, record.chosen),
+        // A pick is the user's verdict on a settled turn; it continues the
+        // conversation rather than steering whatever is running now.
+        timing: 'next-turn',
+      });
+      continuationQueued = result === 'queued';
     }
     this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
     return { ...record, continuationQueued };
@@ -2880,13 +2876,15 @@ export class OrchestratorAgent extends ActorAgent {
     return { ok: true };
   }
 
-  /** MCP `run_task`: inject a turn into the SAME serialized loop the event→turn
-   *  reactor and background-job wake use (host.enqueueTurn → Think.saveMessages).
-   *  Not a new execution path — the identical programmatic-turn seam. */
+  /** MCP `run_task`: deliver a task signal through the SAME seam the event→turn
+   *  reactor and background-job wake use. Not a new execution path. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new Error('run_task requires non-empty text');
-    return this.host.enqueueTurn({ text: trimmed, metadata: { proteusEvent: 'mcp' } });
+    const outcome = await this.orch.signals.deliver({
+      kind: 'mcp', text: trimmed, timing: 'next-turn',
+    });
+    return { status: outcome === 'queued' ? 'queued' : 'skipped' };
   }
 
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other

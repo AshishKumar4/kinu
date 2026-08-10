@@ -46,7 +46,7 @@ import {
 import { buildDrainBatch } from '../events/hub/drain.js';
 import { renderForLLM } from '../events/hub/visibility.js';
 import { StepInjections } from '../prompting/step-injections.js';
-import { EventInjectionBuffer } from '../orchestrator/event-injection.js';
+import { SignalDelivery } from '../orchestrator/signals.js';
 import { DrainScheduler } from '../orchestrator/drain-scheduler.js';
 import { formatApproval, reviewCommand, withApprovalGate } from '../safety/approval-gate.js';
 import { argumentDigest } from '../safety/argument-digest.js';
@@ -124,7 +124,7 @@ export interface PipelineSubjects {
   readonly buildDrainBatch: typeof buildDrainBatch;
   readonly renderForLLM: typeof renderForLLM;
   readonly StepInjections: typeof StepInjections;
-  readonly EventInjectionBuffer: typeof EventInjectionBuffer;
+  readonly SignalDelivery: typeof SignalDelivery;
   readonly DrainScheduler: typeof DrainScheduler;
 
   // ── safety gate ──
@@ -202,7 +202,7 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   buildDrainBatch: 'events/hub/drain.ts',
   renderForLLM: 'events/hub/visibility.ts',
   StepInjections: 'prompting/step-injections.ts',
-  EventInjectionBuffer: 'orchestrator/event-injection.ts',
+  SignalDelivery: 'orchestrator/signals.ts',
   DrainScheduler: 'orchestrator/drain-scheduler.ts',
 
   reviewCommand: 'safety/approval-gate.ts',
@@ -276,7 +276,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     buildDrainBatch,
     renderForLLM,
     StepInjections,
-    EventInjectionBuffer,
+    SignalDelivery,
     DrainScheduler,
 
     reviewCommand,

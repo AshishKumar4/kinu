@@ -126,10 +126,11 @@ per activation bridges Think's subclass hooks onto the contract above:
 
 Both default registrants attach on this host in the `ActorAgent` constructor:
 the compaction extension (`registerCompactionExtension`, registered under the
-name `compaction`) and the mid-turn event-injection extension
-(`proteus.event-injection`, a `prepareStep` hook that drains background events
-which arrived mid-turn into the active turn's next step — the DO counterpart of
-the CLI steering drain, sharing the same `StepInjections` splice math).
+name `compaction`) and the orchestrator's signal extension (`proteus.signals`,
+which observes tool calls for the delegation nudge and drains every signal
+delivered for the live turn — a background event, a nudge — into the active
+turn's next step; the DO counterpart of the CLI steering drain, sharing the
+same `StepInjections` splice math).
 
 One thing worth knowing about `registerTools` on this backend: an actor's
 `activeTools` whitelist is `[...effectiveActiveTools, ...extensionToolNames]`,

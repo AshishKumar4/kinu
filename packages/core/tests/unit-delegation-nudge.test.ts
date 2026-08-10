@@ -2,24 +2,42 @@
 // harness nudging toward the delegation ladder at the two moments the doctrine
 // names, because prose alone moved the model 0 times in 10 bench tasks.
 //
-// These are behaviour tests through the public seams: the ProteusExtension
-// hooks both backends fire, and — for the fidelity that matters most — a full
-// runChat turn where the nudge has to actually reach the model's next request.
+// These are behaviour tests through the public seams: the orchestrator's turn
+// extension both backends register (the nudge is delivered as a turn-local
+// signal through the one delivery seam, like every other async producer), and —
+// for the fidelity that matters most — a full runChat turn where the nudge has
+// to actually reach the model's next request.
 import { describe, expect, test } from 'bun:test';
 import { tool, type LanguageModelV2StreamPart, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import {
-  DelegationNudge, isFailingToolResult, runChat,
+  AgentOrchestrator, isFailingToolResult, runChat,
   CONSECUTIVE_FAILURES_BEFORE_NUDGE, LONG_TURN_STEPS_BEFORE_NUDGE, DELEGATION_NUDGE_HEADER,
-  ExtensionHost,
+  ExtensionHost, type BackendHost,
 } from '../src/index.js';
+import type { EventLog } from '../src/events/hub/log.js';
+import type { EvolutionEngine } from '../src/evolution/engine.js';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 
-/** The step the model would see: whatever prepareStep hands back (or the
+/** The nudge as production wires it: the orchestrator's turn extension on a
+ *  backend that never queues, so a nudge that fired is a nudge the model saw. */
+function newNudge(): AgentOrchestrator {
+  const host: BackendHost = {
+    broadcast: () => {},
+    enqueueTurn: async () => { throw new Error('a turn-local nudge must never queue'); },
+    acceptsMidTurnWake: () => false,
+    setTimer: () => {},
+  };
+  return new AgentOrchestrator({
+    host, engine: {} as EvolutionEngine, eventLog: {} as EventLog,
+  });
+}
+
+/** The step the model would see: whatever the turn extension hands back (or the
  *  unchanged input when nothing was injected). */
-function step(nudge: DelegationNudge, stepNumber: number, messages: ModelMessage[]): ModelMessage[] {
-  return nudge.prepareStep({ stepNumber, messages }) ?? messages;
+function step(orch: AgentOrchestrator, stepNumber: number, messages: ModelMessage[]): ModelMessage[] {
+  return orch.turnExtension.prepareStep!({ stepNumber, messages }) ?? messages;
 }
 
 function injected(messages: readonly ModelMessage[]): string[] {
@@ -28,8 +46,10 @@ function injected(messages: readonly ModelMessage[]): string[] {
     .filter((text) => text.startsWith(DELEGATION_NUDGE_HEADER));
 }
 
-function fail(nudge: DelegationNudge, toolName: string, times = 1): void {
-  for (let i = 0; i < times; i++) nudge.onToolResult({ toolName, result: 'boom', success: false });
+function fail(orch: AgentOrchestrator, toolName: string, times = 1): void {
+  for (let i = 0; i < times; i++) {
+    orch.turnExtension.onToolResult!({ toolName, result: 'boom', success: false });
+  }
 }
 
 describe('isFailingToolResult', () => {
@@ -65,120 +85,120 @@ describe('isFailingToolResult', () => {
 
 describe('repeated-failure trigger', () => {
   test('three failures on one tool inject exactly one nudge, at the next step boundary', () => {
-    const nudge = new DelegationNudge();
-    expect(step(nudge, 0, [user('build it')])).toEqual([user('build it')]);
-    fail(nudge, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE - 1);
+    const orch = newNudge();
+    expect(step(orch, 0, [user('build it')])).toEqual([user('build it')]);
+    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE - 1);
     // Two failures is a correction, not a pattern — nothing yet.
-    expect(injected(step(nudge, 1, [user('build it')]))).toEqual([]);
-    expect(nudge.snapshot()).toBeNull();
+    expect(injected(step(orch, 1, [user('build it')]))).toEqual([]);
+    expect(orch.nudge.snapshot()).toBeNull();
 
-    fail(nudge, 'run');
-    const nudged = step(nudge, 2, [user('build it')]);
+    fail(orch, 'run');
+    const nudged = step(orch, 2, [user('build it')]);
     expect(injected(nudged)).toHaveLength(1);
     const text = injected(nudged)[0]!;
     expect(text).toContain('`run` has failed 3 times in a row');
     expect(text).toContain('agents` action=fork');
     expect(text).toContain('settle=mcts');
     expect(text).toContain('hint, not an instruction');
-    expect(nudge.snapshot()).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
+    expect(orch.nudge.snapshot()).toEqual({ trigger: 'repeated_failure', step: 2, tool: 'run', converted: false });
   });
 
   test('the nudge holds its entry index across later steps and never repeats', () => {
-    const nudge = new DelegationNudge();
-    step(nudge, 0, [user('q')]);
-    fail(nudge, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
-    const at1 = step(nudge, 1, [user('q'), user('a1')]);
+    const orch = newNudge();
+    step(orch, 0, [user('q')]);
+    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
+    const at1 = step(orch, 1, [user('q'), user('a1')]);
     expect(at1.map((m) => m.content)).toEqual([
       'q', 'a1', expect.stringContaining(DELEGATION_NUDGE_HEADER) as unknown as string,
     ]);
     // Later steps rebuild from scratch: the nudge re-applies at its original
     // position (cache-prefix stability) and is not re-issued.
-    fail(nudge, 'run', 5);
-    const at2 = step(nudge, 2, [user('q'), user('a1'), user('a2')]);
+    fail(orch, 'run', 5);
+    const at2 = step(orch, 2, [user('q'), user('a1'), user('a2')]);
     expect(injected(at2)).toHaveLength(1);
     expect(at2[2]!.content).toContain(DELEGATION_NUDGE_HEADER);
-    expect(nudge.snapshot()?.step).toBe(1);
+    expect(orch.nudge.snapshot()?.step).toBe(1);
   });
 
   test('a success on that tool clears its streak; failures of other tools do not', () => {
-    const nudge = new DelegationNudge();
-    fail(nudge, 'run', 2);
-    nudge.onToolResult({ toolName: 'run', result: 'ok', success: true });
-    fail(nudge, 'run', 2);
+    const orch = newNudge();
+    fail(orch, 'run', 2);
+    orch.turnExtension.onToolResult!({ toolName: 'run', result: 'ok', success: true });
+    fail(orch, 'run', 2);
     // Two since the success — and a different tool's failures are its own
     // streak, not this one's.
-    fail(nudge, 'web_fetch', 2);
-    expect(injected(step(nudge, 1, [user('q')]))).toEqual([]);
+    fail(orch, 'web_fetch', 2);
+    expect(injected(step(orch, 1, [user('q')]))).toEqual([]);
     // …while a success on ANOTHER tool leaves the failing tool's streak alone:
     // interleaved reads must not launder a stuck approach.
-    nudge.onToolResult({ toolName: 'web_fetch', result: 'page', success: true });
-    fail(nudge, 'run');
-    expect(injected(step(nudge, 2, [user('q')]))).toHaveLength(1);
-    expect(nudge.snapshot()?.tool).toBe('run');
+    orch.turnExtension.onToolResult!({ toolName: 'web_fetch', result: 'page', success: true });
+    fail(orch, 'run');
+    expect(injected(step(orch, 2, [user('q')]))).toHaveLength(1);
+    expect(orch.nudge.snapshot()?.tool).toBe('run');
   });
 });
 
 describe('long-turn trigger', () => {
   test('a long turn with no delegation is nudged once, naming fork', () => {
-    const nudge = new DelegationNudge();
-    expect(injected(step(nudge, LONG_TURN_STEPS_BEFORE_NUDGE - 1, [user('q')]))).toEqual([]);
-    const nudged = step(nudge, LONG_TURN_STEPS_BEFORE_NUDGE, [user('q')]);
+    const orch = newNudge();
+    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_NUDGE - 1, [user('q')]))).toEqual([]);
+    const nudged = step(orch, LONG_TURN_STEPS_BEFORE_NUDGE, [user('q')]);
     expect(injected(nudged)).toHaveLength(1);
     expect(injected(nudged)[0]).toContain('25 steps into this turn with no delegation');
     expect(injected(nudged)[0]).toContain('agents` action=fork');
-    expect(nudge.snapshot()).toEqual({
+    expect(orch.nudge.snapshot()).toEqual({
       trigger: 'long_turn_no_delegation', step: LONG_TURN_STEPS_BEFORE_NUDGE, converted: false,
     });
     // Every later step of a 130-step turn stays silent — a nudge that repeats
     // is spam.
     for (let s = LONG_TURN_STEPS_BEFORE_NUDGE + 1; s < LONG_TURN_STEPS_BEFORE_NUDGE + 10; s++) {
-      expect(injected(step(nudge, s, [user('q')]))).toHaveLength(1);
+      expect(injected(step(orch, s, [user('q')]))).toHaveLength(1);
     }
   });
 
   test('a turn that already delegated is never nudged for length', () => {
-    const nudge = new DelegationNudge();
-    nudge.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
-    expect(injected(step(nudge, LONG_TURN_STEPS_BEFORE_NUDGE + 5, [user('q')]))).toEqual([]);
-    expect(nudge.snapshot()).toBeNull();
+    const orch = newNudge();
+    orch.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_NUDGE + 5, [user('q')]))).toEqual([]);
+    expect(orch.nudge.snapshot()).toBeNull();
   });
 
   test('one nudge per turn, whichever trigger fires first', () => {
-    const nudge = new DelegationNudge();
-    fail(nudge, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
-    expect(injected(step(nudge, 1, [user('q')]))).toHaveLength(1);
+    const orch = newNudge();
+    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
+    expect(injected(step(orch, 1, [user('q')]))).toHaveLength(1);
     // Long and undelegated as well — still one line in the conversation.
-    expect(injected(step(nudge, LONG_TURN_STEPS_BEFORE_NUDGE + 1, [user('q')]))).toHaveLength(1);
-    expect(nudge.snapshot()?.trigger).toBe('repeated_failure');
+    expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_NUDGE + 1, [user('q')]))).toHaveLength(1);
+    expect(orch.nudge.snapshot()?.trigger).toBe('repeated_failure');
   });
 });
 
 describe('conversion + turn boundaries', () => {
   test('converted counts delegation AFTER the nudge, not before it', () => {
-    const before = new DelegationNudge();
-    before.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
+    const before = newNudge();
+    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
     fail(before, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
     step(before, 1, [user('q')]);
-    expect(before.snapshot()).toEqual({
+    expect(before.nudge.snapshot()).toEqual({
       trigger: 'repeated_failure', step: 1, tool: 'run', converted: false,
     });
 
-    before.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
-    expect(before.snapshot()?.converted).toBe(true);
+    before.turnExtension.onToolCall!({ toolName: 'agents', args: { action: 'fork' } });
+    expect(before.nudge.snapshot()?.converted).toBe(true);
   });
 
   test('reset clears the streaks, the splice state and the record', () => {
-    const nudge = new DelegationNudge();
-    fail(nudge, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
-    step(nudge, 1, [user('q')]);
-    expect(nudge.snapshot()).not.toBeNull();
+    const orch = newNudge();
+    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
+    step(orch, 1, [user('q')]);
+    expect(orch.nudge.snapshot()).not.toBeNull();
 
-    nudge.reset();
-    expect(nudge.snapshot()).toBeNull();
+    orch.beginTurn(Date.now());
+    expect(orch.nudge.snapshot()).toBeNull();
     // The previous turn's failures do not carry into this one.
-    expect(injected(step(nudge, 0, [user('next')]))).toEqual([]);
-    fail(nudge, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
-    expect(injected(step(nudge, 1, [user('next')]))).toHaveLength(1);
+    expect(injected(step(orch, 0, [user('next')]))).toEqual([]);
+    fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_NUDGE);
+    expect(injected(step(orch, 1, [user('next')]))).toHaveLength(1);
   });
 });
 
@@ -229,7 +249,7 @@ function promptText(messages: ModelMessage[]): string {
 describe('through a real runChat turn', () => {
   test('the nudge reaches the model\'s next request after the third failure', async () => {
     const prompts: ModelMessage[][] = [];
-    const nudge = new DelegationNudge();
+    const orch = newNudge();
     const tools = {
       // The exit-code shape: the tool SUCCEEDS and returns the failure text.
       flaky: tool({
@@ -244,7 +264,7 @@ describe('through a real runChat turn', () => {
       history: [user('build caffe')],
       tools: tools as never,
       maxSteps: 6,
-      extensions: new ExtensionHost().register(nudge),
+      extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
 
     // Requests 1-3 issue the three failing calls; only after the third does
@@ -257,7 +277,7 @@ describe('through a real runChat turn', () => {
     for (const prompt of prompts.slice(3)) {
       expect(promptText(prompt).split(DELEGATION_NUDGE_HEADER)).toHaveLength(2);
     }
-    expect(nudge.snapshot()).toEqual({
+    expect(orch.nudge.snapshot()).toEqual({
       trigger: 'repeated_failure', step: 3, tool: 'flaky', converted: false,
     });
   });

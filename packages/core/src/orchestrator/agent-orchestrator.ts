@@ -8,11 +8,14 @@
 // private TurnQueue / the CLI's local loop), durable fibers, and the @callable
 // control plane stay on each backend; this owns the LOGIC.
 
+import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
 import { DelegationNudge } from './delegation-nudge.js';
 import { DrainScheduler } from './drain-scheduler.js';
+import { SignalDelivery } from './signals.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
+import type { PrepareStepContext, ProteusExtension } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
 import type { CompletedTurn } from '../evolution/types.js';
@@ -35,11 +38,29 @@ export interface AgentOrchestratorDeps {
 export class AgentOrchestrator {
   /** Per-turn accounting — tool calls, steps, token usage, errors. */
   readonly acc: TurnAccumulator;
-  /** Per-turn mechanical delegation steering. Backends register it on the
-   *  turn's ExtensionHost (it observes tool calls/results and splices its one
-   *  nudge at a step boundary) and hand it to closeTurnRun for the durable
+  /** The ONE way an asynchronous producer reaches the agent — hub drains,
+   *  background-job wakes, overflow retries, take picks, MCP tasks, the
+   *  delegation nudge. Producers state a timing; this picks the mechanism. */
+  readonly signals: SignalDelivery;
+  /** Per-turn mechanical delegation steering. Observed through
+   *  {@link turnExtension} and handed to closeTurnRun for the durable
    *  `delegation_nudge` row. */
   readonly nudge = new DelegationNudge();
+  /** The orchestrator's per-turn extension, registered on the turn's
+   *  ExtensionHost by both backends: the delegation nudge's observation hooks
+   *  plus the ONE mid-turn signal drain every producer feeds. The nudge's
+   *  trigger check runs first so its signal rides the step it was decided on;
+   *  that ordering lives here, not in each backend's registration order. */
+  readonly turnExtension: ProteusExtension = {
+    name: 'proteus.signals',
+    onToolCall: (ctx) => this.nudge.onToolCall(ctx),
+    onToolResult: (ctx) => this.nudge.onToolResult(ctx),
+    prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
+      const nudge = this.nudge.nudgeFor(ctx.stepNumber);
+      if (nudge) void this.signals.deliver(nudge);
+      return this.signals.prepareStep(ctx);
+    },
+  };
   private readonly reflectionInterval: number;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -50,6 +71,7 @@ export class AgentOrchestrator {
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
+    this.signals = new SignalDelivery(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d));
     this.reflectionInterval = deps.sessionReflectionInterval ?? 5;
     this.drains = new DrainScheduler(
       () => this.drainPendingEvents(),
@@ -71,10 +93,14 @@ export class AgentOrchestrator {
 
   /** Reset per-turn accounting at the start of a turn and bind its mission
    *  scope — the labels the turn's model calls and spawns debit. Omitted (the
-   *  chat path and every unbudgeted wake) leaves the turn uncapped. */
-  beginTurn(now: number, missionLabels: readonly string[] = []): void {
+   *  chat path and every unbudgeted wake) leaves the turn uncapped.
+   *  `continuation` marks a turn that continues the previous one (Think
+   *  auto-continue / recovery): its signals ride in again rather than being
+   *  dropped as answered. */
+  beginTurn(now: number, missionLabels: readonly string[] = [], continuation = false): void {
     this.acc.reset(now);
     this.nudge.reset();
+    this.signals.beginTurn(continuation);
     this.deps.budget?.activate(missionLabels);
   }
 
@@ -176,14 +202,14 @@ export class AgentOrchestrator {
   /**
    * The reactor: bind the selected pending events to a synthetic turn
    * (markConsumed — synchronous, so atomic w.r.t. the event loop; a concurrent
-   * drain sees them already consumed), then deliver the batch — spliced into
-   * the ACTIVE turn's next agentic step when one is live
-   * (host.injectIntoActiveTurn, also synchronous, so the whole select→bind→
-   * deliver decision is one event-loop tick), otherwise as ONE programmatic
-   * turn via host.enqueueTurn. Either way the events stay bound to `turnId`,
-   * so reply-channel dispatch (email_thread → outbound reply) finds them by
-   * the same id. The injected turn's own post-turn drain re-checks, so this
-   * self-terminates once the external backlog is empty. No-op when none.
+   * drain sees them already consumed), then hand the batch to signal delivery
+   * as ONE 'now' signal. Whether it splices into a live turn's next step or
+   * queues as its own programmatic turn is the seam's decision, not this
+   * caller's; either way the events stay bound to `replyTurnId`, so
+   * reply-channel dispatch (email_thread → outbound reply) finds them by the
+   * same id. A signal that cannot be delivered puts its events back. The woken
+   * turn's own post-turn drain re-checks, so this self-terminates once the
+   * external backlog is empty. No-op when nothing is pending.
    */
   async drainPendingEvents(): Promise<void> {
     let batch: ReturnType<typeof buildDrainBatch>;
@@ -197,34 +223,22 @@ export class AgentOrchestrator {
       console.warn('[proteus] drainPendingEvents (select) failed:', (err as Error).message);
       return;
     }
-    try {
-      if (this.deps.host.injectIntoActiveTurn({
-        turnId, ids: batch.ids, stepText: batch.midTurnText, turnText: batch.text,
-      })) {
-        this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: batch.ids.length });
-        return;
-      }
-      // The metadata marks the injected message as programmatic (event card,
-      // immediate outcome review) and carries the synthetic turn id so the
-      // backend can dispatch the turn's answer to the reply channels of the
-      // events it consumed (e.g. email_thread → outbound email reply).
-      const result = await this.deps.host.enqueueTurn({
-        text: batch.text,
-        metadata: {
-          proteusEvent: 'event_drain',
-          drainTurnId: turnId,
-          // The mission scope the woken turn spends under — the link between a
-          // schedule that declared a budget and the ledger its turn debits.
-          ...(batch.missions.length > 0 ? { [MISSION_LABELS_METADATA_KEY]: batch.missions } : {}),
-        },
-      });
-      if (result.status === 'skipped') {
-        console.warn('[proteus] drainPendingEvents (turn) skipped; returning events to pending');
-        this.returnEventsToPending(batch.ids);
-      }
-    } catch (err) {
-      console.warn('[proteus] drainPendingEvents (turn) failed:', (err as Error).message);
-      this.returnEventsToPending(batch.ids);
+    const ids = batch.ids;
+    const outcome = await this.signals.deliver({
+      kind: 'event_drain',
+      text: batch.text,
+      stepText: batch.midTurnText,
+      timing: 'now',
+      replyTurnId: turnId,
+      // The mission scope the woken turn spends under — the link between a
+      // schedule that declared a budget and the ledger its turn debits.
+      ...(batch.missions.length > 0
+        ? { metadata: { [MISSION_LABELS_METADATA_KEY]: batch.missions } }
+        : {}),
+      compensate: () => this.returnEventsToPending(ids),
+    });
+    if (outcome === 'mid-turn') {
+      this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: ids.length });
     }
   }
 

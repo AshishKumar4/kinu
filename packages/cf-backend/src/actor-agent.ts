@@ -62,7 +62,7 @@ import {
   openTurnRun, closeTurnRun, persistMeasuredPromptTokens, applyOverflowRecovery,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
-  EventInjectionBuffer, type MidTurnEventBatch,
+  type SettledSignals,
   type AgentsToolAction,
   type AgentsToolDeps,
   type BuiltinToolName,
@@ -407,65 +407,31 @@ export abstract class ActorAgent extends Think<Env> {
     // be initialized before the getter caches its closure.
     this.compactionState = createCompactionStateStore(this.boundSql);
     this.registerCompactionExtension();
-    // Mid-turn background-event injection: batches the reactor bound to a live
-    // turn (host.injectIntoActiveTurn) splice into its next agentic step.
-    this.extensions.register({
-      name: 'proteus.event-injection',
-      prepareStep: (ctx) => this._eventInjections.prepareStep(ctx),
-    });
-    // Mechanical delegation steering (core orchestrator/delegation-nudge.ts) —
-    // the same instance the settle spine reads for the durable row. Registered
+    // The orchestrator's per-turn extension: the delegation nudge's observation
+    // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
     // through closures because `orch` is built lazily and this runs in the
-    // constructor; LAST, so its splice never shifts an earlier extension's
-    // recorded indices.
+    // constructor.
     this.extensions.register({
-      name: 'proteus.delegation-nudge',
-      onToolCall: (ctx) => this.orch.nudge.onToolCall(ctx),
-      onToolResult: (ctx) => this.orch.nudge.onToolResult(ctx),
-      prepareStep: (ctx) => this.orch.nudge.prepareStep(ctx),
+      name: 'proteus.signals',
+      onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
+      onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
+      prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
     });
-  }
-
-  /** Drain batches bound to the LIVE turn (BackendHost.injectIntoActiveTurn),
-   *  spliced into its next step by the proteus.event-injection extension and
-   *  settled in onChatResponse (absorbed → reply dispatch, leftover → the
-   *  standard programmatic drain turn). */
-  protected readonly _eventInjections = new EventInjectionBuffer();
-
-  protected async reenqueueEventBatch(batch: MidTurnEventBatch, source: 'leftover' | 'aborted'): Promise<void> {
-    try {
-      const result = await this.host.enqueueTurn({
-        text: batch.turnText,
-        metadata: { proteusEvent: 'event_drain', drainTurnId: batch.turnId },
-      });
-      if (result.status === 'queued') return;
-      console.warn(`[proteus] ${source} event re-enqueue skipped; returning events to pending`);
-    } catch (err) {
-      console.warn(`[proteus] ${source} event re-enqueue failed:`, err);
-    }
-    for (const id of batch.ids) {
-      try {
-        this.eventLog.unbind(id);
-      } catch (err) {
-        console.warn('[proteus] event unbind failed:', id, err);
-      }
-    }
   }
 
   /** The settled turn's actor-generic front half — every actor's
    *  onChatResponse calls this FIRST (before anything that can throw or
    *  return early). Resolves the drain identity, clears in-flight turn
-   *  state, and settles mid-turn event injection: absorbed batches keep
-   *  their reply dispatch with this turn's answer; batches that never saw a
-   *  step boundary (or an aborted turn's) re-enqueue as the standard
-   *  programmatic drain turn, same metadata shape enqueueTurn stamps, so
-   *  the event card and reply dispatch work unchanged. */
+   *  state, and settles mid-turn signal delivery: absorbed signals keep their
+   *  reply dispatch with this turn's answer, and whatever the model never saw
+   *  re-delivers through the same seam (which queues it, since the turn is
+   *  over) — so the event card and reply dispatch work unchanged. */
   protected settleTurnEvents(result: ChatResponseResult): {
     drainTurnId: string | undefined;
     programmaticUserMessage: UIMessage | null;
     errorText: string | undefined;
     completed: boolean;
-    injectedEvents: ReturnType<EventInjectionBuffer['settle']>;
+    injectedSignals: SettledSignals;
   } {
     const drainTurnId = this._activeDrainTurnId ?? this._pendingDrainReplyTurns.get(result.requestId);
     const programmaticUserMessage = this._activeProgrammaticUserMessage;
@@ -483,14 +449,8 @@ export abstract class ActorAgent extends Think<Env> {
     this._inFlight = false;
     this._cliCwd = null;
     const completed = result.status === 'completed';
-    const injectedEvents = this._eventInjections.settle({ retainForContinuation: completed });
-    const batchesToReenqueue = completed
-      ? injectedEvents.leftover
-      : [...injectedEvents.absorbed, ...injectedEvents.leftover];
-    for (const batch of batchesToReenqueue) {
-      void this.reenqueueEventBatch(batch, completed ? 'leftover' : 'aborted');
-    }
-    return { drainTurnId, programmaticUserMessage, errorText, completed, injectedEvents };
+    const injectedSignals = this.orch.signals.settle({ completed });
+    return { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals };
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -514,7 +474,7 @@ export abstract class ActorAgent extends Think<Env> {
         turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: this.name,
-        enqueueTurn: (t) => this.host.enqueueTurn(t),
+        signals: this.orch.signals,
       });
       if (recovery.forceCompaction) {
         this.logActivity('overflow_detected',
@@ -857,7 +817,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
   // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
-  // the resume path for the reactor + background-job wake + consent.
+  // the queued half of signal delivery, reached only through the core seam.
   private _host: BackendHost | null = null;
   protected get host(): BackendHost {
     if (!this._host) {
@@ -886,18 +846,13 @@ export abstract class ActorAgent extends Think<Env> {
             }
           }
         },
-        // Mid-turn delivery: a drained batch bound while a turn is live rides
-        // that turn's next step boundary (the event-injection extension)
-        // instead of queueing behind it. Check + push are one synchronous
-        // tick, so the turn observed here is the one whose prepareStep will
-        // drain the buffer (turns are TurnQueue-serialized); a turn that
-        // settles first hands the batch back through settle()'s leftover path.
-        injectIntoActiveTurn: (batch) => {
-          if (!this._inFlight) return false;
-          this._eventInjections.push(batch);
-          this.logActivity('event_injected', `${batch.turnId} → live turn`);
-          return true;
-        },
+        // Mid-turn delivery: an external wake that lands while a turn is live
+        // rides that turn's next step boundary instead of queueing behind it.
+        // The read is synchronous and the seam's buffer push happens in the
+        // same tick, so the turn observed here is the one whose prepareStep
+        // will drain it (turns are TurnQueue-serialized); a turn that settles
+        // first re-delivers the signal from settle().
+        acceptsMidTurnWake: () => this._inFlight,
         // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
         // the evolution hooks already rely on) holds the DO through the window
         // + the drain so the debounced drain completes within the live
@@ -1014,7 +969,7 @@ export abstract class ActorAgent extends Think<Env> {
       this._jobRunner = new BackgroundJobRunner({
         store: this.jobs,
         fiber: this.rt.schedule.fiber,
-        host: this.host,
+        signals: this.orch.signals,
         eventLog: this.eventLog,
         scheduleDrain: () => this.orch.scheduleDrain(),
         logActivity: (event, detail) => this.logActivity(event, detail),
@@ -1790,14 +1745,12 @@ export abstract class ActorAgent extends Think<Env> {
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
-    this.orch.beginTurn(Date.now(), this.turnMissionLabels());
+    // The continuation flag resets mid-turn signal splice state: a continuation
+    // turn re-absorbs the just-settled signals so they ride into it the way the
+    // queued path's durable message does. Signals still waiting ride either way.
+    this.orch.beginTurn(Date.now(), this.turnMissionLabels(), ctx.continuation);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
-    // Reset event-injection splice state; a continuation turn re-absorbs the
-    // just-settled batches so injected events ride into it the same way the
-    // enqueued drain path's durable message does. Batches still waiting
-    // inject into this turn either way.
-    this._eventInjections.beginTurn(ctx.continuation);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // A real user message is the verdict on the previous turn — dispatch the
@@ -2074,9 +2027,10 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.onFirstChunk();
   }
 
-  /** Whether the in-flight turn was injected programmatically (reactor drain,
-   *  background-job wake, consent resume) — enqueueTurn stamps proteusEvent
-   *  metadata on the saved user message; real chat messages carry none. */
+  /** Whether the in-flight turn was injected programmatically (an event drain,
+   *  a background-job wake, an overflow retry) — a queued signal stamps
+   *  proteusEvent metadata on the saved user message; real chat messages carry
+   *  none. */
   protected lastUserTurnIsProgrammatic(): boolean {
     return this.turnUserMessageEvent(null) !== null;
   }

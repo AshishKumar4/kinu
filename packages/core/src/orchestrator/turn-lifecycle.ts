@@ -7,7 +7,7 @@
  *                                 built from the shared TurnAccumulator
  *   persistMeasuredPromptTokens   the NEXT turn's measured compaction trigger
  *   applyOverflowRecovery         the turn-failure policy APPLIED: arm force-
- *                                 compaction + enqueue exactly one retry
+ *                                 compaction + deliver exactly one retry signal
  *
  * Each existed twice — cf beforeTurn/recordTurnTelemetry and the CLI
  * processTurn/closeRun — with the payload shapes drifting one field at a time.
@@ -21,7 +21,7 @@ import {
   planOverflowRecovery, OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   type OverflowRecoveryDecision,
 } from '../turn-failure.js';
-import type { EnqueueTurnResult, ProgrammaticTurn } from '../types/backend-host.js';
+import type { SignalDeliverer } from '../types/signals.js';
 
 /** The recorder slice this spine writes through — structural (both backends
  *  pass their RunEventRecorder). */
@@ -138,8 +138,8 @@ export function persistMeasuredPromptTokens(
 
 /**
  * The shared turn-failure policy, applied: a context_length-class provider
- * failure arms force-compaction for the next assembly and enqueues ONE retry
- * turn — a failed retry never enqueues another. Rate limits never
+ * failure arms force-compaction for the next assembly and delivers ONE retry
+ * signal — a failed retry never delivers another. Rate limits never
  * force-compact (throughput is not size) unless the measured PER-REQUEST
  * prompt crossed half the window. Returns the plan for the caller's logging.
  */
@@ -150,7 +150,7 @@ export function applyOverflowRecovery(opts: {
   turnWasOverflowRetry: boolean;
   state: CompactionTriggerState;
   sessionKey: string;
-  enqueueTurn: (turn: ProgrammaticTurn) => Promise<EnqueueTurnResult>;
+  signals: SignalDeliverer;
 }): OverflowRecoveryDecision {
   const recovery = planOverflowRecovery({
     error: opts.error,
@@ -161,9 +161,11 @@ export function applyOverflowRecovery(opts: {
   if (recovery.forceCompaction) {
     opts.state.armForceCompaction(opts.sessionKey);
     if (recovery.enqueueRetry) {
-      void opts.enqueueTurn({
+      void opts.signals.deliver({
+        kind: OVERFLOW_RETRY_EVENT,
         text: OVERFLOW_RETRY_TEXT,
-        metadata: { proteusEvent: OVERFLOW_RETRY_EVENT },
+        // The turn that failed is over; the retry is the next one by definition.
+        timing: 'next-turn',
       }).catch((err: unknown) => console.warn('[proteus] overflow retry enqueue failed:', err));
     }
   }

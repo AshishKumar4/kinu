@@ -100,11 +100,12 @@ the peer transport uses: *delivered* means it reached the target's context,
 *queued* means it waits behind work already admitted.
 
 The mechanism behind `steering_live_turn` is the reactor drain
-(`core/src/orchestrator/agent-orchestrator.ts`) plus
-`BackendHost.injectIntoActiveTurn`: a batch bound while a turn is live is
-spliced by the `proteus.event-injection` extension instead of queueing behind
-the turn. This is why there is no delivery *mode* to choose — there is one
-policy, and the return reports which branch it took.
+(`core/src/orchestrator/agent-orchestrator.ts`) handing the batch to the one
+signal-delivery seam (`core/src/orchestrator/signals.ts`) with timing `now`: a
+batch bound while a turn is live is spliced by the `proteus.signals` extension
+instead of queueing behind the turn. This is why there is no delivery *mode* to
+choose — the caller states a timing, the seam picks the mechanism, and the
+return reports which branch it took.
 
 ## execute_tools — Codemode Sandbox
 

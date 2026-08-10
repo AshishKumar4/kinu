@@ -11,7 +11,7 @@ import {
   TurnAccumulator, DelegationNudge,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
-  type CompactionTriggerState, type ProgrammaticTurn,
+  type AgentSignal, type CompactionTriggerState,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
@@ -98,7 +98,7 @@ describe('openTurnRun / closeTurnRun', () => {
     nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
     nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
     nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
-    nudge.prepareStep({ stepNumber: 4, messages: [{ role: 'user', content: 'q' }] });
+    nudge.nudgeFor(4);
     nudge.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
 
     closeTurnRun(rec, 'run-n', {
@@ -170,38 +170,48 @@ describe('persistMeasuredPromptTokens', () => {
   });
 });
 
+/** Records what the recovery policy hands the one delivery seam. */
+function recordingSignals() {
+  const delivered: AgentSignal[] = [];
+  return {
+    delivered,
+    deliver: async (signal: AgentSignal) => { delivered.push(signal); return 'queued' as const },
+  };
+}
+
 describe('applyOverflowRecovery', () => {
-  test('a context overflow arms force-compaction and enqueues exactly one retry', async () => {
+  test('a context overflow arms force-compaction and delivers exactly one retry', async () => {
     const state = recordingState();
-    const enqueued: ProgrammaticTurn[] = [];
+    const signals = recordingSignals();
     const decision = applyOverflowRecovery({
       error: 'prompt is too long: 210000 tokens > 200000 maximum',
       lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
-      state, sessionKey: 'k',
-      enqueueTurn: async (t) => { enqueued.push(t); return { status: 'queued' }; },
+      state, sessionKey: 'k', signals,
     });
     expect(decision.forceCompaction).toBe(true);
     expect(state.armed).toEqual(['k']);
     await Promise.resolve();
-    expect(enqueued).toEqual([{ text: OVERFLOW_RETRY_TEXT, metadata: { proteusEvent: OVERFLOW_RETRY_EVENT } }]);
+    // The retry never steers a live turn: the turn that failed is over.
+    expect(signals.delivered).toEqual([
+      { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT, timing: 'next-turn' },
+    ]);
   });
 
-  test('a failed retry never enqueues another; unrelated failures never arm', () => {
+  test('a failed retry never delivers another; unrelated failures never arm', () => {
     const state = recordingState();
-    const enqueued: ProgrammaticTurn[] = [];
-    const enqueueTurn = async (t: ProgrammaticTurn) => { enqueued.push(t); return { status: 'queued' as const }; };
+    const signals = recordingSignals();
     const retryFailure = applyOverflowRecovery({
       error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
-      turnWasOverflowRetry: true, state, sessionKey: 'k', enqueueTurn,
+      turnWasOverflowRetry: true, state, sessionKey: 'k', signals,
     });
     expect(retryFailure.forceCompaction).toBe(true);
     expect(retryFailure.enqueueRetry).toBe(false);
     const rateLimit = applyOverflowRecovery({
       error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
-      turnWasOverflowRetry: false, state, sessionKey: 'k', enqueueTurn,
+      turnWasOverflowRetry: false, state, sessionKey: 'k', signals,
     });
     expect(rateLimit.forceCompaction).toBe(false);
-    expect(enqueued).toEqual([]);
+    expect(signals.delivered).toEqual([]);
     expect(state.armed).toEqual(['k']); // only the genuine overflow armed
   });
 });

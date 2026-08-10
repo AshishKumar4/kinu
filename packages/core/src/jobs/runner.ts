@@ -1,16 +1,18 @@
 // BackgroundJobRunner — the backend-agnostic lifecycle for auto-detached >30s
 // tool calls (think-heads, long execute_tools/run). Mints a job, keeps the
 // in-flight promise alive in a durable fiber, settles/fails it, and wakes the
-// agent with a synthesis turn — all over the AgentRuntime fiber + a BackendHost.
+// agent with a synthesis signal — over the AgentRuntime fiber + the one
+// signal-delivery seam.
 //
 // Hoisted out of the cf-backend OrchestratorAgent (re-arch P4) so the CLI gets
 // background jobs for free. The platform supplies a durable `fiber` (CF:
-// Agent.runFiber; CLI: createLinuxFiber) + a BackendHost (enqueueTurn = the
-// programmatic-turn wake). The @callable control-plane RPCs (jobResult/list/
+// Agent.runFiber; CLI: createLinuxFiber); the wake is a plain
+// SignalDelivery.deliver, so this never picks a delivery mechanism of its own.
+// The @callable control-plane RPCs (jobResult/list/
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.
 
 import type { Schedule } from '../types/primitives.js';
-import type { BackendHost } from '../types/backend-host.js';
+import type { SignalDeliverer } from '../types/signals.js';
 import type { EventLog } from '../events/hub/log.js';
 import type { ThresholdDeps } from './threshold.js';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
@@ -49,8 +51,8 @@ export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
   /** Durable fiber — AgentRuntime.schedule.fiber. */
   fiber: Schedule['fiber'];
-  /** Programmatic-turn wake + (unused here) broadcast. */
-  host: BackendHost;
+  /** The one signal-delivery seam — the wake at the end of a settled job. */
+  signals: SignalDeliverer;
   /** Durable retry breadcrumb consumed by the standard event drain. */
   eventLog: EventLog;
   /** Existing ingress drain scheduler; called after publishing a retry event. */
@@ -178,9 +180,10 @@ export class BackgroundJobRunner {
     catch { return false; }
   }
 
-  /** Wake the agent with a synthesis turn carrying the settled job. The metadata
-   *  marker makes the chat render it as a background-event card, not a user
-   *  bubble. Runs once per job (no self-wake loop). */
+  /** Wake the agent with a synthesis signal carrying the settled job. The
+   *  `background_job` kind makes the chat render it as a background-event card,
+   *  not a user bubble. An undelivered wake leaves a durable retry breadcrumb
+   *  the standard drain picks up. Runs once per job (no self-wake loop). */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
@@ -189,16 +192,19 @@ export class BackgroundJobRunner {
         `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded.`
       : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
         `Decide whether to retry or report the failure.`;
-    try {
-      const result = await this.deps.host.enqueueTurn({
-        text, metadata: { proteusEvent: 'background_job', jobId, kind: job.kind, status: job.status },
-      });
-      if (result.status === 'queued') return;
-      this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
-    } catch (err) {
-      console.warn('[proteus] wakeForBackgroundJob failed:', err instanceof Error ? err.message : err);
-    }
-    this.publishWakeRetry(job, text);
+    await this.deps.signals.deliver({
+      kind: 'background_job',
+      text,
+      // The job settled outside any turn; its synthesis is the next one.
+      timing: 'next-turn',
+      metadata: { jobId, kind: job.kind, status: job.status },
+      compensate: (reason) => {
+        if (reason === 'preempted') {
+          this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
+        }
+        this.publishWakeRetry(job, text);
+      },
+    });
   }
 
   private publishWakeRetry(job: BackgroundJob, text: string): void {

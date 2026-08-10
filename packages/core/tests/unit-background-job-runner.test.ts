@@ -1,10 +1,11 @@
 // BackgroundJobRunner — the backend-agnostic >30s-detach lifecycle (re-arch P4).
 // Verifies the durable-fiber detach → settle/fail → programmatic-turn wake, the
 // operator hard-cancel, and the evict-mid-flight recovery — over a fake fiber +
-// fake BackendHost, with no DO.
+// the real signal-delivery seam on a fake BackendHost, with no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, JobNotResumable, type JobResumer } from '../src/jobs/runner.js';
+import { SignalDelivery } from '../src/orchestrator/signals.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index.js';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
@@ -35,7 +36,7 @@ function fakeHost() {
       if (rejection) throw rejection;
       return { status };
     },
-    injectIntoActiveTurn: () => false,
+    acceptsMidTurnWake: () => false,
     setTimer: () => {},
   };
   return {
@@ -64,7 +65,7 @@ function setup(opts: { resume?: JobResumer } = {}) {
   const notified: Array<{ id: string; status: string }> = [];
   let drainSchedules = 0;
   const runner = new BackgroundJobRunner({
-    store, fiber, host, eventLog,
+    store, fiber, signals: new SignalDelivery(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
     logActivity: (e, d) => logs.push({ e, d }),
     onSettled: (job) => notified.push({ id: job.id, status: job.status }),

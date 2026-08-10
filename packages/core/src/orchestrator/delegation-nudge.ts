@@ -39,18 +39,16 @@
  * failures is too many". Their rationale is above; changing them is a code
  * change with a reason attached.
  *
- * Shared by construction: this is a {@link ProteusExtension} on the one hook
- * path both backends fire (cf's beforeToolCall/afterToolCall/beforeStep, the
- * CLI's runChat), owned per turn by the AgentOrchestrator next to the rest of
- * the turn's accounting.
+ * Shared by construction: the observation hooks ride the one hook path both
+ * backends fire (cf's beforeToolCall/afterToolCall/beforeStep, the CLI's
+ * runChat), and the nudge itself is delivered as a turn-local {@link AgentSignal}
+ * through the same seam every asynchronous producer uses — the AgentOrchestrator
+ * owns both, per turn, next to the rest of the turn's accounting.
  */
 
-import type { ModelMessage } from 'ai';
 import type { DelegationNudgeRecord, DelegationNudgeTrigger } from '../events/types.js';
-import type {
-  PrepareStepContext, ProteusExtension, ToolCallContext, ToolResultContext,
-} from '../extension.js';
-import { StepInjections } from '../prompting/step-injections.js';
+import type { ToolCallContext, ToolResultContext } from '../extension.js';
+import type { AgentSignal } from '../types/signals.js';
 import type { BuiltinToolName } from '../tools/registry.js';
 
 /** Failing results from one tool, with no success in between, before the turn
@@ -113,13 +111,7 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
   }
 }
 
-export class DelegationNudge implements ProteusExtension {
-  readonly name = 'proteus.delegation-nudge';
-
-  /** Splices the nudge at the step tail and re-applies it at that index for
-   *  the rest of the turn — the same coordinate math every other mid-turn
-   *  injection rides, so the prompt-cache prefix stays stable. */
-  private readonly injections = new StepInjections<{ readonly message: ModelMessage }>();
+export class DelegationNudge {
   /** Failures per tool since that tool last succeeded. */
   private readonly failures = new Map<string, number>();
   private delegated = false;
@@ -128,7 +120,6 @@ export class DelegationNudge implements ProteusExtension {
 
   /** Clear for a new turn. */
   reset(): void {
-    this.injections.reset();
     this.failures.clear();
     this.delegated = false;
     this.fired = null;
@@ -149,34 +140,38 @@ export class DelegationNudge implements ProteusExtension {
     this.failures.set(ctx.toolName, (this.failures.get(ctx.toolName) ?? 0) + 1);
   }
 
-  prepareStep(ctx: PrepareStepContext): ModelMessage[] | undefined {
-    return this.injections.drain(ctx, this.nudgeFor(ctx.stepNumber));
-  }
-
   /** The turn's nudge and whether it converted, or null when none fired. */
   snapshot(): DelegationNudgeRecord | null {
     return this.fired ? { ...this.fired, converted: this.converted } : null;
   }
 
-  /** At most one entry, ever: the first trigger to fire owns the turn. */
-  private nudgeFor(step: number): Array<{ readonly message: ModelMessage }> {
-    if (this.fired) return [];
+  /**
+   * The step-boundary trigger check: the signal to deliver into THIS step, or
+   * null. At most one, ever — the first trigger to fire owns the turn.
+   */
+  nudgeFor(step: number): AgentSignal | null {
+    if (this.fired) return null;
     const stuck = [...this.failures].find(([, count]) => count >= CONSECUTIVE_FAILURES_BEFORE_NUDGE);
     if (stuck) {
       this.fired = { trigger: 'repeated_failure', step, tool: stuck[0] };
-      return [message(repeatedFailureText(stuck[0], stuck[1]))];
+      return signal(repeatedFailureText(stuck[0], stuck[1]));
     }
     if (step >= LONG_TURN_STEPS_BEFORE_NUDGE && !this.delegated) {
       this.fired = { trigger: 'long_turn_no_delegation', step };
-      return [message(longTurnText(step))];
+      return signal(longTurnText(step));
     }
-    return [];
+    return null;
   }
 }
 
-/** A user-role message, like every other runtime-authored mid-turn splice: a
- *  system message between steps is not portable across providers, and the
- *  header already says who wrote it. */
-function message(text: string): { readonly message: ModelMessage } {
-  return { message: { role: 'user', content: `${DELEGATION_NUDGE_HEADER}\n\n${text}` } };
+/** A turn-local signal — meaningless outside the turn that produced it, so it
+ *  never queues. Its body becomes a user-role message like every other
+ *  runtime-authored mid-turn splice: a system message between steps is not
+ *  portable across providers, and the header already says who wrote it. */
+function signal(text: string): AgentSignal {
+  return {
+    kind: 'delegation_nudge',
+    timing: 'this-turn',
+    text: `${DELEGATION_NUDGE_HEADER}\n\n${text}`,
+  };
 }

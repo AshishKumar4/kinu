@@ -7,7 +7,8 @@ import { createTestSql } from '@proteus/test-utils';
 import { AgentOrchestrator } from '../src/orchestrator/agent-orchestrator.js';
 import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window.js';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index.js';
-import type { BackendHost, BroadcastEvent, MidTurnEventBatch, ProgrammaticTurn } from '../src/types/backend-host.js';
+import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
+import type { AgentSignal } from '../src/types/signals.js';
 import type { EvolutionEngine } from '../src/evolution/engine.js';
 import type { CompletedTurn } from '../src/evolution/types.js';
 
@@ -53,20 +54,22 @@ function fakeEngine() {
 }
 function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
-  const injected: MidTurnEventBatch[] = [];
   const broadcasts: BroadcastEvent[] = [];
   const timers: Array<{ fn: () => Promise<void>; ms: number }> = [];
   const host: BackendHost = {
     broadcast: (event) => { broadcasts.push(event); },
     enqueueTurn: async (i) => { enqueued.push(i); return { status: 'queued' }; },
-    injectIntoActiveTurn: (batch) => {
-      if (!opts?.activeTurn) return false;
-      injected.push(batch);
-      return true;
-    },
+    acceptsMidTurnWake: () => opts?.activeTurn === true,
     setTimer: (fn, ms) => { timers.push({ fn, ms }); },
   };
-  return { host, enqueued, injected, broadcasts, timers };
+  return { host, enqueued, broadcasts, timers };
+}
+
+/** What a live turn actually absorbed, read back through the seam the backend
+ *  reads: one step boundary, then settle. */
+function absorb(orch: AgentOrchestrator): readonly AgentSignal[] {
+  orch.turnExtension.prepareStep!({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
+  return orch.signals.settle({ completed: true }).absorbed;
 }
 const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({
   userMessage: `t${i}`, assistantResponse: 'r', toolCalls: [], durationMs: 1, steps: 1,
@@ -213,40 +216,39 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     const log = newEventLog();
     log.publish({ descriptor: webhook('d1'), now: 1 });
     const { engine } = fakeEngine();
-    const { host, enqueued, injected, broadcasts } = fakeHost({ activeTurn: true });
+    const { host, enqueued, broadcasts } = fakeHost({ activeTurn: true });
     const orch = new AgentOrchestrator({ host, engine, eventLog: log });
 
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(0);
+    // A second drain finds nothing: consumed events never double-deliver.
+    await orch.drainPendingEvents();
+    const injected = absorb(orch);
     expect(injected).toHaveLength(1);
     // Mid-turn rendering: the live turn is told to fold the events in, not stop.
     expect(injected[0]!.stepText).toContain('arrived while you were working');
     expect(injected[0]!.stepText).toContain('[webhook]');
-    // The standalone rendering rides along for the leftover fallback.
-    expect(injected[0]!.turnText).toContain('arrived while you were idle');
+    // The standalone rendering rides along for the re-delivery fallback.
+    expect(injected[0]!.text).toContain('arrived while you were idle');
     // Reply-channel binding: the consumed event is bound to the SAME turn id
-    // the host received — the backend dispatches the live turn's answer by it.
-    const bound = log.query({ turn_id: injected[0]!.turnId });
-    expect(bound).toHaveLength(1);
-    expect(injected[0]!.ids).toEqual(bound.map((event) => event.id));
+    // the signal carries — the backend dispatches the live turn's answer by it.
+    const bound = log.query({ turn_id: injected[0]!.replyTurnId! });
+    expect(bound.map((event) => event.id)).toHaveLength(1);
     // The delivery is observable (clients get a typed fan-out, not silence).
     expect(broadcasts).toEqual([
-      { type: 'background_event_injected', turnId: injected[0]!.turnId, events: 1 },
+      { type: 'background_event_injected', turnId: injected[0]!.replyTurnId!, events: 1 },
     ]);
-
-    // Consumed events never double-deliver: the next drain is a no-op.
-    await orch.drainPendingEvents();
-    expect(injected).toHaveLength(1);
     expect(enqueued).toHaveLength(0);
   });
 
-  test('no active turn → the host declines and the batch enqueues as its own turn', async () => {
+  test('a backend that takes no mid-turn wake gets the batch as its own turn', async () => {
     const log = newEventLog();
     log.publish({ descriptor: webhook('d1'), now: 1 });
     const { engine } = fakeEngine();
-    const { host, enqueued, injected, broadcasts } = fakeHost({ activeTurn: false });
-    await new AgentOrchestrator({ host, engine, eventLog: log }).drainPendingEvents();
-    expect(injected).toHaveLength(0);
+    const { host, enqueued, broadcasts } = fakeHost({ activeTurn: false });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: log });
+    await orch.drainPendingEvents();
+    expect(absorb(orch)).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0]!.metadata?.proteusEvent).toBe('event_drain');

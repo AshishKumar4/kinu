@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator, EventInjectionBuffer,
+  AgentOrchestrator,
   type BackendHost, type EvolutionEngine,
 } from '@proteus/core';
 import { acceptInboundEmail } from '../src/events/ingress/email.js';
@@ -154,14 +154,13 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     const { log, replies, sent } = setup();
     const eventId = admitOwnerEmail(log, replies);
 
-    // A turn is live: the reactor injects instead of enqueueing (the same
-    // decision drainPendingEvents makes on the DO), and the buffer splices
-    // the batch into the turn's next step — as the orchestrator wires it.
-    const buffer = new EventInjectionBuffer();
+    // A turn is live: the seam splices the drain into the turn's next step
+    // instead of queueing it (the same decision every backend delegates), as
+    // the orchestrator wires it.
     const host: BackendHost = {
       broadcast: () => {},
       enqueueTurn: async () => { throw new Error('must inject, not enqueue — a turn is live'); },
-      injectIntoActiveTurn: (batch) => { buffer.push(batch); return true; },
+      acceptsMidTurnWake: () => true,
       setTimer: () => {},
     };
     const orch = new AgentOrchestrator({
@@ -170,15 +169,14 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     });
     await orch.drainPendingEvents();
 
-    const step = buffer.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
+    const step = orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
     expect(String(step![1]!.content)).toContain('Is staging green?');
 
-    // Turn end: the absorbed batch id keys the SAME dispatch the enqueued
-    // drain-turn path uses — the live turn's answer threads back.
-    const { absorbed, leftover } = buffer.settle();
-    expect(leftover).toEqual([]);
+    // Turn end: the absorbed signal's reply turn id keys the SAME dispatch the
+    // queued drain-turn path uses — the live turn's answer threads back.
+    const { absorbed } = orch.signals.settle({ completed: true });
     expect(absorbed).toHaveLength(1);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.turnId, 'Green.', 2_000))
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.replyTurnId!, 'Green.', 2_000))
       .toEqual({ delivered: 1, pending: false });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');

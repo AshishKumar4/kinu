@@ -447,7 +447,7 @@ export class LocalAgentSession implements BackendHost {
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       fiber: (name, fn) => this.trackFiber(name, fn),
-      host: this,
+      signals: this.orch.signals,
       eventLog: this.eventLog,
       scheduleDrain: () => this.orch.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
@@ -724,9 +724,10 @@ export class LocalAgentSession implements BackendHost {
     await this.engine.applyTakePick(record.set.turnId, record.outcome);
     let continuationQueued = false;
     if (record.changedAnswer) {
-      void this.enqueueTurn({
+      void this.orch.signals.deliver({
+        kind: 'take_pick',
         text: buildTakeContinuationPrompt(record.set, record.chosen),
-        metadata: { proteusEvent: 'take_pick' },
+        timing: 'next-turn',
       });
       continuationQueued = true;
     }
@@ -820,14 +821,15 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** BackendHost seam — the CLI declines mid-turn event injection: the local
-   *  steer-drain owns the live turn's injection channel with USER semantics a
-   *  platform event must not assume (each steer persists as a verbatim user
-   *  row for the walk-back fork, interrupt() hands pending steers back to the
-   *  composer, and leftover steers rerun as a user-origin turn — which would
-   *  misgrade the outcome review). Events drain as the immediate next
-   *  programmatic turn instead (the enqueueTurn fallback). */
-  injectIntoActiveTurn(): boolean {
+  /** BackendHost seam — the CLI takes no mid-turn wake: the local steer-drain
+   *  owns the live turn's injection channel with USER semantics a platform wake
+   *  must not assume (each steer persists as a verbatim user row for the
+   *  walk-back fork, interrupt() hands pending steers back to the composer, and
+   *  leftover steers rerun as a user-origin turn — which would misgrade the
+   *  outcome review). A signal queues instead, which the local pump runs as the
+   *  immediate next turn. Turn-local signals (the delegation nudge) never ask —
+   *  they ride their own turn's step boundary here exactly as on cf. */
+  acceptsMidTurnWake(): boolean {
     return false;
   }
 
@@ -1243,12 +1245,12 @@ export class LocalAgentSession implements BackendHost {
     // The compaction extension + the steer-drain ride the public extension
     // seam — the same host external plugins register on. One hook path, not
     // a private callback + a plugin API.
-    // The mechanical delegation nudge registers LAST: its splice must never
+    // The orchestrator's signal extension registers LAST: its splice must never
     // shift the indices the user-steer drain replays into durable history.
     const extensions = new ExtensionHost()
       .register(this.compactionExtension)
       .register({ name: 'proteus.steering', prepareStep: prepareStepMessages })
-      .register(this.orch.nudge);
+      .register(this.orch.turnExtension);
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
     const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
@@ -1378,11 +1380,19 @@ export class LocalAgentSession implements BackendHost {
         turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: cache.sessionKey,
-        enqueueTurn: (t) => this.enqueueTurn(t),
+        signals: this.orch.signals,
       });
     } finally {
       this.currentAbort = null;
     }
+
+    // Turn over for signal delivery — the same spine the cf backend runs, and
+    // for the same reason: it must happen before anything that can throw, so a
+    // signal the model never saw always re-delivers. This session takes no
+    // mid-turn wake, so today only its own turn-local nudge settles here; the
+    // call is what keeps that a property of the seam rather than of this
+    // backend remembering to be a special case.
+    this.orch.signals.settle({ completed: runError === null });
 
     let assistantMsgId: string | null = null;
     const snapshotTurn = (): CompletedTurn => snapshotCompletedTurn(this.orch.acc, {
