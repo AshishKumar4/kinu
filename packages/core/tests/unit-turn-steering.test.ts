@@ -67,6 +67,22 @@ function repeat(orch: AgentOrchestrator, toolName: string, args: Record<string, 
   }
 }
 
+describe('isFailingToolResult — a failure the seam had to truncate', () => {
+  test('a bounded prefix of a failure payload still reads as a failure', () => {
+    // chat.ts and the cf afterToolCall both cut the result at 1000 chars, so a
+    // verbose failure arrives as JSON that cannot parse. Reading it as a
+    // success is what silently disabled every consumer of this predicate.
+    const truncated = `{"error":"${'x'.repeat(60)}`;
+    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: truncated, success: true })).toBe(true);
+  });
+
+  test('a truncated SUCCESS payload is not turned into a failure', () => {
+    const truncated = `{"result":"${'x'.repeat(60)}`;
+    expect(isFailingToolResult({ toolName: 'execute_tools', args: {}, result: truncated, success: true })).toBe(false);
+    expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'plain text output', success: true })).toBe(false);
+  });
+});
+
 describe('isFailingToolResult', () => {
   test('the harness discriminator', () => {
     expect(isFailingToolResult({ toolName: 'run', args: {}, result: 'boom', success: false })).toBe(true);

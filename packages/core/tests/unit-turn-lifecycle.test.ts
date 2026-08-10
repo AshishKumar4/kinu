@@ -8,7 +8,7 @@ import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
-  TurnAccumulator, TurnSteering,
+  TurnAccumulator, TurnSteering, CraftCycle,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
   type AgentSignal, type CompactionTriggerState,
@@ -120,6 +120,48 @@ describe('openTurnRun / closeTurnRun', () => {
       steering: new TurnSteering().snapshot(),
     });
     expect(rec.read('run-quiet').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
+  });
+
+  test('an in-episode craft loop writes its craft_cycle row; an idle turn writes none', () => {
+    const rec = recorder();
+    const observed: string[][] = [];
+    const crafted: string[] = [];
+    const cycle = new CraftCycle({
+      names: () => crafted,
+      observe: (names) => { observed.push([...names]); return []; },
+    });
+    cycle.reset(true);
+
+    // The episode: craft in one call, reach for it in the next.
+    crafted.push('sum');
+    cycle.onToolResult({
+      toolName: 'execute_tools', args: { code: 'await workspace.createTool("sum","d","async()=>1")' },
+      result: 'ok', success: true,
+    });
+    cycle.onToolResult({
+      toolName: 'execute_tools', args: { code: 'return await tools.sum(1)' },
+      result: '1', success: true,
+    });
+
+    closeTurnRun(rec, 'run-c', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      craft: cycle.snapshot(),
+    });
+    const events = rec.read('run-c');
+    expect(events.map((e) => e.type)).toEqual(['craft_cycle', 'turn_end', 'run_end']);
+    const row = events[0] as Extract<typeof events[number], { type: 'craft_cycle' }>;
+    expect(row.crafted).toEqual(['sum']);
+    expect(row.reused).toEqual(['sum']);
+    expect(row.returned).toBe(1);
+    expect(observed).toEqual([['sum']]);
+
+    const idle = new CraftCycle({ names: () => [], observe: () => [] });
+    idle.reset(true);
+    closeTurnRun(rec, 'run-idle', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      craft: idle.snapshot(),
+    });
+    expect(rec.read('run-idle').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
 
   test('a recorder failure never throws into the turn', () => {

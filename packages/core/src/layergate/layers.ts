@@ -1136,6 +1136,58 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
 
   {
+    id: 'craft-fitness',
+    owns: 'the in-episode fitness signal for crafted tools: which tools a submitted block actually called, ' +
+      'and which of them a failure is attributable to',
+    subjects: ['craftInvocationSites', 'craftFailureBlame', 'craftInvocationError'],
+    probes: [
+      {
+        id: 'craft-fitness/call-sites',
+        asserts: 'both sandbox namespaces count as calls; a bare mention, a foreign namespace and an unknown tool do not',
+        observe: (s) => [
+          'await tools.summarize(1)',
+          'return codemode.summarize(x)',
+          'const f = tools.summarize;',
+          'other.summarize(1)',
+          'summarize(1)',
+          'tools.summarizeAll(1)',
+        ].map((code) => [code, s.craftInvocationSites(code, ['summarize', 'summarizeAll'])]),
+      },
+      {
+        id: 'craft-fitness/prose-is-not-a-call',
+        asserts: 'a tool named inside a string or comment — the createTool body case — is never scored as invoked, but a template interpolation is real code',
+        observe: (s) => [
+          'await workspace.createTool("w", "d", "async () => tools.summarize(1)")',
+          '// tools.summarize(1)',
+          '/* tools.summarize(1) */ 1',
+          'console.log("tools.summarize(")',
+          '`plain tools.summarize( text`',
+          '`${await tools.summarize(1)}`',
+        ].map((code) => [code, s.craftInvocationSites(code, ['summarize'])]),
+      },
+      {
+        id: 'craft-fitness/stored-name-is-not-a-pattern',
+        asserts: 'a stored name that is not a plain identifier is skipped, never interpolated into the matcher',
+        observe: (s) => [['a.b'], ['.*'], ['x y'], ['2bad']].map(
+          (known) => [known[0], s.craftInvocationSites('tools.x(1) tools.a.b(1) tools.2bad(1) tools.x y(1)', known)],
+        ),
+      },
+      {
+        id: 'craft-fitness/blame-by-stamp-only',
+        asserts: 'only the tool the failure NAMES is scored; a block that broke on its own account blames nobody',
+        observe: (s) => {
+          const stamped = s.craftInvocationError('summarize', new Error('boom')).message;
+          return [
+            [stamped, s.craftFailureBlame(stamped, ['summarize', 'other'])],
+            ['TypeError: x is not a function', s.craftFailureBlame('TypeError: x is not a function', ['summarize'])],
+            [stamped, s.craftFailureBlame(stamped, ['other'])],
+          ];
+        },
+      },
+    ],
+  },
+
+  {
     id: 'execution-signal',
     owns: 'device presence: the three-state view of the user\'s PC and the one-turn transition notice',
     subjects: ['devicePresence', 'deviceChangeNotice', 'parseDevicePresence'],

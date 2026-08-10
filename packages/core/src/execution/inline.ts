@@ -21,6 +21,7 @@ import { isVfsError, withVfsErrorHint } from '../vfs/errno.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
+import { seedCraftScore } from '../craft/in-episode.js';
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -239,6 +240,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             scope: 'local',
             params: null,
           });
+          // The tool is born with a neutral prior, so the decay + injection
+          // floor can see it at all: an unscored tool is exempt from the
+          // filter forever, which is what kept a tool crafted here from ever
+          // being retired no matter how it behaved.
+          if (sql) seedCraftScore(sql, toolName);
           // Optional eager notification; PreambleCraftedExecutor reads
           // craftStore.list() live, so CF leaves this as a no-op.
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });

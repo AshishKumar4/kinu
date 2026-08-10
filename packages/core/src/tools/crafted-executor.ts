@@ -40,9 +40,9 @@ export type CraftedToolExecuteFn = (arg: unknown) => Promise<unknown>;
 /**
  * Platform factory. Given a crafted tool row, return the host-side execute
  * function that codemode will invoke via RPC whenever the sandbox calls
- * `codemode.<name>(arg)`. Implementations MUST be idempotent — `buildBuiltinTools`
- * calls the factory once per tool per turn; the returned function is then
- * invoked many times per turn from the sandbox Worker.
+ * `codemode.<name>(arg)`. Implementations MUST be idempotent — the crafted set is
+ * resolved once per `execute_tools` call (so a tool crafted mid-turn is
+ * callable on the next one), and each resolve calls the factory once per tool.
  */
 export type CraftedToolExecute = (tool: CraftedToolSource) => CraftedToolExecuteFn;
 

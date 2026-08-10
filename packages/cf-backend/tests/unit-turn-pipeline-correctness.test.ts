@@ -243,6 +243,10 @@ describe('turn-pipeline correctness wiring', () => {
     const closeArgs = spine.slice(runEnd, spine.indexOf('});', runEnd));
     expect(closeArgs).toContain('error: errorText');
     expect(closeArgs).toContain('reason: result.status');
+    // The per-turn records the spine is the only writer of. Dropping either
+    // leaves the mechanism running and its durable trail silently empty.
+    expect(closeArgs).toContain('steering: this.orch.steering.snapshot()');
+    expect(closeArgs).toContain('craft: this.orch.craft.snapshot()');
   });
 
   test("the per-turn system prompt carries the turn's mode overlay", () => {

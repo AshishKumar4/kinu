@@ -41,12 +41,8 @@ const nodeCraftedExecute: CraftedToolExecute = (t) => {
 };
 
 const nodeExecFactory = (opts: {
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
 }) => {
-  const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-  for (const [n, e] of Object.entries(opts.tools)) {
-    codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
-  }
   return tool({
     description: 'test exec_tools',
     inputSchema: jsonSchema<{ code: string }>({
@@ -54,8 +50,13 @@ const nodeExecFactory = (opts: {
     }),
     execute: async (a: { code: string }) => {
       try {
-        const fn = new Function('workspace', 'codemode', 'return (async () => { ' + a.code + ' })()');
-        const result = await fn({}, codemode);
+        // Resolved per execute, exactly as the cli-backend factory does.
+        const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
+        for (const [n, e] of Object.entries(opts.craftedTools())) {
+          codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
+        }
+        const fn = new Function('workspace', 'codemode', 'tools', 'return (async () => { ' + a.code + ' })()');
+        const result = await fn({}, codemode, codemode);
         return { result };
       } catch (e) {
         return { result: undefined, error: (e as Error).message };

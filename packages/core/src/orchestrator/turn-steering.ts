@@ -138,7 +138,12 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
     return typeof parsed === 'object' && parsed !== null
       && typeof (parsed as { error?: unknown }).error === 'string';
   } catch {
-    return false;
+    // The seam hands over a BOUNDED prefix of the result (chat.ts and the cf
+    // afterToolCall both cut at 1000 chars), so a long failure payload arrives
+    // as JSON that cannot parse. The discriminator is still legible at the
+    // head — a leading `error` key with a string value — and reading it there
+    // is what keeps a verbose failure from being counted as a success.
+    return /^\{\s*"error"\s*:\s*"/.test(text);
   }
 }
 

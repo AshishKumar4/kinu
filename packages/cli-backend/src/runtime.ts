@@ -258,8 +258,11 @@ export function createCLIRuntime(
   // both carry its measured cgroup limits — the truth `nproc` cannot tell the
   // model. Null off a cgroup, and then nothing is claimed.
   const limits = hostResourceLimits();
+  // `sql` is not optional in practice: workspace.createTool seeds the crafted
+  // tool's score prior and writes the misevolution veto trail through it, and
+  // listTools quotes real EMA scores from it.
   executionRouter.register(createInlineExecutor({
-    vfs, memory, craftStore, shell, ...(limits ? { resourceLimits: limits } : {}),
+    vfs, memory, craftStore, shell, sql, ...(limits ? { resourceLimits: limits } : {}),
   }));
   executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints, limits));
   // The laptop executor's FILE plane, at the same /pc prefix the cloud backend

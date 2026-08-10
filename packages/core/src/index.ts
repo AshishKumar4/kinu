@@ -586,6 +586,7 @@ export {
 
 // CraftStore quality
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema.js';
+export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
 // SKILL.md export/import (Hermes-style git-friendly tool format)
 export {
@@ -704,7 +705,7 @@ export {
 // SSE-stream compatibility. New code uses the EventsHub directly.
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType,
-  CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger,
+  CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
 } from './events/index.js';
 export {
   initRunEventTables,
@@ -829,6 +830,7 @@ export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
 } from './orchestrator/turn-steering.js';
+export { CraftCycle } from './orchestrator/craft-cycle.js';
 export {
   CompletionGate, observeCompletionState, completionGateText,
   COMPLETION_GATE_EVENT, COMPLETION_GATE_HEADER, COMPLETION_PROBE_COMMANDS,

@@ -267,6 +267,19 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     }),
   },
   {
+    id: 'craft-fitness/prose-scored-as-execution',
+    layer: 'craft-fitness',
+    patches: ['craftInvocationSites', 'craftInvocationError'],
+    models: 'the signal stops distinguishing code from prose and failures stop naming the tool that raised — ' +
+      'a crafted tool merely MENTIONED in a string earns execution credit, and no failure is attributable to anything',
+    inject: (s) => ({
+      ...s,
+      craftInvocationSites: (code, known) => known.filter((name) => code.includes(name)),
+      craftInvocationError: (_name, cause) =>
+        new Error(cause instanceof Error ? cause.message : String(cause)),
+    }),
+  },
+  {
     id: 'execution-signal/presence-overreports',
     layer: 'execution-signal',
     patches: ['devicePresence', 'deviceChangeNotice'],

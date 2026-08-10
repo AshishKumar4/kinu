@@ -994,7 +994,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
       })],
-    })({ tools: {}, providers: [], loader: {} });
+    })({ craftedTools: () => ({}), providers: [], loader: {} });
 
     const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -1017,7 +1017,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         armCompactNow: () => { arms++; },
       })],
-    })({ tools: {}, providers: [], loader: {} });
+    })({ craftedTools: () => ({}), providers: [], loader: {} });
 
     const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
       code: 'return await agent.compactNow();',
@@ -2246,7 +2246,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeExecuteToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ tools: {}, providers: [], loader: {} });
+    })({ craftedTools: () => ({}), providers: [], loader: {} });
     return (code: string, options?: unknown) =>
       (tool as { execute: (a: { code: string }, o?: unknown) => Promise<unknown> }).execute({ code }, options);
   }

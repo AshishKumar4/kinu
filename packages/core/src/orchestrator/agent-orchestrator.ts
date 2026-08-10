@@ -12,7 +12,11 @@
 //
 // Evolution never blocks a turn mid-flight: every dispatch is detached. But a
 // process that exits kills whatever it detached, so `end()` has to decide what
-// to wait for. Two lanes, with different answers:
+// to wait for. Two lanes, with different answers — plus the IN-EPISODE loop
+// (`craft`, orchestrator/craft-cycle.ts), which is in neither because it makes
+// no model call: it writes one synchronous row as an execute block settles, so
+// there is nothing to detach and nothing to join, and it is the only evolution
+// clock that ticks inside a single long autonomous turn.
 //
 //   TURN LANE — the outcome review (classifier → reflection/extraction/lesson)
 //     and the sampled scaffold shadow eval. Seconds to ~a minute, and the
@@ -40,6 +44,7 @@
 import type { ModelMessage } from 'ai';
 import { TurnAccumulator, type TurnSinks } from './turn-accumulator.js';
 import { TurnSteering } from './turn-steering.js';
+import { CraftCycle } from './craft-cycle.js';
 import { DrainScheduler } from './drain-scheduler.js';
 import { SignalDelivery, readSignalId } from './signals.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
@@ -115,15 +120,21 @@ export class AgentOrchestrator {
    *  Observed through {@link turnExtension} and handed to closeTurnRun for the
    *  durable `turn_steering` row. */
   readonly steering = new TurnSteering();
+  /** The IN-EPISODE evolution clock: crafted tools scored by execution as the
+   *  episode runs, off the same tool-result hook the steering rides. The only
+   *  evolution timescale that ticks inside one long autonomous turn. */
+  readonly craft: CraftCycle;
   /** The orchestrator's per-turn extension, registered on the turn's
-   *  ExtensionHost by both backends: the steering object's observation hooks
-   *  plus the ONE mid-turn signal drain every producer feeds. The steer is
-   *  decided against the step being prepared and handed straight to it, so it
-   *  rides the step it was decided on and dies with it. */
+   *  ExtensionHost by both backends: the steering object's and the craft
+   *  cycle's observation hooks (the craft cycle needs only the result, which
+   *  carries its call's own args), plus the ONE mid-turn signal drain every
+   *  producer feeds. The steer is decided against the step being prepared and
+   *  handed straight to it, so it rides the step it was decided on and dies
+   *  with it. */
   readonly turnExtension: ProteusExtension = {
     name: 'proteus.signals',
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
-    onToolResult: (ctx) => this.steering.onToolResult(ctx),
+    onToolResult: (ctx) => { this.steering.onToolResult(ctx); this.craft.onToolResult(ctx); },
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
       const steer = this.steering.steerFor(ctx.stepNumber);
       return this.signals.prepareStep(ctx, steer ? [steer] : []);
@@ -143,6 +154,7 @@ export class AgentOrchestrator {
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
+    this.craft = new CraftCycle(deps.engine.craftLedger);
     this.signals = new SignalDelivery(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d));
     this.reflectionInterval = deps.sessionReflectionInterval ?? DEFAULT_SESSION_REFLECTION_INTERVAL;
     this.settleTimeoutMs = deps.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;
@@ -176,6 +188,11 @@ export class AgentOrchestrator {
   beginTurn(now: number, metadata?: unknown, continuation = false): void {
     this.acc.reset(now);
     this.steering.reset();
+    // Decided once, here, for the whole turn: a `--no-auto-evolve` run records
+    // no evolution state at all, and a crafted tool's execution score is
+    // evolution state — so a bench arm with evolution off measures the
+    // in-episode loop's absence along with the rest of it.
+    this.craft.reset(this.deps.engine.enabled);
     this.signals.beginTurn(continuation, readSignalId(metadata));
     this.deps.budget?.activate(readMissionLabels(metadata));
   }

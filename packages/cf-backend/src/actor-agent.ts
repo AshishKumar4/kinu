@@ -500,6 +500,7 @@ export abstract class ActorAgent extends Think<Env> {
         usage: this.acc.usage,
         context: this.acc.context,
         steering: this.orch.steering.snapshot(),
+        craft: this.orch.craft.snapshot(),
         reason: result.status,
         error: errorText,
       });

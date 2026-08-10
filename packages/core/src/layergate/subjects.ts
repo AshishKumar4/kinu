@@ -56,6 +56,9 @@ import { selectEvolutionBase } from '../scaffold/archive.js';
 import { hybridSearch } from '../memory/hybrid-search.js';
 import { reciprocalRankFusion } from '../memory/vector-store.js';
 import { delegationFeatures, renderDelegationFeatures } from '../evolution/delegation-features.js';
+import {
+  craftFailureBlame, craftInvocationError, craftInvocationSites,
+} from '../craft/in-episode.js';
 import { renderToolSchemaDescription } from '../tools/registry.js';
 import {
   deviceChangeNotice,
@@ -146,6 +149,11 @@ export interface PipelineSubjects {
   readonly delegationFeatures: typeof delegationFeatures;
   readonly renderDelegationFeatures: typeof renderDelegationFeatures;
 
+  // ── in-episode craft fitness ──
+  readonly craftInvocationSites: typeof craftInvocationSites;
+  readonly craftFailureBlame: typeof craftFailureBlame;
+  readonly craftInvocationError: typeof craftInvocationError;
+
   // ── tool contract ──
   readonly renderToolSchemaDescription: typeof renderToolSchemaDescription;
 
@@ -220,6 +228,10 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   delegationFeatures: 'evolution/delegation-features.ts',
   renderDelegationFeatures: 'evolution/delegation-features.ts',
 
+  craftInvocationSites: 'craft/in-episode.ts',
+  craftFailureBlame: 'craft/in-episode.ts',
+  craftInvocationError: 'craft/in-episode.ts',
+
   renderToolSchemaDescription: 'tools/registry.ts',
 
   devicePresence: 'execution/device-status.ts',
@@ -293,6 +305,10 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
 
     delegationFeatures,
     renderDelegationFeatures,
+
+    craftInvocationSites,
+    craftFailureBlame,
+    craftInvocationError,
 
     renderToolSchemaDescription,
 

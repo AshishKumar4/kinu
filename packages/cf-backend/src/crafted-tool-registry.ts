@@ -25,7 +25,7 @@
  */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
-import { filterByEffectiveScore } from '@proteus/core';
+import { craftFailureMarker, filterByEffectiveScore } from '@proteus/core';
 import type { CraftStore, SqlExecutor } from '@proteus/core';
 
 /** Minimal WorkerLoader shape. Typed loosely — we hand it to DWE untouched. */
@@ -65,11 +65,29 @@ export function selectInjectableCraftedTools(
  * Build the `const tools = { name: <body>, ... };` preamble.
  * Empty → empty string (preamble is only spliced if non-empty, see
  * `injectPreamble`).
+ *
+ * Each body is wrapped so a failure leaves the sandbox stamped with the tool
+ * that raised it (`craftFailureMarker`, core craft/in-episode.ts) — the model
+ * otherwise gets a bare message with no idea which of its own tools broke, and
+ * the in-episode fitness signal scores an artifact only when the failure names
+ * it. The wrapper is an IIFE, so the body keeps the lexical scope of the
+ * sandbox arrow it is spliced into (`workspace.*`, the `tools` literal itself)
+ * exactly as an unwrapped body did.
  */
 export function buildToolsPreamble(tools: ReadonlyArray<{ name: string; code: string }>): string {
   if (tools.length === 0) return '';
-  const entries = tools.map(t => `    ${t.name}: ${t.code.trim()}`);
+  const entries = tools.map(t => `    ${t.name}: ${attributedBody(t.name, t.code.trim())}`);
   return `const tools = {\n${entries.join(',\n')}\n  };\n  `;
+}
+
+function attributedBody(name: string, code: string): string {
+  const marker = JSON.stringify(`${craftFailureMarker(name)} `);
+  // The stored body sits alone between parentheses on its own lines. It is
+  // model-authored and routinely ends in a `//` comment, which on one line
+  // would swallow the rest of the wrapper and make the whole preamble — spliced
+  // into EVERY execute — a syntax error that no crafted tool could survive.
+  return `(() => { const __impl = (\n${code}\n); return async (...__a) => { try { return await __impl(...__a); } ` +
+    `catch (__e) { throw new Error(${marker} + (__e && __e.message ? __e.message : String(__e)), { cause: __e }); } }; })()`;
 }
 
 /**

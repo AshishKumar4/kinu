@@ -66,6 +66,28 @@ export function isBackgroundHandle(v: unknown): v is BackgroundHandle {
   return typeof v === 'object' && v !== null && (v as { background?: unknown }).background === true;
 }
 
+/**
+ * The same discriminator over the SERIALIZED result — a handle OR a refusal.
+ *
+ * The tool-result extension seam carries the rendered string, not the value
+ * (extension.ts), so a consumer that must not read a detached call as a
+ * finished one has only the text. Both outcomes matter equally there: a handle
+ * means the work is still running, a refusal means it was cancelled, and
+ * neither is a result.
+ */
+export function isBackgroundOutcomeText(result: string): boolean {
+  const text = result.trimStart();
+  if (!text.startsWith('{')) return false;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    return typeof parsed === 'object' && parsed !== null
+      && typeof (parsed as { background?: unknown }).background === 'boolean'
+      && typeof (parsed as { kind?: unknown }).kind === 'string';
+  } catch {
+    return false;
+  }
+}
+
 /** What `onThreshold` decided: the job it minted, or why it refused. */
 export type DetachOutcome =
   | { readonly detached: true; readonly jobId: string }

@@ -38,18 +38,29 @@ function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): 
 /** A stand-in engine over a REAL in-memory session window — the store the
  *  engine owns in production, so the cadence is exercised against the durable
  *  buffer rather than orchestrator-instance state. */
-function fakeEngine() {
+function fakeEngine(opts?: { enabled?: boolean }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
   const { sql, execRaw } = createTestSql();
   initSessionWindowTable(execRaw);
+  // The crafted-tool ledger the engine owns in production, over a real store,
+  // so the in-episode clock is exercised through the same seam.
+  const crafted: string[] = [];
+  const observed: Array<{ names: string[]; quality: number }> = [];
   const engine = {
-    enabled: true,
+    enabled: opts?.enabled ?? true,
     sessionWindow: createSessionWindowStore(sql),
+    craftLedger: {
+      names: () => crafted,
+      observe: (names: readonly string[], quality: number) => {
+        observed.push({ names: [...names], quality });
+        return [];
+      },
+    },
     reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
   } as unknown as EvolutionEngine;
-  return { engine, reviews, sessions };
+  return { engine, reviews, sessions, crafted, observed };
 }
 function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
@@ -444,5 +455,109 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
     orch.scheduleDrain();
     await timers[0]!.fn();
     expect(enqueued).toHaveLength(0);                // buildDrainBatch null → no enqueueTurn
+  });
+});
+
+describe('AgentOrchestrator — the in-episode evolution clock', () => {
+  /** Drive one settled `execute_tools` call through the orchestrator's own
+   *  per-turn extension, which is the seam both backends register. */
+  function runBlock(orch: AgentOrchestrator, code: string, failure?: string): void {
+    orch.turnExtension.onToolResult?.({
+      toolName: 'execute_tools',
+      args: { code },
+      result: failure ?? 'ok',
+      success: failure === undefined,
+    });
+  }
+
+  test('the turn extension is the seam — a crafted tool is scored mid-turn', () => {
+    const { engine, crafted, observed } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    crafted.push('summarize');
+    orch.beginTurn(Date.now());
+
+    runBlock(orch, 'return await tools.summarize(1)');
+
+    expect(observed).toHaveLength(1);
+    expect(observed[0]!.names).toEqual(['summarize']);
+    // No turn boundary, no user message, no cadence — the score is already in.
+    expect(orch.craft.snapshot()).toEqual({
+      crafted: [], invoked: ['summarize'], reused: [], returned: 1, raised: 0, dropped: [],
+    });
+  });
+
+  test('a stamped failure is scored against the tool through the same seam', () => {
+    const { engine, crafted, observed } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    crafted.push('summarize');
+    orch.beginTurn(Date.now());
+
+    runBlock(orch, 'return await tools.summarize(1)', '[crafted:summarize] boom');
+    expect(observed).toEqual([{ names: ['summarize'], quality: 0.1 }]);
+    expect(orch.craft.snapshot()!.raised).toBe(1);
+
+    // …and a failure that names nothing scores nothing.
+    runBlock(orch, 'return await tools.summarize(1)', 'TypeError: x is not a function');
+    expect(observed).toHaveLength(1);
+  });
+
+  test('a tool that appeared during the turn is crafted, not pre-existing', () => {
+    const { engine, crafted, observed } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    orch.beginTurn(Date.now());
+
+    crafted.push('summarize');
+    runBlock(orch, 'await workspace.createTool("summarize","d","async()=>1"); return tools.summarize(1)');
+    // Created and called in one breath earns nothing…
+    expect(observed).toEqual([]);
+    expect(orch.craft.snapshot()!.crafted).toEqual(['summarize']);
+
+    // …and the next block that reaches for it closes the loop.
+    runBlock(orch, 'return await tools.summarize(2)');
+    expect(observed).toHaveLength(1);
+    expect(orch.craft.snapshot()!.reused).toEqual(['summarize']);
+  });
+
+  test('with auto-evolution off the in-episode clock records nothing', () => {
+    const { engine, crafted, observed } = fakeEngine({ enabled: false });
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    crafted.push('summarize');
+    orch.beginTurn(Date.now());
+
+    runBlock(orch, 'return await tools.summarize(1)');
+
+    expect(observed).toEqual([]);
+    expect(orch.craft.snapshot()).toBeNull();
+  });
+
+  test('beginTurn clears the previous turn\'s craft record', () => {
+    const { engine, crafted } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    crafted.push('summarize');
+    orch.beginTurn(Date.now());
+    runBlock(orch, 'return await tools.summarize(1)');
+    expect(orch.craft.snapshot()).not.toBeNull();
+
+    orch.beginTurn(Date.now());
+    expect(orch.craft.snapshot()).toBeNull();
+  });
+
+  test('turn steering still observes the same calls through the shared seam', () => {
+    const { engine } = fakeEngine();
+    const { host } = fakeHost();
+    const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog() });
+    orch.beginTurn(Date.now());
+    for (let i = 0; i < 3; i++) {
+      orch.turnExtension.onToolCall?.({ toolName: 'run', args: { command: `x${i}` } });
+      orch.turnExtension.onToolResult?.({
+        toolName: 'run', args: { command: `x${i}` }, result: `Error: no ${i}`, success: false,
+      });
+    }
+    expect(orch.steering.steerFor(4)).not.toBeNull();
   });
 });

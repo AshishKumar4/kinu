@@ -9,11 +9,12 @@
 import { describe, test, expect, mock } from "bun:test";
 import { Database } from "bun:sqlite";
 import type { CraftStore, SqlExecutor, SqlValue } from "@proteus/core";
-import { initCraftScoreTables } from "@proteus/core";
+import { craftFailureMarker, initCraftScoreTables } from "@proteus/core";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
 mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
 const { selectInjectableCraftedTools, buildToolsPreamble } = await import("../src/crafted-tool-registry.js");
+const { craftedDispatcherEntry } = await import("../src/execute-tools.js");
 
 function makeSql(db: Database): SqlExecutor {
   return (<T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
@@ -60,6 +61,52 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
     expect(preamble).toContain("unscored:");
     expect(preamble).not.toContain("retired");
     expect(preamble).not.toContain("commented_out");
+  });
+
+  test("the preamble is valid JS and each body keeps the sandbox's lexical scope", async () => {
+    const preamble = buildToolsPreamble([
+      { name: "double", code: "async (n) => n * 2" },
+      // The property an IIFE wrapper must not break: a crafted body reads the
+      // surrounding sandbox scope, and calls its siblings through `tools`.
+      { name: "scaled", code: "async (n) => (await tools.double(n)) * factor" },
+    ]);
+    const run = new Function("factor", `return (async () => {\n  ${preamble}\n  return [await tools.double(4), await tools.scaled(5)];\n})()`);
+    expect(await run(10)).toEqual([8, 100]);
+  });
+
+  test("a body that ends in a line comment does not break the whole preamble", async () => {
+    // Model-authored bodies routinely end in `// …`. On one line the comment
+    // would swallow the rest of the wrapper and make EVERY execute a syntax
+    // error, taking down every other crafted tool with it.
+    const preamble = buildToolsPreamble([
+      { name: "commented", code: "async (n) => n + 1 // adds one" },
+      { name: "after", code: "async (n) => n * 3" },
+    ]);
+    const run = new Function(`return (async () => {\n  ${preamble}\n  return [await tools.commented(1), await tools.after(2)];\n})()`);
+    expect(await run()).toEqual([2, 6]);
+  });
+
+  test("a crafted body that raises is stamped with the tool that raised it", async () => {
+    const preamble = buildToolsPreamble([
+      { name: "boom", code: 'async () => { throw new Error("inner"); }' },
+    ]);
+    const run = new Function(`return (async () => {\n  ${preamble}\n  return tools.boom();\n})()`);
+    const err = await (run() as Promise<unknown>).catch((e: unknown) => e as Error);
+    expect((err as Error).message).toBe(`${craftFailureMarker("boom")} inner`);
+    expect((err as Error).cause).toBeInstanceOf(Error);
+  });
+
+  test("codemode.<name> raises and names the form that works", async () => {
+    // The dispatcher entry exists so the sandbox TYPES declare the crafted
+    // name; the callable body is the preamble's `tools.<name>`. Returning an
+    // error object here would read as a successful call to both the model and
+    // the runtime — including the in-episode fitness observer.
+    const entry = craftedDispatcherEntry("doubleIt", "doubles");
+    expect(entry.description).toBe("doubles");
+    const err = await entry.execute().then(() => null, (e: unknown) => e as Error);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toContain("tools.doubleIt(args)");
+    expect(err!.message).toContain("not codemode.doubleIt(args)");
   });
 
   test("a broken craft store yields an empty selection, not a throw", () => {

@@ -1219,6 +1219,7 @@ export class LocalAgentSession implements BackendHost {
       context: this.orch.acc.context,
       steering: this.orch.steering.snapshot(),
       completionGate: this.completionGate.take(),
+      craft: this.orch.craft.snapshot(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });

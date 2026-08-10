@@ -14,7 +14,7 @@ interface ExecTool {
 
 function makeTool(): ExecTool {
   const factory = createNodeExecuteToolFactory();
-  return factory({ tools: {}, providers: [], loader: {} }) as unknown as ExecTool;
+  return factory({ craftedTools: () => ({}), providers: [], loader: {} }) as unknown as ExecTool;
 }
 
 describe('createNodeExecuteToolFactory — console capture + implicit return', () => {
@@ -61,7 +61,7 @@ function makeToolWithFailingProvider(error: Error) {
       },
     } as never],
   });
-  return { tool: factory({ tools: {}, providers: [], loader: {} }) as unknown as ExecTool, calls };
+  return { tool: factory({ craftedTools: () => ({}), providers: [], loader: {} }) as unknown as ExecTool, calls };
 }
 
 describe('createNodeExecuteToolFactory — a failing host call can never kill the process', () => {
@@ -102,8 +102,63 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
 
   test('the tool description tells the model what workspace.* actually is', async () => {
     const factory = createNodeExecuteToolFactory();
-    const built = factory({ tools: {}, providers: [], loader: {} }) as unknown as { description: string };
+    const built = factory({ craftedTools: () => ({}), providers: [], loader: {} }) as unknown as { description: string };
     expect(built.description).toContain('OWN virtual filesystem');
     expect(built.description).toContain('`run` tool');
+  });
+});
+
+describe('createNodeExecuteToolFactory — crafted tools, on the episode clock', () => {
+  /** A crafted set that changes between calls, the way the CraftStore does
+   *  when the model crafts a tool mid-turn. */
+  function makeToolOverStore(store: Map<string, (arg: unknown) => Promise<unknown>>): ExecTool {
+    return createNodeExecuteToolFactory()({
+      craftedTools: () => Object.fromEntries(
+        [...store].map(([name, execute]) => [name, { description: name, execute }]),
+      ),
+      providers: [],
+      loader: {},
+    }) as unknown as ExecTool;
+  }
+
+  test('a tool crafted mid-turn is callable on the very next execute', async () => {
+    const store = new Map<string, (arg: unknown) => Promise<unknown>>();
+    const tool = makeToolOverStore(store);
+
+    const before = await tool.execute({ code: 'return typeof codemode.double;' });
+    expect(before.result).toBe('undefined');
+
+    // What workspace.createTool does to the store, mid-turn.
+    store.set('double', async (n) => Number(n) * 2);
+
+    const after = await tool.execute({ code: 'return await codemode.double(21);' });
+    expect(after.result).toBe(42);
+  });
+
+  test('`tools.<name>` is the same binding as `codemode.<name>` — the CF contract', async () => {
+    const store = new Map<string, (arg: unknown) => Promise<unknown>>([
+      ['double', async (n) => Number(n) * 2],
+    ]);
+    const out = await makeToolOverStore(store).execute({
+      code: 'return [await tools.double(2), await codemode.double(3)];',
+    });
+    expect(out.result).toEqual([4, 6]);
+  });
+
+  test('a provider may not take one of the fixed namespaces', async () => {
+    // `new Function` rejects duplicate parameter names, so a provider called
+    // `tools` used to be a crash waiting to happen rather than a shadowed name.
+    const tool = createNodeExecuteToolFactory({
+      extraProviders: [{
+        name: 'tools',
+        tools: { hijack: { description: 'x', execute: async () => 'provider' } },
+      } as never],
+    })({
+      craftedTools: () => ({ real: { description: 'r', execute: async () => 'crafted' } }),
+      providers: [],
+      loader: {},
+    }) as unknown as ExecTool;
+    const out = await tool.execute({ code: 'return await tools.real();' });
+    expect(out.result).toBe('crafted');
   });
 });

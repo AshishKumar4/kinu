@@ -80,7 +80,8 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     // execute_tools over the head's OWN router providers (private `workspace.*`
     // + the parent's real `laptop.*`) plus the web/llm codemode namespaces.
     const executeTool = createNodeExecuteToolFactory({ extraProviders: deps.codemodeExtras() })({
-      tools: {},
+      // A head's CraftStore is a throwaway in-memory fork: no crafted tools.
+      craftedTools: () => ({}),
       providers: rt.executionRouter?.getProviders() ?? [],
       loader: { __cli: true },
     });

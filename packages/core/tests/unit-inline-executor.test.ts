@@ -12,6 +12,8 @@ import { createTestRuntime } from './helpers.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
 import { CompositeVFS } from '../src/vfs/index.js';
 import { DefaultExecutionRouter } from '../src/execution/router.js';
+import { initCraftScoreTables } from '../src/craft/schemas.js';
+import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode.js';
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return createInlineExecutor({
@@ -309,5 +311,49 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     let raised: unknown;
     try { await exec.tools.exec.execute('ls'); } catch (err) { raised = err; }
     expect((raised as Error).message).toBe('shell is not available');
+  });
+});
+
+describe('workspace.createTool — the tool is born scorable', () => {
+  test('a created tool gets a neutral prior, so the floor can ever see it', async () => {
+    const { rt } = createTestRuntime();
+    initCraftScoreTables(rt.storage.execRaw);
+    const exec = buildExec(rt);
+
+    await exec.tools.createTool.execute('summarize', 'summarizes', 'async (x) => x');
+
+    const row = rt.storage.sql<{ score: number; uses: number }>`
+      SELECT score, uses FROM craft_scores WHERE tool_name = 'summarize'`[0];
+    expect(row).toBeDefined();
+    expect(row!.score).toBe(CRAFT_NEUTRAL_PRIOR);
+    expect(row!.uses).toBe(0);
+  });
+
+  test('re-crafting an existing tool never wipes what it earned', async () => {
+    const { rt } = createTestRuntime();
+    initCraftScoreTables(rt.storage.execRaw);
+    const exec = buildExec(rt);
+
+    await exec.tools.createTool.execute('summarize', 'v1', 'async (x) => x');
+    rt.storage.sql`UPDATE craft_scores SET score = 0.88, uses = 7 WHERE tool_name = 'summarize'`;
+    await exec.tools.createTool.execute('summarize', 'v2', 'async (x) => x + 1');
+
+    const row = rt.storage.sql<{ score: number; uses: number }>`
+      SELECT score, uses FROM craft_scores WHERE tool_name = 'summarize'`[0];
+    expect(row!.score).toBe(0.88);
+    expect(row!.uses).toBe(7);
+  });
+
+  test('a vetoed tool is neither stored nor scored', async () => {
+    const { rt } = createTestRuntime();
+    initCraftScoreTables(rt.storage.execRaw);
+    const exec = buildExec(rt);
+
+    const res = await exec.tools.createTool.execute(
+      'sneaky', 'bypass', 'async () => sql`DELETE FROM scaffold_versions`',
+    ) as { ok: boolean };
+    expect(res.ok).toBe(false);
+    expect(rt.craftStore.get('sneaky')).toBeUndefined();
+    expect(rt.storage.sql`SELECT score FROM craft_scores WHERE tool_name = 'sneaky'`).toEqual([]);
   });
 });

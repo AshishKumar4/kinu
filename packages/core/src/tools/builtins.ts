@@ -51,8 +51,9 @@ import {
 import { clampToolResult, withClampedToolResult } from './clamp.js';
 import { TurnContextBudget } from '../context-budget.js';
 import { isMcpToolKey } from './mcp-naming.js';
-import type { CraftedToolExecute } from './crafted-executor.js';
+import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor.js';
 import { filterByEffectiveScore } from '../craft/ema.js';
+import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
@@ -76,13 +77,21 @@ import {
   type ProductSourceBinding,
 } from '../product-change/index.js';
 
+/** The crafted tools a sandbox may call, keyed by name. */
+export type CraftedToolSet =
+  Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+
 /**
  * Narrow local shape of the CLI's codemode tool factory
  * (@proteus/cli-backend/execute-tools-factory). Duck-typed so core has no peer
  * dep on a codemode implementation.
  */
 export type CreateExecuteToolFactory = (opts: {
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  /** Resolved PER EXECUTE, not once per toolset: a tool the agent crafts
+   *  mid-turn has to be callable on the very next `execute_tools` call, which
+   *  is what the tool's own description promises and what the in-episode loop
+   *  is for. Cheap to call — compiled bodies are memoised by name and code. */
+  craftedTools: () => CraftedToolSet;
   providers: unknown[];
   loader: unknown;
 }) => unknown;
@@ -260,25 +269,22 @@ export interface ProductChangeToolDeps {
  * All codegen lives behind `craftedToolExecute(tool)` — core has no
  * in-process code-generation path of its own.
  *
- * Filter semantics: effective-score >= minScore, comment-only code dropped,
- * every observed name recorded into `preexistingNames`.
+ * Filter semantics: effective-score >= minScore, comment-only code dropped.
+ * Read fresh on every call, so a tool crafted mid-turn is here on the next one.
  */
 function buildCraftedToolSetFromExecute(
   rt: AgentRuntime,
   factory: CraftedToolExecute,
   minScore: number,
-  preexistingNames: Set<string>,
   surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
-): Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }> {
-  const out: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }> = {};
+): CraftedToolSet {
+  const out: CraftedToolSet = {};
   let list;
   try {
     list = rt.craftStore.list();
   } catch {
     return out;
   }
-
-  for (const t of list) preexistingNames.add(t.name);
 
   // Single injection policy — shared with the CF preamble path.
   const scorePassing = new Set(
@@ -315,13 +321,38 @@ function buildCraftedToolSetFromExecute(
     const description = t.description || `Crafted tool: ${t.name}`;
     try {
       const execute = factory({ name: t.name, description, code: t.code });
-      out[t.name] = { description, execute: async (arg: unknown) => execute(arg) };
+      out[t.name] = {
+        description,
+        // Stamped with the tool's identity so a failure is attributable to the
+        // artifact rather than to the code around it (craft/in-episode.ts).
+        execute: async (arg: unknown) => {
+          try {
+            return await execute(arg);
+          } catch (err) {
+            throw craftInvocationError(t.name, err);
+          }
+        },
+      };
     } catch (err) {
       console.warn(`[proteus] Skipping broken crafted tool "${t.name}":`, (err as Error).message);
     }
   }
 
   return out;
+}
+
+/** One compiled body per (name, code). The platform factories are documented
+ *  as idempotent, so re-deriving the same tool is safe — it is just wasteful,
+ *  and it now happens once per `execute_tools` call rather than once per turn. */
+function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute {
+  const compiled = new Map<string, { code: string; execute: CraftedToolExecuteFn }>();
+  return (tool) => {
+    const hit = compiled.get(tool.name);
+    if (hit && hit.code === tool.code) return hit.execute;
+    const execute = factory(tool);
+    compiled.set(tool.name, { code: tool.code, execute });
+    return execute;
+  };
 }
 
 /** The durable-state tool's one input shape. `key` names a fact, `content` /
@@ -362,13 +393,18 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // deps.craftedToolExecute (CF → LOADER Worker, CLI → Node eval).
   // Host-side codegen is gone; crafted tools dispatch through the configured
   // runtime executor instead of compiling inside this module.
-  const preexistingCraftNames = new Set<string>();
-  const craftedToolSet = deps.craftedToolExecute
+  // Memoised per toolset: the crafted set is re-read on every execute, and
+  // compiling a stored body is a real cost on both adapters (a child Worker on
+  // cf, `new Function` on the CLI). Keyed by code as well as name, so a tool
+  // the agent rewrites mid-turn recompiles rather than running its old body.
+  const craftedToolExecute = deps.craftedToolExecute
+    ? memoizeCraftedExecute(deps.craftedToolExecute)
+    : undefined;
+  const craftedTools = (): CraftedToolSet => craftedToolExecute
     ? buildCraftedToolSetFromExecute(
         rt,
-        deps.craftedToolExecute,
+        craftedToolExecute,
         deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
-        preexistingCraftNames,
         deps.toolSurfacing,
       )
     : {};
@@ -379,7 +415,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     try {
       const providers = router?.getProviders() ?? [];
       tools.execute_tools = deps.createExecuteTool({
-        tools: craftedToolSet,
+        craftedTools,
         providers,
         loader: deps.codemodeLoader,
       }) as ToolSet[string];

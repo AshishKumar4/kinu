@@ -7,9 +7,12 @@
  * The returned tool's execute compiles the LLM's code via `new Function()`
  * and runs it in-process with the execution router's provider namespaces
  * (`workspace.*` from the always-registered inline executor, plus any
- * extras) and a `codemode` object containing the pre-materialised
- * crafted-tool executes (already produced by deps.craftedToolExecute
- * upstream in buildBuiltinTools).
+ * extras) and the crafted-tool executes bound under BOTH `codemode` and
+ * `tools` — the two names the CF sandbox answers to, so code written against
+ * `workspace.createTool`'s documented contract runs the same on either
+ * backend. The crafted set is resolved per execute (opts.craftedTools()), so a
+ * tool crafted mid-turn is callable on the next call rather than at the next
+ * model change.
  *
  * Node/Bun only — V8 codegen is permitted there. This module is NEVER
  * imported by the CF backend, keeping `new Function` outside the
@@ -25,6 +28,12 @@ export interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
 }
 
+/** The sandbox parameters this factory always binds, in order: the workspace
+ *  namespace, the crafted-tool record under both of its names (CF's in-sandbox
+ *  `tools` literal and the `codemode.<name>` dispatcher name), and the
+ *  capturing console. A provider may not take any of them. */
+const FIXED_NAMESPACES: readonly string[] = ['workspace', 'codemode', 'tools', 'console'];
+
 
 
 /**
@@ -34,15 +43,10 @@ export interface NodeExecuteToolFactoryDeps {
  */
 export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = {}) {
   return (opts: {
-    tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+    craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
     providers: unknown[];
     loader: unknown;
   }) => {
-    const craftedBindings: Record<string, (arg: unknown) => Promise<unknown>> = {};
-    for (const [name, entry] of Object.entries(opts.tools)) {
-      craftedBindings[name] = containRejection(entry.execute as (arg: unknown) => Promise<unknown>);
-    }
-
     const providers = [
       ...(opts.providers as CodemodeProvider[]),
       ...(deps.extraProviders ?? []),
@@ -71,6 +75,12 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         try {
           const signal = readAbortSignal(options);
           const context = signal ? { signal } : undefined;
+          // Resolved here, not at construction: the CraftStore is read for
+          // THIS call, so a tool the model crafted a step ago is callable now.
+          const craftedBindings: Record<string, (arg: unknown) => Promise<unknown>> = {};
+          for (const [name, entry] of Object.entries(opts.craftedTools())) {
+            craftedBindings[name] = containRejection(entry.execute as (arg: unknown) => Promise<unknown>);
+          }
           const providerBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
           for (const p of providers) {
             if (!p || typeof p !== 'object' || !('name' in p) || !('tools' in p)) continue;
@@ -85,13 +95,15 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           const workspace = providerBindings['workspace'] ?? {};
 
           // Build the arg names / values for the sandboxed function so every
-          // registered provider namespace is accessible by name.
-          // 'console' is excluded alongside 'workspace' so a provider namespace
-          // never duplicates the injected capturing console (a `new Function`
-          // duplicate-parameter crash).
-          const extraNamespaces = Object.keys(providerBindings).filter(n => n !== 'workspace' && n !== 'console');
-          const argNames = ['workspace', 'codemode', 'console', ...extraNamespaces];
-          const argValues: unknown[] = [workspace, craftedBindings, sandboxConsole, ...extraNamespaces.map(n => providerBindings[n])];
+          // registered provider namespace is accessible by name. The fixed
+          // names are excluded from the provider list so a namespace can never
+          // duplicate one of them (a `new Function` duplicate-parameter crash).
+          const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
+          const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
+          const argValues: unknown[] = [
+            workspace, craftedBindings, craftedBindings, sandboxConsole,
+            ...extraNamespaces.map(n => providerBindings[n]),
+          ];
 
           // Implicit return (parity with the subprocess executor and the CF
           // codemode sandbox): a trailing bare expression becomes the tool

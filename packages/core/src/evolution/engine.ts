@@ -47,6 +47,8 @@ import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structu
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
 import { updateCraftScores } from '../craft/ema.js';
+import { initCraftScoreTables } from '../craft/schemas.js';
+import { createCraftLedger, type CraftLedger } from '../craft/in-episode.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
@@ -197,14 +199,27 @@ export class EvolutionEngine {
    *  AgentOrchestrator owns the cadence policy; the engine owns the ledger,
    *  as it does for outcomes, lessons and replays. */
   readonly sessionWindow: SessionWindowStore;
+  /** The crafted-tool ledger the IN-EPISODE loop writes through (the step
+   *  clock, orchestrator/craft-cycle.ts). Same division of labour as the
+   *  window above: the orchestrator decides when an observation is taken, the
+   *  engine owns the ledger it lands in — so both timescales score crafted
+   *  tools through one table and one policy. */
+  readonly craftLedger: CraftLedger;
 
   constructor(rt: AgentRuntime, config?: Partial<EvolutionConfig>) {
     this.rt = rt;
     this.config = { ...DEFAULT_EVOLUTION_CONFIG, ...config };
+    this.craftLedger = createCraftLedger({ craftStore: rt.craftStore, sql: rt.storage.sql });
 
     // The engine owns the outcome + lessons + replay + session-window ledgers,
     // and the config table it paces the lifetime timescale in — created here so
     // both backends (and tests) get them without per-backend schema wiring.
+    // `craft_scores` joins them: the engine writes it from the turn clock and
+    // the in-episode clock writes it through `craftLedger`, and it was ensured
+    // at actor attach on cf but only at `proteus create` on the CLI — so a
+    // workspace that predated the table, or one built over a bare database,
+    // silently scored nothing at all.
+    initCraftScoreTables(rt.storage.execRaw);
     initTurnOutcomeTables(rt.storage.execRaw, rt.storage.sql);
     initReplayTables(rt.storage.execRaw);
     initSessionWindowTable(rt.storage.execRaw);

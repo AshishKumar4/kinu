@@ -14,7 +14,9 @@
  */
 
 import type { TurnContextBudget } from '../context-budget.js';
-import type { CompletionGateRecord, RunEventInput, TurnSteeringRecord } from '../events/types.js';
+import type {
+  CompletionGateRecord, CraftCycleRecord, RunEventInput, TurnSteeringRecord,
+} from '../events/types.js';
 import type { CompletedTurn, TurnUsage } from '../evolution/types.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
 import {
@@ -54,7 +56,8 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
 }
 
 /** Seal the run: the turn's context-budget ledger (when it moved), its
- *  mechanical steer and its completion gate (when either fired), then turn_end (index + token usage),
+ *  mechanical steer, its completion gate and its in-episode craft record (when
+ *  each fired), then turn_end (index + token usage),
  *  then run_end (status + the failure text — the durable evidence trail, since
  *  the platform layers keep only the LAST terminal error). Never throws. */
 export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
@@ -72,6 +75,10 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   /** The one-shot completion gate's verdict (gate.take()), or null on every
    *  run that is not the confirming turn — one row per gated run. */
   completionGate?: CompletionGateRecord | null | undefined;
+  /** The turn's in-episode craft loop (orch.craft.snapshot()), or null when the
+   *  turn neither crafted nor called a crafted tool — no row, `turn_end` being
+   *  the denominator here too. */
+  craft?: CraftCycleRecord | null | undefined;
 }): void {
   try {
     if (opts.context?.active) {
@@ -79,6 +86,7 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     }
     if (opts.steering) recorder.emit(runId, { type: 'turn_steering', ...opts.steering });
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
+    if (opts.craft) recorder.emit(runId, { type: 'craft_cycle', ...opts.craft });
     recorder.emit(runId, {
       type: 'turn_end',
       turnIndex: opts.turnIndex,

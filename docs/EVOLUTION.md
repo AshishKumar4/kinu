@@ -2,9 +2,46 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus evolves across three timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`.
+Proteus evolves across four timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`; the shortest timescale — the only one that ticks INSIDE a single long autonomous turn — is `core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`.
 
-## Three Timescales
+## In-Episode Evolution (the step clock)
+
+The other three timescales are conversational: the next user message grades a
+turn, five turns close a window, twenty-five close a lifetime. One long agentic
+episode — one prompt, hours of steps, nobody watching — is ONE turn, so none of
+them fire inside it. The in-episode loop is the one that does.
+
+| | |
+|---|---|
+| **Trigger** | every settled `execute_tools` call, read off the tool-result hook (which carries the call's own args, so the code graded is the code that ran). Creation is a diff of the callable set across the call, credited only to a call that itself invoked `workspace.createTool`; invocation is call sites (`tools.<name>(` / `codemode.<name>(`) in the submitted code, with strings and comments blanked first so a tool BODY passed to `createTool` is not read as a call. |
+| **Fitness signal** | execution, observed at the host. A crafted tool that raised is stamped with its own name on the way out of the sandbox, so a failure is attributed to the artifact — whether or not the model caught it — and a call that broke on its own account blames nobody. A call that completed credits only tools that already existed when it started: a tool cannot certify itself in the breath that created it. A call that was moved to the background is not a result and credits nothing. |
+| **Acceptance gate** | the misevolution veto (already run before every crafted-tool write) plus the effective-score injection floor. The floor is reachable for the first time because `workspace.createTool` now seeds a `craft_scores` row: an unscored tool is exempt from the filter forever, so a tool with no row could never be retired however it behaved. |
+| **Timescale** | one synchronous SQL update as the block settles. No model call, no await, no turn boundary — a tool that keeps raising drops out of the callable set for the rest of the same episode, because both backends re-read the store per execute. |
+
+Observations land in `craft_scores` through the same `updateCraftScores` EMA the
+turn clock uses — one score per tool, not a parallel one. Priced on its own
+band (`CRAFT_INVOCATION_QUALITY`, 0.7 ran / 0.1 raised): the positive pole sits
+strictly inside what a person's verdict reaches, so no volume of self-dealing
+lets a crafted tool outrank one a human approved; the negative pole sits below
+the floor's asymptote, which is what makes retirement reachable at all — four
+consecutive raises take a freshly seeded tool under the floor, one success
+pulls it most of the way back.
+
+Each turn writes at most one `craft_cycle` run event (`crafted`, `invoked`,
+`reused`, `returned`, `raised`, `dropped`), with `turn_end` as the denominator.
+`reused` is the numerator that matters: a tool crafted this turn and then
+called by a LATER block is the loop actually closing.
+
+**The ceiling, stated plainly.** Execution-grounded fitness measures "it ran and
+did not raise". It cannot measure "it did the right thing" — that needs a
+verifier the agent did not choose, which the sealed bench has and production
+does not. This is why the channel feeds tool injection and nothing with a wider
+blast radius: no scaffold, prompt or gate is ever promoted on it.
+
+Gated with the rest of evolution — a `--no-auto-evolve` run observes nothing,
+so a benchmark's arms still mean what they say.
+
+## Three Conversational Timescales
 
 ```mermaid
 sequenceDiagram
@@ -329,8 +366,13 @@ graph LR
 **Scoring formula:**
 - EMA update: `newScore = 0.7 * oldScore + 0.3 * observation` (α = 0.3)
 - Time decay: `effectiveScore = score * 0.5^(daysSinceLastUse / 30)`
-- Injection cutoff: `effectiveScore >= 0.2` — unscored (brand-new) tools always pass
+- Injection cutoff: `effectiveScore >= 0.2` — unscored tools pass, which is why
+  `workspace.createTool` seeds a 0.5 prior at creation
 - Retirement threshold: `effectiveScore < 0.1`, and only after 2 uses
+
+**Observations come from two clocks**, both writing the same `craft_scores` row:
+the turn clock (the turn's outcome, once the turn is graded) and the in-episode
+clock (each observed invocation, as the episode runs).
 
 Crafted-tool code must be between 50 and 1500 characters to be extracted at all.
 Extraction happens from three places: an accepted turn (`extractPattern`), an

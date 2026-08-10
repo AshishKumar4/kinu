@@ -41,11 +41,11 @@ const nodeCraftedExecute: CraftedToolExecute = (t) => {
 /** execute_tools factory that wires every injected provider namespace into the
  *  sandbox by name (mirrors the cli-backend factory) so codemode `web.*` works. */
 const nodeExecFactory = (opts: {
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
   providers: unknown[];
 }) => {
   const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-  for (const [n, e] of Object.entries(opts.tools)) codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
+  for (const [n, e] of Object.entries(opts.craftedTools())) codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
   const nsBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
   for (const p of opts.providers as Array<{ name: string; tools: Record<string, { execute: (...a: unknown[]) => Promise<unknown> }> }>) {
     if (!p?.name || !p.tools) continue;

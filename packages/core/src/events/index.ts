@@ -10,6 +10,7 @@ export type {
   CompletionGateRecord,
   TurnSteeringRecord,
   TurnSteeringTrigger,
+  CraftCycleRecord,
 } from './types.js';
 
 export {

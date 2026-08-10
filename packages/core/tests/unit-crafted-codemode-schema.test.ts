@@ -4,10 +4,10 @@
  * namespace — the LLM-visible contract.
  *
  * We do NOT import the real @cloudflare/codemode here (it's a cf-backend peer
- * dep, not a core dep). Instead we capture the `tools` argument passed to the
- * createExecuteTool factory and assert:
+ * dep, not a core dep). Instead we capture the `craftedTools` resolver passed
+ * to the createExecuteTool factory, call it as the sandbox would, and assert:
  *
- *   1. The captured `tools` map has an entry keyed by each crafted tool's name.
+ *   1. The resolved map has an entry keyed by each crafted tool's name.
  *      codemode's createCodeTool turns this into `declare const codemode: {
  *      <name>(input: ...): Promise<...>; }` — see
  *      @cloudflare/codemode/dist/ai.js:113-155 (generateTypes).
@@ -53,7 +53,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
 
     // Capture what the CF adapter would have passed to createExecuteTool.
     let captured: {
-      tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+      craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
       providers: unknown[];
       loader: unknown;
     } | null = null;
@@ -71,19 +71,55 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
 
     expect(captured).not.toBeNull();
     const captured2 = captured as NonNullable<typeof captured>;
-    const toolNames = Object.keys(captured2.tools);
-    expect(toolNames).toContain('double');
+    // Nothing is resolved until the sandbox asks: the crafted set is read per
+    // execute so a tool crafted mid-turn is callable on the next call.
+    expect(factoryCallCount).toBe(0);
+
+    const resolved = captured2.craftedTools();
+    expect(Object.keys(resolved)).toContain('double');
     // The loader is forwarded unchanged
     expect(captured2.loader).toBeDefined();
 
     // Entry shape — description and execute
-    const doubleEntry = captured2.tools.double;
+    const doubleEntry = resolved.double;
     expect(doubleEntry).toBeDefined();
     expect(doubleEntry!.description).toBe('Doubles its numeric argument');
     expect(typeof doubleEntry!.execute).toBe('function');
 
-    // Phase C factory was called exactly once for this tool (per-tool per build)
+    // Phase C factory was called exactly once for this tool, per resolution.
     expect(factoryCallCount).toBe(1);
+  });
+
+  test('a tool crafted after the toolset was built is callable on the next resolve', async () => {
+    const { rt } = createTestRuntime();
+    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
+      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
+      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
+    )`);
+    let captured: {
+      craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+    } | null = null;
+    buildBuiltinTools({
+      rt,
+      codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
+      craftedToolExecute: (tool) => async (arg) => (new Function('return ' + tool.code)() as (a: unknown) => unknown)(arg),
+      createExecuteTool: ((opts) => {
+        captured = opts as never;
+        return { description: '', execute: async () => null };
+      }) as never,
+    });
+    const resolve = (captured as never as NonNullable<typeof captured>)!.craftedTools;
+    expect(Object.keys(resolve())).toEqual([]);
+
+    // The in-episode move: the agent crafts a tool mid-turn.
+    rt.craftStore.create({
+      name: 'quadruple', description: 'x4', params: null,
+      code: 'async (n) => n * 4', scope: 'local',
+    });
+
+    const after = resolve();
+    expect(Object.keys(after)).toContain('quadruple');
+    expect(await after.quadruple!.execute(5)).toBe(20);
   });
 
   test('invoking the captured execute dispatches into craftedToolExecute', async () => {
@@ -110,7 +146,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     };
 
     let captured: {
-      tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+      craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
     } | null = null;
     buildBuiltinTools({
       rt,
@@ -122,7 +158,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       }) as never,
     });
 
-    const tripleExec = (captured as never as NonNullable<typeof captured>)!.tools.triple!.execute;
+    const tripleExec = (captured as never as NonNullable<typeof captured>)!.craftedTools().triple!.execute;
     expect(await tripleExec(7)).toBe(21);
     expect(execCalls).toBe(1);
   });
@@ -147,7 +183,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       factoryCalls++;
       return async () => null;
     };
-    let captured: { tools: Record<string, unknown> } | null = null;
+    let captured: { craftedTools: () => Record<string, unknown> } | null = null;
     buildBuiltinTools({
       rt,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
@@ -158,8 +194,8 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       }) as never,
     });
 
+    const names = Object.keys((captured as never as NonNullable<typeof captured>)!.craftedTools());
     expect(factoryCalls).toBe(0);
-    const names = Object.keys((captured as never as NonNullable<typeof captured>)!.tools);
     expect(names).not.toContain('forgotten');
   });
 });

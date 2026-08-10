@@ -27,6 +27,7 @@ export type RunEventType =
   | 'context_budget'
   | 'turn_steering'
   | 'completion_gate'
+  | 'craft_cycle'
   | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
@@ -97,6 +98,29 @@ export type RunEvent =
   | (RunEventBase & { type: 'completion_gate';
       /** The agent made tool calls after seeing the observed state. */
       converted: boolean })
+  /** The in-episode craft loop's turn record — did the agent build itself a
+   *  tool mid-episode, did it reach for that tool again, and did the reach
+   *  work. Written once per turn by the settle spine like `turn_steering`,
+   *  with `turn_end` as the denominator: the durable trail an analysis can read
+   *  without asking the model anything. Declared here rather than imported from
+   *  the producer (orchestrator/craft-cycle.ts) for the same reason the steering
+   *  record is: this union is reachable from most of the turn pipeline, the
+   *  producer is not. */
+  | (RunEventBase & { type: 'craft_cycle';
+      /** Crafted tools that came into existence during this turn. */
+      crafted: string[];
+      /** Crafted tools whose call sites appeared in a settled execute call. */
+      invoked: string[];
+      /** Crafted THIS turn and then called by a LATER execute call — the
+       *  in-episode loop actually closing, and the numerator to report. */
+      reused: string[];
+      /** Observations recorded: invocations that returned, and invocations
+       *  that raised and were attributed to the tool itself. */
+      returned: number;
+      raised: number;
+      /** Crafted tools this turn's execution evidence pushed below the
+       *  injection floor — retirement, in-episode. */
+      dropped: string[] })
   /** A mission budget ran out and a host seam declined the work. Written once
    *  per label by the governor (mission-budget.ts), so the durable trail says
    *  which cap stopped which run rather than leaving an unexplained short turn. */
@@ -123,6 +147,12 @@ export type TurnSteeringTrigger = TurnSteeringRecord['trigger'];
  *  reason as the steering record: one declaration, no drift. */
 export type CompletionGateRecord =
   Omit<Extract<RunEvent, { type: 'completion_gate' }>, keyof RunEventBase | 'type'>;
+
+/** One turn's in-episode craft loop — what the cycle reports and what the
+ *  settle spine writes, derived from the durable schema so there is one
+ *  declaration. */
+export type CraftCycleRecord =
+  Omit<Extract<RunEvent, { type: 'craft_cycle' }>, keyof RunEventBase | 'type'>;
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {

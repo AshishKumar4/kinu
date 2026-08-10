@@ -14,6 +14,7 @@ import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
+  craftFailureMarker,
   type CraftedToolExecute,
 } from '../src/index.js';
 import { tool, jsonSchema } from 'ai';
@@ -39,12 +40,8 @@ const createNodeCraftedExecute: () => CraftedToolExecute = () => (t) => {
 // this test needs.
 const createNodeExecFactory = () =>
   (opts: {
-    tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+    craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
   }) => {
-    const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-    for (const [name, e] of Object.entries(opts.tools)) {
-      codemode[name] = e.execute as (arg: unknown) => Promise<unknown>;
-    }
     return tool({
       description: 'test exec_tools',
       inputSchema: jsonSchema<{ code: string }>({
@@ -52,8 +49,12 @@ const createNodeExecFactory = () =>
       }),
       execute: async (a: { code: string }) => {
         try {
-          const fn = new Function('codemode', 'return (async () => { ' + a.code + ' })()');
-          const result = await fn(codemode);
+          const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
+          for (const [name, e] of Object.entries(opts.craftedTools())) {
+            codemode[name] = e.execute as (arg: unknown) => Promise<unknown>;
+          }
+          const fn = new Function('codemode', 'tools', 'return (async () => { ' + a.code + ' })()');
+          const result = await fn(codemode, codemode);
           return { result };
         } catch (e) {
           return { result: undefined, error: (e as Error).message };
@@ -98,7 +99,59 @@ describe('Phase B — Node crafted-tool executor', () => {
     expect(res.result).toBe(42);
   });
 
-  test('craftedToolExecute factory is called once per tool per getTools build', async () => {
+  test('a crafted tool that raises leaves the sandbox stamped with its identity', async () => {
+    const { rt } = createTestRuntime();
+    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
+      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
+      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
+    )`);
+    rt.craftStore.create({
+      name: 'exploder',
+      description: 'always throws',
+      params: null,
+      code: 'async () => { throw new Error("inner boom"); }',
+      scope: 'local',
+    });
+
+    const tools = buildBuiltinTools({
+      rt,
+      craftedToolExecute: createNodeCraftedExecute(),
+      createExecuteTool: createNodeExecFactory() as never,
+    });
+    const execTool = tools.execute_tools as {
+      execute: (a: { code: string }) => Promise<{ result: unknown; error?: string }>;
+    };
+
+    const res = await execTool.execute({ code: 'return await codemode.exploder();' });
+    // The model is told WHICH of its own tools broke, and the in-episode
+    // fitness signal reads the same stamp to score that artifact and no other.
+    expect(res.error).toContain(craftFailureMarker('exploder'));
+    expect(res.error).toContain('inner boom');
+  });
+
+  test('a tool that RETURNS normally is not stamped', async () => {
+    const { rt } = createTestRuntime();
+    rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
+      tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
+      uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
+    )`);
+    rt.craftStore.create({
+      name: 'quiet', description: 'fine', params: null,
+      code: 'async () => "ok"', scope: 'local',
+    });
+    const tools = buildBuiltinTools({
+      rt,
+      craftedToolExecute: createNodeCraftedExecute(),
+      createExecuteTool: createNodeExecFactory() as never,
+    });
+    const res = await (tools.execute_tools as {
+      execute: (a: { code: string }) => Promise<{ result: unknown; error?: string }>;
+    }).execute({ code: 'return await codemode.quiet();' });
+    expect(res.error).toBeUndefined();
+    expect(res.result).toBe('ok');
+  });
+
+  test('a body is compiled once, and again only when the tool is rewritten', async () => {
     const { rt } = createTestRuntime();
     rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
       tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
@@ -118,8 +171,28 @@ describe('Phase B — Node crafted-tool executor', () => {
       return async (arg) => `${tool.name}:${JSON.stringify(arg)}`;
     };
 
-    buildBuiltinTools({ rt, craftedToolExecute: factory });
+    let resolve: (() => Record<string, unknown>) | null = null;
+    buildBuiltinTools({
+      rt,
+      craftedToolExecute: factory,
+      codemodeLoader: { __test: true },
+      createExecuteTool: ((opts: { craftedTools: () => Record<string, unknown> }) => {
+        resolve = opts.craftedTools;
+        return { description: '', execute: async () => null };
+      }) as never,
+    });
+    // Building resolves nothing — the sandbox asks per execute, which is what
+    // makes a tool crafted mid-turn callable on the next call.
+    expect(factoryCalls).toBe(0);
+    resolve!();
+    resolve!();
+    // …and asking repeatedly costs one compile, not one per call.
     expect(factoryCalls).toBe(1);
+
+    // A tool the agent REWRITES mid-turn must not keep running its old body.
+    rt.craftStore.update('identity', { code: 'async (x) => x + 1' });
+    resolve!();
+    expect(factoryCalls).toBe(2);
   });
 
   test('low-scoring tools are filtered out before the factory is invoked', async () => {
