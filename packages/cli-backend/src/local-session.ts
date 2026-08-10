@@ -373,7 +373,8 @@ export class LocalAgentSession implements BackendHost {
     // workspace made before this silently unable to record a trial.
     initShadowTables(this.rt.storage.execRaw);
 
-    // agent_facts world model — exposes the `fact` tool (parity with the DO).
+    // agent_facts world model — backs `memory`'s keyed-fact actions
+    // (remember/recall/forget), parity with the DO.
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
 

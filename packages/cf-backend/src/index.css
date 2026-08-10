@@ -12,7 +12,6 @@ html, body, #root {
 
 :root {
   --c-bg:       #1A1613;
-  --c-sidebar:  #201A15;
   --c-surface:  #241E18;
   --c-elevated: #2E261E;
   --c-border:   rgba(224, 164, 88, 0.14);
@@ -39,17 +38,13 @@ html, body, #root {
 
   --c-user-bg:     #2E261E;
   --c-user-border: rgba(224, 164, 88, 0.14);
-  --c-agent-bg:    #1f1a15;
-  --c-agent-border: rgba(245, 239, 230, 0.05);
 
-  --c-code:     #E8B97A;
   --c-sage:     #88A06B;
   --c-accent-on: #2a1d0c;
 }
 
 [data-mode="light"] {
   --c-bg:       #FBF7F0;
-  --c-sidebar:  #F5EFE6;
   --c-surface:  #F0E9DD;
   --c-elevated: #FFFDF9;
   --c-border:   rgba(60, 45, 25, 0.12);
@@ -76,10 +71,7 @@ html, body, #root {
 
   --c-user-bg:     #F3EAD9;
   --c-user-border: rgba(181, 121, 58, 0.14);
-  --c-agent-bg:    #F7F1E7;
-  --c-agent-border: rgba(60, 45, 25, 0.05);
 
-  --c-code:     #9c6428;
   --c-sage:     #6f8a52;
   --c-accent-on: #FBF7F0;
 }
@@ -107,7 +99,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 /* ── Surfaces ───────────────────────────────────────────────────── */
 .p-bg       { background: var(--c-bg); }
-.p-sidebar  { background: var(--c-sidebar); }
 .p-surface  { background: var(--c-surface); }
 .p-elevated { background: var(--c-elevated); }
 .p-border   { border-color: var(--c-border); }
@@ -151,7 +142,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 35%, transparent); }
 .p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 35%, transparent); }
 .p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 35%, transparent); }
-.p-notice-info    { background: var(--c-info-tint);    color: var(--c-info);    border: 1px solid color-mix(in srgb, var(--c-info) 35%, transparent); }
 
 /* ── Cards ──────────────────────────────────────────────────────── */
 .p-card {
@@ -190,13 +180,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 .p-btn:hover { opacity: 0.85; }
 .p-btn:disabled { opacity: 0.35; cursor: default; }
-
-.p-nav-active {
-  background: var(--c-accent-subtle);
-  color: var(--c-accent-fg);
-}
-
-.p-row-hover:hover { background: var(--c-accent-subtle); }
 
 /* ── Animations ─────────────────────────────────────────────────── */
 @keyframes fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }

@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  parseModelSpec, formatModelSpec,
+  parseModelSpec,
   createProviderRegistry,
   createOpenAICompatProvider,
   createCodexProvider,
@@ -31,11 +31,6 @@ describe('parseModelSpec', () => {
     expect(() => parseModelSpec('')).toThrow('Empty model spec');
     expect(() => parseModelSpec('gpt-5.5')).toThrow('Invalid model spec');
     expect(() => parseModelSpec('/foo')).toThrow('Invalid model spec');
-  });
-
-  test('formatModelSpec is a roundtrip of parseModelSpec', () => {
-    const original = 'openrouter/anthropic/claude-3.5-sonnet';
-    expect(formatModelSpec(parseModelSpec(original))).toBe(original);
   });
 });
 

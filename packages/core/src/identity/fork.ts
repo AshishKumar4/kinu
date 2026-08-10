@@ -22,7 +22,6 @@
  * transactionSync() for atomicity; tests drive it directly against two
  * bun:sqlite handles.
  *
- * Formal spec + rationale: docs/THINK-UPGRADE-AND-FORKING.md §6.
  */
 
 import type { SqlExecutor } from '../types/primitives.js';

@@ -2,8 +2,6 @@
  * Six abstract primitive interfaces — the portability layer.
  * Everything in the agent core is written against these.
  * Backends (CF Workers / Linux CLI) satisfy them.
- *
- * Architecture reference: final-architecture.md §3
  */
 
 export type SqlValue = string | number | boolean | null | ArrayBuffer;

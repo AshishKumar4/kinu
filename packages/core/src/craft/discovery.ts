@@ -1,7 +1,5 @@
 /**
  * CraftStore tool discovery — extract reusable patterns from winning branches.
- *
- * Architecture reference: final-architecture.md §6
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

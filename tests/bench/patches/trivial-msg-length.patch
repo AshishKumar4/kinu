@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/evolution/outcomes.ts b/packages/core/src/evolution/outcomes.ts
-index d90bc58..2287d40 100644
+index 129dfef..119f5c4 100644
 --- a/packages/core/src/evolution/outcomes.ts
 +++ b/packages/core/src/evolution/outcomes.ts
-@@ -71,7 +71,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
+@@ -132,7 +132,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
    if (turn.toolCalls.length > 0) return false;
    const msg = turn.userMessage.trim();
    if (TRIVIAL_MESSAGE.test(msg)) return true;
@@ -10,4 +10,4 @@ index d90bc58..2287d40 100644
 +  return msg.length < 120 && !msg.includes('?');
  }
  
- // ── The classifier (one cheap LLM call per non-trivial turn) ─────
+ // ── The execution-grounded verdict (no LLM, no user) ─────────────

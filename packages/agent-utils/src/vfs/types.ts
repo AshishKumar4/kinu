@@ -1,5 +1,5 @@
 /**
- * Virtual Filesystem abstraction for @cf-utils/agent-utils.
+ * Virtual Filesystem abstraction for @proteus/agent-utils.
  *
  * Provides a POSIX-like async filesystem interface that can be backed by
  * Durable Object SQLite, Cloudflare R2, in-memory storage, or any custom backend.
@@ -55,32 +55,4 @@ export interface VFSError extends Error {
 	code?: string;
 	errno?: number;
 	path?: string;
-}
-
-export function makeError(message: string, code: string, path: string): VFSError {
-	const err: VFSError = new Error(message);
-	err.code = code;
-	err.errno = code === "ENOENT" ? -2 : -1;
-	err.path = path;
-	return err;
-}
-
-export function makeStat(type: "file" | "dir", size: number, mtimeMs: number): VFSStat {
-	const isDir = type === "dir";
-	return {
-		type,
-		mode: isDir ? 0o040755 : 0o100644,
-		size,
-		mtimeMs,
-		dev: 0,
-		ino: 0,
-		uid: 0,
-		gid: 0,
-		ctime: new Date(mtimeMs),
-		mtime: new Date(mtimeMs),
-		ctimeMs: mtimeMs,
-		isFile: () => !isDir,
-		isDirectory: () => isDir,
-		isSymbolicLink: () => false,
-	};
 }

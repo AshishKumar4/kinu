@@ -68,7 +68,7 @@ describe('BackgroundJobStore', () => {
     expect(s.epochOf('e')).toBe(0);
 
     // Evict + recover: reclaim bumps the epoch (fences the dead executor) + attempts.
-    const claim = s.reclaim('e', 2);
+    const claim = s.reclaim('e');
     expect(claim).toEqual({ epoch: 1, attempts: 1 });
     expect(s.epochOf('e')).toBe(1);
 
@@ -84,18 +84,18 @@ describe('BackgroundJobStore', () => {
 
     // Monotonic: a second reclaim would only ever raise the epoch — but a settled
     // job is no longer running, so reclaim declines it.
-    expect(s.reclaim('e', 5)).toBeNull();
+    expect(s.reclaim('e')).toBeNull();
   });
 
   test('reclaim bumps epoch + attempts monotonically across repeated eviction', () => {
     const s = newStore();
     s.create({ id: 'r', kind: 'think', now: 1 });
-    expect(s.reclaim('r', 2)).toEqual({ epoch: 1, attempts: 1 });
-    expect(s.reclaim('r', 3)).toEqual({ epoch: 2, attempts: 2 });
-    expect(s.reclaim('r', 4)).toEqual({ epoch: 3, attempts: 3 });
+    expect(s.reclaim('r')).toEqual({ epoch: 1, attempts: 1 });
+    expect(s.reclaim('r')).toEqual({ epoch: 2, attempts: 2 });
+    expect(s.reclaim('r')).toEqual({ epoch: 3, attempts: 3 });
     expect(s.get('r')?.epoch).toBe(3);
     expect(s.get('r')?.resumeAttempts).toBe(3);
-    expect(s.reclaim('missing', 5)).toBeNull();
+    expect(s.reclaim('missing')).toBeNull();
   });
 
   test('create stores input_json; getInput round-trips it for retry', () => {

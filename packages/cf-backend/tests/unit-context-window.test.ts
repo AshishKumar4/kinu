@@ -2,9 +2,8 @@
 // that feed the compaction extension's transformContext trigger.
 import { describe, test, expect } from "bun:test";
 import { userCredentialSource } from './helpers/user-credentials.js';
-import { contextWindowForModel } from "../src/lib/context-window";
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import { catalogModelInfo, type ProviderDeps } from "@proteus/core";
+import { catalogModelInfo, contextWindowForModel, type ProviderDeps } from "@proteus/core";
 
 describe("contextWindowForModel", () => {
   test("matches known model families on their spec", () => {

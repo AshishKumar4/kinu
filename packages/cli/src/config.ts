@@ -15,7 +15,6 @@ import {
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
   type LLMProviderConfig,
-  type OAuthCredential,
   isReasoningEffort,
   type ReasoningEffort,
 } from '@proteus/core';
@@ -76,7 +75,6 @@ export interface ProteusAgentConfig {
   alias?: string;
   localName?: string;
   cloudName?: string;
-  cliModel?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -437,10 +435,6 @@ export function resolveProviderCredentials(): LocalProviderCredentials {
 
 export function createCodexAuthStore(fetchFn?: typeof fetch): LocalCodexAuthStore {
   return createFileCodexAuthStore(CONFIG_PATH, { fetch: fetchFn });
-}
-
-export function saveCodexOAuthCredential(credential: OAuthCredential): void {
-  createCodexAuthStore().save(credential);
 }
 
 /** Stdio MCP servers from ~/.proteus/config.json (`mcpServers`). Empty if none. */

@@ -139,7 +139,3 @@ export function parseModelSpec(spec: string): ModelSpec {
   if (i < 1) throw new Error(`Invalid model spec ${JSON.stringify(spec)} — expected "<provider>/<modelId>".`);
   return { provider: s.slice(0, i), modelId: s.slice(i + 1) };
 }
-
-export function formatModelSpec(spec: ModelSpec): string {
-  return `${spec.provider}/${spec.modelId}`;
-}

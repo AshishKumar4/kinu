@@ -69,7 +69,6 @@ export class HeadCapture {
   recordToolCall(name: string, args: Record<string, unknown>, result: string): void {
     this.toolCalls.push({ name, args, result });
   }
-  addChildIds(ids: readonly HeadId[]): void { for (const id of ids) this.childHeadIds.push(id); }
 }
 
 /** The two accumulator tools every head has — record_evidence / record_decision,

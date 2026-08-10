@@ -1,7 +1,7 @@
 /**
  * Tool-call summary lines — the pure half of the chat's tool card.
  *
- * A bare `team` chip repeated six times tells the operator nothing, and the
+ * A bare `agents` chip repeated six times tells the operator nothing, and the
  * arguments the agent already passed say exactly what each call was about.
  * This turns those arguments into one compact line per call. It never invents
  * detail the arguments do not carry: when they say nothing the summary is
@@ -207,7 +207,7 @@ function summarizeUnknownTool(input: Record<string, unknown>): string {
 /**
  * One line describing what a tool call is doing, derived only from its
  * arguments. Empty when the arguments carry nothing worth showing (a bare
- * `team({action:'list'})` still yields "list"; a call with no input yields "").
+ * `agents({action:'list'})` still yields "list"; a call with no input yields "").
  */
 export function summarizeToolCall(toolName: string, input: unknown): string {
   if (!isRecord(input)) return "";

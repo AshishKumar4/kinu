@@ -1,7 +1,6 @@
 /**
  * UCT (Upper Confidence bounds for Trees) selection.
  *
- * Architecture reference: final-architecture.md §5.6
  * Paper: LATS arXiv:2310.04406 §3.2 Equation (1)
  *
  * CRITICAL: SQLite log() is log₁₀, NOT natural log (ln).

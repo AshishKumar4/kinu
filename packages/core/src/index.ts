@@ -127,14 +127,14 @@ export {
   buildChangelog, countUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
-  type ChangelogRevertAction, type ChangelogRevertType,
+  type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './evolution/changelog.js';
 // Canonical `buildBuiltinTools` is exported below; the older `buildAgentTools`
 // surface is no longer exported.
 
 // Configuration
-export { DEFAULT_CONFIG, DEFAULT_MAX_STEPS, mergeConfig, resolveMaxSteps } from './config.js';
+export { DEFAULT_CONFIG, DEFAULT_MAX_STEPS, resolveMaxSteps } from './config.js';
 export type { AgentConfig, MCTSDefaults, CraftStoreDefaults, ScaffoldDefaults } from './config.js';
 
 // Typed accessors over the `agent_config` key/value table — collapses ~23
@@ -143,7 +143,7 @@ export {
   createAgentConfigStore, initAgentConfigTable,
   AGENT_CONFIG_KEYS, DEFAULT_AUTO_GEPA_EVERY_N_TURNS,
   DEFAULT_GEPA_EVAL_BUDGET, clampGepaEvalBudget,
-  type AgentConfigStore, type AgentConfigKey, type MctsOverrides, type ShellApprovalMode,
+  type AgentConfigStore, type MctsOverrides, type ShellApprovalMode,
 } from './config/index.js';
 
 // Types
@@ -154,7 +154,6 @@ export type * from './types/signals.js';
 export { SIGNAL_ID_METADATA_KEY } from './types/signals.js';
 export type * from './types/mcts.js';
 export type * from './types/craft.js';
-export type * from './types/scaffold.js';
 export type * from './types/evaluation.js';
 
 // Product self-customization lane — separate from scaffold evolution.
@@ -170,7 +169,6 @@ export {
   deployTargetAsCommand,
   initProductChangeTables,
   isEngineOwnedTransitionTarget,
-  isProductChangeTerminal,
   isSecretProductPath,
   normalizeProductSourcePath,
   parseDeployOutput,
@@ -372,7 +370,6 @@ export {
   compilePromptSurface,
   executorIsSelectable,
   promptModeForTurnEvent,
-  selectableRuntimeNames,
   uniqueBuiltinTools,
   uniqueExternalTools,
   uniquePromptExecutors,
@@ -700,9 +697,8 @@ export {
 } from './events/index.js';
 
 // EventsHub — events / triggers / turn runner / reply channels.
-// Spec: docs/EVENTS-HUB-SPEC.md. Builds the single agent_log ledger and the
-// six load-bearing primitives (trust, reactor, channels, triggers, budget,
-// turn orchestration).
+// Builds the agent_log ledger plus the trust, channel, trigger and budget
+// primitives around it.
 export * from './events/hub/index.js';
 
 // ExplorationStrategy — single seam for "search candidate continuations,
@@ -783,7 +779,7 @@ export {
   HeadJournal, type HeadJournalRow, type LiveHeadRun,
   HeadController, type HeadRuntime, type HeadGrounding, type SpawnedHead, type MergeLLMFn,
   type SplitPhaseEvent,
-  MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput,
+  MergeOutputSchema, DecisionSchema, type MergeOutput,
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,

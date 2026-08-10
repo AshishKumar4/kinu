@@ -1,6 +1,5 @@
 /**
  * CraftStore quality tracking schema.
- * Architecture reference: final-architecture.md §6
  *
  * NOTE: Must stay in sync with packages/core/src/identity/schema.ts
  * (the unified schema). Both are safe because of IF NOT EXISTS.

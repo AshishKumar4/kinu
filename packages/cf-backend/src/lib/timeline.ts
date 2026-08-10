@@ -3,7 +3,7 @@
  * event sources (durable run_events, evolution_events, MCTS search_nodes) into
  * the single ordered TimelineSpan shape the spine renders. Kept pure +
  * separate from the Durable Object so they are unit-testable without booting
- * the agent (see lib/timeline.test.ts).
+ * the agent (see tests/unit-timeline.test.ts).
  */
 
 import type { RunEvent } from "@proteus/core";

@@ -70,10 +70,6 @@ export class HeadJournal {
               ${input.mergeStrategy})`;
   }
 
-  updateRunning(id: HeadId): void {
-    this.sql`UPDATE head_journal SET status = 'running' WHERE id = ${id}`;
-  }
-
   recordReport(report: HeadReport): void {
     this.sql`UPDATE head_journal SET
       status = ${report.status},

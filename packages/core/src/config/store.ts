@@ -83,7 +83,6 @@ export const AGENT_CONFIG_KEYS = {
   memoryVectorBackfillDone: 'memory_vector_backfill_done',
   memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
 } as const;
-export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
 export interface AgentConfigStore {
   // ── Generic accessors ──

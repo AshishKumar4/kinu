@@ -330,7 +330,7 @@ export class BackgroundJobRunner {
     if (job.status !== 'running') { await this.wake(jobId); return; }
 
     if (this.deps.resume) {
-      const claim = this.deps.store.reclaim(jobId, Date.now());
+      const claim = this.deps.store.reclaim(jobId);
       if (!claim) return; // lost the race — another activation already reclaimed it
       if (claim.attempts > MAX_RESUME_ATTEMPTS) {
         this.deps.store.fail(

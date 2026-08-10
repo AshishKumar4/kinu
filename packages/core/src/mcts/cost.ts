@@ -1,6 +1,5 @@
 /**
  * MCTS cost estimation — pre-check before running search.
- * Architecture reference: final-architecture.md §5.8
  */
 
 import type { CostEstimate } from '../types/evaluation.js';

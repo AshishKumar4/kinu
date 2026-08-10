@@ -1,6 +1,5 @@
 /**
  * CraftStore types — crafted tools, quality scores.
- * Architecture reference: final-architecture.md §6
  */
 
 export interface CraftedTool {

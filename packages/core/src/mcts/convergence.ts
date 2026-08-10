@@ -1,7 +1,6 @@
 /**
  * MCTS convergence — committing the winning branch.
  *
- * Architecture reference: final-architecture.md §5.9
  *
  * BUG-4: When winner.value < MIN_ACCEPTABLE_SCORE, converge() returns
  * { converged: false }. The architecture doc does NOT specify what happens next

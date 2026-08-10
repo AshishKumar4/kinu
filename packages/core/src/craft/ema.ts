@@ -1,7 +1,6 @@
 /**
  * EMA scoring + time decay for CraftStore tools.
  *
- * Architecture reference: final-architecture.md §6
  * Formal spec: Evolution/FullCraftLifecycle.lean — ema_bounded, ema_nonneg
  * (over a scaled-integer model of the EMA update)
  */

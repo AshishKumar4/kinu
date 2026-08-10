@@ -65,7 +65,6 @@ import {
   createCodexOAuthClient,
   decodeCodexAccountId,
   tokensToCredential,
-  CODEX_DEVICE_PORTAL,
   mcpToolKey,
   type DeviceCodeStart,
   type DeviceCheckpointHint,
@@ -1018,11 +1017,6 @@ export class UserDO extends Agent<Env> {
   }
 
   // ── Product changes ─────────────────────────────────────────────────
-
-  async listProductSourceBindings(caller: UserCaller): Promise<ProductSourceBinding[]> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().listSourceBindings();
-  }
 
   async upsertProductSourceBinding(caller: UserCaller, input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
     await this.requireTier(caller, 'product_change');

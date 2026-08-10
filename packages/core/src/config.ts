@@ -1,8 +1,6 @@
 /**
  * Configuration system — all tunable parameters with sensible defaults.
  * Zero hardcoded secrets. All credentials come from the caller.
- *
- * Architecture reference: final-architecture.md §3, §5, §6
  */
 
 /** MCTS search parameters */
@@ -116,18 +114,6 @@ export const DEFAULT_CONFIG: AgentConfig = {
     minRationaleLength: 50,
   },
 };
-
-/** Deep-merge user config over defaults */
-export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
-  if (!overrides) return DEFAULT_CONFIG;
-  return {
-    maxSteps: overrides.maxSteps ?? DEFAULT_CONFIG.maxSteps,
-    mcts: { ...DEFAULT_CONFIG.mcts, ...overrides.mcts },
-    heads: { ...DEFAULT_CONFIG.heads, ...overrides.heads },
-    craftStore: { ...DEFAULT_CONFIG.craftStore, ...overrides.craftStore },
-    scaffold: { ...DEFAULT_CONFIG.scaffold, ...overrides.scaffold },
-  };
-}
 
 /** Resolve maxSteps from env or default */
 export function resolveMaxSteps(): number {

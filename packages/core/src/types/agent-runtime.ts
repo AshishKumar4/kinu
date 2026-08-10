@@ -1,8 +1,6 @@
 /**
  * AgentRuntime — the one struct the agent core receives.
  * Platform-specific; constructed by either CF or Linux backend.
- *
- * Architecture reference: final-architecture.md §3
  */
 
 import type {

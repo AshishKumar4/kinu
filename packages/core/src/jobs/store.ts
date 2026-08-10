@@ -123,7 +123,7 @@ export class BackgroundJobStore {
    *  epoch (fencing any executor still holding the old one) and the resume-attempt
    *  counter, atomically. Returns the new epoch + attempt count, or null when the
    *  job is no longer running (already settled/cancelled, or gone). */
-  reclaim(id: string, _now: number): JobClaim | null {
+  reclaim(id: string): JobClaim | null {
     this.sql`UPDATE background_jobs SET epoch = epoch + 1, resume_attempts = resume_attempts + 1
       WHERE id=${id} AND status='running'`;
     const rows = this.sql<{ epoch: number; resume_attempts: number; status: string }>`

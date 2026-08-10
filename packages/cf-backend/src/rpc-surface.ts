@@ -231,7 +231,6 @@ const USER_DO_METHODS = [
   'listCredentials',
   'listDeviceConsents',
   'listDevices',
-  'listProductSourceBindings',
   'listWorkspaces',
   'mintAccessToken',
   'mintCliToken',

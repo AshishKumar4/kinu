@@ -1,7 +1,6 @@
 /**
  * MCTS search engine — the full fiber-backed parallel exploration loop.
  *
- * Architecture reference: final-architecture.md §5.12 (Full Lifecycle)
  * Paper: LATS arXiv:2310.04406
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
@@ -78,7 +77,7 @@ export async function runMCTS(
     rootId = resumed.rootId;
     rootMsgId = resumed.rootMsgId;
     initialPhase = { iteration: resumed.iteration, budget: resumed.budget, rootId, rootMsgId, task };
-    searchEpoch = search!.reclaim(rootId, Date.now()) ?? resumed.epoch;
+    searchEpoch = search!.reclaim(rootId) ?? resumed.epoch;
   } else {
     rootId = nanoid();
     rootMsgId = await recordNode(session, rt.storage.sql, {

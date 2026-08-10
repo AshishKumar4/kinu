@@ -264,7 +264,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       switch (chunk.type) {
         case 'text-delta': {
-          const delta = (chunk as any).textDelta ?? (chunk as any).text ?? '';
+          const delta = chunk.text;
           if (delta) {
             stepHadOutput = true;
             allText += delta;
@@ -274,13 +274,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
         case 'tool-call': {
           stepHadOutput = true;
-          const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
+          const args = (chunk.input ?? {}) as Record<string, unknown>;
           await extensions?.emitToolCall({ toolName: chunk.toolName, args });
           yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
           break;
         }
         case 'tool-result': {
-          const raw = (chunk as any).output ?? (chunk as any).result ?? '';
+          const raw = chunk.output;
           const result = renderToolResult(raw).slice(0, 1000);
           const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
           await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: true });
@@ -291,7 +291,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // A tool threw: the error is the durable outcome the evolution signal
           // reads. The extension seam sees the error text as the result (same as
           // the cf afterToolCall), and the discriminator rides success/error.
-          const error = describeProviderError((chunk as any).error);
+          const error = describeProviderError(chunk.error);
           const result = error.slice(0, 1000);
           const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
           await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: false });
@@ -357,7 +357,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const summaries: string[] = [];
     for (const step of steps) {
       for (const tr of step.toolResults) {
-        const output = (tr as any).output ?? (tr as any).result ?? '';
+        const output = tr.output;
         summaries.push(`[${tr.toolName}] ${renderToolResult(output).slice(0, 200)}`);
       }
     }

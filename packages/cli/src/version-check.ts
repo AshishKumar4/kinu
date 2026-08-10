@@ -115,10 +115,3 @@ export async function runStartupUpdateCheck(opts: {
     return null;
   }
 }
-
-/** Cached "an update was seen" flag for surfaces that must not do I/O (the
- *  TUI status bar): reads only what a previous check already wrote. */
-export function cachedUpdateAvailable(config = loadConfigFile()): boolean {
-  const seen = config.updateLatestSeen;
-  return typeof seen === 'string' && !isSameBuild(VERSION, seen);
-}

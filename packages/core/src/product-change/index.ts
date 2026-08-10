@@ -13,7 +13,6 @@ export { PRODUCT_CHANGE_STATUSES } from './types.js';
 export {
   assertProductChangeTransition,
   isEngineOwnedTransitionTarget,
-  isProductChangeTerminal,
 } from './lifecycle.js';
 export {
   approvalTypeForEnvironment,

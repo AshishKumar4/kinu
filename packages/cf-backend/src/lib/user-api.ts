@@ -267,19 +267,6 @@ export interface CreateWebhookResult {
   secret: string | null;       // returned once at creation; never again
 }
 
-export interface EventRow {
-  id: string;
-  trace_id: string;
-  caused_by: string | null;
-  ingress: string;
-  variant: string;
-  trust: 'external' | 'authenticated' | 'owner' | 'self';
-  priority: 'urgent' | 'normal' | 'background';
-  payload_visibility: 'full' | 'redact' | 'hash' | 'hmac' | 'opaque_handle';
-  payload: unknown;
-  received_at: number;
-}
-
 /** Agent-scoped HTTP fetch; same auth as the user routes. */
 async function agentApi<T>(method: string, agentName: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
@@ -303,12 +290,3 @@ export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts)
 
 export const cancelTrigger = (agentName: string, trigger_id: string) =>
   agentApi<{ ok: boolean; changed: boolean }>('DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);
-
-export const listAgentEvents = (agentName: string, opts?: { variant?: string; since?: number; limit?: number }) => {
-  const qs = new URLSearchParams();
-  if (opts?.variant) qs.set('variant', opts.variant);
-  if (opts?.since)   qs.set('since', String(opts.since));
-  if (opts?.limit)   qs.set('limit', String(opts.limit));
-  const tail = qs.toString();
-  return agentApi<{ events: EventRow[] }>('GET', agentName, `/events${tail ? '?' + tail : ''}`);
-};

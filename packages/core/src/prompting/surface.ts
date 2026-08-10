@@ -184,7 +184,3 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     mode: opts.mode ?? 'chat',
   };
 }
-
-export function selectableRuntimeNames(executors: readonly PromptExecutorInfo[]): string[] {
-  return executors.filter(executorIsSelectable).map((exec) => exec.name);
-}

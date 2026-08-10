@@ -1,7 +1,6 @@
 /**
  * Scaffold cold-start bootstrap.
  *
- * Architecture reference: final-architecture.md §4 (Cold start)
  *
  * On first run, scaffold/agent.js does not exist in the VFS.
  * This module provides the initial scaffold source as a string constant

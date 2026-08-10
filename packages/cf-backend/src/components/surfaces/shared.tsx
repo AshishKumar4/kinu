@@ -3,7 +3,7 @@
  * surfaces — kept in one place so there is a single source of truth (DRY) for
  * markdown rendering, code blocks, preview-URL detection, and empty states.
  */
-import { memo, useState } from "react";
+import { memo } from "react";
 import { Code } from "@cloudflare/kumo/components/code";
 import { CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";

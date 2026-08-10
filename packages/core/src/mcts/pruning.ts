@@ -2,7 +2,6 @@
  * MCTS pruning — retire settled low-value branches so selection stops spending
  * on them and their branch agents are freed.
  *
- * Architecture reference: final-architecture.md §5.10
  * Formal spec: MCTS/StorageIsolation.lean — transition_preserves_isolation
  * (the Prune action preserves the storage-isolation invariant).
  *

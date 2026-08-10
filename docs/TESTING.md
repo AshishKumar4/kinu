@@ -58,32 +58,31 @@ enforces.
 
 ```
 packages/
-├─ core/tests/                (115 files)
+├─ core/tests/                (152 files)
 │  ├─ unit-*.test.ts          (pure logic)
 │  ├─ integration-*.test.ts   (multi-module flows)
 │  ├─ contract-providers.test.ts  (HTTP wire format per provider)
 │  └─ helpers.ts              (package-local helpers)
-├─ cf-backend/tests/           (58 files)
+├─ cf-backend/tests/           (78 files)
 │  ├─ unit-agent-registry.test.ts  (provider registry composition)
 │  ├─ unit-auth-security.test.ts   (browser OAuth and CLI auth invariants)
 │  ├─ unit-cli-auth-store.test.ts  (D1-backed device-code flow)
 │  ├─ unit-rlm.test.ts             (Recursive Language Model bridge)
 │  └─ unit-webhook-ingress.test.ts (webhook body/rate-limit helpers)
-├─ cli-backend/tests/          (16 files)
+├─ cli-backend/tests/          (23 files)
 │  ├─ local-session.test.ts        (local agent session behavior)
 │  ├─ model-resolver.test.ts       (provider/model selection)
 │  └─ executor.test.ts             (local execution tools)
-├─ cli/tests/                  (25 files — CLI commands, config, TUI)
-├─ agent-utils/tests/          (4 files — SqliteFS, MemoryStore, shell)
-├─ compaction/tests/           (4 files — the ladder and the codec)
+├─ cli/tests/                  (38 files — CLI commands, config, TUI)
+├─ agent-utils/tests/          (5 files — SqliteFS, MemoryStore, shell)
+├─ compaction/tests/           (7 files — the ladder and the codec)
 └─ test-utils/src/
    ├─ sql.ts            ── createTestSql()
-   ├─ llm.ts            ── createScriptedLLM / createJSONLLM / createEchoLLM / createFailingLLM
+   ├─ llm.ts            ── createScriptedLLM / createJSONLLM / createEchoLLM
    ├─ network.ts        ── createMockFetch(handlers)
    ├─ runtime.ts        ── createTestRuntime()
-   ├─ provider.ts       ── createTestProvider / createTestStrategy
-   ├─ events.ts         ── assertEventSequence / collectEvents
-   ├─ credentials.ts    ── createTestAuth / codexAuthHeaders / bearerAuth / anthropicAuth
+   ├─ provider.ts       ── createTestStrategy
+   ├─ credentials.ts    ── createTestAuth
    └─ facts.ts          ── createTestFactsStore
 tests/
 ├─ e2e-lifecycle.test.ts
@@ -103,9 +102,8 @@ to implementation and produce false confidence:
 | Structured-output LLM | `createJSONLLM({ /* the JSON */ })` |
 | HTTP (provider wire) | `createMockFetch([{ match, respond }])` — assert URLs/headers/body |
 | SQL (DO storage) | `createTestSql()` — bun:sqlite `:memory:` + template tag |
-| Credentials | `createTestAuth({ key: bearerAuth('tok') })` — resolved auth headers, not raw secrets |
+| Credentials | `createTestAuth({ key: { headers: { Authorization: 'Bearer tok' } } })` — resolved auth headers, not raw secrets |
 | AgentRuntime | `createTestRuntime()` — full minimal AgentRuntime |
-| RunEvent stream | `collectEvents(loop.run(ctx))` + `assertEventSequence(...)` |
 | Crafted-tool sandbox | already mocked by `createNodeCraftedExecute` from `@proteus/cli-backend` |
 
 What **not** to mock: pure functions inside the same package. If `parseModelSpec`
@@ -152,11 +150,11 @@ test('auto-judge picks current when scores tie', async () => {
 
 ```ts
 import { describe, test, expect } from 'bun:test';
-import { createMockFetch, createTestAuth, bearerAuth } from '@proteus/test-utils';
+import { createMockFetch, createTestAuth } from '@proteus/test-utils';
 import { createMyProvider, MY_CRED_KEY } from '../src/index.ts';
 
 test('sends Authorization: Bearer', async () => {
-  const auth = createTestAuth({ [MY_CRED_KEY]: bearerAuth('sk-x') });
+  const auth = createTestAuth({ [MY_CRED_KEY]: { headers: { Authorization: 'Bearer sk-x' } } });
   const mock = createMockFetch([
     { match: 'api.myservice.com', respond: { status: 200, body: { ok: true }}},
   ]);
@@ -203,7 +201,7 @@ or wrangler dev, not from `bun test`.
 The pattern we use: extract the pure URL/parsing/policy logic into its own file
 with no `agents` import, unit-test that in Bun, and leave the orchestration file
 that wires it to actual DO calls to the integration and e2e harness. That is why
-`cf-backend/tests` can still hold 58 passing Bun files despite the constraint —
+`cf-backend/tests` can still hold 78 passing Bun files despite the constraint —
 most of what matters there was written to be reachable without a DO.
 
 ## Running with coverage

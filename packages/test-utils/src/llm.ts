@@ -44,14 +44,6 @@ export function createEchoLLM(): LLM {
   };
 }
 
-/** An LLM that always throws — for testing error paths. */
-export function createFailingLLM(message = 'simulated LLM failure'): LLM {
-  return {
-    async *stream() { yield ''; throw new Error(message); },
-    async complete(): Promise<string> { throw new Error(message); },
-  };
-}
-
 /** An LLM that returns canned JSON, with retries on schema mismatch. Pair
  *  with structured-output tests (auto-judge, curriculum, sleep-time, eval). */
 export function createJSONLLM(payload: unknown): LLM {

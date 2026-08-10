@@ -91,6 +91,6 @@ export {
   buildChangelog, countUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
-  type ChangelogRevertAction, type ChangelogRevertType,
+  type ChangelogRevertAction,
   type ChangelogRevertContext, type ChangelogRevertResult,
 } from './changelog.js';

@@ -1,7 +1,6 @@
 /**
  * Periodic CraftStore consolidation — retire stale tools.
  *
- * Architecture reference: final-architecture.md §6
  * Formal spec: Evolution/FullCraftLifecycle.lean — consolidation_never_empties,
  * consolidation_nonincreasing, below_threshold_filtered
  *

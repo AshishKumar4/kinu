@@ -12,7 +12,6 @@
  * Tool surface composes from `(headTrust, phase, role)` as a pure function —
  * never via prompt instructions. The runtime is the gate.
  *
- * See `docs/EVENTS-HUB-SPEC.md` for the authoritative spec.
  */
 
 // ── Trust ────────────────────────────────────────────────────────
@@ -482,8 +481,6 @@ export type TriggerKind =
   | 'peer_inbox'
   | 'mcp_route'
   | 'email_route';   // per-agent inbound-email allowlist (owner is always allowed)
-
-export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
 
 export interface TriggerRow {
   id: TriggerId;

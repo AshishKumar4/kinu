@@ -1,7 +1,6 @@
 /**
  * Record a new MCTS node in both search_nodes SQL table and Session message tree.
  *
- * Architecture reference: final-architecture.md §5.3
  *
  * CRITICAL: SessionMessage uses `parts: SessionMessagePart[]`, NOT `content: string`.
  * The architecture doc's v1 used `content: "..."` which is a TYPE ERROR.

@@ -34,7 +34,7 @@ export {
 
 export { initHeadsTables } from './schema.js';
 export { HeadJournal, type HeadJournalRow, type LiveHeadRun } from './journal.js';
-export { MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
+export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
 export {
   HeadController,
   type HeadRuntime,

@@ -69,7 +69,7 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, reasoningEffortOptions, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  effortFor, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   isReasoningEffort, type ReasoningEffort,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
@@ -136,7 +136,6 @@ import {
 import type { CodemodeProvider } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
-import type { UserDO } from "./user/user-do.js";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
 import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
 import {
@@ -1358,7 +1357,7 @@ export class OrchestratorAgent extends ActorAgent {
     // constructs the engine, and the legacy CHECK would reject the insert.
     initTurnOutcomeTables(execRaw, this.boundSql);
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
+    // + partial indexes + views.
     initEventsHubTables(this.ctx.storage.sql);
     initWebhookRateLimitTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
@@ -3347,7 +3346,6 @@ export class OrchestratorAgent extends ActorAgent {
    *     memory copied, agent_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, craft_scores RESET
    *
-   * See docs/THINK-UPGRADE-AND-FORKING.md §6 for the full spec.
    */
   @callable()
   async forkAgent(

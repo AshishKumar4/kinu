@@ -9,7 +9,7 @@
 // merge LLM runs in this process.
 //
 // The tool surface is the SAME backend-agnostic buildHeadToolSet the cf Facet
-// uses: `run` + `execute_tools` + `web_*` (the parent's vocabulary, so a fork's
+// uses: `run` + `execute_tools` + `web` (the parent's vocabulary, so a fork's
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 

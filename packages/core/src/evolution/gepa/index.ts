@@ -10,7 +10,6 @@
  * eval + promotion pipeline. Complementary to the runtime mutable-scaffold
  * loop; not a replacement.
  *
- * Spec: docs/COMPETITIVE-ANALYSIS-2026-05-29.md §3.
  * Paper: Agrawal et al., ICLR 2026 — https://arxiv.org/abs/2507.19457
  */
 

@@ -1,7 +1,5 @@
 /**
  * CraftStore conflict detection and upsert.
- *
- * Architecture reference: final-architecture.md §6
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

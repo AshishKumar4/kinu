@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/cache-breakpoints.ts b/packages/core/src/prompting/cache-breakpoints.ts
-index 921dfdf..3a0a825 100644
+index 0b70f4a..b5a15f5 100644
 --- a/packages/core/src/prompting/cache-breakpoints.ts
 +++ b/packages/core/src/prompting/cache-breakpoints.ts
-@@ -52,7 +52,7 @@ export type PromptCacheStrategy =
+@@ -85,7 +85,7 @@ export type PromptCacheStrategy =
   *  spent on the tool surface (markLastToolForAnthropicCache), one on the
   *  system prompt, and the remaining two roll on the message tail. */
  export const ANTHROPIC_MAX_BREAKPOINTS = 4;
 -const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 2;
 +const TAIL_BREAKPOINTS = ANTHROPIC_MAX_BREAKPOINTS - 1;
  
- const EPHEMERAL = { type: 'ephemeral' } as const;
- 
+ /** One `cache_control` block. The TTL is omitted for the short default so the
+  *  wire bytes match a request that never asked about retention. */

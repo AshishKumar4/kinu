@@ -44,7 +44,7 @@ import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
 import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
-import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
+import { createAgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";

@@ -953,7 +953,6 @@ export abstract class ActorAgent extends Think<Env> {
   //   - EventLog        publish/pending/defer/dismiss/query
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
-  // Spec: docs/EVENTS-HUB-SPEC.md
   private _eventLog: import('@proteus/core').EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
