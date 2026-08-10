@@ -2,11 +2,20 @@
 // Core types for @proteus/agent-utils
 // ---------------------------------------------------------------------------
 
-/** Primitive types accepted by Durable Object SQL. */
+/**
+ * The one SQL primitive in the repo. Core re-exports these from
+ * `types/primitives.ts` as part of its portability layer — the definition
+ * lives here because `agent-utils` is the bottom of the package DAG and core
+ * already depends on it, so this is the only place a single definition can sit.
+ */
+
+/** Primitive types a bound value may take. */
 export type SqlValue = string | number | boolean | null | ArrayBuffer;
 
 /**
- * Tagged-template SQL executor compatible with the Agents SDK `Agent.sql`.
+ * Tagged-template SQL executor. The Agents SDK `Agent.sql`, Durable Object
+ * SQLite and better-sqlite3 all satisfy it. For DDL (CREATE TABLE etc), which
+ * binds nothing, core declares a separate `RawSqlExec`.
  *
  * Obtain from any Agent subclass via `this.sql.bind(this) as SqlExecutor`.
  */

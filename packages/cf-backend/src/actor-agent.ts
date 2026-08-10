@@ -124,8 +124,8 @@ import type { AgentProviderRegistry } from "./providers/agent-registry.js";
 import { OwnedModelServices } from "./owned-model-services.js";
 import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
-  resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
-  hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
+  promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
+  type PromptCacheStrategy,
 } from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
@@ -364,7 +364,7 @@ export abstract class ActorAgent extends Think<Env> {
    * trusted worker callers while denying the same method to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
 
-  override maxSteps = resolveMaxSteps();
+  override maxSteps = resolveMaxSteps(this.env.PROTEUS_MAX_STEPS);
 
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
@@ -953,6 +953,7 @@ export abstract class ActorAgent extends Think<Env> {
   //   - EventLog        publish/pending/defer/dismiss/query
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
+  // Spec: docs/ARCHITECTURE.md — "Events and ingress"
   private _eventLog: import('@proteus/core').EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
@@ -1957,17 +1958,25 @@ export abstract class ActorAgent extends Think<Env> {
       ? [...effectiveActiveTools, ...extensionToolNames]
       : effectiveActiveTools;
 
-    // Prompt-cache plan for this turn (core prompting/cache-breakpoints.ts).
-    // Request-level cache routing (prompt_cache_key / promptCacheKey) rides
-    // TurnConfig.providerOptions; the cache-eligible system message + rolling
-    // tail breakpoints for marker providers (Anthropic) ride beforeStep —
-    // PrepareStepResult carries typed system/messages overrides for every
-    // step's request, whereas TurnConfig.system is string-typed.
-    const cacheStrategy = resolvePromptCacheStrategy(model.provider, model.id, this.config.getCacheRetention());
-    this._turnCachePlan = hasCacheMarkers(cacheStrategy)
-      ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
+    // Prompt-cache plan for this turn — the same core derivation `runChat`
+    // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
+    // strategy resolution, system eligibility or routing reaches both loops.
+    // Only the message tail differs: request-level cache routing rides
+    // TurnConfig.providerOptions, while the cache-eligible system message and
+    // the rolling tail breakpoints for marker providers (Anthropic) ride
+    // beforeStep — PrepareStepResult carries typed system/messages overrides
+    // for every step's request, whereas TurnConfig.system is string-typed.
+    const cachePlan = promptCachePlan({
+      providerId: model.provider,
+      modelId: model.id,
+      system: systemOverride,
+      sessionKey: this.ownedModelServices.affinityKey,
+      retention: this.config.getCacheRetention(),
+    });
+    this._turnCachePlan = hasCacheMarkers(cachePlan.strategy)
+      ? { strategy: cachePlan.strategy, system: cachePlan.system }
       : null;
-    const cacheOptions = promptCacheOptions(cacheStrategy, this.ownedModelServices.affinityKey);
+    const cacheOptions = cachePlan.providerOptions;
     const reasoningOptions = reasoningEffortOptions(
       this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat,
       this.effectiveModelProviderFamily(),

@@ -47,7 +47,6 @@ export {
   initProductChangeTables,
   productChangeSqlFromExec,
   type ProductChangeBoard,
-  type ProductChangeSqlExec,
   type ProductChangeSqlStore,
   type ProductChangeStoreOptions,
   type ProductSourceBindingInput,

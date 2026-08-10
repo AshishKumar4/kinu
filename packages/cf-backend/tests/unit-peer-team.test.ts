@@ -11,13 +11,10 @@ import {
   EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch, nextAlarmTime,
   eventContentPath, renderForLLM,
   type ReplyDispatcher, type ReplyChannelKind, type PeerAgentPayload,
+  type SqlExec,
 } from '@proteus/core';
 import { createMemoryVfs } from '@proteus/test-utils';
 import { PeerHub, type PeerMessage, type ReceiveResult } from '../src/events/ingress/peer.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');

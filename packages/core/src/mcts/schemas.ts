@@ -1,5 +1,6 @@
 /**
  * MCTS SQL schemas — the DDL for the search tree.
+ * Architecture reference: docs/MCTS.md — "search_nodes Table".
  *
  * BUG-1 FIX: value defaults to 0, NOT 0.5.
  * Formal spec: MCTS/Backpropagation.lean:initial_valid (the value=0 initial state is Valid).

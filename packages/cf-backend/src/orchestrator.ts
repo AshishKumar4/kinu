@@ -132,7 +132,7 @@ import {
   createTeamToolDeps,
   normalizeReportContent,
   type SubordinatesChangedEvent,
-} from "./subordinate-support.js";
+} from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
@@ -1357,7 +1357,7 @@ export class OrchestratorAgent extends ActorAgent {
     // constructs the engine, and the legacy CHECK would reject the insert.
     initTurnOutcomeTables(execRaw, this.boundSql);
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + partial indexes + views.
+    // + partial indexes + views. Spec: docs/ARCHITECTURE.md — "Events and ingress".
     initEventsHubTables(this.ctx.storage.sql);
     initWebhookRateLimitTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
@@ -3346,6 +3346,7 @@ export class OrchestratorAgent extends ActorAgent {
    *     memory copied, agent_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, craft_scores RESET
    *
+   * See docs/WORKSPACES.md for the full spec.
    */
   @callable()
   async forkAgent(
@@ -3904,16 +3905,6 @@ export class OrchestratorAgent extends ActorAgent {
       return published;
     });
     if (result.admitted) {
-      this.broadcast(JSON.stringify({
-        type: 'subordinate_report',
-        subordinate: {
-          name: subordinate.name,
-          displayName: subordinate.displayName,
-        },
-        status: input.status,
-        content: input.content,
-        task: subordinate.currentTask,
-      }));
       this.broadcastSubordinatesChanged();
       this.broadcastSubordinateEvent({
         id: result.id,

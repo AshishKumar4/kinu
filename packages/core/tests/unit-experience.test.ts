@@ -28,12 +28,12 @@ import {
   recordLesson,
   type ExperienceEntry,
   type ExperienceLibraryStore,
-  type ExperienceSqlExec,
+  type SqlExec,
 } from '../src/index.js';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
-function sqlExec(db: Database): ExperienceSqlExec {
+function sqlExec(db: Database): SqlExec {
   return {
     exec(query: string, ...bindings: unknown[]) {
       const statement = db.prepare(query);

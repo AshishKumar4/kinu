@@ -6,6 +6,7 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
+  type SqlExec,
 } from '@proteus/core';
 import {
   agentEmailAddress, agentNameFromRecipient, normalizeEmailAddress,
@@ -13,10 +14,6 @@ import {
 } from '../src/email/inbound.js';
 import { acceptInboundEmail, type EmailIngressDeps, type IncomingEmail } from '../src/events/ingress/email.js';
 import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');

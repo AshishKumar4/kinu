@@ -38,12 +38,7 @@ import { dedupeKeyFor } from './dedupe.js';
 import { deriveFields } from './trust.js';
 import { applyVisibilityForStorage } from './visibility.js';
 import { ulid } from './ulid.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
+import type { SqlExec } from '../../types/primitives.js';
 
 const EVENT_SCHEMA_VERSION = 1;
 

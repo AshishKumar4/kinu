@@ -1,5 +1,6 @@
 /**
  * CraftStore quality tracking schema.
+ * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
  *
  * NOTE: Must stay in sync with packages/core/src/identity/schema.ts
  * (the unified schema). Both are safe because of IF NOT EXISTS.

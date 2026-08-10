@@ -22,7 +22,6 @@ export {
   initExperienceLibraryTables,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-  type ExperienceSqlExec,
 } from './library.js';
 
 export {

@@ -54,24 +54,3 @@ export function toCraftedToolSource(t: CraftedTool): CraftedToolSource | null {
   if (!t.code || t.code.startsWith('//')) return null;
   return { name: t.name, description: t.description ?? `Crafted tool: ${t.name}`, code: t.code };
 }
-
-/**
- * Platform detection helper. True on CF Workers runtime (V8 isolate with
- * codegen disallowed). Implementations in the adapter layer MUST check
- * this only as an optimisation hint — the authoritative signal is whether
- * `env.LOADER` is bound, which is what the CF adapter actually uses.
- *
- * Returns `false` on Node/Bun, where codegen is allowed. Safe to call in any
- * runtime — does not itself invoke any codegen primitive.
- */
-export function codegenDisallowed(): boolean {
-  // Workers expose `navigator.userAgent === "Cloudflare-Workers"` in most
-  // contexts; fall through to feature-probing via typeof tests if not present.
-  // We do NOT probe via codegen because that would throw synchronously in the
-  // runtime we're trying to detect.
-  const nav = (globalThis as { navigator?: { userAgent?: string } }).navigator;
-  if (typeof nav?.userAgent === 'string' && nav.userAgent.includes('Cloudflare-Workers')) {
-    return true;
-  }
-  return false;
-}

@@ -11,10 +11,8 @@ import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types
 import type { AgentSignal } from '../src/types/signals.js';
 import type { EvolutionEngine } from '../src/evolution/engine.js';
 import type { CompletedTurn } from '../src/evolution/types.js';
+import type { SqlExec } from '../src/index.js';
 
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 function makeSql(): SqlExec {
   const db = new Database(':memory:');
   return {

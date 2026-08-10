@@ -10,7 +10,7 @@
  * (never thrown) so they survive the Worker→DO RPC boundary with their
  * meaning intact; thrown errors are real infra failures.
  */
-import { nanoid } from '@proteus/core';
+import { nanoid, type SqlExec } from '@proteus/core';
 import { sha256Hex } from '../lib/crypto.js';
 
 // Scopes renamed from agent.read/agent.exec with no back-compat migration by
@@ -20,10 +20,6 @@ export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.prox
 export type AccessTokenScope = (typeof ACCESS_TOKEN_SCOPES)[number];
 
 const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
-
-export interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 export interface AccessTokenRecord {
   tokenHash: string;

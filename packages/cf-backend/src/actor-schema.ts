@@ -12,20 +12,14 @@ import {
   initSearchTables,
   initTurnOutcomeTables,
   type SqlExecutor,
+  type SqlExec,
 } from '@proteus/core';
-
-/** Structural subset shared by Cloudflare Durable Object SQLite and tests. */
-export interface ActorSchemaSqlStorage {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
 
 /** Initialize the durable tables required by ActorAgent itself. Workspace-only
  * concerns (identity, fork lineage, webhooks, roster, curriculum, GEPA,
  * product changes, and UI feedback) remain with OrchestratorAgent. */
 export function ensureActorSchema(
-  storageSql: ActorSchemaSqlStorage,
+  storageSql: SqlExec,
   sql: SqlExecutor,
 ): void {
   const execRaw = (ddl: string): void => { storageSql.exec(ddl); };

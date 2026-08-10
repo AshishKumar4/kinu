@@ -38,7 +38,7 @@ import {
   describeSubordinateHandoff,
   readSubordinateLiveStatus,
   type SubordinateLiveStatus,
-} from './subordinate-support.js';
+} from '@proteus/core';
 
 export interface SetSubordinateIdentityInput {
   name: string;

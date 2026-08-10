@@ -1,6 +1,8 @@
 /**
  * Configuration system — all tunable parameters with sensible defaults.
  * Zero hardcoded secrets. All credentials come from the caller.
+ *
+ * Tuning constants: docs/MCTS.md and docs/EVOLUTION.md document what each one does.
  */
 
 /** MCTS search parameters */
@@ -115,8 +117,25 @@ export const DEFAULT_CONFIG: AgentConfig = {
   },
 };
 
-/** Resolve maxSteps from env or default */
-export function resolveMaxSteps(): number {
-  const env = process.env.PROTEUS_MAX_STEPS;
-  return env ? parseInt(env, 10) : DEFAULT_MAX_STEPS;
+/** Deep-merge user config over defaults */
+export function mergeConfig(overrides?: Partial<AgentConfig>): AgentConfig {
+  if (!overrides) return DEFAULT_CONFIG;
+  return {
+    maxSteps: overrides.maxSteps ?? DEFAULT_CONFIG.maxSteps,
+    mcts: { ...DEFAULT_CONFIG.mcts, ...overrides.mcts },
+    heads: { ...DEFAULT_CONFIG.heads, ...overrides.heads },
+    craftStore: { ...DEFAULT_CONFIG.craftStore, ...overrides.craftStore },
+    scaffold: { ...DEFAULT_CONFIG.scaffold, ...overrides.scaffold },
+  };
+}
+
+/**
+ * Resolve the step budget from a backend-supplied setting.
+ *
+ * The setting itself lives on the host — a shell variable on the CLI, a Worker
+ * var on Cloudflare — so the backend reads it and passes it in. Core owns only
+ * the interpretation, which is why there is one parser and not one per backend.
+ */
+export function resolveMaxSteps(configured?: string | null): number {
+  return configured ? parseInt(configured, 10) : DEFAULT_MAX_STEPS;
 }

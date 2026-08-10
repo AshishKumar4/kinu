@@ -7,6 +7,7 @@
  *   data:        types, schema, ulid, dedupe, trust, visibility
  *   storage:     log (EventLog), reply-channel, triggers
  *
+ * Spec: docs/ARCHITECTURE.md — "Events and ingress"
  */
 
 // Data

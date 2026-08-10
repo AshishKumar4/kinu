@@ -12,10 +12,7 @@ import {
 import { assertProductChangeTransition } from './lifecycle.js';
 import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest.js';
 import { redactProductDiff } from './path-safety.js';
-
-export interface ProductChangeSqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import type { SqlExec } from '../types/primitives.js';
 
 export interface ProductChangeSqlStore {
   all<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): T[];
@@ -46,7 +43,7 @@ export interface ProductChangeBoard {
   deployments: ProductDeploymentRecord[];
 }
 
-export function productChangeSqlFromExec(sql: ProductChangeSqlExec): ProductChangeSqlStore {
+export function productChangeSqlFromExec(sql: SqlExec): ProductChangeSqlStore {
   return {
     all<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): T[] {
       return sql.exec(query, ...bindings).toArray() as T[];
@@ -57,7 +54,7 @@ export function productChangeSqlFromExec(sql: ProductChangeSqlExec): ProductChan
   };
 }
 
-export function initProductChangeTables(sql: ProductChangeSqlExec): void {
+export function initProductChangeTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS product_source_bindings (
       id              TEXT PRIMARY KEY,

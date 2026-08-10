@@ -9,6 +9,7 @@ import {
   initEventsHubTables, EventLog, ReplyChannelStore,
   AgentOrchestrator,
   type BackendHost, type EvolutionEngine,
+  type SqlExec,
 } from '@proteus/core';
 import { acceptInboundEmail } from '../src/events/ingress/email.js';
 import {
@@ -16,10 +17,6 @@ import {
   threadingHeaders,
 } from '../src/email/outbound.js';
 import { EmailOutbox } from '../src/email/outbox.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');

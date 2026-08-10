@@ -14,6 +14,7 @@ import {
   revokeAccessToken,
   verifyAccessToken,
 } from '../src/cli/access-token-store.js';
+import type { SqlExec } from '@proteus/core';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 

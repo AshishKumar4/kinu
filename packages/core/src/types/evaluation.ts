@@ -1,5 +1,6 @@
 /**
  * Evaluation types — results from MCTS exploration, convergence, cost estimates.
+ * Architecture reference: docs/MCTS.md — "Scoring", "Pruning and convergence"
  */
 
 export interface ConvergenceResult {

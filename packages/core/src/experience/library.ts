@@ -24,12 +24,9 @@ import {
   type ExperienceKind,
   type PublishableCandidate,
 } from './types.js';
+import type { SqlExec } from '../types/primitives.js';
 
-export interface ExperienceSqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
-
-export function initExperienceLibraryTables(sql: ExperienceSqlExec): void {
+export function initExperienceLibraryTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS experience_library (
       id               TEXT PRIMARY KEY,
@@ -133,7 +130,7 @@ function ftsQuery(query: string): string | null {
   return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
 }
 
-export function createExperienceLibrary(sql: ExperienceSqlExec): ExperienceLibraryStore {
+export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
   const rows = (query: string, ...bindings: unknown[]): LibraryRow[] =>
     sql.exec(query, ...bindings).toArray() as LibraryRow[];
 

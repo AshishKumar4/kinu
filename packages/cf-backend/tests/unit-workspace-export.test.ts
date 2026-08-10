@@ -14,14 +14,14 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive,
-  type ArchiveCursor, type ArchiveSql,
+  type ArchiveCursor, type SqlExec,
 } from '@proteus/core';
 import {
   AGENT_RPC_ACCESS, cliScopesConnectionTag, rejectOutOfScopeRpc, requiredRpcAccess,
 } from '../src/cli/rpc-gate.js';
 
 /** A workspace whose storage is reached exactly as the DO reaches its own. */
-function workspace(): { sql: ArchiveSql; db: Database } {
+function workspace(): { sql: SqlExec; db: Database } {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY, token TEXT NOT NULL)`);
@@ -35,7 +35,7 @@ function workspace(): { sql: ArchiveSql; db: Database } {
 }
 
 /** What the CLI and the browser both do: walk `next` until it is null. */
-function drain(sql: ArchiveSql, maxBytes: number): { lines: string[]; pages: number } {
+function drain(sql: SqlExec, maxBytes: number): { lines: string[]; pages: number } {
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
   let pages = 0;

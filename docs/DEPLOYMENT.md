@@ -267,7 +267,7 @@ exhausted budget returns the original response rather than throwing.
 | `PROTEUS_MODEL` | CLI shell env | Override local agent model |
 | `PROTEUS_SOURCE_TARBALL` | CLI shell env | Advanced installer/update source override |
 | `PROTEUS_SOURCE_SHA256` | CLI shell env | Pin a SHA-256 for the source tarball (default: published `.sha256` asset, always verified) |
-| `PROTEUS_MAX_STEPS` | Shell env | Max tool-call steps (default: 500) |
+| `PROTEUS_MAX_STEPS` | CLI shell env / wrangler env var | Max tool-call steps (default: 500) |
 
 ## Wrangler Bindings
 

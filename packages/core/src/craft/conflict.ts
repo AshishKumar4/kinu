@@ -1,5 +1,7 @@
 /**
  * CraftStore conflict detection and upsert.
+ *
+ * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

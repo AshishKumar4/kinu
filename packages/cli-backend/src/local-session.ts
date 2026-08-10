@@ -78,7 +78,7 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
   isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort, type CacheRetention,
+  type ReasoningEffort, type CacheRetention, type SqlExec,
 } from '@proteus/core';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -1401,7 +1401,7 @@ export class LocalAgentSession implements BackendHost {
       tools: turnTools,
       ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
       transformTrigger,
-      maxSteps: resolveMaxSteps(),
+      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       signal: abort.signal,
       extensions,
       cache,
@@ -1765,7 +1765,7 @@ export class LocalAgentSession implements BackendHost {
         system: opts.system,
         history: [{ role: 'user', content: opts.task.slice(0, 2000) }],
         tools: opts.tools,
-        maxSteps: resolveMaxSteps(),
+        maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       }),
     });
     if (result?.applied) {
@@ -1837,7 +1837,7 @@ export class LocalAgentSession implements BackendHost {
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
    *  over THIS turn's tool surface. */
   private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps() });
+    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS) });
   }
 
   /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
@@ -2168,10 +2168,8 @@ function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: Readonl
 
 export { serializeContentForHeads } from '@proteus/core';
 
-/** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */
-function makeHubSql(db: LocalSessionDb): {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-} {
+/** Adapt a bun:sqlite handle to core's SqlExec primitive (DO storage.sql). */
+function makeHubSql(db: LocalSessionDb): SqlExec {
   return {
     exec(query, ...bindings) {
       const stmt = db.prepare(query);

@@ -1,14 +1,10 @@
-import { initExperienceLibraryTables, initProductChangeTables } from '@proteus/core';
-import { initAccessTokenTable } from '../cli/access-token-store.js';
-import { initWorkspaceCapabilityTables } from './workspace-capability.js';
-
 // UserDO SQL schema. All tables live inside a single Durable Object instance
 // keyed by the stable Proteus userId resolved by the D1 auth store.
 // Idempotent — safe to call on every DO boot.
 
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import { initExperienceLibraryTables, initProductChangeTables, type SqlExec } from '@proteus/core';
+import { initAccessTokenTable } from '../cli/access-token-store.js';
+import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
 /** One-shot migration ledger version. Bump it when adding a migration that
  *  must run exactly once (anything destructive or shape-changing); the

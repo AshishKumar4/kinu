@@ -329,36 +329,56 @@ export function promptCacheOptions(strategy: PromptCacheStrategy, sessionKey: st
   }
 }
 
-export interface CacheBreakpointInput {
+export interface PromptCachePlanInput {
   /** Registry provider id the model spec resolved through. */
   providerId?: string;
   modelId?: string;
   system: string;
-  messages: ReadonlyArray<ModelMessage>;
   /** Stable per-conversation cache key. */
   sessionKey: string;
   /** How long the provider should keep this turn's prefix. Default `short`. */
   retention?: CacheRetention;
 }
 
-export interface CacheBreakpointPlan {
+export interface PromptCachePlan {
   strategy: PromptCacheStrategy;
   system: string | SystemModelMessage;
-  messages: ModelMessage[];
   providerOptions?: ProviderOptions;
 }
 
-/** One-call turn assembly: strategy + cache-eligible system + marked tail +
- *  request-level cache routing. `none` strategies pass everything through
- *  untouched (system stays a plain string). */
-export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpointPlan {
+export interface CacheBreakpointInput extends PromptCachePlanInput {
+  messages: ReadonlyArray<ModelMessage>;
+}
+
+export interface CacheBreakpointPlan extends PromptCachePlan {
+  messages: ModelMessage[];
+}
+
+/**
+ * The turn-level half of prompt caching: which strategy this model gets, the
+ * system prompt in a cache-eligible position, and the request-level routing
+ * key. Every loop needs all three regardless of its shape, so this is the one
+ * place they are derived — the message tail is the part that differs, because
+ * where a loop can put its messages depends on the loop.
+ */
+export function promptCachePlan(input: PromptCachePlanInput): PromptCachePlan {
   const strategy = resolvePromptCacheStrategy(input.providerId, input.modelId, input.retention);
   return {
     strategy,
     system: cacheableSystem(input.system, strategy),
-    messages: markCacheTail(input.messages, strategy),
     providerOptions: promptCacheOptions(strategy, input.sessionKey),
   };
+}
+
+/** {@link promptCachePlan} plus the marked message tail, for a loop that hands
+ *  its messages to the SDK at turn assembly (`runChat`). A driver whose turn
+ *  channel cannot carry them — Think's string-typed `TurnConfig.system`, whose
+ *  messages get their markers per step in `composePrepareStep` — calls
+ *  `promptCachePlan` directly rather than pay for a marking pass it discards.
+ *  `none` strategies pass everything through untouched. */
+export function applyCacheBreakpoints(input: CacheBreakpointInput): CacheBreakpointPlan {
+  const plan = promptCachePlan(input);
+  return { ...plan, messages: markCacheTail(input.messages, plan.strategy) };
 }
 
 /**

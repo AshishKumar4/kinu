@@ -11,6 +11,7 @@
  *               `toolAllowedBySkills`
  *   - tool:     `runSkillsAction`, `SkillsToolDeps`, `SkillsToolOutcome`
  *
+ * Claude-Code SKILL.md compatible.
  */
 
 export * from './types.js';

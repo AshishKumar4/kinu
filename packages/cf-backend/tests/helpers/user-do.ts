@@ -7,15 +7,12 @@
 import { Database } from 'bun:sqlite';
 import { mockAgentsSdk } from './agents-sdk.js';
 import { sha256Hex } from '../../src/lib/crypto.js';
+import type { SqlExec } from '@proteus/core';
 
 mockAgentsSdk();
 
 const { UserDO } = await import('../../src/user/user-do.js');
 type UserDOInstance = InstanceType<typeof UserDO>;
-
-export interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 /** A `SqlExec` over bun:sqlite — the same seam the Durable Object provides. */
 export function sqlExec(db: Database): SqlExec {

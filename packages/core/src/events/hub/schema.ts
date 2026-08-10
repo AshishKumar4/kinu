@@ -16,9 +16,7 @@
  * The DDL is idempotent. Safe to call on every DO boot.
  */
 
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import type { SqlExec } from '../../types/primitives.js';
 
 const AGENT_LOG_DDL = `
 CREATE TABLE IF NOT EXISTS agent_log (

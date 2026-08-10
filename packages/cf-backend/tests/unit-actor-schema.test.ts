@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import type { SqlExecutor, SqlValue } from '@proteus/core';
-import { ensureActorSchema, type ActorSchemaSqlStorage } from '../src/actor-schema.js';
+import type { SqlExecutor, SqlValue, SqlExec } from '@proteus/core';
+import { ensureActorSchema } from '../src/actor-schema.js';
 
 function toBinding(value: unknown): SQLQueryBindings {
   if (value instanceof ArrayBuffer) return new Uint8Array(value);
@@ -12,10 +12,10 @@ function toBinding(value: unknown): SQLQueryBindings {
 }
 
 function createSql(db: Database): {
-  storage: ActorSchemaSqlStorage;
+  storage: SqlExec;
   tagged: SqlExecutor;
 } {
-  const storage: ActorSchemaSqlStorage = {
+  const storage: SqlExec = {
     exec(query, ...bindings) {
       const statement = db.prepare(query);
       const sqlBindings = bindings.map(toBinding);

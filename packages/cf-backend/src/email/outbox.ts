@@ -18,11 +18,7 @@
  *      re-send (deduped downstream), not a blind new message.
  */
 
-import { argumentDigest } from '@proteus/core';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import { argumentDigest, type SqlExec } from '@proteus/core';
 
 /** A rendered outbound message — exactly the `send_email` binding's payload. */
 export interface OutboundEmailMessage {

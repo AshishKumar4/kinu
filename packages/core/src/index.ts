@@ -19,7 +19,7 @@ export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
   type ArchiveCursor, type ArchiveExportOptions, type ArchivePage,
-  type ArchiveRestoreResult, type ArchiveSql,
+  type ArchiveRestoreResult,
 } from './identity/archive.js';
 export {
   WORKSPACE_IDENTITY_SYSTEM_PROMPT,
@@ -188,7 +188,6 @@ export {
   type ProductChangeExec,
   type ProductChangeLedger,
   type ProductChangeRequest,
-  type ProductChangeSqlExec,
   type ProductChangeSqlStore,
   type ProductChangeStatus,
   type ProductChangeStoreOptions,
@@ -218,7 +217,6 @@ export {
   type ExperienceLibraryStore,
   type ExperiencePayload,
   type ExperienceSearchOptions,
-  type ExperienceSqlExec,
   type ImportStatus,
   type ImportedExperienceRow,
   type PublishRefusal,
@@ -331,6 +329,23 @@ export {
 } from './tools/agents-tool.js';
 // The same delegation dispatch, projected into the codemode sandbox.
 export { createAgentsCodemodeProvider } from './tools/agents-codemode.js';
+// Subordinate roster, identity, admission and the orchestration policy over
+// them — platform-neutral, so a backend supplies only SubordinateRuntime.
+export {
+  SubordinateIdentityStore,
+  SubordinateRosterStore,
+  admitSubordinateReport,
+  admitSubordinateTask,
+  createTeamToolDeps,
+  describeSubordinateHandoff,
+  normalizeReportContent,
+  readSubordinateLiveStatus,
+  renderSubordinateInheritedContext,
+  type SubordinateIdentity,
+  type SubordinateLiveStatus,
+  type SubordinateRuntime,
+  type SubordinatesChangedEvent,
+} from './subordinates/support.js';
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,
@@ -354,7 +369,6 @@ export {
   type ClampToolResultOptions,
 } from './tools/clamp.js';
 export {
-  codegenDisallowed,
   toCraftedToolSource,
   type CraftedToolExecute,
   type CraftedToolExecuteFn,
@@ -425,6 +439,7 @@ export {
   markCacheTail,
   markLastToolForAnthropicCache,
   promptCacheOptions,
+  promptCachePlan,
   resolvePromptCacheStrategy,
   isCacheRetention,
   ANTHROPIC_MAX_BREAKPOINTS,
@@ -433,6 +448,8 @@ export {
   type CacheBreakpointInput,
   type CacheBreakpointPlan,
   type CacheRetention,
+  type PromptCachePlan,
+  type PromptCachePlanInput,
   type PromptCacheStrategy,
 } from './prompting/cache-breakpoints.js';
 export {
@@ -698,7 +715,7 @@ export {
 
 // EventsHub — events / triggers / turn runner / reply channels.
 // Builds the agent_log ledger plus the trust, channel, trigger and budget
-// primitives around it.
+// primitives around it. Spec: docs/ARCHITECTURE.md — "Events and ingress".
 export * from './events/hub/index.js';
 
 // ExplorationStrategy — single seam for "search candidate continuations,

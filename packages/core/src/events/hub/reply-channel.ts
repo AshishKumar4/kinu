@@ -21,12 +21,7 @@ import {
   type ReplyChannelState, type EventId, type PayloadPolicy,
 } from './types.js';
 import { ulid } from './ulid.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
+import type { SqlExec } from '../../types/primitives.js';
 
 const TTL_MS: Record<Exclude<ReplyChannelKind, 'none'>, number> = {
   ws_session: 0,          // 0 → bound to holder, no clock-based expiry

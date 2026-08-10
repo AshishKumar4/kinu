@@ -15,7 +15,7 @@
 import type {
   AgentRuntime, BranchHandle,
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
-  SqlExecutor as CoreSqlExecutor, RawSqlExec,
+  SqlExecutor, RawSqlExec,
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
@@ -38,7 +38,6 @@ import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
 import { createShell } from "@proteus/agent-utils/shell";
-import type { SqlExecutor } from "@proteus/agent-utils";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -73,6 +72,16 @@ type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'ab
   readonly env: Env;
   readonly ctx: DurableObjectState;
 };
+
+/**
+ * The one bridge between the Agents SDK's `Agent.sql` and the SqlExecutor
+ * primitive. The SDK types its bound values as scalars only, so it does not
+ * nominally satisfy a primitive that admits ArrayBuffer — an assertion is
+ * unavoidable, and this is the single place it is made.
+ */
+function boundSql(agent: AgentHost): SqlExecutor {
+  return agent.sql.bind(agent) as unknown as SqlExecutor;
+}
 
 /**
  * The actor's identity bootstrap + exec-plane keying — the two things that
@@ -151,7 +160,7 @@ export interface CFRuntimeHooks {
  * Build a full AgentRuntime from a Think agent's DO context.
  */
 export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, hooks: CFRuntimeHooks = {}): CFRuntime {
-  const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
+  const sql = boundSql(agent);
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
   // SqliteFS from agent-utils — pure DO SQLite, no R2
@@ -168,7 +177,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const vectorStore = buildVectorStore(agent, actor);
   // Owns the semantic-index completeness markers, read by the backfill and
   // cleared by the write path when a sync fails.
-  const memoryConfig = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
+  const memoryConfig = createAgentConfigStore(sql);
   // One-time backfill of chunks indexed before the vector store existed.
   // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
   // per boot, idempotent, and a no-op once the marker is set.
@@ -197,7 +206,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const executor = createExecutor(envForExec.LOADER);
   const llm = createDualPathLLM(agent, actor);
   const schedule = createRealSchedule(agent);
-  const identity = createIdentity(agent, vfs, sql as unknown as CoreSqlExecutor);
+  const identity = createIdentity(agent, vfs, sql);
 
   // Execution router — manages codemode providers (workspace, nimbus, sandbox, laptop)
   const shell = createShell(sqliteFS);
@@ -205,8 +214,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell,
     // sql is used by workspace.listTools() to look up EMA craft_scores.
-    // Cast bridges the agent SDK's sql binding to core's SqlExecutor shape.
-    sql: sql as unknown as import("@proteus/core").SqlExecutor,
+    sql,
     // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
   }));
@@ -232,7 +240,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
         sandboxId,
         { normalizeId: true },
       ) as unknown as SandboxHandle;
-      const configStore = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
+      const configStore = createAgentConfigStore(sql);
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
@@ -321,7 +329,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   });
 
   return {
-    storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
+    storage: { vfs, sql, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
     judgeModel: createJudgeLLM(agent, actor),
     fastLlm: createFastLLM(agent, actor),
@@ -538,9 +546,7 @@ function createExecutor(loader: unknown): Executor {
 // has switched providers.
 function readStoredModelSpec(agent: AgentHost): string | null {
   // Single canonical path through the typed config store — no raw SQL.
-  return createAgentConfigStore(
-    agent.sql.bind(agent) as unknown as CoreSqlExecutor,
-  ).getModel();
+  return createAgentConfigStore(boundSql(agent)).getModel();
 }
 
 function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
@@ -577,9 +583,7 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
  * `fastLlm` unset and every reader's documented `?? rt.llm` fallback runs.
  */
 function createFastLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM | undefined {
-  const config = createAgentConfigStore(
-    agent.sql.bind(agent) as unknown as CoreSqlExecutor,
-  );
+  const config = createAgentConfigStore(boundSql(agent));
   const registry = createAgentProviderRegistry({
     env: agent.env,
     userDO: userCredentialSourceFor(agent, actor),
@@ -621,9 +625,7 @@ function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
-      const config = createAgentConfigStore(
-        agent.sql.bind(agent) as unknown as CoreSqlExecutor,
-      );
+      const config = createAgentConfigStore(boundSql(agent));
       const registry = createAgentProviderRegistry({
         env: agent.env,
         userDO: userCredentialSourceFor(agent, actor),
@@ -660,7 +662,7 @@ function createRealSchedule(agent: AgentHost): Schedule {
 
 // ── Identity ─────────────────────────────────────────────────────
 
-function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
+function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: SqlExecutor): Identity {
   return {
     id: agent.ctx.id.toString(),
     name: agent.name,

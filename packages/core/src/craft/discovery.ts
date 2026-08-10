@@ -1,5 +1,7 @@
 /**
  * CraftStore tool discovery — extract reusable patterns from winning branches.
+ *
+ * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
  */
 
 import type { AgentRuntime } from '../types/agent-runtime.js';

@@ -43,16 +43,13 @@ import {
   type ReasoningEffort,
   readSoul,
   summarizeSoul,
+  type SqlExec,
 } from '@proteus/core';
 import { makeSql, createHostShell } from '@proteus/cli-backend';
 import { agentDbPath } from './config.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 type SqliteDb = Database;
-
-type HubSql = {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-};
 
 export interface LocalMctsNodeDetail {
   id: string;
@@ -799,7 +796,7 @@ const NOOP_ALARM = {
   currentAlarm() { return null; },
 };
 
-function hubSql(db: SqliteDb): HubSql {
+function hubSql(db: SqliteDb): SqlExec {
   return {
     exec(query: string, ...bindings: unknown[]) {
       const stmt = db.query(query);

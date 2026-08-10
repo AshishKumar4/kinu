@@ -30,18 +30,13 @@
 
 import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
 import type { AgentDatabase } from './inline-primitives.js';
+import type { SqlExec } from '../types/primitives.js';
 
-/** Positional-binding SQL seam. Durable Object `ctx.storage.sql` implements it
- *  natively; bun:sqlite is one `db.query(q).all(...)` wrapper away. */
-export interface ArchiveSql {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
-
-/** `ArchiveSql` over a local workspace database (the same `AgentDatabase` seam
+/** `SqlExec` over a local workspace database (the same `AgentDatabase` seam
  *  `wrapDatabase` takes), so the CLI's export and import speak to bun:sqlite
  *  exactly as the Durable Object speaks to its own storage. Statements run
  *  eagerly — DDL and INSERTs have no rows to pull. */
-export function archiveSqlFromDatabase(db: AgentDatabase): ArchiveSql {
+export function archiveSqlFromDatabase(db: AgentDatabase): SqlExec {
   return {
     exec(query, ...bindings) {
       // Canonical BLOBs are ArrayBuffers (DO storage's native type); bun:sqlite
@@ -166,7 +161,7 @@ interface SchemaObject {
  * Recomputed per page — `sqlite_master` is small, and re-reading it is what
  * keeps a resumed page honest about a schema that changed underneath it.
  */
-function readSchema(sql: ArchiveSql): SchemaObject[] {
+function readSchema(sql: SqlExec): SchemaObject[] {
   const rows = sql.exec(
     `SELECT name, type, sql FROM sqlite_master
       WHERE sql IS NOT NULL AND type IN ('table', 'index', 'trigger', 'view')`,
@@ -228,7 +223,7 @@ function quoteIdent(name: string): string {
  * page and with the previous page's `next` thereafter, until `next` is null.
  */
 export function readWorkspaceArchivePage(
-  sql: ArchiveSql,
+  sql: SqlExec,
   opts: ArchiveExportOptions,
 ): ArchivePage {
   const maxBytes = opts.maxBytes ?? DEFAULT_MAX_BYTES;
@@ -324,7 +319,7 @@ export function readWorkspaceArchivePage(
 
 /** Whole archive in one call — for a caller with the database in hand and no
  *  transport in the middle (the local export, and tests). */
-export function writeWorkspaceArchive(sql: ArchiveSql, opts: ArchiveExportOptions): string[] {
+export function writeWorkspaceArchive(sql: SqlExec, opts: ArchiveExportOptions): string[] {
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
   do {
@@ -351,7 +346,7 @@ export interface ArchiveRestoreResult {
  * has to be held in memory, and an FTS index is rebuilt against complete
  * content rather than maintained row by row.
  */
-export function restoreWorkspaceArchive(sql: ArchiveSql, lines: Iterable<string>): ArchiveRestoreResult {
+export function restoreWorkspaceArchive(sql: SqlExec, lines: Iterable<string>): ArchiveRestoreResult {
   let header: ArchiveHeader | null = null;
   let end: EndRecord | null = null;
   const deferred: SchemaRecord[] = [];

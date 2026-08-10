@@ -2,17 +2,22 @@
  * Six abstract primitive interfaces — the portability layer.
  * Everything in the agent core is written against these.
  * Backends (CF Workers / Linux CLI) satisfy them.
+ *
+ * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
  */
 
-export type SqlValue = string | number | boolean | null | ArrayBuffer;
+import type { SqlExecutor } from '@proteus/agent-utils';
 
 /**
- * Tagged-template SQL executor. Both DO sql and better-sqlite3 satisfy this.
- * For DDL (CREATE TABLE etc), use execRaw which accepts a plain string.
+ * The tagged-template SQL primitive. Both DO sql and better-sqlite3 satisfy it.
+ * For DDL (CREATE TABLE etc), use execRaw below, which accepts a plain string.
+ *
+ * Defined in `@proteus/agent-utils` rather than here: core already depends on
+ * that package and it sits at the bottom of the DAG, so it is the only place
+ * one definition can serve both. Re-exported here because this file is the
+ * portability layer a backend author reads.
  */
-export interface SqlExecutor {
-  <T = unknown>(query: TemplateStringsArray, ...values: SqlValue[]): T[];
-}
+export type { SqlValue, SqlExecutor } from '@proteus/agent-utils';
 
 /**
  * Raw SQL execution for DDL statements that don't use parameter binding.
@@ -21,6 +26,22 @@ export interface SqlExecutor {
  */
 export interface RawSqlExec {
   (ddl: string): void;
+}
+
+/**
+ * Positional-binding SQL. Durable Object `ctx.storage.sql` implements it
+ * natively; bun:sqlite is one `db.query(q).all(...)` wrapper away.
+ *
+ * The second SQL primitive, and a deliberate one: a tagged template cannot
+ * express a query whose shape is built at runtime, so the stores holding DDL
+ * and dynamic statements — the events hub, the experience library, the
+ * product-change board, the subordinate roster — speak this instead. Prefer
+ * {@link SqlExecutor} wherever the statement is a literal.
+ */
+export interface SqlExec {
+  exec(query: string, ...bindings: unknown[]): {
+    toArray(): Array<Record<string, unknown>>;
+  };
 }
 
 /**

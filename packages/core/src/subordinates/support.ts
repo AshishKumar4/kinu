@@ -1,17 +1,26 @@
-import {
-  type EventLog,
-  type PublishResult,
-  type SerializedMessage,
-  type SubordinateReportStatus,
-  type SubordinateHandoff,
-  type SubordinateRosterEntry,
-  type SubordinateStatus,
-  type TeamToolDeps,
-} from '@proteus/core';
+/**
+ * Subordinates — roster, identity, admission and the one orchestration policy
+ * behind them.
+ *
+ * Platform-neutral by construction: nothing here touches a Durable Object, a
+ * facet or a local process. A backend supplies the SqlExec primitive and a
+ * SubordinateRuntime (how a subordinate is actually spawned and addressed on
+ * that platform); everything else — status transitions, rollback semantics,
+ * the inherited-context digest, event admission — is the same policy wherever
+ * it runs. Core already owned the vocabulary (tools/agents-tool.ts); this is
+ * the logic that belongs beside it.
+ */
 
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import type { EventLog, PublishResult } from '../events/hub/log.js';
+import type { SubordinateReportStatus } from '../events/hub/types.js';
+import type { SerializedMessage } from '../heads/types.js';
+import type { SqlExec } from '../types/primitives.js';
+import type {
+  SubordinateHandoff,
+  SubordinateRosterEntry,
+  SubordinateStatus,
+  TeamToolDeps,
+} from '../tools/agents-tool.js';
 
 export interface SubordinateLiveStatus {
   lastActivity: number | null;

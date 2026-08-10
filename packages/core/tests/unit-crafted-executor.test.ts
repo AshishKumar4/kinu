@@ -1,5 +1,5 @@
 /**
- * Unit tests: crafted-tool source lifting + runtime codegen detection.
+ * Unit tests: crafted-tool source lifting.
  *
  * `toCraftedToolSource` is the filter standing between the crafted_tools table
  * and the platform executor: whatever it lets through, some adapter will try to
@@ -7,8 +7,8 @@
  * and must not reach a child Worker.
  */
 
-import { describe, test, expect, afterEach } from 'bun:test';
-import { codegenDisallowed, toCraftedToolSource } from '../src/tools/crafted-executor.js';
+import { describe, test, expect } from 'bun:test';
+import { toCraftedToolSource } from '../src/tools/crafted-executor.js';
 import type { CraftedTool } from '../src/types/craft.js';
 
 function tool(patch: Partial<CraftedTool>): CraftedTool {
@@ -63,47 +63,5 @@ describe('toCraftedToolSource', () => {
   test('params and scope are deliberately not carried into the executor shape', () => {
     const source = toCraftedToolSource(tool({ params: { type: 'object' }, scope: 'global' }));
     expect(Object.keys(source!).sort()).toEqual(['code', 'description', 'name']);
-  });
-});
-
-describe('codegenDisallowed', () => {
-  const originalNavigator = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
-
-  afterEach(() => {
-    if (originalNavigator) Object.defineProperty(globalThis, 'navigator', originalNavigator);
-    else delete (globalThis as { navigator?: unknown }).navigator;
-  });
-
-  function setUserAgent(userAgent: string | undefined): void {
-    Object.defineProperty(globalThis, 'navigator', {
-      value: userAgent === undefined ? {} : { userAgent },
-      configurable: true,
-      writable: true,
-    });
-  }
-
-  test('false under Node/Bun, where string compilation is allowed', () => {
-    expect(codegenDisallowed()).toBe(false);
-  });
-
-  test('true when the runtime identifies itself as Cloudflare-Workers', () => {
-    setUserAgent('Cloudflare-Workers');
-    expect(codegenDisallowed()).toBe(true);
-  });
-
-  test('does not itself invoke codegen — safe to call in the runtime it detects', () => {
-    // Probing with `new Function(...)` would throw in the very runtime this is
-    // meant to identify, so detection must stay string-based.
-    setUserAgent('Cloudflare-Workers');
-    expect(() => codegenDisallowed()).not.toThrow();
-  });
-
-  test('an absent or unrelated userAgent is not a false positive', () => {
-    setUserAgent(undefined);
-    expect(codegenDisallowed()).toBe(false);
-    setUserAgent('Mozilla/5.0');
-    expect(codegenDisallowed()).toBe(false);
-    delete (globalThis as { navigator?: unknown }).navigator;
-    expect(codegenDisallowed()).toBe(false);
   });
 });

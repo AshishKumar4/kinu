@@ -1,5 +1,6 @@
 /**
  * MCTS cost estimation — pre-check before running search.
+ * Architecture reference: docs/MCTS.md — "UCT Formula" (budget defaults)
  */
 
 import type { CostEstimate } from '../types/evaluation.js';

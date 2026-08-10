@@ -5,6 +5,7 @@
  * After every turn, session, and periodically at the lifetime level,
  * the engine automatically reflects, discovers patterns, and evolves.
  *
+ * Architecture reference: docs/EVOLUTION.md — "Three Timescales"
  *
  * Timescale 1 — Turn-level (reviewTurn, Hermes-style forked review):
  *   When user message N+1 arrives IN THE SAME CONVERSATION, turn N is graded

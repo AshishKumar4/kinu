@@ -1,12 +1,8 @@
+import type { SqlExec } from '@proteus/core';
+
 const WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 const MAX_RATE_LIMIT_PER_MIN = 10_000;
-
-export interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
 
 export interface WebhookRateLimitDecision {
   allowed: boolean;

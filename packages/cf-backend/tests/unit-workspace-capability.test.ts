@@ -17,6 +17,7 @@ import {
 } from '../src/user/workspace-capability.js';
 import { isModelInferenceCredentialKey } from '../src/user/credential-headers.js';
 import { sqlExec } from './helpers/user-do.js';
+import type { SqlExec } from '@proteus/core';
 
 function setup() {
   const db = new Database(':memory:');

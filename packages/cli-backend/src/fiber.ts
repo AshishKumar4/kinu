@@ -2,6 +2,7 @@
  * SQLite-backed durable fiber for Linux CLI.
  * Same FiberCtx contract as CF Agent.runFiber.
  *
+ * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
  *
  * On SIGTERM: the fiber row persists in SQLite. On restart, query the `fibers`
  * table for orphaned rows (equivalent to Agent.onFiberRecovered).

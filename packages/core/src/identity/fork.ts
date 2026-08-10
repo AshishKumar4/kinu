@@ -3,7 +3,7 @@
  *
  * Forks a source workspace's SQLite state into a target workspace's SQLite
  * state (a fork is a NEW workspace by a new name).
- * The fork semantics are "clean-slate messages-only" (per plan doc §6):
+ * The fork semantics are "clean-slate messages-only":
  *
  *   Copy:   SOUL.md, messages+conversation_history (≤ forkPointMs),
  *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
@@ -22,6 +22,7 @@
  * transactionSync() for atomicity; tests drive it directly against two
  * bun:sqlite handles.
  *
+ * Formal spec + rationale: docs/WORKSPACES.md.
  */
 
 import type { SqlExecutor } from '../types/primitives.js';

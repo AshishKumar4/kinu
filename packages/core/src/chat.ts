@@ -9,7 +9,7 @@
 
 import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
-import { resolveMaxSteps } from './config.js';
+import { DEFAULT_MAX_STEPS } from './config.js';
 import {
   assertToolsSupportedByModel,
   type PromptModelContext,
@@ -122,7 +122,7 @@ export const STALL_TIMEOUT_MS = 300_000;
  * to the conversation history — not just the flat text.
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
-  const maxSteps = opts.maxSteps ?? resolveMaxSteps();
+  const maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
   const extensions = opts.extensions;
 
   // One ToolSet: the caller's tools plus every extension's contributed tools.

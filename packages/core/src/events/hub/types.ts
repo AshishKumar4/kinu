@@ -12,6 +12,7 @@
  * Tool surface composes from `(headTrust, phase, role)` as a pure function —
  * never via prompt instructions. The runtime is the gate.
  *
+ * See docs/ARCHITECTURE.md — "Events and ingress" for the authoritative spec.
  */
 
 // ── Trust ────────────────────────────────────────────────────────
