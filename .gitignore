@@ -48,3 +48,6 @@ CC-CORPUS-*.md
 
 # Throwaway output of the bench/harbor bun --compile step
 /.harbor-build-*/
+
+# Preserved harbor job artifacts (raw trial evidence, not source)
+/bench-artifacts/
