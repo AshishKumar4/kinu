@@ -151,7 +151,9 @@ describe('head tool surface — containment', () => {
       input: headInput({ budget: { maxDepth: 3, maxTokens: 100, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
       split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
-    capture.tokenUsage.input = 500;
+    // 500 tokens of the head's OWN output — marginal work, so it counts against
+    // the 100-token ceiling. A re-sent 1000-token prompt does not.
+    capture.recordStepUsage(1_000, 500);
     const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
       .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
     expect(result).toContain('budget exhausted');

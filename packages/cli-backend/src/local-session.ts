@@ -1964,11 +1964,24 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Fan head_split / head_merge lifecycle out as broadcasts so the frontends
-   *  can render the branch timeline. */
+   *  can render the branch timeline, AND into the durable run-event log so the
+   *  split's cost and productivity survive the process — the same rows the DO
+   *  writes. Broadcast-only was why local runs (every benchmark trial) left no
+   *  trace of a fork, and 4-of-5 empty forks had to be found by reading
+   *  trajectories by hand. */
   private emitHeadPhase(event: SplitPhaseEvent): void {
-    this.broadcast(event.kind === 'split'
+    const payload: RunEventInput = event.kind === 'split'
       ? { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale }
-      : { type: 'head_merge', rootId: event.rootId, headCount: event.headCount, mergedNarrative: event.mergedNarrative });
+      : {
+        type: 'head_merge',
+        rootId: event.rootId,
+        headCount: event.cost.headCount,
+        headsWithFindings: event.cost.headsWithFindings,
+        totalTokens: event.cost.totalTokens,
+        mergedNarrative: event.mergedNarrative,
+      };
+    this.broadcast(payload);
+    this.recordRunEvent(payload);
   }
 
   /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO

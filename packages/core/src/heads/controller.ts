@@ -34,6 +34,7 @@ import {
   deriveChildBudget,
 } from './types.js';
 import { HeadJournal } from './journal.js';
+import { headProducedFindings } from './head-summary.js';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
 import type { LLM, Executor } from '../types/primitives.js';
@@ -97,7 +98,9 @@ export interface HeadRuntime {
  */
 export type SplitPhaseEvent =
   | { kind: 'split'; rootId: HeadId; headIds: readonly HeadId[]; rationale: string }
-  | { kind: 'merge'; rootId: HeadId; headCount: number; mergedNarrative: string };
+  /** Carries the whole cost summary rather than a copied-out head count, so a
+   *  new outcome figure reaches the run-event ledger without a second edit. */
+  | { kind: 'merge'; rootId: HeadId; cost: MergeResult['costSummary']; mergedNarrative: string };
 
 export class HeadController {
   constructor(
@@ -231,7 +234,7 @@ export class HeadController {
     opts.onPhase?.({
       kind: 'merge',
       rootId,
-      headCount: mergeResult.costSummary.headCount,
+      cost: mergeResult.costSummary,
       mergedNarrative: mergeResult.mergedNarrative,
     });
     return mergeResult;
@@ -296,6 +299,27 @@ export class HeadController {
     headScores: readonly HeadScore[] = [],
   ): Promise<MergeResult> {
     const grounded = this.runtime.grounding != null;
+    const costSummary = summarizeCost(reports, parentBudget);
+
+    // Nothing to synthesize: every head stopped without banking a finding.
+    // Asking an LLM to narrate that makes it invent a cause it cannot know — a
+    // real split told its parent "the immediate blockage is the sandbox
+    // provisioning failure" when both heads had merely run out of budget. So
+    // the empty split is reported deterministically and never reaches a model.
+    if (costSummary.headsWithFindings === 0) {
+      return {
+        mergedNarrative: emptySplitNarrative(reports, rationale),
+        selectedDecisions: [],
+        unresolvedQuestions: [],
+        recommendations: [],
+        evidenceAggregate: [],
+        headIds,
+        headScores,
+        grounded,
+        costSummary,
+      };
+    }
+
     const prompt = buildMergePrompt(reports, rationale, strategy, inheritedContext, grounded ? headScores : []);
     const fallback = (errMsg: string): MergeResult => ({
       mergedNarrative: fallbackNarrative(reports, rationale, errMsg),
@@ -306,7 +330,7 @@ export class HeadController {
       headIds,
       headScores,
       grounded,
-      costSummary: summarizeCost(reports, parentBudget),
+      costSummary,
     });
 
     const merged = await this.synthesize(prompt, rationale);
@@ -321,7 +345,7 @@ export class HeadController {
       headIds,
       headScores,
       grounded,
-      costSummary: summarizeCost(reports, parentBudget),
+      costSummary,
     };
   }
 
@@ -403,10 +427,35 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number): Promis
 function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget): MergeResult['costSummary'] {
   return {
     headCount: reports.length,
+    headsWithFindings: reports.filter(headProducedFindings).length,
     totalTokens: reports.reduce((acc, r) => acc + r.tokenUsage.total, 0),
     totalWallClockMs: Math.max(0, ...reports.map((r) => r.wallClockMs)),
     maxDepth: parentBudget.maxDepth,
   };
+}
+
+/** The narrative for a split where no head banked anything. Deterministic by
+ *  construction: it states each head's status and cost and nothing else, so the
+ *  parent cannot be handed a cause that nobody observed. */
+function emptySplitNarrative(reports: readonly HeadReport[], rationale: string): string {
+  const lines = [
+    `No head produced findings. ${reports.length} head(s) were spawned to explore: ${rationale}`,
+    '',
+  ];
+  for (const r of reports) {
+    lines.push(
+      `- Head ${r.id}: ${r.status}${r.errorMessage ? ` — ${r.errorMessage}` : ''}`
+      + ` (${r.tokenUsage.total} tokens, ${Math.round(r.wallClockMs / 100) / 10}s,`
+      + ` ${r.toolCalls.length} tool call(s), ${r.steps.length} step(s))`,
+    );
+  }
+  lines.push(
+    '',
+    'Nothing was learned about the task. This is a failed delegation, not information '
+    + 'about the task or the environment: do not infer a cause from it, and do not repeat '
+    + 'it back as a finding.',
+  );
+  return lines.join('\n');
 }
 
 /** Flatten a head's report into the trajectory the grounded evaluator scores:
@@ -456,7 +505,7 @@ function fallbackNarrative(reports: readonly HeadReport[], rationale: string, er
   lines.push(`Reason for split: ${rationale}`);
   lines.push('');
   for (const r of reports) {
-    lines.push(`### Head ${r.id} (${r.status})`);
+    lines.push(`### Head ${r.id} (${r.status}${headProducedFindings(r) ? '' : ' — produced no findings'})`);
     lines.push(r.summary);
     lines.push('');
   }
@@ -498,7 +547,8 @@ function buildMergePrompt(
       : `\n\nArtifacts:\n${r.artifactRefs.map((a) => `  - (${a.kind}) ${a.ref}${a.description ? ` — ${a.description}` : ''}`).join('\n')}`;
     const s = scoreById.get(r.id);
     const scoreTag = s ? ` — grounded outcome ${s.score.toFixed(2)} (${s.grounding})` : '';
-    return `## Head ${r.id} (${r.status})${scoreTag}
+    const emptyTag = headProducedFindings(r) ? '' : ' — PRODUCED NO FINDINGS';
+    return `## Head ${r.id} (${r.status}${emptyTag})${scoreTag}
 Summary:
 ${r.summary}
 
@@ -513,13 +563,20 @@ ${evList}${artList}`;
     ? '\nEach head carries a grounded outcome score (execution-verified when it left runnable code); weight higher-scoring heads more heavily when they conflict.\n'
     : '';
 
+  // A head that stopped before banking anything observed nothing. Without this
+  // the model reads its silence as a signal and narrates a cause for it.
+  const emptyCount = reports.length - reports.filter(headProducedFindings).length;
+  const emptyGuidance = emptyCount > 0
+    ? `\n${emptyCount} of ${reports.length} heads are marked PRODUCED NO FINDINGS: they stopped before recording anything. Say plainly that they did not complete and contributed nothing. Do NOT state or imply why they stopped, and do NOT turn their silence into a claim about the environment, the tooling, or the task.\n`
+    : '';
+
   return `You are merging the findings of ${reports.length} parallel reasoning heads.
 
 Split rationale: ${rationale}
 
 Merge strategy: ${strategy}
 Strategy guidance: ${strategyGuidance[strategy]}
-${scoreGuidance}
+${scoreGuidance}${emptyGuidance}
 Recent conversation context:
 ${recentContext || '(none)'}
 

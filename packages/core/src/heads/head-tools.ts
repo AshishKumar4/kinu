@@ -119,7 +119,7 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
       }),
       execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
         // budgetExhausted covers max-depth, tokens and wall-clock in one gate.
-        const exhausted = budgetExhausted(input.budget, capture.tokenUsage.input + capture.tokenUsage.output);
+        const exhausted = budgetExhausted(input.budget, capture.tokenUsage.budgetCharged);
         if (exhausted.exhausted) return `Cannot split: budget exhausted (${exhausted.reason}).`;
         try {
           const result = await deps.split({

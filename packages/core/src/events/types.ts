@@ -57,7 +57,12 @@ export type RunEvent =
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: unknown; error?: string; durationMs?: number })
   | (RunEventBase & { type: 'step_finish'; stepIndex: number; reason?: string })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
-  | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number; mergedNarrative: string })
+  /** A split settled. `headsWithFindings` vs `headCount` is how many forks came
+   *  back with something against how many returned empty, and `totalTokens` is
+   *  what the whole split cost — so the productivity of delegation is a query
+   *  over the ledger instead of a hand-read of trajectories. */
+  | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;
+      headsWithFindings: number; totalTokens: number; mergedNarrative: string })
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })

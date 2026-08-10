@@ -329,6 +329,120 @@ describe('HeadController.run', () => {
   });
 });
 
+/**
+ * A head that stopped without banking anything observed nothing, and its
+ * silence must never reach the parent as a fact. A real run merged two
+ * budget-starved heads into "the immediate blockage is the sandbox provisioning
+ * failure" — a cause nobody had observed, handed to the parent as ground truth.
+ */
+describe('HeadController.merge — an empty head cannot become a finding', () => {
+  const emptyReport = (id: string, overrides: Partial<HeadReport> = {}): HeadReport => fakeReport(id, {
+    status: 'budget_exceeded',
+    summary: `Head ${id} did not complete (status=budget_exceeded). It produced no findings.`,
+    evidence: [], decisions: [], artifactRefs: [],
+    ...overrides,
+  });
+
+  test('when no head banked anything the merge LLM is never asked to narrate it', async () => {
+    const { journal } = newJournal();
+    let mergeCalls = 0;
+    const base = buildRuntime({
+      reports: {
+        'angle A': emptyReport('h-A'),
+        'angle B': emptyReport('h-B', { status: 'errored', errorMessage: 'stream closed' }),
+      },
+    });
+    const runtime: HeadRuntime = {
+      spawnHead: base.spawnHead,
+      mergeLLM: async (...args) => { mergeCalls++; return base.mergeLLM(...args); },
+    };
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(mergeCalls).toBe(0);
+    expect(result.costSummary.headsWithFindings).toBe(0);
+    expect(result.mergedNarrative).toContain('No head produced findings');
+    expect(result.mergedNarrative).toContain('budget_exceeded');
+    expect(result.mergedNarrative).toContain('stream closed');
+    expect(result.mergedNarrative).toContain('do not infer a cause from it');
+    // Nothing was learned, so nothing is asserted.
+    expect(result.recommendations).toEqual([]);
+    expect(result.unresolvedQuestions).toEqual([]);
+    expect(result.selectedDecisions).toEqual([]);
+    expect(result.evidenceAggregate).toEqual([]);
+  });
+
+  test('a mixed split still merges, but marks the empty head and forbids inferring why', async () => {
+    const { journal } = newJournal();
+    let prompt = '';
+    const base = buildRuntime({
+      reports: {
+        'angle A': fakeReport('h-A', { summary: 'A finding' }),
+        'angle B': emptyReport('h-B'),
+      },
+      mergeOutput: fakeMergeOutput('Synthesis of what A found.'),
+    });
+    const runtime: HeadRuntime = {
+      spawnHead: base.spawnHead,
+      mergeLLM: async (p, schema) => { prompt = p; return base.mergeLLM(p, schema); },
+    };
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(result.mergedNarrative).toBe('Synthesis of what A found.');
+    expect(result.costSummary.headsWithFindings).toBe(1);
+    expect(result.costSummary.headCount).toBe(2);
+    expect(prompt).toContain('PRODUCED NO FINDINGS');
+    expect(prompt).toContain('do NOT turn their silence into a claim about the environment');
+  });
+
+  test('a stopped head that DID bank evidence counts as having findings', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({
+      reports: {
+        'angle A': emptyReport('h-A', { evidence: [{ id: 'e1', kind: 'fact', body: 'gates.txt exists' }] }),
+        'angle B': emptyReport('h-B'),
+      },
+      mergeOutput: fakeMergeOutput('One head got partway.'),
+    });
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(result.costSummary.headsWithFindings).toBe(1);
+    expect(result.mergedNarrative).toBe('One head got partway.');
+  });
+
+  test('the cached replay reports the same findings count as the live merge', async () => {
+    const { journal } = newJournal();
+    // Reports carry the SPAWNED id here so they land on the journal rows the
+    // cached read derives its count from.
+    const runtime: HeadRuntime = {
+      async spawnHead(input: HeadInput): Promise<SpawnedHead> {
+        return {
+          id: input.id,
+          run: async () => (input.task === 'angle A'
+            ? fakeReport(input.id, { summary: 'A finding' })
+            : emptyReport(input.id)),
+          abort: async () => undefined,
+        };
+      },
+      mergeLLM: async () => fakeMergeOutput('Synthesis of what A found.'),
+    };
+    const live = await new HeadController(runtime, journal).run({
+      parentHeadId: null, rootId: 'root-1', inheritedContext: baseContext, request: baseRequest,
+    });
+
+    const cached = journal.readCachedMerge('root-1');
+    expect(cached?.costSummary.headsWithFindings).toBe(live.costSummary.headsWithFindings);
+  });
+});
+
 describe('HeadJournal.listLive — the live fork roster', () => {
   const spawn = (journal: HeadJournal, rootId: string, id: string) => journal.insertSpawn({
     id, parentId: null, rootId, depth: 1, task: `t-${id}`, rationale: 'why',

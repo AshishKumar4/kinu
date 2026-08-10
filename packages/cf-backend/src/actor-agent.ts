@@ -1605,7 +1605,9 @@ export abstract class ActorAgent extends Think<Env> {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'head_merge',
           rootId: event.rootId,
-          headCount: event.headCount,
+          headCount: event.cost.headCount,
+          headsWithFindings: event.cost.headsWithFindings,
+          totalTokens: event.cost.totalTokens,
           mergedNarrative: event.mergedNarrative,
         });
       }

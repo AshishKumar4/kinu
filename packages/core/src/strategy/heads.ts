@@ -141,7 +141,8 @@ function formatMergeResult(result: MergeResult, strategy: MergeStrategy): string
   }
   lines.push('');
   lines.push(
-    `_(merge=${strategy}, heads=${result.costSummary.headCount}, ` +
+    `_(merge=${strategy}, ` +
+    `heads=${result.costSummary.headCount} (${result.costSummary.headsWithFindings} with findings), ` +
     `tokens=${result.costSummary.totalTokens}, ` +
     `wall=${Math.round(result.costSummary.totalWallClockMs / 100) / 10}s, ` +
     `depth=${result.costSummary.maxDepth})_`,

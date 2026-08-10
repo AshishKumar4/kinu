@@ -164,6 +164,47 @@ function executeToolsModel(code: string): LanguageModel {
   } as unknown as LanguageModel;
 }
 
+/** A model that forks into two heads once, then answers. The heads and the merge
+ *  synthesis run against the SAME stub via doGenerate. */
+function forkingModel(): LanguageModel {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const base = fakeModel('head finding') as unknown as Record<string, unknown>;
+  let step = 0;
+  return {
+    ...base,
+    doStream: async () => {
+      step += 1;
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            if (step === 1) {
+              controller.enqueue({
+                type: 'tool-call', toolCallId: 'call-1', toolName: 'agents',
+                input: JSON.stringify({
+                  action: 'fork', task: 'explore two angles',
+                  forks: [
+                    { task: 'angle A', rationale: 'first angle' },
+                    { task: 'angle B', rationale: 'second angle' },
+                  ],
+                }),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+            } else {
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            }
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  } as unknown as LanguageModel;
+}
+
 function setupWithResolver(resolver: LocalModelResolver) {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE IF NOT EXISTS messages (
@@ -2100,6 +2141,27 @@ describe('LocalAgentSession — the durable run-event log', () => {
       .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
       .map((e) => e.event);
     expect(streamed).toEqual(session.getRunEvents(runId));
+
+    await session.end();
+  });
+
+  test('a fork lands in the ledger with what it produced and what it cost', async () => {
+    // Head phases were broadcast-only here while the DO recorded them, so every
+    // local run — and therefore every benchmark trial — left no durable trace of
+    // a fork at all: that a run's forks came back empty could only be found by
+    // reading trajectories by hand.
+    const { session } = setup('unused', forkingModel());
+    await session.send('go');
+
+    const events = session.getRunEvents(session.listRuns()[0]!.runId);
+    expect(events.some((e) => e.type === 'head_split')).toBe(true);
+
+    const merge = events.find((e): e is Extract<typeof events[number], { type: 'head_merge' }> =>
+      e.type === 'head_merge');
+    expect(merge).toBeDefined();
+    expect(merge!.headCount).toBe(2);
+    expect(merge!.headsWithFindings).toBe(2);
+    expect(merge!.totalTokens).toBeGreaterThan(0);
 
     await session.end();
   });

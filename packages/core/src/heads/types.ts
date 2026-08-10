@@ -236,6 +236,10 @@ export interface MergeResult {
   readonly grounded: boolean;
   readonly costSummary: {
     readonly headCount: number;
+    /** How many of those heads actually banked a finding (headProducedFindings).
+     *  `headCount - headsWithFindings` is how many forks came back empty — the
+     *  one number that says whether a delegation was worth its tokens. */
+    readonly headsWithFindings: number;
     readonly totalTokens: number;
     readonly totalWallClockMs: number;
     readonly maxDepth: number;
@@ -257,10 +261,32 @@ export interface HeadScore {
   readonly grounding: 'execution' | 'judge';
 }
 
-/** Default budget for a fresh root head if the parent doesn't specify. */
+/** Hard ceiling on a head's reasoning steps. Ordinarily this — not the token
+ *  pool — is what ends a head; the pool is sized so it only bites on a runaway. */
+export const MAX_HEAD_STEPS = 16;
+
+/** Nominal marginal cost of one head step: the head's own output plus the tool
+ *  output it pulls in. Two things derive from it — the tighter step cap a small
+ *  budget implies (head-inference) and the default pool below. */
+export const NOMINAL_STEP_TOKENS = 1_200;
+
+/** Widest fan-out the fork surface accepts (2–6 head specs). The pool is divided
+ *  among siblings, so this is the divisor the default has to survive. */
+export const MAX_FORK_WIDTH = 6;
+
+/**
+ * Default budget for a fresh root head if the parent doesn't specify.
+ *
+ * `maxTokens` is a subtree pool, divided among siblings on spawn. It is sized so
+ * that even at the widest legal fan-out each head still has room for the full
+ * step cap at nominal cost: below that the pool, not the step cap, is what stops
+ * a head, and a fork returns empty because it was starved rather than because it
+ * finished. (The old flat 50_000 gave a 6-wide split 8.3k per head — under half
+ * of what its own step cap assumes.)
+ */
 export const DEFAULT_HEAD_BUDGET: Omit<HeadBudget, 'spawnedAt'> = {
   maxDepth: 3,
-  maxTokens: 50_000,
+  maxTokens: MAX_FORK_WIDTH * MAX_HEAD_STEPS * NOMINAL_STEP_TOKENS,
   maxWallClockMs: 5 * 60 * 1000,
 };
 
@@ -304,9 +330,11 @@ export function deriveChildBudget(
 /**
  * Returns true if this budget is exhausted along any dimension.
  *
- * `consumedTokens` is the total tokens this head + descendants have spent so far;
- * pass it from the run loop's running `capture.tokenUsage` so the token ceiling
- * actually gates a run mid-flight. Omitted (or 0) only checks depth + wall-clock.
+ * `consumedTokens` is the MARGINAL spend of this head + descendants so far —
+ * `HeadCapture.tokenUsage.budgetCharged`, not gross provider usage. Passing gross
+ * bills the re-sent prompt prefix on every step, which makes the ceiling a
+ * function of how long the parent has been running. Omitted (or 0) only checks
+ * depth + wall-clock.
  */
 export function budgetExhausted(
   b: HeadBudget,

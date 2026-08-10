@@ -13,9 +13,10 @@
 
 import type { SqlExecutor } from '../types/primitives.js';
 import type {
-  HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, MergeResult, MergeStrategy,
-  HeadRunView, HeadRunHeadView,
+  HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, Decision, ArtifactRef,
+  MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types.js';
+import { headProducedFindings } from './head-summary.js';
 
 /** Defensive JSON parse → array (head_journal/head_steps JSON columns). */
 function parseArray<T>(json: string | null): T[] {
@@ -283,23 +284,44 @@ export class HeadJournal {
     const tree = this.readTree(rootId);
     const evidence: Evidence[] = tree.flatMap((h) => this.readEvidence(h.id));
     const headIds: HeadId[] = tree.filter((h) => h.parent_id == null || h.parent_id === '').map((h) => h.id);
+    const ids = headIds.length > 0 ? headIds : tree.map((h) => h.id);
     return {
       mergedNarrative: r.merged_narrative,
       selectedDecisions: r.selected_decisions_json ? JSON.parse(r.selected_decisions_json) : [],
       unresolvedQuestions: r.unresolved_questions_json ? JSON.parse(r.unresolved_questions_json) : [],
       recommendations: r.recommendations_json ? JSON.parse(r.recommendations_json) : [],
       evidenceAggregate: evidence,
-      headIds: headIds.length > 0 ? headIds : tree.map((h) => h.id),
+      headIds: ids,
       // Per-head grounded scores are a live-run signal, not persisted as columns;
       // the cached read (UI replay) carries none.
       headScores: [],
       grounded: false,
       costSummary: {
         headCount: r.cost_head_count,
+        headsWithFindings: this.countHeadsWithFindings(ids),
         totalTokens: r.cost_total_tokens,
         totalWallClockMs: r.cost_total_wall_ms,
         maxDepth: r.cost_max_depth,
       },
     };
+  }
+
+  /** How many of these heads banked a finding. Derived from the journal rows
+   *  rather than stored as a column, so a replayed merge can never disagree with
+   *  the live one — and through the SAME predicate the merge path uses. */
+  private countHeadsWithFindings(headIds: readonly HeadId[]): number {
+    return headIds.filter((id) => {
+      const row = this.sql<{ status: string; decisions_json: string | null; artifacts_json: string | null }>`
+        SELECT status, decisions_json, artifacts_json FROM head_journal WHERE id = ${id}`[0];
+      if (!row) return false;
+      return headProducedFindings({
+        // 'running' is not a terminal status: a head still in flight has banked
+        // nothing beyond what the recorded arrays below already show.
+        status: row.status === 'completed' ? 'completed' : 'aborted',
+        evidence: this.readEvidence(id),
+        decisions: parseArray<Decision>(row.decisions_json),
+        artifactRefs: parseArray<ArtifactRef>(row.artifacts_json),
+      });
+    }).length;
   }
 }
