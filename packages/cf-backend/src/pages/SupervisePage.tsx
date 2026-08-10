@@ -20,7 +20,7 @@ import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { Modal } from "@/components/ui/Modal";
-import { inputCls } from "@/components/ui/form";
+import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc, BackgroundJob } from "@/lib/protocol";
 
@@ -169,8 +169,8 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
                 </div>
                 {t.status === "pending" && (
                   <div className="flex items-center gap-2 mt-2">
-                    <Button size="sm" variant="primary" icon={<PlayIcon size={12} />}
-                      onClick={() => void setStatus(t.id, "accepted").then(() => onRunTask(t.task), () => {})}>Run</Button>
+                    <button className={`p-btn ${btnSmCls}`}
+                      onClick={() => void setStatus(t.id, "accepted").then(() => onRunTask(t.task), () => {})}><PlayIcon size={12} />Run</button>
                     <Button size="sm" variant="ghost" icon={<CheckIcon size={12} />} onClick={() => void setStatus(t.id, "accepted").catch(() => {})}>Accept</Button>
                     <Button size="sm" variant="ghost" icon={<XIcon size={12} />} onClick={() => void setStatus(t.id, "rejected").catch(() => {})}>Reject</Button>
                   </div>
@@ -433,9 +433,9 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
       busy={submitting}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={submitting}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={submit} disabled={submitting || !label.trim()}>
+        <button className={`p-btn ${btnSmCls}`} onClick={submit} disabled={submitting || !label.trim()}>
           {submitting ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create"}
-        </Button>
+        </button>
       </>}
     >
       <div className="space-y-2">

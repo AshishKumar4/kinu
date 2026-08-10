@@ -43,10 +43,16 @@ export interface MCTSNodeDetail extends MCTSNodeSummary {
 export interface ToolInfo {
 	name: string;
 	description: string;
-	scope: "local" | "global";
+	/** Where the tool came from: shipped with the agent, or crafted by it. */
+	learned: boolean;
+	/**
+	 * How the model reaches it — a tool definition in the turn's ToolSet
+	 * (`native`), or only from inside an `execute_tools` program (`codemode`).
+	 * Derived by the orchestrator from the assembled surface, never declared.
+	 */
+	exposure: "native" | "codemode";
 	qualityScore: number;
 	usageCount: number;
-	lastUsed: string;
 }
 
 export interface MemoryEntry {

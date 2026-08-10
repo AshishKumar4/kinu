@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import { HouseIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
 import type { SubordinateRosterEntry } from "@proteus/core";
 import { Modal } from "./ui/Modal";
@@ -62,9 +63,9 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
       busy={saving}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
-        <Button size="sm" variant="primary" type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
+        <button className={`p-btn ${btnSmCls}`} type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
           {saving ? "Starting…" : "Start mission"}
-        </Button>
+        </button>
       </>}
     >
       <form id="spawn-subordinate" onSubmit={submit} className="space-y-3">
@@ -164,9 +165,8 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
           busy={dismissing}
           footer={<>
             <Button size="sm" variant="ghost" disabled={dismissing} onClick={() => setDismissTarget(null)}>Cancel</Button>
-            <Button
-              size="sm"
-              variant="primary"
+            <button
+              className={`p-btn-danger ${btnSmCls}`}
               disabled={dismissing}
               onClick={async () => {
                 setDismissing(true);
@@ -182,7 +182,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
               }}
             >
               {dismissing ? "Dismissing…" : "Dismiss"}
-            </Button>
+            </button>
           </>}
         >
           <p className="text-xs leading-relaxed p-text-2">

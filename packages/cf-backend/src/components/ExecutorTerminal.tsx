@@ -57,7 +57,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
       fontSize: 12,
       cursorBlink: true,
       convertEol: true,
-      theme: TERMINAL_THEME[mode],
+      theme: terminalTheme(mode),
     });
     const fit = new FitAddon();
     term.loadAddon(fit);
@@ -133,7 +133,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
   // a dark terminal sitting in a light page.
   useEffect(() => {
     const t = termRef.current;
-    if (t) t.options.theme = TERMINAL_THEME[mode];
+    if (t) t.options.theme = terminalTheme(mode);
   }, [mode]);
 
   // Re-fit when the executor changes (label in the prompt + reset buffer).
@@ -172,24 +172,41 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
     if (wroteSomething) promptLine(t);
   }, [outputs]);
 
-  return <div ref={ref} className="w-full h-full rounded-lg border p-border overflow-hidden" style={{ background: "var(--c-bg)" }} />;
+  return <div ref={ref} className="p-bg w-full h-full rounded-lg border p-border overflow-hidden" />;
 }
 
-/** The two palettes, mirroring the --c-bg / --c-text / --c-accent tokens.
- *  The ANSI eight have no token equivalents, so they are tuned per mode for
- *  contrast against that mode's background. */
-const TERMINAL_THEME: Record<ThemeMode, NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"]> = {
-  dark: {
-    background: "#1A1613", foreground: "#F5EFE6", cursor: "#E0A458",
-    black: "#1A1613", red: "#f87171", green: "#4ade80", yellow: "#facc15",
-    blue: "#60a5fa", magenta: "#c084fc", cyan: "#22d3ee", white: "#F5EFE6",
-  },
-  light: {
-    background: "#FBF7F0", foreground: "#241E18", cursor: "#B5793A",
-    black: "#241E18", red: "#b91c1c", green: "#15803d", yellow: "#a16207",
-    blue: "#1d4ed8", magenta: "#7e22ce", cyan: "#0e7490", white: "#FBF7F0",
-  },
-};
+/**
+ * xterm needs concrete colours, not custom properties, so the palette is read
+ * off the document at theme time. Hardcoding it here is what let this file
+ * drift a whole palette behind — it still carried the pre-v2 browns.
+ *
+ * ANSI is a protocol: a program that emits `\x1b[31m` means "error", so the
+ * four slots with a status role take that role's token. Magenta and cyan have
+ * no status meaning and no token; they stay distinguishable (a shell that
+ * colours by type needs them to be) but are pulled into the warm family
+ * rather than shipping the only violet and cyan in the product.
+ */
+const ANSI_UNTOKENED = {
+  dark:  { magenta: "#c9a0c6", cyan: "#8fbdb8" },
+  light: { magenta: "#7a3f74", cyan: "#2f6660" },
+} as const;
+
+function terminalTheme(mode: ThemeMode): NonNullable<ConstructorParameters<typeof Terminal>[0]>["theme"] {
+  const cs = getComputedStyle(document.documentElement);
+  const tok = (name: string) => cs.getPropertyValue(name).trim();
+  return {
+    background: tok("--c-bg"),
+    foreground: tok("--c-text"),
+    cursor: tok("--c-accent"),
+    black: tok("--c-recessed"),
+    white: tok("--c-text"),
+    red: tok("--c-danger"),
+    green: tok("--c-success"),
+    yellow: tok("--c-warning"),
+    blue: tok("--c-info"),
+    ...ANSI_UNTOKENED[mode],
+  };
+}
 
 function promptLine(t: Terminal) {
   t.write("\x1b[32m$\x1b[0m ");

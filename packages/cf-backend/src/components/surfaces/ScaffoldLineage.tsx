@@ -9,11 +9,12 @@
  */
 import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import { GitBranchIcon, ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines } from "./shared";
+import { DiffLines, Section } from "./shared";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
@@ -128,13 +129,9 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const isPending = selectedV?.status === "pending";
 
   return (
-    <section>
-      <div className="flex items-center gap-2 mb-2.5">
-        <GitBranchIcon size={14} className="p-text-2" />
-        <span className="text-sm font-medium p-text">Scaffold evolution</span>
-        <Badge variant="secondary">v{currentVersion}</Badge>
-      </div>
-
+    <Section id="scaffold" title="Scaffold evolution" defaultOpen={false}
+      icon={<GitBranchIcon size={14} className="p-text-2" />}
+      badge={<Badge variant="secondary">v{currentVersion}</Badge>}>
       {lineage.status === "error" && versions.length === 0 ? (
         <LoadFailure what="the scaffold lineage" message={lineage.message} onRetry={reload} />
       ) : lineage.status === "loading" ? (
@@ -189,10 +186,10 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               {/* Promote / Rollback — only meaningful while this version is pending */}
               {isPending && (
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="primary" disabled={!!busy} onClick={() => decide("promote")}
-                    icon={busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}>
+                  <button className={`p-btn ${btnSmCls}`} disabled={!!busy} onClick={() => decide("promote")}>
+                    {busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}
                     Promote v{selected}
-                  </Button>
+                  </button>
                   <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rollback")}
                     icon={busy === "rollback" ? <Loader size="sm" /> : <ArrowUUpLeftIcon size={13} />}>
                     Roll back
@@ -204,6 +201,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           )}
         </div>
       )}
-    </section>
+    </Section>
   );
 }

@@ -15,6 +15,10 @@ import {
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 
+/** The clear button Kumo forces onto a non-clearable picker. Named so the
+ *  stylesheet can remove it; must match the selector in index.css. */
+const CLEAR_LABEL_UNUSED = "Clear selection (unused)";
+
 export interface ModelPickerProps {
   models: ModelMenuEntry[];
   /** Providers the server could not reach. Listed under the options so a
@@ -58,8 +62,14 @@ export function ModelPicker({
     >
       <Combobox.TriggerInput
         placeholder={placeholder}
-        clearLabel={clearable ? "Use default model" : "Clear search"}
-        className={className}
+        // Kumo renders the clear button unconditionally and offers no prop to
+        // suppress it, so a non-clearable picker ships an X that does nothing
+        // (onValueChange(null) is ignored below) and eats 8px of a label that
+        // is already clipping in the workspace toolbar. `p-combobox-no-clear`
+        // removes it and reclaims the padding; it selects on this exact label,
+        // which unit-combobox-clear-affordance.test.ts keeps in step.
+        clearLabel={clearable ? "Use default model" : CLEAR_LABEL_UNUSED}
+        className={clearable ? className : `p-combobox-no-clear ${className ?? ""}`}
       />
       <Combobox.Content className="min-w-72">
         <Combobox.Empty>No models match</Combobox.Empty>

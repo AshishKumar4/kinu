@@ -11,7 +11,7 @@ import {
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
-import { MarkdownContent, EmptyState, EMPTY_HINTS } from "./shared";
+import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { EvolutionChangelog } from "./EvolutionChangelog";
 
@@ -28,6 +28,29 @@ export interface BrainSurfaceProps {
   onChangelogSeen?: () => void;
 }
 
+/**
+ * Says how the model reaches a capability. `native` means the turn hands it to
+ * the model as a tool definition; `codemode` means it exists only as a
+ * namespace inside an `execute_tools` program, which is a real difference in
+ * how the agent has to call it and therefore worth a word on screen.
+ *
+ * The value is derived by the orchestrator from the assembled tool surface —
+ * this renders it, it does not decide it.
+ */
+function ExposureBadge({ exposure }: { exposure: ToolInfo["exposure"] }) {
+  const native = exposure === "native";
+  return (
+    <span
+      className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-mono ${native ? "p-badge-neutral" : "p-accent-subtle p-accent"}`}
+      title={native
+        ? "Native — passed to the model as a tool definition"
+        : "Code mode — reachable only from inside an execute_tools program"}
+    >
+      {native ? "native" : "code mode"}
+    </span>
+  );
+}
+
 export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc, onChangelogSeen }: BrainSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
@@ -37,7 +60,7 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
     <div className="space-y-6 animate-fade-in">
       {/* Identity */}
       {as ? (
-        <section>
+        <Section id="identity" title="Identity" icon={<FingerprintIcon size={14} className="p-text-2" />}>
           <div className="flex items-center gap-3 mb-4">
             <div className="size-11 rounded-xl flex items-center justify-center p-elevated border p-border">
               <FingerprintIcon size={22} className="p-accent" />
@@ -63,7 +86,7 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
               </div>
             ))}
           </div>
-        </section>
+        </Section>
       ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>}
 
       {/* Evolution Changelog — what the agent changed about itself, with
@@ -74,39 +97,29 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
       {as && <ScaffoldLineage rpc={rpc} currentVersion={as.scaffoldVersion} />}
 
       {/* Tools (CraftStore + builtins) */}
-      <section>
-        <div className="flex items-center gap-2 mb-2.5">
-          <PackageIcon size={14} className="p-text-2" />
-          <span className="text-sm font-medium p-text">Tools</span>
-          {tools.length > 0 && <Badge variant="secondary">{tools.length}</Badge>}
-        </div>
+      <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
+        badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
         <div className="space-y-2">
           {tools.length === 0 ? (
             <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />
-          ) : tools.map((tool) => {
-            const isLearned = tool.scope === "global";
-            return (
-              <div key={tool.name} className="p-card rounded-lg p-3">
-                <div className="flex items-center gap-2 mb-1">
-                  <PackageIcon size={13} className="p-accent" />
-                  <span className="text-sm font-medium font-mono p-text">{tool.name}</span>
-                  <Badge variant={isLearned ? "primary" : "secondary"}>{isLearned ? "Learned" : "Built-in"}</Badge>
-                  {tool.usageCount > 0 && <span className="text-[10px] p-text-3 ml-auto">{tool.usageCount} uses</span>}
-                </div>
-                <span className="text-xs p-text-2 block leading-relaxed mb-1.5">{tool.description}</span>
-                {isLearned && <ScoreBar value={tool.qualityScore} className="mt-1" />}
+          ) : tools.map((tool) => (
+            <div key={tool.name} className="p-card rounded-lg p-3">
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
+                <PackageIcon size={13} className="p-accent" />
+                <span className="text-sm font-medium font-mono p-text">{tool.name}</span>
+                <Badge variant="secondary">{tool.learned ? "Learned" : "Built-in"}</Badge>
+                <ExposureBadge exposure={tool.exposure} />
+                {tool.usageCount > 0 && <span className="text-[10px] p-text-3 ml-auto">{tool.usageCount} uses</span>}
               </div>
-            );
-          })}
+              <span className="text-xs p-text-2 block leading-relaxed mb-1.5">{tool.description}</span>
+              {tool.learned && <ScoreBar value={tool.qualityScore} className="mt-1" />}
+            </div>
+          ))}
         </div>
-      </section>
+      </Section>
 
       {/* Memory */}
-      <section>
-        <div className="flex items-center gap-2 mb-2.5">
-          <DatabaseIcon size={14} className="p-text-2" />
-          <span className="text-sm font-medium p-text">Memory</span>
-        </div>
+      <Section id="memory" title="Memory" icon={<DatabaseIcon size={14} className="p-text-2" />}>
         <div className="space-y-3">
           <div className="relative">
             <MagnifyingGlassIcon size={14} className="absolute left-3 top-1/2 -translate-y-1/2 p-text-3" />
@@ -135,16 +148,13 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
             </div>
           ))}
         </div>
-      </section>
+      </Section>
 
       {/* World model — keyed agent_facts the agent remembers across turns. */}
       {facts.length > 0 && (
-        <section>
-          <div className="flex items-center gap-2 mb-2.5">
-            <BrainIcon size={14} className="p-text-2" />
-            <span className="text-sm font-medium p-text">World model</span>
-            <Badge variant="secondary">{facts.length}</Badge>
-          </div>
+        <Section id="world-model" title="World model" defaultOpen={false}
+          icon={<BrainIcon size={14} className="p-text-2" />}
+          badge={<Badge variant="secondary">{facts.length}</Badge>}>
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {facts.map((f) => (
               <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0">
@@ -154,7 +164,7 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
               </div>
             ))}
           </div>
-        </section>
+        </Section>
       )}
     </div>
   );

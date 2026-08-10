@@ -18,7 +18,7 @@ import type { ChangelogEntry, ChangelogEntryKind } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines } from "./shared";
+import { DiffLines, Section } from "./shared";
 import type { DiffLine } from "@/lib/diff";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
@@ -147,13 +147,9 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
   };
 
   return (
-    <section>
-      <div className="flex items-center gap-2 mb-2.5">
-        <ClockCounterClockwiseIcon size={14} className="p-text-2" />
-        <span className="text-sm font-medium p-text">Changelog</span>
-        {view && view.entries.length > 0 && <Badge variant="secondary">{view.entries.length}</Badge>}
-      </div>
-
+    <Section id="changelog" title="Changelog"
+      icon={<ClockCounterClockwiseIcon size={14} className="p-text-2" />}
+      badge={view && view.entries.length > 0 ? <Badge variant="secondary">{view.entries.length}</Badge> : undefined}>
       {/* The section always renders. Returning null on a failed read made the
           agent's self-change record indistinguishable from a build that never
           had one — on the very surface that justifies autonomy-ON defaults. */}
@@ -244,6 +240,6 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
           })}
         </div>
       )}
-    </section>
+    </Section>
   );
 }

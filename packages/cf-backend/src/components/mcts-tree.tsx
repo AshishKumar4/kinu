@@ -27,9 +27,21 @@ const STATUS_ICON: Record<string, string> = {
 
 const MARGIN = { top: 50, right: 50, bottom: 50, left: 50 };
 
-function nodeColor(value: number, status: string): string {
-	if (status === "pruned" || status === "failed") return "oklch(0.4 0 0)";
-	return d3.interpolateRdYlGn(value);
+/**
+ * Node fill encodes score on the product's own danger→warning→success ramp.
+ * d3's `interpolateRdYlGn` was the app's largest chromatic surface and its
+ * only saturated red/green, so it read as a chart pasted onto the workshop.
+ * Interpolating in Lab keeps the perceptual spacing d3's ramp was chosen for.
+ */
+function scoreRamp(): (t: number) => string {
+	const cs = getComputedStyle(document.documentElement);
+	const tok = (name: string) => cs.getPropertyValue(name).trim();
+	return d3.piecewise(d3.interpolateLab, [tok("--c-danger"), tok("--c-warning"), tok("--c-success")]);
+}
+
+function nodeColor(value: number, status: string, ramp: (t: number) => string): string {
+	if (status === "pruned" || status === "failed") return "var(--c-text-3)";
+	return ramp(value);
 }
 
 function nodeRadius(visits: number): number {
@@ -162,16 +174,17 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 			.style("cursor", "pointer");
 
 		// Node circles (selection-dependent attrs applied below)
+		const ramp = scoreRamp();
 		nodes.append("circle")
 			.attr("r", (d) => nodeRadius(d.data.visits))
-			.attr("fill", (d) => nodeColor(d.data.value, d.data.status));
+			.attr("fill", (d) => nodeColor(d.data.value, d.data.status, ramp));
 
 		// Score label inside node
 		nodes.append("text")
 			.text((d) => d.data.value.toFixed(2))
 			.attr("text-anchor", "middle")
 			.attr("dy", "0.35em")
-			.attr("fill", "white")
+			.attr("fill", "var(--c-bg)")
 			.attr("font-size", (d) => nodeRadius(d.data.visits) > 14 ? "9px" : "7px")
 			.attr("font-family", "var(--font-mono)")
 			.attr("font-weight", "600")
@@ -263,8 +276,8 @@ export const MCTSTree = forwardRef<MCTSTreeHandle, Props>(function MCTSTree(
 				const scoreColor = n.value >= 0.7 ? "p-success" : n.value >= 0.4 ? "p-warning" : "p-danger";
 				return (
 				<div
-				className="absolute z-50 pointer-events-none p-surface border rounded-lg px-4 py-3 shadow-2xl text-xs animate-scale-in max-w-xs"
-				style={{ left: tooltip.x + 16, top: tooltip.y, borderColor: "var(--c-border)" }}
+				className="absolute z-50 pointer-events-none p-surface p-border border rounded-lg px-4 py-3 p-shadow-menu text-xs animate-scale-in max-w-xs"
+				style={{ left: tooltip.x + 16, top: tooltip.y }}
 			>
 				<div className="font-semibold p-text mb-2 leading-tight">
 					{STATUS_ICON[n.status]} {cleanNodeLabel(n.action, "(root)")}

@@ -48,9 +48,10 @@ function fmtElapsed(ms?: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+// 24h so the gutter is a fixed 8 characters wide in every locale.
 function fmtClock(ts: number): string {
   const d = new Date(ts);
-  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hourCycle: "h23", hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 export interface RunTimelineProps {
@@ -109,21 +110,22 @@ export function RunTimeline({ spans, selectedRef, onSelect, follow, onToggleFoll
                 <li key={`${s.ts}-${i}`}>
                   <button
                     onClick={() => onSelect?.(s)}
-                    className={`group w-full flex items-start gap-2 px-2 py-1 rounded-md text-left transition-colors ${
-                      selected ? "p-elevated" : "hover:p-card"
+                    className={`group w-full flex items-start gap-2 px-2 py-1 rounded-md text-left transition-colors cursor-pointer ${
+                      selected ? "p-span-selected" : "p-row-hover"
                     }`}
                   >
                     <span className={`mt-0.5 shrink-0 ${meta.tone}`}><Icon size={14} weight="bold" /></span>
                     <span className="min-w-0 flex-1">
-                      <span className="flex items-baseline gap-2">
-                        <span className="text-xs p-text truncate">{s.label}</span>
-                        {s.elapsedMs != null && (
-                          <span className="text-[10px] p-text-3 tabular-nums shrink-0">{fmtElapsed(s.elapsedMs)}</span>
-                        )}
-                      </span>
-                      {s.detail && <span className="block text-[10px] p-text-3 truncate">{s.detail}</span>}
+                      <span className="block p-row-text p-text truncate">{s.label}</span>
+                      {s.detail && <span className="block p-meta p-text-3 truncate">{s.detail}</span>}
                     </span>
-                    <span className="text-[9px] p-text-3 tabular-nums shrink-0 opacity-0 group-hover:opacity-100">{fmtClock(s.ts)}</span>
+                    {/* One instrument gutter, fixed width so timings column-align
+                        down the spine: elapsed at rest, wall clock under the
+                        cursor. Two gutters cost the label ~90px of width. */}
+                    <span className="shrink-0 w-14 text-right p-num text-[11px] leading-[18px] p-text-3">
+                      <span className="group-hover:hidden">{fmtElapsed(s.elapsedMs)}</span>
+                      <span className="hidden group-hover:inline">{fmtClock(s.ts)}</span>
+                    </span>
                   </button>
                 </li>
               );

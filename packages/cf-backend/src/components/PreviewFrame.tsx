@@ -43,7 +43,7 @@ export function PreviewFrame({ url, label }: {
         key={reloadKey}
         src={url}
         title={label ?? url}
-        className="flex-1 w-full bg-white"
+        className="p-bg flex-1 w-full"
         sandbox={IFRAME_SANDBOX}
       />
     </div>

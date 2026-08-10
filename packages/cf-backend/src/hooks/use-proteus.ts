@@ -836,16 +836,16 @@ export interface MctsRow {
 }
 
 interface ToolDescResult {
-  builtIn: Array<{ name: string; description: string }>;
-  crafted: Array<{ name: string; description: string; qualityScore?: number; usageCount?: number }>;
+  builtIn: Array<{ name: string; description: string; exposure: ToolInfo["exposure"] }>;
+  crafted: Array<{ name: string; description: string; exposure: ToolInfo["exposure"]; qualityScore?: number; usageCount?: number }>;
 }
 
 /** Map a getToolDescriptions result into the UI's ToolInfo[] — single source
  *  for the mapping used by both the initial load and live refresh. */
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
   return [
-    ...r.builtIn.map((t) => ({ name: t.name, description: t.description, scope: "local" as const, qualityScore: 1, usageCount: 0, lastUsed: "" })),
-    ...r.crafted.map((t) => ({ name: t.name, description: t.description, scope: "global" as const, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0, lastUsed: "" })),
+    ...r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 })),
+    ...r.crafted.map((t) => ({ ...t, learned: true, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0 })),
   ];
 }
 

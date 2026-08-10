@@ -2,6 +2,7 @@ import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMem
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
@@ -124,7 +125,7 @@ function InlineWorkspaceTitle({ title, onRename }: {
 
   return (
     <div className="group/title flex min-w-0 items-center gap-1">
-      <span className="font-medium text-sm p-text truncate max-w-[180px]">{title}</span>
+      <span className="font-medium text-sm p-text truncate max-w-[180px]" title={title}>{title}</span>
       <button
         onClick={() => setEditing(true)}
         className="shrink-0 rounded p-1 opacity-0 group-hover/title:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all"
@@ -179,26 +180,21 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 function ReasoningBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="p-card rounded-lg px-3 py-2 my-1.5" style={{ borderLeftWidth: 2, borderLeftColor: "var(--c-accent)" }}>
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs w-full text-left" style={{ color: "var(--c-sage)" }}>
-        <GearIcon size={12} className="shrink-0" />
-        <span className="font-medium">Thinking</span>
-        {expanded ? <CaretDownIcon size={12} className="ml-auto" /> : <CaretRightIcon size={12} className="ml-auto" />}
+    <div className="my-1.5">
+      <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
+        <BrainIcon size={14} className="shrink-0" />
+        <span className="font-medium">{expanded ? "Thoughts" : "Thinking"}</span>
+        {!expanded && <span className="min-w-0 truncate p-meta p-text-3 opacity-70">{text.slice(0, 90)}</span>}
+        <CaretRightIcon size={11} className={`shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/reason:opacity-100`} />
       </button>
-      <div className={`mt-1 text-xs p-text-2 whitespace-pre-wrap ${!expanded ? "line-clamp-2" : ""}`}>
-        {expanded ? text : text.length > 100 ? text.slice(0, 100) + "..." : text}
-      </div>
+      {expanded && (
+        <div className="mt-1.5 ml-[7px] border-l p-border pl-4 p-meta p-text-2 whitespace-pre-wrap leading-relaxed">
+          {text}
+        </div>
+      )}
     </div>
   );
 }
-
-/** Color-coded badge for the runtime a `run` tool call dispatched on. */
-const RUNTIME_COLORS: Record<string, string> = {
-  workspace: 'p-badge-neutral',
-  nimbus:    'p-badge-info',
-  sandbox:   'p-badge-success',
-  laptop:    'p-badge-warning',
-};
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
  *  string-ified tool output. Returns null if the output doesn't match. */
@@ -251,27 +247,24 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   // row of `agents` chips is six identical rows for six different calls.
   const summary = summarizeToolCall(toolName, input);
 
+  const failed = isError || !!provisionErr;
   return (
-    <div className="my-1.5">
-      <button onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-2 text-left text-xs p-text-2 hover:p-text transition-colors">
-        <span className="shrink-0 flex items-center">
-          {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="p-danger" /> : <CheckCircleIcon size={12} className="p-success" />}
+    <div className="my-0.5">
+      <button onClick={() => setExpanded(!expanded)} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
+        <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
+          {isRunning ? <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+            : failed ? <span className="size-1.5 rounded-full p-dot-danger" />
+            : <WrenchIcon size={13} className="p-text-3 opacity-60" />}
         </span>
-        <span className="font-mono shrink-0">{toolName}</span>
+        <span className={`font-mono text-[12px] shrink-0 ${isRunning ? "p-shimmer" : failed ? "p-danger" : ""}`}>{toolName}</span>
         {summary && (
-          <span className="min-w-0 truncate p-text-3" title={summary}>
-            <span aria-hidden>· </span>{summary}
-          </span>
+          <span className="min-w-0 truncate p-text-3" title={summary}>{summary}</span>
         )}
-        {runtime && (
-          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'p-badge-neutral'}`}
-                title={`Runtime: ${runtime}`}>
-            {runtime}
-          </span>
+        {runtime && runtime !== "workspace" && (
+          <span className="shrink-0 font-mono text-[11px] p-text-3" title={`Runtime: ${runtime}`}>@{runtime}</span>
         )}
-        {isRunning && <span className="shrink-0 p-warning text-[11px]">running...</span>}
-        {durationLabel && !isRunning && <span className="shrink-0 p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
-        <span className="shrink-0">{expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}</span>
+        {durationLabel && !isRunning && <span className="shrink-0 p-text-3 p-num text-[11px]">{durationLabel}</span>}
+        <CaretRightIcon size={11} className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/tool:opacity-100 ${expanded ? "opacity-100" : ""}`} />
       </button>
       {provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
@@ -289,15 +282,23 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
         </div>
       )}
       {expanded && (
-        <div className="mt-1.5 ml-5 space-y-1 animate-scale-in">
+        <div className="mt-1 ml-[7px] border-l p-border pl-4 space-y-2 animate-scale-in">
           {/* execute_tools is the agent's primary doing-mechanism: render the
               LLM-authored JS program legibly, not as escaped JSON. */}
           {toolName === "execute_tools" && typeof input?.code === "string" ? (
             <CodeBlock className="language-js">{input.code}</CodeBlock>
           ) : input != null ? (
-            <pre className="rounded-lg p-elevated border p-border p-2.5 text-xs font-mono p-text-2 max-h-40 overflow-auto">{JSON.stringify(input, null, 2)}</pre>
+            <div>
+              <div className="p-eyebrow mb-1">Input</div>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{JSON.stringify(input, null, 2)}</pre>
+            </div>
           ) : null}
-          {output != null && <pre className="rounded-lg p-elevated border p-border p-2.5 text-xs font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>}
+          {output != null && (
+            <div>
+              <div className="p-eyebrow mb-1">Output</div>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -305,7 +306,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
 }
 
 /** Consent card: an agent wants to use a connected device. */
-function DeviceConsentCard({ consent, onResolve }: {
+export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
@@ -338,7 +339,7 @@ function DeviceConsentCard({ consent, onResolve }: {
 /** Terminal chat error — the turn failed (provider error, stream break) and
  *  produced no visible answer. Shows the honest error body with a retry
  *  affordance; the hook clears it on the next send. */
-function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
+export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
   message: string;
   streaming: boolean;
   onRetry: () => void;
@@ -490,7 +491,7 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
 // Memoized: @ai-sdk's replaceMessage only clones the streaming message, so
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
-const MessageView = memo(function MessageView({
+export const MessageView = memo(function MessageView({
   message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles, takes, onPickTake,
   signalState,
 }: {
@@ -537,7 +538,7 @@ const MessageView = memo(function MessageView({
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
+        <div className="relative max-w-[75%] px-4 py-2.5 rounded-[14px] rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
@@ -578,12 +579,8 @@ const MessageView = memo(function MessageView({
   if (isLive && !hasContent) {
     return (
       <div className="flex items-center gap-2 animate-fade-in py-2">
-        <div className="flex gap-1">
-          <span className="size-1.5 rounded-full bg-[var(--c-text-3)] animate-bounce [animation-delay:0ms]" />
-          <span className="size-1.5 rounded-full bg-[var(--c-text-3)] animate-bounce [animation-delay:150ms]" />
-          <span className="size-1.5 rounded-full bg-[var(--c-text-3)] animate-bounce [animation-delay:300ms]" />
-        </div>
-        <span className="text-xs p-text-3">Thinking...</span>
+        <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+        <span className="p-row-text p-shimmer font-medium">Thinking</span>
       </div>
     );
   }
@@ -745,9 +742,9 @@ function ForkModal({
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={submit} disabled={busy}>
+        <button className={`p-btn ${btnSmCls}`} onClick={submit} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </Button>
+        </button>
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
@@ -835,19 +832,24 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
   const as = state.agentStatus;
   return (
-    <div className="relative flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
-        <div className="flex min-w-0 items-center gap-3">
+    <div className="@container relative flex flex-col flex-1 min-h-0">
+      <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <ConnectionIndicator status={state.connectionStatus} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || subName}</span>
-              {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+              <span className="font-medium text-sm p-text truncate">{as?.displayName || subName}</span>
+              {state.isStreaming && (
+                  <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
+                    <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
+                  </span>
+                )}
             </div>
-            {as?.purpose && <span className="block text-[11px] p-text-3 truncate max-w-[220px]">{as.purpose}</span>}
+            {as?.purpose && <span className="block text-[11px] p-text-3 truncate">{as.purpose}</span>}
           </div>
         </div>
-        <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="w-52" />
+        <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-28 @[30rem]:w-36 @[42rem]:w-44" />
       </div>
 
       <ErrorBoundary label="Subordinate chat">
@@ -880,7 +882,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
       <div className="px-5 py-3 border-t p-border lg:px-7">
         {state.error && <WorkspaceErrorBanner message={state.error} onRetry={state.retryLoad} />}
-        <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+        <div className="flex items-end gap-2.5 p-composer p-2.5">
           <InputArea ref={inputRef} value={input} onValueChange={setInput}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
             placeholder={`Message ${as?.displayName || subName}…`} disabled={state.connectionStatus !== "connected"} rows={1}
@@ -1204,10 +1206,10 @@ export default function WorkspacePage() {
           agent over time — curriculum, runs, automations). */}
       <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
         <span className="text-xs p-text-2 font-medium truncate">{workspaceTitle}</span>
-        <div className="ml-auto flex items-center gap-0.5 p-elevated rounded-md p-0.5">
+        <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
           {(["run", "supervise"] as const).map((a) => (
             <button key={a} onClick={() => setAltitude(a)}
-              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-card p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
               {a}
             </button>
           ))}
@@ -1238,7 +1240,7 @@ export default function WorkspacePage() {
             {subName ? (
               <SubordinateChatColumn key={subName} workspace={agentId} subName={subName} />
             ) : (
-            <div className="relative flex flex-col flex-1 min-h-0"
+            <div className="@container relative flex flex-col flex-1 min-h-0"
               onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
             {dragOver && (
               <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
@@ -1249,15 +1251,20 @@ export default function WorkspacePage() {
               </div>
             )}
             {/* Header */}
-            <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
-              <div className="flex min-w-0 items-center gap-3">
+            <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
+              <div className="flex min-w-0 flex-1 items-center gap-3">
                 <ConnectionIndicator status={state.connectionStatus} />
                 <InlineWorkspaceTitle title={workspaceTitle} onRename={state.setDisplayName} />
-                {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+                {state.isStreaming && (
+                  <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
+                    <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
+                  </span>
+                )}
                 {as?.forkLineage && (
                   <Link
                     to={`/workspace/${as.forkLineage.sourceWorkspaceName}`}
-                    className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
+                    className="shrink-0 flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
                     title={`Open parent workspace from ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
                   >
                     <GitBranchIcon size={10} />
@@ -1265,8 +1272,8 @@ export default function WorkspacePage() {
                   </Link>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="w-52" />
+              <div className="flex shrink-0 items-center gap-2">
+                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-28 @[30rem]:w-36 @[42rem]:w-44" />
                 <button
                   onClick={toggleTimeline}
                   title={timelineOpen ? "Hide run timeline" : "Show run timeline"}
@@ -1378,7 +1385,7 @@ export default function WorkspacePage() {
                   ))}
                 </div>
               )}
-              <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+              <div className="flex items-end gap-2.5 p-composer p-2.5">
                 <input ref={fileInputRef} type="file" multiple className="hidden"
                   onChange={e => { void addFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
                 <button onClick={() => fileInputRef.current?.click()} disabled={state.connectionStatus !== "connected"}
@@ -1490,7 +1497,7 @@ export default function WorkspacePage() {
           onClose={() => setShowClearConfirm(false)}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
-            <Button size="sm" variant="primary" onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</Button>
+            <button className={`p-btn-danger ${btnSmCls}`} onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</button>
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
@@ -1533,9 +1540,9 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={onConfirm} disabled={busy}>
+        <button className={`p-btn ${btnSmCls}`} onClick={onConfirm} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
-        </Button>
+        </button>
       </>}
     >
       <div className="space-y-2">

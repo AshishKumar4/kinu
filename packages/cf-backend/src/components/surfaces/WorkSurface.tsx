@@ -5,6 +5,7 @@
  * (Column B) drives which surface is active; this owns the switcher chrome +
  * dispatch.
  */
+import { useEffect, useRef } from "react";
 import {
   MonitorIcon, BrainIcon, TreeStructureIcon, ClockIcon, GitDiffIcon, StackIcon,
 } from "@phosphor-icons/react";
@@ -64,30 +65,45 @@ export interface WorkSurfaceProps {
 
 export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
+  const strip = useRef<HTMLDivElement>(null);
+
+  // The Run Timeline drives the active surface, so a tab can be selected
+  // without being clicked — keep it in view when the strip has to scroll.
+  useEffect(() => {
+    strip.current?.querySelector('[aria-current="true"]')
+      ?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [surface]);
+
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center border-b p-border px-2 gap-0.5 shrink-0">
-        {SURFACES.map((s) => {
-          const Icon = SURFACE_ICON[s];
-          // Live-port badge lights Output ONLY — one home per signal.
-          const badge = s === "Output" ? props.pinnedPorts.length
-            : s === "Tasks" ? (props.runningTaskCount ?? 0)
-            : s === "Brain" ? (props.changelogUnseen ?? 0) : 0;
-          const badgeTone = s === "Tasks" ? "p-badge-warning"
-            : s === "Brain" ? "p-accent-subtle p-accent"
-            : "p-badge-success";
-          return (
-            <button key={s} onClick={() => onSurface(s)}
-              className={`px-3 py-2.5 text-xs font-medium transition-colors border-b -mb-px flex items-center gap-1.5 ${
-                surface === s ? "p-tab-active border-b-[1.5px]" : "p-text-2 border-transparent hover:p-text"
-              }`}>
-              <Icon size={13} /><span>{s}</span>
-              {badge > 0 && (
-                <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold ${badgeTone}`}>{badge}</span>
-              )}
-            </button>
-          );
-        })}
+    <div className="@container flex flex-col h-full">
+      <div className="border-b p-border shrink-0">
+        {/* Six labelled surfaces need ~600px. Below that the switcher condenses
+            to icons and only the current surface keeps its word, so the row
+            stays one thin line instead of clipping a label; the strip still
+            scrolls as the last resort. */}
+        <div ref={strip} className="p-tabstrip flex items-center px-2 gap-0.5 -mb-px">
+          {SURFACES.map((s) => {
+            const Icon = SURFACE_ICON[s];
+            // Live-port badge lights Output ONLY — one home per signal.
+            const badge = s === "Output" ? props.pinnedPorts.length
+              : s === "Tasks" ? (props.runningTaskCount ?? 0)
+              : s === "Brain" ? (props.changelogUnseen ?? 0) : 0;
+            const badgeTone = s === "Tasks" ? "p-badge-warning"
+              : s === "Brain" ? "p-accent-subtle p-accent"
+              : "p-badge-success";
+            return (
+              <button key={s} onClick={() => onSurface(s)} title={s} aria-current={surface === s ? "true" : undefined}
+                className={`px-2 @[38rem]:px-3 py-2.5 p-row-text font-medium transition-colors border-b-2 shrink-0 whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
+                  surface === s ? "p-tab-active" : "p-text-3 border-transparent hover:p-text-2"
+                }`}>
+                <Icon size={14} /><span className={surface === s ? "" : "hidden @[38rem]:inline"}>{s}</span>
+                {badge > 0 && (
+                  <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold p-num ${badgeTone}`}>{badge}</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-5 min-h-0">

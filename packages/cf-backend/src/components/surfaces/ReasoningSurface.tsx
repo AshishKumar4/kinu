@@ -372,7 +372,7 @@ function MctsBranchInspector({
 
 function Metric({ label, value }: { label: string; value: React.ReactNode }) {
   return (
-    <div className="rounded-md border p-border bg-black/10 px-2 py-1.5">
+    <div className="rounded-md border p-border p-recessed px-2 py-1.5">
       <div className="text-[9px] uppercase tracking-normal p-text-3">{label}</div>
       <div className="text-[11px] p-text font-mono tabular-nums">{value}</div>
     </div>
@@ -889,13 +889,13 @@ function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; thre
     ...[...points].reverse().map((p, i) => `${x(points.length - 1 - i).toFixed(2)},${y(p.interval.lo).toFixed(2)}`),
   ].join(" ");
   const floorY = y(threshold).toFixed(2);
-  const dotColor = (s: number) => s >= 0.7 ? "var(--c-success, #34d399)" : s >= 0.4 ? "var(--c-warning, #fbbf24)" : "var(--c-danger, #f87171)";
+  const dotColor = (s: number) => s >= 0.7 ? "var(--c-success)" : s >= 0.4 ? "var(--c-warning)" : "var(--c-danger)";
   return (
     <div className="rounded-lg border p-border p-surface p-2">
       <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-24">
-        <line x1={pad} y1={floorY} x2={W - pad} y2={floorY} stroke="var(--c-text-3, #888)" strokeWidth={0.4} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" opacity={0.6} />
-        {n > 1 && <polygon points={band} fill="var(--c-accent, #38bdf8)" opacity={0.14} />}
-        {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent, #38bdf8)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
+        <line x1={pad} y1={floorY} x2={W - pad} y2={floorY} stroke="var(--c-text-3)" strokeWidth={0.4} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" opacity={0.6} />
+        {n > 1 && <polygon points={band} fill="var(--c-accent)" opacity={0.14} />}
+        {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
         {points.map((p, i) => (
           <circle key={p.id} cx={x(i)} cy={y(p.meanScore)} r={1.4} fill={dotColor(p.meanScore)} vectorEffect="non-scaling-stroke">
             <title>{`${new Date(p.ranAt).toLocaleString()} · score ${p.meanScore.toFixed(3)} (95% CI ${p.interval.lo.toFixed(2)}–${p.interval.hi.toFixed(2)}) · loss ${p.loss.toFixed(3)}${p.scaffoldVersion != null ? ` · scaffold v${p.scaffoldVersion}` : ""}`}</title>

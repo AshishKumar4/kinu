@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import {
   ArrowClockwiseIcon, CheckIcon, GitBranchIcon, GitDiffIcon, PlusIcon,
   ShieldCheckIcon, WarningIcon, XIcon,
@@ -191,10 +192,10 @@ function CreateChangeForm({
         <Field label="Plan"><TextArea value={plan} onChange={(e) => setPlan(e.target.value)} rows={2} /></Field>
       </div>
       {err && <div className="text-[11px] p-danger">{err}</div>}
-      <Button size="sm" variant="primary" disabled={busy || !bindingId || !prompt.trim()} onClick={create}
-        icon={busy ? <Loader size="sm" /> : <PlusIcon size={12} />}>
+      <button className={`p-btn ${btnSmCls}`} disabled={busy || !bindingId || !prompt.trim()} onClick={create}>
+        {busy ? <Loader size="sm" /> : <PlusIcon size={12} />}
         Create change
-      </Button>
+      </button>
     </div>
   );
 }

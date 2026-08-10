@@ -2992,9 +2992,19 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async getToolDescriptions() {
     // Descriptions sourced from @proteus/core/tools/registry — single truth.
     // Fixes F1 (tools.* → codemode.*) by virtue of the canonical source.
+
+    // How a capability is REACHED, derived rather than declared: a tool is
+    // native exactly when it is a key of the ToolSet the turn hands the model.
+    // Anything else is reachable only from inside an execute_tools program.
+    // Crafted tools are never ToolSet entries — buildCraftedToolSetFromExecute
+    // routes them through createExecuteTool's providers — so they come out
+    // codemode without a literal saying so, and a builtin that moves behind
+    // codemode flips here on its own.
+    const nativeNames = new Set(Object.keys(this.getRawTools()));
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
       description: BUILTIN_TOOL_DESCRIPTIONS[name],
+      exposure: (nativeNames.has(name) ? "native" : "codemode") as "native" | "codemode",
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
@@ -3004,6 +3014,7 @@ export class OrchestratorAgent extends ActorAgent {
         name: t.name,
         description: t.description || "Crafted tool",
         isLearned: true,
+        exposure: (nativeNames.has(t.name) ? "native" : "codemode") as "native" | "codemode",
         qualityScore: scoreRow[0]?.score ?? 0.5,
         usageCount: scoreRow[0]?.uses ?? 0,
       };

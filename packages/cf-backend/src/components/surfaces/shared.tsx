@@ -3,9 +3,9 @@
  * surfaces — kept in one place so there is a single source of truth (DRY) for
  * markdown rendering, code blocks, preview-URL detection, and empty states.
  */
-import { memo } from "react";
+import { memo, useState } from "react";
 import { Code } from "@cloudflare/kumo/components/code";
-import { CopyIcon } from "@phosphor-icons/react";
+import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { MAX_LINES_PER_FILE, type DiffLine } from "@/lib/diff";
@@ -115,3 +115,60 @@ export const EMPTY_HINTS: Record<string, string> = {
   mcts: "Exploration trees appear when the agent uses think(strategy:'mcts') to investigate subproblems.",
   preview: "When the agent exposes a port (sandbox.exposePort), the running app appears here as a live preview.",
 };
+
+/**
+ * A titled, collapsible section — the one header grammar the work surfaces
+ * use, so the six that hand-rolled `<section><div flex gap-2>…` stay aligned.
+ *
+ * The Brain surface stacks identity, changelog, scaffold lineage, tools,
+ * memory and the world model into one scroll; being able to fold the ones you
+ * are not reading is what makes it usable at length. Which sections a person
+ * keeps folded is a property of that person's workspace, not of the agent, so
+ * it lives in localStorage beside the theme choice rather than in agent state.
+ *
+ * `id` is that persistence key and must be stable across renames of `title`.
+ */
+export function Section({ id, title, icon, badge, defaultOpen = true, children }: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const key = `proteus.section.${id}`;
+  // Read once on mount and write only on toggle: an effect that mirrored state
+  // would stamp every default into storage on first paint, which then looks
+  // like a choice the user made and freezes the defaults forever.
+  const [open, setOpen] = useState(() => {
+    const stored = localStorage.getItem(key);
+    return stored === null ? defaultOpen : stored === "1";
+  });
+
+  const toggle = () => {
+    setOpen((prev) => {
+      localStorage.setItem(key, prev ? "0" : "1");
+      return !prev;
+    });
+  };
+
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="group/section flex w-full items-center gap-2 rounded-md py-1 text-left cursor-pointer p-row-hover transition-colors"
+      >
+        <CaretRightIcon
+          size={12}
+          className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
+        {icon}
+        <span className="text-sm font-medium p-text">{title}</span>
+        {badge}
+      </button>
+      {open && <div className="mt-2.5">{children}</div>}
+    </section>
+  );
+}
