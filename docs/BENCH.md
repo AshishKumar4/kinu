@@ -444,6 +444,29 @@ Model access comes from `PROTEUS_BASE_URL` (default OpenRouter),
 `OPENROUTER_API_KEY`/`OPENAI_API_KEY` (or a complete `PROTEUS_AUTH` header), and
 `-m` for the model id as the endpoint's provider names it.
 
+### Isolation, and where the key goes
+
+Two properties the adapter enforces rather than assumes.
+
+**`PROTEUS_HOME` is set, always.** Everything durable a local run writes —
+config, the workspace database, sessions, shadow-git checkpoints — lands under
+`$PROTEUS_HOME`, and an unset one means `~/.proteus`. The adapter points it at
+`/installed-agent/proteus-home`, created per container and destroyed with it, and
+puts that path through `bench/isolation.py` — the Python counterpart of
+`assertScratchRoot`, which refuses an unset or relative home, the operator's real
+`~/.proteus`, and anything inside this checkout. The CL-Bench adapter resolves
+its own home through the same function, so the rule has one definition and a
+launcher that skips it fails loudly.
+
+**The credential never reaches a command line.** Harbor renders per-exec
+environment as `docker compose exec -e KEY=VALUE`, which publishes the value to
+every `ps` on the host and to Harbor's own command log. So the adapter uploads
+the run environment into the container as `/installed-agent/proteus.env`, mode
+0600 and owned by the agent user, and every Proteus invocation is wrapped in
+`set -a; . /installed-agent/proteus.env; set +a;`. The command line names the
+path and nothing else; there is no second way for the adapter to pass
+configuration, so there is no second way for a key to leak back onto argv.
+
 ### How it installs
 
 DeepSWE task images declare `allow_internet = false`, and the install phase runs
