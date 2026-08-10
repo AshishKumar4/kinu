@@ -589,6 +589,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
         if (status.status !== 'running') addMessage({ role: 'system', content: describeBranchStatus(status) });
         break;
       }
+      case 'run-event':
+        break;
     }
   }, [addMessage, beginSegment, client, dispatchInput, runInputEffects, sealSegment, stream]);
 

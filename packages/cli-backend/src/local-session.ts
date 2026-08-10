@@ -126,7 +126,12 @@ export type SessionEvent =
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
-  | { type: 'broadcast'; event: BroadcastEvent };
+  | { type: 'broadcast'; event: BroadcastEvent }
+  /** One durable run-event, forwarded live as the recorder writes it. The
+   *  run_events table is the agent's instrumentation ledger (nudges, context
+   *  budget, refused budgets); a container-scoped database dies with the
+   *  container, so the stream is the only way an outside observer sees it. */
+  | { type: 'run-event'; event: RunEvent };
 
 /** An interactive answer to a gated shell command. Resolving null declines to
  *  decide, leaving the standing approval mode's own answer in force. */
@@ -444,6 +449,10 @@ export class LocalAgentSession implements BackendHost {
     // local workspace had no replayable run history at all.
     initRunEventTables(this.rt.storage.execRaw);
     this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
+    // …and forwarded to the frontends as it is written. The table alone is
+    // observable only to something that outlives the database, which a
+    // benchmark container or a one-shot `proteus exec` does not.
+    this.eventRecorder.observe((event) => this.emit({ type: 'run-event', event }));
 
     // The cumulative spend governor — a scheduled run or a fork opts into a
     // label, and its refusals land in this run's durable event log. No label

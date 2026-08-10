@@ -262,6 +262,16 @@ describe("proteus exec (headless)", () => {
       const turnEnd = events.find((e) => e.type === "turn_end");
       expect(turnEnd).toMatchObject({ hadError: false });
 
+      // The durable run-event ledger rides the same stream. Without it the log
+      // is readable only from inside the agent's own database, which a
+      // container-scoped run destroys on exit.
+      const ledger = events
+        .filter((e) => e.type === "run_event")
+        .map((e) => (e as { event: { type: string } }).event);
+      expect(ledger.map((e) => e.type)).toEqual(["run_start", "turn_start", "step_finish", "turn_end", "run_end"]);
+      expect(ledger.every((e) => typeof (e as { runId?: unknown }).runId === "string")).toBe(true);
+      expect(new Set(ledger.map((e) => (e as { runId: string }).runId)).size).toBe(1);
+
       // --resume continues the same recorded session instead of opening a new one.
       const sessionId = String((events[0] as { id: string }).id);
       const resumed = runCli(["exec", "--workspace", "smokey", "--json", "--resume", sessionId, "Say hello again"], { home, env });
@@ -344,6 +354,51 @@ describe("proteus exec (headless)", () => {
   });
 });
 
+// The mechanical delegation nudge is the strongest causally-measured result in
+// the program, and it was measurable only from the run_events table inside the
+// agent's database — which a benchmark container deletes with the container.
+// Zero nudges were observable across a whole ten-task run as a result.
+describe("proteus exec --json — the delegation nudge is observable from outside", () => {
+  test("a turn that grinds on one failing tool reports its nudge, trigger and conversion", async () => {
+    const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-nudge-"));
+    tempDirs.push(home);
+    // Three failures from the same tool is the `repeated_failure` trigger; an
+    // unregistered runtime fails deterministically without touching a shell.
+    const server = startToolLoopMockLlm(
+      { name: "run", arguments: JSON.stringify({ command: "true", runtime: "nonexistent" }) },
+      3,
+      "gave up",
+    );
+    try {
+      const env = {
+        PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
+        PROTEUS_AUTH: "Bearer mock",
+        PROTEUS_MODEL: "mock-model",
+      };
+      expect(runCli(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+
+      const proc = runCli(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
+      const lines = proc.stdout.toString().trim().split("\n");
+      const events = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+
+      const nudges = events
+        .filter((e) => e.type === "run_event")
+        .map((e) => (e as { event: Record<string, unknown> }).event)
+        .filter((e) => e.type === "delegation_nudge");
+      expect(nudges).toHaveLength(1);
+      expect(nudges[0]).toMatchObject({
+        trigger: "repeated_failure",
+        tool: "run",
+        // The model was told and pushed on alone — the conversion denominator.
+        converted: false,
+      });
+      expect(typeof nudges[0]!.step).toBe("number");
+    } finally {
+      server.stop();
+    }
+  }, 120_000);
+});
+
 /** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks
  *  for stream requests and returns a completion object otherwise. */
 function startMockLlm(answer: string): { port: number; stop(): void } {
@@ -380,6 +435,63 @@ function startMockLlm(answer: string): { port: number; stop(): void } {
         "data: [DONE]\n\n",
       ].join("");
       return new Response(sse, { headers: { "content-type": "text/event-stream" } });
+    },
+  });
+  return { port: server.port, stop: () => server.stop(true) };
+}
+
+/** Like startMockLlm, but the first `calls` streamed responses are the SAME
+ *  tool call and the next one is the final answer — a turn that grinds. */
+function startToolLoopMockLlm(
+  call: { name: string; arguments: string },
+  calls: number,
+  answer: string,
+): { port: number; stop(): void } {
+  let streamed = 0;
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    async fetch(request) {
+      if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
+        return new Response("not found", { status: 404 });
+      }
+      const body = await request.json().catch(() => ({})) as { stream?: boolean };
+      const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
+      if (!body.stream) {
+        return Response.json({
+          id: "chatcmpl-mock", object: "chat.completion", created: 1, model: "mock-model",
+          choices: [{ index: 0, message: { role: "assistant", content: answer }, finish_reason: "stop" }],
+          usage,
+        });
+      }
+      const step = streamed++;
+      const chunk = (choice: unknown, extra: Record<string, unknown> = {}) =>
+        `data: ${JSON.stringify({
+          id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
+          choices: [choice], ...extra,
+        })}\n\n`;
+      const body_ = step < calls
+        ? [
+            chunk({
+              index: 0,
+              delta: {
+                role: "assistant",
+                tool_calls: [{
+                  index: 0, id: `call-${step}`, type: "function",
+                  function: { name: call.name, arguments: call.arguments },
+                }],
+              },
+              finish_reason: null,
+            }),
+            chunk({ index: 0, delta: {}, finish_reason: "tool_calls" }, { usage }),
+          ]
+        : [
+            chunk({ index: 0, delta: { role: "assistant", content: answer }, finish_reason: null }),
+            chunk({ index: 0, delta: {}, finish_reason: "stop" }, { usage }),
+          ];
+      return new Response([...body_, "data: [DONE]\n\n"].join(""), {
+        headers: { "content-type": "text/event-stream" },
+      });
     },
   });
   return { port: server.port, stop: () => server.stop(true) };

@@ -16,6 +16,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- `proteus exec --json` now carries the agent's durable run-event ledger: one
+  `run_event` line per row, wrapping the row verbatim. That is where the
+  delegation nudge (which trigger fired, and whether the model then reached for
+  `agents`), the turn's context budget, and a refused mission budget are
+  recorded. The rows live in the workspace database, which a one-shot run in a
+  container destroys on exit, so nothing outside the process could read them —
+  a benchmark measured zero nudges for want of a channel. Terminal output is
+  unchanged. A row is written when its turn settles, so a turn killed mid-flight
+  still leaves none.
 - `agents` `ask`/`send` now tell the sender what happened to the work:
   `event_id` (the id the eventual report cites), `delivery`
   (`steering_live_turn` / `starts_now` / `queued`) and `subordinate_phase`.

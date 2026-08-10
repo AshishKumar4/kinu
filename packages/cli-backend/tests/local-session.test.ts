@@ -2087,6 +2087,23 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
 });
 
 describe('LocalAgentSession — the durable run-event log', () => {
+  // The table is scoped to the agent's database, which a one-shot run or a
+  // benchmark container destroys on exit. Every row is therefore also handed
+  // to the frontend as it is written, from the one recorder, so the live
+  // stream and the durable table can never disagree.
+  test('every recorded row is forwarded to the frontend as it is written', async () => {
+    const { session, events } = setup('hello there');
+    await session.send('hi');
+
+    const runId = session.listRuns()[0]!.runId;
+    const streamed = events
+      .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
+      .map((e) => e.event);
+    expect(streamed).toEqual(session.getRunEvents(runId));
+
+    await session.end();
+  });
+
   test('a turn records a replayable run in run_events', async () => {
     // Backend parity: the DO persists every run into run_events and can replay
     // it (list_run_events / SSE Last-Event-ID resume). The CLI recorded nothing

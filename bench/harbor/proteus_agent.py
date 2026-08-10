@@ -229,4 +229,5 @@ class ProteusAgent(BaseInstalledAgent):
             "had_error": summary.had_error,
             "errors": summary.errors,
             "evolution_events": summary.evolution_events,
+            "run_events": summary.run_events,
         }

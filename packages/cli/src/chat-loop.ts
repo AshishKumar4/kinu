@@ -521,6 +521,7 @@ function renderClientEvent(
       break;
     case 'turn-end':
     case 'step-finish':
+    case 'run-event':
       break;
   }
 }

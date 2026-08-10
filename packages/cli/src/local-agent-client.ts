@@ -507,6 +507,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
       return { type: 'evolution', event: event.event, message: event.message };
     case 'broadcast':
       return { type: 'broadcast', event: event.event };
+    case 'run-event':
+      return { type: 'run-event', event: event.event };
     case 'error':
       return { type: 'error', message: event.message };
   }

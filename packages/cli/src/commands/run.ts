@@ -511,6 +511,7 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'step-finish':
     case 'evolution':
     case 'broadcast':
+    case 'run-event':
       break;
   }
 }
@@ -556,6 +557,13 @@ function jsonEvents(event: AgentClientEvent): unknown[] {
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'broadcast':
       return [{ type: 'broadcast', event: event.event }];
+    // The durable ledger, verbatim and whole: every RunEvent kind travels
+    // under one envelope so a consumer reads `event.type` rather than waiting
+    // for this switch to learn about the next kind. Enveloped rather than
+    // flattened because the ledger's own `turn_start`/`turn_end`/`error` names
+    // collide with the presentation events above.
+    case 'run-event':
+      return [{ type: 'run_event', event: event.event }];
   }
 }
 

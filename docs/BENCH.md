@@ -467,6 +467,16 @@ Reading the stream is `bench/clbench/proteus/events.py` — one reader for the
 CLI's event contract, shared with the CL-Bench adapter, so a change to the event
 shape breaks a test instead of quietly degrading two benchmark scores.
 
+The stream also carries the agent's durable run-event ledger: one `run_event`
+line per row of its `run_events` table, wrapping the row verbatim. That is where
+the harness-side measurements live — `delegation_nudge` (which trigger fired,
+and whether the model then reached for `agents`), `context_budget`,
+`budget_exhausted`. The table itself is inside the container's database and dies
+with the container, so the stream is the only copy: `run_events(events, …)`
+reads it, and the adapter keeps it in `trajectory.json` and the trial metadata.
+A row is written when its turn settles, so a trial killed by the agent timeout
+carries no ledger for that turn — the measurement covers completed turns.
+
 ### What the `evolve` switch measures here, and what it does not
 
 Harbor gives every trial its own container, and the adapter creates a fresh
