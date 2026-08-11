@@ -28,7 +28,6 @@ export {
 export {
   compactionTranscriptPath,
   createVfsTranscriptStore,
-  initCompactionStateTable,
   createCompactionStateStore,
   type CompactionStateStore,
 } from './stores.js';

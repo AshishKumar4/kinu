@@ -6,13 +6,13 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildOutcomeEvalSplit, initTurnOutcomeTables, recordTurnOutcome } from '@proteus/core';
+import { buildOutcomeEvalSplit, initTurnOutcomeTables, recordTurnOutcome } from '../src/index.js';
 import { createTestSql } from '@proteus/test-utils';
 
-const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
+const control = readFileSync(join(import.meta.dir, '..', 'src', 'evolution', 'control.ts'), 'utf8');
 const gepaCall = (() => {
-  const start = orchestrator.indexOf('async runScaffoldGepaOptimization(');
-  return orchestrator.slice(start, orchestrator.indexOf('@callable()', start));
+  const start = control.indexOf('export async function runScaffoldGepaOptimization(');
+  return control.slice(start, control.indexOf('\nexport ', start + 1));
 })();
 
 describe('runScaffoldGepaOptimization — split wiring', () => {

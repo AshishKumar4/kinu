@@ -7,7 +7,9 @@
  */
 
 import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
-import type { Storage, Schedule, Memory, VFS, SqlExecutor, SqlValue, RawSqlExec } from '@proteus/core';
+import type {
+  Storage, Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
+} from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
 import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
 import { spawn } from 'node:child_process';
@@ -48,6 +50,12 @@ export interface CLIRuntimeConfig {
   checkpointKeep?: number;
 }
 
+/** The bun:sqlite surface every local SQL adapter here needs. */
+export interface LocalDb {
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
+  exec(sql: string): void;
+}
+
 export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void } }): SqlExecutor {
   const sql = function <T = unknown>(
     strings: TemplateStringsArray,
@@ -68,6 +76,30 @@ export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]):
 
 export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
   return (ddl: string) => db.exec(ddl);
+}
+
+/** Positional-binding SQL — what the events hub, the product-change board and
+ *  the experience library speak. A Durable Object's `ctx.storage.sql` is this
+ *  natively; bun:sqlite is one wrapper away. */
+export function makeSqlExec(db: {
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
+}): SqlExec {
+  return {
+    exec(query: string, ...bindings: unknown[]) {
+      const stmt = db.prepare(query);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
+        return { toArray: () => stmt.all(...bindings) as Array<Record<string, unknown>> };
+      }
+      stmt.run(...bindings);
+      return { toArray: () => [] };
+    },
+  };
+}
+
+/** The three handles core's `initWorkspaceSchema` needs, all onto one local
+ *  database — so no caller can pair a DDL handle with another file's reads. */
+export function makeWorkspaceSchemaSql(db: LocalDb): WorkspaceSchemaSql {
+  return { execRaw: makeExecRaw(db), sql: makeSql(db), exec: makeSqlExec(db) };
 }
 
 /**

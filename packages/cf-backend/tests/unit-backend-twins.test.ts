@@ -8,19 +8,26 @@
  * asserts they agree. Several of the "X never worked on Y backend" defects
  * were exactly a twin whose halves drifted.
  *
- * This gate does not forbid the 54 twins that exist — they are recorded below
- * as the measured baseline. It forbids the inventory from drifting in either
+ * A shared NAME does not always mean unshared logic, though: once a driver is
+ * hoisted, both backends keep the method as a transport over the one core
+ * implementation. Those are recorded separately, in SHARED_TRANSPORTS, each
+ * naming the core symbol it delegates to — and the gate CHECKS that claim
+ * against both bodies, so an entry cannot be moved out of the twin count
+ * without the delegation actually existing.
+ *
+ * This gate does not forbid the twins that exist — they are recorded below as
+ * the measured baseline. It forbids the inventory from drifting in either
  * direction:
  *
  *   a NEW twin appears      → red. Hoist the logic to core instead, or record
- *                             the twin here — a deliberate, visible decision.
+ *                             it — as a twin, or as a transport that names its
+ *                             core symbol. Either way, a visible decision.
  *   a recorded twin is gone → red. It was hoisted or renamed — delete its
  *                             entry, so the inventory only ever shrinks by
  *                             real hoists and the list stays the honest
  *                             measure of remaining duplication.
  *
- * Every future hoist's success criterion is an entry disappearing from this
- * list.
+ * Every future hoist's success criterion is an entry leaving KNOWN_TWINS.
  */
 
 import { describe, expect, test } from 'bun:test';
@@ -31,7 +38,6 @@ const REPO = resolve(import.meta.dir, '../../..');
 
 /** The measured twin inventory at seeding time. Shrink by hoisting. */
 const KNOWN_TWINS: readonly string[] = [
-  'applyScaffoldDecision',
   'armCompactNow',
   'cancelBackgroundJob',
   'cancelTrigger',
@@ -46,7 +52,6 @@ const KNOWN_TWINS: readonly string[] = [
   'getReasoningEffort',
   'getReplayEvals',
   'getRunEvents',
-  'getShadowStatus',
   'getShellApprovalMode',
   'getSkillsVfs',
   'getStoredModelSpec',
@@ -58,7 +63,6 @@ const KNOWN_TWINS: readonly string[] = [
   'listFileCheckpoints',
   'listRecentEvents',
   'listRuns',
-  'listScaffoldVersions',
   'listTriggers',
   'makeScaffoldCallTool',
   'makeScaffoldHistory',
@@ -67,7 +71,6 @@ const KNOWN_TWINS: readonly string[] = [
   'pickAlternateTake',
   'planFileRestore',
   'proposeCurriculumTasks',
-  'proposeScaffold',
   'readInheritedContext',
   'recordHeadsTake',
   'recordSystemPromptHash',
@@ -76,6 +79,10 @@ const KNOWN_TWINS: readonly string[] = [
   'resumeBackgroundJob',
   'revertChangelogEntry',
   'runShadowEvalSampled',
+  // The seam itself, not duplication: each backend describes the inference
+  // surface a candidate scaffold runs on (its ToolSet, its history, its
+  // default loop). This entry is not expected to shrink.
+  'scaffoldControl',
   'sessionAcceptedMedia',
   'sessionContextWindow',
   'setAlwaysActiveSkills',
@@ -86,6 +93,22 @@ const KNOWN_TWINS: readonly string[] = [
   'settlePendingBranches',
   'wrapToolsForBackground',
 ];
+
+/**
+ * Same name on both backends, one implementation in core: the method is the
+ * backend's transport for it. Each entry names the core symbol both bodies
+ * must call — asserted below, so this list cannot launder a real twin.
+ */
+const SHARED_TRANSPORTS: Readonly<Record<string, string>> = {
+  applyScaffoldDecision: 'applyScaffoldDecision',
+  getGepaRuns: 'listGepaRuns',
+  getShadowStatus: 'getShadowStatus',
+  listScaffoldVersions: 'listScaffoldVersions',
+  previewScaffoldLive: 'previewScaffoldLive',
+  proposeScaffold: 'proposeScaffold',
+  runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
+  runScaffoldOnce: 'runScaffoldOnce',
+};
 
 /** The class bodies that constitute each backend's composition surface. */
 const CF_CLASSES = [
@@ -133,21 +156,31 @@ function methodNames(body: string): Set<string> {
   return names;
 }
 
-function scanTwins(): { cf: Set<string>; cli: Set<string>; twins: string[] } {
+function scanTwins(): {
+  cf: Set<string>; cli: Set<string>; twins: string[]; cfBodies: string[]; cliBody: string;
+} {
   const cf = new Set<string>();
+  const cfBodies: string[] = [];
   for (const [file, cls] of CF_CLASSES) {
     const body = classBody(file, cls);
     expect({ file, cls, found: body !== null }).toEqual({ file, cls, found: true });
+    cfBodies.push(body!);
     for (const name of methodNames(body!)) cf.add(name);
   }
   const cliBody = classBody(CLI_CLASS[0], CLI_CLASS[1]);
   expect(cliBody).not.toBeNull();
   const cli = methodNames(cliBody!);
-  return { cf, cli, twins: [...cf].filter((n) => cli.has(n)).sort() };
+  return { cf, cli, twins: [...cf].filter((n) => cli.has(n)).sort(), cfBodies, cliBody: cliBody! };
+}
+
+/** A bare `symbol(` call — not `this.symbol(`, not `store.symbol(`. */
+function callsFreeFunction(body: string, symbol: string): boolean {
+  return new RegExp(String.raw`(?<![.\w])${symbol}\s*\(`).test(body);
 }
 
 describe('backend twin methods', () => {
-  const { cf, cli, twins } = scanTwins();
+  const { cf, cli, twins, cfBodies, cliBody } = scanTwins();
+  const recorded = new Set([...KNOWN_TWINS, ...Object.keys(SHARED_TRANSPORTS)]);
 
   test('the extractor sees real class surfaces (guards the guard)', () => {
     // A broken extractor returning near-empty sets would make "no new twins"
@@ -158,12 +191,25 @@ describe('backend twin methods', () => {
   });
 
   test('no NEW twin: logic added to both backends belongs in core', () => {
-    const known = new Set(KNOWN_TWINS);
-    expect(twins.filter((n) => !known.has(n))).toEqual([]);
+    expect(twins.filter((n) => !recorded.has(n))).toEqual([]);
   });
 
   test('no STALE entry: a hoisted twin leaves the inventory', () => {
     const seen = new Set(twins);
-    expect(KNOWN_TWINS.filter((n) => !seen.has(n))).toEqual([]);
+    expect([...recorded].filter((n) => !seen.has(n)).sort()).toEqual([]);
+  });
+
+  test('a name is recorded once: a transport is not also a twin', () => {
+    expect(KNOWN_TWINS.filter((n) => n in SHARED_TRANSPORTS)).toEqual([]);
+  });
+
+  test('every declared transport really delegates to its core symbol', () => {
+    // Without this, SHARED_TRANSPORTS would be a way to assert duplication
+    // away. Both sides must actually reach the named core implementation.
+    const unproven = Object.entries(SHARED_TRANSPORTS)
+      .filter(([, symbol]) =>
+        !callsFreeFunction(cliBody, symbol) || !cfBodies.some((b) => callsFreeFunction(b, symbol)))
+      .map(([name]) => name);
+    expect(unproven).toEqual([]);
   });
 });

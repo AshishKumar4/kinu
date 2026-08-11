@@ -3,6 +3,9 @@
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
 export { readActivityLog, type ActivityLogEntry } from './identity/activity-log.js';
+// The one answer to "which tables a workspace has" — every composition root
+// calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
+export { initWorkspaceSchema, type WorkspaceSchemaSql } from './identity/workspace-schema.js';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -481,6 +484,7 @@ export {
 export {
   extractJsonArray,
   extractJsonObject,
+  generateJson,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
 } from './prompts/structured.js';
@@ -925,6 +929,16 @@ export type {
 // al., ICLR 2026 (arxiv 2507.19457).
 // Only the entry points + persistence + types are public; the algorithm
 // internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
+// The scaffold evolution CONTROL PLANE — the drivers over those primitives.
+// They used to be Durable Object methods, which is why GEPA could not be run
+// from the CLI at all; both backends now call these.
+export {
+  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  runScaffoldOnce,
+  type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
+  type ScaffoldDecisionResult, type ScaffoldSurface, type ScaffoldVersionView, type ShadowStatus,
+} from './evolution/control.js';
 export {
   runGepa, runScaffoldGepa,
   DEFAULT_GEPA_BUDGET,

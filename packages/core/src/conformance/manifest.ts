@@ -177,11 +177,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     head_evidence: EVERYWHERE,
     head_steps: EVERYWHERE,
     head_merge_results: EVERYWHERE,
-    mcts_search_runs: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: LAZY_ON_FIRST_USE('the MCTS engine') },
-    },
+    mcts_search_runs: EVERYWHERE,
 
     // ── events hub ──
     agent_log: EVERYWHERE,
@@ -199,21 +195,9 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     imported_experience: EVERYWHERE,
 
     // ── gepa ──
-    gepa_runs: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: LAZY_ON_FIRST_USE('the GEPA persistence layer') },
-    },
-    gepa_candidates: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: LAZY_ON_FIRST_USE('the GEPA persistence layer') },
-    },
-    gepa_pareto_membership: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': WIRED,
-      cli: { absent: LAZY_ON_FIRST_USE('the GEPA persistence layer') },
-    },
+    gepa_runs: EVERYWHERE,
+    gepa_candidates: EVERYWHERE,
+    gepa_pareto_membership: EVERYWHERE,
 
     // ── product change ──
     // The board's home differs by backend and nothing recorded that until this

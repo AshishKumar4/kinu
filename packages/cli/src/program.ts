@@ -381,7 +381,11 @@ export function buildProgram(): Command {
   program
     .command('gepa <name> [runId]')
     .helpGroup(INSPECT)
-    .description('Inspect GEPA optimization runs')
+    .description('Inspect GEPA optimization runs, or run a pass with --run')
+    .option('--run', 'Run one optimisation pass over the scaffold')
+    .option('--iterations <n>', 'Reflection iterations (--run)')
+    .option('--eval-size <n>', 'Labeled turns to draw the split from (--run)')
+    .option('--metric-calls <n>', 'Metric-call ceiling (--run)')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(gepaCommand));

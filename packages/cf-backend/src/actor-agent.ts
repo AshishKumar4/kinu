@@ -29,7 +29,6 @@ import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { McpToolSurface } from "./user/user-do.js";
-import { generateJson } from "./lib/generate-json.js";
 import type {
   TurnContext, TurnConfig,
   ToolCallResultContext, StepContext, ChunkContext,
@@ -117,6 +116,7 @@ import {
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  generateJson,
 } from "@proteus/core";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";

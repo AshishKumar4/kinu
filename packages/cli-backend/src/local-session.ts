@@ -15,7 +15,7 @@
 import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
 import {
   createCompactionExtension, createVfsTranscriptStore,
-  createCompactionStateStore, initCompactionStateTable, createModelSummarizer,
+  createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
@@ -33,18 +33,18 @@ import type {
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, initBackgroundJobsTable,
+  BackgroundJobStore, BackgroundJobRunner, JobNotResumable,
   wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
-  EventLog, initEventsHubTables,
-  RunEventRecorder, initRunEventTables,
+  EventLog,
+  RunEventRecorder,
   TriggerRegistry, nextCronFire,
   EvolutionEngine,
-  initAgentConfigTable, createAgentConfigStore,
-  initFactsTable, createFactsStore, initImportedExperienceTable, readMemoryTail,
-  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  createAgentConfigStore,
+  createFactsStore, readMemoryTail,
+  proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
-  HeadController, HeadJournal, initHeadsTables,
+  HeadController, HeadJournal,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   recordGroundedHeadsTake, inheritedContextFromHistory,
   ModelCatalogSession,
@@ -62,7 +62,13 @@ import {
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
   type MediaModality,
-  createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
+  createProductChangeStore, initProductChangeTables, productChangeSqlFromExec, initWorkspaceSchema,
+  // The scaffold evolution control plane — core owns the drivers; this session
+  // supplies the local surface they run against.
+  applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listGepaRuns, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldGepaOptimization, runScaffoldOnce,
+  type GepaOptimizationResult, type GepaRunSummary, type ScaffoldControl,
+  type ScaffoldDecisionResult, type ScaffoldVersionView, type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
   buildChangelog, countUnseenChangelog, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
@@ -72,16 +78,15 @@ import {
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
   SCAFFOLD_TURN_TIMEOUT_MS,
-  createStructuredJudge, modifyScaffold, listScaffoldArchive,
-  getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
-  initShadowTables,
+  createStructuredJudge,
   type AlternateTakeSet, type TakePickOutcome,
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
   isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort, type CacheRetention, type SqlExec,
+  type ReasoningEffort, type CacheRetention,
 } from '@proteus/core';
+import { makeSqlExec } from './runtime.js';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
@@ -381,37 +386,25 @@ export class LocalAgentSession implements BackendHost {
     });
     this.engine.onEvent((e) => this.emit({ type: 'evolution', event: e.type, message: e.message }));
 
+    // Every table a workspace has, on any backend — one list, in core. A
+    // session can be constructed against a database that no open path touched
+    // (a benchmark harness, `proteus exec` on a fresh clone), so it runs here
+    // too rather than trusting an earlier caller.
+    const hubSql = makeSqlExec(opts.db);
+    initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
+
     // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
     // this session as the BackendHost (enqueueTurn wakes the agent).
-    initBackgroundJobsTable(this.rt.storage.execRaw);
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
     this.headJournal = new HeadJournal(this.rt.storage.sql);
     this.mctsSearchStore = new MctsSearchStore(this.rt.storage.sql);
-    // agent_config (typed key/value) — backs always-active skills, etc.
-    initAgentConfigTable(this.rt.storage.execRaw);
     this.config = createAgentConfigStore(this.rt.storage.sql);
-
-    // Shadow-rollout ledger (scaffold_evaluations). Provisioned at session
-    // init, exactly as the DO does — creation-time-only would leave every
-    // workspace made before this silently unable to record a trial.
-    initShadowTables(this.rt.storage.execRaw);
-
-    // agent_facts world model — backs `memory`'s keyed-fact actions
-    // (remember/recall/forget), parity with the DO.
-    initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
-
-    // Imported-experience staging ledger. A local session has no owner library
-    // to import FROM (no `experience` tool without a UserDO), but a workspace
-    // that imported in the cloud and is later driven from here must still be
-    // able to settle what is staged, so the ledger exists on both backends.
-    initImportedExperienceTable(this.rt.storage.execRaw);
 
     // Better-compact is THE default (and only) compaction path — the same
     // staged transformContext ladder the cloud backend registers, over the
     // same shared stores (transcripts in the composite VFS, plan + trigger
     // state in agent.db). The summarizer rides the session's active model.
-    initCompactionStateTable(this.rt.storage.execRaw);
     this.compactionState = createCompactionStateStore(this.rt.storage.sql);
     this.compactionExtension = createCompactionExtension({
       ports: {
@@ -441,10 +434,6 @@ export class LocalAgentSession implements BackendHost {
       },
     });
 
-    // Voyager-style curriculum table (agent.* parity with the DO).
-    initCurriculumTable(this.rt.storage.execRaw);
-
-    initHeadsTables(this.rt.storage.execRaw);
     this._headRuntime = createCLIHeadRuntime({
       model: this.fallbackModel,
       providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
@@ -458,8 +447,8 @@ export class LocalAgentSession implements BackendHost {
 
     // The EventsHub substrate (reactor source of truth). Local external
     // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
-    const hubSql = makeHubSql(opts.db);
-    initEventsHubTables(hubSql);
+    // The product-change board is the one local-only plane: on cf it lives in
+    // the owner's UserDO (core/conformance/manifest.ts records that).
     initProductChangeTables(hubSql);
     this.productChanges = createProductChangeStore(productChangeSqlFromExec(hubSql), {
       validateAgentName: (name) => {
@@ -474,9 +463,7 @@ export class LocalAgentSession implements BackendHost {
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
 
     // The durable per-run event log (run_events) — the same recorder, table and
-    // RunEvent union the cloud backend records, over local SQLite. Without it a
-    // local workspace had no replayable run history at all.
-    initRunEventTables(this.rt.storage.execRaw);
+    // RunEvent union the cloud backend records, over local SQLite.
     this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
     // …and forwarded to the frontends as it is written. The table alone is
     // observable only to something that outlives the database, which a
@@ -1820,60 +1807,102 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
+  /**
+   * This session's view for the scaffold evolution control plane: the ports a
+   * candidate loop runs against, plus the models it needs. The plane itself is
+   * core's (evolution/control.ts) — the same one the cloud backend drives.
+   */
+  private get scaffoldControl(): ScaffoldControl {
+    return {
+      rt: this.rt,
+      sql: this.rt.storage.sql,
+      config: this.config,
+      surface: (task) => {
+        const model = this.ensureModelState();
+        return {
+          llmStream: this.makeScaffoldLLMStream(model, this.tools),
+          callTool: this.makeScaffoldCallTool(this.tools),
+          history: this.makeScaffoldHistory(),
+          defaultInference: () => this.scaffoldDefaultInference(task, model),
+        };
+      },
+      model: () => this.ensureModelState(),
+      judge: createLlmJsonJudge(this.rt.judgeModel ?? this.rt.llm),
+    };
+  }
+
+  /** `host.defaultInference()` for a scaffold run outside a live turn — the
+   *  ordinary local loop over this session's whole tool surface, which is what
+   *  the cloud backend's streamText bridge gives a candidate there. */
+  private scaffoldDefaultInference(task: string, model: LanguageModel): AsyncIterable<unknown> {
+    return runChat({
+      model,
+      modelContext: { id: this.effectiveModelSpec(), contextWindow: this.sessionContextWindow() },
+      system: buildSystemPromptSync(this.rt, {
+        backend: 'cli-local',
+        mode: 'chat',
+        model: { id: this.effectiveModelSpec() },
+        currentDate: currentDateForPrompt(),
+      }),
+      history: [{ role: 'user', content: task }],
+      tools: this.tools,
+      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
+    });
+  }
+
   /** The pending scaffold's rollout state — trials so far and what the
    *  promotion gate currently says. */
-  getShadowStatus() {
-    const pending = getPendingScaffold(this.rt.storage.sql);
-    if (!pending) return { hasPending: false as const, versions: this.listScaffoldVersions(10) };
-    return {
-      hasPending: true as const,
-      pending,
-      decision: decidePromotion(pending, DEFAULT_SHADOW_CONFIG),
-      config: DEFAULT_SHADOW_CONFIG,
-    };
+  getShadowStatus(): ShadowStatus {
+    return getShadowStatus(this.rt.storage.sql);
   }
 
   /** Resolve the pending scaffold by hand. 'auto' acts only on a conclusive
    *  promotion gate; 'promote'/'rollback' force the corresponding action. */
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback') {
-    const pending = getPendingScaffold(this.rt.storage.sql);
-    if (!pending) return { ok: false as const, error: 'no pending scaffold' };
-    let decision: 'promote' | 'rollback';
-    if (mode === 'auto') {
-      const auto = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
-      if (auto === 'continue') return { ok: false as const, error: 'inconclusive; need more trials' };
-      decision = auto;
-    } else {
-      decision = mode;
-    }
-    const result = await applyPromotionDecision(this.rt, pending, decision);
-    this.invalidateModelState();
-    return { ok: true as const, ...result };
+  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+    const result = await applyScaffoldDecision(this.scaffoldControl, mode);
+    if (result.ok) this.invalidateModelState();
+    return result;
   }
 
   /** Propose a new scaffold version through the existing 4-gate pipeline. An
    *  accepted proposal lands as `pending` and is resolved by the shadow eval. */
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
-    return modifyScaffold(
-      this.rt, rationale, code,
-      baseVersion !== undefined ? { baseVersion } : undefined,
-    );
+    return proposeScaffold(this.scaffoldControl, rationale, code, baseVersion);
   }
 
   /** Read-only scaffold archive: versions with status, lineage and shadow record. */
-  listScaffoldVersions(limit = 20) {
-    return listScaffoldArchive(this.rt.storage.sql, limit).map((e) => ({
-      version: e.version,
-      written_at: e.writtenAt,
-      rationale: e.rationale,
-      status: e.status,
-      parent_version: e.parentVersion,
-      trials: e.trials,
-      wins: e.wins,
-      losses: e.losses,
-      ties: e.ties,
-      win_rate: e.winRate,
-    }));
+  listScaffoldVersions(limit = 20): ScaffoldVersionView[] {
+    return listScaffoldVersions(this.rt.storage.sql, limit);
+  }
+
+  /** Run the current scaffold for a one-shot task, capturing what it emits
+   *  instead of injecting it into the conversation. */
+  runScaffoldOnce(task: string, opts?: { useShadowOverride?: boolean; timeoutMs?: number }) {
+    return runScaffoldOnce(this.scaffoldControl, task, opts);
+  }
+
+  /** Run an arbitrary archived scaffold version against a task — previewing a
+   *  candidate live before promoting it. */
+  previewScaffoldLive(version: number, task: string, opts?: { timeoutMs?: number }) {
+    return previewScaffoldLive(this.scaffoldControl, version, task, opts);
+  }
+
+  /**
+   * A GEPA optimisation pass over this workspace's scaffold. Reflection-mutated
+   * candidates are scored against the turn-outcome ledger's held-out failures;
+   * a strictly better winner enters the ordinary shadow-eval → promote pipeline.
+   * The pass is core's; only the surface it runs on is local.
+   */
+  runScaffoldGepaOptimization(opts?: {
+    maxIterations?: number; evalSize?: number; maxMetricCalls?: number;
+  }): Promise<GepaOptimizationResult> {
+    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
+  }
+
+  /** Recent GEPA passes, newest first. */
+  getGepaRuns(limit = 20): GepaRunSummary[] {
+    try { return listGepaRuns(this.rt.storage.sql, limit); }
+    catch { return []; }
   }
 
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
@@ -2240,20 +2269,6 @@ function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: Readonl
 export { serializeContentForHeads } from '@proteus/core';
 
 /** Adapt a bun:sqlite handle to core's SqlExec primitive (DO storage.sql). */
-function makeHubSql(db: LocalSessionDb): SqlExec {
-  return {
-    exec(query, ...bindings) {
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        const rows = stmt.all(...bindings) as Array<Record<string, unknown>>;
-        return { toArray: () => rows };
-      }
-      stmt.run(...bindings);
-      return { toArray: () => [] };
-    },
-  };
-}
-
 function triggerToView(t: TriggerRow): LocalTriggerView {
   return {
     id: t.id,

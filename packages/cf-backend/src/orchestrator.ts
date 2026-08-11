@@ -14,10 +14,8 @@
 
 import { callable, type AgentContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
-import { initCompactionStateTable } from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
 import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
-import * as v from "valibot";
 import type {
   ActivitySnapshot,
   TimelineSpan,
@@ -28,7 +26,6 @@ import type {
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
 import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
 import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
-import { generateJson } from "./lib/generate-json.js";
 import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
 import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
 import type { ChatResponseResult } from "@cloudflare/think";
@@ -37,7 +34,7 @@ import {
   readActivityLog,
   summarizeSteps,
   bootstrapScaffold,
-  initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
+  initWorkspaceSchema,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
@@ -46,46 +43,41 @@ import {
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
-  migrateWorkspaceStorage,
   // Fork feature
   forkWorkspaceStorage, readForkLineage,
   // Workspace archive — the owner's portable copy of this workspace's storage
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
-  nanoid, initHeadsTables, type HeadRunView,
+  nanoid, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventText, modifyScaffold, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult,
-  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
-  listScaffoldArchive,
-  readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
-  // Durable run-event log
-  initRunEventTables,
-  // R3 outcome ledger (schema + take_pick CHECK rebuild) — eager in ensureSchema
-  initTurnOutcomeTables,
+  type ScaffoldRunResult,
+  // The scaffold evolution control plane (core owns the drivers; this actor
+  // supplies the surface they run against).
+  applyScaffoldDecision, createJsonJudge, getShadowStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  runScaffoldOnce,
+  type GepaOptimizationResult, type ScaffoldControl, type ScaffoldDecisionResult,
+  type ScaffoldVersionView, type ShadowStatus,
+  getPendingScaffold,
+  readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
   type RunEvent, type RunEventQuery,
   // agent_facts world model
-  initFactsTable, DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
+  DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
   // Voyager curriculum + Absolute Zero learnability proposer
-  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, initBackgroundJobsTable, initMctsSearchTable, initImportedExperienceTable,
+  effortFor,
   type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   isReasoningEffort, type ReasoningEffort,
-  initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
-  // GEPA offline optimisation (scaffold + crafted-tool)
-  runScaffoldGepa,
-  initGepaTables, startGepaRun, finishGepaRun, makePersistingHook, listGepaRuns,
-  loadGepaCandidates,
-  type EvalInstance, type MetricOutcome, type GepaRunSummary,
-  // Turn-outcome signal + replay-eval loss curve (audit R3)
-  buildOutcomeEvalSplit, describeSplitDegeneracy, listReplayEvals,
-  clampGepaEvalBudget, type ScoreInterval,
-  type OutcomeEvalExpectation, type ReplayEvalSummary,
+  // GEPA run lineage (the pass itself is core's evolution control plane)
+  listGepaRuns, loadGepaCandidates, type GepaRunSummary,
+  // Replay-eval loss curve (audit R3)
+  listReplayEvals, type ReplayEvalSummary,
   // K_align — the correction-rate trend over the same outcome ledger
   alignmentConvergence, type AlignmentConvergence,
   calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
@@ -125,7 +117,6 @@ import {
   // Shared turn lifecycle
   snapshotCompletedTurn,
   spillEventContent,
-  EVIDENCE_BUDGETS, evidenceWindow,
   type DynamicApproval,
   type MissingCapability,
   type DynamicContext,
@@ -602,6 +593,34 @@ export class OrchestratorAgent extends ActorAgent {
     if (dropped > 0) {
       console.warn(`[proteus] dropped ${dropped} unrunnable schedule row(s) overdue by more than ${STALE_SCHEDULE_HORIZON_MS}ms`);
     }
+  }
+
+  /**
+   * The scaffold evolution control plane's view of this actor: the ports a
+   * candidate loop runs against, plus the two models it needs. The plane
+   * itself is core's (evolution/control.ts); this is the whole of what being
+   * a Durable Object contributes to it.
+   */
+  private get scaffoldControl(): ScaffoldControl {
+    return {
+      rt: this.rt,
+      sql: this.boundSql,
+      config: this.config,
+      surface: (task) => ({
+        llmStream: this.makeScaffoldLLMStream(),
+        callTool: this.makeScaffoldCallTool(),
+        history: this.makeScaffoldHistory(),
+        defaultInference: () => streamText({
+          model: this.getModel(),
+          messages: [{ role: 'user', content: task }],
+          tools: this.getRawTools(),
+          stopWhen: stepCountIs(this.maxSteps),
+          ...effortFor('scaffold_mutation'),
+        }).toUIMessageStream(),
+      }),
+      model: () => this.getModel(),
+      judge: createJsonJudge(() => this.getModelForReview()),
+    };
   }
 
   protected get engine(): EvolutionEngine {
@@ -1367,87 +1386,17 @@ export class OrchestratorAgent extends ActorAgent {
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
-    // Migrate old schemas that conflict with agent-utils implementations.
-    try {
-      // vfs_files: old schema lacked chunk_index. SqliteFS needs it.
-      const vfsCols = this.sql<{ name: string }>`PRAGMA table_info(vfs_files)`;
-      if (vfsCols.length > 0 && !vfsCols.some(c => c.name === "chunk_index")) {
-        execRaw("DROP TABLE vfs_files");
-        console.log("[proteus] Migrated vfs_files to chunked schema");
-      }
-      // memory_chunks: old schema had 3 columns (id INTEGER, path, content).
-      // MemoryStore needs 7 columns (id TEXT, path, start_line, end_line, hash, text, updated_at).
-      const mcCols = this.sql<{ name: string }>`PRAGMA table_info(memory_chunks)`;
-      if (mcCols.length > 0 && !mcCols.some(c => c.name === "start_line")) {
-        execRaw("DROP TABLE IF EXISTS memory_chunks");
-        execRaw("DROP TABLE IF EXISTS memory_chunks_fts");
-        console.log("[proteus] Migrated memory_chunks to FTS5 schema");
-      }
-      // search_nodes: add code_used / root_id columns if missing.
-      const snCols = this.sql<{ name: string }>`PRAGMA table_info(search_nodes)`;
-      if (snCols.length > 0 && !snCols.some(c => c.name === "code_used")) {
-        execRaw("ALTER TABLE search_nodes ADD COLUMN code_used TEXT");
-        console.log("[proteus] Added code_used column to search_nodes");
-      }
-      if (snCols.length > 0 && !snCols.some(c => c.name === "root_id")) {
-        execRaw("ALTER TABLE search_nodes ADD COLUMN root_id TEXT");
-        console.log("[proteus] Added root_id column to search_nodes");
-      }
-    } catch { /* tables don't exist yet — fine */ }
+    // Every table a workspace has, on any backend — one list, in core.
+    initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
 
-    initAllTables(execRaw);
-    // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound
-    // SOUL.md rows) — repaired here so every read path stays a pure read.
-    migrateWorkspaceStorage(this.boundSql);
-    initSearchTables(execRaw);
-    initScaffoldTables(execRaw);
-    initCraftScoreTables(execRaw);
-    // R3 outcome ledger (+ its take_pick CHECK-widening rebuild). MUST run
-    // here, not only in the lazy EvolutionEngine constructor: a freshly-woken
-    // DO can serve pickAlternateTake → recordTurnOutcome before any turn
-    // constructs the engine, and the legacy CHECK would reject the insert.
-    initTurnOutcomeTables(execRaw, this.boundSql);
-    // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + partial indexes + views. Spec: docs/ARCHITECTURE.md — "Events and ingress".
-    initEventsHubTables(this.ctx.storage.sql);
+    // ── planes this root alone carries (declared per-root in
+    //    core/conformance/manifest.ts, observed against sqlite_master) ──
     initWebhookRateLimitTables(this.ctx.storage.sql);
-    // Branching-heads journal (head_journal, head_evidence, head_merge_results)
-    initHeadsTables(execRaw);
-    // Scaffold shadow-mode tables (scaffold_evaluations + status col)
-    initShadowTables(execRaw);
-    // Durable run-event log (run_events table)
-    initRunEventTables(execRaw);
-    // agent_facts world model (keyed JSON facts w/ confidence + recency)
-    initFactsTable(execRaw);
-    // Voyager curriculum proposed-tasks queue (UI + autonomous loop consume).
-    initCurriculumTable(execRaw);
-    // GEPA offline-optimisation run + candidate history (gepa_runs, gepa_candidates,
-    // gepa_pareto_membership). Populated by runScaffoldGepaOptimization.
-    initGepaTables(execRaw);
+    this.subordinateRoster.ensureSchema();
+
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
     // cumulative change-set. Captured lazily / re-markable via resetWorkspaceBaseline.
     execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (path TEXT PRIMARY KEY, content TEXT)`);
-
-    // Background-job registry — work auto-detached past the 30s threshold.
-    initBackgroundJobsTable(execRaw);
-    // Durable MCTS search checkpoints — an evicted fork(settle=mcts) resumes from here.
-    initMctsSearchTable(execRaw);
-    // Experience-import staging ledger. The `experience` tool is wired on this
-    // actor (actorToolDeps), and its import action SELECTs this table with no
-    // guard — it must exist wherever the tool does. It was created on the CLI
-    // but never here: the import action hard-errored in production
-    // ("no such table: imported_experience").
-    initImportedExperienceTable(execRaw);
-
-    // Compaction: the replayable plan snapshot + the measured prompt-token
-    // trigger signal, one row per session (@proteus/compaction stores).
-    initCompactionStateTable(execRaw);
-
-    this.subordinateRoster.ensureSchema();
-
-    execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
-      key TEXT PRIMARY KEY, value TEXT NOT NULL
-    )`);
 
     // Per-turn user feedback (thumbs up/down). The chat UI's thumbs button
     // writes here via setTurnFeedback, which re-scores the crafted tools used
@@ -2079,19 +2028,7 @@ export class OrchestratorAgent extends ActorAgent {
     task: string,
     opts?: { useShadowOverride?: boolean; timeoutMs?: number },
   ): Promise<ScaffoldRunResult> {
-    const pending = opts?.useShadowOverride ? getPendingScaffold(this.boundSql) : null;
-    const codeOverride = pending
-      ? (await readScaffoldVersion(this.rt, pending.version)) ?? undefined
-      : undefined;
-    return runScaffold({
-      rt: this.rt, task,
-      emit: () => undefined, // RPC mode — events captured in result.events
-      llmStream: this.makeScaffoldLLMStream(),
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      scaffoldCodeOverride: codeOverride,
-      timeoutMs: opts?.timeoutMs,
-    });
+    return runScaffoldOnce(this.scaffoldControl, task, opts);
   }
 
   /**
@@ -2103,31 +2040,12 @@ export class OrchestratorAgent extends ActorAgent {
    * surface.
    */
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
-    const result = await modifyScaffold(
-      this.rt, rationale, code,
-      baseVersion !== undefined ? { baseVersion } : undefined,
-    );
-    if (result.ok) {
-      try {
-        this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-          VALUES (${nanoid()}, 'scaffold_proposed',
-                  ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
-                  ${null}, ${Date.now()})`;
-      } catch { /* evolution_events may not exist yet */ }
-    }
-    return result;
+    return proposeScaffold(this.scaffoldControl, rationale, code, baseVersion);
   }
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
-  async getShadowStatus() {
-    const pending = getPendingScaffold(this.boundSql);
-    if (!pending) {
-      const versions = this.sql<{ version: number; status: string; rationale: string; written_at: number }>`
-        SELECT version, status, rationale, written_at FROM scaffold_versions ORDER BY version DESC LIMIT 10`;
-      return { hasPending: false as const, versions };
-    }
-    const decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
-    return { hasPending: true as const, pending, decision, config: DEFAULT_SHADOW_CONFIG };
+  async getShadowStatus(): Promise<ShadowStatus> {
+    return getShadowStatus(this.boundSql);
   }
 
   /**
@@ -2138,33 +2056,24 @@ export class OrchestratorAgent extends ActorAgent {
    * `mode='promote'` / `mode='rollback'` forces the corresponding action.
    */
   @callable()
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback') {
-    const pending = getPendingScaffold(this.boundSql);
-    if (!pending) return { ok: false, error: 'no pending scaffold' };
-    let decision: 'promote' | 'rollback' | 'continue';
-    if (mode === 'auto') {
-      decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
-      if (decision === 'continue') return { ok: false, error: 'inconclusive; need more trials' };
-    } else {
-      decision = mode;
-    }
-    const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
-    const result = await applyPromotionDecision(this.rt, pending, decision);
-    // Emit the promotion/rollback into the durable event log so SSE
-    // subscribers + MCP `list_run_events` see the decision in-band. Uses the
-    // action ACTUALLY applied — the misevolution recheck can convert a
-    // requested promote into a rollback (result.vetoReason says why).
+  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+    const result = await applyScaffoldDecision(this.scaffoldControl, mode);
+    if (!result.ok) return result;
+    // Emit the decision into the durable event log so SSE subscribers + MCP
+    // `list_run_events` see it in-band. Uses the action ACTUALLY applied — the
+    // misevolution recheck can convert a requested promote into a rollback
+    // (result.vetoReason says why).
     try {
       const runId = this._currentRunId || `scaffold-${nanoid()}`;
       this.eventRecorder.emit(runId, {
         type: result.action === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-        fromVersion,
+        fromVersion: result.fromVersion,
         toVersion: result.newCurrentVersion,
       });
     } catch (err) {
       console.warn('[proteus] event emit failed at applyScaffoldDecision:', err);
     }
-    return { ok: true, ...result };
+    return result;
   }
 
   /**
@@ -2213,19 +2122,7 @@ export class OrchestratorAgent extends ActorAgent {
     task: string,
     opts?: { timeoutMs?: number },
   ): Promise<ScaffoldRunResult> {
-    const codeOverride = (await readScaffoldVersion(this.rt, version)) ?? undefined;
-    if (codeOverride === undefined) {
-      throw new Error(`previewScaffoldLive: no scaffold code found for v${version}`);
-    }
-    return runScaffold({
-      rt: this.rt, task,
-      emit: () => undefined,
-      llmStream: this.makeScaffoldLLMStream(),
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      scaffoldCodeOverride: codeOverride,
-      timeoutMs: opts?.timeoutMs,
-    });
+    return previewScaffoldLive(this.scaffoldControl, version, task, opts);
   }
 
   /**
@@ -2398,187 +2295,24 @@ export class OrchestratorAgent extends ActorAgent {
    *  core's listScaffoldArchive; keys stay snake_case here because this RPC's
    *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
   @callable()
-  async listScaffoldVersions(limit: number = 20) {
-    return listScaffoldArchive(this.boundSql, limit).map((e) => ({
-      version: e.version,
-      written_at: e.writtenAt,
-      rationale: e.rationale,
-      status: e.status,
-      parent_version: e.parentVersion,
-      trials: e.trials,
-      wins: e.wins,
-      losses: e.losses,
-      ties: e.ties,
-      win_rate: e.winRate,
-    }));
+  async listScaffoldVersions(limit: number = 20): Promise<ScaffoldVersionView[]> {
+    return listScaffoldVersions(this.boundSql, limit);
   }
 
   // ── GEPA offline scaffold optimisation ─────────────────────────
 
   /**
-   * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
-   * Offline + batch: draws a budgeted, DISJOINT train/val split from the
-   * turn-outcome ledger (older corrected/frustrated turns = the train set
-   * reflection must fix; the newest failures held out + accepted turns = the
-   * val set the winner is selected on), runs the current scaffold +
-   * reflection-mutated candidates against them, scores each with an
-   * outcome-aware judge, and — if a strictly-better candidate is found —
-   * hands the winner to modifyScaffold so it enters the normal shadow-eval →
-   * promote pipeline. Persisted to gepa_runs/gepa_candidates so the UI can
-   * show lineage.
-   *
-   * Cost-bounded: the instance budget comes from agent_config
-   * gepa_eval_budget (DEFAULT_GEPA_EVAL_BUDGET) unless opts.evalSize
-   * overrides it; each metric call runs a full scaffold + a judge call.
-   * Scores come back as intervals — with a val set this size, a winner inside
-   * the seed's interval is not evidence of anything.
+   * Run a GEPA (Genetic-Pareto) optimisation pass over this agent's scaffold.
+   * The pass itself is core's — see `runScaffoldGepaOptimization` in
+   * evolution/control.ts for what it does and what it costs.
    */
   @callable()
   async runScaffoldGepaOptimization(opts?: {
     maxIterations?: number;
     evalSize?: number;
     maxMetricCalls?: number;
-  }): Promise<{
-    ok: boolean;
-    error?: string;
-    runId?: string;
-    proposed?: boolean;
-    pendingVersion?: number | null;
-    skipReason?: string;
-    bestScore?: ScoreInterval;
-    seedScore?: ScoreInterval;
-    iterations?: number;
-    /** What the winner was selected on: failures it never trained on plus
-     *  accepted regression guards. */
-    selection?: { heldOutNegatives: number; guards: number };
-    /** Present when the split could not support an out-of-sample selection —
-     *  the result is exploratory, not evidence. */
-    selectionWarning?: string;
-  }> {
-    const evalSize = clampGepaEvalBudget(opts?.evalSize ?? this.config.getGepaEvalBudget());
-
-    // 1. Train/val split from outcome-labeled turns (turn_outcomes ledger).
-    const split = buildOutcomeEvalSplit(this.boundSql, evalSize);
-    const { train: trainSet, val: evalSet } = split;
-    // Without a failure to optimise toward there is nothing to select on but
-    // judge noise over already-accepted turns — and an empty train set would
-    // hand the eval set straight back to reflection as its minibatch source.
-    if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
-      return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
-    }
-    const budget = {
-      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
-      // Seed scoring (|val|) + one minibatch and one full scoring per
-      // iteration; the default covers the default 4 iterations over a
-      // default-budget split with headroom.
-      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 120, 400)),
-      // The paper's 3 — reflection reads three failures per proposal. The
-      // engine caps it at the (now disjoint) train set when fewer exist.
-      minibatchSize: 3,
-    };
-
-    const model = this.getModel();
-
-    // 2. Metric: run the candidate scaffold against the task, then judge
-    // against the recorded outcome — accepted turns are regression checks
-    // against the response the user approved; corrected/frustrated turns are
-    // scored on whether the candidate already addresses the user's correction.
-    //
-    // The candidate RUNS on the chat model (it is this agent's own loop being
-    // measured) but is SCORED by the review model — the same cross-family
-    // judge selection the shadow eval and MCTS use. GEPA is the largest judge
-    // consumer in the system; letting the chat model grade its own candidates
-    // is exactly the self-enhancement bias (arXiv:2306.05685) the rest of the
-    // repo already routes around.
-    const metric = async (
-      candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
-    ): Promise<MetricOutcome> => {
-      let output: string;
-      try {
-        output = await this.runScaffoldCaptureText(instance.input, candidate);
-      } catch (err) {
-        return { score: 0, feedback: `scaffold execution failed: ${(err as Error).message}` };
-      }
-      const exp = instance.expected;
-      const criterion = exp && exp.outcome === 'accepted'
-        ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
-          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${evidenceWindow(exp.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
-        : `The agent's previous response to this task FAILED — the user had to correct it. Score 1.0 when ` +
-          `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
-          `Previous (failed) response:\n${evidenceWindow(exp?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
-          `User's correction:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
-      try {
-        const obj = await generateJson({
-          model: await this.getModelForReview(),
-          schema: v.object({
-            score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
-            feedback: v.pipe(v.string(), v.minLength(1)),
-          }),
-          prompt:
-            `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
-            `actionable feedback on how the agent's behaviour could improve.\n\n` +
-            `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
-            `${criterion}\n\n` +
-            `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
-          providerOptions: effortFor('judge').providerOptions,
-        });
-        return { score: obj.score, feedback: obj.feedback };
-      } catch (err) {
-        return { score: 0.5, feedback: `judge unavailable: ${(err as Error).message}` };
-      }
-    };
-
-    // 3. Reflection LM — rewrites the scaffold from the failure feedback.
-    const reflectionLm = async (prompt: string): Promise<string> => {
-      const { text } = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
-      return text;
-    };
-
-    // 4. Run GEPA, persisting every candidate + Pareto snapshot.
-    const runId = startGepaRun(this.boundSql, { target: 'scaffold', budget });
-    const persisted = new Set<string>();
-    let result;
-    try {
-      result = await runScaffoldGepa({
-        rt: this.rt,
-        evalSet,
-        trainSet,
-        metric,
-        reflectionLm,
-        budget,
-        onIteration: makePersistingHook({ sql: this.boundSql, runId, evalSet, persisted }),
-      });
-    } catch (err) {
-      finishGepaRun(this.boundSql, {
-        runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
-      });
-      return { ok: false, error: (err as Error).message, runId };
-    }
-
-    finishGepaRun(this.boundSql, {
-      runId,
-      status: 'completed',
-      stopReason: result.gepa.stopReason,
-      winnerId: result.gepa.winner.id,
-      metricCalls: result.gepa.metricCallsUsed,
-      iterations: result.gepa.iterationsRun,
-    });
-
-    return {
-      ok: true,
-      runId,
-      proposed: result.proposed,
-      pendingVersion: result.pendingVersion,
-      skipReason: result.skipReason,
-      bestScore: result.winnerScore,
-      seedScore: result.seedScore,
-      iterations: result.gepa.iterationsRun,
-      selection: {
-        heldOutNegatives: split.heldOutNegatives,
-        guards: evalSet.length - split.heldOutNegatives,
-      },
-      ...(split.degeneracy ? { selectionWarning: describeSplitDegeneracy(split.degeneracy) } : {}),
-    };
+  }): Promise<GepaOptimizationResult> {
+    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
   }
 
   /** List recent GEPA optimisation runs for the UI. */
@@ -2859,29 +2593,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  produced. With candidateCode it is the GEPA metric's rollout; without,
    *  it rolls the LIVE scaffold — the replay-eval harness's current-config
    *  runner. */
-  private async runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
-    let text = '';
-    const result = await runScaffold({
-      rt: this.rt,
-      task,
-      scaffoldCodeOverride: candidateCode,
-      emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
-      llmStream: this.makeScaffoldLLMStream(),
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      defaultInference: () => streamText({
-        model: this.getModel(),
-        messages: [{ role: 'user', content: task }],
-        tools: this.getRawTools(),
-        stopWhen: stepCountIs(this.maxSteps),
-        ...effortFor('scaffold_mutation'),
-      }).toUIMessageStream(),
-      // The live turn budget, not a smaller one: this run IS the candidate's
-      // score, and a candidate cut off early scores as a bad candidate.
-      timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
-    });
-    if (!result.ok && result.error) throw new Error(result.error);
-    return text;
+  private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
+    return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
   // ── Durable run-event log — read endpoints + run listing ──

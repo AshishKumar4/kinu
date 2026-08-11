@@ -2,26 +2,11 @@ import { callable, type AgentContext } from 'agents';
 import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface.js';
 import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
-import { initCompactionStateTable } from '@proteus/compaction';
 import {
   EvolutionEngine,
   bootstrapScaffold,
   createParentRpcMountVFS,
-  initAllTables,
-  initBackgroundJobsTable,
-  initCraftScoreTables,
-  initCurriculumTable,
-  initEventsHubTables,
-  initFactsTable,
-  initGepaTables,
-  initHeadsTables,
-  initImportedExperienceTable,
-  initMctsSearchTable,
-  initRunEventTables,
-  initScaffoldTables,
-  initSearchTables,
-  initShadowTables,
-  initTurnOutcomeTables,
+  initWorkspaceSchema,
   seedSoul,
   snapshotCompletedTurn,
   type CompletedTurn,
@@ -120,33 +105,14 @@ export class SubordinateAgent extends ActorAgent {
 
   private ensureSchema(): void {
     if (this._schemaReady) return;
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    initAllTables(execRaw);
-    initSearchTables(execRaw);
-    initScaffoldTables(execRaw);
-    initCraftScoreTables(execRaw);
-    initTurnOutcomeTables(execRaw, this.boundSql);
-    initEventsHubTables(this.ctx.storage.sql);
-    initHeadsTables(execRaw);
-    initShadowTables(execRaw);
-    initRunEventTables(execRaw);
-    initFactsTable(execRaw);
-    initCurriculumTable(execRaw);
-    initGepaTables(execRaw);
-    initBackgroundJobsTable(execRaw);
-    // Durable MCTS search checkpoints. The fork substrate — including
-    // settle=mcts — is universal across actor profiles (getAgentsToolDeps on
-    // the base class), so the checkpoint table must exist here exactly as it
-    // does on the orchestrator; only the orchestrator had it.
-    initMctsSearchTable(execRaw);
-    // Experience-import staging ledger — read by the shared EvolutionEngine's
-    // settleImports on every root, not only where the `experience` tool is.
-    initImportedExperienceTable(execRaw);
-    initCompactionStateTable(execRaw);
-    execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )`);
+    // Every table a workspace has, on any backend — one list, in core.
+    initWorkspaceSchema({
+      execRaw: (ddl: string) => this.ctx.storage.sql.exec(ddl),
+      sql: this.boundSql,
+      exec: this.ctx.storage.sql,
+    });
+    // The one plane this root alone carries: its own identity row, seeded by
+    // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
     this._schemaReady = true;
   }

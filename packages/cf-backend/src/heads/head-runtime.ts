@@ -11,6 +11,7 @@ import type {
   HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, MergeLLMFn,
 } from "@proteus/core";
 import {
+  generateJson,
   type MergeOutput,
   MergeOutputSchema,
   createAgentConfigStore,
@@ -21,7 +22,6 @@ import type { Think } from "@cloudflare/think";
 import { spawnHeadFacet } from "../facet-spawn.js";
 import { createAgentProviderRegistry } from "../providers/agent-registry.js";
 import { agentAffinityKey } from "@proteus/core";
-import { generateJson } from "../lib/generate-json.js";
 import type { UserDO } from "../user/user-do.js";
 import type { UserCaller } from "../user/workspace-capability.js";
 

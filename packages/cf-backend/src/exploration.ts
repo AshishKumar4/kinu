@@ -39,8 +39,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { diversityDirective, formatInheritedContext, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
-import { generateJson } from "./lib/generate-json.js";
+import { diversityDirective, formatInheritedContext, generateJson, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,

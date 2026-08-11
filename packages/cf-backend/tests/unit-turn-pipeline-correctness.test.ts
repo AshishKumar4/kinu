@@ -10,7 +10,7 @@ const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
-const generateJson = readFileSync(join(import.meta.dir, '..', 'src', 'lib', 'generate-json.ts'), 'utf8');
+const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {

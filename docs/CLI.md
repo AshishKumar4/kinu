@@ -72,7 +72,7 @@ proteus <command> [options]
 | [`proteus timeline <name>`](#proteus-timeline-name) | List the run/evolution/MCTS timeline |
 | [`proteus mcts <name> [nodeId]`](#proteus-mcts-name-nodeid) | Inspect MCTS search history |
 | [`proteus heads <name>`](#proteus-heads-name) | Inspect parallel reasoning branch runs |
-| [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs |
+| [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
 | [`proteus alignment <name>`](#proteus-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
 | [`proteus label [action] [name] [file]`](#proteus-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
 | [`proteus product <name>`](#proteus-product-name) | Inspect product self-customization state |
@@ -434,10 +434,14 @@ Inspect parallel reasoning branch runs.
 
 ### proteus gepa <name> [runId]
 
-Inspect GEPA optimization runs.
+Inspect GEPA optimization runs, or run a pass with --run.
 
 | Option | What it does |
 | --- | --- |
+| `--run` | Run one optimisation pass over the scaffold |
+| `--iterations <n>` | Reflection iterations (--run) |
+| `--eval-size <n>` | Labeled turns to draw the split from (--run) |
+| `--metric-calls <n>` | Metric-call ceiling (--run) |
 | `--limit <n>` | Run limit |
 | `--json` | Print raw JSON |
 

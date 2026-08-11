@@ -5,7 +5,7 @@
 import { describe, test, expect } from "bun:test";
 import * as v from "valibot";
 import { MockLanguageModelV3 } from "ai/test";
-import { extractJsonObject, generateJson } from "../src/lib/generate-json";
+import { extractJsonObject, generateJson } from "../src/prompts/structured.js";
 
 function modelReturning(text: string, capture?: (options: { maxOutputTokens?: number }) => void) {
   return new MockLanguageModelV3({
