@@ -51,6 +51,7 @@ import {
   MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
 } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { fileToolSteer } from './run-file-steer.js';
 import { createFileTool } from './file-tool.js';
 import { TurnFileLedger } from './file-ledger.js';
 import { TurnContextBudget } from '../context-budget.js';
@@ -528,8 +529,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
       // Restorable result budget — full stdout/stderr is offloaded to the
       // workspace VFS before clamping (see clamp.ts), so big outputs never
-      // rot the session and nothing is lost.
-      const clamp = (text: string) => clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+      // rot the session and nothing is lost. A command that hand-rolls a file
+      // edit carries the `file` steer back with it (run-file-steer.ts) —
+      // outside the clamp, so the note is never the part that gets truncated.
+      const steer = fileToolSteer(args.command);
+      const clamp = async (text: string) => {
+        const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+        return steer ? `${steer}\n\n${clamped}` : clamped;
+      };
       const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {

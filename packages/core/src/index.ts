@@ -374,6 +374,7 @@ export {
   TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,
 } from './tools/clamp.js';
+export { handRolledFileWrite, fileToolSteer } from './tools/run-file-steer.js';
 export {
   toCraftedToolSource,
   type CraftedToolExecute,

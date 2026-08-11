@@ -135,6 +135,10 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
         : '')
       + 'save/search hold a lesson or note too long to be a value; sessions reads what past sessions said, before re-deriving context you already have.',
     whenNotToUse: 'Do not store temporary task progress, stale logs, or anything this turn already carries.',
+    // Not a usage rule but a fact about what is already in the store: the
+    // harness writes failed work here as lessons, so the search is worth
+    // making before the retry rather than after it.
+    doctrine: 'Your own failures are recorded as lessons in here — search before retrying similar work.',
     result: hasFacts
       ? 'Returns save or fact-mutation status, recalled fact values, note search hits, or session transcript slices.'
       : 'Returns save status, note search hits, or session transcript slices.',

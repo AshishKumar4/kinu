@@ -318,19 +318,25 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
-        id: 'context-assembly/kimi-bare-tool-index',
-        asserts: 'kimi-family prompts index tool names only — no per-tool prose',
+        id: 'context-assembly/tool-index-is-family-neutral',
+        asserts: 'every model family gets the same tool index — no family branch in the catalogue',
         observe: (s) => {
-          const prompt = s.buildSystemPromptSync({
-            soulOverride: 'You are Proteus.',
-            availableTools: ['run', 'agents', 'memory'],
-            backend: 'cf',
-            model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
-            currentDate: '2026-01-01',
-          });
+          const section = (id: string, provider: string) => {
+            const prompt = s.buildSystemPromptSync({
+              soulOverride: 'You are Proteus.',
+              availableTools: ['run', 'agents', 'memory'],
+              backend: 'cf',
+              model: { id, provider },
+              currentDate: '2026-01-01',
+            });
+            const start = prompt.indexOf('## Tools available this turn');
+            return prompt.slice(start, prompt.indexOf('\n## ', start + 1));
+          };
+          const kimi = section('kimi-k3-instruct', 'moonshot');
           return {
-            hasSummaries: prompt.includes(BUILTIN_TOOL_SPECS.run.summary),
-            toolLines: prompt.split('\n').filter((line) => /^- (run|agents|memory)$/.test(line)),
+            identicalAcrossFamilies: kimi === section('claude-sonnet-4-7', 'anthropic')
+              && kimi === section('gpt-5.5', 'openai'),
+            index: kimi,
           };
         },
       },

@@ -7,7 +7,6 @@
 import type { AgentRuntime } from './types/agent-runtime.js';
 import {
   BUILTIN_TOOL_SPECS,
-  DELEGATION_RUNGS,
   type BuiltinToolName,
 } from './tools/registry.js';
 import { renderActiveSkillsSection } from './skills/render.js';
@@ -82,10 +81,6 @@ function renderOperatingGuidance(surface: PromptSurface): string {
     '- If a required fact is unavailable, say exactly what is missing and stop.',
   ];
 
-  if (hasTool(surface.builtinTools, 'agents')) {
-    lines.push('- For multi-part or long-running work, or when you are unsure which approach is right, pick a rung of the delegation ladder below.');
-  }
-
   if (family === 'kimi') {
     lines.push(
       '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context and continue from each observation.',
@@ -128,26 +123,26 @@ function renderExternalToolLine(tool: PromptExternalToolInfo): string {
   return `- **${tool.name}** (${source})${description}`;
 }
 
+// One index for every model family. The kimi branch this replaced stripped the
+// per-tool lines on the claim that prompt prose about tool usage interferes
+// with that family's selection — sourced to a retired, K2.5-scoped Moonshot
+// page that no live source states. What the live K3 guidance does say is
+// "avoid repeating tool behavior in a long system prompt", which is an
+// argument against duplication for everyone (handled above: doctrine is
+// schema-only) and not for a family branch. The branch could not have done
+// what it claimed either: the schemas are family-neutral, so kimi received
+// every byte of the doctrine the index was stripped to protect it from.
 function renderToolsSection(surface: PromptSurface): string {
-  // Single family gate (Moonshot guidance): kimi-family models self-select
-  // tools best from the schema alone — prompt prose about tool usage
-  // interferes — so they get a bare name index; other families keep one
-  // summary line per tool.
-  const bareIndex = surface.model.family === 'kimi';
   const builtins = surface.builtinTools.length === 0
     ? '(none)'
-    : surface.builtinTools
-        .map((name) => (bareIndex ? `- ${name}` : renderBuiltinToolLine(name)))
-        .join('\n');
+    : surface.builtinTools.map(renderBuiltinToolLine).join('\n');
   const external = surface.externalTools.length === 0
     ? ''
     : [
         '',
         '### External tools',
         'These tools are exposed by connected external providers for this turn. Use them when their names/descriptions match the task.',
-        surface.externalTools
-          .map((tool) => (bareIndex ? `- ${tool.name}` : renderExternalToolLine(tool)))
-          .join('\n'),
+        surface.externalTools.map(renderExternalToolLine).join('\n'),
       ].join('\n');
   return [
     '## Tools available this turn',
@@ -214,8 +209,16 @@ function renderExecutorSection(surface: PromptSurface): string {
     '',
     ...lines,
   ];
+  // Whether two runtimes are two filesystems is a fact about the backend, not
+  // about the count. On cli-local the workspace and laptop executors are both
+  // handed the SAME host shell (cli-backend/runtime.ts) — a command in either
+  // sees the same files — so the disjoint-filesystem warning was false there,
+  // and a model that believed it would copy a file between two views of one
+  // directory. Every other backend provisions a real container per runtime.
   if (executors.length > 1) {
-    parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
+    parts.push('', surface.backend === 'cli-local'
+      ? 'These runtimes execute on the same machine and see the same files — there is nothing to copy between them.'
+      : 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
   }
   // Mount-table doctrine. Every backend's workspace VFS mounts the file plane
   // of the execution environments it actually has — /sandbox and /nimbus on cf,
@@ -259,21 +262,9 @@ function renderAgentStateSection(surface: PromptSurface): string {
     'Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line-by-line — evolve freely and report honestly; nothing you change about yourself is hidden or permanent.',
   ].join('\n'));
 
-  if (hasTool(tools, 'memory')) {
-    parts.push([
-      '## Memory and facts',
-      '- Use `memory` action="remember" for keyed state you should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
-      '- Use `memory` action="save" for longer prose notes or lessons that are useful across turns.',
-      '- Use `memory` action="sessions" to search your past session transcripts before re-deriving prior context.',
-      '- Your failures are recorded as lessons in memory — search before retrying similar work.',
-      '- Update a stale fact in place, so each key keeps one current value.',
-    ].join('\n'));
-  }
-
   if (hasTool(tools, 'execute_tools')) {
     parts.push([
       '## Code execution and learned capabilities',
-      '- `execute_tools` runs JavaScript against the active executor/codemode namespaces.',
       '- Before building from scratch, check `workspace.listTools()` and `memory` search for existing tools and prior lessons.',
       '- When you have built a reusable routine, save it with `workspace.createTool` — saved tools become callable as `codemode.<name>(args)` / `tools.<name>(args)` on your next execute_tools call.',
       ...(surface.rlmAvailable ? ['- `llm.query(text, { model?, reasoning_effort? })` is available inside execute_tools for one-level decomposition over large inputs: read the file, slice it, `llm.query` each slice (cheap at low reasoning_effort), aggregate in code. Handle either a string result or `{ error }`. For slices that themselves need decomposition, fork (`agents` action=fork) — forks run full tool loops with llm.query in scope.'] : []),
@@ -287,11 +278,14 @@ function renderAgentStateSection(surface: PromptSurface): string {
 
   if (hasTool(tools, 'agents') || hasTool(tools, 'report')) {
     // ONE ladder, keyed on lifetime, behind ONE tool — the only axis the
-    // model has to decide on. Both rung triggers render from the registry's
-    // DELEGATION_RUNGS (single source); the frame, the fork artifact trail
-    // and the coordination loop are the prompt-only operational doctrine no
-    // tool schema can carry. Rungs gate on the actions this actor's deps
-    // actually wire (surface.agentsActions), exactly like the tool's enum.
+    // model has to decide on. The rungs are INDEXED here and specified in the
+    // `agents` schema: each rung's triggers are selection doctrine, which the
+    // schema owns (registry.ts renderToolSchemaDescription) and every family
+    // reads. What stays is the prompt-only operational doctrine no tool schema
+    // carries — the frame, the turn output budget, the fork artifact trail,
+    // the coordination loop, the codemode namespace. Rungs gate on the actions
+    // this actor's deps actually wire (surface.agentsActions), exactly like
+    // the tool's enum.
     const actions = surface.agentsActions;
     const has = (action: (typeof actions)[number]) => actions.includes(action);
     const lines = ['## Delegation'];
@@ -312,10 +306,10 @@ function renderAgentStateSection(surface: PromptSurface): string {
       );
     }
     if (has('fork')) {
-      lines.push(`- Ephemeral fork — ${DELEGATION_RUNGS.fork}`);
+      lines.push('- Ephemeral fork (action=fork) — copies of you that run their own tool loops in parallel and merge back this turn.');
     }
     if (has('staff')) {
-      lines.push(`- Persistent subordinate — ${DELEGATION_RUNGS.staff}`);
+      lines.push('- Persistent subordinate (action=staff) — a helper that outlives this turn and stays in your roster.');
     }
     if (has('fork')) {
       lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop `web` search then fetch.');
@@ -351,21 +345,21 @@ function renderAgentStateSection(surface: PromptSurface): string {
     ].join('\n'));
   }
 
-  if (hasTool(tools, 'product_change')) {
-    parts.push([
-      '## Proteus product changes',
-      'When the user asks Proteus to modify its own app, route the work through `product_change`: bind source, record the plan, run checks, create a preview, request approval, deploy only after approval, and keep rollback metadata.',
-    ].join('\n'));
-  }
-
   // Last doctrine before the answer, because that is when it applies. Each
   // line targets an observed failure where the model solved the problem and
   // then fumbled the deliverable: reasoning the causal structure out correctly
   // and writing every row of it transposed; building an API to its own
   // convenient signature and self-grading it green against its own tests.
+  //
+  // Deliberately NOT here: a "check your work before calling it done" framing
+  // sentence. The CompletionGate is that instruction as a mechanism — it shows
+  // the harness's own reading of the working directory and asks for it to be
+  // checked against the task — and a generic re-check prompt is the one
+  // Anthropic's Opus 5 guidance says to delete because it over-verifies. What
+  // survives is what the gate does not say and cannot: the exact SHAPE the
+  // request named, and the interface it will be called through.
   const verification = [
     '## Verification',
-    'Before you call work done, check what you produced against what was asked. The artifact is the evidence — read it.',
     "- Re-read the artifact itself — the file, the diff, the final answer — against the request's own words: every deliverable it names, and the exact shape it names (column order, direction, units, filenames).",
     '- Build to the interface the task states: exercise your own work the way the task says it will be called, with the signature, entry point, and arguments it specifies.',
   ];
