@@ -13,9 +13,9 @@
   // abrupt-stop incident's root error unrecoverable).
   "observability": { "enabled": true },
   "worker_loaders": [{ "binding": "LOADER" }],
-  // Main site served by the custom domain. Sandbox and Nimbus previews use
-  // authenticated path-style URLs on this same domain, so Proteus does not
-  // need per-agent subdomains or wildcard TLS/DNS.
+  // Main site served by the custom domain. Sandbox previews are served on
+  // PREVIEW_HOSTNAME below, which must be a DIFFERENT host — see the note
+  // there and lib/preview-origin.ts.
   // custom_domain: true tells wrangler to auto-create the DNS record on
   // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
   // proxied DNS record on the zone (manual setup via the dashboard).
@@ -96,17 +96,31 @@
   //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
   // For local dev, add to .dev.vars:
   //   AI_GATEWAY_AUTH=Bearer <your-token>
-  // PREVIEW_HOSTNAME is the public host the UI/agents use when building
-  // preview URLs. We serve previews via a path prefix (`/_preview/...`)
-  // on the main custom domain — no wildcard DNS required. See
+  // PREVIEW_HOSTNAME is the public host previews are served on, via a path
+  // prefix (`/_preview/...`) — no wildcard DNS required. See
   // packages/cf-backend/src/preview-proxy.ts for the routing logic.
+  //
+  // IT MUST NOT BE THE APP'S OWN HOST. Preview content is HTML the agent
+  // wrote from sources it does not control; on the app's origin it runs with
+  // the owner's session and can call /api/user/* as the owner. When this host
+  // differs from CLI_PUBLIC_ORIGIN's host the Worker serves previews there and
+  // NOTHING else — no SPA, no login — so no session ever exists on it.
+  //
+  // This is the workers.dev hostname of this same Worker: already live, and a
+  // separate registrable domain (workers.dev is on the Public Suffix List), so
+  // the `__Host-` session cookie can never reach it. To move previews onto the
+  // zone instead, add a second custom domain and point this at it:
+  //   "routes": [ …, { "pattern": "previews.ashishkumarsingh.com", "custom_domain": true } ]
+  //   "PREVIEW_HOSTNAME": "previews.ashishkumarsingh.com"
+  // custom_domain provisions the DNS record and certificate itself, so no
+  // zone:write / dns_records:write token is needed.
   //
   // (The @cloudflare/sandbox SDK's built-in preview URL scheme requires a
   // wildcard DNS record + non-workers.dev hostname, neither of which is
   // available here; we bypass it with our own token-gated proxy.)
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
-    "PREVIEW_HOSTNAME": "proteus.ashishkumarsingh.com",
+    "PREVIEW_HOSTNAME": "proteus.ashishkmr472.workers.dev",
     "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
@@ -239,6 +253,11 @@
       ],
       "vars": {
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
+        // Staging has one hostname (its own workers.dev), so previews share the
+        // app's origin here. They are still opaque-origin — every preview
+        // response carries `Content-Security-Policy: sandbox` without
+        // allow-same-origin — but staging does not get the host separation
+        // production has. Give it a custom domain if that stops being enough.
         "PREVIEW_HOSTNAME": "proteus-staging.ashishkmr472.workers.dev",
         "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",
         "CLI_APPROVAL_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",

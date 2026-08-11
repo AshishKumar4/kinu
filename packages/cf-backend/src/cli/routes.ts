@@ -1040,7 +1040,7 @@ function html(title: string, body: string, status = 200, init: ResponseInit = {}
     ...init,
     status,
     headers: {
-      'content-type': 'text/html; charset=utf-8',
+      ...publicHtmlHeaders(),
       ...(init.headers as Record<string, string> | undefined),
     },
   });

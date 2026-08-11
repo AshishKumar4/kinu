@@ -5,9 +5,10 @@
  * custom domain with a wildcard DNS record so it can route
  * `PORT-SANDBOX-TOKEN.hostname` requests. The Proteus zone has no
  * wildcard CNAME (and the wrangler OAuth token lacks zone:write to
- * create one), so we route previews through a path prefix on the main
- * domain instead. Security is preserved: the sandbox DO still gates
- * access with validatePortToken.
+ * create one), so we route previews through a path prefix on the
+ * preview host instead. Access is gated twice: the sandbox DO checks
+ * the URL token with validatePortToken, and lib/preview-origin.ts keeps
+ * the served document off the app's origin and inside an opaque one.
  *
  * Path scheme (matches what exposeSandboxPort returns):
  *
@@ -20,8 +21,12 @@
  */
 
 import { getSandbox } from "@cloudflare/sandbox";
-
-const PREFIX = "/_preview/";
+import { escapeHtml } from "./lib/http.js";
+import {
+  PREVIEW_PATH_PREFIX as PREFIX,
+  containPreviewResponse,
+  isolatedPreviewHost,
+} from "./lib/preview-origin.js";
 
 interface PreviewRoute {
   port: number;
@@ -49,7 +54,9 @@ export function parsePreviewRoute(url: URL): PreviewRoute | null {
   const sandboxSlash = afterPort.indexOf("/");
   if (sandboxSlash === -1) return null;
   const sandboxId = afterPort.slice(0, sandboxSlash);
-  if (!sandboxId || sandboxId.length > 128) return null;
+  // Charset-bound like the port and token below: the id is echoed into the
+  // proxy's own error pages, and `proteus-<agent-name>` never needs more.
+  if (!/^[a-z0-9_-]+$/i.test(sandboxId) || sandboxId.length > 128) return null;
 
   const afterSandbox = afterPort.slice(sandboxSlash + 1);
   const tokenSlash = afterSandbox.indexOf("/");
@@ -70,7 +77,7 @@ export function parsePreviewRoute(url: URL): PreviewRoute | null {
 
 /**
  * Build the public URL an agent should hand out. The hostname is the
- * main site (no wildcard DNS needed), and the preview lives under
+ * preview host (no wildcard DNS needed), and the preview lives under
  * `/_preview/…`.
  */
 export function buildPreviewUrl(hostname: string, route: Omit<PreviewRoute, "innerPath">): string {
@@ -81,11 +88,23 @@ export function buildPreviewUrl(hostname: string, route: Omit<PreviewRoute, "inn
  * If `request` targets `/_preview/…`, validate the token with the
  * sandbox DO and forward to the container. Otherwise return null so
  * the Worker falls through to its normal routing.
+ *
+ * When a separate preview host is configured, that host is the only
+ * place previews are served: the same path on the app's own origin is
+ * a 404, so a preview URL can never be reached as the app.
  */
 export async function proxyPreviewRequest(request: Request, env: Env): Promise<Response | null> {
   const url = new URL(request.url);
   const route = parsePreviewRoute(url);
   if (!route) return null;
+
+  const isolated = isolatedPreviewHost(env);
+  if (isolated && url.host.toLowerCase() !== isolated.toLowerCase()) {
+    return new Response(
+      JSON.stringify({ error: `Previews are served on ${isolated}, not this host.`, code: "WRONG_PREVIEW_ORIGIN" }),
+      { status: 404, headers: { "content-type": "application/json" } },
+    );
+  }
 
   const { port, sandboxId, token, innerPath } = route;
 
@@ -124,7 +143,7 @@ export async function proxyPreviewRequest(request: Request, env: Env): Promise<R
     // The SDK's switchPort rewrites `:PORT` in the host; we build a
     // localhost URL because the DO's fetch() accepts it.
     const forwarded = new Request(`http://localhost:${port}${innerPath}${wsUrl.search}`, request);
-    return await sandbox.fetch(forwarded);
+    return containPreviewResponse(await sandbox.fetch(forwarded));
   }
 
   const forwardedUrl = `http://localhost:${port}${innerPath}${url.search}`;
@@ -144,7 +163,7 @@ export async function proxyPreviewRequest(request: Request, env: Env): Promise<R
   });
 
   try {
-    return await sandbox.containerFetch(forwardedReq, port);
+    return containPreviewResponse(await sandbox.containerFetch(forwardedReq, port));
   } catch (err) {
     const msg = (err as Error).message ?? '';
     // The sandbox SDK surfaces "container is not listening" when the
@@ -162,6 +181,7 @@ export async function proxyPreviewRequest(request: Request, env: Env): Promise<R
 function renderNotListeningPage(opts: {
   port: number; sandboxId: string; hostname: string;
 }): Response {
+  const safeSandboxId = escapeHtml(opts.sandboxId);
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -210,21 +230,19 @@ function renderNotListeningPage(opts: {
   <pre>You exposed port ${opts.port} but the container isn't serving anything on it. Please start a server first (e.g. <code>nohup python3 -m http.server ${opts.port} --directory /workspace/&lt;app&gt; &gt; /tmp/srv.log 2>&amp;1 &amp;</code> for static sites, or <code>nohup node server.js &gt; /tmp/srv.log 2&gt;&amp;1 &amp;</code> for Node), wait ~1s for it to bind, then verify with <code>sandbox.listPorts()</code>.</pre>
   <p class="hint">Once the agent starts a listener, refresh this page and the preview will appear.</p>
   <button onclick="location.reload()">Reload preview</button>
-  <div class="meta">sandbox=${opts.sandboxId} · port=${opts.port}</div>
+  <div class="meta">sandbox=${safeSandboxId} · port=${opts.port}</div>
 </div>
 </body>
 </html>`;
-  return new Response(html, {
+  return containPreviewResponse(new Response(html, {
     status: 503,
     headers: { "content-type": "text/html; charset=utf-8" },
-  });
+  }));
 }
 
 function renderProxyErrorPage(opts: { port: number; sandboxId: string; message: string }): Response {
-  // Escape HTML in the message to prevent any reflected injection.
-  const safeMsg = String(opts.message).replace(/[&<>"']/g, (c) =>
-    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!),
-  );
+  const safeMsg = escapeHtml(String(opts.message));
+  const safeSandboxId = escapeHtml(opts.sandboxId);
   const html = `<!doctype html>
 <html lang="en">
 <head>
@@ -251,14 +269,14 @@ function renderProxyErrorPage(opts: { port: number; sandboxId: string; message: 
 <div class="card">
   <h1><span class="dot"></span> Preview proxy error</h1>
   <pre>${safeMsg}</pre>
-  <div class="meta">sandbox=${opts.sandboxId} · port=${opts.port}</div>
+  <div class="meta">sandbox=${safeSandboxId} · port=${opts.port}</div>
 </div>
 </body>
 </html>`;
-  return new Response(html, {
+  return containPreviewResponse(new Response(html, {
     status: 502,
     headers: { "content-type": "text/html; charset=utf-8" },
-  });
+  }));
 }
 
 /** Minimal surface of the Sandbox DO we depend on (avoid importing the class). */

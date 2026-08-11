@@ -6,6 +6,7 @@ import {
   type OAuthProfile,
 } from './d1-store.js';
 import { escapeHtml, json } from '../lib/http.js';
+import { publicHtmlHeaders } from '../lib/security-headers.js';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
   type OAuthProviderConfig,
@@ -550,7 +551,7 @@ function redirect(location: string, init: ResponseInit = {}): Response {
 
 function html(title: string, body: string, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
-  headers.set('content-type', 'text/html; charset=utf-8');
+  for (const [key, value] of Object.entries(publicHtmlHeaders())) headers.set(key, value);
   return new Response(`<!doctype html>
 <html lang="en">
 <head>

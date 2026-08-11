@@ -1,7 +1,7 @@
 /**
  * Shared presentational primitives used by both the chat column and the work
  * surfaces — kept in one place so there is a single source of truth (DRY) for
- * markdown rendering, code blocks, preview-URL detection, and empty states.
+ * markdown rendering, code blocks, and empty states.
  */
 import { memo, useState } from "react";
 import { Code } from "@cloudflare/kumo/components/code";
@@ -69,31 +69,6 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
     }}>{content}</Markdown>
   );
 });
-
-/**
- * Detect a Proteus path-style preview URL anywhere inside a tool result. Tool
- * outputs are usually strings (e.g. `https://.../_preview/8080/.../`) but can
- * also be objects with a `url` field (exposeSandboxPort returns `{url}`).
- */
-export function extractPreviewUrl(output: unknown): string | null {
-  const re = /https:\/\/[^\s"']+\/_preview\/\d+\/[^/\s"']+\/[a-z0-9_]+\/?[^\s"']*/i;
-  if (typeof output === "string") {
-    const m = output.match(re);
-    return m ? m[0] : null;
-  }
-  if (output && typeof output === "object") {
-    const url = (output as { url?: unknown }).url;
-    if (typeof url === "string") {
-      const m = url.match(re);
-      return m ? m[0] : null;
-    }
-    try {
-      const m = JSON.stringify(output).match(re);
-      return m ? m[0] : null;
-    } catch { return null; }
-  }
-  return null;
-}
 
 export function EmptyState({ icon, title, hint, children }: {
   icon: React.ReactNode; title: string; hint?: React.ReactNode; children?: React.ReactNode;

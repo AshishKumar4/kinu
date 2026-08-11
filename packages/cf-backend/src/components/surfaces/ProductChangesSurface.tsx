@@ -15,6 +15,7 @@ import type {
   ProductSourceBinding,
   Rpc,
 } from "@/lib/protocol";
+import { isPreviewUrl } from "@/lib/preview-origin";
 import { EmptyState } from "./shared";
 
 const STATUS_META: Record<ProductChangeStatus, { label: string; tone: string }> = {
@@ -342,7 +343,11 @@ function ChangeDetail({
       {change.previewUrl && (
         <section>
           <div className="text-[11px] p-text-3 mb-1">Preview</div>
-          <a href={change.previewUrl} target="_blank" rel="noreferrer" className="text-xs p-accent hover:underline break-all">{change.previewUrl}</a>
+          {/* The URL comes from an agent-written change record, so it is a link
+              only when it really is a preview route. */}
+          {isPreviewUrl(change.previewUrl)
+            ? <a href={change.previewUrl} target="_blank" rel="noopener noreferrer" className="text-xs p-accent hover:underline break-all">{change.previewUrl}</a>
+            : <span className="text-xs p-text-3 break-all">{change.previewUrl}</span>}
         </section>
       )}
 

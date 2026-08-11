@@ -5,7 +5,12 @@
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
-**Workers.dev fallback:** https://proteus.ashishkmr472.workers.dev
+**Sandbox previews:** https://proteus.ashishkmr472.workers.dev
+
+The workers.dev hostname serves sandbox previews and nothing else — it is no
+longer an app fallback. Previewed apps are agent-written HTML, so they get an
+origin with no Proteus session on it; see `PREVIEW_HOSTNAME` below and
+`packages/cf-backend/src/lib/preview-origin.ts`.
 
 ## Local Development
 
@@ -245,7 +250,7 @@ exhausted budget returns the original response rather than throwing.
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | AI Gateway endpoint URL |
 | `AI_GATEWAY_AUTH` | Wrangler secret | `Bearer <token>` (NEVER in code) |
 | `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
-| `PREVIEW_HOSTNAME` | wrangler.jsonc `vars` | Hostname used for sandbox preview URLs |
+| `PREVIEW_HOSTNAME` | wrangler.jsonc `vars` | Host sandbox previews are served on. **Must not be the app's own host** — preview content is agent-written, and on the app's origin it runs with the owner's session. The Worker serves only `/_preview/*` there, and refuses that path anywhere else. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
 | `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |
