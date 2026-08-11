@@ -85,6 +85,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
   tool: {
     execute_tools: EVERYWHERE,
     run: EVERYWHERE,
+    file: EVERYWHERE,
     skills: EVERYWHERE,
     agents: EVERYWHERE,
     memory: EVERYWHERE,
