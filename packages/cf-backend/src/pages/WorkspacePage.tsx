@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, type DragEvent as ReactDragEvent, type FormEvent } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent, type FormEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
@@ -26,7 +26,8 @@ import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
 import { summarizeToolCall } from "@/components/tool-call-summary";
 import {
-  classifyProgrammaticTurn, eventVariantLabel, parseDrainedEvents, type DrainedEvent,
+  classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
+  type DrainedEvent, type ProgrammaticTurn, type SignalCard,
 } from "@/components/background-event";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
@@ -364,9 +365,24 @@ function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
   );
 }
 
+/** Whether the agent has read this event yet. An event is shown to the user
+ *  when it HAPPENS; the agent reads it at its next step, which may be a while
+ *  later — so the card says which of the two it is, and flips in place. */
+type CardState = SignalCard["state"];
+
+/** The lifecycle caption, in the event cards' existing language. */
+function ShownCaption({ state }: { state: CardState }) {
+  return (
+    <>
+      <span aria-hidden>·</span>
+      <span>{state === "pending" ? "to be shown to the agent" : "shown to the agent"}</span>
+    </>
+  );
+}
+
 /** A background task returning into the conversation — rendered as a centered
  *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
-function BackgroundEventCard({ kind, status }: { kind: string; status: string }) {
+function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
   const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
     : status === "cancelled" ? { Icon: ProhibitIcon, tone: "p-text-3", verb: "was cancelled" }
     : { Icon: WarningCircleIcon, tone: "p-danger", verb: "failed" };
@@ -375,6 +391,7 @@ function BackgroundEventCard({ kind, status }: { kind: string; status: string })
       <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
         <meta.Icon size={13} className={meta.tone} weight="fill" />
         <span>Background <span className="font-medium p-text">{kind}</span> task {meta.verb}</span>
+        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
         <ClockIcon size={11} className="p-text-3" />
       </div>
     </div>
@@ -410,19 +427,19 @@ function DrainedEventRow({ event }: { event: DrainedEvent }) {
   );
 }
 
-/** The reactor's drain turn: events that arrived while the operator was idle,
- *  handed to the agent as its turn input. The operator did not type this, so it
- *  never wears their bubble — it is a captioned, quieter event card. */
-function DrainedEventsCard({ text }: { text: string }) {
+/** The reactor's drain: events that arrived while the operator was away, handed
+ *  to the agent as turn input or spliced into the turn it was already running.
+ *  The operator did not type this, so it never wears their bubble — it is a
+ *  captioned, quieter event card. */
+function DrainedEventsCard({ text, state }: { text: string; state: CardState }) {
   const events = parseDrainedEvents(text);
   return (
     <div className="flex justify-center animate-fade-in">
       <div className="w-full max-w-[85%] rounded-xl border p-border p-elevated px-3 py-2">
         <div className="flex items-center gap-1.5 text-[10px] p-text-3">
-          <LightningIcon size={11} className="p-warning shrink-0" weight="fill" />
+          <LightningIcon size={11} className={`shrink-0 ${state === "pending" ? "p-text-3" : "p-warning"}`} weight="fill" />
           <span className="font-medium">Background event</span>
-          <span aria-hidden>·</span>
-          <span>shown to the agent</span>
+          <ShownCaption state={state} />
           {events.length > 1 && <span className="ml-auto shrink-0 tabular-nums">{events.length} events</span>}
         </div>
         <div className="mt-1.5 space-y-1">
@@ -434,6 +451,17 @@ function DrainedEventsCard({ text }: { text: string }) {
       </div>
     </div>
   );
+}
+
+/** One programmatic turn as the chat shows it — the durable message a queued
+ *  signal became, or the live card of one spliced into a running turn. Same
+ *  classifier, same cards, one rendering. */
+function ProgrammaticTurnCard({ turn, text, state }: {
+  turn: ProgrammaticTurn; text: string; state: CardState;
+}) {
+  return turn.kind === "background_job"
+    ? <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />
+    : <DrainedEventsCard text={text} state={state} />;
 }
 
 /** A subordinate's task assignment or progress report, mirrored into the main
@@ -464,10 +492,15 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
 // re-rendering (and re-parsing their markdown) entirely.
 const MessageView = memo(function MessageView({
   message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles, takes, onPickTake,
+  signalState,
 }: {
   message: UIMessage;
   isLast: boolean;
   isStreaming: boolean;
+  /** For a message a signal enqueued: where that signal's card is in its
+   *  lifecycle. Undefined once the card's live state is gone (a reload, or a
+   *  session that started after it landed) — history is by definition shown. */
+  signalState?: CardState;
   /** Called with the message id when user clicks "Fork from here". */
   onFork?: (messageId: string) => void;
   /** Restore device files to the shadow-git checkpoint taken before this
@@ -493,11 +526,11 @@ const MessageView = memo(function MessageView({
   // messages so the model reads them as its input — but the operator did not
   // type them, so they get their own presentation instead of a user bubble.
   const programmatic = classifyProgrammaticTurn((message as { metadata?: unknown }).metadata);
-  if (programmatic?.kind === "background_job") {
-    return <BackgroundEventCard kind={programmatic.jobKind} status={programmatic.status} />;
-  }
-  if (programmatic?.kind === "event_drain") {
-    return <DrainedEventsCard text={getMessageText(message)} />;
+  if (programmatic) {
+    return (
+      <ProgrammaticTurnCard
+        turn={programmatic} text={getMessageText(message)} state={signalState ?? "shown"} />
+    );
   }
 
   if (isUser) {
@@ -1044,6 +1077,27 @@ export default function WorkspacePage() {
   // and refreshed when a turn settles (a think convergence may have produced
   // a fresh near-tied set for the answer that just streamed in).
   const [takesByTurn, setTakesByTurn] = useState<Record<string, AlternateTakeSet>>({});
+
+  // A signal that started a turn has a durable message; one spliced into a
+  // running turn never will. Both are the same card, so the message renders it
+  // once it exists and the live list carries the rest — never both.
+  const cardStates = useMemo(
+    () => new Map(state.signalCards.map((card) => [card.id, card.state])),
+    [state.signalCards]);
+  const messageCardIds = useMemo(() => new Set(state.messages.flatMap((msg) => {
+    const id = messageSignalId((msg as { metadata?: unknown }).metadata);
+    return id ? [id] : [];
+  })), [state.messages]);
+  const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
+    if (messageCardIds.has(card.id)) return [];
+    const turn = classifyProgrammaticTurn(card.metadata);
+    return turn ? [{ card, turn }] : [];
+  }), [state.signalCards, messageCardIds]);
+  const cardStateOf = (metadata: unknown) => {
+    const id = messageSignalId(metadata);
+    return id ? cardStates.get(id) : undefined;
+  };
+
   const settledBranchCount = state.branchRuns.filter((b) => b.status === "settled").length;
   useEffect(() => {
     if (state.connectionStatus !== "connected" || state.isStreaming) return;
@@ -1255,7 +1309,11 @@ export default function WorkspacePage() {
                   onRestoreFiles={onRestoreFiles}
                   takes={takesByTurn[msg.id]}
                   onPickTake={onPickTake}
+                  signalState={cardStateOf((msg as { metadata?: unknown }).metadata)}
                 />
+              ))}
+              {looseCards.map(({ card, turn }) => (
+                <ProgrammaticTurnCard key={card.id} turn={turn} text={card.text} state={card.state} />
               ))}
               {state.branchRuns.map((run) => (
                 <BranchRunChip

@@ -15,7 +15,7 @@
 import type {
   AgentRuntime, BranchHandle,
   VFS as CoreVFS, Executor, LLM, Schedule, Identity,
-  SqlExecutor as CoreSqlExecutor, RawSqlExec,
+  SqlExecutor, RawSqlExec,
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
@@ -28,7 +28,8 @@ import {
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
-  createAgentConfigStore,
+  EVIDENCE_BUDGETS, evidenceWindow,
+  createAgentConfigStore, selectFastModel,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
@@ -38,13 +39,12 @@ import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
 import { createShell } from "@proteus/agent-utils/shell";
-import type { SqlExecutor } from "@proteus/agent-utils";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
 import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
 import { createHubDeviceTransport } from "./device-transport.js";
-import { createAgentProviderRegistry, type AgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
+import { createAgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
@@ -73,6 +73,16 @@ type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'ab
   readonly env: Env;
   readonly ctx: DurableObjectState;
 };
+
+/**
+ * The one bridge between the Agents SDK's `Agent.sql` and the SqlExecutor
+ * primitive. The SDK types its bound values as scalars only, so it does not
+ * nominally satisfy a primitive that admits ArrayBuffer — an assertion is
+ * unavoidable, and this is the single place it is made.
+ */
+function boundSql(agent: AgentHost): SqlExecutor {
+  return agent.sql.bind(agent) as unknown as SqlExecutor;
+}
 
 /**
  * The actor's identity bootstrap + exec-plane keying — the two things that
@@ -151,7 +161,7 @@ export interface CFRuntimeHooks {
  * Build a full AgentRuntime from a Think agent's DO context.
  */
 export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, hooks: CFRuntimeHooks = {}): CFRuntime {
-  const sql = agent.sql.bind(agent) as unknown as SqlExecutor;
+  const sql = boundSql(agent);
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
   // SqliteFS from agent-utils — pure DO SQLite, no R2
@@ -168,7 +178,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const vectorStore = buildVectorStore(agent, actor);
   // Owns the semantic-index completeness markers, read by the backfill and
   // cleared by the write path when a sync fails.
-  const memoryConfig = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
+  const memoryConfig = createAgentConfigStore(sql);
   // One-time backfill of chunks indexed before the vector store existed.
   // Fire-and-forget (same pattern as deviceTransport.refreshStatus): bounded
   // per boot, idempotent, and a no-op once the marker is set.
@@ -197,7 +207,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const executor = createExecutor(envForExec.LOADER);
   const llm = createDualPathLLM(agent, actor);
   const schedule = createRealSchedule(agent);
-  const identity = createIdentity(agent, vfs, sql as unknown as CoreSqlExecutor);
+  const identity = createIdentity(agent, vfs, sql);
 
   // Execution router — manages codemode providers (workspace, nimbus, sandbox, laptop)
   const shell = createShell(sqliteFS);
@@ -205,8 +215,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell,
     // sql is used by workspace.listTools() to look up EMA craft_scores.
-    // Cast bridges the agent SDK's sql binding to core's SqlExecutor shape.
-    sql: sql as unknown as import("@proteus/core").SqlExecutor,
+    sql,
     // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
   }));
@@ -223,7 +232,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // Every remote mount exposes the environment's REAL root ('/'); the
   // ergonomic working dir is metadata, not a path rewrite.
   const sandboxMountPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
@@ -232,7 +241,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
         sandboxId,
         { normalizeId: true },
       ) as unknown as SandboxHandle;
-      const configStore = createAgentConfigStore(sql as unknown as CoreSqlExecutor);
+      const configStore = createAgentConfigStore(sql);
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
@@ -260,7 +269,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // endpoint/token secrets. The handle is lazy: no session is touched until
   // the agent actually calls nimbus.*.
   const nimbusMountPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   if (env.NIMBUS_SESSION) {
     try {
       const nimbusBox = createAgentNimbusHandle(agent, actor);
@@ -316,14 +325,15 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
         catch { return false; } // consent unverifiable → subtree scope (fail closed)
       },
     }),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
     live: () => deviceTransport.status().connected,
   });
 
   return {
-    storage: { vfs, sql: sql as unknown as CoreSqlExecutor, execRaw },
+    storage: { vfs, sql, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
     judgeModel: createJudgeLLM(agent, actor),
+    fastLlm: createFastLLM(agent, actor),
     spawnBranch: createFacetSpawner(agent, actor),
     abortBranch: createFacetAborter(agent),
     executionRouter,
@@ -537,9 +547,7 @@ function createExecutor(loader: unknown): Executor {
 // has switched providers.
 function readStoredModelSpec(agent: AgentHost): string | null {
   // Single canonical path through the typed config store — no raw SQL.
-  return createAgentConfigStore(
-    agent.sql.bind(agent) as unknown as CoreSqlExecutor,
-  ).getModel();
+  return createAgentConfigStore(boundSql(agent)).getModel();
 }
 
 function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
@@ -565,6 +573,45 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
 }
 
 /**
+ * The mechanical-work tier (rt.fastLlm): the chat vendor's own small model,
+ * for the evolution engine's classification / labelling / short-reflection /
+ * extraction calls and sleep-time compression. Resolved at CALL time from the
+ * same registry and credentials the chat model uses, so a `fast_model` change
+ * or a provider switch takes effect without a redeploy, and no second provider
+ * path exists — only a cheaper model id on the one already connected.
+ *
+ * Returns null when the vendor has no smaller tier, so the runtime leaves
+ * `fastLlm` unset and every reader's documented `?? rt.llm` fallback runs.
+ */
+function createFastLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM | undefined {
+  const config = createAgentConfigStore(boundSql(agent));
+  const registry = createAgentProviderRegistry({
+    env: agent.env,
+    userDO: userCredentialSourceFor(agent, actor),
+    appTitle: 'Proteus (fast)',
+    workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
+  });
+  const selected = () => selectFastModel({
+    fastSpec: config.getFastModel(),
+    chatSpec: registry.normalizeSpecSync(readStoredModelSpec(agent)),
+    providers: registry.registry.list(),
+  });
+  if (selected().source === 'chat-model') return undefined;
+  return {
+    async *stream() { yield ""; },
+    async complete(prompt: string): Promise<string> {
+      try {
+        const result = await generateText({
+          model: registry.resolveModel(selected().spec), prompt,
+          ...effortFor('reflection'),
+        });
+        return result.text.trim();
+      } catch { return "(reflection unavailable)"; }
+    },
+  };
+}
+
+/**
  * Cross-model judge for MCTS branch evaluation (rt.judgeModel). Resolves the
  * operator's review_model (the `review_model` agent_config key) at call time
  * so judging can run on a DIFFERENT model from the explorer — the
@@ -579,9 +626,7 @@ function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
-      const config = createAgentConfigStore(
-        agent.sql.bind(agent) as unknown as CoreSqlExecutor,
-      );
+      const config = createAgentConfigStore(boundSql(agent));
       const registry = createAgentProviderRegistry({
         env: agent.env,
         userDO: userCredentialSourceFor(agent, actor),
@@ -618,7 +663,7 @@ function createRealSchedule(agent: AgentHost): Schedule {
 
 // ── Identity ─────────────────────────────────────────────────────
 
-function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: CoreSqlExecutor): Identity {
+function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: SqlExecutor): Identity {
   return {
     id: agent.ctx.id.toString(),
     name: agent.name,
@@ -694,7 +739,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
     generateReflection: async (task) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: `What went wrong? ${task.slice(0, 500)}\nOne sentence.` }],
+        messages: [{ role: "user" as const, content: `What went wrong? ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\nOne sentence.` }],
         ...effortFor('reflection'),
       });
       return result.text.trim();

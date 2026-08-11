@@ -21,6 +21,7 @@ import {
   type AuthResolver,
   type ModelCapability,
   type ModelInfo,
+  type ModelMenu,
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
@@ -70,7 +71,9 @@ export interface LocalModelResolver {
   normalizeSpecSync(specOrNull?: string | null): string;
   resolveModel(specOrNull?: string | null): LanguageModel;
   listProviders(): Promise<ProviderInfo[]>;
-  listModels(): Promise<Array<ModelInfo & { provider: string }>>;
+  /** Models from every available provider, plus the providers that could not
+   *  be listed — one broken credential never empties the menu. */
+  listModels(): Promise<ModelMenu>;
   /** One spec's catalog entry (provider listModels lookup) — per-model
    *  metadata like input modalities for the attachment sanitizer. Null when
    *  the provider/model is unknown or the catalog is unreachable. */
@@ -79,6 +82,10 @@ export interface LocalModelResolver {
    *  judge/panel selection walks (core's `availableJudgeSpecs`, the same rule
    *  the DO backend uses). */
   judgeCandidates(): Promise<string[]>;
+  /** The registered providers' small-tier declarations — what core's
+   *  `selectFastModel` walks to find a cheaper model of the SAME vendor for
+   *  the mechanical evolution calls. */
+  fastModelCandidates(): ReadonlyArray<Pick<ModelProvider, 'id' | 'fastModel'>>;
   /** Resolve auth headers for a credential key (e.g. `tavily` for the web
    *  search upgrade) through the same local auth store model resolution uses. */
   getAuth: AuthResolver;
@@ -104,12 +111,20 @@ export interface LocalModelResolverConfig {
   opencode?: OpenCodeProviderOptions;
 }
 
-export function createLocalProviderLLM(opts: LocalModelResolverConfig): LLM {
+/**
+ * The workspace LLM seam over the local registry.
+ *
+ * `spec` overrides which model it resolves — that is how the MECHANICAL
+ * evolution calls reach the chat vendor's small tier (core's selectFastModel)
+ * without a second provider path: same resolver, same credentials, one
+ * different model id. Omitted = the workspace's configured chat model.
+ */
+export function createLocalProviderLLM(opts: LocalModelResolverConfig & { spec?: string | null }): LLM {
   const resolver = createLocalModelResolver(opts);
-  const spec = resolver.normalizeSpecSync(null);
+  const spec = resolver.normalizeSpecSync(opts.spec ?? null);
   const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
   const maxOutputTokens = opts.llm.maxTokens;
-  const model = () => resolver.resolveModel(null);
+  const model = () => resolver.resolveModel(spec);
   return {
     async *stream(input) {
       const result = streamText({
@@ -264,6 +279,9 @@ export function createLocalModelResolver(opts: LocalModelResolverConfig): LocalM
     judgeCandidates() {
       return availableJudgeSpecs(registry, deps);
     },
+    fastModelCandidates() {
+      return registry.list();
+    },
     listModels() {
       return registry.listAllModels(deps);
     },
@@ -329,22 +347,33 @@ interface CloudMenuEntry {
 
 const CLOUD_MENU_TTL_MS = 60_000;
 
+interface CloudMenu {
+  entries: CloudMenuEntry[];
+  /** Why the server could not list a provider, keyed by provider id — the
+   *  cloud providers report it verbatim instead of their canned hint. */
+  failures: Map<string, string>;
+}
+
+const EMPTY_CLOUD_MENU: CloudMenu = { entries: [], failures: new Map() };
+
 /** Server-driven model menu (GET /api/cli/models) shared by the cloud
  *  providers — the worker is the source of truth for what the signed-in
  *  account can actually serve (Cloudflare connected, gateway BYOK slugs,
  *  Unified Billing). Failures list as empty, so availability stays honest
  *  while explicit specs still resolve through the proxy. */
-function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): () => Promise<CloudMenuEntry[]> {
+function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch): () => Promise<CloudMenu> {
   const baseFetch = fetchImpl ?? fetch;
-  let cached: { at: number; entries: CloudMenuEntry[] } | null = null;
+  let cached: { at: number; menu: CloudMenu } | null = null;
   return async () => {
-    if (cached && Date.now() - cached.at < CLOUD_MENU_TTL_MS) return cached.entries;
+    if (cached && Date.now() - cached.at < CLOUD_MENU_TTL_MS) return cached.menu;
     try {
       const res = await baseFetch(`${cloud.origin.replace(/\/+$/, '')}/api/cli/models`, {
         headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
       });
-      if (!res.ok) return [];
-      const rows: unknown = await res.json();
+      if (!res.ok) return EMPTY_CLOUD_MENU;
+      const body: unknown = await res.json();
+      const source = body && typeof body === 'object' ? body as Record<string, unknown> : {};
+      const rows = source.models;
       const entries = (Array.isArray(rows) ? rows : []).flatMap((row): CloudMenuEntry[] => {
         if (!row || typeof row !== 'object') return [];
         const item = row as Record<string, unknown>;
@@ -361,12 +390,26 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
             : undefined,
         }];
       });
-      cached = { at: Date.now(), entries };
-      return entries;
+      const menu: CloudMenu = { entries, failures: cloudMenuFailures(source.failures) };
+      cached = { at: Date.now(), menu };
+      return menu;
     } catch {
-      return [];
+      return EMPTY_CLOUD_MENU;
     }
   };
+}
+
+function cloudMenuFailures(rows: unknown): Map<string, string> {
+  const out = new Map<string, string>();
+  if (!Array.isArray(rows)) return out;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const { provider, reason } = row as Record<string, unknown>;
+    if (typeof provider === 'string' && typeof reason === 'string' && provider && reason) {
+      out.set(provider, reason);
+    }
+  }
+  return out;
 }
 
 /** workers-ai / my-gateway backed by the worker's signed-in AI proxy. The
@@ -376,7 +419,7 @@ function createCloudProxyProvider(opts: {
   id: 'workers-ai' | 'my-gateway';
   label: string;
   cloud: LocalCloudSession;
-  menu: () => Promise<CloudMenuEntry[]>;
+  menu: () => Promise<CloudMenu>;
   defaultModel?: string;
   unavailableReason: string;
   fetch?: typeof fetch;
@@ -392,11 +435,13 @@ function createCloudProxyProvider(opts: {
     label: opts.label,
     defaultModel: opts.defaultModel,
     async isAvailable() {
-      return (await opts.menu()).some((entry) => entry.provider === opts.id);
+      return (await opts.menu()).entries.some((entry) => entry.provider === opts.id);
     },
-    unavailableReason: () => opts.unavailableReason,
+    async unavailableReason() {
+      return (await opts.menu()).failures.get(opts.id) ?? opts.unavailableReason;
+    },
     async listModels(): Promise<ModelInfo[]> {
-      return (await opts.menu())
+      return (await opts.menu()).entries
         .filter((entry) => entry.provider === opts.id)
         .map((entry) => ({
           id: entry.spec.startsWith(prefix) ? entry.spec.slice(prefix.length) : entry.spec,

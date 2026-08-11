@@ -15,12 +15,7 @@ import {
   DEFAULT_FORK_POLICY, TriggerRegistry, initEventsHubTables,
   type AlarmScheduler, type RegisterSpec, type TriggerKind,
 } from '../src/events/hub/index.ts';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
+import type { SqlExec } from '../src/index.js';
 
 /** Records every wake request so the alarm contract is assertable, and models
  *  the real scheduler's "converge on the soonest pending time" semantics. */

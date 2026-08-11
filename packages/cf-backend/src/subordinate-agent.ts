@@ -15,6 +15,8 @@ import {
   initFactsTable,
   initGepaTables,
   initHeadsTables,
+  initImportedExperienceTable,
+  initMctsSearchTable,
   initRunEventTables,
   initScaffoldTables,
   initSearchTables,
@@ -37,8 +39,10 @@ import {
   admitSubordinateTask,
   describeSubordinateHandoff,
   readSubordinateLiveStatus,
+  subordinateRelaysTurnEnd,
   type SubordinateLiveStatus,
-} from './subordinate-support.js';
+  type SubordinateReportOrigin,
+} from '@proteus/core';
 
 export interface SetSubordinateIdentityInput {
   name: string;
@@ -91,7 +95,7 @@ export class SubordinateAgent extends ActorAgent {
     return {
       report: {
         report: async (input) => {
-          const result = await this.sendReport(input.status, input.content);
+          const result = await this.sendReport(input.status, input.content, 'report_tool');
           this.reportedThisTurn = true;
           return result;
         },
@@ -103,10 +107,15 @@ export class SubordinateAgent extends ActorAgent {
     return method === 'setSubordinateIdentity';
   }
 
+  /** A subordinate has no inbox of its own: the orchestrator's owner-notify lane
+   *  (email) is reached by reporting to it. Automatic, not chosen, so it rides
+   *  the `turn_end` origin — a job the OWNER's own conversation detached settles
+   *  against no assignment and stops at the parent's ingress. */
   protected notifyOwner(subject: string, body: string): void {
-    void this.sendReport('progress', `${subject}\n\n${body}`).catch((error: unknown) => {
-      console.warn('[subordinate] parent notification failed:', error);
-    });
+    void this.sendReport('progress', `${subject}\n\n${body}`, 'turn_end')
+      .catch((error: unknown) => {
+        console.warn('[subordinate] parent notification failed:', error);
+      });
   }
 
   private ensureSchema(): void {
@@ -125,6 +134,14 @@ export class SubordinateAgent extends ActorAgent {
     initCurriculumTable(execRaw);
     initGepaTables(execRaw);
     initBackgroundJobsTable(execRaw);
+    // Durable MCTS search checkpoints. The fork substrate — including
+    // settle=mcts — is universal across actor profiles (getAgentsToolDeps on
+    // the base class), so the checkpoint table must exist here exactly as it
+    // does on the orchestrator; only the orchestrator had it.
+    initMctsSearchTable(execRaw);
+    // Experience-import staging ledger — read by the shared EvolutionEngine's
+    // settleImports on every root, not only where the `experience` tool is.
+    initImportedExperienceTable(execRaw);
     initCompactionStateTable(execRaw);
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY,
@@ -149,7 +166,6 @@ export class SubordinateAgent extends ActorAgent {
         readOnly: false,
         rootPath: '',
         consistency: 'durable',
-        credentialsStayInHost: true,
       },
     });
   }
@@ -207,7 +223,7 @@ export class SubordinateAgent extends ActorAgent {
    * The delivery branch is decided here and not guessed by the caller: this DO
    * is the only place that knows whether a turn is live right now, and the
    * drain it schedules will splice into that turn rather than queue behind it
-   * (BackendHost.injectIntoActiveTurn). Reading `_inFlight` before admission
+   * (BackendHost.turnInFlight). Reading `_inFlight` before admission
    * keeps the answer about the turn the batch will actually reach.
    */
   async enqueueSubordinateTask(input: {
@@ -307,7 +323,11 @@ export class SubordinateAgent extends ActorAgent {
     return { ok: true, cancelledJobs, abortedTools };
   }
 
-  private async sendReport(status: SubordinateReportStatus, content: string): Promise<unknown> {
+  private async sendReport(
+    status: SubordinateReportStatus,
+    content: string,
+    origin: SubordinateReportOrigin,
+  ): Promise<unknown> {
     const identity = this.identity.read();
     if (!identity) throw new Error('Subordinate identity is not initialized.');
     const parent = this.env.OrchestratorAgent.get(
@@ -317,6 +337,7 @@ export class SubordinateAgent extends ActorAgent {
       fromSubordinate: identity.name,
       status,
       content,
+      origin,
     });
   }
 
@@ -344,17 +365,21 @@ export class SubordinateAgent extends ActorAgent {
       responseMessages: await convertToModelMessages([result.message], { ignoreIncompleteToolCalls: true }),
     });
 
+    // One read of who drove this turn, feeding both the turn's recorded origin
+    // and whether its answer is the parent's to hear.
+    const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();
+
     const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
       userMessage: userText,
       assistantResponse: assistantText,
       ...(result.message.id ? { turnId: result.message.id } : {}),
       sessionId: 'default',
-      origin: programmaticUserMessage || this.lastUserTurnIsProgrammatic() ? 'programmatic' : 'user',
+      origin: ownerDriven ? 'user' : 'programmatic',
     });
     this.settleCompletedTurn(turn, { userText, assistantText });
 
-    if (!this.reportedThisTurn && assistantText.trim()) {
-      void this.sendReport('progress', assistantText).catch((error: unknown) => {
+    if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
+      void this.sendReport('progress', assistantText, 'turn_end').catch((error: unknown) => {
         console.warn('[subordinate] turn-end report failed:', error);
       });
     }

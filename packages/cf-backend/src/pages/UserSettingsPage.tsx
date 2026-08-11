@@ -27,7 +27,7 @@ import {
   listCloudflareGateways, selectCloudflareGateway,
   listDevices, registerDevice, revokeDevice,
   type UserProfile, type CredentialSummary, type CodexStatus,
-  type ModelMenuEntry, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
+  type ModelMenu, type ProviderCatalogEntry, type DeviceFlowStart, type CliSetup,
   type CloudflareGatewayStatus, type UserDevice,
 } from "../lib/user-api";
 import { Card, inputCls } from "@/components/ui/form";
@@ -40,7 +40,7 @@ interface Account {
   profile: UserProfile | null;
   creds: CredentialSummary[];
   codex: CodexStatus | null;
-  models: ModelMenuEntry[];
+  models: ModelMenu;
   catalog: ProviderCatalogEntry[];
   gateways: CloudflareGatewayStatus | null;
   defaultModel: string | null;
@@ -104,7 +104,7 @@ export default function UserSettingsPage() {
   }
 
   const { profile, creds, codex, models, catalog, gateways } = account;
-  const workersAIConnected = models.some((model) => model.provider === 'workers-ai');
+  const workersAIConnected = models.models.some((model) => model.provider === 'workers-ai');
 
   return (
     <div className="h-full overflow-y-auto">
@@ -188,7 +188,8 @@ export default function UserSettingsPage() {
           <div className="space-y-2">
             <div className="text-xs p-text-2">Default model for new workspaces</div>
             <ModelPicker
-              models={models}
+              models={models.models}
+              failures={models.failures}
               value={selectedDefaultModel}
               onChange={async (spec) => {
                 setDefaultModel(spec);

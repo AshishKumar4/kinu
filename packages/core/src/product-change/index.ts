@@ -13,7 +13,6 @@ export { PRODUCT_CHANGE_STATUSES } from './types.js';
 export {
   assertProductChangeTransition,
   isEngineOwnedTransitionTarget,
-  isProductChangeTerminal,
 } from './lifecycle.js';
 export {
   approvalTypeForEnvironment,
@@ -48,7 +47,6 @@ export {
   initProductChangeTables,
   productChangeSqlFromExec,
   type ProductChangeBoard,
-  type ProductChangeSqlExec,
   type ProductChangeSqlStore,
   type ProductChangeStoreOptions,
   type ProductSourceBindingInput,

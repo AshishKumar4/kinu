@@ -6,7 +6,24 @@
 // and a generative head almost always ends on a tool-call / reasoning turn —
 // so reading `result.text` alone yielded an empty per-head merge summary.
 
-import type { HeadStep } from "./types.js";
+import type { HeadReport, HeadStep } from "./types.js";
+
+/**
+ * Did this head bank anything a merge may cite?
+ *
+ * The distinction the merge path must never blur. A head that STOPPED — budget,
+ * abort, error — without recording evidence, a decision, or an artifact learned
+ * nothing, and its silence is not a finding about the task or the environment.
+ * A completed head answered, and its summary is that answer. Tool calls alone
+ * are activity, not findings. One predicate so the merge prompt, the merge
+ * narrative, and the cost summary can never disagree about which is which.
+ */
+export function headProducedFindings(
+  r: Pick<HeadReport, "status" | "evidence" | "decisions" | "artifactRefs">,
+): boolean {
+  if (r.status === "completed") return true;
+  return r.evidence.length > 0 || r.decisions.length > 0 || r.artifactRefs.length > 0;
+}
 
 interface StepLike { text?: string }
 interface ResultLike { text?: string; reasoningText?: string; steps?: ReadonlyArray<StepLike> }

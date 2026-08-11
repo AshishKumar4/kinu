@@ -119,11 +119,18 @@ export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}
   const max = opts.maxChars ?? 4000;
   if (facts.length === 0) return '';
   const lines: string[] = [];
+  let shown = 0;
+  let used = 0;
   for (const f of facts) {
     const val = typeof f.value === 'string' ? f.value : JSON.stringify(f.value);
     const line = `${f.key}: ${val}`;
-    if (lines.join('\n').length + line.length + 1 > max) break;
+    if (used + line.length + 1 > max) break;
     lines.push(line);
+    used += line.length + 1;
+    shown++;
+  }
+  if (shown < facts.length) {
+    lines.push(`# …and ${facts.length - shown} more facts not shown — memory recall reads any key`);
   }
   return lines.join('\n');
 }

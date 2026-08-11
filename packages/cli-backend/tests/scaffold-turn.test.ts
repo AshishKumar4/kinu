@@ -149,15 +149,15 @@ describe('a promoted scaffold drives a local turn', () => {
     await installScaffold(rt, {
       version: 1, status: 'current',
       code: `async function run({ task }) {
-        const result = await host.callTool('memory', { action: 'read', path: 'memory/MEMORY.md' });
+        const result = await host.callTool('memory', { action: 'search', query: 'anything' });
         await host.emit({ type: 'text_delta', text: 'tool returned ' + typeof result });
       }`,
     });
 
     await session.send('use a tool');
 
-    // The args reached the tool: a dispatch that dropped them would have
-    // errored on the missing action rather than returning a value.
+    // The args reached the tool: a dispatch that dropped them would have left
+    // the action undefined, which answers with an error OBJECT, not a string.
     expect(events.some((e) => e.type === 'tool-call' && e.toolName === 'memory')).toBe(true);
     expect(streamed(events)).toBe('tool returned string');
   });

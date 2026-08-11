@@ -10,7 +10,7 @@ import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
-  initSearchTables, initAlternateTakesTable, captureAlternateTakes,
+  initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
   type AgentsToolDeps, type StrategyContext,
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
@@ -56,6 +56,17 @@ function fakeModel(answer: string): LanguageModel {
       }),
       response: { headers: {} },
     }),
+  } as unknown as LanguageModel;
+}
+
+/** A model whose non-streaming call never resolves — the test's stand-in for a
+ *  detached `run` that started a server: the work is genuinely alive, and it is
+ *  never going to settle. */
+function hangingModel(): LanguageModel {
+  const base = fakeModel('unused') as unknown as Record<string, unknown>;
+  return {
+    ...base,
+    doGenerate: () => new Promise<never>(() => { /* never settles */ }),
   } as unknown as LanguageModel;
 }
 
@@ -136,6 +147,47 @@ function executeToolsModel(code: string): LanguageModel {
               controller.enqueue({
                 type: 'tool-call', toolCallId: 'call-1', toolName: 'execute_tools',
                 input: JSON.stringify({ code }),
+              });
+              controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+            } else {
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            }
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  } as unknown as LanguageModel;
+}
+
+/** A model that forks into two heads once, then answers. The heads and the merge
+ *  synthesis run against the SAME stub via doGenerate. */
+function forkingModel(): LanguageModel {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  const base = fakeModel('head finding') as unknown as Record<string, unknown>;
+  let step = 0;
+  return {
+    ...base,
+    doStream: async () => {
+      step += 1;
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            if (step === 1) {
+              controller.enqueue({
+                type: 'tool-call', toolCallId: 'call-1', toolName: 'agents',
+                input: JSON.stringify({
+                  action: 'fork', task: 'explore two angles',
+                  forks: [
+                    { task: 'angle A', rationale: 'first angle' },
+                    { task: 'angle B', rationale: 'second angle' },
+                  ],
+                }),
               });
               controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
             } else {
@@ -440,6 +492,77 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text.at(-1)).toBe('what did I say?');
     expect(text.indexOf('remember this')).toBeLessThan(text.indexOf('remembered answer'));
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
+  });
+
+  // Restore used to stop at the newest 40 messages — a number nothing ever
+  // passed, applied on every reconnect. A session past 40 messages lost
+  // everything older each time the CLI restarted, silently: no marker in the
+  // transcript, and no way for the model to ask what it had lost.
+  describe('restoring a long transcript', () => {
+    function seed(db: Database, messages: Array<{ role: 'user' | 'assistant'; content: string }>): void {
+      messages.forEach((m, i) => {
+        db.query(
+          `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 'default', ?, ?, ?)`,
+        ).run(`m-${i}`, m.role, m.content, 1_000 + i);
+      });
+    }
+
+    function resume(db: Database, rt: ReturnType<typeof createCLIRuntime>) {
+      let observed: ModelMessage[] = [];
+      const session = new LocalAgentSession({
+        rt, db, sessionId: 'default',
+        model: historyCapturingModel('ok', (messages) => { observed = messages; }),
+        onEvent: () => {}, noAutoEvolve: true,
+      });
+      return { session, seen: () => observed.map(messageText).filter((t) => !isDynamicBlock(t)) };
+    }
+
+    test('a transcript far past the old 40-message cap is restored whole', async () => {
+      const { db, rt } = setup();
+      seed(db, Array.from({ length: 120 }, (_, i) => ({
+        role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: `turn-${i}`,
+      })));
+
+      const { session, seen } = resume(db, rt);
+      await session.send('and now?');
+      await session.end();
+
+      const text = seen();
+      expect(text).toContain('turn-0');
+      expect(text).toContain('turn-119');
+      expect(text.some((t) => t.includes('earlier message'))).toBe(false);
+    });
+
+    test('what does not fit the context window is stated, with its count and where it lives', async () => {
+      const { db, rt } = setup();
+      // The static fallback window is 128k tokens ≈ 512k characters, so 80
+      // messages of 10k characters cannot be restored whole.
+      seed(db, Array.from({ length: 80 }, (_, i) => ({
+        role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: `turn-${i} ${'z'.repeat(10_000)}`,
+      })));
+
+      const { session, seen } = resume(db, rt);
+      await session.send('and now?');
+      await session.end();
+
+      const text = seen();
+      const notice = text.find((t) => t.includes('earlier message'));
+      expect(notice).toBeDefined();
+      // The newest end is what survived, and the count names exactly how much
+      // of the old end did not — the boundary the model can reason about.
+      expect(text.some((t) => t.startsWith('turn-79'))).toBe(true);
+      expect(text.some((t) => t.startsWith('turn-0 '))).toBe(false);
+      const omitted = Number(/(\d+) earlier messages/.exec(notice!)![1]);
+      expect(omitted).toBeGreaterThan(0);
+      expect(omitted).toBeLessThan(80);
+      expect(text.some((t) => t.startsWith(`turn-${omitted - 1} `))).toBe(false);
+      // Not lost, and it says so — an agent that knows it is reading the tail
+      // of its own conversation can ask for the rest.
+      expect(notice).toContain('local session store');
+      expect(notice).toContain('"default"');
+    });
   });
 });
 
@@ -942,7 +1065,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
       })],
-    })({ tools: {}, providers: [], loader: {} });
+    })({ craftedTools: () => ({}), providers: [], loader: {} });
 
     const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
@@ -965,7 +1088,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         listBackgroundJobs: async () => [],
         armCompactNow: () => { arms++; },
       })],
-    })({ tools: {}, providers: [], loader: {} });
+    })({ craftedTools: () => ({}), providers: [], loader: {} });
 
     const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
       code: 'return await agent.compactNow();',
@@ -1081,11 +1204,131 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(db.query(`SELECT COUNT(*) c FROM fibers`).get()).toEqual({ c: 0 });
   });
 
-  test('toolNames exposes the full surface (agents/fact parity); end() resolves', async () => {
+  test('settleBackgroundWork gives up on work that never settles, and leaves it running', async () => {
+    // The regression this pins: `proteus exec` detaches a server-style `run`
+    // (a VM, a package server, a training job), the agent correctly ends its
+    // turn, and the process then blocked on Promise.allSettled over a fiber
+    // that never settles — 6.4 of 16.2 agent-hours of dead idle across a
+    // benchmark run, every trial of it ended by the harness SIGKILL.
+    const { db, session, events } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-hang', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fh', 'bg:think', '{"phase":"running","jobId":"bgjob-hang","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    expect(jobStatus(db, 'bgjob-hang')).toBe('running');
+
+    const started = performance.now();
+    await session.settleBackgroundWork();
+    const waited = performance.now() - started;
+
+    // Bounded by the grace, not by the work.
+    expect(waited).toBeGreaterThanOrEqual(140);
+    expect(waited).toBeLessThan(5_000);
+    // Left RUNNING, not cancelled: a server the agent deliberately started has
+    // to outlive the one-shot process that started it, and the durable row is
+    // what the next start's orphan recovery reads.
+    expect(jobStatus(db, 'bgjob-hang')).toBe('running');
+    // Not silent about it either.
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_jobs_abandoned')).toBe(true);
+  });
+
+  test('end() releases the session when a fiber will never settle', async () => {
+    const { db, session } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-e', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fe', 'bg:think', '{"phase":"running","jobId":"bgjob-e","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    const started = performance.now();
+    await session.end();
+    expect(performance.now() - started).toBeLessThan(5_000);
+    expect(jobStatus(db, 'bgjob-e')).toBe('running');
+  });
+
+  test('a one-shot drain then close pays the grace once, not twice', async () => {
+    // runOneShot calls settleBackgroundWork() and then close() → end(), back to
+    // back, on the same never-settling job. Two independent graces would double
+    // the idle tail this whole change exists to remove.
+    const { db, session } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200 },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
+    db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-2x', 'think', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('f2x', 'bg:think', '{"phase":"running","jobId":"bgjob-2x","kind":"think"}', 1)`);
+
+    await session.recoverBackgroundJobs();
+    const started = performance.now();
+    await session.settleBackgroundWork();
+    await session.end();
+    const total = performance.now() - started;
+
+    expect(total).toBeGreaterThanOrEqual(190);
+    expect(total).toBeLessThan(400);
+  });
+
+  test('a long tool call runs inline under a policy whose threshold it does not cross', async () => {
+    // A one-shot run has no human waiting on a fast turn, so ordinary long work
+    // — a build, a test suite — completes inline. Detaching it would truncate
+    // the turn and force the model into polling its own job instead of working.
+    const { db, session, events } = setup(
+      'unused',
+      executeToolsModel('await new Promise(r => setTimeout(r, 120));\n"computed inline"'),
+      { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 } },
+    );
+    await session.send('do the long thing');
+
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_job_started')).toBe(false);
+    expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 0 });
+    const result = events.find((e) => e.type === 'tool-result') as { result?: unknown } | undefined;
+    expect(JSON.stringify(result?.result)).toContain('computed inline');
+  });
+
+  test('the same call detaches once it crosses the policy threshold', async () => {
+    const { db, session, events } = setup(
+      'unused',
+      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"computed late"'),
+      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000 } },
+    );
+    await session.send('do the long thing');
+    await session.settleBackgroundWork();
+
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_job_started')).toBe(true);
+    expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: 1 });
+  });
+
+  test('past the concurrent-job cap a crossing call is refused, and the model is told why', async () => {
+    const { db, session, events } = setup(
+      'unused',
+      executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
+      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500 } },
+    );
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      db.exec(`INSERT INTO background_jobs (id, kind, status, created_at) VALUES ('busy-${i}', 'run', 'running', 1)`);
+    }
+
+    await session.send('start another one');
+
+    // No new job minted: the cap held.
+    expect(db.query(`SELECT COUNT(*) c FROM background_jobs`).get()).toEqual({ c: MAX_CONCURRENT_DETACHED_JOBS });
+    expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_job_refused')).toBe(true);
+    const result = events.find((e) => e.type === 'tool-result') as { result?: unknown } | undefined;
+    const text = JSON.stringify(result?.result);
+    expect(text).toContain('CANCELLED');
+    expect(text).toContain('busy-0');
+  });
+
+  test('toolNames exposes the full surface (agents/memory parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    // Full parity with the DO surface: execution + memory + delegation + facts + skills.
-    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'fact', 'skills']) expect(names).toContain(t);
+    // Full parity with the DO surface: execution + durable state + delegation + skills.
+    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'skills']) expect(names).toContain(t);
+    // ...and the keyed-fact actions ride the one durable-state tool.
+    expect(names).not.toContain('fact');
     await session.send('hi');
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
   });
@@ -1373,6 +1616,70 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     expect(rows.map((r) => r.role)).toEqual(['user', 'user', 'user', 'assistant']);
     expect(rows[1]!.content).toBe('also check X');
     expect(rows[2]!.content).toBe('and Y');
+    await session.end();
+  });
+
+  test('a background event reaches the LIVE turn at its next step, alongside a user steer', async () => {
+    // One delivery time for everything asynchronous: the agent's next step.
+    // A platform wake and a user steer land in the same window here, and the
+    // two channels stay separate — the wake is model-visible only, the steer
+    // keeps its verbatim durable row, and neither spawns a second turn.
+    const { model, prompts, release } = toolThenAnswerModel('handled both');
+    const { db, session, events } = setup('unused', model);
+
+    const turn = session.send('main question');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    expect(session.turnInFlight()).toBe(true);
+    expect(session.steer('also check X')).toBe(true);
+    await session.publishEvent({
+      descriptor: {
+        ingress: 'chat_ws', variant: 'chat', payload: { text: 'mail from bob' },
+        operator_user_id: 'owner-1', session_id: 'local-test',
+      },
+      now: 123,
+    });
+    await session.flushPendingDrains();
+    release();
+    await turn;
+
+    const second = prompts[1]!;
+    const injected = userTexts(second).filter((text) => text.includes('also check X') || text.includes('mail from bob'));
+    expect(injected).toHaveLength(2);
+    expect(injected[0]).toBe('also check X');
+    expect(injected[1]).toContain('mail from bob');
+    // Both land after the tool results, so role alternation stays valid.
+    const roles = second.map((m) => m.role);
+    expect(roles.lastIndexOf('user')).toBeGreaterThan(roles.lastIndexOf('tool'));
+
+    // ONE turn: the event no longer waits for a programmatic turn of its own.
+    expect(turnStarts(events)).toHaveLength(1);
+    expect(session.pendingEvents()).toEqual([]);
+
+    // The steer persists verbatim; the signal is ephemeral — model-visible at
+    // the tip of the live turn and nowhere in durable history.
+    const rows = db.query(`SELECT role, content FROM messages WHERE session_id = 'default' ORDER BY created_at, rowid`)
+      .all() as Array<{ role: string; content: string }>;
+    expect(rows.map((r) => r.content)).toContain('also check X');
+    expect(rows.some((r) => r.content.includes('mail from bob'))).toBe(false);
+    await session.end();
+  });
+
+  test('turnInFlight is false once the stream is over, so a late signal starts its own turn', async () => {
+    const { session, events } = setup('answered');
+    expect(session.turnInFlight()).toBe(false);
+    await session.send('question');
+    expect(session.turnInFlight()).toBe(false);
+
+    await session.publishEvent({
+      descriptor: {
+        ingress: 'chat_ws', variant: 'chat', payload: { text: 'arrived after the turn' },
+        operator_user_id: 'owner-1', session_id: 'local-test',
+      },
+      now: 456,
+    });
+    await session.flushPendingDrains();
+    await waitFor(() => turnStarts(events).length >= 2);
+    expect(turnStarts(events)[1]!.kind).toBe('programmatic');
     await session.end();
   });
 
@@ -1830,10 +2137,13 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       async fetch(request) {
         const path = new URL(request.url).pathname;
         if (path === '/api/cli/models') {
-          return Response.json([{
-            spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
-            capabilities: ['tools', 'streaming'], contextWindow: 262144,
-          }]);
+          return Response.json({
+            models: [{
+              spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
+              capabilities: ['tools', 'streaming'], contextWindow: 262144,
+            }],
+            failures: [],
+          });
         }
         if (path === '/api/user/ai/v1/chat/completions') {
           const body = await request.json() as { model?: unknown; stream?: unknown };
@@ -1882,7 +2192,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       }]);
 
       // /model parity at the session surface: the worker menu's metadata flows.
-      const models = await session.listAvailableModels();
+      const { models } = await session.listAvailableModels();
       const kimi = models.find((m) => m.provider === 'workers-ai' && m.id === '@cf/moonshotai/kimi-k2.6');
       expect(kimi?.contextWindow).toBe(262144);
     } finally {
@@ -1892,6 +2202,44 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
 });
 
 describe('LocalAgentSession — the durable run-event log', () => {
+  // The table is scoped to the agent's database, which a one-shot run or a
+  // benchmark container destroys on exit. Every row is therefore also handed
+  // to the frontend as it is written, from the one recorder, so the live
+  // stream and the durable table can never disagree.
+  test('every recorded row is forwarded to the frontend as it is written', async () => {
+    const { session, events } = setup('hello there');
+    await session.send('hi');
+
+    const runId = session.listRuns()[0]!.runId;
+    const streamed = events
+      .filter((e): e is Extract<SessionEvent, { type: 'run-event' }> => e.type === 'run-event')
+      .map((e) => e.event);
+    expect(streamed).toEqual(session.getRunEvents(runId));
+
+    await session.end();
+  });
+
+  test('a fork lands in the ledger with what it produced and what it cost', async () => {
+    // Head phases were broadcast-only here while the DO recorded them, so every
+    // local run — and therefore every benchmark trial — left no durable trace of
+    // a fork at all: that a run's forks came back empty could only be found by
+    // reading trajectories by hand.
+    const { session } = setup('unused', forkingModel());
+    await session.send('go');
+
+    const events = session.getRunEvents(session.listRuns()[0]!.runId);
+    expect(events.some((e) => e.type === 'head_split')).toBe(true);
+
+    const merge = events.find((e): e is Extract<typeof events[number], { type: 'head_merge' }> =>
+      e.type === 'head_merge');
+    expect(merge).toBeDefined();
+    expect(merge!.headCount).toBe(2);
+    expect(merge!.headsWithFindings).toBe(2);
+    expect(merge!.totalTokens).toBeGreaterThan(0);
+
+    await session.end();
+  });
+
   test('a turn records a replayable run in run_events', async () => {
     // Backend parity: the DO persists every run into run_events and can replay
     // it (list_run_events / SSE Last-Event-ID resume). The CLI recorded nothing
@@ -1972,7 +2320,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
   function sandboxWith(deps: AgentsToolDeps) {
     const tool = createNodeExecuteToolFactory({
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
-    })({ tools: {}, providers: [], loader: {} });
+    })({ craftedTools: () => ({}), providers: [], loader: {} });
     return (code: string, options?: unknown) =>
       (tool as { execute: (a: { code: string }, o?: unknown) => Promise<unknown> }).execute({ code }, options);
   }
@@ -2086,6 +2434,131 @@ describe('agents.* codemode namespace — node sandbox', () => {
     expect(JSON.parse(String(probe))).toEqual({
       members: ['fork'], fork: 'function', staff: 'undefined',
     });
+    await session.end();
+  });
+});
+
+// ── the mechanical completion gate ──────────────────────────────────────────
+// A one-shot run is graded on what it leaves behind with nobody reading the
+// answer, so the harness takes its own look before letting the process go. The
+// two properties worth pinning: the trigger is what the turn DID, and the
+// evidence is read by the harness — so no claim of success can satisfy it.
+
+/** A model that runs one shell command, answers, and (on the confirming turn)
+ *  answers again. `confirmWith` is what it does when the gate comes back:
+ *  'text' = it just re-asserts, 'tool' = it goes back to work. */
+function runThenAnswerModel(confirmWith: 'text' | 'tool' = 'text'): LanguageModel {
+  const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+  let step = 0;
+  const answer = (controller: ReadableStreamDefaultController, text: string) => {
+    controller.enqueue({ type: 'text-start', id: '0' });
+    controller.enqueue({ type: 'text-delta', id: '0', delta: text });
+    controller.enqueue({ type: 'text-end', id: '0' });
+    controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+  };
+  const call = (controller: ReadableStreamDefaultController, id: string, command: string) => {
+    controller.enqueue({ type: 'tool-call', toolCallId: id, toolName: 'run', input: JSON.stringify({ command }) });
+    controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+  };
+  return {
+    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+    doStream: async () => {
+      step += 1;
+      const at = step;
+      return {
+        stream: new ReadableStream({
+          start(controller) {
+            controller.enqueue({ type: 'stream-start', warnings: [] });
+            if (at === 1) call(controller, 'call-1', 'echo working');
+            else if (at === 2) answer(controller, 'all done, the task is complete');
+            else if (at === 3 && confirmWith === 'tool') call(controller, 'call-2', 'echo fixing');
+            else answer(controller, 'confirmed');
+            controller.close();
+          },
+        }),
+        response: { headers: {} },
+      };
+    },
+  } as unknown as LanguageModel;
+}
+
+const gateTurn = (events: SessionEvent[]) =>
+  turnStarts(events).find((t) => t.event === 'completion_gate');
+
+describe('LocalAgentSession — the one-shot completion gate', () => {
+  test('a one-shot turn that did work gets one more turn carrying state the HARNESS read', async () => {
+    const { session, events } = setup('unused', runThenAnswerModel(), { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    const gate = gateTurn(events);
+    expect(gate).toBeDefined();
+    // Harness-authored, and the model's "the task is complete" did not prevent it.
+    expect(gate!.text).toContain('[Runtime check');
+    expect(gate!.text).toContain('write the report');
+    // Observed, not asserted: the real probe output from the real shell.
+    expect(gate!.text).toContain('$ pwd');
+    expect(gate!.text).toContain('$ ls -la');
+
+    // Exactly one gate, and it does not gate itself into a loop.
+    expect(turnStarts(events).filter((t) => t.event === 'completion_gate')).toHaveLength(1);
+    await session.end();
+  });
+
+  test('the gate is not armed on the interactive surface, where a human is the check', async () => {
+    const { session, events } = setup('unused', runThenAnswerModel());
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    expect(gateTurn(events)).toBeUndefined();
+    await session.end();
+  });
+
+  test('a turn that called no tools is not gated — it left no state to check', async () => {
+    const { session, events } = setup('just answering', undefined, { oneShot: true });
+    await session.send('what is 2 + 2');
+    await session.settleBackgroundWork();
+
+    expect(gateTurn(events)).toBeUndefined();
+    await session.end();
+  });
+
+  test('a failed turn is not gated — it already reported the failure', async () => {
+    const exploding = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
+      doStream: async () => { throw new Error('upstream is on fire'); },
+    } as unknown as LanguageModel;
+    const { session, events } = setup('unused', exploding, { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    expect(gateTurn(events)).toBeUndefined();
+    await session.end();
+  });
+
+  test('the confirming turn records whether the re-look converted into real work', async () => {
+    const { session } = setup('unused', runThenAnswerModel('tool'), { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    const gateRun = session.listRuns()
+      .map((r) => session.getRunEvents(r.runId))
+      .find((evs) => evs.some((e) => e.type === 'completion_gate'));
+    expect(gateRun).toBeDefined();
+    expect(gateRun!.find((e) => e.type === 'completion_gate')).toMatchObject({ converted: true });
+    await session.end();
+  });
+
+  test('a re-look that only re-asserts is recorded as an honest non-conversion', async () => {
+    const { session } = setup('unused', runThenAnswerModel('text'), { oneShot: true });
+    await session.send('write the report');
+    await session.settleBackgroundWork();
+
+    const rows = session.listRuns()
+      .flatMap((r) => session.getRunEvents(r.runId))
+      .filter((e) => e.type === 'completion_gate');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ converted: false });
     await session.end();
   });
 });

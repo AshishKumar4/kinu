@@ -30,11 +30,31 @@ const profile: CompactionProfile = {
   summarizerConcurrency: 2,
 };
 
+/** The ephemeral plane the ladder's first rung prunes, holding
+ *  `supersededTokens` worth of superseded blocks. A second drop frees nothing,
+ *  exactly as the real ledger's does. */
+function fakeEphemeral(supersededTokens = 0) {
+  let remaining = supersededTokens;
+  const drops: number[] = [];
+  return {
+    drops,
+    /** More superseded blocks piled up since the last drop. */
+    refill(tokens: number) { remaining = tokens; },
+    dropSuperseded(): number {
+      const freed = remaining;
+      remaining = 0;
+      drops.push(freed);
+      return freed;
+    },
+  };
+}
+
 interface Rig {
   ports: MemoryPorts;
   archive: MemoryArchiveStore;
   prompts: string[];
   outcomes: CompactionOutcomeEvent[];
+  ephemeral: ReturnType<typeof fakeEphemeral>;
   transform: (messages: ModelMessage[], overrides?: Partial<TransformContext>) => Promise<ModelMessage[] | undefined>;
 }
 
@@ -43,6 +63,7 @@ function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
   const archive = memoryArchive();
   const prompts: string[] = [];
   const outcomes: CompactionOutcomeEvent[] = [];
+  const ephemeral = fakeEphemeral();
   const extension = createCompactionExtension({
     ports,
     archive,
@@ -50,6 +71,7 @@ function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
       prompts.push(prompt);
       return validSummary(String(prompts.length));
     },
+    ephemeral,
     profile,
     onOutcome: (event) => outcomes.push(event),
     ...overrides,
@@ -65,7 +87,10 @@ function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
       ...ctxOverrides,
     });
   };
-  return { ports, archive, prompts, outcomes, transform };
+  return {
+    ports, archive, prompts, outcomes, transform,
+    ephemeral: (overrides.ephemeral as ReturnType<typeof fakeEphemeral>) ?? ephemeral,
+  };
 }
 
 describe('trigger gating', () => {
@@ -105,6 +130,76 @@ describe('trigger gating', () => {
     const result = await large.transform(messages, { system: 'S'.repeat(12_000) });
     expect(result).toBeDefined();
     expect(large.outcomes[0]?.outcome).toBe('planned');
+  });
+});
+
+describe('the first rung — superseded ephemeral context', () => {
+  test('nothing is pruned below the trigger: the ordinary path never touches the plane', async () => {
+    const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(5_000) });
+    // Repeated turns well under the trigger, each a fresh transform — a
+    // speculative rung would have fired on any of them.
+    for (let i = 0; i < 3; i++) {
+      expect(await transform(history(3, 200), { providerReportedTokens: 8_499 })).toBeUndefined();
+    }
+    expect(ephemeral.drops).toEqual([]);
+    expect(outcomes).toHaveLength(0);
+  });
+
+  test('at the trigger the superseded blocks go FIRST, and what they free can stand the rest of the ladder down', async () => {
+    // 8_600 is over the 8_500 trigger; dropping 500 tokens of superseded
+    // blocks puts the request back under it, so no tool output is touched and
+    // no plan is built — the cheapest rung was the only one needed.
+    const { transform, ephemeral, ports, outcomes } = rig({ ephemeral: fakeEphemeral(500) });
+    expect(await transform(history(3, 200), { providerReportedTokens: 8_600 })).toBeUndefined();
+    expect(ephemeral.drops).toEqual([500]);
+    expect(ports.plans.snapshots.size).toBe(0);
+    expect(ports.transcripts.writes.size).toBe(0);
+    expect(outcomes).toHaveLength(0);
+  });
+
+  test('when the first rung is not enough the stages below still run', async () => {
+    const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(200) });
+    const result = await transform(history(15, 3_000), { providerReportedTokens: 20_000 });
+    expect(ephemeral.drops).toEqual([200]);
+    expect(result).toBeDefined();
+    expect(outcomes[0]?.outcome).toBe('planned');
+  });
+
+  test('the freed tokens come off the provider total, never below the history floor', async () => {
+    // A relief larger than the whole context cannot pretend the history is
+    // free: the estimate + system floor still decides, so the ladder runs.
+    const { transform, ephemeral, outcomes } = rig({ ephemeral: fakeEphemeral(1_000_000) });
+    const result = await transform(history(15, 3_000), { providerReportedTokens: 20_000 });
+    expect(ephemeral.drops).toEqual([1_000_000]);
+    expect(result).toBeDefined();
+    expect(outcomes[0]?.outcome).toBe('planned');
+  });
+
+  test('a REPLAYING plan still gets the rung — the case nothing else can relieve', async () => {
+    // The engine's regrowth guard prices the prefix with the overhead recorded
+    // when the plan was built, so ephemeral blocks appended after that are
+    // invisible to it: the plan replays happily while the real request climbs.
+    // Without this rung the plane would grow for the life of the activation.
+    const ephemeral = fakeEphemeral(1_500);
+    const { transform, outcomes } = rig({ ephemeral });
+    const messages = history(15, 3_000);
+    await transform(messages);
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned']);
+    expect(ephemeral.drops).toEqual([1_500]);
+
+    // Blocks appended since, then the same history again: the plan replays
+    // byte-stably AND the rung still fires, because the provider is reporting
+    // pressure the regrowth guard structurally cannot see.
+    ephemeral.refill(2_000);
+    expect(await transform(messages, { providerReportedTokens: 9_000 })).toBeDefined();
+    expect(outcomes.map((o) => o.outcome)).toEqual(['planned', 'replayed']);
+    expect(ephemeral.drops).toEqual([1_500, 2_000]);
+  });
+
+  test('force prunes the plane too — the strongest pressure signal there is', async () => {
+    const { transform, ephemeral } = rig({ ephemeral: fakeEphemeral(300) });
+    await transform(history(6, 200), { trigger: 'force' });
+    expect(ephemeral.drops).toEqual([300]);
   });
 });
 
@@ -232,7 +327,8 @@ describe('replay', () => {
     // ignored by the ownership check; a fresh plan is built and saved.
     ports.plans.snapshots.set('other-session', snapshot);
     const ext = createCompactionExtension({
-      ports, archive: memoryArchive(), summarize: async () => validSummary('other'), profile,
+      ports, archive: memoryArchive(), summarize: async () => validSummary('other'),
+      ephemeral: fakeEphemeral(), profile,
     });
     const result = await ext.transformContext?.({
       sessionKey: 'other-session',

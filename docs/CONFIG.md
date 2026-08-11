@@ -41,7 +41,6 @@ backing it up backs up everything the CLI knows.
 | `agents.<name>.cloudName` / `localName` | string | Its name on that side, when it differs from the key. |
 | `agents.<name>.displayName` | string | The human name shown in the web app. |
 | `agents.<name>.alias` | string | The alias shim created for it, if any. |
-| `agents.<name>.cliModel` | string | A model pinned for this workspace from the CLI. |
 | `agents.<name>.createdAt` / `updatedAt` | ISO date | Bookkeeping. |
 | `aliases` | map | `alias → workspace name`. `proteus alias` / `unalias` maintain it, and each alias also has a shim in `bin/`. |
 

@@ -19,6 +19,7 @@
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
 import { readExecSignal } from './signal.js';
+import { formatExecResult } from './exec-result.js';
 
 /**
  * Duck-typed handle — matches the subset of @cloudflare/sandbox's getSandbox()
@@ -177,7 +178,7 @@ function buildPathPreviewUrl(
 
 const NOT_CONFIGURED =
   'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
-  'and Container to wrangler.jsonc (see docs/EXECUTION.md).';
+  'and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
 
 /**
  * Substring markers (lower-cased) for transient sandbox/RPC errors that the
@@ -226,13 +227,7 @@ export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): P
 function normalize(res: { output?: string; stdout?: string; stderr?: string; exitCode?: number }): string {
   // @cloudflare/sandbox returns { stdout, stderr, exitCode }; older versions
   // returned { output, exitCode }. Accept both.
-  const stdout = res.stdout ?? res.output ?? '';
-  const stderr = res.stderr ?? '';
-  const exitCode = res.exitCode ?? 0;
-  if (exitCode !== 0) {
-    return `Exit ${exitCode}${stderr ? `\n${stderr}` : ''}${stdout ? `\n${stdout}` : ''}`.trim();
-  }
-  return stdout || stderr || '(no output)';
+  return formatExecResult({ ...res, stdout: res.stdout ?? res.output ?? '' });
 }
 
 /**

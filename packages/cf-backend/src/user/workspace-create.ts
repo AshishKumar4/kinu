@@ -43,8 +43,8 @@ export async function createCloudWorkspaceForUser(
   if (input.reasoningEffort !== undefined && !isReasoningEffort(input.reasoningEffort)) {
     throw new Error(`Invalid reasoning effort: ${String(input.reasoningEffort)}`);
   }
-  const models = await listAvailableModels(env, userId, caller);
-  const model = pickInitialModel(input.model ?? await userDO.getConfig(caller, 'default_model'), models);
+  const menu = await listAvailableModels(env, userId, caller);
+  const model = pickInitialModel(input.model ?? await userDO.getConfig(caller, 'default_model'), menu.models);
   if (!model) {
     throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the workspace again.');
   }

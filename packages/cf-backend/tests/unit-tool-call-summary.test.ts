@@ -28,9 +28,10 @@ describe('tool call summaries — the unified agents tool', () => {
   });
 });
 
-// NOTE: the think/team/peers cases below pin HISTORICAL renderers — those
-// tools were unified into `agents`, but stored transcripts still carry their
-// names and must keep rendering.
+// NOTE: the think/team/peers, fact and web_search/web_fetch cases below pin
+// HISTORICAL renderers — those tools were unified into `agents`, `memory` and
+// `web`, but stored transcripts still carry their names and must keep
+// rendering.
 describe('tool call summaries — builtins', () => {
   test('team calls are told apart by their target, not just their name', () => {
     expect(summarizeToolCall('team', { action: 'dismiss', name: 'arch-auditor' })).toBe('dismiss arch-auditor');
@@ -62,17 +63,38 @@ describe('tool call summaries — builtins', () => {
     expect(summarizeToolCall('think', { strategy: 'mcts', task: 'find the fix' })).toBe('mcts: "find the fix"');
   });
 
-  test('memory, fact, skills and the web tools name their subject', () => {
+  test('memory, skills and web name their subject', () => {
     expect(summarizeToolCall('memory', { action: 'search', query: 'deploy' })).toBe('search "deploy"');
     expect(summarizeToolCall('memory', { action: 'save', content: 'the deploy target is staging' }))
       .toBe('save — "the deploy target is staging"');
     expect(summarizeToolCall('memory', { action: 'sessions' })).toBe('sessions');
-    expect(summarizeToolCall('fact', { action: 'remember', key: 'user.tz', value: 'UTC' })).toBe('remember user.tz');
+    // The keyed-fact actions read by their key, not by a query they never carry.
+    expect(summarizeToolCall('memory', { action: 'remember', key: 'user.tz', value: 'UTC' }))
+      .toBe('remember user.tz');
+    expect(summarizeToolCall('memory', { action: 'forget', key: 'deploy.target' })).toBe('forget deploy.target');
     expect(summarizeToolCall('skills', { action: 'invoke', name: 'code-review' })).toBe('invoke code-review');
     expect(summarizeToolCall('skills', { action: 'list' })).toBe('list');
+    expect(summarizeToolCall('web', { action: 'search', query: 'workers ai session affinity' }))
+      .toBe('search "workers ai session affinity"');
+    expect(summarizeToolCall('web', { action: 'fetch', url: 'https://example.com/docs' }))
+      .toBe('fetch https://example.com/docs');
+  });
+
+  test('a stored transcript from before the merges still renders', () => {
+    // `fact` and web_search/web_fetch calls live in history for good. Their
+    // summarizers stay, exactly as think/team/peers did after `agents`.
+    expect(summarizeToolCall('fact', { action: 'remember', key: 'user.tz', value: 'UTC' })).toBe('remember user.tz');
+    expect(summarizeToolCall('fact', { action: 'recall', key: 'deploy.target' })).toBe('recall deploy.target');
     expect(summarizeToolCall('web_search', { query: 'workers ai session affinity' }))
       .toBe('"workers ai session affinity"');
     expect(summarizeToolCall('web_fetch', { url: 'https://example.com/docs' })).toBe('https://example.com/docs');
+    // `experience` left the tool surface for the owner's RPC; the calls the
+    // agent already made stay in history and keep their line.
+    expect(summarizeToolCall('experience', { action: 'search', query: 'auth retry backoff' }))
+      .toBe('search — "auth retry backoff"');
+    expect(summarizeToolCall('experience', { action: 'publish', kind: 'craft', key: 'slugify' }))
+      .toBe('publish craft — "slugify"');
+    expect(summarizeToolCall('experience', { action: 'import', id: 'exp-71' })).toBe('import — "exp-71"');
   });
 
   test('peers distinguishes the addressee and the reply lane', () => {

@@ -15,9 +15,13 @@
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types.js';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
-import { appendMemoryNote } from '../memory/note.js';
+import { appendMemoryNote, memoryIndexPath } from '../memory/note.js';
 import { ensureDir } from '../utils/vfs-helpers.js';
+import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno.js';
 import { readExecSignal } from './signal.js';
+import { formatExecResult } from './exec-result.js';
+import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
+import { seedCraftScore } from '../craft/in-episode.js';
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -43,6 +47,30 @@ export interface InlineExecutorDeps {
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
 }
 
+/**
+ * Every VFS error out of `workspace.*` carries the correction the model needs
+ * (vfsAddressingHint — shared with the `file` tool, which addresses the same
+ * plane). The error keeps its code, errno and path; only what a reader sees
+ * changes.
+ */
+function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorProvider['tools'] {
+  const guided: ExecutorProvider['tools'] = {};
+  for (const [name, entry] of Object.entries(tools)) {
+    guided[name] = {
+      ...entry,
+      execute: async (...args: unknown[]) => {
+        try {
+          return await entry.execute(...args);
+        } catch (err) {
+          if (!isVfsError(err)) throw err;
+          throw withVfsErrorHint(err, await vfsAddressingHint(vfs, 'workspace.*'));
+        }
+      },
+    };
+  }
+  return guided;
+}
+
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
   const { vfs, memory, craftStore, shell, sql, resourceLimits, onToolRegistered } = deps;
 
@@ -62,7 +90,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const dir = p.split('/').slice(0, -1).join('/');
         if (dir) await ensureDir(vfs, dir);
         await vfs.writeFile(p, String(content));
-        if (p.startsWith('memory/')) await memory.index(p);
+        const indexed = memoryIndexPath(p);
+        if (indexed) await memory.index(indexed);
         return `Written ${String(content).length} bytes to ${p}`;
       },
     },
@@ -85,9 +114,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description: 'Execute a POSIX shell command. Supports cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq, xargs. Pipes (|) and redirects (>, >>) work.',
       execute: async (command: unknown, context?: unknown) => {
         const signal = readExecSignal(context);
-        const result = await shell.exec(String(command), signal ? { signal } : undefined);
-        if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
-        return result.stdout || '(no output)';
+        return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
       },
     },
 
@@ -151,6 +178,28 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           const existing = craftStore.get(toolName);
           const desc = String(description);
           const codeStr = String(code);
+          // The misevolution gate, before any write, on the `craft_tool`
+          // surface — the safety-machinery criteria in full, deliberately
+          // without `network-egress` (the same fetch runs unrestricted in an
+          // ephemeral execute_tools call, so vetoing only its persisted form
+          // buys nothing; see SURFACE_CRITERIA). What IS refused is a stored,
+          // reusable, publishable tool that names the promotion tables, the
+          // rollout knobs, the gate entry points, or the consent settings.
+          const misevolution = checkMisevolutionForSurface(codeStr, 'craft_tool');
+          if (!misevolution.ok) {
+            if (sql) {
+              recordMisevolutionVeto(sql, {
+                surface: 'craft_tool', violation: misevolution,
+                detail: `workspace.createTool("${toolName}") rejected`,
+              });
+            }
+            return {
+              ok: false,
+              error:
+                `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason} ` +
+                `Rewrite the tool body without it and call createTool again.`,
+            };
+          }
           if (existing) {
             craftStore.update(toolName, { description: desc, code: codeStr });
             onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
@@ -176,6 +225,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
             scope: 'local',
             params: null,
           });
+          // The tool is born with a neutral prior, so the decay + injection
+          // floor can see it at all: an unscored tool is exempt from the
+          // filter forever, which is what kept a tool crafted here from ever
+          // being retired no matter how it behaved.
+          if (sql) seedCraftScore(sql, toolName);
           // Optional eager notification; PreambleCraftedExecutor reads
           // craftStore.list() live, so CF leaves this as a no-op.
           onToolRegistered?.({ name: toolName, description: desc, code: codeStr });
@@ -215,7 +269,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
-    tools,
+    tools: withVfsGuidance(vfs, tools),
     types,
     positionalArgs: true,
     // workspace executor runs INSIDE the Worker — no inbound TCP port

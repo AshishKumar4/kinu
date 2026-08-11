@@ -123,6 +123,19 @@ export interface ScaffoldRunResult {
   finalResult?: unknown;
 }
 
+/**
+ * Wall clock one scaffold turn gets, live or under evaluation.
+ *
+ * ONE number, deliberately. The promotion gate compares a candidate scaffold's
+ * output against what the live loop produced, and an A/B whose arms get
+ * different resource is not measuring what it claims to: a candidate evaluated
+ * under a tenth of the live budget fails for running out of room, not for being
+ * worse, so the gate systematically promotes scaffolds that finish fast and do
+ * little. Both backends' live turns and the shadow evaluation read this
+ * constant; nothing sets its own.
+ */
+export const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+
 /** Options for a scaffold run. */
 export interface ScaffoldRunOptions {
   /** The task / user message that drives this turn. */
@@ -166,7 +179,7 @@ export interface ScaffoldRunOptions {
    * orchestrator/scaffold-host.ts, which owns the budget.
    */
   history?: (query: { offset?: number; limit?: number; maxChars?: number }) => Promise<unknown>;
-  /** Hard timeout in milliseconds. Default 5 min. */
+  /** Hard timeout in milliseconds. Default {@link SCAFFOLD_TURN_TIMEOUT_MS}. */
   timeoutMs?: number;
   /** Optional: override the scaffold code (for shadow-mode A/B). Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
@@ -291,7 +304,7 @@ function buildHostProvider(opts: {
  * is expected to fall back to streamText() and queue a scaffold rollback.
  */
 export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRunResult> {
-  const { rt, task, emit, llmStream, callTool, timeoutMs = 5 * 60 * 1000, scaffoldCodeOverride } = opts;
+  const { rt, task, emit, llmStream, callTool, timeoutMs = SCAFFOLD_TURN_TIMEOUT_MS, scaffoldCodeOverride } = opts;
   const startedAt = Date.now();
   const capturedEvents: ScaffoldEvent[] = [];
   const state = { doneEmitted: false, finalResult: undefined as unknown };

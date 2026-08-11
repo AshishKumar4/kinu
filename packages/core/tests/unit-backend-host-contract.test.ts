@@ -33,7 +33,7 @@ describe('BackendHost contract', () => {
 
   test('declares the loop capabilities and nothing more', () => {
     expect(members.sort()).toEqual(
-      ['broadcast', 'enqueueTurn', 'headRuntime', 'injectIntoActiveTurn', 'setTimer'],
+      ['broadcast', 'enqueueTurn', 'headRuntime', 'setTimer', 'turnInFlight'],
     );
   });
 

@@ -3,7 +3,7 @@
 // Wraps HeadController.run behind the StrategyContext/StrategyResult shape.
 // Per-strategy options (StrategyContext.options.heads):
 //   { controller: HeadController, heads: SplitRequest['heads'],
-//     mergeStrategy?, mergeModel?, maxDepth?, inheritedContext?, onPhase? }
+//     mergeStrategy?, maxDepth?, inheritedContext?, onPhase? }
 // `controller`, `inheritedContext` and `onPhase` are host-injected (via the
 // agents tool's fork defaultOptions); `heads` / `mergeStrategy` come from the LLM.
 import type { HeadController, SplitPhaseEvent } from '../heads/controller.js';
@@ -17,7 +17,6 @@ interface HeadsStrategyOptions {
   controller: HeadController;
   heads: SplitRequest['heads'];
   mergeStrategy?: MergeStrategy;
-  mergeModel?: string;
   maxDepth?: number;
   maxTokens?: number;
   maxWallClockMs?: number;
@@ -69,7 +68,6 @@ export function createHeadsStrategy(): ExplorationStrategy {
           rationale: ctx.task,
           heads: o.heads,
           mergeStrategy: strategy,
-          mergeModel: o.mergeModel,
         },
         parentBudget,
         model: o.defaultModel,
@@ -141,7 +139,8 @@ function formatMergeResult(result: MergeResult, strategy: MergeStrategy): string
   }
   lines.push('');
   lines.push(
-    `_(merge=${strategy}, heads=${result.costSummary.headCount}, ` +
+    `_(merge=${strategy}, ` +
+    `heads=${result.costSummary.headCount} (${result.costSummary.headsWithFindings} with findings), ` +
     `tokens=${result.costSummary.totalTokens}, ` +
     `wall=${Math.round(result.costSummary.totalWallClockMs / 100) / 10}s, ` +
     `depth=${result.costSummary.maxDepth})_`,

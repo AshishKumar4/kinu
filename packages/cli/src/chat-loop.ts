@@ -14,6 +14,7 @@
 
 import * as readline from 'node:readline';
 import { renderChangelogText } from '@proteus/core';
+import { EMPTY_MODEL_MENU } from './model-catalog.js';
 import { forkCandidates, type AgentClient, type AgentClientEvent } from './agent-client.js';
 import { describeBranchStatus, executeSlashCommand, isBranchStatusEvent, performUndo, renderStatusLines, renderTakesText, type SlashOutcome } from './slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from './attachments.js';
@@ -421,11 +422,14 @@ async function applySlashOutcome(client: AgentClient, rl: readline.Interface, ou
     case 'model-picker': {
       const current = await client.getModelSpec();
       console.log(`\n${DIM('Model:')} ${ACCENT(current ?? '(default)')}`);
-      const models = await client.listModels().catch(() => []);
-      if (models.length > 0) {
+      const menu = await client.listModels().catch(() => EMPTY_MODEL_MENU);
+      if (menu.models.length > 0) {
         console.log(DIM('Available (set with /model <spec>):'));
-        for (const model of models.slice(0, 40)) console.log(`  ${ACCENT(model.spec)} ${DIM('—')} ${model.label}`);
-        if (models.length > 40) console.log(DIM(`  … ${models.length - 40} more`));
+        for (const model of menu.models.slice(0, 40)) console.log(`  ${ACCENT(model.spec)} ${DIM('—')} ${model.label}`);
+        if (menu.models.length > 40) console.log(DIM(`  … ${menu.models.length - 40} more`));
+      }
+      for (const failure of menu.failures) {
+        console.log(WARN(`  ! ${failure.label ?? failure.provider} could not be listed — ${failure.reason}`));
       }
       console.log('');
       return 'ok';
@@ -521,6 +525,7 @@ function renderClientEvent(
       break;
     case 'turn-end':
     case 'step-finish':
+    case 'run-event':
       break;
   }
 }

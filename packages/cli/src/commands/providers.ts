@@ -1,10 +1,10 @@
 import { checkClaudeAvailability, checkOpenCodeAvailability } from '@proteus/cli-backend';
-import { loadConfigFile } from '../config.js';
+import { loadConfigFile, updateConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { authCommand } from './auth.js';
 import { setupCommand } from './setup.js';
 
-type ProviderAction = 'list' | 'connect';
+type ProviderAction = 'list' | 'connect' | 'disconnect';
 type ProviderName =
   | 'cloudflare'
   | 'claude'
@@ -42,7 +42,12 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   }
 
   if (!provider) {
-    throw new Error('Choose a provider to connect: cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
+    throw new Error(`Choose a provider to ${action}: cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.`);
+  }
+
+  if (action === 'disconnect') {
+    disconnectProvider(provider);
+    return;
   }
 
   if (provider === 'cloudflare') {
@@ -133,8 +138,121 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
   if (first === 'connect' || first === 'login' || first === 'add') {
     return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined };
   }
+  if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
+    return { action: 'disconnect', provider: providerArg ? normalizeProvider(providerArg) : undefined };
+  }
 
   return { action: 'connect', provider: normalizeProvider(actionOrProvider) };
+}
+
+/** The credential a provider stores in ~/.proteus/config.json, and the env
+ *  vars that would keep supplying it after the file entry is gone. Providers
+ *  absent from this map hold no Proteus-owned credential. */
+const LOCAL_CREDENTIALS: Partial<Record<ProviderName, {
+  clear: (providers: NonNullable<ProteusConfig['providers']>) => boolean;
+  envVars: string[];
+}>> = {
+  codex: {
+    clear: (p) => deleteKey(p, 'codex'),
+    envVars: ['CODEX_ACCESS_TOKEN'],
+  },
+  openai: {
+    clear: (p) => deleteKey(p, 'openai'),
+    envVars: ['OPENAI_API_KEY'],
+  },
+  anthropic: {
+    clear: (p) => deleteKey(p, 'anthropic'),
+    envVars: ['ANTHROPIC_API_KEY'],
+  },
+  openrouter: {
+    clear: (p) => deleteKey(p, 'openrouter'),
+    envVars: ['OPENROUTER_API_KEY'],
+  },
+  'openai-compatible': {
+    clear: (p) => deleteKey(p, 'openaiCompat'),
+    envVars: ['PROTEUS_BASE_URL', 'PROTEUS_AUTH'],
+  },
+};
+
+function deleteKey<K extends keyof NonNullable<ProteusConfig['providers']>>(
+  providers: NonNullable<ProteusConfig['providers']>,
+  key: K,
+): boolean {
+  if (providers[key] === undefined) return false;
+  delete providers[key];
+  return true;
+}
+
+/** The model-spec prefixes a provider serves — a default model left pointing
+ *  at a disconnected provider is exactly the "no connected provider" trap
+ *  `proteus create` warns about, so the pointer goes with the credential. */
+const MODEL_SPEC_PREFIXES: Partial<Record<ProviderName, readonly string[]>> = {
+  codex: ['codex/'],
+  openai: ['openai/'],
+  anthropic: ['anthropic/'],
+  openrouter: ['openrouter/'],
+  'openai-compatible': ['openai-compat/', 'openai-compat:'],
+  claude: ['claude/'],
+  opencode: ['opencode/'],
+  cloudflare: ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/'],
+};
+
+/**
+ * The inverse of `provider connect`: remove the stored credential.
+ *
+ * Only the providers Proteus stores a credential FOR can be disconnected
+ * here. The Proteus account is `proteus logout`, and the two subscription
+ * bridges (claude, opencode) are other tools' logins — Proteus holds nothing
+ * to delete, and saying so beats pretending the command did something.
+ */
+function disconnectProvider(provider: ProviderName): void {
+  console.log('');
+  if (provider === 'cloudflare') {
+    console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Proteus account.`);
+    console.log(DIM('  Sign out with: proteus logout'));
+    console.log(DIM('  To disconnect Cloudflare itself, revoke it in your Proteus account settings.'));
+    return;
+  }
+  if (provider === 'claude' || provider === 'opencode') {
+    const tool = provider === 'claude' ? 'Claude Code' : 'opencode';
+    const command = provider === 'claude' ? 'claude logout' : 'opencode auth logout';
+    console.log(`${WARN('!')} Proteus stores no ${tool} credential — it drives the ${tool} login.`);
+    console.log(DIM(`  Sign out of ${tool} itself: ${command}`));
+    clearDefaultModelFor(provider);
+    return;
+  }
+
+  const credential = LOCAL_CREDENTIALS[provider];
+  if (!credential) throw new Error(`No local credential is stored for ${provider}.`);
+
+  let removed = false;
+  updateConfigFile((config) => {
+    if (config.providers) removed = credential.clear(config.providers);
+  });
+
+  if (removed) console.log(`${OK('✓')} Disconnected ${ACCENT(provider)} — the stored credential was removed.`);
+  else console.log(`${WARN('!')} ${provider} was not connected — nothing to remove.`);
+
+  clearDefaultModelFor(provider);
+
+  const live = credential.envVars.filter((name) => process.env[name]);
+  if (live.length > 0) {
+    console.log(`${WARN('!')} ${live.join(' and ')} ${live.length > 1 ? 'are' : 'is'} still set in this environment.`);
+    console.log(DIM('  Environment credentials win over the config file — unset them to fully disconnect.'));
+  }
+}
+
+/** Drop the default model spec when it names the provider being removed. */
+function clearDefaultModelFor(provider: ProviderName): void {
+  const prefixes = MODEL_SPEC_PREFIXES[provider] ?? [];
+  let cleared: string | null = null;
+  updateConfigFile((config) => {
+    const model = config.model;
+    if (!model || !prefixes.some((prefix) => model.startsWith(prefix))) return;
+    cleared = model;
+    delete config.model;
+  });
+  if (cleared) console.log(DIM(`  Cleared the default model (${cleared}).`));
 }
 
 function normalizeProvider(value: string): ProviderName {
@@ -206,6 +324,8 @@ async function printProviders(): Promise<void> {
   else if (oc.binary) missing('OpenCode', LOGIN_HINT_OPENCODE);
   else missing('OpenCode', 'proteus provider connect opencode');
 
+  console.log('');
+  console.log(DIM('  Remove a stored credential: proteus provider disconnect <name>'));
   console.log('');
 }
 

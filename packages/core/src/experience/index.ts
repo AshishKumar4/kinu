@@ -22,7 +22,6 @@ export {
   initExperienceLibraryTables,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
-  type ExperienceSqlExec,
 } from './library.js';
 
 export {
@@ -44,3 +43,12 @@ export {
   type ImportStatus,
   type ImportedExperienceRow,
 } from './imports.js';
+
+export {
+  EXPERIENCE_ACTIONS,
+  runExperienceAction,
+  type ExperienceAction,
+  type ExperienceActionDeps,
+  type ExperienceActionInput,
+  type ExperienceLibraryClient,
+} from './actions.js';

@@ -7,8 +7,10 @@ export type {
   RunEventBase,
   RunEventInput,
   RunEventType,
-  DelegationNudgeRecord,
-  DelegationNudgeTrigger,
+  CompletionGateRecord,
+  TurnSteeringRecord,
+  TurnSteeringTrigger,
+  CraftCycleRecord,
 } from './types.js';
 
 export {

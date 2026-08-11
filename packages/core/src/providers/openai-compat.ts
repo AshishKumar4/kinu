@@ -20,9 +20,9 @@ export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 /** Extract the credential key for an openai-compat provider id.
  *  `openai-compat:groq` → `openai-compat.groq` */
 function credKeyFor(providerId: string): string {
-  if (providerId === 'openai-compat') return 'openai-compat.default';
+  if (providerId === 'openai-compat') return `${OPENAI_COMPAT_KEY_PREFIX}default`;
   if (providerId.startsWith('openai-compat:')) {
-    return `openai-compat.${providerId.slice('openai-compat:'.length)}`;
+    return OPENAI_COMPAT_KEY_PREFIX + providerId.slice('openai-compat:'.length);
   }
   return providerId;
 }

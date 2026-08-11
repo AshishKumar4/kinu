@@ -76,30 +76,30 @@ function renderOperatingGuidance(surface: PromptSurface): string {
   const mode = surface.mode;
   const family = surface.model.family;
   const lines = [
-    '- Treat ambiguous "do this" requests as work to perform, not as invitations to only describe a plan.',
+    '- Treat ambiguous "do this" requests as work to perform.',
     '- Inspect current code, state, logs, or tool results before making claims about them.',
     '- Keep changes scoped to the user request and the existing architecture.',
-    '- If a required fact is unavailable, say exactly what is missing and stop rather than inventing it.',
+    '- If a required fact is unavailable, say exactly what is missing and stop.',
   ];
 
   if (hasTool(surface.builtinTools, 'agents')) {
-    lines.push('- For multi-part or long-running work, or when you are unsure which approach is right, pick a rung of the delegation ladder below instead of grinding through it inline.');
+    lines.push('- For multi-part or long-running work, or when you are unsure which approach is right, pick a rung of the delegation ladder below.');
   }
 
   if (family === 'kimi') {
     lines.push(
-      '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context, continue from observations, and avoid re-planning after every tool result.',
-      '- For long-horizon coding, write down durable decisions with fact/memory instead of relying on hidden reasoning.',
+      '- Kimi K2.6 works best when tool use is concrete and continuous: preserve tool/result context and continue from each observation.',
+      '- For long-horizon coding, write durable decisions down with `memory`.',
     );
   } else if (family === 'gpt') {
     lines.push(
       '- GPT/Codex-style reasoning models do best with direct success criteria: state assumptions briefly, use tools for current facts, and keep final answers outcome-focused.',
-      '- Prefer schema-backed outputs for machine-readable tasks; do not rely on prose-only JSON instructions when a schema/tool is available.',
+      '- For machine-readable tasks, take the schema-backed output whenever a schema or tool offers one.',
     );
   }
 
   if (mode === 'plan') {
-    lines.push('- Planning mode: do not edit, deploy, or mutate state. Produce a concrete plan with affected files and verification.');
+    lines.push('- Planning mode: leave state as you found it and produce a concrete plan with affected files and verification.');
   } else if (mode === 'product_change') {
     lines.push('- Product-change mode: use product_change to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
     lines.push('- Never deploy Proteus product changes without an explicit approval record.');
@@ -113,9 +113,13 @@ function renderOperatingGuidance(surface: PromptSurface): string {
 }
 
 // The when-to-use doctrine lives in the JSON-schema tool descriptions
-// (registry.ts renderToolSchemaDescription) — the prompt only indexes names.
+// (registry.ts renderToolSchemaDescription). The prompt indexes the names and
+// shows one real call each: a concrete argument shape is what a model actually
+// copies, and it teaches the same thing an anti-pattern would without spending
+// the model's attention on a way of calling it we do not want.
 function renderBuiltinToolLine(name: BuiltinToolName): string {
-  return `- **${name}** — ${BUILTIN_TOOL_SPECS[name].summary}`;
+  const spec = BUILTIN_TOOL_SPECS[name];
+  return `- **${name}** — ${spec.summary}\n  \`${spec.example}\``;
 }
 
 function renderExternalToolLine(tool: PromptExternalToolInfo): string {
@@ -147,7 +151,7 @@ function renderToolsSection(surface: PromptSurface): string {
       ].join('\n');
   return [
     '## Tools available this turn',
-    'Only call tools listed here or present in the model tool schema for this turn. If a tool/runtime is absent, do not assume it exists.',
+    'Call the tools listed here and in this turn\'s model tool schema. That list is live — read it to see which tools and runtimes you have.',
     '',
     '### Built-in tools',
     builtins,
@@ -161,7 +165,7 @@ function renderToolsSection(surface: PromptSurface): string {
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   switch (exec.name) {
       case 'workspace':
-        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state; do not treat it as the user\'s PC or a full Linux sandbox.';
+        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state; the user\'s PC and a full Linux sandbox are the other runtimes below.';
       case 'nimbus':
         return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
       case 'sandbox':
@@ -204,7 +208,7 @@ function renderExecutorSection(surface: PromptSurface): string {
 
   const parts = [
     '## Execution environments',
-    'Only the environments listed here are selectable in this turn. If a namespace is absent, do not mention it, call it, or assume it can be used.',
+    'The environments listed here are the ones selectable in this turn; a namespace is available exactly when it appears below.',
     'This list reflects live state at the start of THIS turn — trust it over assumptions or earlier turns; it can change when the user connects or disconnects a device.',
     'Choose the runtime that matches the task; keep reads/writes in the same runtime unless you intentionally copy data between runtimes.',
     '',
@@ -251,18 +255,18 @@ function renderAgentStateSection(surface: PromptSurface): string {
   parts.push([
     '## Persistence',
     'You are NOT stateless between turns. Conversation history, durable memory, keyed facts, crafted tools, scaffold versions, background jobs, and event triggers persist in storage.',
-    'Your context window is automatically compacted as it approaches its limit; do not stop or wrap up tasks early due to token-budget concerns. Save durable progress to facts/memory as you go.',
+    'Your context window is automatically compacted as it approaches its limit, so work each task through to completion and save durable progress to facts/memory as you go.',
     'Your self-changes (crafted tools, learned facts, scaffold promotions) are recorded in an Evolution Changelog the user can review and revert line-by-line — evolve freely and report honestly; nothing you change about yourself is hidden or permanent.',
   ].join('\n'));
 
-  if (hasTool(tools, 'memory') || hasTool(tools, 'fact')) {
+  if (hasTool(tools, 'memory')) {
     parts.push([
       '## Memory and facts',
-      '- Use `fact` for keyed state the agent should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
-      '- Use `memory` for longer prose notes or lessons that are useful across turns.',
+      '- Use `memory` action="remember" for keyed state you should recall by name: user preferences, project state, URLs, configuration, dates, and decisions.',
+      '- Use `memory` action="save" for longer prose notes or lessons that are useful across turns.',
       '- Use `memory` action="sessions" to search your past session transcripts before re-deriving prior context.',
       '- Your failures are recorded as lessons in memory — search before retrying similar work.',
-      '- Prefer updating stale facts over adding contradictory new ones.',
+      '- Update a stale fact in place, so each key keeps one current value.',
     ].join('\n'));
   }
 
@@ -293,7 +297,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
     const lines = ['## Delegation'];
     if (actions.length > 0) {
       lines.push(
-        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Do not grind multi-part work through inline — pick a rung.'
+        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Multi-part work gets a rung.'
         // The zeroth rung is not an agent at all: flat map-reduce sub-calls.
         // Weight-ordered, it sits between doing it yourself and forking, and
         // it renders only where the llm provider is actually wired.
@@ -303,7 +307,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
         // The turn-cumulative clamp is mechanical, so say so: a model that
         // knows WHY the ninth heavy read came back short reaches for a rung
         // instead of re-running the command (context-budget.ts).
-        'Tool output is budgeted per turn, not just per call: the first heavy reads come back whole, and once a turn has pulled in a lot of output the rest arrive as a head plus a workspace path — read that as the signal to hand the bulk to a helper instead of pulling more of it into this turn.',
+        'Tool output is budgeted per turn, not just per call: the first heavy reads come back whole, and once a turn has pulled in a lot of output the rest arrive as a head plus a workspace path — read that as the signal to hand the bulk to a helper.',
         '- Do it yourself — a single short coherent change.',
       );
     }
@@ -314,7 +318,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       lines.push(`- Persistent subordinate — ${DELEGATION_RUNGS.staff}`);
     }
     if (has('fork')) {
-      lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop web_search then web_fetch.');
+      lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop `web` search then fetch.');
     }
     // The rungs are also a codemode namespace, so a multi-step plan is code
     // rather than a tool-call-at-a-time grind. Gated on the same actions the
@@ -361,18 +365,18 @@ function renderAgentStateSection(surface: PromptSurface): string {
   // convenient signature and self-grading it green against its own tests.
   const verification = [
     '## Verification',
-    'Before you call work done, check what you produced against what was asked. Reasoning it out correctly is not evidence that you wrote it down correctly.',
+    'Before you call work done, check what you produced against what was asked. The artifact is the evidence — read it.',
     "- Re-read the artifact itself — the file, the diff, the final answer — against the request's own words: every deliverable it names, and the exact shape it names (column order, direction, units, filenames).",
-    '- Build to the interface the task states, not the one that was convenient: exercise your own work the way the task says it will be called, with the signature, entry point, and arguments it specifies.',
+    '- Build to the interface the task states: exercise your own work the way the task says it will be called, with the signature, entry point, and arguments it specifies.',
   ];
   if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools')) {
-    verification.push('- Run the real check and report what passed or failed. Tests you wrote against your own interface prove only that it is self-consistent; an unexecuted claim is not a result.');
+    verification.push('- Run the real check and report what passed or failed. A result is something you executed.');
   }
   parts.push(verification.join('\n'));
 
   parts.push([
     '## Output format',
-    'Final replies are plain markdown. Keep user-visible reasoning concise, name important files/checks, and do not dump raw JSON unless asked.',
+    'Final replies are plain markdown. Keep user-visible reasoning concise, name important files/checks, and summarize tool output in prose (raw JSON when asked).',
   ].join('\n'));
 
   return parts.join('\n\n');

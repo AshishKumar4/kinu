@@ -44,17 +44,21 @@ const TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   run: 'execute',
   execute_tools: 'execute',
   memory: 'think',
-  fact: 'think',
   report: 'think',
   experience: 'think',
   agents: 'think',
   skills: 'read',
-  web_search: 'fetch',
-  web_fetch: 'fetch',
+  web: 'fetch',
   product_change: 'edit',
 };
 
-function toolKind(name: string): ToolKind {
+/** `file` is the one builtin whose kind depends on the call rather than the
+ *  name: a read and a write present differently in an ACP client. */
+function toolKind(name: string, args: unknown): ToolKind {
+  if (name === 'file') {
+    const action = args && typeof args === 'object' ? (args as { action?: unknown }).action : undefined;
+    return action === 'read' ? 'read' : 'edit';
+  }
   return TOOL_KINDS[name] ?? 'other';
 }
 
@@ -146,7 +150,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
           sessionUpdate: 'tool_call',
           toolCallId: event.toolCallId,
           title: toolTitle(event.toolName, event.args),
-          kind: toolKind(event.toolName),
+          kind: toolKind(event.toolName, event.args),
           // Proteus emits the call at dispatch, so it is already running.
           status: 'in_progress',
           rawInput: event.args,

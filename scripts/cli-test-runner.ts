@@ -11,6 +11,13 @@ import { existsSync, statSync, rmSync, mkdirSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 
+// Prevent the test runner from accidentally starting a real daemon.
+// createCommand → createCliAgent → ensureLocalDaemonRunning → startDaemon
+// would spawn `bun <this-file> daemon run`, re-executing the entire test
+// suite as a "daemon" child, which would spawn another child, ad infinitum.
+// This must be set BEFORE any imports that pull in the CLI command modules.
+process.env.PROTEUS_SKIP_DAEMON = "1";
+
 // Provide dummy LLM config so resolveLLMConfig() doesn't throw.
 process.env.PROTEUS_BASE_URL = process.env.PROTEUS_BASE_URL ?? "http://localhost:5173/workers-ai/v1";
 process.env.PROTEUS_AUTH = process.env.PROTEUS_AUTH ?? "Bearer test";

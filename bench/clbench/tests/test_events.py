@@ -26,6 +26,7 @@ assistant_text = events.assistant_text
 had_error = events.had_error
 has_answer = events.has_answer
 parse_events = events.parse_events
+run_events = events.run_events
 session_id = events.session_id
 sum_usages = events.sum_usages
 tool_calls = events.tool_calls
@@ -164,6 +165,37 @@ class TurnSignals(unittest.TestCase):
         ]
         self.assertEqual(tool_calls(events), ["run", "memory"])
         self.assertEqual(tool_calls(parse_events(REAL_TURN)), [])
+
+
+class RunEvents(unittest.TestCase):
+    LEDGER = [
+        {"type": "run_event", "event": {"type": "run_start", "runId": "r1", "agentId": "a"}},
+        {"type": "tool_call", "toolName": "run", "args": {}},
+        {
+            "type": "run_event",
+            "event": {
+                "type": "turn_steering", "runId": "r1", "eventIndex": 4,
+                "trigger": "long_turn_no_delegation", "step": 25, "converted": True,
+            },
+        },
+        {"type": "run_event", "event": {"type": "run_end", "runId": "r1", "reason": "completed"}},
+    ]
+
+    def test_unwraps_the_ledger_in_order(self) -> None:
+        self.assertEqual(
+            [row["type"] for row in run_events(self.LEDGER)],
+            ["run_start", "turn_steering", "run_end"],
+        )
+
+    def test_filters_by_row_kind(self) -> None:
+        nudges = run_events(self.LEDGER, "turn_steering")
+        self.assertEqual(len(nudges), 1)
+        self.assertIs(nudges[0]["converted"], True)
+        self.assertEqual(nudges[0]["trigger"], "long_turn_no_delegation")
+
+    def test_a_stream_without_a_ledger_reads_as_empty_not_an_error(self) -> None:
+        self.assertEqual(run_events(parse_events(REAL_TURN)), [])
+        self.assertEqual(run_events([{"type": "run_event", "event": "not-an-object"}]), [])
 
 
 if __name__ == "__main__":

@@ -37,6 +37,7 @@ export async function sessionsCommand(agentName: string | undefined, opts: {
       const pathText = opts.path ? ` ${DIM(s.path)}` : '';
       console.log(`  ${ACCENT(label)} ${DIM(`${s.entries} entries`)}${first}${pathText}`);
     }
+    if (sessions.length > 30) console.log(DIM(`  … and ${sessions.length - 30} more`));
   }
 }
 

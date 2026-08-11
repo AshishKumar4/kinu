@@ -49,7 +49,7 @@ Proteus drives the official `claude` binary, which owns its own login — it nev
 reads your credentials. Cloud workspaces can't use the subscription; give them an
 Anthropic API key (`proteus providers connect anthropic`) instead.
 
-**Web search** just works: the `web_search` and `web_fetch` tools need no setup
+**Web search** just works: the `web` tool's `search` and `fetch` actions need no setup
 (DuckDuckGo + Cloudflare's markdown service). For ranked, answer-augmented
 search, store a Tavily key as the `tavily` credential.
 

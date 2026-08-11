@@ -9,11 +9,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Combobox } from "@cloudflare/kumo";
 import { ArrowsClockwiseIcon, WarningCircleIcon } from "@phosphor-icons/react";
 import { formatContextWindow } from "@proteus/core";
-import { cloudflareReconnectPath, listAvailableModels, type ModelMenuEntry } from "../lib/user-api";
+import {
+  cloudflareReconnectPath, listAvailableModels,
+  type ModelMenu, type ModelMenuEntry, type ProviderFailure,
+} from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
 
 export interface ModelPickerProps {
   models: ModelMenuEntry[];
+  /** Providers the server could not reach. Listed under the options so a
+   *  broken credential is visible instead of silently shortening the menu. */
+  failures?: ProviderFailure[];
   /** Currently selected spec; '' = no explicit choice. */
   value: string;
   onChange: (spec: string) => void;
@@ -27,7 +33,7 @@ export interface ModelPickerProps {
 }
 
 export function ModelPicker({
-  models, value, onChange,
+  models, failures, value, onChange,
   size = "base", placeholder = "Select a model…", clearable = false, className,
 }: ModelPickerProps) {
   const items = useMemo(
@@ -67,6 +73,7 @@ export function ModelPicker({
             </Combobox.Group>
           )}
         </Combobox.List>
+        <ProviderFailureNotice failures={failures} />
       </Combobox.Content>
     </Combobox>
   );
@@ -87,22 +94,22 @@ export function ConnectedModelPicker({
    *  reconnect CTA. */
   renderEmpty?: () => React.ReactNode;
 }) {
-  const [models, setModels] = useState<ModelMenuEntry[] | null | "error">(null);
+  const [menu, setMenu] = useState<ModelMenu | null | "error">(null);
   const fetchModels = useCallback(() => {
-    setModels(null);
+    setMenu(null);
     listAvailableModels()
-      .then(setModels)
-      .catch(() => setModels("error"));
+      .then(setMenu)
+      .catch(() => setMenu("error"));
   }, []);
   useEffect(() => { fetchModels(); }, [fetchModels]);
-  if (models === null) {
+  if (menu === null) {
     return (
       <span className="inline-flex items-center rounded-md border p-border px-1.5 py-1 text-[11px] p-text-3" aria-label="Loading models">
         …
       </span>
     );
   }
-  if (models === "error") {
+  if (menu === "error") {
     return (
       <button
         type="button"
@@ -115,7 +122,22 @@ export function ConnectedModelPicker({
       </button>
     );
   }
-  if (models.length === 0) {
+  if (menu.models.length === 0) {
+    // A menu that is empty BECAUSE every provider failed is not an
+    // unconnected account — sending it through the OAuth CTA would be a lie.
+    if (menu.failures.length > 0) {
+      return (
+        <button
+          type="button"
+          onClick={fetchModels}
+          className="p-tint-warning p-warning inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-[11px] hover:opacity-80"
+          title={failureTitle(menu.failures)}
+        >
+          <WarningCircleIcon size={12} />
+          providers unavailable
+        </button>
+      );
+    }
     if (renderEmpty) return <>{renderEmpty()}</>;
     return (
       <a
@@ -130,7 +152,8 @@ export function ConnectedModelPicker({
   }
   return (
     <ModelPicker
-      models={models}
+      models={menu.models}
+      failures={menu.failures}
       value={value}
       onChange={onChange}
       size={size}
@@ -139,6 +162,28 @@ export function ConnectedModelPicker({
       placeholder={placeholder}
     />
   );
+}
+
+/** One line per provider the server could not reach. Not selectable — it
+ *  explains a gap in the list rather than offering a choice. */
+function ProviderFailureNotice({ failures }: { failures?: ProviderFailure[] }) {
+  if (!failures?.length) return null;
+  return (
+    <div className="border-t p-border px-2 py-1.5">
+      {failures.map((failure) => (
+        <p key={failure.provider} className="p-warning flex items-start gap-1.5 text-[11px] leading-snug">
+          <WarningCircleIcon size={12} className="mt-0.5 shrink-0" />
+          <span className="min-w-0">
+            <span className="font-medium">{failure.label ?? failure.provider}</span> unavailable — {failure.reason}
+          </span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function failureTitle(failures: ProviderFailure[]): string {
+  return failures.map((f) => `${f.label ?? f.provider}: ${f.reason}`).join("\n");
 }
 
 function ModelPickerItem({ model }: { model: ModelMenuEntry }) {

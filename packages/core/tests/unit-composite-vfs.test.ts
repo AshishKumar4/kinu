@@ -120,7 +120,7 @@ function recordingVFS() {
   return { vfs, calls, files };
 }
 
-const envPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral' as const, credentialsStayInHost: true };
+const envPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral' as const };
 
 describe("Phase 1 — synthetic read-only '/'", () => {
   test("readdir('/') lists live mount names only", async () => {
@@ -277,7 +277,7 @@ describe('mount table basics', () => {
       name: 'local',
       prefix: '/local',
       live: true,
-      policy: { readOnly: false, rootPath: '', consistency: 'durable', credentialsStayInHost: false },
+      policy: { readOnly: false, rootPath: '', consistency: 'durable' },
       cwd: '/local',
       reason: null,
     }]);
@@ -288,7 +288,7 @@ describe('mount table basics', () => {
     const { vfs } = createComposite();
     const spec = {
       vfs: createInlineVFS(makeSql(new Database(':memory:'))),
-      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral' as const, credentialsStayInHost: true },
+      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral' as const },
     };
     expect(() => vfs.mount('local', spec)).toThrow(/permanent writable base/);
     expect(() => vfs.mount('Bad Name', spec)).toThrow(/invalid mount name/);

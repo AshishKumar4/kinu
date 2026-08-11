@@ -22,6 +22,7 @@
  */
 
 import { createHash, createHmac } from 'node:crypto';
+import { evidenceWindow } from '../../prompts/evidence-window.js';
 import type { PayloadPolicy, ProteusEvent } from './types.js';
 
 // ── Secret-shape heuristics for `redact` ─────────────────────────
@@ -138,6 +139,20 @@ function detectContentType(payload: unknown): string {
  *  the spilled reference (`events/hub/content-spill.ts`). */
 export const EVENT_BRIEF_MAX_CHARS = 600;
 
+/**
+ * One brief's body — bounded, and honest about it.
+ *
+ * Every variant whose payload IS the woken turn's input renders through this.
+ * A head slice alone is the defect the spill path was built to close from the
+ * other side: the agent is woken BY a message, shown its opening, and has no
+ * way to tell that what it read was a fragment. `evidenceWindow` keeps both
+ * ends and states the omitted count in-band, so the brief says it is partial
+ * even in the case the spill could not write a path to the rest.
+ */
+function briefWindow(text: string): string {
+  return evidenceWindow(text, EVENT_BRIEF_MAX_CHARS);
+}
+
 /** Compact, human-readable representation of an event for injection into
  *  the LLM context. Never includes raw payload bytes for non-`full`
  *  visibility events. */
@@ -197,17 +212,28 @@ function briefForVariant(event: ProteusEvent): string {
       return `[opaque body verified by hmac, size=${v.size}]`;
     }
     if (v && v._visibility === 'opaque_handle') {
-      return `[opaque handle: use read_external_payload(event_id) if authorized]`;
+      // The payload was replaced with a pointer into a side store the agent
+      // cannot reach (applyVisibilityForStorage). Say so — do not invent a
+      // read-back API. This line once instructed the model to call
+      // `read_external_payload(event_id)`, which existed nowhere.
+      const handle = (v as { handle?: string }).handle ?? 'unknown';
+      return `[opaque payload ${handle}: withheld by visibility policy; not readable from this agent]`;
     }
     // `redact` keeps the structure visible.
   }
   switch (event.variant) {
     case 'chat':
       return (event.payload as { text: string }).text.slice(0, 200);
-    case 'webhook':
-      return `${(event.payload as { http_method: string }).http_method} body of ${
-        JSON.stringify((event.payload as { body: unknown }).body).slice(0, 200)
-      }`;
+    case 'webhook': {
+      // A webhook body IS the woken turn's input, so it gets the chat-scale
+      // budget and an address for the rest. The old 200-char head slice of
+      // stringified JSON handed the model syntactically invalid JSON with no
+      // marker, no count, and nothing to read back.
+      const p = event.payload as { http_method: string; body: unknown; body_path?: string };
+      const body = JSON.stringify(p.body) ?? 'undefined';
+      const full = p.body_path ? ` — full body: ${p.body_path}` : '';
+      return `${p.http_method} body of ${briefWindow(body)}${full}`;
+    }
     case 'process_done': {
       const p = event.payload as { command: string; exit_code: number; stderr_excerpt: string };
       return `${p.command.slice(0, 60)} exit=${p.exit_code}${p.stderr_excerpt ? ' stderr: ' + p.stderr_excerpt.slice(0, 100) : ''}`;
@@ -221,7 +247,7 @@ function briefForVariant(event: ProteusEvent): string {
       // oversize body names where its full text was spilled.
       const p = event.payload as { topic: string; body: unknown; body_path?: string };
       const full = p.body_path ? ` — full message: ${p.body_path}` : '';
-      return `${p.topic}: ${JSON.stringify(p.body).slice(0, EVENT_BRIEF_MAX_CHARS)}${full}`;
+      return `${p.topic}: ${briefWindow(JSON.stringify(p.body) ?? 'undefined')}${full}`;
     }
     case 'subordinate_task': {
       // Assignments are the subordinate's whole turn input — chat-scale
@@ -234,7 +260,7 @@ function briefForVariant(event: ProteusEvent): string {
       };
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
       const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
-      return `${inheritedContext}${p.kind}: ${p.body.slice(0, EVENT_BRIEF_MAX_CHARS)}${deliverable}`;
+      return `${inheritedContext}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }
     case 'subordinate_report': {
       const p = event.payload as {
@@ -242,18 +268,22 @@ function briefForVariant(event: ProteusEvent): string {
       };
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
       const full = p.content_path ? ` — full report: ${p.content_path}` : '';
-      return `${p.status}${task}: ${p.content.slice(0, EVENT_BRIEF_MAX_CHARS)}${full}`;
+      return `${p.status}${task}: ${briefWindow(p.content)}${full}`;
     }
     case 'file_changed':
       return `${(event.payload as { change: string; path: string }).change} ${
         (event.payload as { path: string }).path
       }`;
     case 'email': {
-      const p = event.payload as { subject: string; body_text: string; attachments?: unknown[] };
+      // Same treatment as a peer message: the mail IS the woken turn's input.
+      const p = event.payload as {
+        subject: string; body_text: string; attachments?: unknown[]; body_path?: string;
+      };
       const attachNote = p.attachments && p.attachments.length > 0
         ? ` [${p.attachments.length} attachment${p.attachments.length === 1 ? '' : 's'}]`
         : '';
-      return `"${p.subject}"${attachNote}: ${p.body_text.slice(0, 300)}`;
+      const full = p.body_path ? ` — full body: ${p.body_path}` : '';
+      return `"${p.subject}"${attachNote}: ${briefWindow(p.body_text)}${full}`;
     }
     case 'internal':
       return `${(event.payload as { kind: string }).kind}`;

@@ -2,8 +2,6 @@
  * GEPA (Genetic-Pareto Prompt Evolution) — type contracts.
  *
  * Paper: Agrawal et al., ICLR 2026. https://arxiv.org/abs/2507.19457
- * Brief in repo: docs/COMPETITIVE-ANALYSIS-2026-05-29.md §3 (and the GEPA
- * brief subagent transcript).
  *
  * GEPA targets any string-addressable artifact: a scaffold source file, a
  * crafted-tool implementation, a system-prompt section, even a SKILL.md

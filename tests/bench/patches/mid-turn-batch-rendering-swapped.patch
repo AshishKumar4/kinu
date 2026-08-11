@@ -1,13 +1,15 @@
 diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
-index be3e5d5..ee73383 100644
+index 6a837cf..66bee65 100644
 --- a/packages/core/src/orchestrator/agent-orchestrator.ts
 +++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -185,7 +185,7 @@ export class AgentOrchestrator {
-     }
-     try {
-       if (this.deps.host.injectIntoActiveTurn({
--        turnId, ids: batch.ids, stepText: batch.midTurnText, turnText: batch.text,
-+        turnId, ids: batch.ids, stepText: batch.text, turnText: batch.midTurnText,
-       })) {
-         this.deps.host.broadcast({ type: 'background_event_injected', turnId, events: batch.ids.length });
-         return;
+@@ -389,8 +389,8 @@ export class AgentOrchestrator {
+     const ids = batch.ids;
+     await this.signals.deliver({
+       kind: 'event_drain',
+-      text: batch.text,
+-      stepText: batch.midTurnText,
++      text: batch.midTurnText,
++      stepText: batch.text,
+       replyTurnId: turnId,
+       // The mission scope the woken turn spends under — the link between a
+       // schedule that declared a budget and the ledger its turn debits.

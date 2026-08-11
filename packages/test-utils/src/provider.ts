@@ -1,32 +1,6 @@
-// ModelProvider + StrategyRegistry fixtures.
-//
-// Two shapes: stub providers/strategies for the registry contract tests, and
-// "fake-but-realistic" ones that integrate with mocked fetch via createMockFetch.
-import type {
-  ModelProvider, ModelInfo, ExplorationStrategy, StrategyContext, StrategyResult,
-} from '@proteus/core';
-import type { LanguageModel } from 'ai';
-
-export interface TestProviderOptions {
-  id: string;
-  modelId?: string;
-  available?: boolean;
-  models?: ModelInfo[];
-  /** Returned by createModel. Default: a stub LanguageModel-shaped object. */
-  model?: LanguageModel;
-}
-
-export function createTestProvider(opts: TestProviderOptions): ModelProvider {
-  const models = opts.models ?? [{ id: opts.modelId ?? 'default' }];
-  return {
-    id: opts.id,
-    label: opts.id,
-    defaultModel: opts.modelId,
-    isAvailable: () => opts.available ?? true,
-    listModels: () => models,
-    createModel: () => opts.model ?? ({ specificationVersion: 'v2', provider: opts.id } as unknown as LanguageModel),
-  };
-}
+// ExplorationStrategy fixtures — stub strategies for the registry contract
+// tests. Providers are mocked at the fetch seam instead (network.ts).
+import type { ExplorationStrategy, StrategyContext, StrategyResult } from '@proteus/core';
 
 export interface TestStrategyOptions {
   id: string;

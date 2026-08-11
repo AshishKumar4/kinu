@@ -262,9 +262,9 @@ for (const c of cases) {
 
 describe('VFS conformance — CompositeVFS root & mount rules', () => {
   const readOnlyPolicy: MountPolicy =
-    { readOnly: true, rootPath: '', consistency: 'durable', credentialsStayInHost: false };
+    { readOnly: true, rootPath: '', consistency: 'durable' };
   const offlinePolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
 
   const make = (): CompositeVFS => {
     const c = new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) });

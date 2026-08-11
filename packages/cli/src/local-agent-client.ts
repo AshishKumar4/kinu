@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { WorkspaceInfo, AgentRuntime, SearchNode, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable } from '@proteus/core';
+import type { WorkspaceInfo, AgentRuntime, SearchNode, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, BACKGROUND_POLICY } from '@proteus/core';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
@@ -33,7 +33,7 @@ import {
   type CliSessionOptions,
 } from './session.js';
 import { SessionRecorder } from './session-recorder.js';
-import { normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
+import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
 import {
   findForkPivot,
   promptFiles,
@@ -62,7 +62,12 @@ export interface LocalAgentClientOptions {
   baseUrl?: string;
   auth?: string;
   noAutoEvolve?: boolean;
+  /** One task turn, then exit — see LocalAgentClientDeps.oneShot. */
+  oneShot?: boolean;
   session?: CliSessionOptions;
+  /** Who is driving — fixes the session's background policy. Default:
+   *  'interactive'. */
+  surface?: SessionSurface;
 }
 
 /** Open a local agent database and wrap its LocalAgentSession as an AgentClient. */
@@ -93,6 +98,7 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     mcpServers: resolveMcpServers(),
     noAutoEvolve: opts.noAutoEvolve ?? false,
     sessionOptions: opts.session ?? {},
+    surface: opts.surface ?? 'interactive',
   });
 }
 
@@ -138,6 +144,11 @@ export interface LocalAgentClientDeps {
   mcpServers: Record<string, McpServerConfig>;
   noAutoEvolve: boolean;
   sessionOptions: CliSessionOptions;
+  /** Which surface this process is. 'one-shot' (`proteus exec`/`run`) both
+   *  selects the background detach/grace policy AND decides turn continuity
+   *  for the outcome ledger, keeping the cadence-heavy evolution pass off the
+   *  exit path. One fact, one field. */
+  surface: SessionSurface;
 }
 
 interface PendingLocalTurn {
@@ -307,9 +318,10 @@ export class LocalAgentClient implements AgentClient {
     return this.session.interrupt();
   }
 
-  /** Let detached background jobs settle and their wake turns run to
-   *  completion, streaming through the live subscription, before the caller
-   *  closes. No-op once closed. */
+  /** Run everything the task turn left queued — detached jobs' wake turns, the
+   *  one-shot completion gate's confirming turn — to completion, streaming
+   *  through the live subscription, before the caller closes. No-op once
+   *  closed. */
   async settleBackgroundWork(): Promise<void> {
     if (this.closed) return;
     await this.session.settleBackgroundWork();
@@ -426,8 +438,8 @@ export class LocalAgentClient implements AgentClient {
     return { effort: this.session.setReasoningEffort(effort).effort };
   }
 
-  async listModels(): Promise<AgentModelEntry[]> {
-    return normalizeModelEntries(await this.session.listAvailableModels());
+  async listModels(): Promise<AgentModelMenu> {
+    return normalizeModelMenu(await this.session.listAvailableModels());
   }
 
   private conversationIdForAgentSession(): string {
@@ -443,6 +455,8 @@ export class LocalAgentClient implements AgentClient {
       model: this.deps.model,
       modelResolver: this.deps.modelResolver,
       noAutoEvolve: this.deps.noAutoEvolve,
+      backgroundPolicy: BACKGROUND_POLICY[this.deps.surface],
+      oneShot: this.deps.surface === 'one-shot',
       sessionId,
       persistMessages: this.activeCliSession.mode !== 'none',
       onEvent: (event) => this.handleSessionEvent(event),
@@ -494,6 +508,8 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
       return { type: 'evolution', event: event.event, message: event.message };
     case 'broadcast':
       return { type: 'broadcast', event: event.event };
+    case 'run-event':
+      return { type: 'run-event', event: event.event };
     case 'error':
       return { type: 'error', message: event.message };
   }

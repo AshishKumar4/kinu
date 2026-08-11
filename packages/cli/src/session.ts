@@ -75,10 +75,6 @@ export interface CliSessionTranscript {
 
 const DEFAULT_SESSION_ID = 'default';
 
-export function defaultAgentSessionId(): string {
-  return DEFAULT_SESSION_ID;
-}
-
 export function defaultConversationIdForCliOptions(opts: Pick<CliSessionOptions, 'continue' | 'resume' | 'session' | 'fork' | 'noSession'> = {}): string | undefined {
   if (opts.noSession || opts.continue || opts.resume || opts.session || opts.fork) return undefined;
   return DEFAULT_SESSION_ID;

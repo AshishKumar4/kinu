@@ -11,11 +11,11 @@ import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
-  ReasoningEffort, TurnUsage,
+  ReasoningEffort, TurnUsage, RunEvent,
 } from '@proteus/core';
 import type { ShellApprovalHandler } from '@proteus/cli-backend';
 import type { CliSession, CliSessionInfo } from './session.js';
-import type { AgentModelEntry } from './model-catalog.js';
+import type { AgentModelMenu } from './model-catalog.js';
 
 export type AgentClientMode = 'local' | 'cloud';
 
@@ -57,6 +57,14 @@ export type AgentClientEvent =
   | { type: 'turn-end'; turn: AgentTurnResult }
   | { type: 'evolution'; event: string; message: string }
   | { type: 'broadcast'; event: BroadcastEvent }
+  /** One row of the durable run-event ledger, forwarded as it is written:
+   *  delegation nudges, the context budget, refused mission budgets, and the
+   *  run bracket around them. Instrumentation rather than conversation — the
+   *  human surfaces ignore it and `--json` emits it verbatim, which is what
+   *  makes the ledger readable from outside the agent's own database. Local
+   *  backend only: a cloud agent's ledger lives in the DO, which serves it
+   *  over /api/runs/<id>/stream and MCP `list_run_events`. */
+  | { type: 'run-event'; event: RunEvent }
   | { type: 'error'; message: string };
 
 export interface AgentClientSendOptions {
@@ -300,7 +308,7 @@ export interface AgentClient {
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
-  listModels(): Promise<AgentModelEntry[]>;
+  listModels(): Promise<AgentModelMenu>;
 }
 
 export interface AgentUiMessage {

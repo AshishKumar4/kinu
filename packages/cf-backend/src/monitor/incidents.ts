@@ -15,7 +15,7 @@
  * fails — the ledger never has to own retries.
  */
 
-import { argumentDigest } from '@proteus/core';
+import { argumentDigest, type SqlExec } from '@proteus/core';
 import { sendOwnerEmail } from '../email/outbound.js';
 import type { EmailOutbox } from '../email/outbox.js';
 import type { ProbeOutcome } from './probes.js';
@@ -24,10 +24,6 @@ import type { ProbeOutcome } from './probes.js';
  *  this address can never be confused for a workspace's mission inbox. */
 const MONITOR_SENDER = 'ops.monitor';
 const MONITOR_DISPLAY_NAME = 'Proteus Monitor';
-
-export interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 const MONITOR_INCIDENTS_DDL = `
 CREATE TABLE IF NOT EXISTS monitor_incidents (

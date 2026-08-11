@@ -42,9 +42,16 @@ packages/core/tests/helpers.d.ts.map
 .cc-corpus/
 CC-CORPUS-*.md
 
-# External benchmark corpora (downloaded via harbor, not our source)
+# External benchmark corpora (downloaded via harbor, not our source). Each
+# carries a corpus.json manifest recording which release it is — see
+# bench/harbor/corpus.py. 2.1 is the corpus of record; 2.0 is kept so results
+# measured on it stay interpretable.
 /deep-swe/
-/terminal-bench/
+/terminal-bench-2.0/
+/terminal-bench-2.1/
 
 # Throwaway output of the bench/harbor bun --compile step
 /.harbor-build-*/
+
+# Preserved harbor job artifacts (raw trial evidence, not source)
+/bench-artifacts/

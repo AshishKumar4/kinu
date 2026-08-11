@@ -11,10 +11,7 @@ import {
   type IngressDescriptor, type ProteusEvent,
   type SubordinateTaskPayload, type SubordinateReportPayload,
 } from '../src/events/hub/index.ts';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import type { SqlExec } from '../src/index.js';
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');

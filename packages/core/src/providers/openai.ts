@@ -14,6 +14,8 @@ import { listModelsDevProviderModels } from './models-dev.js';
 export const OPENAI_CRED_KEY = 'openai.bearer';
 export const OPENAI_BASE_URL = 'https://api.openai.com/v1';
 export const OPENAI_DEFAULT_MODEL = 'gpt-5.5';
+/** The small tier the evolution engine's mechanical calls run on. */
+export const OPENAI_FAST_MODEL = 'gpt-5.4-mini';
 
 const FALLBACK_MODELS: ModelInfo[] = [
   { id: OPENAI_DEFAULT_MODEL, label: 'GPT-5.5', capabilities: ['tools', 'streaming', 'reasoning', 'json-mode', 'vision'], contextWindow: 1_050_000, inputModalities: ['text', 'image', 'pdf'] },
@@ -34,6 +36,7 @@ export function createOpenAIProvider(opts: OpenAIOptions = {}): ModelProvider {
     id: 'openai',
     label: 'OpenAI (direct API)',
     defaultModel: OPENAI_DEFAULT_MODEL,
+    fastModel: OPENAI_FAST_MODEL,
     async isAvailable(deps) { return deps.hasCredential(OPENAI_CRED_KEY); },
     unavailableReason() { return 'No OpenAI API key (cred key: `openai.bearer`).'; },
     listModels: (deps) => listModelsDevProviderModels('openai', deps, {

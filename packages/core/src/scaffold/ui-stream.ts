@@ -36,7 +36,6 @@ export async function* scaffoldEventsToUIStream(
   const idPrefix = opts.idPrefix ?? 'sc';
   let textId: string | null = null;
   let textSeq = 0;
-  let finishEmitted = false;
 
   function* openTextIfNeeded(): Generator<UIMessageChunk> {
     if (textId == null) {
@@ -95,5 +94,5 @@ export async function* scaffoldEventsToUIStream(
     yield { type: 'error', errorText: result.error };
   }
   yield* closeTextIfOpen();
-  if (!finishEmitted) { yield { type: 'finish' }; finishEmitted = true; }
+  yield { type: 'finish' };
 }

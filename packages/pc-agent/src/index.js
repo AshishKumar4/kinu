@@ -10,6 +10,12 @@ const { spawn, execFileSync } = require('node:child_process');
 
 const CONFIG_PATH = path.join(os.homedir(), '.proteus', 'device.json');
 
+/** Drain window after an exec'd command's own exit, before we stop reading the
+ *  pipes an orphaned grandchild may still hold. Mirrors EXITED_COMMAND_DRAIN_MS
+ *  in cli-backend/src/runtime.ts — this daemon ships as one dependency-free
+ *  file, so it carries its own copy rather than importing one. */
+const EXITED_COMMAND_DRAIN_MS = 250;
+
 function log(...a) { console.log(new Date().toISOString(), ...a); }
 
 function rpc(ws, id, result, error) {
@@ -376,11 +382,29 @@ function handle(msg, ws, ctx) {
       // Pre-mutation snapshot (invisible; deduped per agent turn).
       if (checkpoints && msg.checkpoint) checkpoints.ensure(msg.checkpoint, process.cwd());
       const child = spawn('/bin/sh', ['-c', cmd], { stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '', stderr = '';
+      let stdout = '', stderr = '', answered = false;
+      const answer = (code) => {
+        if (answered) return;
+        answered = true;
+        rpc(ws, id, { stdout, stderr, exitCode: code ?? 0 });
+      };
       child.stdout.on('data', (d) => { stdout += d.toString(); });
       child.stderr.on('data', (d) => { stderr += d.toString(); });
-      child.on('close', (code) => rpc(ws, id, { stdout, stderr, exitCode: code ?? 0 }));
-      child.on('error', (e) => rpc(ws, id, null, e.message));
+      // `close` waits for every inherited pipe to shut, so a command that
+      // backgrounds a server (`./server &`) would not answer until the SERVER
+      // exited. `exit` means the command itself is done; drain briefly for the
+      // output still in the pipe, then answer and let the orphan keep running.
+      child.on('close', answer);
+      child.on('exit', (code) => {
+        setTimeout(() => {
+          if (answered) return;
+          child.stdout.destroy();
+          child.stderr.destroy();
+          child.unref();
+          answer(code);
+        }, EXITED_COMMAND_DRAIN_MS).unref();
+      });
+      child.on('error', (e) => { if (!answered) { answered = true; rpc(ws, id, null, e.message); } });
     } else if (method === 'readFile') {
       // { encoding: 'base64' } → binary-safe read, answered in a shape the
       // caller can distinguish from the plain-text default.

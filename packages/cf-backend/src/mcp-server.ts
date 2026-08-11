@@ -263,7 +263,8 @@ function buildServer(env: Env, agentName: string): McpServer {
       description:
         "Enqueue a task for the agent: inject a user turn into its serialized loop — the exact " +
         "path the event→turn reactor and background-job wake use. Fire-and-forget; the turn runs " +
-        "asynchronously. Returns whether it was queued or skipped (pre-empted by a newer turn).",
+        "asynchronously. Returns whether it was queued or skipped (a newer turn pre-empted it, " +
+        "or the turn queue rejected it — either way nothing ran).",
       inputSchema: { text: z.string().min(1).describe("The task / instruction for the agent to act on.") },
     },
     async ({ text }) => {
@@ -272,7 +273,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const result: EnqueueTurnResult = await agent.runTaskFromMcp(text);
         const msg = result.status === "queued"
           ? "Task queued — the agent will run it on its turn loop."
-          : "Task skipped — a newer turn pre-empted this injection.";
+          : "Task skipped — a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
         return { content: [{ type: "text", text: msg }] };
       } catch (err) {
         return { content: [{ type: "text", text: `run_task error: ${(err as Error).message}` }] };

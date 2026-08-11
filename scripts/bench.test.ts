@@ -247,6 +247,21 @@ describe('loadBenchCorpus', () => {
     for (const id of all) expect(patches.get(id)).toContain('diff --git');
   });
 
+  // A defect patch is data ABOUT source that keeps moving. When a refactor
+  // renames the code a patch anchors on — or deletes it — the patch stops
+  // applying and its task silently becomes unrunnable: `prepare` throws at
+  // attempt time, long after anyone would connect it to the refactor. The
+  // check is the same `git apply` the sandbox runs, so nothing can pass here
+  // and fail there.
+  test('every defect patch still applies to the tree it was seeded against', () => {
+    const { patches } = loadBenchCorpus(REPO_ROOT);
+    const stale = [...patches].filter(([, patch]) => Bun.spawnSync(
+      ['git', 'apply', '--check', '--whitespace=nowarn', '-'],
+      { cwd: REPO_ROOT, stdin: Buffer.from(patch), stdout: 'ignore', stderr: 'ignore' },
+    ).exitCode !== 0).map(([id]) => id);
+    expect(stale).toEqual([]);
+  });
+
   test('every dev task really is dev — the split is derived, not declared', () => {
     const { corpus } = loadBenchCorpus(REPO_ROOT);
     for (const t of corpus.dev) expect(splitOf(t.id)).toBe('dev');

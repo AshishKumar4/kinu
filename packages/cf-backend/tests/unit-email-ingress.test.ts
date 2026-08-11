@@ -6,17 +6,18 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
+  type SqlExec,
 } from '@proteus/core';
 import {
   agentEmailAddress, agentNameFromRecipient, normalizeEmailAddress,
   parseInboundMime, stripQuotedReply,
 } from '../src/email/inbound.js';
-import { acceptInboundEmail, type EmailIngressDeps, type IncomingEmail } from '../src/events/ingress/email.js';
+import {
+  acceptInboundEmail, inboundEmailDropNotice,
+  type EmailIngressDeps, type IncomingEmail,
+} from '../src/events/ingress/email.js';
 import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import { createMemoryVfs } from '@proteus/test-utils';
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');
@@ -35,14 +36,16 @@ function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
   initEventsHubTables(sql);
   const log = new EventLog(sql);
   const replies = new ReplyChannelStore(sql, {});
+  const { vfs, files } = createMemoryVfs();
   const deps: EmailIngressDeps = {
     log, replies,
     owner_email: 'owner@example.com',
     allowlist: [],
     tryConsumeRateLimit: () => true,
+    vfs,
     ...overrides,
   };
-  return { deps, log, replies, sql };
+  return { deps, log, replies, sql, files };
 }
 
 function incoming(overrides: Partial<IncomingEmail> = {}): IncomingEmail {
@@ -149,9 +152,9 @@ describe('parseInboundMime', () => {
 });
 
 describe('acceptInboundEmail — the trust gate', () => {
-  test('the owner drives a turn: event admitted at authenticated trust with a thread channel', () => {
+  test('the owner drives a turn: event admitted at authenticated trust with a thread channel', async () => {
     const { deps, log, replies } = makeDeps();
-    const result = acceptInboundEmail(deps, incoming());
+    const result = await acceptInboundEmail(deps, incoming());
     expect(result).toMatchObject({ admitted: true, duplicate: false, sender_class: 'owner' });
     if (!result.admitted) throw new Error('unreachable');
 
@@ -176,23 +179,23 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(batch!.text).toContain('email (owner@example.com)');
   });
 
-  test('owner match ignores case and display-name wrappers', () => {
+  test('owner match ignores case and display-name wrappers', async () => {
     const { deps } = makeDeps({ owner_email: 'Owner@Example.COM' });
-    const result = acceptInboundEmail(deps, incoming({ from: 'Owner <owner@example.com>' }));
+    const result = await acceptInboundEmail(deps, incoming({ from: 'Owner <owner@example.com>' }));
     expect(result).toMatchObject({ admitted: true, sender_class: 'owner' });
   });
 
-  test('an unknown sender is dropped — no event row, no reply channel', () => {
+  test('an unknown sender is dropped — no event row, no reply channel', async () => {
     const { deps, log, sql } = makeDeps();
-    const result = acceptInboundEmail(deps, incoming({ from: 'attacker@evil.example.com' }));
+    const result = await acceptInboundEmail(deps, incoming({ from: 'attacker@evil.example.com' }));
     expect(result).toEqual({ admitted: false, reason: 'sender not authorized for this agent' });
     expect(log.pending()).toHaveLength(0);
     expect(sql.exec(`SELECT COUNT(*) AS n FROM reply_channels`).toArray()[0].n).toBe(0);
   });
 
-  test('an allowlisted sender is admitted at external trust', () => {
+  test('an allowlisted sender is admitted at external trust', async () => {
     const { deps, log } = makeDeps({ allowlist: ['Friend@Example.com'] });
-    const result = acceptInboundEmail(deps, incoming({ from: 'friend@example.com' }));
+    const result = await acceptInboundEmail(deps, incoming({ from: 'friend@example.com' }));
     expect(result).toMatchObject({ admitted: true, sender_class: 'allowlisted' });
     if (!result.admitted) throw new Error('unreachable');
     const event = log.get(result.event_id)!;
@@ -200,10 +203,10 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(event.priority).toBe('background');
   });
 
-  test('a retried delivery of the same Message-ID dedupes and aborts its extra channel', () => {
+  test('a retried delivery of the same Message-ID dedupes and aborts its extra channel', async () => {
     const { deps, log, sql } = makeDeps();
-    const first = acceptInboundEmail(deps, incoming());
-    const retry = acceptInboundEmail(deps, incoming({ now: 9_000 }));
+    const first = await acceptInboundEmail(deps, incoming());
+    const retry = await acceptInboundEmail(deps, incoming({ now: 9_000 }));
     expect(retry).toMatchObject({ admitted: true, duplicate: true });
     if (!first.admitted || !retry.admitted) throw new Error('unreachable');
     expect(retry.event_id).toBe(first.event_id);
@@ -212,11 +215,60 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(states.map((r) => r.state)).toEqual(['open', 'aborted']);
   });
 
-  test('the rate limit drops mail before publish', () => {
+  test('the rate limit drops mail before publish', async () => {
     const { deps, log } = makeDeps({ tryConsumeRateLimit: () => false });
-    const result = acceptInboundEmail(deps, incoming());
+    const result = await acceptInboundEmail(deps, incoming());
     expect(result).toEqual({ admitted: false, reason: 'inbound email rate limit exceeded' });
     expect(log.pending()).toHaveLength(0);
+  });
+
+  test('a long mail spills its body and the brief cites the path', async () => {
+    // The agent is woken BY this message. A brief that silently holds its
+    // first few hundred characters leaves it reading a fragment it cannot
+    // tell is a fragment, with nothing to read the rest from.
+    const { deps, log, files } = makeDeps();
+    const body = `URGENT-HEAD ${'detail '.repeat(400)}ACTION-TAIL`;
+    const result = await acceptInboundEmail(deps, incoming({ body_text: body }));
+    if (!result.admitted) throw new Error('unreachable');
+
+    const payload = log.get(result.event_id)!.payload as { body_path?: string };
+    expect(payload.body_path).toBeTruthy();
+    expect(files.get(payload.body_path!)).toBe(body);
+
+    const batch = buildDrainBatch(log.pending())!;
+    expect(batch.text).toContain(payload.body_path!);
+    expect(batch.text).toContain('chars omitted');
+    expect(batch.text).toContain('URGENT-HEAD');
+    expect(batch.text).toContain('ACTION-TAIL');
+  });
+
+  test('mail that fits the brief is not spilled — a reference would be noise', async () => {
+    const { deps, log } = makeDeps();
+    const result = await acceptInboundEmail(deps, incoming());
+    if (!result.admitted) throw new Error('unreachable');
+    expect((log.get(result.event_id)!.payload as { body_path?: string }).body_path).toBeUndefined();
+    expect(buildDrainBatch(log.pending())!.text).toContain('Is staging green?');
+  });
+});
+
+describe('the inbox gate says when it is deaf', () => {
+  // A rate-limited delivery leaves no trace the agent can read: the sender
+  // gets nothing, nothing is stored, and the agent goes on believing it has
+  // seen its inbox. A reply storm or a list subscription makes it silently
+  // deaf for a whole minute.
+  const RESET_AT = 1_700_000_060_000;
+
+  test('while the window is exhausted, the turn is told — with the limit and the reset', () => {
+    const notice = inboundEmailDropNotice(30, RESET_AT, RESET_AT - 20_000)!;
+    expect(notice.source).toBe('inbound email');
+    expect(notice.reason).toContain('more than 30 messages');
+    expect(notice.reason).toContain(new Date(RESET_AT).toISOString());
+    expect(notice.reason).toContain('have NOT seen your inbox');
+  });
+
+  test('once the window resets it says nothing — a deafness that ended is not news', () => {
+    expect(inboundEmailDropNotice(30, RESET_AT, RESET_AT)).toBeNull();
+    expect(inboundEmailDropNotice(30, RESET_AT, RESET_AT + 1)).toBeNull();
   });
 });
 

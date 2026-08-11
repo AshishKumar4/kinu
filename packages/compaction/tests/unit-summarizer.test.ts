@@ -44,6 +44,7 @@ describe('createModelSummarizer', () => {
       ports: memoryPorts(),
       archive: memoryArchive(),
       summarize: createModelSummarizer(hangingModel, 25),
+      ephemeral: { dropSuperseded: () => 0 },
       profile,
     });
     if (!extension.transformContext) throw new Error('extension must implement transformContext');

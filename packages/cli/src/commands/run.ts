@@ -71,7 +71,7 @@ export async function runCommand(name: string, promptParts: string[], opts: Agen
     json: outputMode === 'json',
     headless: false,
   });
-  if (failed) process.exitCode = 1;
+  exitOneShot(failed);
 }
 
 export interface ExecOptions extends Omit<AgentClientFlags, 'noAutoEvolve'> {
@@ -110,7 +110,26 @@ export async function execCommand(promptParts: string[], opts: ExecOptions): Pro
     json: opts.json === true,
     headless: true,
   });
-  process.exitCode = failed ? 1 : 0;
+  exitOneShot(failed);
+}
+
+/**
+ * End the one-shot command.
+ *
+ * A one-shot run is over once its turn and its bounded background drain are:
+ * there is nothing left for this process to do. It still cannot simply return,
+ * because the shell it ran commands through keeps a handle on every child it
+ * spawned — so a `run` the agent deliberately left running in the background (a
+ * server, a VM, a training job) holds the process open long after the answer was
+ * printed. That was measured at 6.4 of 16.2 agent-hours of pure idle tail across
+ * an 89-task benchmark run, all of it after the agent had already finished.
+ *
+ * Exiting here does not disturb that work: every child is spawned into its own
+ * process group and outlives us, which is precisely what "I left it running"
+ * has to mean for the task that asked for a running server.
+ */
+function exitOneShot(failed: boolean): never {
+  process.exit(failed ? 1 : 0);
 }
 
 /** exec is non-interactive, so an omitted --workspace only works when there
@@ -141,8 +160,15 @@ async function runOneShot(
   const prompt = await resolvePromptAttachments(rawPrompt);
   for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
+  // The daemon is this process's deferred-work host: a one-shot run never
+  // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
+  // what eventually runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) });
+  const client = createAgentClient(
+    target,
+    { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },
+    'one-shot',
+  );
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
@@ -164,10 +190,12 @@ async function runOneShot(
       { cwd: process.cwd() },
     );
     if (result.hadError) failed = true;
-    // A tool that auto-detached (>30s) ends the turn early; its result arrives
-    // as a wake turn. This one-shot process exits after send(), so drain those
-    // wake turns to completion HERE — while the subscription is still live, so
-    // their events stream — instead of losing the second half of the work.
+    // send() resolves when the task turn resolves, but the task turn is not
+    // always the last one: a tool that auto-detached ends the turn early and
+    // its result arrives as a wake turn, and the one-shot completion gate
+    // queues a confirming turn against freshly observed state. This process
+    // exits after send(), so drain the rest HERE — while the subscription is
+    // still live, so their events stream — instead of losing the second half.
     await client.settleBackgroundWork?.();
   } catch (err) {
     // In-stream failures already surfaced as an error event; only report
@@ -485,6 +513,7 @@ function renderRunEvent(event: AgentClientEvent): void {
     case 'step-finish':
     case 'evolution':
     case 'broadcast':
+    case 'run-event':
       break;
   }
 }
@@ -530,6 +559,13 @@ function jsonEvents(event: AgentClientEvent): unknown[] {
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'broadcast':
       return [{ type: 'broadcast', event: event.event }];
+    // The durable ledger, verbatim and whole: every RunEvent kind travels
+    // under one envelope so a consumer reads `event.type` rather than waiting
+    // for this switch to learn about the next kind. Enveloped rather than
+    // flattened because the ledger's own `turn_start`/`turn_end`/`error` names
+    // collide with the presentation events above.
+    case 'run-event':
+      return [{ type: 'run_event', event: event.event }];
   }
 }
 
@@ -543,13 +579,44 @@ function parseRpc(line: string): { ok: true; value: Record<string, unknown> } | 
   }
 }
 
-/** Grace period for OPTIONAL stdin — see buildPrompt. Long enough for a real
- *  pipe that already holds data, short enough that a harness which inherits an
- *  idle stdin is not stalled. */
+/** Grace period for OPTIONAL stdin's FIRST byte — see buildPrompt. Long
+ *  enough for a real pipe to start delivering, short enough that a harness
+ *  which inherits an idle stdin is not stalled. */
 const OPTIONAL_STDIN_GRACE_MS = 250;
 
 async function readStdin(): Promise<string> {
   return await new Response(Bun.stdin.stream()).text();
+}
+
+/**
+ * Read optional stdin with first-byte semantics: if ANY data arrives within
+ * the grace window, the pipe is real — wait for EOF and keep every byte. Only
+ * a pipe that stayed silent for the whole window reads as absent. The old
+ * whole-read race dropped bytes already received when EOF missed the window
+ * (a slow `cat bigfile |` lost its input mid-stream, silently).
+ */
+async function readOptionalStdin(): Promise<string> {
+  const reader = Bun.stdin.stream().getReader();
+  const first = await Promise.race([
+    reader.read(),
+    new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
+  ]);
+  if (first === 'idle') {
+    void reader.cancel().catch(() => {});
+    process.stderr.write(
+      `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
+      'pipe data promptly or close it (< /dev/null)\n',
+    );
+    return '';
+  }
+  const decoder = new TextDecoder();
+  let text = first.done ? '' : decoder.decode(first.value, { stream: true });
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    text += decoder.decode(chunk.value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 /**
@@ -567,12 +634,7 @@ async function buildPrompt(parts: string[]): Promise<string> {
   const argvPrompt = chunks.join(' ').trim();
   let stdin = '';
   if (!process.stdin.isTTY) {
-    stdin = argvPrompt
-      ? await Promise.race([
-          readStdin(),
-          new Promise<string>((resolve) => setTimeout(() => resolve(''), OPTIONAL_STDIN_GRACE_MS)),
-        ])
-      : await readStdin();
+    stdin = argvPrompt ? await readOptionalStdin() : await readStdin();
   }
   if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
   return chunks.join(' ').trim();

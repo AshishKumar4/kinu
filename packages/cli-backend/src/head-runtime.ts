@@ -9,7 +9,7 @@
 // merge LLM runs in this process.
 //
 // The tool surface is the SAME backend-agnostic buildHeadToolSet the cf Facet
-// uses: `run` + `execute_tools` + `web_*` (the parent's vocabulary, so a fork's
+// uses: `run` + `execute_tools` + `web` (the parent's vocabulary, so a fork's
 // allowedTools maps onto real tools) + record_evidence/record_decision +
 // split_subheads (recursive nested HeadController, depth-budgeted).
 
@@ -36,7 +36,7 @@ export interface CLIHeadRuntimeDeps {
    *  the task's files live. */
   cwd: string;
   /** The shared web research provider — same seam the main loop uses. Backs the
-   *  head's web_search / web_fetch tools. */
+   *  head's `web` tool. */
   webSearch: WebSearchProvider;
   /** Extra codemode namespaces spliced into the head's execute_tools sandbox —
    *  `web.*` and `llm.query`, WITHOUT `agents.*`/`agent.*`: a head forks its
@@ -80,7 +80,8 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     // execute_tools over the head's OWN router providers (private `workspace.*`
     // + the parent's real `laptop.*`) plus the web/llm codemode namespaces.
     const executeTool = createNodeExecuteToolFactory({ extraProviders: deps.codemodeExtras() })({
-      tools: {},
+      // A head's CraftStore is a throwaway in-memory fork: no crafted tools.
+      craftedTools: () => ({}),
       providers: rt.executionRouter?.getProviders() ?? [],
       loader: { __cli: true },
     });

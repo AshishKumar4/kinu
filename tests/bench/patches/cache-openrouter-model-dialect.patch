@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/prompting/cache-breakpoints.ts b/packages/core/src/prompting/cache-breakpoints.ts
-index 921dfdf..300d4ab 100644
+index 0b70f4a..580e09a 100644
 --- a/packages/core/src/prompting/cache-breakpoints.ts
 +++ b/packages/core/src/prompting/cache-breakpoints.ts
-@@ -90,7 +90,7 @@ export function resolvePromptCacheStrategy(providerId?: string, modelId?: string
+@@ -142,7 +142,7 @@ export function resolvePromptCacheStrategy(
      case 'codex':
-       return { kind: 'openai-cache-key' };
-     case 'openrouter':
--      return { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: ANTHROPIC_MODEL_ID.test(modelId ?? '') };
-+      return { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: ANTHROPIC_MODEL_ID.test(providerId ?? '') };
-     case 'my-gateway':
-     case 'ai-gateway':
-       return { kind: 'openai-compat', bodyNamespace: providerId, markers: false };
+       return { kind: 'openai-cache-key', ...(long ? { ttl: '24h' as const } : {}) };
+     case 'openrouter': {
+-      const markers = ANTHROPIC_MODEL_ID.test(modelId ?? '');
++      const markers = ANTHROPIC_MODEL_ID.test(providerId ?? '');
+       return {
+         kind: 'openai-compat', bodyNamespace: 'openrouter', markers,
+         ...(long && markers ? { ttl: '1h' as const } : {}),

@@ -2,6 +2,7 @@ import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, wr
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
+import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@proteus/core';
 import {
   LocalAgentSession,
   openWorkspaceCLI,
@@ -74,6 +75,8 @@ export async function daemonCommand(action: string | undefined): Promise<void> {
 }
 
 export function ensureLocalDaemonRunning(): void {
+  // Skip daemon startup when explicitly disabled (e.g. in tests).
+  if (process.env.PROTEUS_SKIP_DAEMON === '1') return;
   startDaemon({ quiet: true });
 }
 
@@ -87,6 +90,15 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   const entry = process.argv[1];
   if (!entry) {
     if (!opts.quiet) throw new Error('Cannot locate Proteus CLI entrypoint for daemon startup.');
+    return null;
+  }
+
+  // Guard against recursive spawning: if the entry point is a test script
+  // (not the real CLI), spawning a daemon child would re-execute the test,
+  // which would call ensureLocalDaemonRunning() again, creating an infinite
+  // fork loop.  Refuse silently in quiet mode, throw loudly otherwise.
+  if (/test|spec|e2e/i.test(entry)) {
+    if (!opts.quiet) throw new Error(`Refusing to start daemon from a test script: ${entry}`);
     return null;
   }
 
@@ -181,7 +193,13 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
   const db = new Database(dbPath);
   try {
     const nextBefore = nextTriggerAt(db);
-    if (nextBefore === null || nextBefore > now) return nextBefore;
+    const triggersDue = nextBefore !== null && nextBefore <= now;
+    // The daemon is also the host for the cadence-heavy evolution pass a
+    // one-shot `proteus exec` process cannot afford to finish (see
+    // AgentOrchestrator's exit contract). Both are checked with plain SQL so a
+    // workspace with nothing to do costs one query, not a session.
+    const evolutionDue = sessionEvolutionDue(db);
+    if (!triggersDue && !evolutionDue) return nextBefore;
 
     const { llmConfig, resolver: modelResolver } = createConfiguredLocalModelResolver({ agentName: name });
     const providerCredentials = resolveProviderCredentials();
@@ -198,12 +216,16 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
     try {
       if (Object.keys(mcpServers).length > 0) await session.connectMcp(mcpServers);
       await session.recoverBackgroundJobs();
-      const result = await session.fireDueTriggers(now);
-      if (result.fired > 0) log(`${name}: fired ${result.fired} timer trigger${result.fired === 1 ? '' : 's'}`);
-      // fireDueTriggers only ARMS the debounced drain; end() would disarm it
-      // before it fires. Flush synchronously so the fired trigger's autonomous
-      // turn actually runs (also drains any recovered background-job wake).
-      await session.flushPendingDrains();
+      if (triggersDue) {
+        const result = await session.fireDueTriggers(now);
+        if (result.fired > 0) log(`${name}: fired ${result.fired} timer trigger${result.fired === 1 ? '' : 's'}`);
+        // fireDueTriggers only ARMS the debounced drain; end() would disarm it
+        // before it fires. Flush synchronously so the fired trigger's autonomous
+        // turn actually runs (also drains any recovered background-job wake).
+        await session.flushPendingDrains();
+      }
+      // Last, so any turn this tick just ran is in the window it evolves over.
+      await session.runDueEvolution();
     } finally {
       await session.end().catch(() => {});
     }
@@ -211,6 +233,21 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
   } finally {
     db.close();
   }
+}
+
+/**
+ * Whether this workspace's durable evolution window has reached the
+ * session-reflection interval — the same test AgentOrchestrator applies, read
+ * straight from the table so the daemon can skip idle workspaces without
+ * opening a runtime. The interval is core's default (5); a session that
+ * overrides it only makes the daemon's check conservative, and the pass itself
+ * re-checks under the session's own interval before claiming anything.
+ */
+function sessionEvolutionDue(db: Database): boolean {
+  const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_window'`).get();
+  if (!table) return false;
+  const row = db.query(`SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1`).get() as { n: number } | null;
+  return (row?.n ?? 0) >= DEFAULT_SESSION_REFLECTION_INTERVAL;
 }
 
 function nextTriggerAt(db: Database): number | null {

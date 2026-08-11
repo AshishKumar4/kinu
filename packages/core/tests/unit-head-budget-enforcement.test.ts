@@ -10,7 +10,10 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
-import { budgetExhausted, deriveChildBudget, type HeadBudget } from '../src/heads/types.js';
+import {
+  budgetExhausted, deriveChildBudget, DEFAULT_HEAD_BUDGET,
+  NOMINAL_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH, type HeadBudget,
+} from '../src/heads/types.js';
 import { runHeadInference, HeadCapture } from '../src/heads/head-inference.js';
 import type { HeadInput } from '../src/heads/types.js';
 
@@ -76,22 +79,42 @@ describe('deriveChildBudget — recursive wall-clock bounded by parent remaining
 
 // ── A real run that overspends its token budget must stop ─────────────
 
-/** A v2 model that always wants to call `record_evidence` (so the agentic loop
- *  keeps going), reporting `perStep` token usage each step. Lets a run accrue
- *  tokens past its ceiling unless the budget gate stops it. */
-function loopingHeadModel(perStep: { inputTokens: number; outputTokens: number }): LanguageModel {
+/**
+ * A v2 model that always wants to call `record_evidence` (so the agentic loop
+ * keeps going), reporting a prompt of `promptTokens + step * promptGrowth` and a
+ * fixed `outputTokens` each step — the shape of a real head, which re-sends its
+ * whole accumulated context every step and grows it by whatever it pulled in.
+ */
+function loopingHeadModel(perStep: {
+  promptTokens: number; promptGrowth: number; outputTokens: number;
+  /** Mid-flight prose the model emits alongside its tool call each step. */
+  text?: string;
+  /** After this many steps the model CHOOSES to stop (text only, finishReason
+   *  'stop') — a head that genuinely finishes. Omitted = loops forever. */
+  stopAfterSteps?: number;
+}): LanguageModel {
+  let step = 0;
   return {
     specificationVersion: 'v2', provider: 'fake', modelId: 'fake-loop', supportedUrls: {},
-    doGenerate: async () => ({
-      content: [
-        { type: 'tool-call', toolCallId: `tc-${Math.random()}`, toolName: 'record_evidence',
-          input: JSON.stringify({ kind: 'fact', body: 'still working' }) },
-      ],
-      finishReason: 'tool-calls' as const,
-      usage: perStep,
-      response: { id: 'r', modelId: 'fake-loop', timestamp: new Date(0) },
-      warnings: [],
-    }),
+    doGenerate: async () => {
+      const finishes = perStep.stopAfterSteps !== undefined && step >= perStep.stopAfterSteps;
+      return {
+        content: [
+          ...(perStep.text ? [{ type: 'text' as const, text: perStep.text }] : []),
+          ...(finishes ? [] : [
+            { type: 'tool-call' as const, toolCallId: `tc-${Math.random()}`, toolName: 'record_evidence',
+              input: JSON.stringify({ kind: 'fact', body: 'still working' }) },
+          ]),
+        ],
+        finishReason: finishes ? 'stop' as const : 'tool-calls' as const,
+        usage: {
+          inputTokens: perStep.promptTokens + step++ * perStep.promptGrowth,
+          outputTokens: perStep.outputTokens,
+        },
+        response: { id: 'r', modelId: 'fake-loop', timestamp: new Date(0) },
+        warnings: [],
+      };
+    },
   } as unknown as LanguageModel;
 }
 
@@ -108,19 +131,164 @@ function loopInput(maxTokens: number): HeadInput {
   };
 }
 
-describe('runHeadInference — token budget actually stops a run', () => {
-  test('a run that overspends its token budget stops with budget_exceeded', async () => {
+describe('runHeadInference — the budget meters marginal work, not the re-sent prefix', () => {
+  test('a run whose prompt GROWS past its ceiling stops with budget_exceeded', async () => {
     const capture = new HeadCapture();
-    // maxTokens 6000 → step cap floor(6000/1200)=5 steps. Per-step 2500 tokens
-    // crosses the 6000 ceiling on step 3 — BEFORE the step cap — so a stop here
-    // can only be the token gate (THINKING-AUDIT §4 #7).
+    // maxTokens 6000 → step cap floor(6000/1200)=5 steps. The prompt grows 1500
+    // per step and each step emits 1000 output, so the marginal charge crosses
+    // 6000 on step 3 — BEFORE the step cap — and only the token gate can stop it.
     const report = await runHeadInference(
       loopInput(6_000),
-      { model: loopingHeadModel({ inputTokens: 1_500, outputTokens: 1_000 }), tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false },
+      {
+        model: loopingHeadModel({ promptTokens: 4_000, promptGrowth: 1_500, outputTokens: 1_000 }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
     );
     expect(report.status).toBe('budget_exceeded');
-    expect(report.tokenUsage.total).toBeGreaterThanOrEqual(6_000);
-    // Stopped on the token gate (step 3), strictly before the 5-step cap.
     expect(report.steps.length).toBeLessThan(5);
+  });
+
+  test('a head on a long parent turn is NOT starved by its own re-sent prefix', async () => {
+    const capture = new HeadCapture();
+    // The defect this locks: a 20k inherited prompt re-sent every step used to
+    // be charged in full every step, so a 25k head died after one or two steps
+    // having produced nothing. The prompt here never grows — the head adds only
+    // its own 400-token turns — so the token gate stays open and the head does
+    // real work (a genuine finish after 12 steps of it).
+    const report = await runHeadInference(
+      loopInput(25_000),
+      {
+        model: loopingHeadModel({
+          promptTokens: 20_000, promptGrowth: 0, outputTokens: 400,
+          text: 'Here is my conclusion.', stopAfterSteps: 12,
+        }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
+    );
+    expect(report.status).toBe('completed');
+    expect(report.steps.length).toBe(13);
+    expect(capture.tokenUsage.budgetCharged).toBe(400 * 13);
+  });
+
+  test('gross provider spend is still reported in full', async () => {
+    const capture = new HeadCapture();
+    const report = await runHeadInference(
+      loopInput(25_000),
+      {
+        model: loopingHeadModel({
+          promptTokens: 20_000, promptGrowth: 0, outputTokens: 400, stopAfterSteps: 9,
+        }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
+    );
+    // The cost ledger debits real tokens; only the BUDGET is metered marginally.
+    expect(report.tokenUsage.input).toBe(20_000 * 10);
+    expect(report.tokenUsage.output).toBe(400 * 10);
+    expect(report.tokenUsage.total).toBeGreaterThan(capture.tokenUsage.budgetCharged);
+  });
+
+  test('the step guard is a runaway backstop that reports itself honestly', async () => {
+    const capture = new HeadCapture();
+    // A degenerate loop the token meter cannot see: no prompt growth, near-zero
+    // output. The guard (2 x nominal estimate) ends it — and the report says a
+    // guard ended it, never that the head finished.
+    const report = await runHeadInference(
+      loopInput(6_000),
+      {
+        model: loopingHeadModel({ promptTokens: 4_000, promptGrowth: 0, outputTokens: 1 }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
+    );
+    expect(report.steps.length).toBe(2 * Math.floor(6_000 / NOMINAL_STEP_TOKENS));
+    expect(report.status).toBe('budget_exceeded');
+    expect(report.errorMessage).toContain('step guard');
+    expect(report.summary).toContain('did not complete');
+    // What it genuinely banked is still reported.
+    expect(report.summary).toContain('still working');
+  });
+});
+
+describe('runHeadInference — a head that stopped never reports a conclusion it did not reach', () => {
+  const SPECULATION = 'The immediate blockage is the sandbox provisioning failure.';
+
+  test("a starved head's mid-flight prose is not returned as its finding", async () => {
+    const capture = new HeadCapture();
+    const report = await runHeadInference(
+      loopInput(6_000),
+      {
+        model: loopingHeadModel({ promptTokens: 4_000, promptGrowth: 1_500, outputTokens: 1_000, text: SPECULATION }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
+    );
+    expect(report.status).toBe('budget_exceeded');
+    // This is the fabrication path: the speculation reached the parent as fact.
+    expect(report.summary).not.toContain('sandbox provisioning');
+    expect(report.summary).toContain('did not complete');
+    // What it genuinely banked is still reported.
+    expect(report.summary).toContain('still working');
+  });
+
+  test('an aborted head that banked nothing says exactly that', async () => {
+    const capture = new HeadCapture();
+    const report = await runHeadInference(
+      loopInput(50_000),
+      {
+        model: loopingHeadModel({ promptTokens: 1_000, promptGrowth: 0, outputTokens: 10, text: SPECULATION }),
+        tools: {}, capture, isAborted: () => true, abortReason: () => 'wall-clock budget exhausted',
+      },
+    );
+    expect(report.status).toBe('aborted');
+    expect(report.evidence).toHaveLength(0);
+    expect(report.summary).not.toContain('sandbox provisioning');
+    expect(report.summary).toContain('It produced no findings.');
+    expect(report.summary).toContain('wall-clock budget exhausted');
+  });
+
+  test('a completed head still reports its own final text', async () => {
+    const capture = new HeadCapture();
+    const report = await runHeadInference(
+      loopInput(50_000),
+      {
+        model: loopingHeadModel({
+          promptTokens: 500, promptGrowth: 0, outputTokens: 10,
+          text: 'Here is what I found.', stopAfterSteps: 3,
+        }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
+    );
+    expect(report.status).toBe('completed');
+    expect(report.summary).toBe('Here is what I found.');
+  });
+});
+
+describe('HeadCapture.recordStepUsage — the marginal charge', () => {
+  test('charges output plus prompt growth, never the inherited prefix', () => {
+    const c = new HeadCapture();
+    c.recordStepUsage(10_000, 500);   // entry prompt: charged for output only
+    c.recordStepUsage(12_000, 300);   // +2000 growth
+    c.recordStepUsage(12_000, 200);   // no growth: re-read costs nothing
+    expect(c.tokenUsage.budgetCharged).toBe(500 + 2_000 + 300 + 200);
+    expect(c.tokenUsage.input).toBe(34_000);
+    expect(c.tokenUsage.output).toBe(1_000);
+  });
+
+  test('a prompt that shrinks never yields a negative charge', () => {
+    const c = new HeadCapture();
+    c.recordStepUsage(9_000, 100);
+    c.recordStepUsage(3_000, 100);
+    c.recordStepUsage(9_500, 100);
+    // Growth is measured against the LARGEST prompt seen, so the rebound to
+    // 9_500 is charged 500 rather than 6_500.
+    expect(c.tokenUsage.budgetCharged).toBe(300 + 500);
+  });
+});
+
+describe('DEFAULT_HEAD_BUDGET — the pool survives its own divisor', () => {
+  test('every head at the widest legal fan-out still gets the full step cap', () => {
+    const parent: HeadBudget = { ...DEFAULT_HEAD_BUDGET, spawnedAt: Date.now() };
+    const child = deriveChildBudget(parent, MAX_FORK_WIDTH, undefined, parent.spawnedAt);
+    // Below this the pool, not the step cap, is what stops a head — which is how
+    // a fork comes back empty having produced nothing.
+    expect(child.maxTokens).toBeGreaterThanOrEqual(NOMINAL_HEAD_STEPS * NOMINAL_STEP_TOKENS);
   });
 });

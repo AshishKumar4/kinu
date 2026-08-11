@@ -6,13 +6,9 @@ import { sanitizeFtsQuery } from "./query";
 import type { MemorySearchResult } from "./query";
 
 const DEFAULT_SNIPPET_MAX_CHARS = 700;
-const DEFAULT_MIN_SCORE = 0.05;
-const DEFAULT_OVERFETCH_MULTIPLIER = 3;
 
 export interface SearchConfig {
 	orFallback?: boolean;
-	minScore?: number;
-	overfetchMultiplier?: number;
 	stopWords?: boolean;
 }
 
@@ -69,8 +65,6 @@ export class MemoryStore {
 		this.snippetMaxChars = config?.snippetMaxChars ?? DEFAULT_SNIPPET_MAX_CHARS;
 		this.searchConfig = {
 			orFallback: config?.search?.orFallback ?? true,
-			minScore: config?.search?.minScore ?? DEFAULT_MIN_SCORE,
-			overfetchMultiplier: config?.search?.overfetchMultiplier ?? DEFAULT_OVERFETCH_MULTIPLIER,
 			stopWords: config?.search?.stopWords ?? true,
 		};
 	}
@@ -193,30 +187,30 @@ export class MemoryStore {
 	search(query: string, limit = 10): MemorySearchResult[] {
 		if (!query.trim()) return [];
 
-		const { orFallback, minScore, overfetchMultiplier, stopWords } = this.searchConfig;
+		const { orFallback, stopWords } = this.searchConfig;
 		const safeQuery = sanitizeFtsQuery(query, { stopWords });
-		const fetchLimit = limit * overfetchMultiplier;
-		let rows = this.runFtsQuery(safeQuery, fetchLimit);
+		let rows = this.runFtsQuery(safeQuery, limit);
 
 		if (rows.length === 0 && orFallback) {
 			const tokens = safeQuery.split(" ").filter(Boolean);
 			if (tokens.length > 1) {
-				rows = this.runFtsQuery(tokens.join(" OR "), fetchLimit);
+				rows = this.runFtsQuery(tokens.join(" OR "), limit);
 			}
 		}
 
-		let results = rows.map((r) => ({
+		// bm25() is negative, more negative = more relevant. The displayed score
+		// must be monotone WITH relevance: |rank|/(1+|rank|) maps the strongest
+		// match nearest 1. (The old 1/(1+|rank|) was inverted, and the 0.05
+		// floor built on it filtered out exactly the strongest matches.)
+		return rows.map((r) => ({
 			path: r.path,
 			startLine: r.start_line,
 			endLine: r.end_line,
 			snippet: r.text.length > this.snippetMaxChars
 				? r.text.slice(0, this.snippetMaxChars) + "..."
 				: r.text,
-			score: 1 / (1 + Math.abs(r.rank)),
+			score: Math.abs(r.rank) / (1 + Math.abs(r.rank)),
 		}));
-
-		if (minScore > 0) results = results.filter((r) => r.score > minScore);
-		return results.slice(0, limit);
 	}
 
 	private runFtsQuery(ftsQuery: string, limit: number): FtsRow[] {

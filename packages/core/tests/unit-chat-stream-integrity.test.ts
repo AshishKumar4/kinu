@@ -36,13 +36,16 @@ function healthyToolStep(): Response {
   ]), { headers: SSE_HEADERS });
 }
 
-async function driveTurn(step2: () => Response, opts: { stallTimeoutMs?: number } = {}) {
+async function driveTurn(
+  step2: () => Response,
+  opts: { stallTimeoutMs?: number; step1?: () => Response; maxSteps?: number } = {},
+) {
   let call = 0;
   const server = Bun.serve({
     port: 0,
     async fetch() {
       call += 1;
-      return call === 1 ? healthyToolStep() : step2();
+      return call === 1 ? (opts.step1 ?? healthyToolStep)() : step2();
     },
   });
   const model = createChatModel({
@@ -62,7 +65,7 @@ async function driveTurn(step2: () => Response, opts: { stallTimeoutMs?: number 
   try {
     for await (const ev of runChat({
       model, system: 'sys', history: [{ role: 'user', content: 'go' }],
-      tools: tools as never, maxSteps: 500,
+      tools: tools as never, maxSteps: opts.maxSteps ?? 500,
       ...(opts.stallTimeoutMs !== undefined ? { stallTimeoutMs: opts.stallTimeoutMs } : {}),
     })) events.push(ev);
   } catch (e) {
@@ -103,6 +106,46 @@ describe('dead provider stream fails the turn', () => {
     ]), { headers: SSE_HEADERS }));
     expect(threw).toBeNull();
     expect(done).toBeDefined();
+  });
+});
+
+// The detector fires on the CONJUNCTION of an unmapped finish reason and an
+// empty step. The cases above cover unmapped+empty (dead) and mapped+content
+// (alive); these are the two remaining cells, and they are the ones that would
+// take real turns down if the detector ever widened to the reason alone.
+// 'other' and 'unknown' are routine for several providers.
+describe('an unmapped finish reason alone is not a dead stream', () => {
+  test('a step that produced TEXT and finished on "other" completes normally', async () => {
+    const { threw, done } = await driveTurn(() => new Response(sse([
+      JSON.stringify({ choices: [{ delta: { content: 'a real answer' } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'other' }], usage: { prompt_tokens: 20, completion_tokens: 2, total_tokens: 22 } }),
+      '[DONE]',
+    ]), { headers: SSE_HEADERS }));
+
+    expect(threw).toBeNull();
+    expect(done && done.type === 'done' ? done.text : '').toContain('a real answer');
+  });
+
+  test('a FINAL step whose only output was a TOOL CALL survives an unmapped reason', async () => {
+    // A tool-call step legitimately emits no text, so it is the step most
+    // easily mistaken for empty. It has to be the LAST step to be worth
+    // asserting — the dead-stream verdict is read once, after the loop, so a
+    // mid-turn step could not exercise it and the case would be untestable.
+    const toolStepEndingOnOther = () => new Response(sse([
+      JSON.stringify({ choices: [{ delta: { tool_calls: [
+        { index: 0, id: 'tc9', type: 'function', function: { name: 'run', arguments: '{"command":"ls"}' } },
+      ] } }] }),
+      JSON.stringify({ choices: [{ delta: {}, finish_reason: 'other' }], usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 } }),
+      '[DONE]',
+    ]), { headers: SSE_HEADERS });
+
+    const { threw, events } = await driveTurn(
+      () => { throw new Error('the turn must stop after one step'); },
+      { step1: toolStepEndingOnOther, maxSteps: 1 },
+    );
+
+    expect(threw).toBeNull();
+    expect(events.some((e) => e.type === 'tool-call')).toBe(true);
   });
 });
 

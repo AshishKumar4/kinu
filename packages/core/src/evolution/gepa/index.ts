@@ -10,7 +10,6 @@
  * eval + promotion pipeline. Complementary to the runtime mutable-scaffold
  * loop; not a replacement.
  *
- * Spec: docs/COMPETITIVE-ANALYSIS-2026-05-29.md §3.
  * Paper: Agrawal et al., ICLR 2026 — https://arxiv.org/abs/2507.19457
  */
 
@@ -26,10 +25,6 @@ export {
   runScaffoldGepa,
   type RunScaffoldGepaOpts, type RunScaffoldGepaResult,
 } from './scaffold-bridge.js';
-export {
-  runCraftedToolGepa,
-  type RunCraftedToolGepaOpts, type RunCraftedToolGepaResult,
-} from './tool-bridge.js';
 export {
   initGepaTables, startGepaRun, finishGepaRun,
   persistGepaCandidate, persistGepaParetoSnapshot,

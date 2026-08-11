@@ -124,6 +124,29 @@ describe('renderDynamicContextBlock', () => {
     expect(text!).toContain('- sandbox: ready on demand');
   });
 
+  test('a configured capability that is NOT on the surface is named, with its reason', () => {
+    // A slow MCP server misses its startup budget and its tools are simply
+    // absent. Without this the model plans around a capability it was promised
+    // and cannot explain why the tools it was told about are not there.
+    const text = renderDynamicContextBlock({
+      missingCapabilities: [
+        { source: 'MCP server "github"', reason: 'not connected within 5s of this turn starting — its tools are absent' },
+      ],
+    })!;
+    expect(text).toContain('Configured but NOT available this turn');
+    expect(text).toContain('MCP server "github"');
+    expect(text).toContain('not connected within 5s');
+  });
+
+  test('the missing-capability roster is capped with an honest count', () => {
+    const text = renderDynamicContextBlock({
+      missingCapabilities: Array.from({ length: 11 }, (_, i) => ({ source: `server-${i}`, reason: 'down' })),
+    })!;
+    expect(text).toContain('server-7');
+    expect(text).not.toContain('server-8');
+    expect(text).toContain('…and 3 more, not shown');
+  });
+
   test('unselectable executors are omitted; empty state renders nothing', () => {
     const offline: PromptExecutorInfo = { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' };
     expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();
@@ -424,6 +447,72 @@ describe('DynamicContextLedger (the cache-stability contract)', () => {
     expect(ledger.size).toBe(1);
     expect(after).toHaveLength(3);
     expect(isDynamicBlock(String(after[1]!.content))).toBe(true);
+  });
+});
+
+describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
+  const state = { factsBlock: '- k = v', executors: [idleSandbox] };
+
+  /** Grow a ledger to `blocks` frozen blocks over a growing history. */
+  function ledgerWith(blocks: number) {
+    const ledger = new DynamicContextLedger();
+    const history: ModelMessage[] = [];
+    const renders: string[] = [];
+    for (let i = 0; i < blocks; i++) {
+      history.push({ role: 'user', content: `turn-${i}` });
+      const at = { ...state, factsBlock: `- k = v${i}` };
+      renders.push(renderDynamicContextBlock(at)!);
+      ledger.weave(history, at);
+      history.push({ role: 'assistant', content: `a${i}` });
+    }
+    return { ledger, history, renders };
+  }
+
+  test('keeps the NEWEST block at its frozen position and drops the rest', () => {
+    const { ledger, history, renders } = ledgerWith(3);
+    expect(ledger.size).toBe(3);
+    const before = ledger.weave(history, {});
+    expect(before.map(messageText)).toEqual([
+      'turn-0', renders[0]!, 'a0', 'turn-1', renders[1]!, 'a1', 'turn-2', renders[2]!, 'a2',
+    ]);
+
+    const freed = ledger.dropSuperseded();
+    expect(ledger.size).toBe(1);
+    // Priced on the ladder's chars/4 scale, over exactly the blocks dropped.
+    expect(freed).toBe(Math.round(renders[0]!.length / 4) + Math.round(renders[1]!.length / 4));
+
+    // The survivor is live state, still at the index it was born at.
+    const after = ledger.weave(history, {});
+    expect(after.map(messageText)).toEqual([
+      'turn-0', 'a0', 'turn-1', 'a1', 'turn-2', renders[2]!, 'a2',
+    ]);
+  });
+
+  test('is a no-op — and free — when there is nothing superseded', () => {
+    const single = ledgerWith(1);
+    expect(single.ledger.dropSuperseded()).toBe(0);
+    expect(single.ledger.size).toBe(1);
+
+    const empty = new DynamicContextLedger();
+    expect(empty.dropSuperseded()).toBe(0);
+    expect(empty.dropSuperseded()).toBe(0);
+  });
+
+  test('a second drop frees nothing — the rung cannot be milked', () => {
+    const { ledger } = ledgerWith(4);
+    expect(ledger.dropSuperseded()).toBeGreaterThan(0);
+    expect(ledger.dropSuperseded()).toBe(0);
+    expect(ledger.size).toBe(1);
+  });
+
+  test('the survivor keeps growing normally afterwards', () => {
+    const { ledger, history } = ledgerWith(3);
+    ledger.dropSuperseded();
+    history.push({ role: 'user', content: 'turn-3' });
+    const changed = { ...state, factsBlock: '- k = later' };
+    const out = ledger.weave(history, changed);
+    expect(ledger.size).toBe(2);
+    expect(messageText(out[out.length - 1]!)).toBe(renderDynamicContextBlock(changed)!);
   });
 });
 

@@ -20,9 +20,11 @@ import { ExtensionHost } from '../extension.js';
 import { DynamicContextLedger } from '../prompting/volatile-context.js';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
 import { TurnContextBudget } from '../context-budget.js';
+import { TurnFileLedger } from '../tools/file-ledger.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
+import type { BackendHost } from '../types/backend-host.js';
 import type { ProteusEvent } from '../events/hub/types.js';
 import type { LexicalHit } from '../memory/hybrid-search.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
@@ -117,6 +119,17 @@ function shortHistory(): ModelMessage[] {
     { role: 'assistant', content: 'hi' },
     { role: 'user', content: 'and now?' },
   ];
+}
+
+/** A BackendHost whose only interesting answers are the two SignalDelivery
+ *  reads: is a turn running, and what did it start. */
+function fakeSignalHost(queued: string[], turnInFlight: boolean): BackendHost {
+  return {
+    broadcast: () => {},
+    enqueueTurn: async (turn) => { queued.push(turn.text); return { status: 'queued' }; },
+    turnInFlight: () => turnInFlight,
+    setTimer: () => {},
+  };
 }
 
 /** Distributes over the event union so a fixture cannot pair a variant with
@@ -439,7 +452,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'volatile-context/facts-budget',
-        asserts: 'the facts block stops at its char budget rather than truncating mid-fact',
+        asserts: 'the facts block stops at its char budget rather than truncating mid-fact, and discloses the count it dropped',
         observe: (s) => s.renderFactsBlock(
           [
             { key: 'deploy_target', value: 'staging', confidence: 0.9, source: 'turn', lastObservedAt: 0 },
@@ -667,15 +680,25 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'compaction/latest-ask-is-verbatim',
-        asserts: 'the most recent user ask is handed in mechanically, bounded, never left to retrieval',
+        asserts: 'the most recent user ask is handed in mechanically — verbatim within the stored budget, windowed head+tail with a named omission beyond it',
         observe: (s) => {
-          const prompt = s.buildCompactionSummaryPrompt({
+          const inBudget = s.buildCompactionSummaryPrompt({
             transcript: 't',
             latestUserAsk: 'Q'.repeat(5_000),
             budgetTokens: 1_000,
           });
-          const block = prompt.slice(prompt.indexOf('THE USER'), prompt.indexOf('"""', prompt.indexOf('"""') + 3) + 3);
-          return { length: block.length, head: block.slice(0, 120), truncated: block.includes('…') };
+          const oversize = s.buildCompactionSummaryPrompt({
+            transcript: 't',
+            latestUserAsk: 'Q'.repeat(10_000),
+            budgetTokens: 1_000,
+          });
+          const block = (p: string) => p.slice(p.indexOf('THE USER'), p.indexOf('"""', p.indexOf('"""') + 3) + 3);
+          return {
+            verbatimInBudget: block(inBudget).includes('Q'.repeat(5_000)),
+            oversizeLength: block(oversize).length,
+            oversizeKeepsTail: block(oversize).includes('Q'.repeat(4_000) + '\n"""'),
+            oversizeNamed: block(oversize).includes('chars omitted from the middle'),
+          };
         },
       },
       {
@@ -759,8 +782,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'mid-turn-injection',
-    owns: 'splicing a drained batch into a LIVE turn: entry-index coordinates across steps, buffer settlement, burst debounce',
-    subjects: ['StepInjections', 'EventInjectionBuffer', 'DrainScheduler'],
+    owns: 'delivering an async signal: one delivery time, entry-index coordinates across steps, settlement, burst debounce',
+    subjects: ['StepInjections', 'SignalDelivery', 'DrainScheduler'],
     probes: [
       {
         id: 'mid-turn-injection/index-is-stable',
@@ -803,20 +826,79 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
-        id: 'mid-turn-injection/buffer-absorb-and-leftover',
-        asserts: 'batches that reached a step boundary settle as absorbed; the rest come back for re-enqueue',
-        observe: (s) => {
-          const buffer = new s.EventInjectionBuffer();
-          buffer.beginTurn(false);
-          buffer.push({ turnId: 't1', ids: ['e1'], stepText: 'step-1', turnText: 'turn-1' });
-          const spliced = buffer.prepareStep({ stepNumber: 0, messages: shortHistory() });
-          buffer.push({ turnId: 't2', ids: ['e2'], stepText: 'step-2', turnText: 'turn-2' });
-          const settled = buffer.settle({ retainForContinuation: false });
+        id: 'mid-turn-injection/one-delivery-time',
+        asserts: 'every signal lands on the next step when a turn is running, and starts a turn when none is — the kind never changes the answer',
+        observe: async (s) => {
+          const run = async (turnInFlight: boolean) => {
+            const queued: string[] = [];
+            const signals = new s.SignalDelivery(
+              fakeSignalHost(queued, turnInFlight),
+            );
+            const outcomes = [
+              await signals.deliver({ kind: 'event_drain', text: 'wake' }),
+              await signals.deliver({ kind: 'background_job', text: 'later' }),
+            ];
+            return { outcomes, queued };
+          };
+          return { busyAgent: await run(true), idleAgent: await run(false) };
+        },
+      },
+      {
+        id: 'mid-turn-injection/buffer-absorb-and-requeue',
+        asserts: 'signals that reached a step boundary settle as absorbed; the rest re-deliver as turns of their own, and the step\'s own steering is dropped',
+        observe: async (s) => {
+          const queued: string[] = [];
+          const signals = new s.SignalDelivery(fakeSignalHost(queued, true));
+          signals.beginTurn(false);
+          await signals.deliver({ kind: 'event_drain', text: 'turn-1', stepText: 'step-1' });
+          const spliced = signals.prepareStep(
+            { stepNumber: 0, messages: shortHistory() },
+            [{ kind: 'turn_steering', text: 'nudge' }],
+          );
+          await signals.deliver({ kind: 'event_drain', text: 'turn-2', stepText: 'step-2' });
+          const settled = signals.settle({ completed: true });
+          await Promise.resolve();
           return {
             spliced: spliced?.map((m) => m.content),
-            absorbed: settled.absorbed.map((b) => b.turnId),
-            leftover: settled.leftover.map((b) => b.turnId),
+            absorbed: settled.absorbed.map((signal) => signal.text),
+            queued,
           };
+        },
+      },
+      {
+        id: 'mid-turn-injection/one-card-per-signal',
+        asserts: 'the user\'s card opens where the signal ARRIVED and moves where the agent took it in — one card, both paths, whatever the kind',
+        observe: async (s) => {
+          const run = async (turnInFlight: boolean) => {
+            const ids: string[] = [];
+            const cards: Array<{ card: number; state: string; text?: string }> = [];
+            let carried: string | undefined;
+            const signals = new s.SignalDelivery({
+              // Card ids are minted per delivery, so the observation records
+              // IDENTITY (first-appearance index) rather than the id itself.
+              broadcast: (event) => {
+                const id = String(event.id);
+                if (!ids.includes(id)) ids.push(id);
+                cards.push({
+                  card: ids.indexOf(id), state: String(event.state),
+                  ...(typeof event.text === 'string' ? { text: event.text } : {}),
+                });
+              },
+              enqueueTurn: async (turn) => {
+                carried = (turn.metadata as { signalId?: string } | undefined)?.signalId;
+                return { status: 'queued' };
+              },
+              turnInFlight: () => turnInFlight,
+              setTimer: () => {},
+            });
+            await signals.deliver({ kind: 'event_drain', text: 'wake', stepText: 'mid-turn wake' });
+            // The agent takes it in: a step boundary for the splice, and for
+            // the queue the turn it started — which names its own card back.
+            signals.prepareStep({ stepNumber: 0, messages: shortHistory() });
+            signals.beginTurn(false, carried);
+            return { cards, queuedTurnNamesItsCard: carried !== undefined && carried === ids[0] };
+          };
+          return { busyAgent: await run(true), idleAgent: await run(false) };
         },
       },
       {
@@ -1065,6 +1147,117 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
 
   {
+    id: 'file-plane',
+    owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts) — ' +
+      'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it',
+    subjects: ['applyFileEdits', 'readFileSlice'],
+    probes: [
+      {
+        id: 'file-plane/anchor-must-be-unique',
+        asserts: 'an absent, empty, or repeated anchor fails by reason and changes nothing; a unique one lands',
+        observe: (s) => {
+          const file = 'alpha\nbeta\nalpha\n';
+          return [
+            ['unique', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'BETA' }], '/f')],
+            ['repeated', s.applyFileEdits(file, [{ oldText: 'alpha', newText: 'A' }], '/f')],
+            ['absent', s.applyFileEdits(file, [{ oldText: 'gamma', newText: 'G' }], '/f')],
+            ['empty', s.applyFileEdits(file, [{ oldText: '', newText: 'G' }], '/f')],
+            ['no-op', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'beta' }], '/f')],
+          ];
+        },
+      },
+      {
+        id: 'file-plane/batch-is-atomic-and-original-anchored',
+        asserts: 'every anchor matches the file as read, overlaps are refused, and one bad edit applies none',
+        observe: (s) => [
+          ['chained', s.applyFileEdits('one\ntwo\n', [
+            { oldText: 'one', newText: 'two' }, { oldText: 'two', newText: 'three' },
+          ], '/f')],
+          ['overlapping', s.applyFileEdits('abcdef\n', [
+            { oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' },
+          ], '/f')],
+          ['one-bad', s.applyFileEdits('alpha\nbeta\n', [
+            { oldText: 'alpha', newText: 'A' }, { oldText: 'missing', newText: 'M' },
+          ], '/f')],
+          ['crlf-bom', s.applyFileEdits('\uFEFFa\r\nb\r\n', [{ oldText: 'a\nb', newText: 'c' }], '/f')],
+          ['mixed-endings', s.applyFileEdits('crlf\r\nlf\nT\r\n', [{ oldText: 'T', newText: 'X\nY' }], '/f')],
+          ['self-overlapping', s.applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f')],
+        ],
+      },
+      {
+        id: 'file-plane/no-silent-truncation',
+        asserts: 'a capped or limited read names the offset that continues it; an oversize line names its recipe',
+        observe: (s) => {
+          const file = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
+          return [
+            ['whole', s.readFileSlice(file, { path: '/f', maxChars: 1000 })],
+            ['capped', s.readFileSlice(file, { path: '/f', maxChars: 20 })],
+            ['limited', s.readFileSlice(file, { path: '/f', limit: 3, maxChars: 1000 })],
+            ['limit-reaches-end', s.readFileSlice(file, { path: '/f', offset: 7, limit: 5, maxChars: 1000 })],
+            ['past-end', s.readFileSlice(file, { path: '/f', offset: 99, maxChars: 1000 })],
+            ['one-huge-line', s.readFileSlice('z'.repeat(60), { path: '/f', maxChars: 20 })],
+            ['trailing-newline', s.readFileSlice('a\nb\n', { path: '/f', limit: 2, maxChars: 1000 })],
+            ['empty-file', s.readFileSlice('', { path: '/f', maxChars: 1000 })],
+            ['sub-line-limit', s.readFileSlice(file, { path: '/f', limit: 0.5, maxChars: 1000 })],
+          ];
+        },
+      },
+    ],
+  },
+
+  {
+    id: 'craft-fitness',
+    owns: 'the in-episode fitness signal for crafted tools: which tools a submitted block actually called, ' +
+      'and which of them a failure is attributable to',
+    subjects: ['craftInvocationSites', 'craftFailureBlame', 'craftInvocationError'],
+    probes: [
+      {
+        id: 'craft-fitness/call-sites',
+        asserts: 'both sandbox namespaces count as calls; a bare mention, a foreign namespace and an unknown tool do not',
+        observe: (s) => [
+          'await tools.summarize(1)',
+          'return codemode.summarize(x)',
+          'const f = tools.summarize;',
+          'other.summarize(1)',
+          'summarize(1)',
+          'tools.summarizeAll(1)',
+        ].map((code) => [code, s.craftInvocationSites(code, ['summarize', 'summarizeAll'])]),
+      },
+      {
+        id: 'craft-fitness/prose-is-not-a-call',
+        asserts: 'a tool named inside a string or comment — the createTool body case — is never scored as invoked, but a template interpolation is real code',
+        observe: (s) => [
+          'await workspace.createTool("w", "d", "async () => tools.summarize(1)")',
+          '// tools.summarize(1)',
+          '/* tools.summarize(1) */ 1',
+          'console.log("tools.summarize(")',
+          '`plain tools.summarize( text`',
+          '`${await tools.summarize(1)}`',
+        ].map((code) => [code, s.craftInvocationSites(code, ['summarize'])]),
+      },
+      {
+        id: 'craft-fitness/stored-name-is-not-a-pattern',
+        asserts: 'a stored name that is not a plain identifier is skipped, never interpolated into the matcher',
+        observe: (s) => [['a.b'], ['.*'], ['x y'], ['2bad']].map(
+          (known) => [known[0], s.craftInvocationSites('tools.x(1) tools.a.b(1) tools.2bad(1) tools.x y(1)', known)],
+        ),
+      },
+      {
+        id: 'craft-fitness/blame-by-stamp-only',
+        asserts: 'only the tool the failure NAMES is scored; a block that broke on its own account blames nobody',
+        observe: (s) => {
+          const stamped = s.craftInvocationError('summarize', new Error('boom')).message;
+          return [
+            [stamped, s.craftFailureBlame(stamped, ['summarize', 'other'])],
+            ['TypeError: x is not a function', s.craftFailureBlame('TypeError: x is not a function', ['summarize'])],
+            [stamped, s.craftFailureBlame(stamped, ['other'])],
+          ];
+        },
+      },
+    ],
+  },
+
+  {
     id: 'execution-signal',
     owns: 'device presence: the three-state view of the user\'s PC and the one-turn transition notice',
     subjects: ['devicePresence', 'deviceChangeNotice', 'parseDevicePresence'],
@@ -1113,7 +1306,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     unmeasuredBecause:
       'buildBuiltinTools is a composition root, not a layer: it wires tools/clamp, safety/approval-gate and ' +
       'memory/hybrid-search into one ToolSet, so a fault in it is not attributable to a single layer. Splitting it ' +
-      'is a production change, out of scope for the gate.',
+      'is a production change, out of scope for the gate. Composition output is covered by the backend conformance ' +
+      'gate instead (src/conformance): each backend runs its real root and diffs the result against the manifest.',
   },
   {
     id: 'compaction-ladder',
@@ -1153,6 +1347,27 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             turnIndex: 3, usage: { input: 10, output: 5, cached: 2 }, reason: 'error', error: 'boom',
           });
           return emitted;
+        },
+      },
+      {
+        id: 'backend-turn-driver/file-edit-row',
+        asserts: 'the file_edit row rides the bracket only when the turn attempted an edit, carrying failures and recovery',
+        observe: (s) => {
+          const rows = (files: TurnFileLedger) => {
+            const emitted: unknown[] = [];
+            s.closeTurnRun({ emit: (_r: string, input: unknown) => { emitted.push(input); } }, 'run-1', {
+              turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed', files,
+            });
+            return emitted;
+          };
+          const untouched = new TurnFileLedger();
+          const readOnly = new TurnFileLedger();
+          readOnly.observeWhole('/a', 'x');
+          const edited = new TurnFileLedger();
+          edited.recordEdit('/a', 'ambiguous');
+          edited.recordEdit('/a', null);
+          edited.recordEdit('/b', 'unread');
+          return [['untouched', rows(untouched)], ['read-only', rows(readOnly)], ['edited', rows(edited)]];
         },
       },
       {
@@ -1206,20 +1421,20 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           const armed: string[] = [];
           const enqueued: unknown[] = [];
           const state = { savePromptTokens: () => {}, armForceCompaction: (key: string) => { armed.push(key); } };
-          const enqueueTurn = (turn: unknown) => { enqueued.push(turn); return Promise.resolve({ status: 'queued' as const }); };
+          const signals = { deliver: (signal: unknown) => { enqueued.push(signal); return Promise.resolve('queued' as const); } };
           const decisions = [
             s.applyOverflowRecovery({
               error: 'prompt is too long: 210000 tokens > 200000 maximum',
               lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
-              state, sessionKey: 'k', enqueueTurn,
+              state, sessionKey: 'k', signals,
             }),
             s.applyOverflowRecovery({
               error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
-              turnWasOverflowRetry: true, state, sessionKey: 'k', enqueueTurn,
+              turnWasOverflowRetry: true, state, sessionKey: 'k', signals,
             }),
             s.applyOverflowRecovery({
               error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
-              turnWasOverflowRetry: false, state, sessionKey: 'k', enqueueTurn,
+              turnWasOverflowRetry: false, state, sessionKey: 'k', signals,
             }),
           ];
           await Promise.resolve();
@@ -1259,7 +1474,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'subordinate-runtime/inherited-context-digest',
-        asserts: 'the digest caps the parent history, narrows roles, and keeps ids index-stable',
+        asserts: 'the digest caps the parent history, DISCLOSES the omission it made, narrows roles, and keeps ids index-stable',
         observe: (s) => {
           const history: ModelMessage[] = [
             ...Array.from({ length: 60 }, (_, i): ModelMessage =>

@@ -40,7 +40,7 @@ describe('agent registry × models.dev catalog', () => {
       userDO: fakeUserDOStub({ 'groq.bearer': { Authorization: 'Bearer gsk' } }),
       fetch: mock.fetch,
     });
-    const models = await reg.registry.listAllModels(reg.deps);
+    const { models } = await reg.registry.listAllModels(reg.deps);
     expect(models.map((m) => `${m.provider}/${m.id}`)).toContain('groq/llama-3.3-70b-versatile');
   });
 

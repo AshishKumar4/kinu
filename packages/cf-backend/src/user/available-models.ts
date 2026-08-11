@@ -6,7 +6,7 @@
  */
 import {
   catalogCredKey, listModelsDevProviders, modelsDevCompatBaseURL,
-  type ModelsDevProviderInfo,
+  type ModelsDevProviderInfo, type ProviderFailure,
 } from '@proteus/core';
 import type { UserDO } from './user-do.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
@@ -25,7 +25,15 @@ export interface ModelMenuEntry {
   contextWindow?: number;
 }
 
-export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuEntry[]> {
+/** The model menu as HTTP clients receive it: what can be picked, and which
+ *  providers could not be reached (so the picker can say so instead of
+ *  silently dropping them). */
+export interface ModelMenuResponse {
+  models: ModelMenuEntry[];
+  failures: ProviderFailure[];
+}
+
+export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuResponse> {
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
   const { registry, deps } = createAgentProviderRegistry({
     env,
@@ -33,7 +41,8 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
     fetch,
   });
 
-  const out = (await registry.listAllModels(deps)).map((model): ModelMenuEntry => ({
+  const menu = await registry.listAllModels(deps);
+  const out = menu.models.map((model): ModelMenuEntry => ({
     spec: `${model.provider}/${model.id}`,
     label: model.label ?? model.id,
     provider: model.provider,
@@ -55,7 +64,7 @@ export async function listAvailableModels(env: Env, userId: string, caller: User
       });
     }
   }
-  return out;
+  return { models: out, failures: menu.failures };
 }
 
 /** One connectable provider for the credential UX (BYO API key). */

@@ -37,7 +37,13 @@ export function diffLines(before: string, after: string): LineDiff {
 }
 
 export type FileStatus = "added" | "removed" | "changed";
-export interface FileDiff { path: string; status: FileStatus; added: number; removed: number; lines: DiffLine[] }
+export interface FileDiff {
+  path: string; status: FileStatus; added: number; removed: number; lines: DiffLine[];
+  /** Set when the file's hunks outran {@link MAX_LINES_PER_FILE} and only the
+   *  first that many rows are carried. `added`/`removed` still count the whole
+   *  file, so the summary stays true while the body is bounded. */
+  truncated?: boolean;
+}
 
 /** Diff a workspace baseline against its current state — the cumulative
  *  change-set the Output surface reviews. Pure: the orchestrator supplies the
@@ -64,9 +70,10 @@ export function computeWorkspaceDiff(baseline: Record<string, string>, current: 
   return out.sort((a, b) => a.path.localeCompare(b.path));
 }
 
-/** Max diff lines kept per file before truncation (keeps the UI bounded for
- *  large hunks). */
-const MAX_LINES_PER_FILE = 1000;
+/** Max diff rows CARRIED per file — a rendering bound, not a counting one.
+ *  The +/- totals are accumulated for every hunk line regardless, and a file
+ *  that hit this says so via {@link FileDiff.truncated}. */
+export const MAX_LINES_PER_FILE = 1000;
 
 /**
  * Parse `git diff` unified output into FileDiff[] — the general per-executor
@@ -82,6 +89,13 @@ export function parseGitDiff(unified: string): FileDiff[] {
   let newPath: string | null = null;
   let oldPath: string | null = null;
   let isNew = false, isDeleted = false;
+
+  /** Carry a row into the file's body, or mark the body bounded. Counting
+   *  happens at the call site and is never gated on this. */
+  const carry = (file: FileDiff, l: DiffLine) => {
+    if (file.lines.length >= MAX_LINES_PER_FILE) { file.truncated = true; return; }
+    file.lines.push(l);
+  };
 
   const flush = () => {
     if (!cur) return;
@@ -110,12 +124,17 @@ export function parseGitDiff(unified: string): FileDiff[] {
     if (line.startsWith("+++ ")) { const p = line.slice(4).trim(); if (p !== "/dev/null") newPath = p.replace(/^b\//, ""); continue; }
     if (line.startsWith("index ") || line.startsWith("old mode") || line.startsWith("new mode")
       || line.startsWith("similarity index") || line.startsWith("\\ No newline")) continue;
-    if (line.startsWith("Binary files")) { cur.lines.push({ kind: "ctx", text: "(binary file differs)" }); continue; }
-    if (line.startsWith("@@")) { cur.lines.push({ kind: "ctx", text: line }); continue; }
-    if (cur.lines.length >= MAX_LINES_PER_FILE) continue;
-    if (line.startsWith("+")) { cur.lines.push({ kind: "add", text: line.slice(1) }); cur.added++; }
-    else if (line.startsWith("-")) { cur.lines.push({ kind: "del", text: line.slice(1) }); cur.removed++; }
-    else if (line.startsWith(" ")) { cur.lines.push({ kind: "ctx", text: line.slice(1) }); }
+    if (line.startsWith("Binary files")) { carry(cur, { kind: "ctx", text: "(binary file differs)" }); continue; }
+    if (line.startsWith("@@")) { carry(cur, { kind: "ctx", text: line }); continue; }
+    // Count FIRST, carry second. The bound used to sit above the counters, so
+    // a file past the limit stopped counting as well as stopped showing — and
+    // then presented the undercount as the file's +/- totals.
+    const kind: DiffLine["kind"] | null =
+      line.startsWith("+") ? "add" : line.startsWith("-") ? "del" : line.startsWith(" ") ? "ctx" : null;
+    if (kind === null) continue;
+    if (kind === "add") cur.added++;
+    else if (kind === "del") cur.removed++;
+    carry(cur, { kind, text: line.slice(1) });
   }
   flush();
   return out;

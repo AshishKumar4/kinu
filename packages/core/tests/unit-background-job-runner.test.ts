@@ -1,11 +1,15 @@
 // BackgroundJobRunner — the backend-agnostic >30s-detach lifecycle (re-arch P4).
 // Verifies the durable-fiber detach → settle/fail → programmatic-turn wake, the
 // operator hard-cancel, and the evict-mid-flight recovery — over a fake fiber +
-// fake BackendHost, with no DO.
+// the real signal-delivery seam on a fake BackendHost, with no DO.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobRunner, JobNotResumable, type JobResumer } from '../src/jobs/runner.js';
-import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/index.js';
+import { BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, type JobResumer } from '../src/jobs/runner.js';
+import { SignalDelivery } from '../src/orchestrator/signals.js';
+import {
+  BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
+  type BackgroundPolicy, type BackgroundJob, type SessionSurface,
+} from '../src/jobs/index.js';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { Schedule } from '../src/types/primitives.js';
@@ -35,7 +39,7 @@ function fakeHost() {
       if (rejection) throw rejection;
       return { status };
     },
-    injectIntoActiveTurn: () => false,
+    turnInFlight: () => false,
     setTimer: () => {},
   };
   return {
@@ -46,7 +50,7 @@ function fakeHost() {
   };
 }
 
-function setup(opts: { resume?: JobResumer } = {}) {
+function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
   const db = new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
   const store = new BackgroundJobStore(makeSql(db));
@@ -63,15 +67,17 @@ function setup(opts: { resume?: JobResumer } = {}) {
   const logs: Array<{ e: string; d?: string }> = [];
   const notified: Array<{ id: string; status: string }> = [];
   let drainSchedules = 0;
-  const runner = new BackgroundJobRunner({
-    store, fiber, host, eventLog,
+  const runnerDeps = {
+    store, fiber, signals: new SignalDelivery(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
-    logActivity: (e, d) => logs.push({ e, d }),
-    onSettled: (job) => notified.push({ id: job.id, status: job.status }),
+    logActivity: (e: string, d?: string) => logs.push({ e, d }),
+    onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
     ...(opts.resume ? { resume: opts.resume } : {}),
-  });
+    ...(opts.policy ? { policy: () => opts.policy! } : {}),
+  };
+  const runner = new BackgroundJobRunner(runnerDeps);
   return {
-    runner, store, eventLog, stashes, runs, settled, host, enqueued,
+    runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
     setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
   };
 }
@@ -326,12 +332,85 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 });
 
 describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {
-  test('createJob mints a running job (carrying input) + logs bg_job_started', () => {
+  test('crossing the threshold mints a running job (carrying input) + logs bg_job_started', () => {
     const { runner, store, logs } = setup();
     const deps = runner.thresholdDeps('heads', { code: '1+1' }, new AbortController());
-    const id = deps.createJob('heads');
+    const outcome = deps.onThreshold('heads', new Promise(() => { /* still running */ }));
+    expect(outcome.detached).toBe(true);
+    const id = outcome.detached ? outcome.jobId : '';
     expect(store.get(id)?.status).toBe('running');
     expect(store.getInput(id)).toBe('{"code":"1+1"}');
     expect(logs).toContainEqual({ e: 'bg_job_started', d: `heads → ${id}` });
+  });
+
+  test('the threshold carries the session surface\'s detach policy', () => {
+    const { runner } = setup();
+    expect(runner.thresholdDeps('run', {}, new AbortController()).thresholdMs)
+      .toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
+
+    const oneShot = setup({ policy: BACKGROUND_POLICY['one-shot'] });
+    expect(oneShot.runner.thresholdDeps('run', {}, new AbortController()).thresholdMs)
+      .toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
+
+    // Resolved per read, not captured once: a backend whose surface is a
+    // property of the TURN (the cloud DO serves a watched chat turn and an
+    // unwatched drain from one agent) switches policy between calls.
+    let surface: SessionSurface = 'interactive';
+    const perTurn = new BackgroundJobRunner({
+      ...oneShot.runnerDeps, policy: () => BACKGROUND_POLICY[surface],
+    });
+    expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
+    surface = 'one-shot';
+    expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
+    // A one-shot run has no human waiting on a fast turn, and a detach there
+    // costs a truncated turn plus a synthesis turn — so ordinary long work runs
+    // to completion inline instead.
+    expect(BACKGROUND_POLICY['one-shot'].detachAfterMs)
+      .toBeGreaterThan(BACKGROUND_POLICY.interactive.detachAfterMs);
+  });
+
+  test('past the concurrency cap the detach is refused and the work is cancelled', () => {
+    // A model that sees no result from a slow call launches another; without a
+    // bound that compounds into a fork storm (52 concurrent builds → OOM kill).
+    const { runner, store, logs } = setup();
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      store.create({ id: `busy-${i}`, kind: 'run', input: '{}', now: Date.now() });
+    }
+    const controller = new AbortController();
+    const deps = runner.thresholdDeps('run', { command: 'pystan build' }, controller);
+    const outcome = deps.onThreshold('run', new Promise(() => { /* still running */ }));
+
+    expect(outcome.detached).toBe(false);
+    // No new job: the cap is a cap, not a warning.
+    expect(store.countRunning()).toBe(MAX_CONCURRENT_DETACHED_JOBS);
+    // The work is stopped, not silently orphaned.
+    expect(controller.signal.aborted).toBe(true);
+    const reason = outcome.detached ? '' : outcome.reason;
+    expect(reason).toContain('CANCELLED');
+    expect(reason).toContain('busy-0');
+    expect(logs.some((l) => l.e === 'bg_job_refused')).toBe(true);
+  });
+
+  test('under the cap a refusal never happens — the boundary is exact', () => {
+    const { runner, store } = setup();
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
+      store.create({ id: `busy-${i}`, kind: 'run', input: '{}', now: Date.now() });
+    }
+    const outcome = runner
+      .thresholdDeps('run', {}, new AbortController())
+      .onThreshold('run', new Promise(() => { /* still running */ }));
+    expect(outcome.detached).toBe(true);
+  });
+
+  test('a settled job frees a slot — the cap counts what is in flight, not what ever ran', () => {
+    const { runner, store } = setup();
+    for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
+      store.create({ id: `busy-${i}`, kind: 'run', input: '{}', now: Date.now() });
+    }
+    store.settle('busy-0', 0, 'done', Date.now());
+    const outcome = runner
+      .thresholdDeps('run', {}, new AbortController())
+      .onThreshold('run', new Promise(() => { /* still running */ }));
+    expect(outcome.detached).toBe(true);
   });
 });

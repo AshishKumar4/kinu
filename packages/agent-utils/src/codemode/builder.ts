@@ -1,4 +1,6 @@
-// Type stubs for CraftedTool — extracted from @cf-utils/agent-utils/codemode/builder
+// CraftedTool as agent-utils sees it. Structurally identical to core's
+// (packages/core/src/types/craft.ts); core depends on this package, so the
+// declaration cannot be shared the other way.
 
 export interface CraftedTool {
   name: string;

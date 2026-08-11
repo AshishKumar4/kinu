@@ -10,7 +10,7 @@
  *   POST   /api/user/workspaces                        — register new agent
  *   POST   /api/user/workspaces/:name/touch            — update last_visited
  *   DELETE /api/user/workspaces/:name                  — remove from registry
- *   GET    /api/user/credentials                   — masked listing
+ *   GET    /api/user/credentials                   — key/kind/timestamps only; no secret is readable back
  *   POST   /api/user/credentials/:key              — set
  *   DELETE /api/user/credentials/:key              — delete
  *   GET    /api/user/devices/consents              — per-(agent, device) consent tiers

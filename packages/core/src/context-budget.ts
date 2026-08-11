@@ -45,9 +45,13 @@ export const SPILL_DIRS = {
 
 const SPILL_DIR_VALUES: readonly string[] = Object.values(SPILL_DIRS);
 
-/** Bulk producers, as the counters name them. */
+/** Bulk producers, as the counters name them. These are durable counter keys
+ *  in `context_budget`, not tool names: `web_fetch` stayed itself when the
+ *  `web_search`/`web_fetch` tools merged into `web`, so stored rows keep
+ *  aggregating with new ones. */
 export type BulkProducer =
   | 'run'
+  | 'file_read'
   | 'web_fetch'
   | 'execute_tools'
   | 'external_tool'

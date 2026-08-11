@@ -3,14 +3,6 @@
 // directly, and the bundle is ~1.5kB vs Zod's ~12kB.
 import * as v from 'valibot';
 
-export const EvidenceItemSchema = v.object({
-  id: v.string(),
-  kind: v.picklist(['tool_output', 'fact', 'citation', 'artifact']),
-  body: v.string(),
-  ref: v.optional(v.string()),
-  confidence: v.optional(v.pipe(v.number(), v.minValue(0), v.maxValue(1))),
-});
-
 export const DecisionSchema = v.object({
   question: v.string(),
   choice: v.string(),

@@ -6,7 +6,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   runAutoShadowEval,
   initScaffoldTables, initShadowTables, getPendingScaffold,
-  DEFAULT_SHADOW_CONFIG,
+  DEFAULT_SHADOW_CONFIG, DEFAULT_AUTO_JUDGE_CONFIG, SCAFFOLD_TURN_TIMEOUT_MS,
   type JudgeOutput,
   type StructuredJudgeFn,
 } from '../src/index.js';
@@ -263,6 +263,16 @@ describe('runAutoShadowEval', () => {
     // Sanity check on the public defaults.
     expect(DEFAULT_SHADOW_CONFIG.minTrials).toBe(5);
     expect(DEFAULT_SHADOW_CONFIG.promoteThreshold).toBe(0.6);
+  });
+
+  test('the candidate is evaluated under the LIVE turn budget, not a smaller one', () => {
+    // The gate compares a candidate's output against what the live loop
+    // produced. It ran the candidate for 60s against a live 5 minutes, so any
+    // candidate attempting substantial work timed out and was rolled back for
+    // running out of room rather than for being worse — the gate could only
+    // promote scaffolds that finish fast and do little. Cost is bounded by
+    // sampleRate (evaluate fewer candidates), never by starving one arm.
+    expect(DEFAULT_AUTO_JUDGE_CONFIG.scaffoldTimeoutMs).toBe(SCAFFOLD_TURN_TIMEOUT_MS);
   });
 });
 

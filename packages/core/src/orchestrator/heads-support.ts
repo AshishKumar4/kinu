@@ -41,10 +41,23 @@ export function inheritedContextFromHistory(
   history: readonly ModelMessage[],
   cap: number = INHERITED_CONTEXT_CAP,
 ): SerializedMessage[] {
-  return history.slice(-cap).map((m, i) => ({
+  const kept = history.slice(-cap).map((m, i) => ({
     id: `ctx-${i}`,
     role: narrowInheritedRole(m.role),
     content: serializeContentForHeads(m.content),
     createdAt: i,
   }));
+  return [...inheritedContextOmissionNote(history.length, kept.length), ...kept];
+}
+
+/** The disclosure entry a capped inheritance leads with — a head must be able
+ *  to tell its view is a window, or it treats the window as the whole story. */
+export function inheritedContextOmissionNote(total: number, kept: number): SerializedMessage[] {
+  if (total <= kept) return [];
+  return [{
+    id: 'ctx-omitted',
+    role: 'system',
+    content: `(${total - kept} earlier messages omitted from inherited context — durable state lives in the workspace files)`,
+    createdAt: -1,
+  }];
 }

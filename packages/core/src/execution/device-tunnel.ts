@@ -18,12 +18,60 @@ export interface TunnelSocket {
 
 /** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
+
+/**
+ * Deadline for a CONTROL round-trip — a file read, a directory listing, an
+ * existence check. Work the daemon answers immediately or not at all, so a
+ * wall clock on it is a real signal.
+ *
+ * It is deliberately NOT the bound on `exec`. The same 30s used to apply to
+ * every call, which meant any laptop command outliving half a minute — a
+ * build, a test suite, an install — failed as `device RPC timeout`, a message
+ * indistinguishable from a dead device. Liveness had been welded onto the work
+ * budget. A call with no deadline of its own now rides {@link LIVENESS_PROBE_MS}
+ * instead: it fails when the DEVICE stops being there, not when the work takes
+ * a while, and says which of the two happened.
+ */
 const DEFAULT_RPC_TIMEOUT_MS = 30_000;
+
+/**
+ * How often a deadline-free call checks that the device is still there.
+ *
+ * Liveness, not a work budget: the question is whether the DEVICE is alive,
+ * which is answered by the device speaking, not by the work finishing. A
+ * socket close already rejects in-flight calls; this covers the half-open
+ * case where no close event ever arrives.
+ */
+const LIVENESS_PROBE_MS = 30_000;
+
+/** The heartbeat's probe method. The daemon answers ANY unrecognized method
+ *  with an error frame, so a frame coming back is proof of life and this needs
+ *  no daemon-side protocol support (and no version negotiation with the
+ *  already-installed `pc-agent`). */
+const LIVENESS_METHOD = 'ping';
+
+/** What a deadline-free call rejects with when the device stopped answering
+ *  while its socket was still nominally open. Distinct from a work timeout:
+ *  nothing about the work is being judged here. */
+export const DEVICE_UNRESPONSIVE = 'device stopped responding';
+
+/** Per-call options. */
+export interface DeviceRpcOptions {
+  /** Extra fields riding on the frame next to id/method/params (e.g. the
+   *  pre-mutation `checkpoint` hint the daemon acts on before executing). */
+  extra?: Record<string, unknown>;
+  /** Wall clock for THIS call. Pass 0 for arbitrary-length work — the call
+   *  then ends only when the device answers, the caller aborts, or the device
+   *  goes away. Defaults to the tunnel's control-RPC deadline. */
+  timeoutMs?: number;
+}
 
 interface Pending {
   resolve: (value: unknown) => void;
   reject: (err: Error) => void;
-  timer: ReturnType<typeof setTimeout>;
+  /** Cancels whichever bound this call is riding — a work deadline or the
+   *  liveness probe. */
+  stop: () => void;
 }
 
 interface RpcResponse { id?: string; result?: unknown; error?: string }
@@ -45,33 +93,67 @@ export function isDeviceNotConnectedError(err: unknown): boolean {
 export class DeviceTunnel {
   private pending = new Map<string, Pending>();
   private seq = 0;
+  /** Calls running with no work deadline — the set the heartbeat guards. */
+  private readonly openEnded = new Set<string>();
+  private heartbeat: ReturnType<typeof setInterval> | null = null;
+  /** When the device last said anything at all. Any frame counts. */
+  private lastFrameAt = 0;
+  /** When the last unanswered liveness probe went out, or 0 for none. */
+  private probeSentAt = 0;
 
   constructor(
     private readonly socket: TunnelSocket,
     private readonly timeoutMs: number = DEFAULT_RPC_TIMEOUT_MS,
+    /** Heartbeat cadence for deadline-free calls. */
+    private readonly probeMs: number = LIVENESS_PROBE_MS,
   ) {}
 
   isConnected(): boolean {
     return this.socket.readyState === WS_OPEN;
   }
 
-  /** Issue a JSON-RPC call and await its correlated response. `extra` fields
-   *  ride on the frame next to id/method/params (e.g. the pre-mutation
-   *  `checkpoint` hint the daemon acts on before executing the call). */
-  rpc(method: string, params: unknown[], extra?: Record<string, unknown>): Promise<unknown> {
+  /**
+   * Issue a JSON-RPC call and await its correlated response.
+   *
+   * Two different bounds, never conflated. A call with a deadline
+   * (`timeoutMs > 0`, the default for control round-trips) fails when the
+   * deadline passes and SAYS the work may still be running on the device. A
+   * call with `timeoutMs: 0` — arbitrary user work — is bounded only by the
+   * device still being there: a socket close rejects it at once, and the
+   * heartbeat catches the half-open case at the next probe. Either way the
+   * message names the device, not a deadline the work never actually hit.
+   */
+  rpc(method: string, params: unknown[], opts?: DeviceRpcOptions): Promise<unknown> {
     return new Promise((resolve, reject) => {
       if (!this.isConnected()) { reject(new Error(TUNNEL_DISCONNECTED)); return; }
       const id = `rpc-${++this.seq}`;
-      const timer = setTimeout(() => {
+      const deadline = opts?.timeoutMs ?? this.timeoutMs;
+      const settle = (err: Error) => {
+        const p = this.pending.get(id);
+        if (!p) return;
         this.pending.delete(id);
-        reject(new Error(`device RPC timeout after ${this.timeoutMs}ms: ${method}`));
-      }, this.timeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+        p.stop();
+        reject(err);
+      };
+      let stop: () => void;
+      if (deadline > 0) {
+        const timer = setTimeout(() => settle(new Error(
+          `device RPC timeout after ${deadline}ms: ${method} — the call may still be running on the device`,
+        )), deadline);
+        stop = () => clearTimeout(timer);
+      } else {
+        // No work deadline: the shared heartbeat guards this call instead, so
+        // it ends when the DEVICE goes away rather than when the work gets long.
+        this.openEnded.add(id);
+        this.armHeartbeat();
+        stop = () => { this.openEnded.delete(id); this.disarmIdleHeartbeat(); };
+      }
+      this.pending.set(id, { resolve, reject, stop });
       try {
-        this.socket.send(JSON.stringify({ ...extra, id, method, params }));
+        this.socket.send(JSON.stringify({ ...opts?.extra, id, method, params }));
       } catch (err) {
         this.pending.delete(id);
-        clearTimeout(timer);
+        stop();
         reject(err instanceof Error ? err : new Error(String(err)));
       }
     });
@@ -82,11 +164,14 @@ export class DeviceTunnel {
   handleMessage(raw: string): void {
     let msg: RpcResponse;
     try { msg = JSON.parse(raw) as RpcResponse; } catch { return; }
+    // Any well-formed frame — a result, an error, the daemon's HELLO — is the
+    // device speaking, which is the only thing liveness actually asks about.
+    this.lastFrameAt = Date.now();
     if (typeof msg.id !== 'string') return;
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
-    clearTimeout(p.timer);
+    p.stop();
     if (msg.error) p.reject(new Error(msg.error));
     else p.resolve(msg.result);
   }
@@ -94,9 +179,57 @@ export class DeviceTunnel {
   /** Reject all in-flight calls — called when the socket closes. */
   dispose(reason = TUNNEL_DISCONNECTED): void {
     for (const [, p] of this.pending) {
-      clearTimeout(p.timer);
+      p.stop();
       p.reject(new Error(reason));
     }
     this.pending.clear();
+    this.openEnded.clear();
+    this.disarmIdleHeartbeat();
+  }
+
+  private armHeartbeat(): void {
+    if (this.heartbeat) return;
+    this.probeSentAt = 0;
+    this.heartbeat = setInterval(() => this.probeLiveness(), this.probeMs);
+  }
+
+  private disarmIdleHeartbeat(): void {
+    if (this.openEnded.size > 0 || !this.heartbeat) return;
+    clearInterval(this.heartbeat);
+    this.heartbeat = null;
+    this.probeSentAt = 0;
+  }
+
+  /**
+   * One heartbeat tick, guarding every deadline-free call at once.
+   *
+   * A probe outstanding since the previous tick with no frame of any kind
+   * since it went out is the failure this exists for: the socket still reads
+   * OPEN, and the device is gone. Everything else is proof of life — including
+   * an error frame, since a daemon that can refuse a call is a daemon that is
+   * running.
+   */
+  private probeLiveness(): void {
+    if (this.openEnded.size === 0) { this.disarmIdleHeartbeat(); return; }
+    if (!this.isConnected()) { this.failOpenEnded(TUNNEL_DISCONNECTED); return; }
+    if (this.probeSentAt > 0 && this.lastFrameAt < this.probeSentAt) {
+      this.failOpenEnded(DEVICE_UNRESPONSIVE);
+      return;
+    }
+    this.probeSentAt = Date.now();
+    // Fire-and-forget: the answer is irrelevant, its ARRIVAL is the signal,
+    // and handleMessage records that for any frame.
+    void this.rpc(LIVENESS_METHOD, []).catch(() => { /* proof of life, not a result */ });
+  }
+
+  private failOpenEnded(reason: string): void {
+    for (const id of [...this.openEnded]) {
+      const p = this.pending.get(id);
+      if (!p) { this.openEnded.delete(id); continue; }
+      this.pending.delete(id);
+      p.stop();
+      p.reject(new Error(`${reason}: the call was abandoned, and may still be running on the device`));
+    }
+    this.disarmIdleHeartbeat();
   }
 }

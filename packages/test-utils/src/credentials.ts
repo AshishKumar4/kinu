@@ -24,34 +24,6 @@ export function createTestAuth(entries: Record<string, AuthResolution> = {}): Te
   };
 }
 
-/** Codex headers for a fresh OAuth credential — `exp` far in the future. */
-export function codexAuthHeaders(opts: { accountId?: string; accessToken?: string } = {}): AuthResolution {
-  const claims: Record<string, unknown> = { exp: Math.floor(Date.now() / 1000) + 3600 };
-  if (opts.accountId) {
-    claims['https://api.openai.com/auth'] = { chatgpt_account_id: opts.accountId };
-  }
-  const b64 = (s: string) => Buffer.from(s).toString('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-  const token = opts.accessToken ?? `header.${b64(JSON.stringify(claims))}.sig`;
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${token}`,
-    'User-Agent': 'codex_cli_rs/0.0.0 (Proteus Agent)',
-    originator: 'codex_cli_rs',
-  };
-  if (opts.accountId) headers['ChatGPT-Account-ID'] = opts.accountId;
-  return { headers };
-}
-
-/** Bearer-token-flavored auth resolution. */
-export function bearerAuth(token: string, extra: Record<string, string> = {}): AuthResolution {
-  return { headers: { Authorization: `Bearer ${token}`, ...extra } };
-}
-
-/** Anthropic-flavored (x-api-key) auth resolution. */
-export function anthropicAuth(key: string): AuthResolution {
-  return { headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01' } };
-}
-
 /**
  * The AI Gateway token the end-to-end suites need to reach a real model,
  * or null when the environment has none.

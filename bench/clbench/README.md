@@ -55,7 +55,9 @@ names), then falls back to `providers.<provider>.apiKey` in
 `~/.proteus/config.json`.
 
 Every run gets a throwaway `PROTEUS_HOME`, so your own workspaces are never
-opened, mutated, or measured.
+opened, mutated, or measured. That home goes through `bench/isolation.py`, the
+one rule both benchmark adapters share: it refuses an unset or relative home,
+your real `~/.proteus`, and anything inside the Proteus checkout.
 
 ## Running
 

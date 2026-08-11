@@ -25,13 +25,16 @@ export type {
 export {
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
+  NOMINAL_HEAD_STEPS,
+  NOMINAL_STEP_TOKENS,
+  MAX_FORK_WIDTH,
   deriveChildBudget,
   budgetExhausted,
 } from './types.js';
 
 export { initHeadsTables } from './schema.js';
 export { HeadJournal, type HeadJournalRow, type LiveHeadRun } from './journal.js';
-export { MergeOutputSchema, EvidenceItemSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
+export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
 export {
   HeadController,
   type HeadRuntime,
@@ -40,11 +43,12 @@ export {
   type MergeLLMFn,
   type SplitPhaseEvent,
 } from './controller.js';
-export { extractHeadSteps, extractFinalText, synthesizeHeadSummary } from './head-summary.js';
+export {
+  extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
+} from './head-summary.js';
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  MAX_HEAD_STEPS,
   type HeadInferenceDeps,
 } from './head-inference.js';
 export {

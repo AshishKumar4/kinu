@@ -116,16 +116,22 @@ fi
 # surface, and every backend builds its tools from @proteus/core's
 # buildBuiltinTools — no backend-local tool factory, no legacy buildAgentTools.
 REGISTRY_PROBE="import { BUILTIN_TOOLS } from './packages/core/src/tools/registry.ts'; console.log([...BUILTIN_TOOLS].sort().join(','))"
-EXPECTED_TOOLS='agents,execute_tools,experience,fact,memory,product_change,report,run,skills,web_fetch,web_search'
+EXPECTED_TOOLS='agents,execute_tools,file,memory,product_change,report,run,skills,web'
 REGISTRY_TOOLS=$(bun -e "$REGISTRY_PROBE" 2>/dev/null | tail -n 1)
-CF_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cf-backend/src/actor-agent.ts packages/cf-backend/src/heads/head-tools.ts 2>/dev/null | wc -l)
+# Each actor composition root consumes the shared factory. The HEAD toolset
+# builder now lives in core (packages/core/src/heads/head-tools.ts) so both
+# backends build forks from one source instead of a per-backend copy — that
+# hoist is what fixed local forks running over an empty in-memory world, so
+# the guard asserts the shared location, not the old cf-local one.
+CF_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cf-backend/src/actor-agent.ts 2>/dev/null | wc -l)
 CLI_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cli-backend/src/local-session.ts 2>/dev/null | wc -l)
+HEADS_SHARED=$(grep -lE 'buildBuiltinTools\(\{' packages/core/src/heads/head-tools.ts 2>/dev/null | wc -l)
 LEGACY_FACTORY=$(grep -rlE 'buildAgentTools\(' packages/*/src 2>/dev/null | wc -l)
-if [ "$REGISTRY_TOOLS" = "$EXPECTED_TOOLS" ] && [ "$CF_USES_FACTORY" -eq 2 ] && [ "$CLI_USES_FACTORY" -eq 1 ] && [ "$LEGACY_FACTORY" -eq 0 ]; then
-  RESULTS+=("${GREEN}✅ PASS${NC}: Built-in tool architecture (11-tool registry; CF actor + heads and CLI backend consume buildBuiltinTools)")
+if [ "$REGISTRY_TOOLS" = "$EXPECTED_TOOLS" ] && [ "$CF_USES_FACTORY" -eq 1 ] && [ "$CLI_USES_FACTORY" -eq 1 ] && [ "$HEADS_SHARED" -eq 1 ] && [ "$LEGACY_FACTORY" -eq 0 ]; then
+  RESULTS+=("${GREEN}✅ PASS${NC}: Built-in tool architecture (9-tool registry; CF actor, CLI backend, and the shared core head builder all consume buildBuiltinTools)")
   ((PASS++))
 else
-  RESULTS+=("${RED}❌ FAIL${NC}: Tool architecture — registry=${REGISTRY_TOOLS:-<unreadable>} cf=$CF_USES_FACTORY/2 cli=$CLI_USES_FACTORY/1 legacy=$LEGACY_FACTORY")
+  RESULTS+=("${RED}❌ FAIL${NC}: Tool architecture — registry=${REGISTRY_TOOLS:-<unreadable>} cf=$CF_USES_FACTORY/1 cli=$CLI_USES_FACTORY/1 heads=$HEADS_SHARED/1 legacy=$LEGACY_FACTORY")
   RESULTS+=("         expected registry: $EXPECTED_TOOLS")
   RESULTS+=("         registry probe:    bun -e \"\$REGISTRY_PROBE\"")
   ((FAIL++))

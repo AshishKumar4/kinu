@@ -1,18 +1,20 @@
 // BackgroundJobRunner — the backend-agnostic lifecycle for auto-detached >30s
 // tool calls (think-heads, long execute_tools/run). Mints a job, keeps the
 // in-flight promise alive in a durable fiber, settles/fails it, and wakes the
-// agent with a synthesis turn — all over the AgentRuntime fiber + a BackendHost.
+// agent with a synthesis signal — over the AgentRuntime fiber + the one
+// signal-delivery seam.
 //
 // Hoisted out of the cf-backend OrchestratorAgent (re-arch P4) so the CLI gets
 // background jobs for free. The platform supplies a durable `fiber` (CF:
-// Agent.runFiber; CLI: createLinuxFiber) + a BackendHost (enqueueTurn = the
-// programmatic-turn wake). The @callable control-plane RPCs (jobResult/list/
+// Agent.runFiber; CLI: createLinuxFiber); the wake is a plain
+// SignalDelivery.deliver, so this never picks a delivery mechanism of its own.
+// The @callable control-plane RPCs (jobResult/list/
 // dismiss/clear/retry) stay on each backend and call BackgroundJobStore + here.
 
 import type { Schedule } from '../types/primitives.js';
-import type { BackendHost } from '../types/backend-host.js';
+import type { SignalDeliverer } from '../types/signals.js';
 import type { EventLog } from '../events/hub/log.js';
-import type { ThresholdDeps } from './threshold.js';
+import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold.js';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
 import { nanoid } from '../utils/nanoid.js';
 
@@ -45,12 +47,30 @@ export type JobResumer = (kind: string, input: unknown, signal: AbortSignal) => 
  *  this; the cap only bounds pathological non-progressing kinds. */
 const MAX_RESUME_ATTEMPTS = 5;
 
+/**
+ * Ceiling on jobs detached at once. Every detached job is a live process tree
+ * the agent is no longer watching, and a model that sees no result from a slow
+ * call reliably launches another: one benchmark trial forked 52 concurrent
+ * `pystan` builds this way and took the whole container down with an OOM kill.
+ * Past the cap the detach is refused and the work is cancelled, so the storm
+ * cannot compound — the agent is told what is already running instead.
+ */
+export const MAX_CONCURRENT_DETACHED_JOBS = 8;
+
 export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
+  /** How long work may run before it detaches, and how long teardown waits on
+   *  it — the surface's policy, resolved per read. A thunk because the surface
+   *  is not always session-scoped: the CLI pins one policy per process, but a
+   *  cf workspace DO serves human-watched web chat, one-shot `proteus exec`
+   *  invocations, and unwatched email/timer/peer drains through the SAME
+   *  runner, so only the turn in flight knows which it is. Read at threshold
+   *  time. Defaults to the interactive policy. */
+  policy?: () => BackgroundPolicy;
   /** Durable fiber — AgentRuntime.schedule.fiber. */
   fiber: Schedule['fiber'];
-  /** Programmatic-turn wake + (unused here) broadcast. */
-  host: BackendHost;
+  /** The one signal-delivery seam — the wake at the end of a settled job. */
+  signals: SignalDeliverer;
   /** Durable retry breadcrumb consumed by the standard event drain. */
   eventLog: EventLog;
   /** Existing ingress drain scheduler; called after publishing a retry event. */
@@ -67,6 +87,21 @@ export interface BackgroundJobRunnerDeps {
   resume?: JobResumer;
 }
 
+/** What the model reads when a detach is refused. Honest about what happened to
+ *  its call, and specific about the work already in flight, so the answer is
+ *  "wait for these" rather than "try launching it again". */
+function refusalMessage(kind: string, running: readonly BackgroundJob[]): string {
+  const roster = running.map((j) => `${j.id} (${j.kind})`).join(', ');
+  return (
+    `The "${kind}" call ran past the background threshold, but this workspace already has ` +
+    `${running.length} background job(s) running — the maximum — so it was CANCELLED instead of ` +
+    `being detached. Nothing was left running from this call. Already in flight: ${roster}. ` +
+    `Wait for those to finish (you are woken as each one settles, and agent.jobResult('<id>') ` +
+    `reads a settled one), or cancel the ones you no longer need, before starting more ` +
+    `long-running work. Launching another copy will not make the running ones finish sooner.`
+  );
+}
+
 export class BackgroundJobRunner {
   /** Live AbortControllers for in-flight jobs — hard-cancel handles. In-memory:
    *  a DO eviction loses them, and recover() then fails the orphan. */
@@ -79,21 +114,40 @@ export class BackgroundJobRunner {
    *  (threshold-detach logs 'bg_job_started'; retry logs 'bg_job_retry'). */
   create(kind: string, input: unknown, controller: AbortController): string {
     const id = `bgjob-${nanoid()}`;
-    this.deps.store.create({ id, kind, input: serializeJobResult(input, 8_000), now: Date.now() });
+    this.deps.store.create({ id, kind, input: serializeJobResult(input), now: Date.now() });
     this.controllers.set(id, controller);
     return id;
   }
 
-  /** ThresholdDeps for withBackgroundThreshold: create the job on cross, detach. */
+  /** The surface's background policy — the detach threshold and the teardown
+   *  grace, read by the backend that owns the session lifecycle. */
+  get policy(): BackgroundPolicy {
+    return this.deps.policy?.() ?? BACKGROUND_POLICY.interactive;
+  }
+
+  /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep
+   *  the live work alive durably — unless the concurrency cap is already full,
+   *  in which case the work is cancelled and the model is told why. */
   thresholdDeps(kind: string, input: unknown, controller: AbortController): ThresholdDeps {
     return {
-      createJob: (k) => {
-        const id = this.create(k, input, controller);
-        this.deps.logActivity?.('bg_job_started', `${k} → ${id}`);
-        return id;
-      },
-      detach: (jobId, promise) => this.detach(jobId, kind, promise),
+      thresholdMs: this.policy.detachAfterMs,
+      onThreshold: (k, promise) => this.onThreshold(k, input, controller, promise),
     };
+  }
+
+  private onThreshold(
+    kind: string, input: unknown, controller: AbortController, promise: Promise<unknown>,
+  ): DetachOutcome {
+    const running = this.deps.store.countRunning();
+    if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
+      try { controller.abort(new Error('background-job concurrency cap reached')); } catch { /* nop */ }
+      this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
+      return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
+    }
+    const jobId = this.create(kind, input, controller);
+    this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
+    this.detach(jobId, kind, promise);
+    return { detached: true, jobId };
   }
 
   /** Keep a backgrounded promise alive in a durable fiber; on settle, record the
@@ -178,9 +232,12 @@ export class BackgroundJobRunner {
     catch { return false; }
   }
 
-  /** Wake the agent with a synthesis turn carrying the settled job. The metadata
-   *  marker makes the chat render it as a background-event card, not a user
-   *  bubble. Runs once per job (no self-wake loop). */
+  /** Wake the agent with a synthesis signal carrying the settled job — at its
+   *  next step if it is working, as its own turn if it is idle. The
+   *  `background_job` kind makes a woken turn render as a background-event
+   *  card, not a user bubble. An undelivered wake leaves a durable retry
+   *  breadcrumb the standard drain picks up. Runs once per job (no self-wake
+   *  loop). */
   async wake(jobId: string): Promise<void> {
     const job = this.deps.store.get(jobId);
     if (!job) return;
@@ -189,16 +246,17 @@ export class BackgroundJobRunner {
         `agent.jobResult('${jobId}'), then synthesize it / continue the work you backgrounded.`
       : `Background ${job.kind} job ${jobId} failed${job.error ? ` (${job.error})` : ''}. ` +
         `Decide whether to retry or report the failure.`;
-    try {
-      const result = await this.deps.host.enqueueTurn({
-        text, metadata: { proteusEvent: 'background_job', jobId, kind: job.kind, status: job.status },
-      });
-      if (result.status === 'queued') return;
-      this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
-    } catch (err) {
-      console.warn('[proteus] wakeForBackgroundJob failed:', err instanceof Error ? err.message : err);
-    }
-    this.publishWakeRetry(job, text);
+    await this.deps.signals.deliver({
+      kind: 'background_job',
+      text,
+      metadata: { jobId, kind: job.kind, status: job.status },
+      compensate: (reason) => {
+        if (reason === 'preempted') {
+          this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
+        }
+        this.publishWakeRetry(job, text);
+      },
+    });
   }
 
   private publishWakeRetry(job: BackgroundJob, text: string): void {
@@ -277,7 +335,7 @@ export class BackgroundJobRunner {
     if (job.status !== 'running') { await this.wake(jobId); return; }
 
     if (this.deps.resume) {
-      const claim = this.deps.store.reclaim(jobId, Date.now());
+      const claim = this.deps.store.reclaim(jobId);
       if (!claim) return; // lost the race — another activation already reclaimed it
       if (claim.attempts > MAX_RESUME_ATTEMPTS) {
         this.deps.store.fail(

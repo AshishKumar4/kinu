@@ -49,8 +49,6 @@ export interface MountPolicy {
   /** durable (survives everything) / ephemeral (dies with the container) /
    *  live-shared (the user's own machine — shared with them, live). */
   consistency: MountConsistency;
-  /** Environment credentials are held by the host and never enter the mount. */
-  credentialsStayInHost: boolean;
 }
 
 export interface MountSpec {
@@ -118,7 +116,7 @@ export class CompositeVFS implements VFS {
     this.rows.set('local', {
       kind: 'mount',
       vfs: opts.local,
-      policy: { readOnly: false, rootPath: '', consistency: 'durable', credentialsStayInHost: false },
+      policy: { readOnly: false, rootPath: '', consistency: 'durable' },
       live: () => true,
       workingDir: '',
     });

@@ -39,6 +39,8 @@ export interface RuntimeComponents {
   craftStore: CraftStore;
   /** Optional second LLM for cross-model judging */
   judgeModel?: LLM;
+  /** Optional small-tier LLM for the mechanical evolution calls. */
+  fastLlm?: LLM;
   /** Branch lifecycle callbacks */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
@@ -86,6 +88,7 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     identity,
     craftStore,
     judgeModel: components.judgeModel,
+    fastLlm: components.fastLlm,
     spawnBranch: components.spawnBranch,
     abortBranch: components.abortBranch,
     executionRouter: components.executionRouter,

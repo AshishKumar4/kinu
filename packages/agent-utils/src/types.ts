@@ -1,12 +1,21 @@
 // ---------------------------------------------------------------------------
-// Core types for @cf-utils/agent-utils
+// Core types for @proteus/agent-utils
 // ---------------------------------------------------------------------------
 
-/** Primitive types accepted by Durable Object SQL. */
+/**
+ * The one SQL primitive in the repo. Core re-exports these from
+ * `types/primitives.ts` as part of its portability layer — the definition
+ * lives here because `agent-utils` is the bottom of the package DAG and core
+ * already depends on it, so this is the only place a single definition can sit.
+ */
+
+/** Primitive types a bound value may take. */
 export type SqlValue = string | number | boolean | null | ArrayBuffer;
 
 /**
- * Tagged-template SQL executor compatible with the Agents SDK `Agent.sql`.
+ * Tagged-template SQL executor. The Agents SDK `Agent.sql`, Durable Object
+ * SQLite and better-sqlite3 all satisfy it. For DDL (CREATE TABLE etc), which
+ * binds nothing, core declares a separate `RawSqlExec`.
  *
  * Obtain from any Agent subclass via `this.sql.bind(this) as SqlExecutor`.
  */
@@ -14,36 +23,5 @@ export interface SqlExecutor {
 	<T = unknown>(query: TemplateStringsArray, ...values: SqlValue[]): T[];
 }
 
-/**
- * SqlExecutor augmented with `transactionSync` from `DurableObjectStorage`.
- *
- * Use this for stores that need atomic multi-statement SQL operations.
- * Build in any Agent subclass via:
- * ```ts
- * const sql = Object.assign(this.sql.bind(this), {
- *     transactionSync: this.ctx.storage.transactionSync.bind(this.ctx.storage),
- * }) as TransactionalSql;
- * ```
- */
-export type TransactionalSql = SqlExecutor & {
-	readonly transactionSync: <T>(fn: () => T) => T;
-};
-
 /** Row type that includes both typed columns and raw SQL values. */
 export type SqlRow<T> = T & Record<string, SqlValue>;
-
-export type TaskStatus = "pending" | "in_progress" | "completed" | "failed" | "cancelled";
-
-export interface WorkspaceTask {
-	id: string;
-	ticketNumber: number | null;
-	parentId: string | null;
-	title: string;
-	description: string;
-	status: TaskStatus;
-	createdAt: number;
-	updatedAt: number;
-}
-
-export const TASK_PROMPT_MAX_CHARS = 4000;
-export const TASK_PROMPT_MAX_ITEMS = 30;

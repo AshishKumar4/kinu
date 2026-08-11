@@ -125,6 +125,9 @@ export const AGENT_RPC_ACCESS = {
   // The owner's backup of their own workspace. Interactive-only: a CI token
   // that can run a task must not be able to walk off with the whole database.
   exportWorkspaceArchive: 'interactive',
+  // Publishing this workspace's proven work to the owner's library, and
+  // importing from it, is the owner's call — interactive for the same reason.
+  experienceAction: 'interactive',
   forkAgent: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
@@ -168,7 +171,6 @@ export const AGENT_RPC_ACCESS = {
   setTurnFeedback: 'interactive',
   spawnSubordinate: 'interactive',
   upsertProductSourceBinding: 'interactive',
-  writeExecutorFile: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',

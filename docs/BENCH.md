@@ -444,6 +444,29 @@ Model access comes from `PROTEUS_BASE_URL` (default OpenRouter),
 `OPENROUTER_API_KEY`/`OPENAI_API_KEY` (or a complete `PROTEUS_AUTH` header), and
 `-m` for the model id as the endpoint's provider names it.
 
+### Isolation, and where the key goes
+
+Two properties the adapter enforces rather than assumes.
+
+**`PROTEUS_HOME` is set, always.** Everything durable a local run writes —
+config, the workspace database, sessions, shadow-git checkpoints — lands under
+`$PROTEUS_HOME`, and an unset one means `~/.proteus`. The adapter points it at
+`/installed-agent/proteus-home`, created per container and destroyed with it, and
+puts that path through `bench/isolation.py` — the Python counterpart of
+`assertScratchRoot`, which refuses an unset or relative home, the operator's real
+`~/.proteus`, and anything inside this checkout. The CL-Bench adapter resolves
+its own home through the same function, so the rule has one definition and a
+launcher that skips it fails loudly.
+
+**The credential never reaches a command line.** Harbor renders per-exec
+environment as `docker compose exec -e KEY=VALUE`, which publishes the value to
+every `ps` on the host and to Harbor's own command log. So the adapter uploads
+the run environment into the container as `/installed-agent/proteus.env`, mode
+0600 and owned by the agent user, and every Proteus invocation is wrapped in
+`set -a; . /installed-agent/proteus.env; set +a;`. The command line names the
+path and nothing else; there is no second way for the adapter to pass
+configuration, so there is no second way for a key to leak back onto argv.
+
 ### How it installs
 
 DeepSWE task images declare `allow_internet = false`, and the install phase runs
@@ -466,6 +489,20 @@ unset, because Proteus reports tokens and not prices.
 Reading the stream is `bench/clbench/proteus/events.py` — one reader for the
 CLI's event contract, shared with the CL-Bench adapter, so a change to the event
 shape breaks a test instead of quietly degrading two benchmark scores.
+
+The stream also carries the agent's durable run-event ledger: one `run_event`
+line per row of its `run_events` table, wrapping the row verbatim. That is where
+the harness-side measurements live — `turn_steering` (which trigger fired,
+and whether the model then reached for `agents`), `context_budget`,
+`budget_exhausted`, and `head_split` / `head_merge`. The last pair closes the
+loop on the first: a nudge that converts is only worth something if the fork it
+produced came back with something, so `head_merge` carries `headsWithFindings`
+against `headCount` and the split's `totalTokens`. The table itself is inside
+the container's database and dies
+with the container, so the stream is the only copy: `run_events(events, …)`
+reads it, and the adapter keeps it in `trajectory.json` and the trial metadata.
+A row is written when its turn settles, so a trial killed by the agent timeout
+carries no ledger for that turn — the measurement covers completed turns.
 
 ### What the `evolve` switch measures here, and what it does not
 

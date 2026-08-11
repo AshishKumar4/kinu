@@ -1,8 +1,10 @@
 /**
  * The ONE file browser. General per-executor file manager: typed directory
- * listing (getExecutorFiles) + a text viewer (readExecutorFile) + uploads
- * (writeExecutorFile) via drop or the Upload button. Drives its own fetches
- * off the stable `rpc`, so it only re-reads when the path or executor changes.
+ * listing (getExecutorFiles) + a text viewer (readExecutorFile) + uploads via
+ * drop or the Upload button. Listing and viewing ride the stable `rpc`, so the
+ * pane only re-reads when the path or executor changes; uploads go over HTTP
+ * (PUT /api/workspaces/<name>/files), because the RPC transport is the chat
+ * WebSocket and its 1 MiB frame ceiling sits below ordinary file sizes.
  * The Environment surface mounts it over the CompositeVFS (execName
  * "workspace", initialPath at a mount prefix), so /local, /sandbox, /nimbus
  * and /pc all browse through this single entry point.
@@ -13,8 +15,8 @@ import {
   FolderIcon, FileIcon, ArrowsClockwiseIcon, ArrowLeftIcon,
   WarningIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
+import { useParams } from "react-router";
 import type { DirEntry, Rpc } from "@/lib/protocol";
-import { MAX_UPLOAD_BYTES, encodeBase64 } from "@/lib/files";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
 
@@ -31,6 +33,9 @@ function joinPath(dir: string, name: string): string {
 interface UploadState { name: string; status: "uploading" | "error"; error?: string }
 
 export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: string; rpc: Rpc; initialPath?: string }) {
+  // The workspace this pane's `rpc` is bound to — the upload route is
+  // addressed by name, and it is the same workspace the route params name.
+  const agentName = useParams().agentId ?? "";
   const [path, setPath] = useState(initialPath);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -74,10 +79,17 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
     setUploads(list.map((f) => ({ name: f.name, status: "uploading" as const })));
     for (const f of list) {
       try {
-        if (f.size > MAX_UPLOAD_BYTES) throw new Error(`too large (max ${MAX_UPLOAD_BYTES / (1024 * 1024)} MB)`);
-        const b64 = encodeBase64(new Uint8Array(await f.arrayBuffer()));
-        const r = await rpc("writeExecutorFile", [execName, joinPath(path, f.name), b64]) as { ok?: true; error?: string };
-        if (r.error) throw new Error(r.error);
+        // Raw bytes over HTTP: no base64 inflation, no frame ceiling, no
+        // app-level size cap — the workspace VFS chunks what it stores.
+        const res = await fetch(
+          `/api/workspaces/${encodeURIComponent(agentName)}/files`
+          + `?executor=${encodeURIComponent(execName)}&path=${encodeURIComponent(joinPath(path, f.name))}`,
+          { method: "PUT", body: f },
+        );
+        if (!res.ok) {
+          const detail = await res.json().catch(() => null) as { error?: string } | null;
+          throw new Error(detail?.error ?? `upload failed (${res.status})`);
+        }
         setUploads((prev) => prev.filter((u) => u.name !== f.name));
       } catch (e) {
         setUploads((prev) => prev.map((u) => u.name === f.name
@@ -86,7 +98,7 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
       }
     }
     await refresh(path);
-  }, [rpc, execName, path, refresh]);
+  }, [agentName, execName, path, refresh]);
 
   const onListDragOver = useCallback((e: ReactDragEvent) => {
     if (e.dataTransfer.types.includes("Files")) { e.preventDefault(); setDragOver(true); }

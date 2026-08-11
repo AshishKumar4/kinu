@@ -34,9 +34,9 @@ export interface BroadcastEvent {
 }
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —
- *  the resume path for the event→turn reactor, background-job completion wakes,
- *  and device consent. `metadata.proteusEvent` makes the chat render it as an
- *  event card rather than a user bubble. */
+ *  the queued half of signal delivery (orchestrator/signals.ts).
+ *  `metadata.proteusEvent` makes the chat render it as an event card rather
+ *  than a user bubble. */
 export interface ProgrammaticTurn {
   readonly text: string;
   readonly metadata?: { proteusEvent?: string; [key: string]: unknown };
@@ -57,42 +57,26 @@ export interface EnqueueTurnResult {
   readonly status: 'queued' | 'skipped';
 }
 
-/** A drained event batch bound for the ACTIVE turn's next agentic step. The
- *  events are already consumed against `turnId` (EventLog markConsumed), so
- *  the backend dispatches the absorbing turn's answer to their reply channels
- *  by that id — the same id scheme the enqueued drain-turn path stamps as
- *  `metadata.drainTurnId`. */
-export interface MidTurnEventBatch {
-  readonly turnId: string;
-  /** EventLog rows bound to `turnId`; required to compensate a failed or
-   *  pre-empted fallback enqueue. */
-  readonly ids: readonly string[];
-  /** Rendered for the live turn's next step ("arrived while you were working"). */
-  readonly stepText: string;
-  /** Rendered for a standalone programmatic turn — the fallback when the live
-   *  turn settles before another step boundary arrives. */
-  readonly turnText: string;
-}
-
 export interface BackendHost {
   /** Fan-out to connected clients. CF: DurableObject.broadcast(JSON). CLI: push
    *  to the TUI store / print to stdout. Never throws. */
   broadcast(event: BroadcastEvent): void;
 
   /** Inject a programmatic turn, serialized behind any live turn. CF:
-   *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue. */
+   *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue.
+   *  The core SignalDelivery seam (orchestrator/signals.ts) is its only caller
+   *  — producers deliver a signal and never pick the mechanism. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
-  /** Splice a drained event batch into the ACTIVE turn's next agentic step
-   *  ("injected mid turn if a turn is active"), returning false when no turn
-   *  is live so the caller falls back to enqueueTurn. Synchronous by contract:
-   *  the is-a-turn-active check and the buffer push must be one event-loop
-   *  tick, atomic with the caller's markConsumed. CF: buffers for the
-   *  event-injection extension's prepareStep drain. CLI: declines — the local
-   *  steer-drain owns the live turn's injection channel with USER semantics
-   *  (per-steer durable rows, composer restore on interrupt) that a platform
-   *  event must not assume. */
-  injectIntoActiveTurn(batch: MidTurnEventBatch): boolean;
+  /** Is a turn running right now — i.e. will there BE a next agentic step for
+   *  a signal to land on? A fact about the loop, not a policy: the one signal
+   *  delivery time is the agent's next step, and this is what tells the seam
+   *  whether it must start a turn to produce one. Synchronous by contract: the
+   *  answer and the buffer push must be one event-loop tick, atomic with the
+   *  producer's own durable bookkeeping. A false positive strands a signal
+   *  until the turn settles (which re-delivers it), a false negative queues a
+   *  turn behind the live one — so answer it exactly. */
+  turnInFlight(): boolean;
 
   /** One-shot platform timer — the drain-debounce primitive (DrainScheduler).
    *  The implementation MUST keep the platform alive until `fn` settles and

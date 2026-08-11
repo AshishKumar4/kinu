@@ -91,10 +91,3 @@ function buildPipeline(tokens: Array<string | { op: string } | { pattern?: strin
 	if (commands.length === 0) throw new Error("Empty command in pipeline");
 	return { commands, redirect, suppressErrors };
 }
-
-// Keep backward compat
-export function parsePipeline(input: string): ParsedPipeline {
-	const list = parseCommandList(input);
-	if (list.segments.length === 1) return list.segments[0].pipeline;
-	return list.segments[0].pipeline;
-}

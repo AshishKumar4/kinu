@@ -1,6 +1,6 @@
 /** Model catalog entries as both backends expose them through AgentClient. */
 
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, type ProviderFailure } from '@proteus/core';
 
 export interface AgentModelEntry {
   spec: string;
@@ -9,6 +9,16 @@ export interface AgentModelEntry {
   capabilities?: string[];
   contextWindow?: number;
 }
+
+/** The menu both backends return: pickable models, plus the providers that
+ *  could not be listed. A provider that fails costs its own models and
+ *  nothing else — it is reported here rather than emptying the list. */
+export interface AgentModelMenu {
+  models: AgentModelEntry[];
+  failures: ProviderFailure[];
+}
+
+export const EMPTY_MODEL_MENU: AgentModelMenu = { models: [], failures: [] };
 
 export function filterModels(models: readonly AgentModelEntry[], query: string): AgentModelEntry[] {
   const normalized = query.trim().toLowerCase();
@@ -43,6 +53,30 @@ export function validateModelSpec(models: readonly AgentModelEntry[], spec: stri
     .slice(0, 3)
     .map((model) => model.spec);
   return { status: 'unknown-model', provider, suggestions };
+}
+
+/** Narrow an untrusted model menu (HTTP body, RPC result) into the CLI's
+ *  shape: entries normalized and deduped, failures kept verbatim. */
+export function normalizeModelMenu(payload: unknown): AgentModelMenu {
+  const source = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
+  const rows = Array.isArray(source.models) ? source.models : [];
+  return {
+    models: dedupeModelEntries(normalizeModelEntries(rows)),
+    failures: normalizeProviderFailures(source.failures),
+  };
+}
+
+function normalizeProviderFailures(rows: unknown): ProviderFailure[] {
+  if (!Array.isArray(rows)) return [];
+  return rows.flatMap((row): ProviderFailure[] => {
+    if (!row || typeof row !== 'object') return [];
+    const item = row as Record<string, unknown>;
+    const provider = stringValue(item.provider);
+    const reason = stringValue(item.reason);
+    if (!provider || !reason) return [];
+    const label = stringValue(item.label);
+    return [{ provider, reason, ...(label ? { label } : {}) }];
+  });
 }
 
 export function normalizeModelEntries(rows: unknown[]): AgentModelEntry[] {

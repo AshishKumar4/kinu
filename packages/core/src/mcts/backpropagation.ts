@@ -1,7 +1,7 @@
 /**
  * MCTS backpropagation — full ancestor walk via WITH RECURSIVE CTE.
  *
- * Architecture reference: final-architecture.md §5.7
+ * Architecture reference: docs/MCTS.md — "Backpropagation"
  * Paper: LATS arXiv:2310.04406 §4.2 Backpropagation
  * Formal spec: MCTS/Backpropagation.lean — backprop_preserves_ids
  *

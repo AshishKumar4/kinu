@@ -105,6 +105,24 @@ def has_answer(events: list[Event]) -> bool:
     return any(event.get("type") == "message_end" for event in events)
 
 
+def run_events(events: list[Event], *kinds: str) -> list[Event]:
+    """The durable run-event ledger carried on the stream, in order.
+
+    Each `run_event` line wraps one row of the agent's own `run_events` table —
+    delegation nudges, the turn's context budget, refused mission budgets, the
+    run bracket. The table lives in the agent's database, which a benchmark
+    container destroys on exit, so the stream is the only copy a harness gets.
+    Filter with `kinds` (the row's own `type`); no argument returns everything.
+    """
+    rows = [
+        row
+        for event in events
+        if event.get("type") == "run_event"
+        and isinstance(row := event.get("event"), dict)
+    ]
+    return rows if not kinds else [row for row in rows if row.get("type") in kinds]
+
+
 def tool_calls(events: list[Event]) -> list[str]:
     """Names of the tools Proteus called, in order."""
     return [

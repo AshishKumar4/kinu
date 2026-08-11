@@ -28,8 +28,7 @@ import {
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
 import {
-  dedupeModelEntries,
-  normalizeModelEntries,
+  normalizeModelMenu,
   validateModelSpec,
   type AgentModelEntry,
 } from '../model-catalog.js';
@@ -100,9 +99,12 @@ export async function effortCommand(name: string, level: string | undefined): Pr
     : `${DIM('reasoning effort')} ${result.effort ?? 'medium (chat default)'}`);
 }
 
-async function loadModelCatalog(load: () => Promise<unknown[]>): Promise<AgentModelEntry[] | null> {
+/** The catalog for spec validation. A menu that could not be read at all is
+ *  null (validation is skipped); a menu missing a failed provider's models is
+ *  still a usable catalog. */
+async function loadModelCatalog(load: () => Promise<unknown>): Promise<AgentModelEntry[] | null> {
   try {
-    return dedupeModelEntries(normalizeModelEntries(await load()));
+    return normalizeModelMenu(await load()).models;
   } catch {
     return null;
   }

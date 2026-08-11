@@ -110,12 +110,6 @@ export function createTypingIndicator(agentName: string) {
   };
 }
 
-// ── Header ───────────────────────────────────────────────────────
-
-export function printHeader(): void {
-  console.log(`\n${BRAND} ${DIM(`v${VERSION}`)}\n`);
-}
-
 // ── Agent created card ───────────────────────────────────────────
 
 export function printCreatedCard(name: string, purpose: string, model: string, dbPath: string): void {

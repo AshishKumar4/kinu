@@ -52,6 +52,34 @@ export interface ExecuteToolsOptions {
   onExecutorUsed?: (name: string) => void;
 }
 
+export interface CraftedDispatcherEntry {
+  description: string;
+  execute: (arg?: unknown) => Promise<never>;
+}
+
+/**
+ * What `codemode.<name>` resolves to for a crafted tool on this backend.
+ *
+ * The callable body is the `tools.<name>` literal the preamble splices into
+ * the sandbox; this entry exists so createCodeTool DECLARES the name in the
+ * types the model reads. But the dispatcher is genuinely reachable — nothing
+ * shadows `codemode.<name>` — so it must THROW rather than return an error
+ * object: a returned `{error}` is a value the model reads as a result and the
+ * runtime reads as a successful call, which is a wrong answer twice over, and
+ * it would let an in-episode fitness observation be taken on a call that never
+ * ran. The throw says which form works instead.
+ */
+export function craftedDispatcherEntry(name: string, description?: string): CraftedDispatcherEntry {
+  return {
+    description: description || `Crafted tool: ${name}`,
+    execute: async () => {
+      throw new Error(
+        `Crafted tools are callable as tools.${name}(args) in this sandbox, not codemode.${name}(args).`,
+      );
+    },
+  };
+}
+
 export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
   const { loader, rt, sql, registry, modelSpec, webSearch } = options;
   if (!loader) throw new Error("CF runtime missing LOADER binding");
@@ -62,16 +90,9 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
   // construction time so the LLM's initial description string lists them —
   // the same selection the preamble makes, so the advertised set can't
   // disagree with the callable set.
-  const seededCraftedTools: Record<string, { description: string; execute: (arg: unknown) => Promise<unknown> }> = {};
+  const seededCraftedTools: Record<string, CraftedDispatcherEntry> = {};
   for (const t of selectInjectableCraftedTools(rt.craftStore, sql)) {
-    seededCraftedTools[t.name] = {
-      description: t.description || `Crafted tool: ${t.name}`,
-      // Never invoked — the preamble injects the real body as a
-      // `tools.<name>` literal in-sandbox, so `codemode.<name>(args)` resolves
-      // lexically rather than through this dispatcher. createCodeTool's
-      // ToolProvider shape requires an execute, hence the stub.
-      execute: async () => ({ error: 'crafted tools run through the preamble, not the dispatcher' }),
-    };
+    seededCraftedTools[t.name] = craftedDispatcherEntry(t.name, t.description);
   }
 
   const craftedProvider = { name: 'codemode', tools: seededCraftedTools };

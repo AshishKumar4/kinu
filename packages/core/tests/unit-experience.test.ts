@@ -1,20 +1,19 @@
 // Cross-workspace experience transfer, exercised at the sharing seam.
 //
 // Two workspaces of one owner and one library between them. The tests drive
-// the REAL surfaces — the `experience` tool, the real library store, the real
-// EvolutionEngine turn review — so what they pin down is behaviour a workspace
-// can actually observe: what may be published, what the gate refuses to import,
-// and the fact that an import changes nothing here until this workspace's own
-// outcome says it should.
+// the REAL surfaces — the action dispatcher the owner's RPC calls, the real
+// library store, the real EvolutionEngine turn review — so what they pin down
+// is behaviour a workspace can actually observe: what may be published, what
+// the gate refuses to import, and the fact that an import changes nothing here
+// until this workspace's own outcome says it should.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { Tool } from 'ai';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { FactsStore } from '../src/memory/facts.js';
 import {
   createExperienceLibrary,
-  createExperienceTool,
+  runExperienceAction,
   createFactsStore,
   EvolutionEngine,
   findPublishable,
@@ -26,14 +25,17 @@ import {
   listImportedExperience,
   listPublishable,
   recordLesson,
+  type ExperienceActionInput,
   type ExperienceEntry,
   type ExperienceLibraryStore,
-  type ExperienceSqlExec,
+  type ExperienceSearchOptions,
+  type PublishableCandidate,
+  type SqlExec,
 } from '../src/index.js';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
-function sqlExec(db: Database): ExperienceSqlExec {
+function sqlExec(db: Database): SqlExec {
   return {
     exec(query: string, ...bindings: unknown[]) {
       const statement = db.prepare(query);
@@ -59,8 +61,7 @@ interface Workspace {
   rt: AgentRuntime;
   db: Database;
   facts: FactsStore;
-  /** The `experience` tool as this workspace sees it. */
-  tool: Tool;
+  /** One library action, as this workspace drives it. */
   call(input: Record<string, unknown>): Promise<Record<string, unknown>>;
   engine: EvolutionEngine;
 }
@@ -80,22 +81,21 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
   const facts = createFactsStore(rt.storage.sql);
   // The seam the cloud backend implements over the UserDO capability gate: a
   // workspace publishes under its own name and never sees its own entries back.
-  const tool = createExperienceTool({
+  const deps = {
     rt,
     facts,
     library: {
-      publish: async (candidate) => library.publish(candidate, name),
-      search: async (options) => library.search({ ...options, excludeWorkspace: name }),
-      get: async (id) => library.get(id),
+      publish: async (candidate: PublishableCandidate) => library.publish(candidate, name),
+      search: async (options: ExperienceSearchOptions) =>
+        library.search({ ...options, excludeWorkspace: name }),
+      get: async (id: string) => library.get(id),
     },
-  }) as Tool;
-
-  const call = async (input: Record<string, unknown>): Promise<Record<string, unknown>> => {
-    const execute = (tool as { execute: (i: unknown, o: unknown) => Promise<unknown> }).execute;
-    return await execute(input, {}) as Record<string, unknown>;
   };
 
-  return { rt, db, facts, tool, call, engine: new EvolutionEngine(rt) };
+  const call = (input: Record<string, unknown>): Promise<Record<string, unknown>> =>
+    runExperienceAction(deps, input as unknown as ExperienceActionInput);
+
+  return { rt, db, facts, call, engine: new EvolutionEngine(rt) };
 }
 
 /** Give a crafted tool a real usage record, which is what makes it publishable. */
@@ -473,7 +473,7 @@ describe('library search', () => {
 
 // ── absence is structural ───────────────────────────────────────────────────
 
-describe('the tool exists only where a library is wired', () => {
+describe('the library answers from an untouched workspace', () => {
   test('listPublishable answers from an untouched workspace without throwing', () => {
     const { rt } = createTestRuntime();
     initFactsTable(rt.storage.execRaw);
@@ -483,7 +483,7 @@ describe('the tool exists only where a library is wired', () => {
   });
 });
 
-describe('the tool answers honestly at its edges', () => {
+describe('the dispatcher answers honestly at its edges', () => {
   test('an action outside the surface names what is available', async () => {
     const beta = workspace('beta', ownerLibrary());
     expect((await beta.call({ action: 'promote' })).error)

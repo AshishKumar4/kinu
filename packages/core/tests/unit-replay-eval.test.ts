@@ -139,8 +139,31 @@ describe('listReplayEvals — the quality-panel data series', () => {
   });
 });
 
-describe('EvolutionEngine.runReplayEval — the periodic seam', () => {
-  test('lifetime evolution runs the replay eval through the backend runner and emits the loss', async () => {
+describe('EvolutionEngine.runReplayEval — the on-demand seam', () => {
+  test('the lifetime cycle does NOT run it — the same ledger is not re-executed twice', async () => {
+    const { rt } = createTestRuntime({
+      llmResponses: {
+        'known-good reference': '{"score": 0.8, "note": "ok"}',
+        "User's correction": '{"score": 0.8, "note": "ok"}',
+      },
+    });
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftScoreTables(rt.storage.execRaw);
+    const engine = new EvolutionEngine(rt, {
+      replayTaskRunner: async (task) => `current-config answer: ${task}`,
+    });
+    seedOutcomes(rt.storage.sql);
+    const events: Array<{ type: string; message: string }> = [];
+    engine.onEvent((e) => events.push(e));
+
+    await engine.onLifetimeEvolution();
+
+    expect(events.filter((e) => e.type === 'replay_eval')).toHaveLength(0);
+    expect(listReplayEvals(rt.storage.sql)).toHaveLength(0);
+  });
+
+  test('called explicitly, it runs through the backend runner and emits the loss', async () => {
     const { rt } = createTestRuntime({
       llmResponses: {
         'known-good reference': '{"score": 0.8, "note": "ok"}',
@@ -158,7 +181,7 @@ describe('EvolutionEngine.runReplayEval — the periodic seam', () => {
 
     const events: Array<{ type: string; message: string }> = [];
     engine.onEvent((e) => events.push(e));
-    await engine.onLifetimeEvolution();
+    await engine.runReplayEval();
 
     const replayEvents = events.filter((e) => e.type === 'replay_eval');
     expect(replayEvents).toHaveLength(1);

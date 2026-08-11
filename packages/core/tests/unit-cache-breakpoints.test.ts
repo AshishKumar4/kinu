@@ -9,6 +9,7 @@ import {
   markCacheTail,
   markLastToolForAnthropicCache,
   promptCacheOptions,
+  promptCachePlan,
   resolvePromptCacheStrategy,
   ANTHROPIC_MAX_BREAKPOINTS,
 } from '../src/index.ts';
@@ -250,6 +251,23 @@ describe('applyCacheBreakpoints', () => {
     expect(plan.messages).toEqual(messages);
     expect(plan.providerOptions).toBeUndefined();
     expect(hasCacheMarkers(plan.strategy)).toBe(false);
+  });
+
+  test('agrees with promptCachePlan on everything but the tail', () => {
+    // The two turn drivers reach caching through different entry points —
+    // runChat through applyCacheBreakpoints, Think's through promptCachePlan,
+    // which cannot carry messages. Only the tail may differ between them; a
+    // strategy, system or routing difference means the paths have drifted.
+    for (const [providerId, modelId] of [
+      ['anthropic', 'claude-opus-4-7'],
+      ['openai', 'gpt-5.5'],
+      ['openrouter', 'anthropic/claude-sonnet-4.6'],
+      ['workers-ai', '@cf/moonshotai/kimi-k2.6'],
+    ] as const) {
+      const input = { providerId, modelId, system: 'sys', sessionKey: 'proteus-x' };
+      const { messages: _tail, ...shared } = applyCacheBreakpoints({ ...input, messages: history(4) });
+      expect({ providerId, ...shared }).toEqual({ providerId, ...promptCachePlan(input) });
+    }
   });
 });
 

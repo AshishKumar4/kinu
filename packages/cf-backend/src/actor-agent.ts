@@ -28,6 +28,7 @@ import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
+import type { McpToolSurface } from "./user/user-do.js";
 import { generateJson } from "./lib/generate-json.js";
 import type {
   TurnContext, TurnConfig,
@@ -44,8 +45,9 @@ import {
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  SCAFFOLD_TURN_TIMEOUT_MS,
   JudgeOutputSchema,
-  type StructuredJudgeFn, effortFor, type CompletedTurn,
+  type StructuredJudgeFn, effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   withClampedToolResults,
@@ -53,7 +55,8 @@ import {
   buildSystemPromptSync,
   currentDateForPrompt,
   promptModeForTurnEvent,
-  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
+  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates,
+  type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
@@ -62,7 +65,7 @@ import {
   openTurnRun, closeTurnRun, persistMeasuredPromptTokens, applyOverflowRecovery,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
-  EventInjectionBuffer, type MidTurnEventBatch,
+  type SettledSignals,
   type AgentsToolAction,
   type AgentsToolDeps,
   type BuiltinToolName,
@@ -76,7 +79,7 @@ import {
   // Durable run-event log
   RunEventRecorder,
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
-  MissionGovernor, readMissionLabels,
+  MissionGovernor,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -86,8 +89,8 @@ import {
   type SessionWriter, type SqlExecutor,
   // The agents tool's fork substrate (shared factory) + durable MCTS session
   buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
-  // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, BackgroundJobRunner,
+  // Background-job system (#173 — auto-background past the surface threshold)
+  BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   wrapToolsForBackground, resumeForkBackgroundJob,
   MctsSearchStore,
   // EventsHub primitives (spec §1)
@@ -96,15 +99,13 @@ import {
   resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver, renderFactsForTurn,
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (takes capture + inherited-context digest)
-  recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP,
+  recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
   type ProductChangeToolDeps,
   isVfsError,
   type ParentRpcResult,
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
-  // Cross-workspace experience transfer
-  type ExperienceToolDeps,
   readSoul,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
@@ -124,8 +125,8 @@ import type { AgentProviderRegistry } from "./providers/agent-registry.js";
 import { OwnedModelServices } from "./owned-model-services.js";
 import {
   // Prompt-cache breakpoints — single source in core prompting/cache-breakpoints.ts
-  resolvePromptCacheStrategy, cacheableSystem, promptCacheOptions,
-  hasCacheMarkers, markLastToolForAnthropicCache, type PromptCacheStrategy,
+  promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
+  type PromptCacheStrategy,
 } from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
@@ -180,6 +181,18 @@ export function extractLastUserText(messages: ReadonlyArray<ModelMessage>): stri
 function readCliCwd(body?: Record<string, unknown>): string | null {
   const cwd = body?.cwd;
   return typeof cwd === 'string' && cwd.trim() ? cwd.trim() : null;
+}
+
+/**
+ * Turn continuity for the arriving message (core's TurnContinuity). The CLI's
+ * one-shot surfaces (`proteus exec`/`proteus run` against a cloud workspace)
+ * stamp `oneShot` on the chat request body: each invocation is an independent
+ * task by a process that never saw the previous answer, so its prompt is not a
+ * verdict on the previous turn. Everything else — the web chat, the API, the
+ * REPL over this socket — is a real conversation.
+ */
+function readTurnContinuity(body?: Record<string, unknown>): TurnContinuity {
+  return body?.oneShot === true ? 'independent_task' : 'conversation';
 }
 
 function withCliCwdContext(messages: ReadonlyArray<ModelMessage>, cwd: string): ModelMessage[] {
@@ -237,9 +250,6 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
-  /** Cross-workspace experience transfer — orchestrator-only, for the same
-   *  reason peers is: a subordinate's world is its workspace. */
-  experience?: ExperienceToolDeps | undefined;
   productChanges?: ProductChangeToolDeps | undefined;
 }
 
@@ -247,7 +257,7 @@ export interface ActorToolDeps {
  *  when the actor profile wires no deps for them. The `agents` tool is never
  *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
  *  on the same profile (see actorAgentsActions). */
-const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;
+const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
@@ -255,7 +265,6 @@ const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
     report: !!deps.report,
-    experience: !!deps.experience,
     product_change: !!deps.productChanges,
   };
   return ACTIVE_TOOLS.filter((name) =>
@@ -352,7 +361,7 @@ export abstract class ActorAgent extends Think<Env> {
    * trusted worker callers while denying the same method to client sockets. */
   protected isClientRpcMethodDenied(_method: string): boolean { return false; }
 
-  override maxSteps = resolveMaxSteps();
+  override maxSteps = resolveMaxSteps(this.env.PROTEUS_MAX_STEPS);
 
   private readonly ownedModelServices = new OwnedModelServices({
     env: this.env,
@@ -407,65 +416,31 @@ export abstract class ActorAgent extends Think<Env> {
     // be initialized before the getter caches its closure.
     this.compactionState = createCompactionStateStore(this.boundSql);
     this.registerCompactionExtension();
-    // Mid-turn background-event injection: batches the reactor bound to a live
-    // turn (host.injectIntoActiveTurn) splice into its next agentic step.
-    this.extensions.register({
-      name: 'proteus.event-injection',
-      prepareStep: (ctx) => this._eventInjections.prepareStep(ctx),
-    });
-    // Mechanical delegation steering (core orchestrator/delegation-nudge.ts) —
-    // the same instance the settle spine reads for the durable row. Registered
+    // The orchestrator's per-turn extension: the turn steering's observation
+    // hooks plus the ONE mid-turn signal drain every producer feeds. Forwarded
     // through closures because `orch` is built lazily and this runs in the
-    // constructor; LAST, so its splice never shifts an earlier extension's
-    // recorded indices.
+    // constructor.
     this.extensions.register({
-      name: 'proteus.delegation-nudge',
-      onToolCall: (ctx) => this.orch.nudge.onToolCall(ctx),
-      onToolResult: (ctx) => this.orch.nudge.onToolResult(ctx),
-      prepareStep: (ctx) => this.orch.nudge.prepareStep(ctx),
+      name: 'proteus.signals',
+      onToolCall: (ctx) => this.orch.turnExtension.onToolCall?.(ctx),
+      onToolResult: (ctx) => this.orch.turnExtension.onToolResult?.(ctx),
+      prepareStep: (ctx) => this.orch.turnExtension.prepareStep?.(ctx),
     });
-  }
-
-  /** Drain batches bound to the LIVE turn (BackendHost.injectIntoActiveTurn),
-   *  spliced into its next step by the proteus.event-injection extension and
-   *  settled in onChatResponse (absorbed → reply dispatch, leftover → the
-   *  standard programmatic drain turn). */
-  protected readonly _eventInjections = new EventInjectionBuffer();
-
-  protected async reenqueueEventBatch(batch: MidTurnEventBatch, source: 'leftover' | 'aborted'): Promise<void> {
-    try {
-      const result = await this.host.enqueueTurn({
-        text: batch.turnText,
-        metadata: { proteusEvent: 'event_drain', drainTurnId: batch.turnId },
-      });
-      if (result.status === 'queued') return;
-      console.warn(`[proteus] ${source} event re-enqueue skipped; returning events to pending`);
-    } catch (err) {
-      console.warn(`[proteus] ${source} event re-enqueue failed:`, err);
-    }
-    for (const id of batch.ids) {
-      try {
-        this.eventLog.unbind(id);
-      } catch (err) {
-        console.warn('[proteus] event unbind failed:', id, err);
-      }
-    }
   }
 
   /** The settled turn's actor-generic front half — every actor's
    *  onChatResponse calls this FIRST (before anything that can throw or
    *  return early). Resolves the drain identity, clears in-flight turn
-   *  state, and settles mid-turn event injection: absorbed batches keep
-   *  their reply dispatch with this turn's answer; batches that never saw a
-   *  step boundary (or an aborted turn's) re-enqueue as the standard
-   *  programmatic drain turn, same metadata shape enqueueTurn stamps, so
-   *  the event card and reply dispatch work unchanged. */
+   *  state, and settles mid-turn signal delivery: absorbed signals keep their
+   *  reply dispatch with this turn's answer, and whatever the model never saw
+   *  re-delivers through the same seam (which queues it, since the turn is
+   *  over) — so the event card and reply dispatch work unchanged. */
   protected settleTurnEvents(result: ChatResponseResult): {
     drainTurnId: string | undefined;
     programmaticUserMessage: UIMessage | null;
     errorText: string | undefined;
     completed: boolean;
-    injectedEvents: ReturnType<EventInjectionBuffer['settle']>;
+    injectedSignals: SettledSignals;
   } {
     const drainTurnId = this._activeDrainTurnId ?? this._pendingDrainReplyTurns.get(result.requestId);
     const programmaticUserMessage = this._activeProgrammaticUserMessage;
@@ -483,14 +458,8 @@ export abstract class ActorAgent extends Think<Env> {
     this._inFlight = false;
     this._cliCwd = null;
     const completed = result.status === 'completed';
-    const injectedEvents = this._eventInjections.settle({ retainForContinuation: completed });
-    const batchesToReenqueue = completed
-      ? injectedEvents.leftover
-      : [...injectedEvents.absorbed, ...injectedEvents.leftover];
-    for (const batch of batchesToReenqueue) {
-      void this.reenqueueEventBatch(batch, completed ? 'leftover' : 'aborted');
-    }
-    return { drainTurnId, programmaticUserMessage, errorText, completed, injectedEvents };
+    const injectedSignals = this.orch.signals.settle({ completed });
+    return { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals };
   }
 
   /** The settled turn's telemetry — the measured compaction trigger, the
@@ -514,7 +483,7 @@ export abstract class ActorAgent extends Think<Env> {
         turnWasOverflowRetry: this.turnUserMessageEvent(programmaticUserMessage) === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: this.name,
-        enqueueTurn: (t) => this.host.enqueueTurn(t),
+        signals: this.orch.signals,
       });
       if (recovery.forceCompaction) {
         this.logActivity('overflow_detected',
@@ -527,7 +496,9 @@ export abstract class ActorAgent extends Think<Env> {
         turnIndex: this.orch.sessionTurnIndex,
         usage: this.acc.usage,
         context: this.acc.context,
-        nudge: this.orch.nudge.snapshot(),
+        files: this.acc.files,
+        steering: this.orch.steering.snapshot(),
+        craft: this.orch.craft.snapshot(),
         reason: result.status,
         error: errorText,
       });
@@ -578,6 +549,8 @@ export abstract class ActorAgent extends Think<Env> {
       },
       archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.getModel()),
+      // The ladder's first rung prunes this plane before any tool output.
+      ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
         // The model-visible stream changed shape — a NEW plan rewrote it
         // ('planned') or a cached plan was discarded after a history rewrite
@@ -681,11 +654,20 @@ export abstract class ActorAgent extends Think<Env> {
    * One watcher at a time — settleEvolution() drains whatever is in flight when
    * it runs, so a turn that completes while a watcher is live is already
    * covered by it.
+   *
+   * BOTH evolution lanes are held open here (core's exit contract): the turn
+   * lane via settleEvolution(), and the cadence session-evolution pass via
+   * runDueSessionEvolution(). The DO is the host that CAN afford the heavy
+   * pass — keepAlive is exactly the mechanism a one-shot CLI process lacks —
+   * so unlike `proteus exec` it waits for it rather than carrying it forward.
    */
   protected settleEvolutionInBackground(): void {
     if (this._evolutionSettling) return;
     this._evolutionSettling = true;
-    void this.keepAliveWhile(() => this.orch.settleEvolution())
+    void this.keepAliveWhile(async () => {
+      await this.orch.settleEvolution();
+      await this.orch.runDueSessionEvolution();
+    })
       .catch((err: unknown) =>
         console.warn('[proteus] evolution settle failed:', err instanceof Error ? err.message : err))
       .finally(() => { this._evolutionSettling = false; });
@@ -709,7 +691,7 @@ export abstract class ActorAgent extends Think<Env> {
     // Evolution hooks make 5-30s LLM calls and onChatResponse runs INSIDE
     // Think's TurnQueue — everything here is detached so the next message is
     // never blocked, and held open by the keepAlive heartbeat instead.
-    this.orch.recordTurn(turn);
+    this.orch.recordTurn(turn, this._turnContinuity);
     this.settleEvolutionInBackground();
     void this.runShadowEvalSampled(texts.userText, texts.assistantText);
   }
@@ -735,7 +717,6 @@ export abstract class ActorAgent extends Think<Env> {
         prompt,
         providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
       });
-    const judgeTask = task.slice(0, 2000);
     const result = await runSampledShadowEval({
       rt: this.rt,
       config: this.config,
@@ -753,13 +734,14 @@ export abstract class ActorAgent extends Think<Env> {
       // prompt, tool surface) so a pending that delegates to the default
       // loop is judged on the scaffold delta alone. Costs one extra
       // full-context inference — that IS the shadow run, already sampled.
-      // Fallback (DO restarted between the live turn and this eval): the
-      // old task-only reconstruction.
+      // Fallback (DO restarted between the live turn and this eval): the task
+      // alone, but under the live loop's own step budget — a candidate judged
+      // against the live answer has to be allowed to reach one.
       defaultInference: () => streamText(liveOpts ?? {
         model: this.getModel(),
-        messages: [{ role: 'user', content: judgeTask }],
+        messages: [{ role: 'user', content: task }],
         tools: this.getRawTools(),
-        stopWhen: stepCountIs(50),
+        stopWhen: stepCountIs(this.maxSteps),
         ...effortFor('scaffold_mutation'),
       }).toUIMessageStream(),
     });
@@ -784,12 +766,15 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
    *  resolve against the RAW surface per call, multi-step, scaffold-stage
-   *  reasoning effort. */
+   *  reasoning effort. The step budget is the turn's own — a scaffold that
+   *  delegates through this bridge is doing the turn's work, and giving it
+   *  less room than the default loop makes every comparison between them a
+   *  measurement of the handicap. */
   protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
       model: this.getModel(),
       tools: () => this.getRawTools(),
-      defaultMaxSteps: 50,
+      defaultMaxSteps: this.maxSteps,
       streamOptions: effortFor('scaffold_mutation'),
     });
   }
@@ -850,14 +835,14 @@ export abstract class ActorAgent extends Think<Env> {
         llmStream: this.makeScaffoldLLMStream(),
         callTool: this.makeScaffoldCallTool(),
         history: this.makeScaffoldHistory(),
-        timeoutMs: 5 * 60 * 1000,
+        timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
       },
     });
   }
 
   // The BackendHost the core orchestrator runs against. broadcast → DO fan-out;
   // enqueueTurn → Think.saveMessages (TurnQueue-serialized programmatic turn) —
-  // the resume path for the reactor + background-job wake + consent.
+  // the queued half of signal delivery, reached only through the core seam.
   private _host: BackendHost | null = null;
   protected get host(): BackendHost {
     if (!this._host) {
@@ -886,18 +871,12 @@ export abstract class ActorAgent extends Think<Env> {
             }
           }
         },
-        // Mid-turn delivery: a drained batch bound while a turn is live rides
-        // that turn's next step boundary (the event-injection extension)
-        // instead of queueing behind it. Check + push are one synchronous
-        // tick, so the turn observed here is the one whose prepareStep will
-        // drain the buffer (turns are TurnQueue-serialized); a turn that
-        // settles first hands the batch back through settle()'s leftover path.
-        injectIntoActiveTurn: (batch) => {
-          if (!this._inFlight) return false;
-          this._eventInjections.push(batch);
-          this.logActivity('event_injected', `${batch.turnId} → live turn`);
-          return true;
-        },
+        // A signal lands on the agent's next step, so this answers whether
+        // there will be one. The read is synchronous and the seam's buffer
+        // push happens in the same tick, so the turn observed here is the one
+        // whose prepareStep will drain it (turns are TurnQueue-serialized); a
+        // turn that settles first re-delivers the signal from settle().
+        turnInFlight: () => this._inFlight,
         // The drain-debounce timer. keepAliveWhile (the agents-SDK heartbeat
         // the evolution hooks already rely on) holds the DO through the window
         // + the drain so the debounced drain completes within the live
@@ -936,6 +915,9 @@ export abstract class ActorAgent extends Think<Env> {
   // the user has actually added/removed/edited a server.
   private _cachedMcpTools: ToolSet = {};
   private _cachedMcpToolsKey: number = -1;
+  /** Configured MCP servers whose tools did not make it onto this surface —
+   *  rendered into the turn's dynamic context so their absence is legible. */
+  private _mcpUnavailable: MissingCapability[] = [];
 
   // Preamble-injection: the codemode tool is built once per DO lifetime.
   // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
@@ -976,7 +958,7 @@ export abstract class ActorAgent extends Think<Env> {
   //   - EventLog        publish/pending/defer/dismiss/query
   //   - TriggerRegistry durable subscriptions (webhooks, timers, watches)
   //   - ReplyChannelStore  durable reply-channel rows + dispatchers
-  // Spec: docs/EVENTS-HUB-SPEC.md
+  // Spec: docs/ARCHITECTURE.md — "Events and ingress"
   private _eventLog: import('@proteus/core').EventLog | null = null;
   protected get eventLog(): EventLog {
     if (!this._eventLog) {
@@ -1013,8 +995,14 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._jobRunner) {
       this._jobRunner = new BackgroundJobRunner({
         store: this.jobs,
+        // The background policy follows the TURN's surface, not the DO: one
+        // workspace serves human-watched web chat, one-shot `proteus exec`
+        // invocations, and autonomous drains, and the detach threshold has to
+        // match the caller. 30s keeps chat responsive; anything with nobody
+        // watching wants its work finished in-turn.
+        policy: () => BACKGROUND_POLICY[this.turnSurface()],
         fiber: this.rt.schedule.fiber,
-        host: this.host,
+        signals: this.orch.signals,
         eventLog: this.eventLog,
         scheduleDrain: () => this.orch.scheduleDrain(),
         logActivity: (event, detail) => this.logActivity(event, detail),
@@ -1128,6 +1116,13 @@ export abstract class ActorAgent extends Think<Env> {
    *  stream. */
   private readonly dynamicLedger = new DynamicContextLedger();
   protected _cliCwd: string | null = null;
+  /** Whether the message that opened the CURRENT turn was a conversational
+   *  reply or an independent one-shot task (`proteus exec` against this
+   *  workspace). Set in beforeTurn from the chat request; read at turn end to
+   *  decide whether this turn may be parked awaiting a follow-up verdict.
+   *  Defaults to a conversation — every non-CLI surface (web chat, API, the
+   *  REPL) is one. */
+  private _turnContinuity: TurnContinuity = 'conversation';
   // Current turn identity for the device daemon's pre-mutation shadow-git
   // snapshot (set in beforeTurn; the daemon dedupes per turnId). Survives the
   // turn so background tool continuations keep tagging their originating turn.
@@ -1485,6 +1480,10 @@ export abstract class ActorAgent extends Think<Env> {
         // cached toolset holds a stable reference across turns and the reset
         // rides the turn's own accounting.
         contextBudget: this.acc.context,
+        // Same ownership: read-before-edit state and the per-edit outcome
+        // counters ride the accumulator, so the cached toolset sees the turn's
+        // ledger and the reset rides the turn's own accounting.
+        fileLedger: this.acc.files,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
         // settle) is universal; staff/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution
@@ -1510,7 +1509,6 @@ export abstract class ActorAgent extends Think<Env> {
         // The remaining actor-profile deps (subordinate report spine,
         // product-change lane).
         ...(actorDeps.report ? { report: actorDeps.report } : {}),
-        ...(actorDeps.experience ? { experience: actorDeps.experience } : {}),
         ...(actorDeps.productChanges ? { productChanges: actorDeps.productChanges } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
@@ -1593,12 +1591,16 @@ export abstract class ActorAgent extends Think<Env> {
           LIMIT ${INHERITED_CONTEXT_CAP}
         ) sub
         ORDER BY created_at ASC`;
-      return rows.map((r) => ({
-        id: r.id,
-        role: narrowInheritedRole(r.role),
-        content: uiMessageText(r.content),
-        createdAt: Date.parse(r.created_at) || 0,
-      }));
+      const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
+      return [
+        ...inheritedContextOmissionNote(total, rows.length),
+        ...rows.map((r) => ({
+          id: r.id,
+          role: narrowInheritedRole(r.role),
+          content: uiMessageText(r.content),
+          createdAt: Date.parse(r.created_at) || 0,
+        })),
+      ];
     } catch {
       // assistant_messages table may not yet exist on a fresh agent.
       return [];
@@ -1621,7 +1623,9 @@ export abstract class ActorAgent extends Think<Env> {
         this.eventRecorder.emit(this._currentRunId, {
           type: 'head_merge',
           rootId: event.rootId,
-          headCount: event.headCount,
+          headCount: event.cost.headCount,
+          headsWithFindings: event.cost.headsWithFindings,
+          totalTokens: event.cost.totalTokens,
           mergedNarrative: event.mergedNarrative,
         });
       }
@@ -1676,8 +1680,23 @@ export abstract class ActorAgent extends Think<Env> {
     }
 
     let descriptors: SerializableToolDescriptor[];
-    try { descriptors = await userDOStub.userMcp_toolDescriptors(caller); }
-    catch (err) {
+    try {
+      // Named at the boundary because Cloudflare's RPC type mapper cannot
+      // prove `SerializableToolDescriptor` serializable (its JSON-Schema
+      // fields are `Record<string, unknown>`) and erases the method's return
+      // to `never` — which assigns silently to anything. Same narrowing the
+      // consent hop uses on its own stub.
+      const answer = await (userDOStub as unknown as {
+        userMcp_toolDescriptors(c: UserCaller): Promise<McpToolSurface>;
+      }).userMcp_toolDescriptors(caller);
+      descriptors = answer.descriptors;
+      // A configured server whose tools never arrived is stated in the turn's
+      // dynamic context, not just logged: the model is otherwise left planning
+      // around a capability it was promised and cannot see.
+      this._mcpUnavailable = answer.unavailable.map((u) => ({
+        source: `MCP server "${u.server}"`, reason: u.reason,
+      }));
+    } catch (err) {
       console.warn('[proteus] mcp descriptor fetch failed:', (err as Error).message);
       return this._cachedMcpTools;
     }
@@ -1790,14 +1809,13 @@ export abstract class ActorAgent extends Think<Env> {
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
-    this.orch.beginTurn(Date.now(), this.turnMissionLabels());
+    // The continuation flag resets mid-turn signal splice state: a continuation
+    // turn re-absorbs the just-settled signals so they ride into it the way the
+    // queued path's durable message does. Signals still waiting ride either way.
+    this.orch.beginTurn(Date.now(), this.turnUserMetadata(), ctx.continuation);
     this._executorsUsedThisTurn.clear();
     this._cliCwd = readCliCwd(ctx.body);
-    // Reset event-injection splice state; a continuation turn re-absorbs the
-    // just-settled batches so injected events ride into it the same way the
-    // enqueued drain path's durable message does. Batches still waiting
-    // inject into this turn either way.
-    this._eventInjections.beginTurn(ctx.continuation);
+    this._turnContinuity = readTurnContinuity(ctx.body);
     this._inFlight = true;
     this.logActivity("beforeturn", "streamText() called next");
     // A real user message is the verdict on the previous turn — dispatch the
@@ -1805,7 +1823,7 @@ export abstract class ActorAgent extends Think<Env> {
     // concurrently with this turn; never blocks it. Programmatic turns
     // (reactor / job wake) are not user verdicts.
     if (!this.lastUserTurnIsProgrammatic()) {
-      this.orch.observeUserTurn(extractLastUserText(ctx.messages));
+      this.orch.observeUserTurn(extractLastUserText(ctx.messages), this._turnContinuity);
     }
     // Start a new run for the event log, with provenance so cross-run history
     // (Supervise altitude) can show what kicked each run off. This is the chat
@@ -1973,17 +1991,25 @@ export abstract class ActorAgent extends Think<Env> {
       ? [...effectiveActiveTools, ...extensionToolNames]
       : effectiveActiveTools;
 
-    // Prompt-cache plan for this turn (core prompting/cache-breakpoints.ts).
-    // Request-level cache routing (prompt_cache_key / promptCacheKey) rides
-    // TurnConfig.providerOptions; the cache-eligible system message + rolling
-    // tail breakpoints for marker providers (Anthropic) ride beforeStep —
-    // PrepareStepResult carries typed system/messages overrides for every
-    // step's request, whereas TurnConfig.system is string-typed.
-    const cacheStrategy = resolvePromptCacheStrategy(model.provider, model.id, this.config.getCacheRetention());
-    this._turnCachePlan = hasCacheMarkers(cacheStrategy)
-      ? { strategy: cacheStrategy, system: cacheableSystem(systemOverride, cacheStrategy) }
+    // Prompt-cache plan for this turn — the same core derivation `runChat`
+    // uses (prompting/cache-breakpoints.ts `promptCachePlan`), so a change to
+    // strategy resolution, system eligibility or routing reaches both loops.
+    // Only the message tail differs: request-level cache routing rides
+    // TurnConfig.providerOptions, while the cache-eligible system message and
+    // the rolling tail breakpoints for marker providers (Anthropic) ride
+    // beforeStep — PrepareStepResult carries typed system/messages overrides
+    // for every step's request, whereas TurnConfig.system is string-typed.
+    const cachePlan = promptCachePlan({
+      providerId: model.provider,
+      modelId: model.id,
+      system: systemOverride,
+      sessionKey: this.ownedModelServices.affinityKey,
+      retention: this.config.getCacheRetention(),
+    });
+    this._turnCachePlan = hasCacheMarkers(cachePlan.strategy)
+      ? { strategy: cachePlan.strategy, system: cachePlan.system }
       : null;
-    const cacheOptions = promptCacheOptions(cacheStrategy, this.ownedModelServices.affinityKey);
+    const cacheOptions = cachePlan.providerOptions;
     const reasoningOptions = reasoningEffortOptions(
       this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat,
       this.effectiveModelProviderFamily(),
@@ -2038,6 +2064,7 @@ export abstract class ActorAgent extends Think<Env> {
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
       delegates: forkDelegates(this.headJournal.listLive()),
+      ...(this._mcpUnavailable.length > 0 ? { missingCapabilities: this._mcpUnavailable } : {}),
     };
   }
 
@@ -2074,29 +2101,47 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.onFirstChunk();
   }
 
-  /** Whether the in-flight turn was injected programmatically (reactor drain,
-   *  background-job wake, consent resume) — enqueueTurn stamps proteusEvent
-   *  metadata on the saved user message; real chat messages carry none. */
+  /** Whether the in-flight turn was injected programmatically (an event drain,
+   *  a background-job wake, an overflow retry) — a queued signal stamps
+   *  proteusEvent metadata on the saved user message; real chat messages carry
+   *  none. */
   protected lastUserTurnIsProgrammatic(): boolean {
     return this.turnUserMessageEvent(null) !== null;
+  }
+
+  /** The surface THIS turn runs on. A chat turn is interactive — a human is
+   *  watching the stream, so slow work must hand back a handle fast. Anything
+   *  driven by a queued signal (an event drain, a background-job wake, a timer,
+   *  an overflow retry) has nobody watching and is one-shot: detaching there
+   *  buys nothing and costs a truncated turn plus a synthesis turn, and the
+   *  model answers by polling its own jobs instead of working. */
+  protected turnSurface(): SessionSurface {
+    // Two independent ways a turn can have nobody watching a stream, and both
+    // count. A CLI one-shot invocation against this workspace stamps `oneShot`
+    // on the request body (readTurnContinuity → 'independent_task'). A turn a
+    // queued signal drove — an event drain, a background-job wake, a timer, an
+    // overflow retry — carries `proteusEvent` metadata on the message that
+    // drives it, the same discriminator every other programmatic-turn decision
+    // reads. Continuity alone would miss the whole autonomous population,
+    // which is the population the one-shot policy was measured on.
+    const programmatic = this.turnUserMessageEvent(this._activeProgrammaticUserMessage) !== null;
+    return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
   }
 
   /** The turn's proteusEvent metadata value — from the active programmatic
    *  message when one drove the turn, else the last durable user message.
    *  Null for real chat turns. */
   protected turnUserMessageEvent(programmaticUserMessage: { metadata?: unknown } | null): string | null {
-    const source = programmaticUserMessage
-      ?? (this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined);
-    const metadata = source?.metadata;
+    const metadata = programmaticUserMessage ? programmaticUserMessage.metadata : this.turnUserMetadata();
     return isRecord(metadata) && typeof metadata.proteusEvent === 'string' ? metadata.proteusEvent : null;
   }
 
-  /** The mission budgets this turn spends against — stamped on the injected
-   *  message by the reactor when a schedule that declared one fired. Empty for
-   *  every chat turn and every unbudgeted wake. */
-  protected turnMissionLabels(): string[] {
+  /** What this turn was started BY: the metadata on the message that drives it
+   *  — a signal's `proteusEvent` / `signalId` / mission labels, or nothing at
+   *  all for a chat turn the operator typed. */
+  protected turnUserMetadata(): unknown {
     const source = this.messages.filter(m => m.role === 'user').at(-1) as { metadata?: unknown } | undefined;
-    return readMissionLabels(source?.metadata);
+    return source?.metadata;
   }
 
   async beforeToolCall(ctx: ThinkToolCallContext): Promise<void> {
@@ -2114,8 +2159,12 @@ export abstract class ActorAgent extends Think<Env> {
     this.acc.recordToolCall(ctx as unknown as Parameters<TurnAccumulator['recordToolCall']>[0]);
     await this.extensions.emitToolResult({
       toolName: ctx.toolName,
-      // Same shape the CLI seam emits: stringified, capped at 1000 chars.
-      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? '').slice(0, 1000),
+      args: (ctx.input ?? {}) as Record<string, unknown>,
+      // Same shape the CLI seam emits: the FULL stringified result. The turn
+      // steering hashes this as the call's identity and reads it to decide
+      // failure, so a head slice made two different outputs sharing a long
+      // preamble indistinguishable and hid every >1000-char structured error.
+      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? ''),
       success: ctx.success,
     });
   }

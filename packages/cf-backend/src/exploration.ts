@@ -38,7 +38,7 @@
 
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
-import { generateText, tool, jsonSchema } from "ai";
+import { generateText } from "ai";
 import { diversityDirective, formatInheritedContext, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
 import { generateJson } from "./lib/generate-json.js";
 import type { OrchestratorAgent } from "./orchestrator.js";
@@ -77,9 +77,6 @@ export class ExplorationAgent extends Agent<Env> {
 
   // ── Head-mode state (MCTS mode is stateless beyond the traces table) ──
   private headInput: HeadInput | null = null;
-  // Per-head findings accumulator — built fresh in runAsHead, mutated by the
-  // head's tools, read into the HeadReport by core runHeadInference.
-  private headCapture: HeadCapture | null = null;
   private headAborted = false;
   private headAbortReason: string | null = null;
 
@@ -151,7 +148,6 @@ export class ExplorationAgent extends Agent<Env> {
         readOnly: false,
         rootPath: '',
         consistency: 'durable',
-        credentialsStayInHost: true,
       },
     });
     this._headRt = rt;
@@ -313,7 +309,6 @@ export class ExplorationAgent extends Agent<Env> {
   @callable()
   async initHead(input: HeadInput): Promise<{ ok: true; id: HeadId }> {
     this.headInput = input;
-    this.headCapture = null;   // built fresh in runAsHead
     this.headAborted = false;
     this.headAbortReason = null;
     return { ok: true, id: input.id };
@@ -334,7 +329,6 @@ export class ExplorationAgent extends Agent<Env> {
     if (!this.headInput) throw new Error("ExplorationAgent.runAsHead() called before initHead()");
     const input = this.headInput;
     const capture = new HeadCapture();
-    this.headCapture = capture;
     // The loop + report assembly live in core (runHeadInference); the Facet
     // supplies its model + the forked tool surface. Abort is driven by
     // abortHead() flipping this.headAborted.

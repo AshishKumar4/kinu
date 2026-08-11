@@ -267,6 +267,44 @@ export const FAULTS: readonly Fault[] = Object.freeze([
     }),
   },
   {
+    id: 'file-plane/edits-land-blind',
+    layer: 'file-plane',
+    patches: ['applyFileEdits', 'readFileSlice'],
+    models: 'the plane goes quiet: a repeated anchor lands on its first occurrence, and a capped read stops naming the offset that continues it',
+    inject: (s) => ({
+      ...s,
+      readFileSlice: (content, opts) => {
+        const slice = s.readFileSlice(content, opts);
+        return { ...slice, output: slice.output.replace(/\n\n\[[^\]]*\]$/, '') };
+      },
+      applyFileEdits: (original, edits, path) => {
+        const first = edits[0];
+        if (first && original.indexOf(first.oldText) !== original.lastIndexOf(first.oldText)) {
+          const at = original.indexOf(first.oldText);
+          return {
+            ok: true,
+            content: original.slice(0, at) + first.newText + original.slice(at + first.oldText.length),
+            applied: [{ line: 1, removedLines: 1, addedLines: 1 }],
+          };
+        }
+        return s.applyFileEdits(original, edits, path);
+      },
+    }),
+  },
+  {
+    id: 'craft-fitness/prose-scored-as-execution',
+    layer: 'craft-fitness',
+    patches: ['craftInvocationSites', 'craftInvocationError'],
+    models: 'the signal stops distinguishing code from prose and failures stop naming the tool that raised — ' +
+      'a crafted tool merely MENTIONED in a string earns execution credit, and no failure is attributable to anything',
+    inject: (s) => ({
+      ...s,
+      craftInvocationSites: (code, known) => known.filter((name) => code.includes(name)),
+      craftInvocationError: (_name, cause) =>
+        new Error(cause instanceof Error ? cause.message : String(cause)),
+    }),
+  },
+  {
     id: 'execution-signal/presence-overreports',
     layer: 'execution-signal',
     patches: ['devicePresence', 'deviceChangeNotice'],

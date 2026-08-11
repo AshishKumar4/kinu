@@ -19,13 +19,14 @@ import {
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
-  AgentRuntime, LLMProviderConfig, CompletedTurn, FiberCtx,
+  ChatOptions,
+  AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome,
   AgentsForkDeps, AgentsToolDeps,
-  IngressDescriptor, ProteusEvent, EventVariant,
+  IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
@@ -33,7 +34,7 @@ import type {
 import {
   AgentOrchestrator,
   BackgroundJobStore, BackgroundJobRunner, JobNotResumable, initBackgroundJobsTable,
-  wrapToolsForBackground, resumeForkBackgroundJob,
+  wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
   EventLog, initEventsHubTables,
   RunEventRecorder, initRunEventTables,
@@ -49,15 +50,16 @@ import {
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
-  createChatModel, runChat, resolveMaxSteps,
+  createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
+  CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, type CodemodeProvider,
-  MissionGovernor, readMissionLabels,
+  MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
   type MediaModality,
   createProductChangeStore, initProductChangeTables, productChangeSqlFromExec,
@@ -69,6 +71,7 @@ import {
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  SCAFFOLD_TURN_TIMEOUT_MS,
   createStructuredJudge, modifyScaffold, listScaffoldArchive,
   getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
   initShadowTables,
@@ -77,7 +80,7 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
   isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort, type CacheRetention,
+  type ReasoningEffort, type CacheRetention, type SqlExec,
 } from '@proteus/core';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
@@ -107,9 +110,32 @@ function providerFamilyForSpec(spec: string): string | undefined {
   catch { return undefined; }
 }
 
-/** A scaffold turn is a whole agentic loop, not a tool call — it gets the
- *  same wall-clock budget the DO gives it. */
-const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * The head of a transcript that could not be restored whole.
+ *
+ * A restore bounded by the context window can still leave older turns behind
+ * on a long-lived session. Saying so is the difference between an agent that
+ * knows it is reading the tail of its own conversation and one that believes
+ * the conversation started there — and the session store is still queryable,
+ * so the notice names where the rest is rather than only that it is gone.
+ */
+function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
+  return {
+    role: 'user',
+    content:
+      `[Runtime note — written by the Proteus harness, not by the user.]\n\n`
+      + `${omitted} earlier message${omitted === 1 ? '' : 's'} from this session `
+      + `are not in your context: the transcript is longer than this model's context window, `
+      + `so it was restored from the newest end. They are not lost — they are in this `
+      + `workspace's local session store under session id "${sessionId}", readable with your `
+      + `normal tools. Say so rather than guessing if something earlier in the conversation matters.`,
+  };
+}
+
+/** A turn's inference, replayable outside the turn that ran it: everything
+ *  runChat needs except the two things that belong to one live turn only —
+ *  its abort signal and its extension host. */
+type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
 
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export interface LocalSessionDb {
@@ -126,7 +152,12 @@ export type SessionEvent =
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
   | { type: 'evolution'; event: string; message: string }
-  | { type: 'broadcast'; event: BroadcastEvent };
+  | { type: 'broadcast'; event: BroadcastEvent }
+  /** One durable run-event, forwarded live as the recorder writes it. The
+   *  run_events table is the agent's instrumentation ledger (nudges, context
+   *  budget, refused budgets); a container-scoped database dies with the
+   *  container, so the stream is the only way an outside observer sees it. */
+  | { type: 'run-event'; event: RunEvent };
 
 /** An interactive answer to a gated shell command. Resolving null declines to
  *  decide, leaving the standing approval mode's own answer in force. */
@@ -183,17 +214,28 @@ export interface LocalAgentSessionOpts {
   onEvent: (event: SessionEvent) => void;
   /** Disable auto-evolution (turn + session reflection). Default: enabled. */
   noAutoEvolve?: boolean;
+  /** This process runs ONE task turn and exits (`proteus exec`/`proteus run`).
+   *  Two consequences, both about honesty rather than throttling:
+   *    • the next invocation's prompt is NOT a conversational follow-up, so it
+   *      never grades the previous turn (it would read as `accepted`);
+   *    • the cadence-heavy evolution pass is not started here, because this
+   *      process cannot finish it — the durable window carries the turns to
+   *      the local scheduler daemon instead.
+   *  Default false: the REPL, TUI and daemon are all long-lived. */
+  oneShot?: boolean;
   /** Turns between session-level reflections (default 5, matching the DO). */
   sessionReflectionInterval?: number;
   /** Durable conversation key in the local messages table. Default: `default`. */
   sessionId?: string;
   /** Persist user/assistant messages to SQLite. Default: true. */
   persistMessages?: boolean;
-  /** Number of recent messages to restore into LLM context. Default: 40. */
-  historyLimit?: number;
   /** Working directory for AGENTS.md discovery + the prompt's runtime context.
    *  Default: process.cwd(). */
   cwd?: string;
+  /** How long a tool call may run before it is moved to the background, and how
+   *  long teardown waits on work that has not settled. Fixed by the surface that
+   *  opened the session (BACKGROUND_POLICY). Default: the interactive policy. */
+  backgroundPolicy?: BackgroundPolicy;
 }
 
 interface QueueItem {
@@ -251,6 +293,19 @@ export class LocalAgentSession implements BackendHost {
   private readonly onEvent: (event: SessionEvent) => void;
   private shellApprovalHandler: ShellApprovalHandler | null = null;
   private readonly sessionId: string;
+  /** True when this process runs one task turn and exits — see the `oneShot`
+   *  option. Decides turn continuity and whether the cadence lane may start. */
+  private readonly oneShot: boolean;
+  /** The mechanical completion gate (core completion-gate.ts). Armed only by a
+   *  one-shot task turn: on the interactive surface the human reading the
+   *  answer is the check, so it never arms and costs nothing. */
+  private readonly completionGate = new CompletionGate();
+  /** Whether a message arriving in THIS process can be a verdict on the turn
+   *  before it. A one-shot process holds no conversation: its prompt came from
+   *  a caller who never saw the previous answer. */
+  private get turnContinuity(): TurnContinuity {
+    return this.oneShot ? 'independent_task' : 'conversation';
+  }
   private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
@@ -308,6 +363,7 @@ export class LocalAgentSession implements BackendHost {
     this.rt = opts.rt;
     this.onEvent = opts.onEvent;
     this.sessionId = opts.sessionId ?? 'default';
+    this.oneShot = opts.oneShot === true;
     this.cwd = opts.cwd ?? process.cwd();
     this.persistMessagesEnabled = opts.persistMessages !== false;
     this.fallbackModel = opts.model;
@@ -340,7 +396,8 @@ export class LocalAgentSession implements BackendHost {
     // workspace made before this silently unable to record a trial.
     initShadowTables(this.rt.storage.execRaw);
 
-    // agent_facts world model — exposes the `fact` tool (parity with the DO).
+    // agent_facts world model — backs `memory`'s keyed-fact actions
+    // (remember/recall/forget), parity with the DO.
     initFactsTable(this.rt.storage.execRaw);
     this.factsStore = createFactsStore(this.rt.storage.sql);
 
@@ -373,6 +430,8 @@ export class LocalAgentSession implements BackendHost {
       },
       archive: this.compactionState.archive,
       summarize: createModelSummarizer(() => this.ensureModelState()),
+      // The ladder's first rung prunes this plane before any tool output.
+      ephemeral: this.dynamicLedger,
       onOutcome: ({ outcome }) => {
         // Fires inside runTransformContext, BEFORE the turn's first step
         // weave — a fresh plan ('planned') or a discarded one ('invalidated')
@@ -419,6 +478,10 @@ export class LocalAgentSession implements BackendHost {
     // local workspace had no replayable run history at all.
     initRunEventTables(this.rt.storage.execRaw);
     this.eventRecorder = new RunEventRecorder(this.rt.storage.sql);
+    // …and forwarded to the frontends as it is written. The table alone is
+    // observable only to something that outlives the database, which a
+    // benchmark container or a one-shot `proteus exec` does not.
+    this.eventRecorder.observe((event) => this.emit({ type: 'run-event', event }));
 
     // The cumulative spend governor — a scheduled run or a fork opts into a
     // label, and its refusals land in this run's durable event log. No label
@@ -437,6 +500,7 @@ export class LocalAgentSession implements BackendHost {
       eventLog: this.eventLog,
       budget: this.budget,
       sessionReflectionInterval: opts.sessionReflectionInterval,
+      oneShot: opts.oneShot === true,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
         onStepEvent: (ev) => this.recordRunEvent({
@@ -446,8 +510,9 @@ export class LocalAgentSession implements BackendHost {
     });
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
+      policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
-      host: this,
+      signals: this.orch.signals,
       eventLog: this.eventLog,
       scheduleDrain: () => this.orch.scheduleDrain(),
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
@@ -462,7 +527,7 @@ export class LocalAgentSession implements BackendHost {
     // bootstrapScaffold is idempotent (exists-check + INSERT OR IGNORE v0);
     // tracked so end()/settleEvolution joins it before the process exits.
     this.orch.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
-    this.restoreHistory(opts.historyLimit ?? 40);
+    this.restoreHistory();
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -564,7 +629,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   listAvailableModels() {
-    return this.modelResolver?.listModels() ?? Promise.resolve([]);
+    return this.modelResolver?.listModels() ?? Promise.resolve({ models: [], failures: [] });
   }
 
   /** Local ingress parity with the DO EventsHub routes: publish through the
@@ -724,9 +789,9 @@ export class LocalAgentSession implements BackendHost {
     await this.engine.applyTakePick(record.set.turnId, record.outcome);
     let continuationQueued = false;
     if (record.changedAnswer) {
-      void this.enqueueTurn({
+      void this.orch.signals.deliver({
+        kind: 'take_pick',
         text: buildTakeContinuationPrompt(record.set, record.chosen),
-        metadata: { proteusEvent: 'take_pick' },
       });
       continuationQueued = true;
     }
@@ -820,15 +885,22 @@ export class LocalAgentSession implements BackendHost {
     });
   }
 
-  /** BackendHost seam — the CLI declines mid-turn event injection: the local
-   *  steer-drain owns the live turn's injection channel with USER semantics a
-   *  platform event must not assume (each steer persists as a verbatim user
-   *  row for the walk-back fork, interrupt() hands pending steers back to the
-   *  composer, and leftover steers rerun as a user-origin turn — which would
-   *  misgrade the outcome review). Events drain as the immediate next
-   *  programmatic turn instead (the enqueueTurn fallback). */
-  injectIntoActiveTurn(): boolean {
-    return false;
+  /** BackendHost seam — will there be a next step for a signal to land on?
+   *
+   *  `currentAbort` is set for exactly the streaming window of one turn and
+   *  cleared in its `finally`, BEFORE settle() runs, so a signal that arrives
+   *  as the turn is ending either buffers for a step that still exists or is
+   *  told there is no turn — never both, never neither.
+   *
+   *  The user steer-drain's USER semantics (each steer persists as a verbatim
+   *  user row for the walk-back fork, interrupt() hands pending steers back to
+   *  the composer, leftover steers rerun as a user-origin turn) are properties
+   *  of `pendingSteers`, which signals do not touch: they ride the core seam's
+   *  own buffer, are never persisted, and settle back into turns of their own.
+   *  Two independent splices land at the same step tail as two adjacent
+   *  user-role messages, which every provider adapter groups into one turn. */
+  turnInFlight(): boolean {
+    return this.currentAbort !== null;
   }
 
   // ── Public driver API ──────────────────────────────────────────────
@@ -912,7 +984,20 @@ export class LocalAgentSession implements BackendHost {
       vfs: this.rt.storage.vfs, budget: this.orch.acc.context, producer: 'external_tool',
     });
     this.mcpClose = conn.close;
+    // A server that never came up is stated in the turn's live context, not
+    // only in a diagnostic the model never sees. Its tools are simply ABSENT
+    // otherwise, so the model plans as if a capability the user configured
+    // does not exist and cannot explain why.
+    this.mcpUnavailable = conn.diagnostics
+      .filter((d) => d.status === 'failed')
+      .map((d) => ({
+        source: `MCP server "${d.server}"`,
+        reason: d.reason ?? 'failed to start — its tools are absent from this turn',
+      }));
   }
+
+  /** Configured MCP servers whose tools are not on this session's surface. */
+  private mcpUnavailable: MissingCapability[] = [];
 
   /** Run any pending event drain to completion NOW, bypassing the ~250ms
    *  debounce window. The scheduler daemon fires due triggers then ends the
@@ -929,6 +1014,22 @@ export class LocalAgentSession implements BackendHost {
     await this.orch.drainPendingEvents();
   }
 
+  /**
+   * Run the session/lifetime evolution pass the durable window is due for, to
+   * completion. This is the CADENCE LANE (AgentOrchestrator's exit contract),
+   * and this method is how a host that CAN afford it claims the work a
+   * one-shot `proteus exec` process deliberately left behind: the scheduler
+   * daemon calls it on its tick, in a process whose wall clock is charged to
+   * nobody's task.
+   *
+   * Resolves immediately when nothing is due. Never rejects — the pass absorbs
+   * its own failures and the window carries forward.
+   */
+  async runDueEvolution(): Promise<void> {
+    if (this.ended) return;
+    await this.orch.runDueSessionEvolution();
+  }
+
   /** End the session: let the evolution this run started finish, then let any
    *  detached background fiber settle, then disconnect MCP. Both windows are
    *  durable, so whatever does not finish carries over to the next run rather
@@ -937,7 +1038,7 @@ export class LocalAgentSession implements BackendHost {
     this.ended = true;
     this.clearLocalAlarm();
     await this.orch.settleEvolution();
-    await this.settleBackgroundFibers();
+    await this.joinBackgroundFibers(this.drainDeadline());
     try { await this.mcpClose?.(); } catch { /* best effort */ }
   }
 
@@ -946,6 +1047,15 @@ export class LocalAgentSession implements BackendHost {
    *  CLI's equivalent is refusing to close the database out from under one,
    *  which would abort the settle write mid-flight. */
   private readonly backgroundFibers = new Set<Promise<unknown>>();
+
+  /** The ONE wall-clock budget this session spends waiting on work that has not
+   *  settled, armed the first time a drain asks for it. settleBackgroundWork()
+   *  and end() share it, so a one-shot run — which calls both, back to back, on
+   *  the same never-settling job — cannot pay the grace twice. */
+  private settleDeadline: number | null = null;
+  private drainDeadline(): number {
+    return this.settleDeadline ??= Date.now() + this.jobRunner.policy.settleGraceMs;
+  }
   private trackFiber<T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> {
     const running = this.rt.schedule.fiber(name, fn);
     this.backgroundFibers.add(running);
@@ -954,17 +1064,42 @@ export class LocalAgentSession implements BackendHost {
     return running;
   }
 
-  /** Await every in-flight background fiber, including ones started by the
-   *  settle of an earlier one. Each is a single tool call, so this converges. */
-  private async settleBackgroundFibers(): Promise<void> {
-    if (this.backgroundFibers.size === 0) return;
+  /**
+   * Await in-flight background fibers until they settle or `deadline` passes.
+   *
+   * The wait has to be bounded because the work behind a fiber may never
+   * finish: the calls that detach are the ones that ran long, and the longest
+   * of those are servers and VMs the agent deliberately left running. An
+   * unbounded join on those was 6.4 of 16.2 agent-hours of dead idle across a
+   * benchmark run, every second of it after the agent had already answered.
+   *
+   * Whatever is still running at the deadline is LEFT running — not cancelled.
+   * Its shell children live in their own process groups and outlive this
+   * process, which is the whole point of "I started the server in the
+   * background", and its durable job row stays `running`, so the next start's
+   * orphan recovery treats it exactly as it treats a job interrupted by a kill.
+   * Returns true when everything settled inside the grace.
+   */
+  private async joinBackgroundFibers(deadline: number): Promise<boolean> {
+    if (this.backgroundFibers.size === 0) return true;
     this.emit({
       type: 'evolution', event: 'bg_jobs_settling',
       message: `${this.backgroundFibers.size} background job(s) still running — waiting for their results`,
     });
     while (this.backgroundFibers.size > 0) {
-      await Promise.allSettled([...this.backgroundFibers]);
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        this.emit({
+          type: 'evolution', event: 'bg_jobs_abandoned',
+          message:
+            `${this.backgroundFibers.size} background job(s) did not finish in time and were left running; ` +
+            'their results are not part of this run.',
+        });
+        return false;
+      }
+      await raceDeadline(Promise.allSettled([...this.backgroundFibers]), remaining);
     }
+    return true;
   }
 
   /**
@@ -1074,19 +1209,31 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Drain in-flight background work to quiescence: await detached job fibers,
-   *  run the wake turns their settlement enqueues, and repeat until nothing is
-   *  detached, queued, or pumping. Unlike end() this never marks the session
-   *  ended, so the wakes actually run (enqueueTurn only skips once ended) — and
-   *  because a settled fiber awaits its own wake turn (host.enqueueTurn resolves
-   *  when that turn finishes), awaiting the fibers awaits the wakes too. A
-   *  one-shot `proteus run`/`exec` calls this after its turn and before it stops
-   *  listening/closes, so a turn that backgrounded work streams its second half
-   *  instead of being cut off at process exit. */
+  /**
+   * Drain in-flight background work: await detached job fibers, run the wake
+   * turns their settlement enqueues, and repeat until nothing is detached,
+   * queued, or pumping. Unlike end() this never marks the session ended, so the
+   * wakes actually run (enqueueTurn only skips once ended) — and because a
+   * settled fiber awaits its own wake turn (host.enqueueTurn resolves when that
+   * turn finishes), awaiting the fibers awaits the wakes too. A one-shot
+   * `proteus run`/`exec` calls this after its turn and before it stops
+   * listening/closes, so a turn that backgrounded work streams its second half
+   * instead of being cut off at process exit.
+   *
+   * The two waits are bounded differently on purpose. A TURN already in flight
+   * is always run to completion — truncating a wake turn is the exact defect
+   * this method exists to prevent, and a turn is bounded by its own budget.
+   * Waiting on work that has NOT settled is bounded by the surface's grace:
+   * that work may be a server which never settles at all.
+   */
   async settleBackgroundWork(): Promise<void> {
-    while (this.pumping || this.queue.length > 0 || this.backgroundFibers.size > 0) {
-      if (this.pumpPromise) await this.pumpPromise;
-      if (this.backgroundFibers.size > 0) await Promise.allSettled([...this.backgroundFibers]);
+    const deadline = this.drainDeadline();
+    for (;;) {
+      // A queued turn always has a live pump (enqueueTurn kicks it), so awaiting
+      // the pump drains the queue too.
+      if (this.pumpPromise) { await this.pumpPromise; continue; }
+      if (this.backgroundFibers.size === 0) return;
+      if (!await this.joinBackgroundFibers(deadline)) return;
     }
   }
 
@@ -1106,7 +1253,10 @@ export class LocalAgentSession implements BackendHost {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
       context: this.orch.acc.context,
-      nudge: this.orch.nudge.snapshot(),
+      files: this.orch.acc.files,
+      steering: this.orch.steering.snapshot(),
+      completionGate: this.completionGate.take(),
+      craft: this.orch.craft.snapshot(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1133,7 +1283,7 @@ export class LocalAgentSession implements BackendHost {
     const startedAt = Date.now();
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
-    this.orch.beginTurn(startedAt, readMissionLabels(item.metadata));
+    this.orch.beginTurn(startedAt, item.metadata);
     // Open this turn's run in the durable event log (core turn-lifecycle).
     // Provenance mirrors the DO's: a real chat turn is 'chat', a programmatic
     // one names its trigger.
@@ -1149,8 +1299,13 @@ export class LocalAgentSession implements BackendHost {
     // substrate — see core checkpoints/types.ts).
     this.rt.checkpoints?.beginTurn({ turnId: crypto.randomUUID(), sessionId: this.sessionId });
     // A real user message grades the previous turn — dispatch the detached
-    // outcome review (same core pipeline as the DO's beforeTurn hook).
-    if (item.kind === 'user') this.orch.observeUserTurn(item.text);
+    // outcome review (same core pipeline as the DO's beforeTurn hook). In a
+    // one-shot process the previous turn belongs to an already-exited
+    // invocation, so this prompt is a fresh task, not a verdict on it.
+    if (item.kind === 'user') this.orch.observeUserTurn(item.text, this.turnContinuity);
+    // A one-shot task turn is graded by whatever it leaves on disk, with nobody
+    // to push back — so it arms the completion gate. Nothing else does.
+    if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
     this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
@@ -1243,12 +1398,12 @@ export class LocalAgentSession implements BackendHost {
     // The compaction extension + the steer-drain ride the public extension
     // seam — the same host external plugins register on. One hook path, not
     // a private callback + a plugin API.
-    // The mechanical delegation nudge registers LAST: its splice must never
+    // The orchestrator's signal extension registers LAST: its splice must never
     // shift the indices the user-steer drain replays into durable history.
     const extensions = new ExtensionHost()
       .register(this.compactionExtension)
       .register({ name: 'proteus.steering', prepareStep: prepareStepMessages })
-      .register(this.orch.nudge);
+      .register(this.orch.turnExtension);
     const cache = this.cacheIdentity();
     const effort = this.config.getReasoningEffort() ?? REASONING_EFFORT_FOR_STAGE.chat;
     const providerOptions = reasoningEffortOptions(effort, cache.providerId ?? '');
@@ -1267,11 +1422,17 @@ export class LocalAgentSession implements BackendHost {
     // and overflow recovery all budget against the same number.
     const contextWindow = this.sessionContextWindow();
 
-    const defaultTurn = runChat({
+    // The turn's inference exactly as it ran, minus the two things that belong
+    // to THIS turn and nothing else (its abort signal and its extension host).
+    // Kept as a value so the shadow evaluation of a delegating pending scaffold
+    // replays the live turn rather than a reconstruction of it — the local peer
+    // of the DO's `_lastTurnOpts` stash. `this.history` is snapshotted because
+    // the assistant's answer is appended to it before the eval runs.
+    const liveTurnOpts = {
       model,
       modelContext: { id: this.effectiveModelSpec(), contextWindow },
       system: systemPrompt,
-      history: this.history,
+      history: [...this.history],
       // Model-capability attachment sanitization — runChat applies it to
       // the whole history BEFORE the transform seam and the ledger weave
       // (same ordering as the DO's beforeTurn); this.history itself is
@@ -1284,13 +1445,12 @@ export class LocalAgentSession implements BackendHost {
       tools: turnTools,
       ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
       transformTrigger,
-      maxSteps: resolveMaxSteps(),
-      signal: abort.signal,
-      extensions,
+      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       cache,
       budget: this.budget,
       ...(providerOptions ? { providerOptions } : {}),
-    });
+    };
+    const defaultTurn = runChat({ ...liveTurnOpts, history: this.history, signal: abort.signal, extensions });
 
     // The mutable scaffold on the live turn seam — the local peer of the DO's
     // _transformInferenceResult. An agent still on the bootstrap v0 gets
@@ -1378,11 +1538,18 @@ export class LocalAgentSession implements BackendHost {
         turnWasOverflowRetry: item.metadata?.proteusEvent === OVERFLOW_RETRY_EVENT,
         state: this.compactionState,
         sessionKey: cache.sessionKey,
-        enqueueTurn: (t) => this.enqueueTurn(t),
+        signals: this.orch.signals,
       });
     } finally {
       this.currentAbort = null;
     }
+
+    // Turn over for signal delivery — the same spine the cf backend runs, and
+    // for the same reason: it must happen before anything that can throw, so a
+    // signal the model never saw always re-delivers — including one that
+    // arrived after the final step boundary, which is why this runs after
+    // `currentAbort` is cleared rather than inside the stream loop.
+    this.orch.signals.settle({ completed: runError === null });
 
     let assistantMsgId: string | null = null;
     const snapshotTurn = (): CompletedTurn => snapshotCompletedTurn(this.orch.acc, {
@@ -1409,6 +1576,10 @@ export class LocalAgentSession implements BackendHost {
         });
       }
 
+      // The completion gate: on the one-shot surface a turn that did work does
+      // not get to be the last word on its own say-so.
+      await this.applyCompletionGate(runError === null);
+
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
       // JSONL transcript recorded them.
@@ -1434,17 +1605,21 @@ export class LocalAgentSession implements BackendHost {
       // answer — detached, so a slow branch never delays turn-end.
       this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
 
+      // The confirming turn is over: what the agent did with its free re-look
+      // IS the gate's conversion number, and closeRun writes it.
+      if (event === COMPLETION_GATE_EVENT) {
+        this.completionGate.settle({ toolCalls: this.orch.acc.toolCalls.length });
+      }
+
       const turn = snapshotTurn();
       this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
-      await this.orch.completeTurn(turn);
+      await this.orch.completeTurn(turn, this.turnContinuity);
       // Sampled auto-judge shadow rollout. Tracked rather than fire-and-forget:
       // a `proteus exec` process exits the moment the turn ends, and the
       // evaluation that resolves a pending scaffold must not die with it.
       this.orch.track(
-        this.runShadowEvalSampled({
-          task: item.text, currentOutput: fullText, model, tools: turnTools, system: systemPrompt,
-        }),
+        this.runShadowEvalSampled({ task: item.text, currentOutput: fullText, liveTurnOpts }),
         'Scaffold shadow eval',
       );
       this.emit({ type: 'turn-end', turn });
@@ -1460,6 +1635,46 @@ export class LocalAgentSession implements BackendHost {
       this.emit({ type: 'error', message });
       this.emit({ type: 'turn-end', turn: snapshotTurn() });
     }
+  }
+
+  /**
+   * The mechanical completion gate (core completion-gate.ts) applied to the
+   * turn that just ended.
+   *
+   * A one-shot run is graded on what it leaves behind, with nobody reading the
+   * answer — so the harness takes its own look before letting the process go.
+   * It reads the working directory through the agent's OWN shell, after the
+   * agent stopped, and hands that back as one more turn. Nothing the model says
+   * reaches this decision: the trigger is that the turn made tool calls and its
+   * stream completed, and the evidence is the harness's own.
+   *
+   * Appended rather than unshifted: it verifies FINAL state, so anything
+   * already queued (a background-job wake, a leftover steer) runs first.
+   *
+   * The probe goes through the checkpointed shell like every other host
+   * command, which is correct in both directions: a turn that already mutated
+   * the host filesystem checkpointed before its first mutation and this
+   * read-only call dedups against that, and a turn that mutated nothing takes
+   * a snapshot of an unmutated tree.
+   */
+  private async applyCompletionGate(completed: boolean): Promise<void> {
+    const shell = this.rt.shell;
+    if (!shell) return;
+    if (!this.completionGate.shouldGate({ completed, toolCalls: this.orch.acc.toolCalls.length })) return;
+    const observed = await observeCompletionState({
+      exec: (command) => shell.exec(command),
+      vfs: this.rt.storage.vfs,
+    }).catch(() => null);
+    // Nothing observable means no evidence to show, and a gate with no evidence
+    // is just "are you sure?" — the doctrine-shaped ask this replaces.
+    if (observed === null) return;
+    this.completionGate.fire();
+    this.queue.push({
+      text: completionGateText({ task: this.completionGate.task, observed }),
+      kind: 'programmatic',
+      metadata: { proteusEvent: COMPLETION_GATE_EVENT },
+      resolve: () => {},
+    });
   }
 
   /** Settle every branch launched during the just-finished turn (detached —
@@ -1571,28 +1786,25 @@ export class LocalAgentSession implements BackendHost {
    * decision is visible and revertable in the Evolution Changelog).
    */
   private async runShadowEvalSampled(opts: {
-    task: string; currentOutput: string; model: LanguageModel; tools: ToolSet; system: string;
+    task: string; currentOutput: string; liveTurnOpts: LiveTurnOpts;
   }): Promise<void> {
+    const { model, tools } = opts.liveTurnOpts;
     const result = await runSampledShadowEval({
       rt: this.rt,
       config: this.config,
       task: opts.task,
       currentOutput: opts.currentOutput,
       judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
-      llmStream: this.makeScaffoldLLMStream(opts.model, opts.tools),
-      callTool: this.makeScaffoldCallTool(opts.tools),
+      llmStream: this.makeScaffoldLLMStream(model, tools),
+      callTool: this.makeScaffoldCallTool(tools),
       history: this.makeScaffoldHistory(),
-      // A pending that delegates is judged on the scaffold delta alone, so
-      // it gets a real default turn for the shadow task — same system prompt
-      // and tool surface, isolated history.
-      defaultInference: () => runChat({
-        model: opts.model,
-        modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
-        system: opts.system,
-        history: [{ role: 'user', content: opts.task.slice(0, 2000) }],
-        tools: opts.tools,
-        maxSteps: resolveMaxSteps(),
-      }),
+      // A pending that delegates is judged on the scaffold delta alone, so it
+      // replays the live turn's OWN inference — same system prompt, same tool
+      // surface, same conversational history, same step budget. It used to get
+      // the task's first 2000 characters as its entire context, so a candidate
+      // was asked to answer a stub of the question the live answer had answered
+      // in full, and then scored against it.
+      defaultInference: () => runChat(opts.liveTurnOpts),
     });
     if (result?.applied) {
       this.emit({
@@ -1663,7 +1875,7 @@ export class LocalAgentSession implements BackendHost {
   /** `host.llmStream` — the scaffold's inference bridge (core scaffold-host)
    *  over THIS turn's tool surface. */
   private makeScaffoldLLMStream(model: LanguageModel, turnTools: ToolSet): ScaffoldRunOptions['llmStream'] {
-    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps() });
+    return createScaffoldLLMStream({ model, tools: () => turnTools, defaultMaxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS) });
   }
 
   /** `host.callTool` — dispatch into THIS turn's tool surface by name (core
@@ -1731,6 +1943,7 @@ export class LocalAgentSession implements BackendHost {
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
       delegates: forkDelegates(this.headJournal.listLive()),
+      ...(this.mcpUnavailable.length > 0 ? { missingCapabilities: this.mcpUnavailable } : {}),
     };
   }
 
@@ -1791,11 +2004,24 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Fan head_split / head_merge lifecycle out as broadcasts so the frontends
-   *  can render the branch timeline. */
+   *  can render the branch timeline, AND into the durable run-event log so the
+   *  split's cost and productivity survive the process — the same rows the DO
+   *  writes. Broadcast-only was why local runs (every benchmark trial) left no
+   *  trace of a fork, and 4-of-5 empty forks had to be found by reading
+   *  trajectories by hand. */
   private emitHeadPhase(event: SplitPhaseEvent): void {
-    this.broadcast(event.kind === 'split'
+    const payload: RunEventInput = event.kind === 'split'
       ? { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale }
-      : { type: 'head_merge', rootId: event.rootId, headCount: event.headCount, mergedNarrative: event.mergedNarrative });
+      : {
+        type: 'head_merge',
+        rootId: event.rootId,
+        headCount: event.cost.headCount,
+        headsWithFindings: event.cost.headsWithFindings,
+        totalTokens: event.cost.totalTokens,
+        mergedNarrative: event.mergedNarrative,
+      };
+    this.broadcast(payload);
+    this.recordRunEvent(payload);
   }
 
   /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO
@@ -1834,20 +2060,45 @@ export class LocalAgentSession implements BackendHost {
     return assistantId;
   }
 
-  private restoreHistory(limit: number): void {
-    if (limit <= 0) return;
+  /**
+   * Restore the session's durable transcript into live context on open.
+   *
+   * Bounded by what the model could ever be shown at once — the resolved
+   * context window — rather than by a message count. The count was 40, was
+   * never overridden by anything, and was applied on EVERY reconnect: a
+   * session past 40 messages silently lost everything older each time the CLI
+   * restarted, with no marker in the transcript and no way for the model to
+   * ask what it had lost. Restoring to the window instead hands the whole
+   * conversation to the compaction ladder, which is the thing that actually
+   * knows how to shed it (summarize, archive verbatim, cite the archive).
+   *
+   * A session larger than the window still cannot be restored whole, so what
+   * did not fit is STATED: the count, and where it is still readable from.
+   */
+  private restoreHistory(): void {
     try {
-      const rows = this.rt.storage.sql<{ role: string; content: string; created_at: number; rowid: number }>`
-        SELECT role, content, created_at
+      const rows = this.rt.storage.sql<{ role: string; content: string }>`
+        SELECT role, content
         FROM messages
         WHERE session_id = ${this.sessionId} AND role IN ('user', 'assistant')
-        ORDER BY created_at DESC, rowid DESC
-        LIMIT ${limit}`;
-      for (const row of rows.reverse()) {
-        if (row.role === 'user' || row.role === 'assistant') {
-          this.history.push({ role: row.role, content: row.content });
-        }
+        ORDER BY created_at DESC, rowid DESC`;
+      const budget = this.sessionContextWindow();
+      const restored: ModelMessage[] = [];
+      let tokens = 0;
+      let omitted = 0;
+      for (const row of rows) {
+        if (row.role !== 'user' && row.role !== 'assistant') continue;
+        if (omitted > 0) { omitted++; continue; }
+        const cost = estimateTokens(row.content.length);
+        // The newest message is always restored: a single message larger than
+        // the whole window is the compaction ladder's problem, not a reason to
+        // open the session with an empty transcript.
+        if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
+        tokens += cost;
+        restored.push({ role: row.role, content: row.content });
       }
+      if (omitted > 0) this.history.push(olderHistoryNotice(omitted, this.sessionId));
+      this.history.push(...restored.reverse());
     } catch {
       // Old or partial databases should still open; they just start with no restored transcript.
     }
@@ -1933,6 +2184,9 @@ export class LocalAgentSession implements BackendHost {
       // The turn's cumulative bulk budget — held on the accumulator so this
       // toolset (rebuilt only on model change) reads the live turn's state.
       contextBudget: this.orch.acc.context,
+      // Same ownership for the read-before-edit state and the per-edit outcome
+      // counters the `file` tool writes.
+      fileLedger: this.orch.acc.files,
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
         extraProviders: [
@@ -1981,10 +2235,8 @@ function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: Readonl
 
 export { serializeContentForHeads } from '@proteus/core';
 
-/** Adapt a bun:sqlite handle to the EventsHub SqlExec shape (DO storage.sql). */
-function makeHubSql(db: LocalSessionDb): {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-} {
+/** Adapt a bun:sqlite handle to core's SqlExec primitive (DO storage.sql). */
+function makeHubSql(db: LocalSessionDb): SqlExec {
   return {
     exec(query, ...bindings) {
       const stmt = db.prepare(query);
@@ -2013,6 +2265,15 @@ function triggerToView(t: TriggerRow): LocalTriggerView {
     last_fire_at: t.last_fire_at,
     fire_count: t.fire_count,
   };
+}
+
+/** Resolve when `work` settles or `ms` elapses, whichever comes first. The timer
+ *  is always cleared, so a fast settle leaves nothing holding the event loop. */
+async function raceDeadline(work: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expiry = new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); });
+  try { await Promise.race([work, expiry]); }
+  finally { if (timer) clearTimeout(timer); }
 }
 
 /** Last index matching the predicate (ES2023 findLastIndex without the lib dep). */

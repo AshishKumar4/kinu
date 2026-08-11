@@ -10,9 +10,12 @@ export async function cmdLs(vfs: VFS, args: string[]): Promise<string> {
 	const path = (opts._ as string[])[0] ?? "";
 
 	if (opts.R) {
-		const entries = await walkRecursive(vfs, path, 50, 500);
-		if (opts.l) return entries.map((e) => formatLong(e.path, e.stat, !!opts.h)).join("\n");
-		return entries.map((e) => e.path).join("\n");
+		const walk = await walkRecursive(vfs, path, 50, 2000);
+		const lines = opts.l
+			? walk.entries.map((e) => formatLong(e.path, e.stat, !!opts.h))
+			: walk.entries.map((e) => e.path);
+		if (walk.truncated) lines.push("... (listing stopped at 2000 entries; list a subdirectory instead)");
+		return lines.join("\n");
 	}
 
 	let entries = await vfs.readdir(path);

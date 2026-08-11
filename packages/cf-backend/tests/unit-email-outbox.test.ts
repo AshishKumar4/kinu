@@ -12,10 +12,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
+import type { SqlExec } from '@proteus/core';
 
 function makeSql(): { sql: SqlExec; db: Database } {
   const db = new Database(':memory:');

@@ -9,7 +9,7 @@
 
 import { streamText, stepCountIs, type ModelMessage, type ToolSet, type LanguageModel } from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
-import { resolveMaxSteps } from './config.js';
+import { DEFAULT_MAX_STEPS } from './config.js';
 import {
   assertToolsSupportedByModel,
   type PromptModelContext,
@@ -23,6 +23,7 @@ import { contextWindowForModel } from './context-window.js';
 import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
 import { describeProviderError } from './providers/util.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -122,7 +123,7 @@ export const STALL_TIMEOUT_MS = 300_000;
  * to the conversation history — not just the flat text.
  */
 export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
-  const maxSteps = opts.maxSteps ?? resolveMaxSteps();
+  const maxSteps = opts.maxSteps ?? DEFAULT_MAX_STEPS;
   const extensions = opts.extensions;
 
   // One ToolSet: the caller's tools plus every extension's contributed tools.
@@ -264,7 +265,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
       switch (chunk.type) {
         case 'text-delta': {
-          const delta = (chunk as any).textDelta ?? (chunk as any).text ?? '';
+          const delta = chunk.text;
           if (delta) {
             stepHadOutput = true;
             allText += delta;
@@ -274,15 +275,22 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
         case 'tool-call': {
           stepHadOutput = true;
-          const args = ((chunk as any).input ?? (chunk as any).args ?? {}) as Record<string, unknown>;
+          const args = (chunk.input ?? {}) as Record<string, unknown>;
           await extensions?.emitToolCall({ toolName: chunk.toolName, args });
           yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
           break;
         }
         case 'tool-result': {
-          const raw = (chunk as any).output ?? (chunk as any).result ?? '';
-          const result = renderToolResult(raw).slice(0, 1000);
-          await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: true });
+          const raw = chunk.output;
+          // Full text, never a head slice: this string is the call's durable
+          // record (recordToolCall → the evolution signal) AND the identity the
+          // turn steering hashes. A clipped copy made two different outputs
+          // sharing a long preamble hash identical, and made cf and the CLI
+          // record different evolution evidence for the same call. Every
+          // display path bounds it at render.
+          const result = renderToolResult(raw);
+          const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
+          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: true });
           yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
           break;
         }
@@ -290,10 +298,10 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // A tool threw: the error is the durable outcome the evolution signal
           // reads. The extension seam sees the error text as the result (same as
           // the cf afterToolCall), and the discriminator rides success/error.
-          const error = describeProviderError((chunk as any).error);
-          const result = error.slice(0, 1000);
-          await extensions?.emitToolResult({ toolName: chunk.toolName, result, success: false });
-          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
+          const error = describeProviderError(chunk.error);
+          const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
+          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, success: false });
+          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, success: false, error };
           break;
         }
         case 'finish-step': {
@@ -355,8 +363,8 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     const summaries: string[] = [];
     for (const step of steps) {
       for (const tr of step.toolResults) {
-        const output = (tr as any).output ?? (tr as any).result ?? '';
-        summaries.push(`[${tr.toolName}] ${renderToolResult(output).slice(0, 200)}`);
+        const output = tr.output;
+        summaries.push(`[${tr.toolName}] ${evidenceWindow(renderToolResult(output), EVIDENCE_BUDGETS.toolFallbackSummary)}`);
       }
     }
     if (summaries.length > 0) allText = summaries.join('\n');

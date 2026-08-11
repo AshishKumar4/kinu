@@ -83,11 +83,6 @@ export interface HeadInput {
   readonly budget: HeadBudget;
   /** The model to use for this head — usually the same as the parent's. */
   readonly model?: string;
-  /**
-   * Namespaces of sandboxes this head may use. Empty = none allowed (read-only
-   * exploration). Default = all the parent has access to.
-   */
-  readonly allowedSandboxes?: readonly string[];
   /** Names of crafted tools this head may invoke. Empty = none. Undefined = all. */
   readonly allowedTools?: readonly string[];
   /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
@@ -197,12 +192,9 @@ export interface SplitRequest {
     /** Per-head provider/model spec (e.g. `codex/gpt-5.5`). Heterogeneous
      *  models per head enable multi-agent debate / panel-of-experts. */
     readonly model?: string;
-    readonly allowedSandboxes?: readonly string[];
     readonly allowedTools?: readonly string[];
   }>;
   readonly mergeStrategy?: MergeStrategy;
-  /** Model spec for the merge LLM. Falls back to controller's default. */
-  readonly mergeModel?: string;
   readonly budget?: Partial<{
     maxDepth: number;
     maxTokens: number;
@@ -236,6 +228,10 @@ export interface MergeResult {
   readonly grounded: boolean;
   readonly costSummary: {
     readonly headCount: number;
+    /** How many of those heads actually banked a finding (headProducedFindings).
+     *  `headCount - headsWithFindings` is how many forks came back empty — the
+     *  one number that says whether a delegation was worth its tokens. */
+    readonly headsWithFindings: number;
     readonly totalTokens: number;
     readonly totalWallClockMs: number;
     readonly maxDepth: number;
@@ -257,10 +253,33 @@ export interface HeadScore {
   readonly grounding: 'execution' | 'judge';
 }
 
-/** Default budget for a fresh root head if the parent doesn't specify. */
+/** Steps of room the DEFAULT pool gives each head at the widest legal fan-out
+ *  — a pool-sizing factor, not a ceiling. The runaway step guard in
+ *  head-inference derives from each head's own token budget. */
+export const NOMINAL_HEAD_STEPS = 16;
+
+/** Nominal marginal cost of one head step: the head's own output plus the tool
+ *  output it pulls in. Two things derive from it — the tighter step cap a small
+ *  budget implies (head-inference) and the default pool below. */
+export const NOMINAL_STEP_TOKENS = 1_200;
+
+/** Widest fan-out the fork surface accepts (2–6 head specs). The pool is divided
+ *  among siblings, so this is the divisor the default has to survive. */
+export const MAX_FORK_WIDTH = 6;
+
+/**
+ * Default budget for a fresh root head if the parent doesn't specify.
+ *
+ * `maxTokens` is a subtree pool, divided among siblings on spawn. It is sized so
+ * that even at the widest legal fan-out each head still has room for
+ * NOMINAL_HEAD_STEPS of nominal-cost work: below that the pool starves a head
+ * before it can do the work the split assumed, and a fork returns empty because
+ * it was starved rather than because it finished. (The old flat 50_000 gave a
+ * 6-wide split 8.3k per head — under half of that room.)
+ */
 export const DEFAULT_HEAD_BUDGET: Omit<HeadBudget, 'spawnedAt'> = {
   maxDepth: 3,
-  maxTokens: 50_000,
+  maxTokens: MAX_FORK_WIDTH * NOMINAL_HEAD_STEPS * NOMINAL_STEP_TOKENS,
   maxWallClockMs: 5 * 60 * 1000,
 };
 
@@ -304,9 +323,11 @@ export function deriveChildBudget(
 /**
  * Returns true if this budget is exhausted along any dimension.
  *
- * `consumedTokens` is the total tokens this head + descendants have spent so far;
- * pass it from the run loop's running `capture.tokenUsage` so the token ceiling
- * actually gates a run mid-flight. Omitted (or 0) only checks depth + wall-clock.
+ * `consumedTokens` is the MARGINAL spend of this head + descendants so far —
+ * `HeadCapture.tokenUsage.budgetCharged`, not gross provider usage. Passing gross
+ * bills the re-sent prompt prefix on every step, which makes the ceiling a
+ * function of how long the parent has been running. Omitted (or 0) only checks
+ * depth + wall-clock.
  */
 export function budgetExhausted(
   b: HeadBudget,

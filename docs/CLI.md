@@ -18,7 +18,7 @@ proteus <command> [options]
 | Command | What it does |
 | --- | --- |
 | [`proteus setup`](#proteus-setup) | Connect your account; optionally configure local-only model credentials |
-| [`proteus provider [action] [name]`](#proteus-provider-action-name) | List or connect model and account providers |
+| [`proteus provider [action] [name]`](#proteus-provider-action-name) | List, connect, or disconnect model and account providers |
 | [`proteus auth`](#proteus-auth) | Sign the CLI into your Proteus account |
 | [`proteus whoami`](#proteus-whoami) | Show the signed-in Proteus account |
 | [`proteus logout`](#proteus-logout) | Sign out of the Proteus CLI |
@@ -105,7 +105,7 @@ Connect your account; optionally configure local-only model credentials.
 
 ### proteus provider [action] [name]
 
-List or connect model and account providers.
+List, connect, or disconnect model and account providers.
 
 Also: `proteus providers`
 
@@ -360,8 +360,9 @@ Trigger an MCTS evolution cycle.
 
 | Option | What it does |
 | --- | --- |
-| `--budget <n>` | MCTS iterations (default: "2") |
-| `--branches <n>` | Branches per expansion (default: "2") |
+| `--budget <n>` | MCTS iterations (default: the engine default) |
+| `--branches <n>` | Branches per expansion (default: the engine default) |
+| `--max-cost <usd>` | Cost ceiling in USD (default: the engine default) |
 | `--model <id>` | Model ID (env: PROTEUS_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |

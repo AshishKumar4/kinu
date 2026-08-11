@@ -19,6 +19,7 @@
 import type { LLM } from '../types/primitives.js';
 import type { FactsStore } from './facts.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 export interface SleepTimeInput {
   /** Last completed turn's task. */
@@ -42,8 +43,8 @@ const PROMPT = (i: SleepTimeInput) => `You are a background memory-compression a
 update the agent's persistent state so the next turn starts smarter.
 
 Recent turn:
-- Task: ${i.task.slice(0, 1000)}
-- Output: ${i.output.slice(0, 2000)}
+- Task: ${evidenceWindow(i.task, EVIDENCE_BUDGETS.outcomeUserMessage)}
+- Output: ${evidenceWindow(i.output, EVIDENCE_BUDGETS.outcomeAssistantResponse)}
 - Tools used: ${i.toolCalls.join(', ') || '(none)'}
 
 Current facts in agent's world model:

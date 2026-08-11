@@ -8,10 +8,10 @@ import {
   initRunEventTables, RunEventRecorder,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
   persistMeasuredPromptTokens, applyOverflowRecovery,
-  TurnAccumulator, DelegationNudge,
+  TurnAccumulator, TurnSteering, CraftCycle,
   OVERFLOW_RETRY_EVENT, OVERFLOW_RETRY_TEXT,
   SPILL_DIRS,
-  type CompactionTriggerState, type ProgrammaticTurn,
+  type AgentSignal, type CompactionTriggerState,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
@@ -92,22 +92,23 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(rec.read('run-3').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
 
-  test('a nudged turn writes its delegation_nudge row; an unnudged one writes none', () => {
+  test('a steered turn writes its turn_steering row; an unsteered one writes none', () => {
     const rec = recorder();
-    const nudge = new DelegationNudge();
-    nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
-    nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
-    nudge.onToolResult({ toolName: 'run', result: 'Error (exit 2): boom', success: true });
-    nudge.prepareStep({ stepNumber: 4, messages: [{ role: 'user', content: 'q' }] });
-    nudge.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
+    const steering = new TurnSteering();
+    // Three DIFFERENT failures of one tool — the failure streak, not a repeat.
+    for (const boom of ['boom a', 'boom b', 'boom c']) {
+      steering.onToolResult({ toolName: 'run', args: { command: boom }, result: `Error (exit 2): ${boom}`, success: true });
+    }
+    steering.steerFor(4);
+    steering.onToolCall({ toolName: 'agents', args: { action: 'fork' } });
 
     closeTurnRun(rec, 'run-n', {
       turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
-      nudge: nudge.snapshot(),
+      steering: steering.snapshot(),
     });
     const events = rec.read('run-n');
-    expect(events.map((e) => e.type)).toEqual(['delegation_nudge', 'turn_end', 'run_end']);
-    const row = events[0] as Extract<typeof events[number], { type: 'delegation_nudge' }>;
+    expect(events.map((e) => e.type)).toEqual(['turn_steering', 'turn_end', 'run_end']);
+    const row = events[0] as Extract<typeof events[number], { type: 'turn_steering' }>;
     expect(row.trigger).toBe('repeated_failure');
     expect(row.tool).toBe('run');
     expect(row.step).toBe(4);
@@ -116,9 +117,51 @@ describe('openTurnRun / closeTurnRun', () => {
 
     closeTurnRun(rec, 'run-quiet', {
       turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
-      nudge: new DelegationNudge().snapshot(),
+      steering: new TurnSteering().snapshot(),
     });
     expect(rec.read('run-quiet').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
+  });
+
+  test('an in-episode craft loop writes its craft_cycle row; an idle turn writes none', () => {
+    const rec = recorder();
+    const observed: string[][] = [];
+    const crafted: string[] = [];
+    const cycle = new CraftCycle({
+      names: () => crafted,
+      observe: (names) => { observed.push([...names]); return []; },
+    });
+    cycle.reset(true);
+
+    // The episode: craft in one call, reach for it in the next.
+    crafted.push('sum');
+    cycle.onToolResult({
+      toolName: 'execute_tools', args: { code: 'await workspace.createTool("sum","d","async()=>1")' },
+      result: 'ok', success: true,
+    });
+    cycle.onToolResult({
+      toolName: 'execute_tools', args: { code: 'return await tools.sum(1)' },
+      result: '1', success: true,
+    });
+
+    closeTurnRun(rec, 'run-c', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      craft: cycle.snapshot(),
+    });
+    const events = rec.read('run-c');
+    expect(events.map((e) => e.type)).toEqual(['craft_cycle', 'turn_end', 'run_end']);
+    const row = events[0] as Extract<typeof events[number], { type: 'craft_cycle' }>;
+    expect(row.crafted).toEqual(['sum']);
+    expect(row.reused).toEqual(['sum']);
+    expect(row.returned).toBe(1);
+    expect(observed).toEqual([['sum']]);
+
+    const idle = new CraftCycle({ names: () => [], observe: () => [] });
+    idle.reset(true);
+    closeTurnRun(rec, 'run-idle', {
+      turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',
+      craft: idle.snapshot(),
+    });
+    expect(rec.read('run-idle').map((e) => e.type)).toEqual(['turn_end', 'run_end']);
   });
 
   test('a recorder failure never throws into the turn', () => {
@@ -170,38 +213,48 @@ describe('persistMeasuredPromptTokens', () => {
   });
 });
 
+/** Records what the recovery policy hands the one delivery seam. */
+function recordingSignals() {
+  const delivered: AgentSignal[] = [];
+  return {
+    delivered,
+    deliver: async (signal: AgentSignal) => { delivered.push(signal); return 'queued' as const },
+  };
+}
+
 describe('applyOverflowRecovery', () => {
-  test('a context overflow arms force-compaction and enqueues exactly one retry', async () => {
+  test('a context overflow arms force-compaction and delivers exactly one retry', async () => {
     const state = recordingState();
-    const enqueued: ProgrammaticTurn[] = [];
+    const signals = recordingSignals();
     const decision = applyOverflowRecovery({
       error: 'prompt is too long: 210000 tokens > 200000 maximum',
       lastPromptTokens: 0, contextWindow: 200_000, turnWasOverflowRetry: false,
-      state, sessionKey: 'k',
-      enqueueTurn: async (t) => { enqueued.push(t); return { status: 'queued' }; },
+      state, sessionKey: 'k', signals,
     });
     expect(decision.forceCompaction).toBe(true);
     expect(state.armed).toEqual(['k']);
     await Promise.resolve();
-    expect(enqueued).toEqual([{ text: OVERFLOW_RETRY_TEXT, metadata: { proteusEvent: OVERFLOW_RETRY_EVENT } }]);
+    // The retry never steers a live turn: the turn that failed is over.
+    expect(signals.delivered).toEqual([
+      { kind: OVERFLOW_RETRY_EVENT, text: OVERFLOW_RETRY_TEXT },
+    ]);
   });
 
-  test('a failed retry never enqueues another; unrelated failures never arm', () => {
+  test('a failed retry never delivers another; unrelated failures never arm', () => {
     const state = recordingState();
-    const enqueued: ProgrammaticTurn[] = [];
-    const enqueueTurn = async (t: ProgrammaticTurn) => { enqueued.push(t); return { status: 'queued' as const }; };
+    const signals = recordingSignals();
     const retryFailure = applyOverflowRecovery({
       error: 'prompt is too long', lastPromptTokens: 0, contextWindow: 200_000,
-      turnWasOverflowRetry: true, state, sessionKey: 'k', enqueueTurn,
+      turnWasOverflowRetry: true, state, sessionKey: 'k', signals,
     });
     expect(retryFailure.forceCompaction).toBe(true);
     expect(retryFailure.enqueueRetry).toBe(false);
     const rateLimit = applyOverflowRecovery({
       error: 'Error 429: too many requests', lastPromptTokens: 0, contextWindow: 200_000,
-      turnWasOverflowRetry: false, state, sessionKey: 'k', enqueueTurn,
+      turnWasOverflowRetry: false, state, sessionKey: 'k', signals,
     });
     expect(rateLimit.forceCompaction).toBe(false);
-    expect(enqueued).toEqual([]);
+    expect(signals.delivered).toEqual([]);
     expect(state.armed).toEqual(['k']); // only the genuine overflow armed
   });
 });

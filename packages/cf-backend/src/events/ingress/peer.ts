@@ -33,13 +33,8 @@ import {
   type EventLog, type PeerAgentPayload,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
   type ReplyChannelRow, type ReplyChannelStore, type VFS,
+  type SqlExec,
 } from '@proteus/core';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
 
 // ── Wire shapes ──────────────────────────────────────────────────
 

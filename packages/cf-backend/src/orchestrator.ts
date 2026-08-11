@@ -52,7 +52,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldEventText, modifyScaffold, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
@@ -69,7 +69,8 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, reasoningEffortOptions, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  effortFor, initBackgroundJobsTable, initMctsSearchTable, initImportedExperienceTable,
+  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   isReasoningEffort, type ReasoningEffort,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
@@ -101,7 +102,9 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeStatus,
   type ProductChangeToolDeps, type ProductSourceBindingInput,
-  type ExperienceToolDeps,
+  runExperienceAction,
+  type ExperienceActionDeps,
+  type ExperienceActionInput,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
@@ -119,7 +122,9 @@ import {
   // Shared turn lifecycle
   snapshotCompletedTurn,
   spillEventContent,
+  EVIDENCE_BUDGETS, evidenceWindow,
   type DynamicApproval,
+  type MissingCapability,
   type DynamicContext,
   type DynamicDelegate,
 } from "@proteus/core";
@@ -131,20 +136,22 @@ import {
   admitSubordinateReport,
   createTeamToolDeps,
   normalizeReportContent,
+  parentAdmitsSubordinateReport,
+  type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
-} from "./subordinate-support.js";
+} from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
-import type { UserDO } from "./user/user-do.js";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
+import type { DeviceConsentDecision } from "./user/device-consent.js";
 import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
 import {
   initWebhookRateLimitTables,
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
 } from "./events/webhook-rate-limit.js";
-import { acceptInboundEmail } from "./events/ingress/email.js";
+import { acceptInboundEmail, inboundEmailDropNotice } from "./events/ingress/email.js";
 import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -165,7 +172,10 @@ const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
 const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
 
 // Inbound-email budget per agent (all senders combined). Email is a wake
-// channel, not a data plane — mail beyond this is dropped at the gate.
+// channel, not a data plane — mail beyond this is dropped at the gate. The
+// drop is announced to the agent (noteEmailRateDrop): a reply storm or a list
+// subscription otherwise makes it silently deaf while it believes it has seen
+// its inbox.
 const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
 function executorOutputIsError(output: string): boolean {
@@ -354,12 +364,15 @@ export class OrchestratorAgent extends ActorAgent {
         kind: 'device consent',
         detail: `${pending.deviceLabel}: ${pending.command}`,
       }));
+    const deafInbox = inboundEmailDropNotice(EMAIL_INBOUND_RATE_PER_MIN, this._emailDropWindow, Date.now());
     return {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
       approvals,
+      ...(deafInbox ? { missingCapabilities: [...(base.missingCapabilities ?? []), deafInbox] } : {}),
     };
   }
+
 
   private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
     try {
@@ -749,11 +762,10 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  /** The `experience` tool's deps: this workspace's own stores plus a client
-   *  for the owner's library, every call of which crosses the UserDO
-   *  capability gate. Absent until the workspace is claimed — there is no
-   *  owner library to reach before that. */
-  private getExperienceToolDeps(): ExperienceToolDeps | undefined {
+  /** This workspace's own stores plus a client for the owner's library, every
+   *  call of which crosses the UserDO capability gate. Absent until the
+   *  workspace is claimed — there is no owner library to reach before that. */
+  private getExperienceDeps(): ExperienceActionDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
     return {
@@ -765,6 +777,27 @@ export class OrchestratorAgent extends ActorAgent {
         get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
       },
     };
+  }
+
+  /**
+   * The owner's experience library — publish / search / import, driven by the
+   * owner rather than by the agent.
+   *
+   * It was a tool once. Sharing proven work between workspaces is a rare and
+   * deliberate decision, and a tool costs the model attention on every turn it
+   * is not the answer to, so the same dispatcher now sits behind this RPC for
+   * the webUI to call. It runs on the workspace DO, not the UserDO, for a
+   * reason the UserDO enforces: publishing happens under a workspace's own
+   * name, and import stages into this workspace's ledger.
+   */
+  @callable()
+  async experienceAction(input: ExperienceActionInput): Promise<Record<string, unknown>> {
+    this.ensureSchema();
+    const deps = this.getExperienceDeps();
+    if (!deps) {
+      return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
+    }
+    return runExperienceAction(deps, input);
   }
 
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
@@ -823,7 +856,6 @@ export class OrchestratorAgent extends ActorAgent {
       team: this.getTeamToolDeps(),
       productChanges: this.getProductChangeToolDeps(),
       peers: this.getPeersToolDeps(),
-      experience: this.getExperienceToolDeps(),
     };
   }
 
@@ -896,14 +928,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
   // (it binds selected pending events via markConsumed, then injects one
-  // programmatic turn via host.enqueueTurn → saveMessages). Ingress paths use
+  // signal through the core delivery seam). Ingress paths use
   // the debounced `this.orch.scheduleDrain()`; the post-turn hook drains
   // immediately via `this.orch.drainPendingEvents()`.
 
   async onChatResponse(result: ChatResponseResult) {
     // The actor-generic settle spine lives on ActorAgent; everything after it
     // here is orchestrator sequencing (takes, branches, evolution, naming).
-    const { drainTurnId, programmaticUserMessage, errorText, completed, injectedEvents } =
+    const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
       this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     if (result.status !== "completed") {
@@ -1006,10 +1038,10 @@ export class OrchestratorAgent extends ActorAgent {
         }
       });
     }
-    // Mid-turn injected batches feed the SAME dispatch, keyed by the batch
-    // turn ids this turn absorbed at its step boundaries.
-    for (const injected of injectedEvents.absorbed) {
-      void this.completeEventBatch(injected.turnId, assistantText);
+    // Signals absorbed at a step boundary feed the SAME dispatch, keyed by the
+    // reply turn id each one carries.
+    for (const injected of injectedSignals.absorbed) {
+      if (injected.replyTurnId) void this.completeEventBatch(injected.replyTurnId, assistantText);
     }
 
     // status is "completed" here (the !== "completed" early-return above), so
@@ -1069,9 +1101,11 @@ export class OrchestratorAgent extends ActorAgent {
       const currentFacts = this.facts.all()
         .sort((a, b) => b.lastObservedAt - a.lastObservedAt)
         .map(f => ({ key: f.key, value: f.value, confidence: f.confidence }));
-      const update = await runSleepTimeCompute(this.rt.llm, {
-        task: task.slice(0, 2000),
-        output: output.slice(0, 4000),
+      // Mechanical work — schema-constrained fact upsert/decay over a turn
+      // summary. Runs on the chat vendor's small tier when it has one.
+      const update = await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
+        task,
+        output,
         toolCalls: toolCalls.map(tc => tc.name),
         currentFacts,
       });
@@ -1228,19 +1262,22 @@ export class OrchestratorAgent extends ActorAgent {
   // listPendingConsents for reload) and await the user's decision via the
   // resolveDeviceConsent RPC. "Always" is persisted on the hub, not here.
   private readonly _pendingConsents = new Map<string, {
-    resolve: (d: 'once' | 'always' | 'deny') => void;
+    resolve: (d: DeviceConsentDecision) => void;
     deviceLabel: string; method: string; command: string; scope: string; createdAt: number;
   }>();
 
-  /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides
-   *  (or denies after 5 min so a device call never hangs forever). */
+  /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides,
+   *  or as `timeout` after 5 minutes so a device call never hangs forever.
+   *  `timeout` is deliberately NOT `deny`: an unanswered prompt means the owner
+   *  was away, and telling the agent it was refused turns that into a
+   *  permanent, self-imposed capability loss. */
   async awaitDeviceConsent(req: {
     deviceId: string;
     deviceLabel: string;
     method: string;
     command: string;
     scope: string;
-  }): Promise<'once' | 'always' | 'deny'> {
+  }): Promise<DeviceConsentDecision> {
     const consentId = `cons-${nanoid(10)}`;
     this.logActivity('device_consent_requested', `${req.deviceLabel}: ${req.command.slice(0, 80)}`);
     try {
@@ -1249,11 +1286,11 @@ export class OrchestratorAgent extends ActorAgent {
         deviceLabel: req.deviceLabel, method: req.method, command: req.command, scope: req.scope,
       }));
     } catch { /* nop */ }
-    return new Promise<'once' | 'always' | 'deny'>((resolve) => {
+    return new Promise<DeviceConsentDecision>((resolve) => {
       const timer = setTimeout(() => {
         if (this._pendingConsents.delete(consentId)) {
           try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
-          resolve('deny');
+          resolve('timeout');
         }
       }, 5 * 60_000);
       this._pendingConsents.set(consentId, {
@@ -1356,7 +1393,7 @@ export class OrchestratorAgent extends ActorAgent {
     // constructs the engine, and the legacy CHECK would reject the insert.
     initTurnOutcomeTables(execRaw, this.boundSql);
     // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + partial indexes + views. Spec: docs/EVENTS-HUB-SPEC.md.
+    // + partial indexes + views. Spec: docs/ARCHITECTURE.md — "Events and ingress".
     initEventsHubTables(this.ctx.storage.sql);
     initWebhookRateLimitTables(this.ctx.storage.sql);
     // Branching-heads journal (head_journal, head_evidence, head_merge_results)
@@ -1380,6 +1417,12 @@ export class OrchestratorAgent extends ActorAgent {
     initBackgroundJobsTable(execRaw);
     // Durable MCTS search checkpoints — an evicted fork(settle=mcts) resumes from here.
     initMctsSearchTable(execRaw);
+    // Experience-import staging ledger. The `experience` tool is wired on this
+    // actor (actorToolDeps), and its import action SELECTs this table with no
+    // guard — it must exist wherever the tool does. It was created on the CLI
+    // but never here: the import action hard-errored in production
+    // ("no such table: imported_experience").
+    initImportedExperienceTable(execRaw);
 
     // Compaction: the replayable plan snapshot + the measured prompt-token
     // trigger signal, one row per session (@proteus/compaction stores).
@@ -1925,18 +1968,13 @@ export class OrchestratorAgent extends ActorAgent {
     }
     let continuationQueued = false;
     if (record.changedAnswer) {
-      try {
-        const result = await this.host.enqueueTurn({
-          text: buildTakeContinuationPrompt(record.set, record.chosen),
-          metadata: { proteusEvent: 'take_pick' },
-        });
-        continuationQueued = result.status === 'queued';
-        if (result.status === 'skipped') {
-          console.warn('[proteus] take_pick continuation enqueue skipped');
-        }
-      } catch (err) {
-        console.warn('[proteus] take_pick continuation enqueue failed:', err);
-      }
+      const result = await this.orch.signals.deliver({
+        kind: 'take_pick',
+        text: buildTakeContinuationPrompt(record.set, record.chosen),
+      });
+      // Delivered either way — riding the live turn's next step is the same
+      // continuation, just sooner than a turn of its own.
+      continuationQueued = result !== 'undelivered';
     }
     this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
     return { ...record, continuationQueued };
@@ -2430,6 +2468,13 @@ export class OrchestratorAgent extends ActorAgent {
     // against the recorded outcome — accepted turns are regression checks
     // against the response the user approved; corrected/frustrated turns are
     // scored on whether the candidate already addresses the user's correction.
+    //
+    // The candidate RUNS on the chat model (it is this agent's own loop being
+    // measured) but is SCORED by the review model — the same cross-family
+    // judge selection the shadow eval and MCTS use. GEPA is the largest judge
+    // consumer in the system; letting the chat model grade its own candidates
+    // is exactly the self-enhancement bias (arXiv:2306.05685) the rest of the
+    // repo already routes around.
     const metric = async (
       candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
     ): Promise<MetricOutcome> => {
@@ -2442,14 +2487,14 @@ export class OrchestratorAgent extends ActorAgent {
       const exp = instance.expected;
       const criterion = exp && exp.outcome === 'accepted'
         ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
-          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${exp.recordedResponse.slice(0, 2500)}`
+          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${evidenceWindow(exp.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
         : `The agent's previous response to this task FAILED — the user had to correct it. Score 1.0 when ` +
           `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
-          `Previous (failed) response:\n${(exp?.recordedResponse ?? '').slice(0, 1500)}\n\n` +
-          `User's correction:\n${(exp?.followup ?? '(not recorded)').slice(0, 1000)}`;
+          `Previous (failed) response:\n${evidenceWindow(exp?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
+          `User's correction:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
       try {
         const obj = await generateJson({
-          model,
+          model: await this.getModelForReview(),
           schema: v.object({
             score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
             feedback: v.pipe(v.string(), v.minLength(1)),
@@ -2457,7 +2502,7 @@ export class OrchestratorAgent extends ActorAgent {
           prompt:
             `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
             `actionable feedback on how the agent's behaviour could improve.\n\n` +
-            `Task:\n${instance.input}\n\nNew response:\n${output.slice(0, 4000)}\n\n` +
+            `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
             `${criterion}\n\n` +
             `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
           providerOptions: effortFor('judge').providerOptions,
@@ -2813,10 +2858,12 @@ export class OrchestratorAgent extends ActorAgent {
         model: this.getModel(),
         messages: [{ role: 'user', content: task }],
         tools: this.getRawTools(),
-        stopWhen: stepCountIs(50),
+        stopWhen: stepCountIs(this.maxSteps),
         ...effortFor('scaffold_mutation'),
       }).toUIMessageStream(),
-      timeoutMs: 2 * 60 * 1000,
+      // The live turn budget, not a smaller one: this run IS the candidate's
+      // score, and a candidate cut off early scores as a bad candidate.
+      timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
     });
     if (!result.ok && result.error) throw new Error(result.error);
     return text;
@@ -2880,13 +2927,15 @@ export class OrchestratorAgent extends ActorAgent {
     return { ok: true };
   }
 
-  /** MCP `run_task`: inject a turn into the SAME serialized loop the event→turn
-   *  reactor and background-job wake use (host.enqueueTurn → Think.saveMessages).
-   *  Not a new execution path — the identical programmatic-turn seam. */
+  /** MCP `run_task`: deliver a task signal through the SAME seam the event→turn
+   *  reactor and background-job wake use. Not a new execution path. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
     const trimmed = typeof text === 'string' ? text.trim() : '';
     if (!trimmed) throw new Error('run_task requires non-empty text');
-    return this.host.enqueueTurn({ text: trimmed, metadata: { proteusEvent: 'mcp' } });
+    const outcome = await this.orch.signals.deliver({
+      kind: 'mcp', text: trimmed,
+    });
+    return { status: outcome === 'undelivered' ? 'skipped' : 'queued' };
   }
 
   /** MCP `send_peer`: fire-and-forget a message to one of the owner's other
@@ -3147,10 +3196,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Upload one file into an executor (file-manager drop/Upload) — binary-
    *  safe through the CompositeVFS for every executor (env-native paths map
-   *  through the executor's mount prefix). */
-  @callable() async writeExecutorFile(executorId: string, path: string, contentBase64: string): Promise<ExecutorWriteResult> {
+   *  through the executor's mount prefix).
+   *
+   *  Reached over HTTP (files-routes.ts), not over the chat WebSocket: an RPC
+   *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
+   *  ordinary files died at the socket as an opaque connection failure. */
+  async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
     try {
-      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, contentBase64);
+      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
@@ -3341,7 +3394,7 @@ export class OrchestratorAgent extends ActorAgent {
    *     memory copied, agent_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, craft_scores RESET
    *
-   * See docs/THINK-UPGRADE-AND-FORKING.md §6 for the full spec.
+   * See docs/WORKSPACES.md for the full spec.
    */
   @callable()
   async forkAgent(
@@ -3778,6 +3831,14 @@ export class OrchestratorAgent extends ActorAgent {
       ttl_ms_override: 30_000,
     }, opts.now);
 
+    // A delivery larger than the brief budget is spilled to this agent's own
+    // file plane first, so the woken turn gets a readable path alongside the
+    // brief instead of an unreachable — and, for JSON, syntactically broken —
+    // fragment of the thing that woke it. After the auth + rate gates, so a
+    // rejected delivery never writes a file.
+    const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
+    const bodyPath = await spillEventContent(this.rt.storage.vfs, bodySerialized);
+
     // Publish.
     const { id, admitted } = this.eventLog.publish({
       descriptor: {
@@ -3789,6 +3850,7 @@ export class OrchestratorAgent extends ActorAgent {
           http_headers: opts.headers,
           body: parsedBody,
           delivery_id,
+          ...(bodyPath ? { body_path: bodyPath } : {}),
         },
         auth_outcome: 'verified',
         webhook_id: opts.trigger_id,
@@ -3872,11 +3934,17 @@ export class OrchestratorAgent extends ActorAgent {
     fromSubordinate: string;
     status: SubordinateReportStatus;
     content: string;
+    origin: SubordinateReportOrigin;
   }): Promise<{ id: string; admitted: boolean }> {
     this.ensureSchema();
     const subordinate = this.subordinateRoster.get(input.fromSubordinate);
     if (!subordinate || subordinate.status === 'dismissed') {
       throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
+    }
+    // Before the spill: a relay this workspace is not the audience for must not
+    // leave a file behind on its file plane either. No event exists, so no id.
+    if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate })) {
+      return { id: '', admitted: false };
     }
     const receivedAt = Date.now();
     // A report longer than the brief budget is spilled to this workspace's own
@@ -3900,16 +3968,6 @@ export class OrchestratorAgent extends ActorAgent {
       return published;
     });
     if (result.admitted) {
-      this.broadcast(JSON.stringify({
-        type: 'subordinate_report',
-        subordinate: {
-          name: subordinate.name,
-          displayName: subordinate.displayName,
-        },
-        status: input.status,
-        content: input.content,
-        task: subordinate.currentTask,
-      }));
       this.broadcastSubordinatesChanged();
       this.broadcastSubordinateEvent({
         id: result.id,
@@ -3964,19 +4022,74 @@ export class OrchestratorAgent extends ActorAgent {
   }): Promise<{ admitted: boolean; duplicate?: boolean; event_id?: string; reason?: string }> {
     const ownerEmail = await this.getOwnerEmail();
     if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
-    const result = acceptInboundEmail({
+    let rateDrop: { limit: number; resetAt: number } | null = null;
+    const result = await acceptInboundEmail({
       log: this.eventLog,
       replies: this.replyChannels,
       owner_email: ownerEmail,
       allowlist: this.emailAllowlist(),
-      tryConsumeRateLimit: (now) =>
-        tryConsumeWebhookRateLimit(this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now).allowed,
+      vfs: this.rt.storage.vfs,
+      tryConsumeRateLimit: (now) => {
+        const decision = tryConsumeWebhookRateLimit(
+          this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now,
+        );
+        if (!decision.allowed) rateDrop = { limit: decision.limit, resetAt: decision.resetAt };
+        return decision.allowed;
+      },
     }, opts);
-    if (!result.admitted) return { admitted: false, reason: result.reason };
+    if (!result.admitted) {
+      if (rateDrop) this.noteEmailRateDrop(rateDrop, opts.now);
+      return { admitted: false, reason: result.reason };
+    }
     // Wake the agent for a turn, debounced — only on fresh admission (a
     // duplicate delivery is already bound or in flight).
     if (!result.duplicate) this.orch.scheduleDrain();
     return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
+  }
+
+  /** The rate-limit window whose drops have already been announced, and how
+   *  many this window has dropped. In memory: an eviction re-announcing once is
+   *  harmless, and a storm must not write a row per message. */
+  private _emailDropWindow = 0;
+  private _emailDropCount = 0;
+
+  /**
+   * Tell the agent its inbox gate is dropping mail.
+   *
+   * A rate-limited delivery leaves no trace the agent can read: the sender gets
+   * nothing, the log gets nothing, and the agent goes on believing it has seen
+   * its inbox. One internal event per rate-limit window turns "I may be deaf
+   * right now" into a fact it can act on — say so, ask the sender to resend,
+   * check back after the window — without a row per dropped message.
+   */
+  private noteEmailRateDrop(drop: { limit: number; resetAt: number }, now: number): void {
+    if (drop.resetAt !== this._emailDropWindow) {
+      this._emailDropWindow = drop.resetAt;
+      this._emailDropCount = 0;
+    }
+    this._emailDropCount += 1;
+    if (this._emailDropCount > 1) return;
+    try {
+      this.eventLog.publish({
+        descriptor: {
+          ingress: 'self_emit',
+          variant: 'internal',
+          emitting_head_trust: 'self',
+          payload: {
+            kind: 'email_inbound_rate_limited',
+            // Audit detail for the operator's event log. It never reaches the
+            // model through the brief (an internal payload's bytes are not
+            // rendered); what the model reads is the live inbox line in the
+            // turn's dynamic context, which also expires with the window.
+            data: { limitPerMin: drop.limit, windowResetsAt: new Date(drop.resetAt).toISOString() },
+          },
+        },
+        now,
+      });
+      this.orch.scheduleDrain();
+    } catch (err) {
+      console.warn('[proteus] email rate-drop notice failed:', (err as Error).message);
+    }
   }
 
   /** The agent's email surface for the operator UI / routes. */

@@ -54,12 +54,15 @@ describe('buildCompactionSummaryPrompt', () => {
     for (const section of SECTIONS) expect(prompt).toContain(section);
   });
 
-  test('an oversize latest ask is capped, not dropped', () => {
+  test('an oversize latest ask is windowed head+tail with a named omission, not dropped', () => {
     const prompt = buildCompactionSummaryPrompt({
       transcript: 't', latestUserAsk: 'A'.repeat(10_000), budgetTokens: 500,
     });
-    expect(prompt).toContain('A'.repeat(4_000) + '…');
-    expect(prompt).not.toContain('A'.repeat(4_001));
+    // Both ends survive (the tail of a long spec-dump ask carries its point)
+    // and the cut names itself, so the summarizer knows the ask was longer.
+    expect(prompt).toContain('A'.repeat(4_000));
+    expect(prompt).not.toContain('A'.repeat(8_001));
+    expect(prompt).toContain('chars omitted from the middle');
   });
 });
 

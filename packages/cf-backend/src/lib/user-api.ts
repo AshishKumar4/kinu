@@ -41,6 +41,20 @@ export interface ModelMenuEntry {
   contextWindow?: number;
 }
 
+/** A provider the server could not reach while building the menu (revoked
+ *  OAuth grant, unreachable endpoint). Surfaced next to the models so one
+ *  broken provider reads as a notice rather than an empty picker. */
+export interface ProviderFailure {
+  provider: string;
+  label?: string;
+  reason: string;
+}
+
+export interface ModelMenu {
+  models: ModelMenuEntry[];
+  failures: ProviderFailure[];
+}
+
 export interface DeviceFlowStart {
   userCode: string;
   deviceAuthId: string;
@@ -151,10 +165,10 @@ export const setConfig        = (key: string, value: string) =>
 // ── Models + providers ─────────────────────────────────────────────
 // The model menu only changes when a provider is connected/disconnected, so it
 // is cached for the SPA session and invalidated by the provider mutators above.
-let _modelsCache: Promise<ModelMenuEntry[]> | null = null;
-export function listAvailableModels(): Promise<ModelMenuEntry[]> {
+let _modelsCache: Promise<ModelMenu> | null = null;
+export function listAvailableModels(): Promise<ModelMenu> {
   if (!_modelsCache) {
-    _modelsCache = api<ModelMenuEntry[]>('GET', '/models').catch((e) => { _modelsCache = null; throw e; });
+    _modelsCache = api<ModelMenu>('GET', '/models').catch((e) => { _modelsCache = null; throw e; });
   }
   return _modelsCache;
 }
@@ -267,19 +281,6 @@ export interface CreateWebhookResult {
   secret: string | null;       // returned once at creation; never again
 }
 
-export interface EventRow {
-  id: string;
-  trace_id: string;
-  caused_by: string | null;
-  ingress: string;
-  variant: string;
-  trust: 'external' | 'authenticated' | 'owner' | 'self';
-  priority: 'urgent' | 'normal' | 'background';
-  payload_visibility: 'full' | 'redact' | 'hash' | 'hmac' | 'opaque_handle';
-  payload: unknown;
-  received_at: number;
-}
-
 /** Agent-scoped HTTP fetch; same auth as the user routes. */
 async function agentApi<T>(method: string, agentName: string, path: string, body?: unknown): Promise<T> {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
@@ -303,12 +304,3 @@ export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts)
 
 export const cancelTrigger = (agentName: string, trigger_id: string) =>
   agentApi<{ ok: boolean; changed: boolean }>('DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);
-
-export const listAgentEvents = (agentName: string, opts?: { variant?: string; since?: number; limit?: number }) => {
-  const qs = new URLSearchParams();
-  if (opts?.variant) qs.set('variant', opts.variant);
-  if (opts?.since)   qs.set('since', String(opts.since));
-  if (opts?.limit)   qs.set('limit', String(opts.limit));
-  const tail = qs.toString();
-  return agentApi<{ events: EventRow[] }>('GET', agentName, `/events${tail ? '?' + tail : ''}`);
-};

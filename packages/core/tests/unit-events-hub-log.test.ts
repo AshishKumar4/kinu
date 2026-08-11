@@ -5,12 +5,7 @@ import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, type IngressDescriptor,
 } from '../src/events/hub/index.ts';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
+import type { SqlExec } from '../src/index.js';
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');

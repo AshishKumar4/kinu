@@ -36,6 +36,11 @@ export const AGENT_CONFIG_KEYS = {
   /** `<provider>/<modelId>` the agent's own output is judged on. Unset = pick
    *  the first available cross-family model (selectJudgeModel). */
   reviewModel: 'review_model',
+  /** `<provider>/<modelId>` the MECHANICAL evolution calls run on (outcome
+   *  classification, pathology labels, short reflections, pattern extraction,
+   *  sleep-time compression). Unset = the chat vendor's own small tier, or the
+   *  chat model where it has none (selectFastModel). */
+  fastModel: 'fast_model',
   /** Comma-separated list of skill names the operator wants always-on. */
   alwaysActiveSkills: 'always_active_skills',
   /** The executor namespace the agent most recently ran a tool in — so the UI
@@ -78,7 +83,6 @@ export const AGENT_CONFIG_KEYS = {
   memoryVectorBackfillDone: 'memory_vector_backfill_done',
   memoryVectorBackfillCursor: 'memory_vector_backfill_cursor',
 } as const;
-export type AgentConfigKey = (typeof AGENT_CONFIG_KEYS)[keyof typeof AGENT_CONFIG_KEYS];
 
 export interface AgentConfigStore {
   // ── Generic accessors ──
@@ -123,6 +127,11 @@ export interface AgentConfigStore {
   getReviewModel(): string | null;
   /** Pin the review model; null / blank clears the pin. */
   setReviewModel(spec: string | null): void;
+  /** The model the mechanical evolution calls run on, or null to let
+   *  selectFastModel pick the chat vendor's small tier. */
+  getFastModel(): string | null;
+  /** Pin the fast model; null / blank clears the pin. */
+  setFastModel(spec: string | null): void;
   /** Skills the operator has pinned as always-active for this agent. */
   getAlwaysActiveSkills(): string[];
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void;
@@ -300,6 +309,12 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       const trimmed = spec?.trim();
       if (trimmed) set(AGENT_CONFIG_KEYS.reviewModel, trimmed);
       else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.reviewModel}`;
+    },
+    getFastModel() { return get(AGENT_CONFIG_KEYS.fastModel); },
+    setFastModel(spec) {
+      const trimmed = spec?.trim();
+      if (trimmed) set(AGENT_CONFIG_KEYS.fastModel, trimmed);
+      else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.fastModel}`;
     },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);

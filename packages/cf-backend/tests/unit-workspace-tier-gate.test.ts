@@ -115,7 +115,6 @@ const GATED_CALLS: GatedCall[] = [
     }),
   },
 
-  { capability: 'product_change', name: 'listProductSourceBindings', run: (u, c) => u.listProductSourceBindings(c) },
   { capability: 'product_change', name: 'upsertProductSourceBinding', run: (u, c) => u.upsertProductSourceBinding(c, { kind: 'github', repo: 'o/r' } as never) },
   { capability: 'product_change', name: 'createProductChange', run: (u, c) => u.createProductChange(c, WORKSPACE, { bindingId: 'b1', userPrompt: 'x' }) },
   { capability: 'product_change', name: 'updateProductChange', run: (u, c) => u.updateProductChange(c, 'pc_1', { plan: 'x' }) },

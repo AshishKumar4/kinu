@@ -14,8 +14,9 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox.js';
-import { recordProbeRun, listIncidents, type MonitorDeps, type SqlExec } from '../src/monitor/incidents.js';
+import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents.js';
 import { runSyntheticProbes, type ProbeOutcome } from '../src/monitor/probes.js';
+import type { SqlExec } from '@proteus/core';
 
 // ── A site to probe ──────────────────────────────────────────────
 

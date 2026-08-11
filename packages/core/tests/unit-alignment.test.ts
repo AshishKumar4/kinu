@@ -167,7 +167,7 @@ describe('renderAlignmentConvergence', () => {
 
     const text = renderAlignmentConvergence(alignmentConvergence(sql));
     expect(text).toContain('Overall: 25.0 per 100 turns (95% CI');
-    expect(text).toContain('over 400 graded turns');
+    expect(text).toContain('over 400 user-graded turns');
     expect(text).toContain('Trend: improving (-30.0 per 100 turns, v1 → v2)');
     expect(text).toContain('  v1  n=200  40.0 per 100 turns');
     expect(text).toContain('  v2  n=200  10.0 per 100 turns');

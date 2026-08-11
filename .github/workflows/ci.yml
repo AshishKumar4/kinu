@@ -35,6 +35,20 @@ jobs:
       - name: Core unit tests
         run: bun test --cwd packages/core
 
+      # The backend suites, including the conformance gates: each backend's
+      # REAL composition root observed against the capability manifest
+      # (core/src/conformance). A gate that does not run in CI converts at the
+      # same rate as advice — these suites previously never ran here, which is
+      # how "X never worked on Y backend" stayed green.
+      - name: Backend suites (cf + cli-backend)
+        run: bun test --cwd packages/cf-backend && bun test --cwd packages/cli-backend
+
+      # The CLI conformance observer drives the production create→open→session
+      # chain; the full packages/cli suite stays out of CI for now because its
+      # PTY tests need a terminal.
+      - name: CLI conformance gate
+        run: bun test packages/cli/tests/conformance.test.ts
+
       # Credential-free eval-gate verification. The live-model benchmark runs in
       # the separate, gated eval.yml (manual / nightly / `run-eval` label).
       - name: Eval gate logic

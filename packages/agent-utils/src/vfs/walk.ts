@@ -5,34 +5,52 @@ export interface FileEntry {
 	stat: VFSStat;
 }
 
+export interface WalkResult {
+	entries: FileEntry[];
+	/** True when the walk stopped at maxEntries — the caller MUST surface
+	 *  this, or a bounded listing is indistinguishable from a complete one. */
+	truncated: boolean;
+	/** True when a subtree was skipped because it lay below maxDepth. Callers
+	 *  surface it when the depth was a default guard, not when the user asked
+	 *  for that depth (find -maxdepth). */
+	depthPruned: boolean;
+}
+
 /**
- * Recursively walk a VFS directory tree, collecting file and directory entries.
- *
- * Stops early when `maxDepth` or `maxEntries` is reached.
+ * Recursively walk a VFS directory tree, collecting file and directory
+ * entries. The bounds are runaway guards for degenerate trees, and hitting
+ * either is REPORTED so the consumer can say so — a silently bounded walk
+ * turns "grep found nothing" into a falsehood on any tree larger than the
+ * bound.
  */
 export async function walkRecursive(
 	vfs: VFS,
 	base: string,
 	maxDepth: number,
 	maxEntries: number,
-): Promise<FileEntry[]> {
-	const results: FileEntry[] = [];
+): Promise<WalkResult> {
+	const entries: FileEntry[] = [];
+	let truncated = false;
+	let depthPruned = false;
 
 	async function walk(dir: string, depth: number): Promise<void> {
-		if (depth > maxDepth || results.length >= maxEntries) return;
-		let entries: string[];
-		try { entries = await vfs.readdir(dir); } catch { return; }
+		if (entries.length >= maxEntries) { truncated = true; return; }
+		let names: string[];
+		try { names = await vfs.readdir(dir); } catch { return; }
 
-		for (const name of entries) {
-			if (results.length >= maxEntries) return;
+		for (const name of names) {
+			if (entries.length >= maxEntries) { truncated = true; return; }
 			const full = dir ? `${dir}/${name}` : name;
 			let st: VFSStat;
 			try { st = await vfs.stat(full); } catch { continue; }
-			results.push({ path: full, stat: st });
-			if (st.isDirectory()) await walk(full, depth + 1);
+			entries.push({ path: full, stat: st });
+			if (st.isDirectory()) {
+				if (depth + 1 > maxDepth) { depthPruned = true; continue; }
+				await walk(full, depth + 1);
+			}
 		}
 	}
 
 	await walk(base, 0);
-	return results;
+	return { entries, truncated, depthPruned };
 }

@@ -31,7 +31,6 @@ export type ChangelogRevertAction =
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] };
 
-export type ChangelogRevertType = ChangelogRevertAction['type'];
 
 export interface ChangelogEntry {
   /** Stable id derived from the source ledger row — safe for revert-by-id. */

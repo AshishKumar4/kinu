@@ -300,6 +300,7 @@ describe('AgentConfigStore — every key has a write path', () => {
     (c) => c.setShadowSampleRate(0.5),
     (c) => c.setScaffoldExploreShare(0.3),
     (c) => c.setReviewModel('anthropic/claude-opus-4-7'),
+    (c) => c.setFastModel('anthropic/claude-haiku-4-5'),
     (c) => c.setAlwaysActiveSkills(['research']),
     (c) => c.setLastActiveExecutor('sandbox'),
     // Stamps workspace_backup_at alongside the handle.

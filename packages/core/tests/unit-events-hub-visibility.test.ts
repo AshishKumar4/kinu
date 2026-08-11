@@ -74,6 +74,31 @@ describe('renderForLLM', () => {
       'hash'));
     expect(r.brief).toContain('redacted');
   });
+  test('an internal note names its kind and never leaks its payload bytes', () => {
+    // `data` is whatever the emitting layer put there; the brief is the model's
+    // view of an event, not a dump of it. The kind is the actionable fact.
+    const e = eventFor('internal', {
+      kind: 'email_inbound_rate_limited',
+      data: 'window resets at 2026-08-11T09:00:00Z',
+    });
+    e.ingress = 'self_emit';
+    const r = renderForLLM(e);
+    expect(r.brief).toBe('email_inbound_rate_limited');
+    expect(r.brief).not.toContain('2026-08-11');
+  });
+
+  test('opaque-handle brief states the withholding and invents no read-back API', () => {
+    // Regression: this brief once instructed the model to call
+    // `read_external_payload(event_id)` — a function that existed nowhere on
+    // any backend. Text injected into the prompt is an API contract; it may
+    // only cite what the runtime can actually serve.
+    const r = renderForLLM(eventFor('webhook',
+      { _visibility: 'opaque_handle', handle: 'opaque:abcd1234' },
+      'opaque_handle' as never));
+    expect(r.brief).toContain('opaque:abcd1234');
+    expect(r.brief).toContain('withheld');
+    expect(r.brief).not.toContain('read_external_payload');
+  });
   test('is_self_caused is true for self_emit', () => {
     const e = eventFor('internal', { kind: 'reflect', data: {} });
     e.ingress = 'self_emit';
@@ -96,9 +121,13 @@ describe('renderForLLM', () => {
       const r = renderForLLM(eventFor('subordinate_report', {
         from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
       }));
-      expect(r.brief).toBe(
-        `completed: ${longReport.slice(0, EVENT_BRIEF_MAX_CHARS)} — full report: ${content_path}`,
+      // Bounded, but it SAYS it is bounded and where the rest lives: head,
+      // an in-band omitted count, tail, then the resolvable path.
+      expect(r.brief.startsWith(`completed: ${longReport.slice(0, 100)}`)).toBe(true);
+      expect(r.brief).toContain(
+        `[... ${longReport.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
+      expect(r.brief.endsWith(` — full report: ${content_path}`)).toBe(true);
       expect(await vfs.readFile(content_path!)).toBe(longReport);
     });
 
@@ -123,9 +152,13 @@ describe('renderForLLM', () => {
         from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
         body, sender_event_id: 'se1', body_path,
       }));
-      expect(r.brief).toBe(
-        `research: ${serialized.slice(0, EVENT_BRIEF_MAX_CHARS)} — full message: ${body_path}`,
+      expect(r.brief.startsWith(`research: ${serialized.slice(0, 100)}`)).toBe(true);
+      expect(r.brief).toContain(
+        `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
       );
+      // The tail survives the window, so the serialization's closing brace is
+      // visible rather than cut mid-value.
+      expect(r.brief).toContain(`"} — full message: ${body_path}`);
       expect(await vfs.readFile(body_path!)).toBe(serialized);
     });
 
@@ -139,6 +172,50 @@ describe('renderForLLM', () => {
         body: 'shipping today', sender_event_id: 'se1',
       }));
       expect(r.brief).toBe('status: "shipping today"');
+    });
+
+    test('an oversize webhook body is windowed, counted, and addressable', async () => {
+      // The old brief handed the model 200 characters of stringified JSON —
+      // syntactically invalid, unmarked, and with nothing to read the rest
+      // from — as the whole content of the delivery that woke it.
+      const { vfs } = createMemoryVfs();
+      const body = { event: 'deploy.failed', log: 'y'.repeat(900), action: 'rollback' };
+      const serialized = JSON.stringify(body);
+      const body_path = await spillEventContent(vfs, serialized);
+
+      const r = renderForLLM(eventFor('webhook', {
+        webhook_id: 'w', http_method: 'POST', http_headers: {}, delivery_id: 'd',
+        body, body_path,
+      }));
+      expect(r.brief).toContain('deploy.failed');
+      expect(r.brief).toContain(
+        `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
+      );
+      expect(r.brief).toContain('rollback');
+      expect(r.brief.endsWith(` — full body: ${body_path}`)).toBe(true);
+      expect(await vfs.readFile(body_path!)).toBe(serialized);
+    });
+
+    test('an oversize email body is windowed, counted, and addressable', async () => {
+      const { vfs } = createMemoryVfs();
+      const body_text = `Please review:\n${'context line\n'.repeat(90)}Ship it by Friday.`;
+      const body_path = await spillEventContent(vfs, body_text);
+
+      const r = renderForLLM({
+        ...eventFor('email', {
+          from: 'owner@example.com', to: 'agent@example.com', subject: 'Release',
+          body_text, message_id: null, in_reply_to: null, references: null,
+          attachments: [{ filename: 'a.csv', content_type: 'text/csv', size: 4 }],
+          body_path,
+        }),
+        ingress: 'email_inbound',
+      });
+      expect(r.brief.startsWith('"Release" [1 attachment]: Please review:')).toBe(true);
+      expect(r.brief).toContain(
+        `[... ${body_text.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
+      );
+      expect(r.brief).toContain('Ship it by Friday.');
+      expect(r.brief.endsWith(` — full body: ${body_path}`)).toBe(true);
     });
 
     test('the budget boundary is exact, and identical content re-addresses one path', async () => {

@@ -29,7 +29,7 @@ function makeSql(db: Database): SqlExecutor {
 
 /** The cf sandbox mount: the container's real root, ephemeral. */
 const SANDBOX_POLICY: MountPolicy =
-  { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+  { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
 
 /** A raw sandbox handle that records the shell commands the adapter issues. */
 function fakeSandbox() {

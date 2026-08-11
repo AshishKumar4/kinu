@@ -21,6 +21,7 @@ import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './typ
 import type { DeviceStatus } from './device-status.js';
 import { isDeviceNotConnectedError } from './device-tunnel.js';
 import { readExecSignal } from './signal.js';
+import { formatExecResult } from './exec-result.js';
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
@@ -38,7 +39,9 @@ const NOT_CONNECTED =
  * connected after this runtime was built works immediately.
  */
 export interface DeviceTransport {
-  rpc(method: string, params: unknown[]): Promise<unknown>;
+  /** `timeoutMs: 0` means the call carries no work deadline — it ends when the
+   *  device answers, the caller aborts, or the device goes away. */
+  rpc(method: string, params: unknown[], opts?: { timeoutMs?: number }): Promise<unknown>;
   /** Cached snapshot — sync and cheap; may lag the hub by the cache TTL. */
   status(): DeviceStatus;
   /** Authoritative hub check; resolves with the fresh snapshot. */
@@ -50,7 +53,8 @@ export interface DeviceTransport {
  * forwards to the user's device hub; this executor just shapes the tool surface.
  */
 export function createDeviceTunnelExecutor(transport: DeviceTransport): ExecutorProvider {
-  const rpc = (method: string, params: unknown[]): Promise<unknown> => transport.rpc(method, params);
+  const rpc = (method: string, params: unknown[], opts?: { timeoutMs?: number }): Promise<unknown> =>
+    transport.rpc(method, params, opts);
 
   // Three-state lifecycle from the hub snapshot: connected, registered-but-
   // offline (the user can reconnect), or no registered device at all.
@@ -75,14 +79,16 @@ export function createDeviceTunnelExecutor(transport: DeviceTransport): Executor
           // The device protocol has no kill RPC — abort stops the wait; the
           // command may still finish on the user's machine.
           const result = await raceAbort(
-            () => rpc('exec', [String(command)]),
+            // No transport deadline: this is arbitrary user work — a build, a
+            // test suite, an install — and the transport is not the thing that
+            // knows how long it should take. The bounds that DO apply stay:
+            // the caller's abort signal below, the turn's own cancellation,
+            // and the tunnel's liveness probe if the device disappears.
+            () => rpc('exec', [String(command)], { timeoutMs: 0 }),
             signal,
             'laptop exec aborted — the command may still finish on the device',
           ) as { stdout: string; stderr: string; exitCode: number };
-          if (result.exitCode !== 0) {
-            return `Exit ${result.exitCode}${result.stderr ? ': ' + result.stderr : ''}`;
-          }
-          return result.stdout || '(no output)';
+          return formatExecResult(result);
         } catch (err) {
           if (isAbortError(err)) throw err;
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;

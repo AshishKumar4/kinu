@@ -106,7 +106,7 @@ export class MctsSearchStore {
 
   /** Claim a still-running search for a resume: bump the lease epoch (fencing
    *  any executor still holding the old one) and return it. Null if not running. */
-  reclaim(rootId: string, _now: number): number | null {
+  reclaim(rootId: string): number | null {
     this.sql`UPDATE mcts_search_runs SET epoch = epoch + 1 WHERE root_id=${rootId} AND status='running'`;
     const rows = this.sql<{ epoch: number; status: string }>`
       SELECT epoch, status FROM mcts_search_runs WHERE root_id=${rootId} LIMIT 1`;

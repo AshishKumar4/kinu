@@ -16,7 +16,7 @@ describe('turn-pipeline correctness wiring', () => {
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
     const constructor = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
-      actor.indexOf('/** Drain batches bound to the LIVE turn'),
+      actor.indexOf('/** The settled turn\'s actor-generic front half'),
     );
     const policy = constructor.indexOf('this.isClientRpcMethodDenied(rpc.method)');
     const dispatch = constructor.indexOf('await dispatchMessage.call');
@@ -133,7 +133,7 @@ describe('turn-pipeline correctness wiring', () => {
   test('CHAT_CLEAR resets the dynamic-context ledger and durable compaction plan after Think handles it', () => {
     const constructor = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
-      actor.indexOf('/** Drain batches bound to the LIVE turn'),
+      actor.indexOf('/** The settled turn\'s actor-generic front half'),
     );
     const dispatch = constructor.indexOf('await dispatchMessage.call');
     const reset = constructor.indexOf('this.dynamicLedger.reset()');
@@ -145,27 +145,18 @@ describe('turn-pipeline correctness wiring', () => {
     expect(clearPlan).toBeGreaterThan(reset);
   });
 
-  test('aborted turns re-enqueue absorbed and leftover batches without continuation retention', () => {
-    // The settle spine is the ActorAgent helper; onChatResponse must call it
-    // FIRST, before anything that can throw or return early.
+  test('the settle spine runs FIRST and hands the turn status to the one delivery seam', () => {
+    // What the aborted turn does with absorbed/leftover signals is core's
+    // (SignalDelivery.settle — behaviourally pinned in core's
+    // unit-signals.test.ts). What THIS backend must do is call the spine before
+    // anything that can throw or return early, and tell it how the turn ended.
     const hook = source.slice(source.indexOf('async onChatResponse(result: ChatResponseResult)'));
     const preEarlyReturn = hook.slice(0, hook.indexOf('if (result.status !== "completed")'));
     expect(preEarlyReturn).toContain('this.settleTurnEvents(result)');
     const helper = actor.slice(actor.indexOf('protected settleTurnEvents(result: ChatResponseResult)'));
-    expect(helper).toContain('settle({ retainForContinuation: completed })');
-    expect(helper).toContain('[...injectedEvents.absorbed, ...injectedEvents.leftover]');
-    expect(helper).toContain("this.reenqueueEventBatch(batch, completed ? 'leftover' : 'aborted')");
-  });
-
-  test('leftover fallback compensates skipped and rejected enqueues with every batch event id', () => {
-    const helper = actor.slice(
-      actor.indexOf('protected async reenqueueEventBatch'),
-      actor.indexOf('/** Durable per-session compaction state'),
-    );
-    expect(helper).toContain("if (result.status === 'queued') return");
-    expect(helper).toContain('catch (err)');
-    expect(helper).toContain('for (const id of batch.ids)');
-    expect(helper).toContain('this.eventLog.unbind(id)');
+    expect(helper).toContain('this.orch.signals.settle({ completed })');
+    // No second re-delivery path on this side — the seam owns it.
+    expect(actor).not.toContain('reenqueue');
   });
 
   test('programmatic turns succeed only after Think completes the turn and keep their own drain identity', () => {
@@ -204,7 +195,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(response).toContain('this._pendingDrainReplyTurns.delete(result.requestId)');
     const clear = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
-      actor.indexOf('/** Drain batches bound to the LIVE turn'),
+      actor.indexOf('/** The settled turn\'s actor-generic front half'),
     );
     expect(clear).toContain('this._pendingDrainReplyTurns.clear()');
   });
@@ -252,6 +243,10 @@ describe('turn-pipeline correctness wiring', () => {
     const closeArgs = spine.slice(runEnd, spine.indexOf('});', runEnd));
     expect(closeArgs).toContain('error: errorText');
     expect(closeArgs).toContain('reason: result.status');
+    // The per-turn records the spine is the only writer of. Dropping either
+    // leaves the mechanism running and its durable trail silently empty.
+    expect(closeArgs).toContain('steering: this.orch.steering.snapshot()');
+    expect(closeArgs).toContain('craft: this.orch.craft.snapshot()');
   });
 
   test("the per-turn system prompt carries the turn's mode overlay", () => {
@@ -267,17 +262,23 @@ describe('turn-pipeline correctness wiring', () => {
     );
   });
 
-  test('the DO holds a keepAlive heartbeat until the turn evolution settles', () => {
+  test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {
     // Parity with the CLI, which awaits orch.settleEvolution() before the
     // process exits. Evolution is detached so it never blocks the TurnQueue —
     // but Think's own keepAliveWhile disposes when onChatResponse returns, so
     // without a settle heartbeat the detached LLM calls race DO eviction.
+    //
+    // The DO holds BOTH lanes: the turn lane (settleEvolution) and the
+    // cadence-heavy session pass (runDueSessionEvolution). It is the host that
+    // CAN afford the heavy pass — keepAlive is exactly what a one-shot
+    // `proteus exec` process lacks, which is why that one defers it instead.
     const settle = actor.slice(
       actor.indexOf('protected settleEvolutionInBackground(): void'),
       actor.indexOf("   * The completed turn's evolution spine"),
     );
     expect(settle).toContain('if (this._evolutionSettling) return;');
-    expect(settle).toContain('this.keepAliveWhile(() => this.orch.settleEvolution())');
+    expect(settle).toContain('await this.orch.settleEvolution();');
+    expect(settle).toContain('await this.orch.runDueSessionEvolution();');
     expect(settle).toContain('.finally(() => { this._evolutionSettling = false; });');
     // Detached — awaiting it in onChatResponse would re-block the TurnQueue.
     expect(settle).toContain('void this.keepAliveWhile');
@@ -288,22 +289,20 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('protected settleCompletedTurn('),
       actor.indexOf('protected async runShadowEvalSampled'),
     );
-    const recordTurn = spine.indexOf('this.orch.recordTurn(turn);');
+    const recordTurn = spine.indexOf('this.orch.recordTurn(turn, this._turnContinuity);');
     const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
     expect(recordTurn).toBeGreaterThan(-1);
     expect(settleCall).toBeGreaterThan(recordTurn);
   });
 
-  test('pickAlternateTake returns false unless the awaited enqueue actually queues', () => {
+  test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
     const pick = source.slice(
       source.indexOf('async pickAlternateTake('),
       source.indexOf('/**\n   * The unified Run Timeline spine'),
     );
     expect(pick).toContain('let continuationQueued = false');
-    expect(pick).toContain('const result = await this.host.enqueueTurn');
-    expect(pick).toContain("continuationQueued = result.status === 'queued'");
-    expect(pick).toContain("if (result.status === 'skipped')");
-    expect(pick).toContain('catch (err)');
+    expect(pick).toContain('const result = await this.orch.signals.deliver');
+    expect(pick).toContain("continuationQueued = result !== 'undelivered'");
     expect(pick).not.toContain('continuationQueued = true');
   });
 });

@@ -1,13 +1,13 @@
-diff --git a/packages/core/src/orchestrator/event-injection.ts b/packages/core/src/orchestrator/event-injection.ts
-index 06d50c1..ae70839 100644
---- a/packages/core/src/orchestrator/event-injection.ts
-+++ b/packages/core/src/orchestrator/event-injection.ts
-@@ -61,7 +61,7 @@ export class EventInjectionBuffer {
-   /** Turn over: report what was absorbed vs left waiting, and reset for the
-    *  next turn. Call exactly once per turn, before anything that can throw. */
-   settle(opts: { retainForContinuation?: boolean } = {}): SettledInjections {
--    this.settled = opts.retainForContinuation === false ? [] : this.absorbed;
-+    this.settled = opts.retainForContinuation === true ? this.absorbed : [];
-     const result = { absorbed: [...this.absorbed], leftover: this.pending.splice(0) };
+diff --git a/packages/core/src/orchestrator/signals.ts b/packages/core/src/orchestrator/signals.ts
+index 9f27f0d..957bd39 100644
+--- a/packages/core/src/orchestrator/signals.ts
++++ b/packages/core/src/orchestrator/signals.ts
+@@ -139,7 +139,7 @@ export class SignalDelivery implements SignalDeliverer {
+     const absorbed = this.absorbed;
+     const leftover = this.pending.splice(0);
+     const requeue = opts.completed ? leftover : [...absorbed, ...leftover];
+-    this.settled = opts.completed ? absorbed : [];
++    this.settled = opts.completed ? [] : absorbed;
      this.absorbed = [];
      this.injections.reset();
+     for (const signal of requeue) {

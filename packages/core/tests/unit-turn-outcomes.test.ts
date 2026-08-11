@@ -8,6 +8,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, createMockLLM } from './helpers.js';
 import {
   isTrivialTurn, classifyTurnOutcome, outcomeToFeedback, outcomeQuality, feedbackToQuality,
+  executionVerdict, executionVerdictOutcome, isUserVerdictSource, isPureLookupCall,
   initTurnOutcomeTables, recordTurnOutcome, listTurnOutcomes, hasNegativeOutcome,
   realOutcomeScaffoldRates, blendRealOutcomeRates, buildOutcomeEvalSplit,
   describeSplitDegeneracy,
@@ -110,6 +111,64 @@ function legacyRow(db: Database, id: string) {
     (id, turn_id, outcome, confidence, source, user_message, assistant_response, created_at)
     VALUES ('${id}', 't-${id}', 'accepted', 0.8, 'classifier', 'u', 'a', 100)`);
 }
+
+describe('executionVerdict — the environment\'s verdict, read symmetrically', () => {
+  const turn = (over: Partial<{ hadError: boolean; toolCalls: Array<{ name: string; args: Record<string, unknown>; result: unknown }> }> = {}) =>
+    ({ hadError: false, toolCalls: [{ name: 'run', args: { command: 'make' }, result: 'ok' }], ...over });
+
+  test('a turn that acted on the world and finished clean SUCCEEDED', () => {
+    expect(executionVerdict(turn())).toBe('succeeded');
+    expect(executionVerdictOutcome('succeeded')).toBe('accepted');
+  });
+
+  test('a turn that errored FAILED', () => {
+    expect(executionVerdict(turn({ hadError: true }))).toBe('failed');
+    expect(executionVerdictOutcome('failed')).toBe('corrected');
+  });
+
+  test('a turn that never acted has NO verdict — silence is not success', () => {
+    expect(executionVerdict(turn({ toolCalls: [] }))).toBeNull();
+    // …and neither is an errorless turn that only read state.
+    expect(executionVerdict(turn({
+      toolCalls: [{ name: 'memory', args: { action: 'search' }, result: [] }],
+    }))).toBeNull();
+  });
+
+  test('an errored turn that never acted still has no verdict to record', () => {
+    expect(executionVerdict({ hadError: true, toolCalls: [] })).toBeNull();
+  });
+
+  test('pure-lookup calls are the one definition, shared with the extractor', () => {
+    expect(isPureLookupCall({ name: 'memory', args: { action: 'search' } })).toBe(true);
+    expect(isPureLookupCall({ name: 'fact', args: { action: 'recall' } })).toBe(true);
+    expect(isPureLookupCall({ name: 'memory', args: { action: 'append' } })).toBe(false);
+    expect(isPureLookupCall({ name: 'run', args: {} })).toBe(false);
+  });
+});
+
+describe('execution-sourced rows are priced and labelled as proxies', () => {
+  test('an execution verdict never reaches a user verdict\'s poles', () => {
+    expect(outcomeQuality('accepted', 'execution')).toBeLessThan(outcomeQuality('accepted', 'explicit'));
+    expect(outcomeQuality('accepted', 'execution')).toBeGreaterThan(0.5);
+    expect(outcomeQuality('corrected', 'execution')).toBeGreaterThan(outcomeQuality('corrected', 'explicit'));
+    expect(outcomeQuality('corrected', 'execution')).toBeLessThan(0.5);
+  });
+
+  test('the user-verdict sources are every source but execution', () => {
+    for (const source of ['explicit', 'classifier', 'session_end', 'take_pick'] as const) {
+      expect(isUserVerdictSource(source)).toBe(true);
+    }
+    expect(isUserVerdictSource('execution')).toBe(false);
+  });
+
+  test('user-verdict quality is untouched by the new source parameter', () => {
+    expect(outcomeQuality('accepted')).toBe(0.9);
+    expect(outcomeQuality('corrected')).toBe(0.2);
+    expect(outcomeQuality('frustrated')).toBe(0.1);
+    expect(outcomeQuality('abandoned')).toBe(0.5);
+    expect(outcomeQuality('abandoned', 'execution')).toBe(0.5);
+  });
+});
 
 describe('turn_outcomes CHECK-widening rebuild', () => {
   test('rebuilds the legacy CHECK in place, keeping rows, and accepts take_pick after', () => {

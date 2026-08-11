@@ -7,7 +7,6 @@
     "./vfs": "./src/vfs/index.ts",
     "./memory": "./src/memory/index.ts",
     "./stores": "./src/stores/index.ts",
-    "./core": "./src/core/index.ts",
     "./shell": "./src/shell/index.ts"
   },
   "dependencies": {

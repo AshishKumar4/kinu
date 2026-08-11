@@ -2,10 +2,13 @@
 // decides which messages lose the user bubble, and the parser recovers the
 // events from the prompt the drain wrapped around them.
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildDrainBatch } from '@proteus/core';
 import type { ProteusEvent } from '@proteus/core';
 import {
-  classifyProgrammaticTurn, eventVariantLabel, parseDrainedEvents,
+  applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
+  parseDrainedEvents, parseSignalCardEvent, type SignalCard,
 } from '../src/components/background-event.ts';
 
 describe('programmatic turn provenance', () => {
@@ -126,5 +129,103 @@ describe('event variant labels', () => {
     expect(eventVariantLabel('subordinate_report')).toBe('Subordinate report');
     expect(eventVariantLabel('timer')).toBe('Scheduled trigger');
     expect(eventVariantLabel('some_future_variant')).toBe('some future variant');
+  });
+});
+
+describe('the card lifecycle', () => {
+  const opened = (id: string, over: Record<string, unknown> = {}) => ({
+    type: 'signal_card', id, state: 'pending',
+    metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', ...over,
+  });
+  const apply = (events: unknown[]): readonly SignalCard[] =>
+    events.reduce<readonly SignalCard[]>((cards, event) => {
+      const parsed = parseSignalCardEvent(event);
+      return parsed ? applySignalCard(cards, parsed) : cards;
+    }, []);
+
+  test('delivery opens the card; consumption moves the SAME one', () => {
+    const cards = apply([opened('s1'), { type: 'signal_card', id: 's1', state: 'shown' }]);
+    expect(cards).toEqual([{
+      id: 's1', metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', state: 'shown',
+    }]);
+  });
+
+  test('a delivery that never landed takes its card away', () => {
+    expect(apply([opened('s1'), { type: 'signal_card', id: 's1', state: 'undelivered' }]))
+      .toEqual([]);
+  });
+
+  test('a re-delivered signal returns to pending on the card it already had', () => {
+    const cards = apply([
+      opened('s1'),
+      { type: 'signal_card', id: 's1', state: 'shown' },
+      opened('s1', { text: 're-delivered' }),
+    ]);
+    expect(cards).toHaveLength(1);
+    expect(cards[0]).toMatchObject({ id: 's1', state: 'pending', text: 're-delivered' });
+  });
+
+  test('a transition for a card this client never saw open is ignored', () => {
+    // A reload mid-flight: the history it loaded already shows the message.
+    expect(apply([{ type: 'signal_card', id: 'gone', state: 'shown' }])).toEqual([]);
+  });
+
+  test('cards keep arrival order and are bounded', () => {
+    const many = apply(Array.from({ length: 60 }, (_, i) => opened(`s${i}`)));
+    expect(many).toHaveLength(50);
+    expect(many[0]!.id).toBe('s10');
+    expect(many.at(-1)!.id).toBe('s59');
+  });
+
+  test('a frame that is not a well-formed card event is not one', () => {
+    expect(parseSignalCardEvent({ type: 'branch_status', id: 'b1' })).toBeNull();
+    expect(parseSignalCardEvent({ type: 'signal_card', state: 'pending' })).toBeNull();
+    // 'pending' is the card's creation — without its payload there is no card.
+    expect(parseSignalCardEvent({ type: 'signal_card', id: 's1', state: 'pending' })).toBeNull();
+    expect(parseSignalCardEvent({ type: 'signal_card', id: 's1', state: 'elsewhere' })).toBeNull();
+    expect(parseSignalCardEvent(null)).toBeNull();
+  });
+
+  test('the message a queued signal became names the card it belongs to', () => {
+    expect(messageSignalId({ proteusEvent: 'event_drain', signalId: 's1' })).toBe('s1');
+    // A turn the operator typed belongs to no card.
+    expect(messageSignalId({})).toBeNull();
+    expect(messageSignalId(undefined)).toBeNull();
+  });
+});
+
+/**
+ * The background threshold is a property of the TURN on this backend.
+ *
+ * One agent serves both a chat turn a human is watching stream and an
+ * email/webhook/timer/peer/MCP drain nobody is waiting on, and the DO's job
+ * runner is a per-agent singleton — so the surface has to be resolved at read
+ * time, not captured at construction. This regressed silently for the whole
+ * life of the one-shot policy: cf passed no policy at all, every turn got the
+ * interactive 30s detach, and the measured pathology of that configuration
+ * (151 of 202 sandbox scripts becoming `agent.jobResult` polls) is the reason
+ * the one-shot policy exists. Nothing observable fails when it goes back to a
+ * fixed policy, so it is pinned here against the source.
+ */
+describe('the cloud backend selects its background policy per turn', () => {
+  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+
+  test('the job runner reads the policy through a thunk, not a captured value', () => {
+    expect(actor).toContain('policy: () => BACKGROUND_POLICY[this.turnSurface()]');
+  });
+
+  test('both unwatched populations are one-shot; only real chat is interactive', () => {
+    const surface = /protected turnSurface\(\): SessionSurface \{([\s\S]*?)\n  \}/.exec(actor);
+    expect(surface).not.toBeNull();
+    // A CLI one-shot invocation AND a signal-driven autonomous turn both have
+    // nobody watching a stream. Continuity alone misses the whole autonomous
+    // population — the population the one-shot policy was measured on — and
+    // the event metadata alone misses `proteus exec` against a cloud
+    // workspace. The discriminators are the ones every other decision already
+    // reads; there is no third notion of "autonomous".
+    expect(surface![1]).toContain('turnUserMessageEvent');
+    expect(surface![1]).toContain("_turnContinuity === 'independent_task'");
+    expect(surface![1]).toContain("'interactive'");
+    expect(surface![1]).toContain("'one-shot'");
   });
 });

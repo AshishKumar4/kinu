@@ -16,7 +16,8 @@ import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
   CompositeVFS, type MountPolicy,
-  DefaultExecutionRouter, createInlineExecutor,
+  DefaultExecutionRouter, createInlineExecutor, formatExecResult,
+  selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
@@ -28,7 +29,9 @@ import { hostResourceLimits } from './cgroup-limits.js';
 import { createHostMountVFS } from './host-mount.js';
 import { createLinuxFiber, initFiberTable, detectOrphanedFibers } from './fiber.js';
 import { createBranchSpawner } from './branch-process.js';
-import { createLocalProviderLLM, type LocalProviderCredentials } from './model-resolver.js';
+import {
+  createLocalModelResolver, createLocalProviderLLM, type LocalProviderCredentials,
+} from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
 
@@ -171,6 +174,30 @@ export function createCLIRuntime(
     codexAuthStore: config.codexAuthStore,
     onCodexRefresh: config.onCodexRefresh,
   });
+  // The mechanical-work tier: the chat vendor's own small model, for the
+  // evolution engine's classification/labelling/short-reflection calls. Same
+  // resolver, same credentials — one cheaper model id (core selectFastModel).
+  // Resolved once here: a CLI process is one workspace's session, and a
+  // `fast_model` change takes effect on the next one.
+  const fastResolver = createLocalModelResolver({
+    llm: config.llm, credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+  });
+  initAgentConfigTable(execRaw);
+  const fast = selectFastModel({
+    fastSpec: createAgentConfigStore(sql).getFastModel(),
+    chatSpec: fastResolver.normalizeSpecSync(null),
+    providers: fastResolver.fastModelCandidates(),
+  });
+  // Only when it IS a different model — otherwise leave it unset so every
+  // reader's documented `?? rt.llm` fallback is what runs, rather than a
+  // second identical client.
+  const fastLlm = fast.source === 'chat-model' ? undefined : createLocalProviderLLM({
+    llm: config.llm, credentials: config.providerCredentials,
+    codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
+    spec: fast.spec,
+  });
+
   // Cross-model judge only when one is actually configured. Leaving this
   // undefined lets consumers apply their documented same-model fallback
   // (mcts/evaluation.ts judge ensemble, local-session auto-judge) instead of
@@ -204,7 +231,7 @@ export function createCLIRuntime(
   // silent compat-route into /local.
   const vfs = new CompositeVFS({ local: sqliteFs });
   const remoteOnlyPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
   vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
 
@@ -231,8 +258,11 @@ export function createCLIRuntime(
   // both carry its measured cgroup limits — the truth `nproc` cannot tell the
   // model. Null off a cgroup, and then nothing is claimed.
   const limits = hostResourceLimits();
+  // `sql` is not optional in practice: workspace.createTool seeds the crafted
+  // tool's score prior and writes the misevolution veto trail through it, and
+  // listTools quotes real EMA scores from it.
   executionRouter.register(createInlineExecutor({
-    vfs, memory, craftStore, shell, ...(limits ? { resourceLimits: limits } : {}),
+    vfs, memory, craftStore, shell, sql, ...(limits ? { resourceLimits: limits } : {}),
   }));
   executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints, limits));
   // The laptop executor's FILE plane, at the same /pc prefix the cloud backend
@@ -241,13 +271,13 @@ export function createCLIRuntime(
   // and laptop.writeFile that already address the host filesystem directly.
   vfs.mount('pc', {
     vfs: createHostMountVFS(checkpoints),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
     workingDir: process.cwd(),
   });
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
-    agentId, agentName, memory, craftStore, judgeModel,
+    agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell, checkpoints,
   });
@@ -291,16 +321,16 @@ export function buildCLIHeadRuntime(
   // head's host writes are covered by /undo too. /workspace roots at the cwd
   // (where the task files live); /pc roots at the machine root, as the parent's.
   const checkpoints = parent.checkpoints;
-  const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared', credentialsStayInHost: true };
+  const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared' };
   vfs.mount('workspace', { vfs: createHostMountVFS(checkpoints), policy: livePolicy, workingDir: cwd });
   vfs.mount('pc', {
     vfs: createHostMountVFS(checkpoints),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
     workingDir: cwd,
   });
   // Cloud-only planes stay reserved so a head addressing them gets the honest
   // unavailability the parent gives, not a silent compat-route into /local.
-  const remoteOnlyPolicy: MountPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+  const remoteOnlyPolicy: MountPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
   vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
 
@@ -328,6 +358,12 @@ export function buildCLIHeadRuntime(
     executionRouter, shell, ...(checkpoints ? { checkpoints } : {}),
   });
 }
+
+/** How long after the command's own exit we keep reading its pipes. A pipe
+ *  holds at most one buffer (64KB) of unread output at exit and node drains
+ *  that in microseconds, so this is generous for the command and short enough
+ *  that an orphaned grandchild's inherited pipe never becomes our problem. */
+const EXITED_COMMAND_DRAIN_MS = 250;
 
 export function createHostShell(cwd: string): Shell {
   return {
@@ -365,13 +401,33 @@ export function createHostShell(cwd: string): Shell {
         child.stdout.on('data', (d) => { stdout += d.toString(); });
         child.stderr.on('data', (d) => { stderr += d.toString(); });
         child.on('error', (err) => finish({ stdout, stderr: err.message, exitCode: 1 }));
-        child.on('close', (code, signalName) => {
+
+        const settle = (code: number | null, signalName: NodeJS.Signals | null) => {
           const aborted = signal?.aborted || signalName === 'SIGTERM' || signalName === 'SIGKILL';
           finish({
             stdout,
             stderr: aborted ? `${stderr}${stderr ? '\n' : ''}Command aborted.` : stderr,
             exitCode: code ?? (aborted ? 130 : 0),
           });
+        };
+
+        // `close` is the clean settle — the command exited AND every pipe it
+        // handed out is closed, so all output is in hand. But a command that
+        // backgrounds anything (`./server &`) leaves a grandchild holding the
+        // inherited stdout pipe, and then `close` never comes until the SERVER
+        // dies. So `exit` — the command itself is over — starts a bounded
+        // drain instead: whatever the command wrote is already in the pipe
+        // buffer and lands within the window; anything still writing after it
+        // is an orphan, not this command's output.
+        child.on('close', settle);
+        child.on('exit', (code, signalName) => {
+          setTimeout(() => {
+            if (settled) return;
+            child.stdout.destroy();
+            child.stderr.destroy();
+            child.unref();
+            settle(code, signalName);
+          }, EXITED_COMMAND_DRAIN_MS).unref();
         });
         if (stdin) child.stdin.end(stdin);
         else child.stdin.end();
@@ -410,8 +466,7 @@ function createLocalLaptopExecutor(
         execute: async (command: unknown, context?: unknown) => {
           const signal = readAbortSignal(context);
           const result = await shell.exec(String(command), signal ? { signal } : undefined);
-          if (result.exitCode !== 0) return `Error (exit ${result.exitCode}): ${result.stderr}`;
-          return result.stdout || '(no output)';
+          return formatExecResult(result);
         },
       },
       readFile: {

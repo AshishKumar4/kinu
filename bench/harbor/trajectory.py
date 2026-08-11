@@ -11,6 +11,7 @@ Proteus emits a line-delimited event stream (see ``jsonEvents`` in
     {"type":"message_end","role":"assistant","text":...}
     {"type":"turn_end","steps":N,"durationMs":N,"hadError":false,"usage":{...}}
     {"type":"evolution","event":...,"message":...}
+    {"type":"run_event","event":{"type":"turn_steering","converted":...,...}}
     {"type":"error","message":...}
 
 Reading that stream is ``bench/clbench/proteus/events.py`` — one reader for the
@@ -50,6 +51,7 @@ _events = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_events)
 
 parse_events = _events.parse_events
+run_events = _events.run_events
 turn_usage = _events.turn_usage
 
 
@@ -64,6 +66,9 @@ class ProteusRunSummary:
     errors: list[str] = field(default_factory=list)
     evolution_events: list[dict[str, str]] = field(default_factory=list)
     usage: dict[str, int] | None = None
+    #: The agent's durable run-event ledger, verbatim — the only copy that
+    #: survives the container, and where a nudge/budget measurement lives.
+    run_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 def read_events(path: Path) -> list[dict[str, Any]]:
@@ -201,6 +206,10 @@ def build_trajectory(
             summary.errors.append(message)
             builder.add_system(message, {"proteus_event": "error"})
 
+    # Instrumentation, not conversation: the ledger is recorded whole rather
+    # than folded into ATIF steps, which describe what the agent said and did.
+    summary.run_events = run_events(events)
+
     # Absent rather than zero when the provider reported nothing: a turn that
     # spent no tokens does not happen, so zeros here would mean "unmetered".
     usage = turn_usage(events)
@@ -217,6 +226,8 @@ def build_trajectory(
         final_extra["duration_ms"] = summary.duration_ms
     if summary.had_error is not None:
         final_extra["had_error"] = summary.had_error
+    if summary.run_events:
+        final_extra["run_events"] = summary.run_events
 
     trajectory = Trajectory(
         schema_version="ATIF-v1.7",

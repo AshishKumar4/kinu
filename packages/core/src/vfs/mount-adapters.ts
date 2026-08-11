@@ -21,14 +21,10 @@ import type { NimbusSandboxHandle } from '../execution/nimbus.js';
 import type { DeviceTransport } from '../execution/device-tunnel-executor.js';
 import { makeVfsError, type VfsErrorCode } from './errno.js';
 import { shellQuote } from '../utils/shell.js';
+import { vfsDirname as dirname } from '../utils/vfs-helpers.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
 
 type Stat = { size: number; mtimeMs: number; isDir: boolean } | null;
-
-function dirname(path: string): string {
-  const i = path.lastIndexOf('/');
-  return i <= 0 ? '/' : path.slice(0, i);
-}
 
 function basename(path: string): string {
   return path.slice(path.lastIndexOf('/') + 1);

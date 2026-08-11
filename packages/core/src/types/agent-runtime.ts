@@ -2,7 +2,7 @@
  * AgentRuntime — the one struct the agent core receives.
  * Platform-specific; constructed by either CF or Linux backend.
  *
- * Architecture reference: final-architecture.md §3
+ * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
  */
 
 import type {
@@ -62,6 +62,18 @@ export interface AgentRuntime {
   craftStore: CraftStore;
   /** Second LLM for cross-model judging (different model from the explorer) */
   judgeModel?: LLM;
+  /**
+   * The chat vendor's small tier, for MECHANICAL work — outcome
+   * classification, pathology labels, one-sentence reflections, pattern
+   * extraction, sleep-time compression. Same vendor, same credential, cheaper
+   * model (providers/fast-model.ts selectFastModel).
+   *
+   * Optional, and every reader falls back to `llm`, so a backend that wires
+   * none simply keeps today's behaviour. Never used for user-visible
+   * generation or for anything that authors a scaffold: those stay on the
+   * model the user chose.
+   */
+  fastLlm?: LLM;
   /** Platform-specific branch spawning — injected by CF or CLI backend */
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;

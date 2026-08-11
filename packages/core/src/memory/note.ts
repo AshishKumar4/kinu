@@ -17,6 +17,25 @@ import type { Memory } from '../types/primitives.js';
 
 const MEMORY_PATH = 'memory/MEMORY.md';
 
+/** The memory store's own directory, VFS-relative. Files under it are FTS5
+ *  indexed; files anywhere else are not. */
+const MEMORY_DIR = 'memory/';
+
+/**
+ * The indexable memory path a VFS write landed on, or null when it landed
+ * outside the memory directory.
+ *
+ * The same file answers to three spellings — `memory/a.md`, `/memory/a.md` and
+ * `/local/memory/a.md` — because bare absolute paths compat-route into /local,
+ * whose mount root is ''. A writer that recognised only one of them left the
+ * index stale for the other two, which is the one directory where that is
+ * never harmless.
+ */
+export function memoryIndexPath(vfsPath: string): string | null {
+  const relative = vfsPath.replace(/^\/+/, '').replace(/^local\//, '');
+  return relative.startsWith(MEMORY_DIR) ? relative : null;
+}
+
 /** Default bound on the MEMORY.md tail woven into a turn — enough for the
  *  newest lessons/reflections without unbounding the prompt as the append-only
  *  file grows. */

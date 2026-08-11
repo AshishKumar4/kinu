@@ -9,6 +9,7 @@
 
 import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
+import { TurnFileLedger } from '../tools/file-ledger.js';
 import type { MissionGovernor } from '../mission-budget.js';
 
 /** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
@@ -60,6 +61,10 @@ export class TurnAccumulator {
    *  so the clamp tightens as the turn gets heavy, and read at turn end for
    *  the durable `context_budget` row. Reset with the rest of the turn. */
   readonly context = new TurnContextBudget();
+  /** What the turn has read and what its `file` edits did. Handed to the
+   *  toolset so an edit can refuse to run blind, and read at turn end for the
+   *  durable `file_edit` row. Reset with the rest of the turn. */
+  readonly files = new TurnFileLedger();
 
   constructor(
     private readonly sinks: TurnSinks = {},
@@ -79,6 +84,7 @@ export class TurnAccumulator {
     this.firstChunkSeen = false;
     this.startedAt = now;
     this.context.reset();
+    this.files.reset();
   }
 
   /** What the turn spent, or undefined when no step reported usage — so a

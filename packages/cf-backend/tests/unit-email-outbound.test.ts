@@ -7,19 +7,17 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator, EventInjectionBuffer,
+  AgentOrchestrator,
   type BackendHost, type EvolutionEngine,
+  type SqlExec,
 } from '@proteus/core';
+import { createMemoryVfs } from '@proteus/test-utils';
 import { acceptInboundEmail } from '../src/events/ingress/email.js';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,
 } from '../src/email/outbound.js';
 import { EmailOutbox } from '../src/email/outbox.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');
@@ -86,12 +84,13 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     return { sql, log, replies, sent };
   }
 
-  function admitOwnerEmail(log: EventLog, replies: ReplyChannelStore) {
-    const result = acceptInboundEmail({
+  async function admitOwnerEmail(log: EventLog, replies: ReplyChannelStore) {
+    const result = await acceptInboundEmail({
       log, replies,
       owner_email: 'owner@example.com',
       allowlist: [],
       tryConsumeRateLimit: () => true,
+      vfs: createMemoryVfs().vfs,
     }, {
       from: 'owner@example.com',
       to: 'scout-a1b2c3@agents.example.com',
@@ -109,7 +108,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test("the turn's answer threads back to the sender as a real reply", async () => {
     const { log, replies, sent, sql } = setup();
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
 
     // The drain binds the event to a synthetic turn (as AgentOrchestrator does).
     log.markConsumed(eventId, 'evt-turn-1', 0);
@@ -152,16 +151,15 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('an email injected MID-TURN still threads its reply — bound to the batch id the live turn absorbed', async () => {
     const { log, replies, sent } = setup();
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
 
-    // A turn is live: the reactor injects instead of enqueueing (the same
-    // decision drainPendingEvents makes on the DO), and the buffer splices
-    // the batch into the turn's next step — as the orchestrator wires it.
-    const buffer = new EventInjectionBuffer();
+    // A turn is live: the seam splices the drain into the turn's next step
+    // instead of queueing it (the same decision every backend delegates), as
+    // the orchestrator wires it.
     const host: BackendHost = {
       broadcast: () => {},
       enqueueTurn: async () => { throw new Error('must inject, not enqueue — a turn is live'); },
-      injectIntoActiveTurn: (batch) => { buffer.push(batch); return true; },
+      turnInFlight: () => true,
       setTimer: () => {},
     };
     const orch = new AgentOrchestrator({
@@ -170,15 +168,14 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     });
     await orch.drainPendingEvents();
 
-    const step = buffer.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
+    const step = orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
     expect(String(step![1]!.content)).toContain('Is staging green?');
 
-    // Turn end: the absorbed batch id keys the SAME dispatch the enqueued
-    // drain-turn path uses — the live turn's answer threads back.
-    const { absorbed, leftover } = buffer.settle();
-    expect(leftover).toEqual([]);
+    // Turn end: the absorbed signal's reply turn id keys the SAME dispatch the
+    // queued drain-turn path uses — the live turn's answer threads back.
+    const { absorbed } = orch.signals.settle({ completed: true });
     expect(absorbed).toHaveLength(1);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.turnId, 'Green.', 2_000))
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.replyTurnId!, 'Green.', 2_000))
       .toEqual({ delivered: 1, pending: false });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
@@ -187,8 +184,9 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('an existing Re: subject is not double-prefixed', async () => {
     const { log, replies, sent } = setup();
-    const result = acceptInboundEmail({
+    const result = await acceptInboundEmail({
       log, replies, owner_email: 'owner@example.com', allowlist: [], tryConsumeRateLimit: () => true,
+      vfs: createMemoryVfs().vfs,
     }, {
       from: 'owner@example.com', to: 'scout-a1b2c3@agents.example.com',
       subject: 'Re: Check the deploy', body_text: 'and now?',
@@ -203,7 +201,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('a send failure keeps the channel open for retry and audits the failure', async () => {
     const { log, replies, sent, sql } = setup({ fail: true });
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
     log.markConsumed(eventId, 'evt-turn-3', 0);
 
     const result = await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-3', 'answer', 2_000);
@@ -224,7 +222,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('empty answers are not emailed', async () => {
     const { log, replies, sent } = setup();
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
     log.markConsumed(eventId, 'evt-turn-4', 0);
     expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-4', '   ', 2_000))
       .toEqual({ delivered: 0, pending: true });

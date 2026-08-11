@@ -1,6 +1,6 @@
 import { describe, test, expect } from 'bun:test';
 import {
-  parseModelSpec, formatModelSpec,
+  parseModelSpec,
   createProviderRegistry,
   createOpenAICompatProvider,
   createCodexProvider,
@@ -31,11 +31,6 @@ describe('parseModelSpec', () => {
     expect(() => parseModelSpec('')).toThrow('Empty model spec');
     expect(() => parseModelSpec('gpt-5.5')).toThrow('Invalid model spec');
     expect(() => parseModelSpec('/foo')).toThrow('Invalid model spec');
-  });
-
-  test('formatModelSpec is a roundtrip of parseModelSpec', () => {
-    const original = 'openrouter/anthropic/claude-3.5-sonnet';
-    expect(formatModelSpec(parseModelSpec(original))).toBe(original);
   });
 });
 
@@ -85,6 +80,81 @@ describe('ProviderRegistry', () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'a', true));
     expect(() => r.register(fakeProvider('alpha', 'a2', true))).toThrow('already registered');
+  });
+
+  /** The regression this suite exists for: a connected provider whose token
+   *  refresh (or endpoint) is broken used to reject the whole listing, so ONE
+   *  failure emptied the model picker for every other provider. */
+  describe('one broken provider never empties the menu', () => {
+    function throwingProvider(
+      id: string,
+      where: 'isAvailable' | 'listModels',
+      defaultModel?: string,
+    ): ModelProvider {
+      return {
+        id,
+        label: `${id} label`,
+        defaultModel,
+        isAvailable: () => {
+          if (where === 'isAvailable') throw new Error(`${id} credential is revoked`);
+          return true;
+        },
+        listModels: () => { throw new Error(`${id} credential is revoked`); },
+        createModel: () => ({ specificationVersion: 'v2', provider: id } as never),
+      };
+    }
+
+    for (const where of ['isAvailable', 'listModels'] as const) {
+      test(`listAllModels keeps healthy providers when ${where} throws`, async () => {
+        const r = createProviderRegistry();
+        r.register(fakeProvider('alpha', 'a', true));
+        r.register(throwingProvider('codex', where));
+        r.register(fakeProvider('gamma', 'g', true));
+
+        const { models, failures } = await r.listAllModels(baseDeps());
+        expect(models.map((m) => m.provider)).toEqual(['alpha', 'gamma']);
+        expect(failures).toEqual([
+          { provider: 'codex', label: 'codex label', reason: 'codex credential is revoked' },
+        ]);
+      });
+    }
+
+    test('listProviders reports the thrown reason instead of rejecting', async () => {
+      const r = createProviderRegistry();
+      r.register(fakeProvider('alpha', 'a', true));
+      r.register(throwingProvider('codex', 'isAvailable'));
+
+      const list = await r.listProviders(baseDeps());
+      expect(list).toEqual([
+        { id: 'alpha', label: undefined, available: true },
+        { id: 'codex', label: 'codex label', available: false, unavailableReason: 'codex credential is revoked' },
+      ]);
+    });
+
+    test('defaultSpec skips a throwing provider instead of leaving the agent modelless', async () => {
+      const r = createProviderRegistry();
+      // No static defaultModel, so defaultSpec must reach the throwing
+      // listModels to find one — the path that used to reject.
+      r.register(throwingProvider('codex', 'listModels'));
+      r.register(fakeProvider('beta', 'b-default', true));
+      expect(await r.defaultSpec(baseDeps())).toBe('beta/b-default');
+    });
+
+    test('a dynamic source that cannot enumerate still leaves the static providers listed', async () => {
+      const r = createProviderRegistry();
+      r.register(fakeProvider('alpha', 'a', true));
+      r.registerDynamic({
+        get: () => undefined,
+        listIds: () => { throw new Error('models.dev returned HTTP 503'); },
+      });
+
+      const { models, failures } = await r.listAllModels(baseDeps());
+      expect(models.map((m) => m.provider)).toEqual(['alpha']);
+      expect(failures).toEqual([
+        { provider: 'catalog', label: 'models.dev catalog', reason: 'models.dev returned HTTP 503' },
+      ]);
+      expect(await r.defaultSpec(baseDeps())).toBe('alpha/a');
+    });
   });
 });
 

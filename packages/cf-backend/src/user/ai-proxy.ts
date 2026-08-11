@@ -42,10 +42,10 @@ export async function handleUserAIProxyRequest(
   const path = url.pathname.slice(USER_AI_PROXY_PREFIX.length);
 
   if (path === '/models' && request.method === 'GET') {
-    const models = await listAvailableModels(env, cli.userId, OWNER_SESSION);
+    const menu = await listAvailableModels(env, cli.userId, OWNER_SESSION);
     return json({
       object: 'list',
-      data: models
+      data: menu.models
         .filter((m) => m.provider === 'workers-ai' || m.provider === MY_GATEWAY_PROVIDER_ID)
         .map((m) => ({ id: m.spec.slice(m.provider.length + 1), object: 'model', owned_by: m.provider })),
     });

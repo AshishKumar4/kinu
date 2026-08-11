@@ -37,6 +37,7 @@ import {
 } from '../prompting/cache-breakpoints.js';
 import { contextWindowForModel } from '../context-window.js';
 import { clampSerializedToolResult, clampToolResult } from '../tools/clamp.js';
+import { applyFileEdits, readFileSlice } from '../tools/file-edit.js';
 import { classifyTurnFailure, planOverflowRecovery } from '../turn-failure.js';
 import {
   buildCompactionSummaryPrompt,
@@ -46,7 +47,7 @@ import {
 import { buildDrainBatch } from '../events/hub/drain.js';
 import { renderForLLM } from '../events/hub/visibility.js';
 import { StepInjections } from '../prompting/step-injections.js';
-import { EventInjectionBuffer } from '../orchestrator/event-injection.js';
+import { SignalDelivery } from '../orchestrator/signals.js';
 import { DrainScheduler } from '../orchestrator/drain-scheduler.js';
 import { formatApproval, reviewCommand, withApprovalGate } from '../safety/approval-gate.js';
 import { argumentDigest } from '../safety/argument-digest.js';
@@ -56,6 +57,9 @@ import { selectEvolutionBase } from '../scaffold/archive.js';
 import { hybridSearch } from '../memory/hybrid-search.js';
 import { reciprocalRankFusion } from '../memory/vector-store.js';
 import { delegationFeatures, renderDelegationFeatures } from '../evolution/delegation-features.js';
+import {
+  craftFailureBlame, craftInvocationError, craftInvocationSites,
+} from '../craft/in-episode.js';
 import { renderToolSchemaDescription } from '../tools/registry.js';
 import {
   deviceChangeNotice,
@@ -124,7 +128,7 @@ export interface PipelineSubjects {
   readonly buildDrainBatch: typeof buildDrainBatch;
   readonly renderForLLM: typeof renderForLLM;
   readonly StepInjections: typeof StepInjections;
-  readonly EventInjectionBuffer: typeof EventInjectionBuffer;
+  readonly SignalDelivery: typeof SignalDelivery;
   readonly DrainScheduler: typeof DrainScheduler;
 
   // ── safety gate ──
@@ -146,8 +150,17 @@ export interface PipelineSubjects {
   readonly delegationFeatures: typeof delegationFeatures;
   readonly renderDelegationFeatures: typeof renderDelegationFeatures;
 
+  // ── in-episode craft fitness ──
+  readonly craftInvocationSites: typeof craftInvocationSites;
+  readonly craftFailureBlame: typeof craftFailureBlame;
+  readonly craftInvocationError: typeof craftInvocationError;
+
   // ── tool contract ──
   readonly renderToolSchemaDescription: typeof renderToolSchemaDescription;
+
+  // ── file plane ──
+  readonly applyFileEdits: typeof applyFileEdits;
+  readonly readFileSlice: typeof readFileSlice;
 
   // ── execution signal ──
   readonly devicePresence: typeof devicePresence;
@@ -202,7 +215,7 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   buildDrainBatch: 'events/hub/drain.ts',
   renderForLLM: 'events/hub/visibility.ts',
   StepInjections: 'prompting/step-injections.ts',
-  EventInjectionBuffer: 'orchestrator/event-injection.ts',
+  SignalDelivery: 'orchestrator/signals.ts',
   DrainScheduler: 'orchestrator/drain-scheduler.ts',
 
   reviewCommand: 'safety/approval-gate.ts',
@@ -220,7 +233,14 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   delegationFeatures: 'evolution/delegation-features.ts',
   renderDelegationFeatures: 'evolution/delegation-features.ts',
 
+  craftInvocationSites: 'craft/in-episode.ts',
+  craftFailureBlame: 'craft/in-episode.ts',
+  craftInvocationError: 'craft/in-episode.ts',
+
   renderToolSchemaDescription: 'tools/registry.ts',
+
+  applyFileEdits: 'tools/file-edit.ts',
+  readFileSlice: 'tools/file-edit.ts',
 
   devicePresence: 'execution/device-status.ts',
   deviceChangeNotice: 'execution/device-status.ts',
@@ -276,7 +296,7 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     buildDrainBatch,
     renderForLLM,
     StepInjections,
-    EventInjectionBuffer,
+    SignalDelivery,
     DrainScheduler,
 
     reviewCommand,
@@ -294,7 +314,14 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     delegationFeatures,
     renderDelegationFeatures,
 
+    craftInvocationSites,
+    craftFailureBlame,
+    craftInvocationError,
+
     renderToolSchemaDescription,
+
+    applyFileEdits,
+    readFileSlice,
 
     devicePresence,
     deviceChangeNotice,

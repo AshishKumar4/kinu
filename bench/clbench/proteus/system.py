@@ -27,6 +27,7 @@ so Proteus sees its own prior turns, not just the task's latest observation.
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
@@ -63,6 +64,18 @@ from .events import (
 )
 
 logger = logging.getLogger(__name__)
+
+# The one PROTEUS_HOME rule, shared with the Harbor adapter. Loaded by path
+# because this package is symlinked into a CL-Bench checkout, where `bench` is
+# not importable — the same arrangement bench/harbor/trajectory.py uses to reach
+# the event reader that lives here.
+_ISOLATION_PATH = Path(__file__).resolve().parents[3] / "bench" / "isolation.py"
+_SPEC = importlib.util.spec_from_file_location("proteus_bench_isolation", _ISOLATION_PATH)
+if _SPEC is None or _SPEC.loader is None:
+    raise ImportError(f"Cannot load the benchmark isolation guard from {_ISOLATION_PATH}")
+_isolation = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(_isolation)
+assert_throwaway_home = _isolation.assert_throwaway_home
 
 _WORKSPACE_NAME = "clbench"
 
@@ -170,7 +183,7 @@ class ProteusSystem(ContinualLearningSystem):
     @property
     def _home(self) -> Path:
         """Throwaway PROTEUS_HOME: config, workspace database, durable state."""
-        return self._root / "home"
+        return Path(assert_throwaway_home(str(self._root / "home")))
 
     @property
     def _cwd(self) -> Path:

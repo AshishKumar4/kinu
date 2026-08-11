@@ -1,7 +1,5 @@
 import type { ProductChangeStatus, ProductChangeTransitionResult } from './types.js';
 
-const TERMINAL = new Set<ProductChangeStatus>(['deployed', 'rejected', 'rolled_back', 'failed']);
-
 const ALLOWED: Record<ProductChangeStatus, ReadonlySet<ProductChangeStatus>> = {
   draft: new Set(['planning', 'rejected', 'failed']),
   planning: new Set(['patching', 'rejected', 'failed']),
@@ -15,10 +13,6 @@ const ALLOWED: Record<ProductChangeStatus, ReadonlySet<ProductChangeStatus>> = {
   rolled_back: new Set([]),
   failed: new Set(['planning', 'patching']),
 };
-
-export function isProductChangeTerminal(status: ProductChangeStatus): boolean {
-  return TERMINAL.has(status);
-}
 
 /** States EARNED by the execution engine (apply/run_checks/deploy/rollback),
  *  never asserted: entering them requires real command results. The agent

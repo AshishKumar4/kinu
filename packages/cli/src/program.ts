@@ -85,7 +85,7 @@ export function buildProgram(): Command {
     .command('provider [action] [name]')
     .alias('providers')
     .helpGroup(ACCOUNT)
-    .description('List or connect model and account providers')
+    .description('List, connect, or disconnect model and account providers')
     .option('--origin <url>', 'Proteus app origin')
     .option('--model <id>', 'Default model for the selected provider')
     .action(wrapAction(providersCommand));
@@ -317,8 +317,9 @@ export function buildProgram(): Command {
       .command('evolve <name>')
       .helpGroup(INSPECT)
       .description('Trigger an MCTS evolution cycle')
-      .option('--budget <n>', 'MCTS iterations', '2')
-      .option('--branches <n>', 'Branches per expansion', '2'),
+      .option('--budget <n>', 'MCTS iterations (default: the engine default)')
+      .option('--branches <n>', 'Branches per expansion (default: the engine default)')
+      .option('--max-cost <usd>', 'Cost ceiling in USD (default: the engine default)'),
   ).action(wrapAction(evolveCommand));
 
   llmOpts(

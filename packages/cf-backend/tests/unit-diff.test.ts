@@ -1,5 +1,5 @@
 import { describe, test, expect } from "bun:test";
-import { diffLines, computeWorkspaceDiff, parseGitDiff } from "../src/lib/diff.ts";
+import { diffLines, computeWorkspaceDiff, parseGitDiff, MAX_LINES_PER_FILE } from "../src/lib/diff.ts";
 
 describe("diffLines", () => {
   test("identical input is all context, zero changes", () => {
@@ -154,5 +154,42 @@ describe("parseGitDiff", () => {
 
   test("empty input → empty list", () => {
     expect(parseGitDiff("")).toEqual([]);
+  });
+
+  test("a file past the row bound still counts every line, and says it was bounded", () => {
+    // The bound used to sit ABOVE the counters, so a large file stopped
+    // counting as well as stopped showing — and then presented the undercount
+    // as the file's +/- totals, with nothing marking it as partial.
+    const adds = 1_400, dels = 300;
+    const raw = [
+      "diff --git a/big.txt b/big.txt",
+      "--- a/big.txt",
+      "+++ b/big.txt",
+      "@@ -1,300 +1,1400 @@",
+      ...Array.from({ length: dels }, (_, i) => `-old ${i}`),
+      ...Array.from({ length: adds }, (_, i) => `+new ${i}`),
+    ].join("\n");
+    const [file] = parseGitDiff(raw);
+    expect(file.added).toBe(adds);
+    expect(file.removed).toBe(dels);
+    expect(file.truncated).toBe(true);
+    // The body is bounded exactly — hunk headers are carried through the same
+    // bound, so a truncated file cannot grow past it either.
+    expect(file.lines.length).toBe(MAX_LINES_PER_FILE);
+  });
+
+  test("a file within the bound carries no truncation marker", () => {
+    const raw = [
+      "diff --git a/small.txt b/small.txt",
+      "--- a/small.txt",
+      "+++ b/small.txt",
+      "@@ -1 +1 @@",
+      "-a",
+      "+b",
+    ].join("\n");
+    const [file] = parseGitDiff(raw);
+    expect(file.truncated).toBeUndefined();
+    expect(file.added).toBe(1);
+    expect(file.removed).toBe(1);
   });
 });

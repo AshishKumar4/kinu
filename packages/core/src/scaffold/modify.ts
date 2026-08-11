@@ -1,7 +1,6 @@
 /**
  * Scaffold modification — 4-gate validation pipeline.
  *
- * Architecture reference: final-architecture.md §4
  * Formal spec: Evolution/Scaffold.lean — append_increases_length (version history
  * only grows); Safety/CapabilitySafety.lean — scaffoldwrite_not_grantable.
  */

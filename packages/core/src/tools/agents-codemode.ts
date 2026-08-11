@@ -65,10 +65,9 @@ const AGENTS_CODEMODE_MEMBERS: Record<AgentsToolAction, string> = {
    *  eviction, which resumes from its search checkpoint. */
   fork(input: {
     task: string;
-    forks?: Array<{ task: string; rationale: string; model?: string; allowedSandboxes?: string[]; allowedTools?: string[] }>;
+    forks?: Array<{ task: string; rationale: string; model?: string; allowedTools?: string[] }>;
     settle?: "merge" | "mcts";
     merge_strategy?: "synthesize" | "best_of" | "consensus";
-    merge_model?: string;
     budget?: number;
     wall_clock_ms?: number;
     options?: object;

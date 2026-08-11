@@ -129,6 +129,46 @@ describe('ChatEvent tool success/error fidelity', () => {
   });
 });
 
+describe('ChatEvent tool-result completeness', () => {
+  // The result string is the call's durable record AND the turn steering's
+  // identity for it. A head slice made two different outputs sharing a long
+  // preamble hash identical (so the harness told the model "repeating cannot
+  // tell you anything new" about a call whose output had changed) and hid the
+  // tail of every large failure.
+  const preamble = 'x'.repeat(4_000);
+
+  test('a result far past the old 1000-char bound reaches the seam whole', async () => {
+    const seen: string[] = [];
+    const ext: ProteusExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
+    const body = `${preamble}THE-TAIL`;
+    const model = toolThenTextModel({ toolName: 'big' });
+    const tools = {
+      big: tool({ description: 'verbose', inputSchema: z.object({}), execute: async () => body }),
+    };
+    const events = await collect(model, tools, new ExtensionHost().register(ext));
+    const result = events.find((e) => e.type === 'tool-result');
+    expect(result?.type === 'tool-result' && result.result).toBe(body);
+    expect(seen).toEqual([body]);
+  });
+
+  test('a long error keeps its tail, so the failure text survives', async () => {
+    const seen: string[] = [];
+    const ext: ProteusExtension = { name: 'recorder', onToolResult: ({ result }) => { seen.push(result); } };
+    const model = toolThenTextModel({ toolName: 'boom' });
+    const tools = {
+      boom: tool({
+        description: 'fails verbosely',
+        inputSchema: z.object({}),
+        execute: async () => { throw new Error(`${preamble}kaboom`); },
+      }),
+    };
+    const events = await collect(model, tools, new ExtensionHost().register(ext));
+    const result = events.find((e) => e.type === 'tool-result');
+    expect(result?.type === 'tool-result' && result.result.endsWith('kaboom')).toBe(true);
+    expect(seen[0]?.endsWith('kaboom')).toBe(true);
+  });
+});
+
 describe('ChatEvent cached-token fidelity', () => {
   test('step-finish carries usage.cachedInputTokens plus the Anthropic providerMetadata read', async () => {
     const model = toolThenTextModel({

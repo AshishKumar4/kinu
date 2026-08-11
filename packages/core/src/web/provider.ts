@@ -3,10 +3,10 @@
  * adapters (cf-backend Worker fetch, cli-backend node fetch).
  *
  * Design (reconciling both research reports):
- *   - TWO model-facing tools, web_search + web_fetch (the universal 2026
- *     agent shape — Claude Code, Codex, opencode, pi all split discovery from
- *     retrieval). The tools live in tools/builtins.ts; this module owns the
- *     network behaviour behind them.
+ *   - ONE model-facing tool, `web`, with a search action and a fetch action:
+ *     discovery and retrieval are distinct operations but a single capability,
+ *     always used as a pair. The tool lives in tools/builtins.ts; this module
+ *     owns the network behaviour behind it.
  *   - KEY-LESS out of the box: search degrades to a DuckDuckGo HTML scrape and
  *     fetch uses plain `fetch` (Markdown-for-Agents `Accept: text/markdown`,
  *     falling back to local HTML→markdown). No credential is required for the
@@ -223,18 +223,24 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
 
       const contentType = res.headers.get('content-type') ?? '';
       const buf = await res.arrayBuffer();
-      const bytes = buf.byteLength > MAX_FETCH_BYTES ? buf.slice(0, MAX_FETCH_BYTES) : buf;
+      const clipped = buf.byteLength > MAX_FETCH_BYTES;
+      const bytes = clipped ? buf.slice(0, MAX_FETCH_BYTES) : buf;
       const raw = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
 
       const markdown = looksLikeHtml(raw, contentType)
         ? await convert(raw, parsed.toString())
         : stripBase64Images(raw);
 
+      // The byte guard is a memory ceiling; when it binds, the reader must be
+      // able to tell a complete page from a cut one.
+      const note = clipped
+        ? `\n\n[fetch truncated: kept the first ${MAX_FETCH_BYTES} of ${buf.byteLength} bytes]`
+        : '';
       return {
         url: parsed.toString(),
         title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
         retrievedAt: new Date().toISOString(),
-        markdown: markdown.trim(),
+        markdown: markdown.trim() + note,
       };
     },
   };

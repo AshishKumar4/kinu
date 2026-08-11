@@ -3,9 +3,9 @@
  *
  * These gate what agent-authored scaffold (and GEPA-proposed scaffold)
  * source is allowed to contain. They were previously copy-pasted across
- * scaffold/modify.ts, evolution/gepa/scaffold-bridge.ts, and
- * evolution/gepa/tool-bridge.ts — a security blocklist that would drift
- * the moment one copy was edited. Import from here instead.
+ * scaffold/modify.ts and evolution/gepa/scaffold-bridge.ts — a security
+ * blocklist that would drift the moment one copy was edited. Import from
+ * here instead.
  */
 
 /** Constructs the scaffold sandbox must never reference — module loaders,

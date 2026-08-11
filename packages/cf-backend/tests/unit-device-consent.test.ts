@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
 } from '../src/user/device-consent.js';
 import { handleUserRequest } from '../src/user/routes.js';
@@ -23,6 +24,18 @@ describe('device consent prompt data', () => {
 
   test('remembered consent scope is the broad local action grant', () => {
     expect(DEVICE_CONSENT_SCOPE).toBe('all_local_actions');
+  });
+
+  test('an unanswered prompt does not read as a refusal', () => {
+    // Both are failures, but they mean opposite things to an agent running
+    // unattended: a refusal is policy and should stop it asking, while an
+    // expired prompt only means nobody was at the keyboard. They used to be
+    // the same sentence, so an AFK moment became a permanent capability loss.
+    expect(DEVICE_CONSENT_UNANSWERED).not.toBe(DEVICE_CONSENT_DENIED);
+    expect(DEVICE_CONSENT_UNANSWERED).toContain('NOT a refusal');
+    expect(DEVICE_CONSENT_UNANSWERED).toContain('ask again later');
+    expect(DEVICE_CONSENT_DENIED).toContain('declined');
+    expect(DEVICE_CONSENT_DENIED).not.toContain('later');
   });
 });
 

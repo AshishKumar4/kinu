@@ -104,13 +104,20 @@ describe('SessionSearchStore.scroll', () => {
     expect(view.messagesAfter).toBe(0);
   });
 
-  test('returns null for an unknown anchor and truncates long content', () => {
+  test('returns null for an unknown anchor; long content truncates WITH a recipe', () => {
     const { sql, store } = setup();
     expect(store.scroll('nope')).toBeNull();
     const id = insert(sql, 'chat', 'assistant', 'x'.repeat(5000));
     const view = store.scroll(id)!;
-    expect(view.messages[0]!.content.length).toBeLessThanOrEqual(701);
-    expect(view.messages[0]!.content.endsWith('…')).toBe(true);
+    expect(view.messages[0]!.content).toContain('x'.repeat(700));
+    expect(view.messages[0]!.content).toContain('[+4300 chars — pass max_chars to read the full message]');
+  });
+
+  test('scroll honours a caller max_chars — the read-back path is not capped', () => {
+    const { sql, store } = setup();
+    const id = insert(sql, 'chat', 'assistant', 'y'.repeat(5000));
+    const view = store.scroll(id, 5, 10_000)!;
+    expect(view.messages[0]!.content).toBe('y'.repeat(5000));
   });
 });
 

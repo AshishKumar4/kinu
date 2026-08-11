@@ -58,14 +58,17 @@ function toJob(r: Row): BackgroundJob {
 }
 
 /** Serialize a job result for storage — never throws (a non-serializable value,
- *  e.g. a BigInt from execute_tools, falls back to String()), with a truncation
- *  marker so the synthesis turn knows when content was clipped. */
-export function serializeJobResult(result: unknown, limit = 16_000): string {
-  let s: string;
-  try { s = JSON.stringify(result ?? null); } catch { s = String(result); }
-  return s.length > limit
-    ? s.slice(0, limit) + `\n…[truncated ${s.length - limit} chars; the full result was longer]`
-    : s;
+ *  e.g. a BigInt from execute_tools, falls back to String()). Stored WHOLE:
+ *  the wake message promises "read the full result with agent.jobResult", and
+ *  a row truncated at storage time made that a lie with no recovery path —
+ *  while the read-back already rides the execute_tools clamp, which windows an
+ *  oversize result and spills the full text with an address. Inputs must be
+ *  whole for a different reason: driveResume JSON.parses them, and a marker
+ *  appended to a clipped input turned every resumed fork into a corrupted
+ *  string input. Both are model-authored payloads, bounded far below the row
+ *  ceiling by the tool-result clamp and provider output limits. */
+export function serializeJobResult(result: unknown): string {
+  try { return JSON.stringify(result ?? null); } catch { return String(result); }
 }
 
 export function initBackgroundJobsTable(execRaw: RawSqlExec): void {
@@ -123,7 +126,7 @@ export class BackgroundJobStore {
    *  epoch (fencing any executor still holding the old one) and the resume-attempt
    *  counter, atomically. Returns the new epoch + attempt count, or null when the
    *  job is no longer running (already settled/cancelled, or gone). */
-  reclaim(id: string, _now: number): JobClaim | null {
+  reclaim(id: string): JobClaim | null {
     this.sql`UPDATE background_jobs SET epoch = epoch + 1, resume_attempts = resume_attempts + 1
       WHERE id=${id} AND status='running'`;
     const rows = this.sql<{ epoch: number; resume_attempts: number; status: string }>`
@@ -166,6 +169,14 @@ export class BackgroundJobStore {
   list(limit = 20): BackgroundJob[] {
     return this.sql<Row>`SELECT id, kind, label, status, result, error, created_at, settled_at, epoch, resume_attempts
       FROM background_jobs ORDER BY created_at DESC LIMIT ${limit}`.map(toJob);
+  }
+
+  /** How many jobs are still in flight — the input to the concurrent-detach
+   *  cap. Counted in SQL rather than from `listRunning`, whose limit would
+   *  silently under-report exactly when the cap matters. */
+  countRunning(): number {
+    const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM background_jobs WHERE status='running'`;
+    return rows[0]?.n ?? 0;
   }
 
   /** Only the jobs still in flight, newest first — the dynamic-context roster.

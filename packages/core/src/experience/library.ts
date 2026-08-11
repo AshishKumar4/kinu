@@ -24,12 +24,9 @@ import {
   type ExperienceKind,
   type PublishableCandidate,
 } from './types.js';
+import type { SqlExec } from '../types/primitives.js';
 
-export interface ExperienceSqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
-
-export function initExperienceLibraryTables(sql: ExperienceSqlExec): void {
+export function initExperienceLibraryTables(sql: SqlExec): void {
   sql.exec(`
     CREATE TABLE IF NOT EXISTS experience_library (
       id               TEXT PRIMARY KEY,
@@ -96,7 +93,7 @@ export interface ExperienceLibraryStore {
 }
 
 const DEFAULT_SEARCH_LIMIT = 10;
-const MAX_SEARCH_LIMIT = 25;
+
 
 interface LibraryRow extends Record<string, unknown> {
   id: string;
@@ -133,7 +130,7 @@ function ftsQuery(query: string): string | null {
   return terms.map((t) => `"${t.replace(/"/g, '""')}"`).join(' OR ');
 }
 
-export function createExperienceLibrary(sql: ExperienceSqlExec): ExperienceLibraryStore {
+export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
   const rows = (query: string, ...bindings: unknown[]): LibraryRow[] =>
     sql.exec(query, ...bindings).toArray() as LibraryRow[];
 
@@ -169,7 +166,9 @@ export function createExperienceLibrary(sql: ExperienceSqlExec): ExperienceLibra
     },
 
     search(options: ExperienceSearchOptions = {}) {
-      const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT));
+      // The caller's limit is honoured — a reader that asks for 50 rows gets
+      // 50 rows, not a silent 25.
+      const limit = Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT);
       const match = options.query ? ftsQuery(options.query) : null;
       // '' matches nothing for kind (the CHECK constraint forbids it) and
       // nothing for a workspace name, so one statement per shape serves both

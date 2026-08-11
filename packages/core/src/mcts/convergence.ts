@@ -1,7 +1,7 @@
 /**
  * MCTS convergence — committing the winning branch.
  *
- * Architecture reference: final-architecture.md §5.9
+ * Architecture reference: docs/MCTS.md — "Pruning and convergence"
  *
  * BUG-4: When winner.value < MIN_ACCEPTABLE_SCORE, converge() returns
  * { converged: false }. The architecture doc does NOT specify what happens next
@@ -17,6 +17,7 @@ import { maybeStoreCraftedTool } from '../craft/discovery.js';
 import { captureAlternateTakes } from './takes.js';
 import { selectWinnerByTest } from './test-selection.js';
 import { DEFAULT_CONFIG } from '../config.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { isoDate } from '../utils/date.js';
 
 export async function converge(
@@ -71,7 +72,7 @@ export async function converge(
     : [];
 
   const summary = await rt.llm.complete(
-    `Task: ${winner.task}\nResult: ${winner.observation.slice(0, 400)}\nScore: ${winner.value.toFixed(2)}\n\n` +
+    `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.value.toFixed(2)}\n\n` +
     `Summarize in ≤3 bullet points what approach worked:`,
   );
   await rt.memory.append(

@@ -33,12 +33,7 @@ import {
   type TriggerId, type TriggerKind, type TriggerRow, type TrustLevel,
 } from './types.js';
 import { ulid } from './ulid.js';
-
-interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
-  };
-}
+import type { SqlExec } from '../../types/primitives.js';
 
 export type ForkPolicy = 'copy' | 'sever' | 'share';
 

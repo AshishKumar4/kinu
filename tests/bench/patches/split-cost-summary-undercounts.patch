@@ -1,11 +1,11 @@
 diff --git a/packages/core/src/heads/controller.ts b/packages/core/src/heads/controller.ts
-index 2d3e06e..4861a63 100644
+index 4247f0a..7a2856d 100644
 --- a/packages/core/src/heads/controller.ts
 +++ b/packages/core/src/heads/controller.ts
-@@ -403,7 +403,7 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number): Promis
- function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget): MergeResult['costSummary'] {
+@@ -428,7 +428,7 @@ function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget)
    return {
      headCount: reports.length,
+     headsWithFindings: reports.filter(headProducedFindings).length,
 -    totalTokens: reports.reduce((acc, r) => acc + r.tokenUsage.total, 0),
 +    totalTokens: reports.reduce((acc, r) => acc + r.tokenUsage.input, 0),
      totalWallClockMs: Math.max(0, ...reports.map((r) => r.wallClockMs)),

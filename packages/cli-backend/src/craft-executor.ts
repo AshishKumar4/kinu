@@ -8,9 +8,10 @@
  * convention the store-time normalizer enforces.
  *
  * The factory is idempotent: each call to craftedToolExecute(tool) returns a
- * fresh closure. buildBuiltinTools calls it once per tool per turn. The
- * returned function caches the compiled fn via a closure variable so
- * per-call overhead is a single reference check.
+ * fresh closure. The crafted set is resolved once per `execute_tools` call, so
+ * this runs once per tool per call; the returned function caches the compiled
+ * fn via a closure variable, so a tool called repeatedly inside one block
+ * compiles once.
  *
  * Errors are re-thrown — codemode's ToolDispatcher wraps them into a
  * JSON-serializable error the sandbox converts into a thrown Error in

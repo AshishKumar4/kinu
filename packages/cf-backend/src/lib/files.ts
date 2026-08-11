@@ -24,28 +24,6 @@ export function toCompositePath(executorId: string, path: string): string | null
   return `${prefix}${path.startsWith("/") ? path : `/${path}`}`;
 }
 
-/** Per-file upload cap. Content crosses the agents RPC frame as base64, so the
- *  raw cap keeps the encoded payload within sane WS frame territory. */
-export const MAX_UPLOAD_BYTES = 2 * 1024 * 1024;
-
-/** Strict base64 → bytes (throws on malformed input). */
-export function decodeBase64(b64: string): Uint8Array {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return bytes;
-}
-
-/** Bytes → base64 without blowing the call stack on large files (UI side). */
-export function encodeBase64(bytes: Uint8Array): string {
-  let bin = "";
-  const CHUNK = 0x8000;
-  for (let i = 0; i < bytes.length; i += CHUNK) {
-    bin += String.fromCharCode(...bytes.subarray(i, i + CHUNK));
-  }
-  return btoa(bin);
-}
-
 /** What writeExecutorFileOp needs from the orchestrator — the workspace
  *  CompositeVFS (binary-safe on every mount). */
 export interface ExecutorWriteDeps {
@@ -60,24 +38,19 @@ export type ExecutorWriteResult = { ok: true } | { error: string };
  * executors' env-native paths map through their mount prefix, landing on the
  * same raw handle the executor's tools use. A reserved/offline mount yields
  * the composite's clear unavailability error.
+ *
+ * Raw bytes, and no size cap. Uploads arrive over HTTP (files-routes.ts), which
+ * has no frame ceiling and needs no encoding, and the workspace VFS chunks what
+ * it stores — so there is nothing left for an app-level limit to protect, and
+ * the one that used to be here sat ABOVE the transport's real ceiling anyway.
  */
 export async function writeExecutorFileOp(
   deps: ExecutorWriteDeps,
   executorId: string,
   path: string,
-  contentBase64: string,
+  bytes: Uint8Array,
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith("/")) return { error: "file path required" };
-  let bytes: Uint8Array;
-  try {
-    bytes = decodeBase64(contentBase64);
-  } catch {
-    return { error: "invalid base64 content" };
-  }
-  if (bytes.length > MAX_UPLOAD_BYTES) {
-    return { error: `file too large (${bytes.length} bytes; max ${MAX_UPLOAD_BYTES})` };
-  }
-
   const target = toCompositePath(executorId, path);
   if (target === null) return { error: `Executor "${executorId}" not found` };
   try {

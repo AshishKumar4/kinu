@@ -2,6 +2,7 @@
 // auto-judge pattern (winner-of-two with rationale) but accepts any LLM that
 // implements the StructuredJudgeFn shape from scaffold/auto-judge.
 import { VerdictSchema, type JudgeFn, type Verdict } from './types.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /** A judge fn that calls a structured-output LLM via the AI SDK. */
 export type LLMJudgeFn = (
@@ -18,13 +19,13 @@ export function createLLMJudge(llmJudge: LLMJudgeFn): JudgeFn {
 
 Task: ${caseInput.task}
 ${caseInput.rubric ? `\nRubric: ${caseInput.rubric}` : ''}
-${caseInput.reference ? `\nReference answer (use as ground truth):\n${caseInput.reference.slice(0, 1500)}` : ''}
+${caseInput.reference ? `\nReference answer (use as ground truth):\n${evidenceWindow(caseInput.reference, EVIDENCE_BUDGETS.evalReference)}` : ''}
 
 Strategy A (${runA.strategyId}) output:
-${runA.error ? `ERROR: ${runA.error}` : runA.output.slice(0, 2000)}
+${runA.error ? `ERROR: ${runA.error}` : evidenceWindow(runA.output, EVIDENCE_BUDGETS.evalOutput)}
 
 Strategy B (${runB.strategyId}) output:
-${runB.error ? `ERROR: ${runB.error}` : runB.output.slice(0, 2000)}
+${runB.error ? `ERROR: ${runB.error}` : evidenceWindow(runB.output, EVIDENCE_BUDGETS.evalOutput)}
 
 Score each strategy from 0.0 to 1.0 on task completion + correctness +
 clarity. Pick the winner ('a', 'b', or 'tie' if scores are within 0.05).

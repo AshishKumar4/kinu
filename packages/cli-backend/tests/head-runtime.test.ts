@@ -143,13 +143,13 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     expect(mergeOptions?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
   });
 
-  test('a head is offered the real fork surface: run + execute_tools + web + record + split', async () => {
+  test('a head is offered the real fork surface: run + file + execute_tools + web + record + split', async () => {
     let captured: string[] = [];
     const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('done', (t) => { captured = t; })));
     await (await runtime.spawnHead(aHeadInput())).run();
     expect(new Set(captured)).toEqual(new Set([
       'record_evidence', 'record_decision',
-      'execute_tools', 'run', 'web_search', 'web_fetch',
+      'execute_tools', 'run', 'file', 'web',
       'split_subheads',
     ]));
   });

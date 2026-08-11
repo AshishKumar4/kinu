@@ -52,6 +52,7 @@ export class SessionRecorder {
       case 'step-finish':
       case 'evolution':
       case 'broadcast':
+      case 'run-event':
         break;
     }
   }

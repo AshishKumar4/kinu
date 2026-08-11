@@ -1,7 +1,7 @@
 /**
  * Tool-call summary lines — the pure half of the chat's tool card.
  *
- * A bare `team` chip repeated six times tells the operator nothing, and the
+ * A bare `agents` chip repeated six times tells the operator nothing, and the
  * arguments the agent already passed say exactly what each call was about.
  * This turns those arguments into one compact line per call. It never invents
  * detail the arguments do not carry: when they say nothing the summary is
@@ -92,9 +92,34 @@ function summarizeAgents(input: Record<string, unknown>): string {
   }
 }
 
+/** The unified durable-state tool — prose actions read by their content or
+ *  query, keyed-fact actions by their key. */
 function summarizeMemory(input: Record<string, unknown>): string {
   const action = str(input, "action");
   if (action === "save") return actionOn(action, undefined, str(input, "content"));
+  const key = str(input, "key");
+  if (key) return actionOn(action, key);
+  const query = str(input, "query");
+  return query ? `${action} ${quoted(query, 56)}` : action;
+}
+
+/** The file plane — every action reads by its path, and an edit says how many
+ *  replacements it carried, which is the one thing the path does not tell you. */
+function summarizeFile(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  const path = str(input, "path");
+  const edits = input.edits;
+  if (action === "edit" && Array.isArray(edits) && edits.length > 1) {
+    return `${action} ${clip(path, 56)} (${edits.length} edits)`;
+  }
+  return path ? `${action} ${clip(path, 60)}` : action;
+}
+
+/** The unified web tool — a search reads by its query, a fetch by its url. */
+function summarizeWeb(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  const url = str(input, "url");
+  if (url) return `${action} ${clip(url, 56)}`;
   const query = str(input, "query");
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
@@ -166,17 +191,23 @@ function summarizeProductChange(input: Record<string, unknown>): string {
 const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = {
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
+  file: summarizeFile,
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   agents: summarizeAgents,
   memory: summarizeMemory,
-  fact: (input) => actionOn(str(input, "action"), str(input, "key")),
-  web_search: (input) => quoted(str(input, "query")),
-  web_fetch: (input) => clip(str(input, "url")),
-  // think/team/peers were unified into `agents`; their summarizers remain so
-  // tool calls in STORED transcripts keep rendering.
+  web: summarizeWeb,
+  // think/team/peers were unified into `agents`, fact into `memory`,
+  // web_search/web_fetch into `web`, and `experience` became an owner-driven
+  // RPC rather than a tool; their summarizers remain so tool calls in STORED
+  // transcripts keep rendering.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
+  fact: (input) => actionOn(str(input, "action"), str(input, "key")),
+  experience: (input) =>
+    actionOn(str(input, "action"), str(input, "kind"), str(input, "query") || str(input, "key") || str(input, "id")),
+  web_search: (input) => quoted(str(input, "query")),
+  web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
   product_change: summarizeProductChange,
 };
@@ -192,7 +223,7 @@ function summarizeUnknownTool(input: Record<string, unknown>): string {
 /**
  * One line describing what a tool call is doing, derived only from its
  * arguments. Empty when the arguments carry nothing worth showing (a bare
- * `team({action:'list'})` still yields "list"; a call with no input yields "").
+ * `agents({action:'list'})` still yields "list"; a call with no input yields "").
  */
 export function summarizeToolCall(toolName: string, input: unknown): string {
   if (!isRecord(input)) return "";

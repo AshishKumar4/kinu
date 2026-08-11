@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 1007" width="900" height="1007" role="img" aria-labelledby="t d">
+  <!-- A README figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and the README picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">Life of a turn in Proteus</title>
+  <desc id="d">A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus a transformed history, which is where the compaction ladder fires — then runs a step loop that re-weaves a dynamic-context block, marks the cache tail and calls tools. Async signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded, reviewed, and any pending events wake the next turn.</desc>
+  <style>
+    :root {
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --faint: #7d8590;
+      --rule: #3d444d;
+      --ruleStrong: #6e7681;
+      --surface: #151b23;
+      --surfaceAlt: #0d1117;
+      --bandFill: #12181f;
+      --bandStroke: #2f3742;
+      --blue: #79c0ff;
+      --blueFill: #0c2d6b22;
+      --blueLine: #4493f8;
+      --orange: #ffa657;
+      --orangeFill: #76210022;
+      --orangeLine: #db6d28;
+      --green: #7ee787;
+      --greenFill: #0f503622;
+      --greenLine: #3fb950;
+      --purple: #d2a8ff;
+      --purpleFill: #4c288922;
+      --purpleLine: #ab7df8;
+      --pink: #ff9bce;
+      --pinkFill: #7d234922;
+      --pinkLine: #f778ba;
+      --slateFill: #1c222b;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="58" y="30">Life of a turn</text>
+  <text class="s" x="58" y="49">packages/core/src/orchestrator — the same pipeline on both backends</text>
+  <text class="band" x="58" y="80">ARRIVAL</text>
+  <rect x="58" y="92" width="198" height="54" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b" x="70" y="113" text-anchor="start" fill="var(--purple)">Programmatic turn</text>
+  <text class="s" x="70" y="128" text-anchor="start">drained event · job wake · gate</text>
+  <rect x="272" y="92" width="198" height="54" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="284" y="113" text-anchor="start" fill="var(--blue)">User message</text>
+  <text class="s" x="284" y="128" text-anchor="start">chat WebSocket · CLI session</text>
+  <path d="M157 146 L157 166" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-purple)"/>
+  <path d="M371 146 L371 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <rect x="58" y="166" width="412" height="34" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="264" y="188" text-anchor="middle">host.enqueueTurn()  ·  one turn in flight</text>
+  <path d="M264 200 L264 224" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
+  <text class="band" x="58" y="240">ASSEMBLED ONCE PER TURN</text>
+  <rect x="58" y="252" width="412" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="70" y="273" text-anchor="start">buildSystemPromptSync()</text>
+  <text class="s" x="70" y="288" text-anchor="start">eight parts, fixed order — the byte-stable cache prefix</text>
+  <path d="M264 298 L264 318" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
+  <rect x="58" y="318" width="412" height="94" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="70" y="339" text-anchor="start">assembleTurnMessages()</text>
+  <text class="s mono" x="70" y="356" text-anchor="start">1  sanitize attachments for the model</text>
+  <text class="s mono" x="70" y="373" text-anchor="start">2  extensions: onTurnStart</text>
+  <text class="s mono" x="70" y="390" text-anchor="start">3  extensions: transformContext</text>
+  <text class="s mono" x="70" y="407" text-anchor="start">4  + turn-local tail, after the transform</text>
+  <path d="M264 412 L264 436" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
+  <text class="band" x="58" y="452">STEP LOOP  ·  UNTIL THE MODEL STOPS, CAP 500 STEPS</text>
+  <rect x="58" y="464" width="412" height="111" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="70" y="485" text-anchor="start">composePrepareStep()</text>
+  <text class="s mono" x="70" y="502" text-anchor="start">0  mission-budget guard</text>
+  <text class="s mono" x="70" y="519" text-anchor="start">1  extensions: prepareStep</text>
+  <text class="s mono" x="70" y="536" text-anchor="start">2  prune superseded step tool output</text>
+  <text class="s mono" x="70" y="553" text-anchor="start">3  weave the dynamic-context block</text>
+  <text class="s mono" x="70" y="570" text-anchor="start">4  markCacheTail (always the last write)</text>
+  <path d="M264 575 L264 595" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
+  <rect x="58" y="595" width="412" height="60" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b mono" x="70" y="616" text-anchor="start" fill="var(--green)">streamText → fullStream</text>
+  <text class="s" x="70" y="631" text-anchor="start">text-delta · tool-call · tool-result · finish-step</text>
+  <text class="xs" x="70" y="646" text-anchor="start">5-minute stall watchdog; a dead stream fails the turn</text>
+  <path d="M264 655 L264 675" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
+  <rect x="58" y="675" width="412" height="60" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b" x="70" y="696" text-anchor="start" fill="var(--green)">tool calls</text>
+  <text class="s" x="70" y="711" text-anchor="start">9 dep-gated builtins + crafted + MCP + extension tools</text>
+  <text class="xs" x="70" y="726" text-anchor="start">a fork still running at 30 s detaches to a background job</text>
+  <path d="M58 705 L36 705 L36 481 L56 481" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
+  <text class="xs" x="31" y="569.5" text-anchor="middle" transform="rotate(-90 31 569.5)" fill="var(--green)">next step</text>
+  <path d="M264 735 L264 759" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
+  <text class="band" x="58" y="775">SETTLE</text>
+  <rect x="58" y="787" width="412" height="77" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="70" y="808" text-anchor="start">closing the turn</text>
+  <text class="s" x="70" y="825" text-anchor="start">signals settled · measured prompt tokens persisted</text>
+  <text class="s" x="70" y="842" text-anchor="start">completion gate — one “are you sure” turn, at most once</text>
+  <text class="s" x="70" y="859" text-anchor="start">turn snapshot written, run closed</text>
+  <path d="M264 864 L264 884" fill="none" stroke="var(--ruleStrong)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a)"/>
+  <rect x="58" y="884" width="412" height="77" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b mono" x="70" y="905" text-anchor="start" fill="var(--purple)">orch.completeTurn()</text>
+  <text class="s" x="70" y="922" text-anchor="start">recordTurn → the previous turn gets reviewed</text>
+  <text class="s" x="70" y="939" text-anchor="start">session-level evolution every 5 turns</text>
+  <text class="s" x="70" y="956" text-anchor="start">drainPendingEvents → wake again if anything queued</text>
+  <path d="M58 944 L14 944 L14 119 L56 119" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" stroke-dasharray="5 4" marker-end="url(#a-purple)"/>
+  <text class="xs" x="9" y="488" text-anchor="middle" transform="rotate(-90 9 488)" fill="var(--purple)">the reactor — a turn can wake the next one</text>
+  <rect x="500" y="255" width="384" height="186" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="512" y="275" text-anchor="start">System prompt</text>
+  <text class="xs" x="512" y="291" text-anchor="start">SOUL.md — who this workspace is</text>
+  <text class="xs" x="512" y="307" text-anchor="start">runtime context — backend, model, cwd, date</text>
+  <text class="xs" x="512" y="323" text-anchor="start">operating guidance — house rules + model family</text>
+  <text class="xs" x="512" y="339" text-anchor="start">the tools section</text>
+  <text class="xs" x="512" y="355" text-anchor="start">the executors section</text>
+  <text class="xs" x="512" y="371" text-anchor="start">agent state — persistence, memory, delegation,</text>
+  <text class="xs" x="512" y="387" text-anchor="start">background work, verification, output format</text>
+  <text class="xs" x="512" y="403" text-anchor="start">AGENTS.md</text>
+  <text class="xs" x="512" y="419" text-anchor="start">active skill bodies — activation reasons stripped,</text>
+  <text class="xs" x="512" y="435" text-anchor="start">because those would move the bytes every turn</text>
+  <path d="M472 275 L476 275 L476 271 L497 271" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
+  <rect x="500" y="457" width="384" height="218" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="512" y="477" text-anchor="start" fill="var(--orange)">Compaction ladder</text>
+  <text class="xs" x="512" y="493" text-anchor="start">@better-compact/core, driven by a Proteus codec + spec.</text>
+  <text class="xs" x="512" y="509" text-anchor="start">Fires at 85% of the context window, targets 35%.</text>
+  <text class="xs" x="512" y="525" text-anchor="start"></text>
+  <text class="xs" x="512" y="541" text-anchor="start">First, above every stage: drop the superseded</text>
+  <text class="xs" x="512" y="557" text-anchor="start">dynamic-context blocks — stale by definition.</text>
+  <text class="xs" x="512" y="573" text-anchor="start"></text>
+  <text class="xs" x="512" y="589" text-anchor="start"></text>
+  <text class="xs" x="512" y="605" text-anchor="start"></text>
+  <text class="xs" x="512" y="621" text-anchor="start"></text>
+  <text class="xs" x="512" y="637" text-anchor="start"></text>
+  <text class="xs" x="512" y="653" text-anchor="start"></text>
+  <text class="xs" x="512" y="669" text-anchor="start">Last resort: summarise the prefix into a checkpoint.</text>
+  <text class="xs" x="512" y="589" fill="var(--fg)">1  skills</text>
+  <text class="xs" x="680" y="589">5  reasoning traces</text>
+  <text class="xs" x="512" y="605" fill="var(--fg)">2  repeated file reads</text>
+  <text class="xs" x="680" y="605">6  remaining tool output</text>
+  <text class="xs" x="512" y="621" fill="var(--fg)">3  failed tool inputs</text>
+  <text class="xs" x="680" y="621">7  assistant runs</text>
+  <text class="xs" x="512" y="637" fill="var(--fg)">4  oldest tool output</text>
+  <text class="xs" x="680" y="637"></text>
+  <path d="M472 386 L483 386 L483 473 L497 473" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
+  <rect x="500" y="691" width="384" height="122" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
+  <text class="b" x="512" y="711" text-anchor="start" fill="var(--pink)">Signals — the one async-wake seam</text>
+  <text class="xs" x="512" y="727" text-anchor="start">webhook · email · timer · peer message · file change ·</text>
+  <text class="xs" x="512" y="743" text-anchor="start">subordinate report · MCP task · job completion · retry</text>
+  <text class="xs" x="512" y="759" text-anchor="start"></text>
+  <text class="xs" x="512" y="775" text-anchor="start">Turn in flight → spliced in as one synthetic user</text>
+  <text class="xs" x="512" y="791" text-anchor="start">message at the step tail, replayed at that index.</text>
+  <text class="xs" x="512" y="807" text-anchor="start">Idle → queued as the next programmatic turn.</text>
+  <path d="M472 515 L490 515 L490 707 L497 707" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
+  <rect x="500" y="829" width="384" height="138" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="512" y="849" text-anchor="start" fill="var(--blue)">Dynamic context</text>
+  <text class="xs" x="512" y="865" text-anchor="start">Re-rendered every step from live state: facts, memory</text>
+  <text class="xs" x="512" y="881" text-anchor="start">tail, executor availability, running jobs, delegates,</text>
+  <text class="xs" x="512" y="897" text-anchor="start">pending approvals. Nothing clock-derived.</text>
+  <text class="xs" x="512" y="913" text-anchor="start"></text>
+  <text class="xs" x="512" y="929" text-anchor="start">Appended only when its bytes change, and frozen at the</text>
+  <text class="xs" x="512" y="945" text-anchor="start">index where it first appeared — so no earlier cache</text>
+  <text class="xs" x="512" y="961" text-anchor="start">breakpoint ever moves.</text>
+  <path d="M472 549 L497 549 L497 845 L497 845" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
+</svg>

@@ -16,11 +16,10 @@ import { useCreateWorkspace } from "@/hooks/use-create-workspace";
 
 export interface CreateWorkspaceModalProps {
   onClose: () => void;
-  initialMission?: string;
 }
 
-export function CreateWorkspaceModal({ onClose, initialMission = "" }: CreateWorkspaceModalProps) {
-  const [mission, setMission] = useState(initialMission);
+export function CreateWorkspaceModal({ onClose }: CreateWorkspaceModalProps) {
+  const [mission, setMission] = useState("");
   const { hasModels, busy, err, create } = useCreateWorkspace();
 
   // Dismiss the modal BEFORE navigating: it's rendered by the persistent

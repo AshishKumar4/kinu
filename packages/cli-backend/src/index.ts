@@ -2,7 +2,7 @@
  * CLI backend — Linux/Bun runtime for the self-evolving agent.
  */
 
-export { createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, withCheckpointedShell, type CLIRuntimeConfig } from './runtime.js';
+export { createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, createHostShell, withCheckpointedShell, type CLIRuntimeConfig } from './runtime.js';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
 export { proteusHome } from './home.js';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open.js';

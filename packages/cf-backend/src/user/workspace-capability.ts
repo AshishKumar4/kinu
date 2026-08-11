@@ -23,12 +23,8 @@
  * matter which tool gate someone forgets. It is not a defence against edits to
  * Proteus's own trusted source.
  */
-import { nanoid } from '@proteus/core';
+import { nanoid, type SqlExec } from '@proteus/core';
 import { sha256Hex } from '../lib/crypto.js';
-
-export interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): { toArray(): Array<Record<string, unknown>> };
-}
 
 /** A workspace's reach into the owner's wider world.
  *  - `full`   — solo-owner workspace: the whole user surface.

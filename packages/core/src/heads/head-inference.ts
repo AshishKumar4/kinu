@@ -15,14 +15,12 @@ import { generateText, tool, jsonSchema, type ToolSet, type LanguageModel } from
 import {
   type HeadInput, type HeadReport, type HeadId,
   type Evidence, type Decision, type ArtifactRef,
-  budgetExhausted,
+  budgetExhausted, NOMINAL_STEP_TOKENS,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
-
-/** Hard ceiling on a head's reasoning steps (budget derives a tighter cap). */
-export const MAX_HEAD_STEPS = 16;
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -37,7 +35,34 @@ export class HeadCapture {
   readonly artifacts: ArtifactRef[] = [];
   readonly toolCalls: ToolCallRecord[] = [];
   readonly childHeadIds: HeadId[] = [];
-  readonly tokenUsage = { input: 0, output: 0 };
+  /** `input`/`output` are gross provider spend (what the cost ledger debits);
+   *  `budgetCharged` is the marginal spend the head's budget meters. See
+   *  recordStepUsage for why those must be two different numbers. */
+  readonly tokenUsage = { input: 0, output: 0, budgetCharged: 0 };
+  /** Largest prompt this head has been sent so far; null until its first step. */
+  private promptTokens: number | null = null;
+
+  /**
+   * Fold one step's provider usage in.
+   *
+   * A head re-sends its entire accumulated prompt on every step, so charging
+   * `inputTokens` per step bills the same prefix again and again: a head spawned
+   * from a long parent turn burns its whole ceiling in one to three steps and
+   * returns having produced nothing. The budget therefore meters only what the
+   * head ADDS — its own output plus the GROWTH of its prompt, i.e. the tool
+   * output it pulled in. The inherited context it was handed is a fixed entry
+   * cost set by the parent, not work the head chose to do, so it is not charged
+   * either; that is what keeps a head's working room independent of how long its
+   * parent has been running. Gross spend stays bounded by the step cap, the
+   * wall-clock, and the mission governor, which debits the real numbers.
+   */
+  recordStepUsage(inputTokens: number, outputTokens: number): void {
+    this.tokenUsage.input += inputTokens;
+    this.tokenUsage.output += outputTokens;
+    const growth = this.promptTokens === null ? 0 : Math.max(0, inputTokens - this.promptTokens);
+    this.tokenUsage.budgetCharged += outputTokens + growth;
+    this.promptTokens = Math.max(this.promptTokens ?? 0, inputTokens);
+  }
 
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
   recordDecision(d: Decision): void { this.decisions.push(d); }
@@ -45,7 +70,6 @@ export class HeadCapture {
   recordToolCall(name: string, args: Record<string, unknown>, result: string): void {
     this.toolCalls.push({ name, args, result });
   }
-  addChildIds(ids: readonly HeadId[]): void { for (const id of ids) this.childHeadIds.push(id); }
 }
 
 /** The two accumulator tools every head has — record_evidence / record_decision,
@@ -95,7 +119,7 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
  * The head tool builders in this module record themselves (they also record
  * artifacts, which only they can classify, and per-tool outcomes only they can
  * name). This wrapper is for the SHARED builtin surface a backend hands a head —
- * `run`, `execute_tools`, `web_*` know nothing about heads, and without it
+ * `run`, `execute_tools`, `web` know nothing about heads, and without it
  * `HeadReport.toolCalls` (which the journal persists and the no-prose fallback
  * summary reads) would be empty for exactly the tools a head does its real work
  * with. It records the one outcome a generic wrapper honestly knows — resolved
@@ -132,15 +156,15 @@ const HEAD_PROMPT_TOOL_NAMES = [
   'record_decision',
   'execute_tools',
   'run',
-  'web_search',
-  'web_fetch',
+  'file',
+  'web',
   'split_subheads',
 ] as const;
 
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = ['execute_tools', 'run'] as const;
+const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const;
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
   return names.some((name) => tools.has(name));
@@ -170,8 +194,14 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
       + 'the default `workspace` runtime is only YOUR private scratch shell.',
     );
   }
-  if (hasHeadTool(tools, 'web_search', 'web_fetch')) {
-    lines.push('- Loop web_search to gather, then web_fetch to read the promising results; record_evidence each finding worth surfacing.');
+  if (hasHeadTool(tools, 'file')) {
+    lines.push(
+      '- file reads and edits over that same mount table. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read '
+      + 'rather than rewriting the file or shelling out to sed.',
+    );
+  }
+  if (hasHeadTool(tools, 'web')) {
+    lines.push('- Loop `web` action=search to gather, then action=fetch to read the promising results; record_evidence each finding worth surfacing.');
   }
   if (hasHeadTool(tools, 'split_subheads')) {
     lines.push('- split_subheads to recursively explore deeper if needed (depth-budgeted).');
@@ -212,21 +242,33 @@ export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: rea
 export function buildHeadMessages(input: HeadInput): Array<{ role: 'user' | 'assistant'; content: string }> {
   const lines: string[] = ['Here is the conversation you inherit:', ''];
   for (const m of input.inheritedContext) {
-    const trimmed = m.content.length > 400 ? m.content.slice(0, 400) + '…' : m.content;
-    lines.push(`[${m.role}${m.toolName ? `/${m.toolName}` : ''}] ${trimmed}`);
+    lines.push(`[${m.role}${m.toolName ? `/${m.toolName}` : ''}] ${evidenceWindow(m.content, EVIDENCE_BUDGETS.inheritedMessage)}`);
   }
   lines.push('', `Now focus on your assigned task: ${input.task}`);
   return [{ role: 'user', content: lines.join('\n') }];
 }
 
-/** When a head produced no prose turn, synthesize a summary from what it recorded
- *  (decisions / evidence / tool calls) so the merge has substance. */
-function headFallbackSummary(input: HeadInput, status: HeadReport['status'], capture: HeadCapture, abortReason: string | null): string {
-  if (status !== 'completed') {
-    return `Head ${input.id} ended with status=${status}${abortReason ? ` (${abortReason})` : ''}.`;
-  }
-  return synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
-    ?? `Head ${input.id} completed without producing a textual summary.`;
+/**
+ * The summary of a head that did NOT run to completion.
+ *
+ * Deliberately ignores the head's last text. That text is a mid-flight thought,
+ * not a conclusion, and reporting it as the head's finding is how a starved
+ * head's speculation reached its parent as fact — a real run told its parent
+ * "the immediate blockage is the sandbox provisioning failure" when both heads
+ * had simply run out of budget. A stopped head reports its status and only what
+ * it actually banked.
+ */
+function incompleteHeadSummary(
+  input: HeadInput,
+  status: HeadReport['status'],
+  capture: HeadCapture,
+  abortReason: string | null,
+): string {
+  const recorded = synthesizeHeadSummary({
+    decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls,
+  });
+  return `Head ${input.id} did not complete (status=${status}${abortReason ? `; ${abortReason}` : ''}). `
+    + (recorded ? `What it recorded before stopping: ${recorded}` : 'It produced no findings.');
 }
 
 export interface HeadInferenceDeps {
@@ -254,8 +296,15 @@ export interface HeadInferenceDeps {
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
   const { capture } = deps;
   const startedAt = Date.now();
-  const maxSteps = Math.min(MAX_HEAD_STEPS, Math.max(1, Math.floor(input.budget.maxTokens / 1200)));
+  // Runaway guard, not a working limit: it exists for the loops the marginal
+  // token meter cannot see (steps that add ~no prompt growth and ~no output),
+  // so it is sized at twice the budget's nominal step estimate — genuine work
+  // is ended by the token pool or the wall clock, and when this guard itself
+  // fires the report says so instead of presenting the head as finished.
+  const maxSteps = Math.max(1, 2 * Math.floor(input.budget.maxTokens / NOMINAL_STEP_TOKENS));
 
+  // Gross spend — what the report carries and the cost ledger debits. The budget
+  // gate below reads `budgetCharged` instead (see HeadCapture.recordStepUsage).
   const usageTotal = () => ({
     input: capture.tokenUsage.input,
     output: capture.tokenUsage.output,
@@ -273,24 +322,34 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       // than only being noticed once the whole loop is done (THINKING-AUDIT §4 #7).
       onStepFinish: (step) => {
         const u = (step as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-        if (u) {
-          capture.tokenUsage.input += u.inputTokens ?? 0;
-          capture.tokenUsage.output += u.outputTokens ?? 0;
-        }
+        if (u) capture.recordStepUsage(u.inputTokens ?? 0, u.outputTokens ?? 0);
       },
       stopWhen: ({ steps }) => {
         if (deps.isAborted()) return true;
         if (steps.length >= maxSteps) return true;
-        if (budgetExhausted(input.budget, usageTotal().total).exhausted) return true;
+        if (budgetExhausted(input.budget, capture.tokenUsage.budgetCharged).exhausted) return true;
         return false;
       },
     });
 
+    const budgetGate = budgetExhausted(input.budget, capture.tokenUsage.budgetCharged);
+    // A run that used every step without the model ever choosing to stop was
+    // ended by the guard mid-flight — reporting it 'completed' would hand the
+    // parent a mid-flight thought as a finished answer, the exact fabrication
+    // incompleteHeadSummary exists to prevent on the token/wall-clock paths.
+    const ranOutOfSteps = result.steps.length >= maxSteps && result.finishReason !== 'stop';
     const status: HeadReport['status'] = deps.isAborted()
       ? 'aborted'
-      : budgetExhausted(input.budget, usageTotal().total).exhausted ? 'budget_exceeded' : 'completed';
-    const abortReason = deps.abortReason?.() ?? null;
-    const summary = extractFinalText(result) || headFallbackSummary(input, status, capture, abortReason);
+      : budgetGate.exhausted || ranOutOfSteps ? 'budget_exceeded' : 'completed';
+    const stopReason = deps.abortReason?.()
+      ?? (budgetGate.exhausted
+        ? `${budgetGate.reason} budget exhausted`
+        : ranOutOfSteps ? `step guard tripped at ${maxSteps} steps without a finish` : null);
+    const summary = status === 'completed'
+      ? (extractFinalText(result)
+        || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
+        || `Head ${input.id} completed without producing a textual summary.`)
+      : incompleteHeadSummary(input, status, capture, stopReason);
 
     return {
       id: input.id, status, summary,
@@ -302,7 +361,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       steps: extractHeadSteps(result.steps),
       tokenUsage: usageTotal(),
       wallClockMs: Date.now() - startedAt,
-      errorMessage: abortReason ?? undefined,
+      errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
     };
   } catch (err) {
     return {

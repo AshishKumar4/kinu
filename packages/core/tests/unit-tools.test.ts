@@ -2,12 +2,13 @@
  * Unit tests for the canonical tool surface.
  *
  * The agent's tool surface is deliberately SMALL (fewer tools → better LLM
- * selection). Always-on (no extra deps): execute_tools, run, memory.
+ * selection). Always-on (no extra deps): execute_tools, run, memory — the ONE
+ * durable-state tool, whose keyed-fact actions are themselves gated on `facts`.
  * Conditional (needs a specific dep in BuiltinToolDeps):
  *   - skills           ← skills (SkillsToolDeps — vfs + invoke tracker)
  *   - agents           ← agents (fork substrate and/or team + peers deps;
  *                        the ONE delegation tool, actions gated per group)
- *   - fact             ← facts (FactsStore; remember/recall/forget actions)
+ *   - web              ← webSearch (WebSearchProvider; search/fetch actions)
  *   - product_change   ← productChanges (source bindings + approvals store)
  *
  * BUILTIN_TOOLS lists every canonical name so crafted-tool filtering
@@ -40,12 +41,8 @@ const nodeCraftedExecute: CraftedToolExecute = (t) => {
 };
 
 const nodeExecFactory = (opts: {
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
 }) => {
-  const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-  for (const [n, e] of Object.entries(opts.tools)) {
-    codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
-  }
   return tool({
     description: 'test exec_tools',
     inputSchema: jsonSchema<{ code: string }>({
@@ -53,8 +50,13 @@ const nodeExecFactory = (opts: {
     }),
     execute: async (a: { code: string }) => {
       try {
-        const fn = new Function('workspace', 'codemode', 'return (async () => { ' + a.code + ' })()');
-        const result = await fn({}, codemode);
+        // Resolved per execute, exactly as the cli-backend factory does.
+        const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
+        for (const [n, e] of Object.entries(opts.craftedTools())) {
+          codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
+        }
+        const fn = new Function('workspace', 'codemode', 'tools', 'return (async () => { ' + a.code + ' })()');
+        const result = await fn({}, codemode, codemode);
         return { result };
       } catch (e) {
         return { result: undefined, error: (e as Error).message };
@@ -72,14 +74,14 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-// skills, agents, fact, and product_change are conditional on their deps. Base = everything
-// else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'agents', 'fact', 'experience', 'web_search', 'web_fetch', 'report', 'product_change'] as const;
+// skills, agents, web, and product_change are conditional on their deps. Base =
+// everything else. Full surface = all canonical tools.
+const CONDITIONAL_TOOLS = ['skills', 'agents', 'web', 'report', 'product_change'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
 
-describe('Agent tools (canonical surface — skills/agents/fact conditional)', () => {
+describe('Agent tools (canonical surface — skills/agents/web conditional)', () => {
   test('without conditional deps: base tools only', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
@@ -178,15 +180,6 @@ describe('Agent tools (canonical surface — skills/agents/fact conditional)', (
     const stubReport = {
       report: async () => ({ delivered: true }),
     };
-    const stubExperience = {
-      rt,
-      facts: stubFacts,
-      library: {
-        publish: async () => { throw new Error('stub'); },
-        search: async () => [],
-        get: async () => null,
-      },
-    };
     const t = buildBuiltinTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
@@ -198,7 +191,6 @@ describe('Agent tools (canonical surface — skills/agents/fact conditional)', (
       webSearch: stubWebSearch,
       agents: { team: stubTeam, peers: stubPeers },
       report: stubReport,
-      experience: stubExperience,
     });
     const names = Object.keys(t);
     for (const canonical of BUILTIN_TOOLS) expect(names).toContain(canonical);
@@ -251,6 +243,63 @@ describe('Agent tools (canonical surface — skills/agents/fact conditional)', (
     };
     const result = await memoryTool.execute({ action: 'search', query: 'machine learning' });
     expect(typeof result).toBe('string');
+  });
+
+  test('memory keyed-fact actions round-trip through the facts store', async () => {
+    const { rt } = createTestRuntime();
+    const store = new Map<string, { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }>();
+    const facts = {
+      upsert: (key: string, value: unknown, opts?: { confidence?: number }) => {
+        store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
+        return 'created' as const;
+      },
+      recall: (key: string) => store.get(key) ?? null,
+      forget: (key: string) => { store.delete(key); },
+      recentTopK: () => [], all: () => [],
+    };
+    const t = buildBuiltinTools({
+      rt, craftedToolExecute: nodeCraftedExecute,
+      createExecuteTool: nodeExecFactory as never, codemodeLoader: { __test: true } as unknown,
+      facts,
+    });
+    const memory = t.memory as { execute: (a: Record<string, unknown>) => Promise<Record<string, unknown>> };
+
+    expect(await memory.execute({ action: 'remember', key: 'user.tz', value: 'UTC', confidence: 0.9 }))
+      .toEqual({ ok: true, key: 'user.tz' });
+    expect(await memory.execute({ action: 'recall', key: 'user.tz' })).toMatchObject({
+      found: true, key: 'user.tz', value: 'UTC', confidence: 0.9,
+    });
+    expect(await memory.execute({ action: 'forget', key: 'user.tz' }))
+      .toEqual({ ok: true, key: 'user.tz', existed: true });
+    expect(await memory.execute({ action: 'recall', key: 'user.tz' })).toEqual({ found: false, key: 'user.tz' });
+
+    // The pre-flight that keeps a non-serializable value from crashing the turn.
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(await memory.execute({ action: 'remember', key: 'k', value: circular })).toHaveProperty('error');
+    expect(await memory.execute({ action: 'recall', key: '' })).toEqual({ error: 'key must be a non-empty string' });
+  });
+
+  test('the full durable-state surface renders the registry description verbatim', () => {
+    // The byte-stable cache prefix advertises BUILTIN_TOOL_DESCRIPTIONS.memory;
+    // the tool composes its own from the same spec, so the two must not drift.
+    const { rt } = createTestRuntime();
+    const t = buildBuiltinTools({
+      rt, craftedToolExecute: nodeCraftedExecute,
+      createExecuteTool: nodeExecFactory as never, codemodeLoader: { __test: true } as unknown,
+      facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
+    });
+    expect((t.memory as { description: string }).description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);
+  });
+
+  test('without a facts store the keyed-fact actions are not on the schema', () => {
+    const { rt } = createTestRuntime();
+    const t = tools(rt);
+    const schema = (t.memory as { inputSchema: { jsonSchema: { properties: { action: { enum: string[] } } } } })
+      .inputSchema.jsonSchema;
+    expect(schema.properties.action.enum).toEqual(['save', 'search', 'sessions']);
+    // ...and the docstring does not advertise what the runtime cannot do.
+    expect((t.memory as { description: string }).description).not.toContain('remember');
   });
 
   test('run in workspace mode falls back gracefully when no shell provided', async () => {

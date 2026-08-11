@@ -8,7 +8,7 @@ import {
 import { escapeHtml, json } from '../lib/http.js';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
-  type OAuthProviderConfig, type OAuthProviderId,
+  type OAuthProviderConfig,
 } from './providers.js';
 import {
   CLOUDFLARE_OAUTH_CRED_KEY,

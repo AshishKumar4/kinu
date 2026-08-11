@@ -11,22 +11,27 @@
  *   2. run            — shell via executionRouter; `runtime` param explicitly
  *                       chooses workspace / nimbus / sandbox / laptop, with
  *                       workspace (rt.shell) as the conservative default.
- *   3. skills         — Claude-Code / Hermes SKILL.md store; one tool, six
+ *   3. file           — the ONE file plane: read / edit / write over the same
+ *                       CompositeVFS every other surface addresses. The edit is
+ *                       exact-match, atomic and unique-or-refused; the read is
+ *                       capped and names the offset that continues it.
+ *                       Unconditional — every runtime has rt.storage.vfs.
+ *   4. skills         — Claude-Code / Hermes SKILL.md store; one tool, six
  *                       actions. Gated on deps.skills.
- *   4. agents         — the ONE delegation tool: ephemeral forks (heads /
+ *   5. agents         — the ONE delegation tool: ephemeral forks (heads /
  *                       mcts settle), persistent subordinates, and peer
  *                       workspace messaging behind a single action surface.
  *                       Gated on deps.agents; each ACTION is further gated on
  *                       the deps group that powers it (fork / team / peers),
  *                       so a CLI session gets fork only and a subordinate
  *                       actor never sees staff. See tools/agents-tool.ts.
- *   5. memory         — long-term prose notes: save / search (auto-hybrid FTS5
- *                       + Vectorize when a VectorStore is wired).
- *   6. fact           — typed keyed world model: remember / recall / forget.
- *                       Gated on deps.facts.
- *   7. experience     — cross-workspace transfer of proven crafts / lessons /
- *                       facts through the owner's library. Gated on
- *                       deps.experience (workspace orchestrator only).
+ *   6. memory         — the ONE durable-state tool: prose notes (save / search,
+ *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
+ *                       wired), the typed keyed world model (remember / recall
+ *                       / forget, gated on deps.facts) and past session
+ *                       transcripts (sessions).
+ *   7. web            — live web access: search / fetch. Gated on
+ *                       deps.webSearch.
  *   8. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
@@ -41,12 +46,18 @@
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
-import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
+import {
+  BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
+  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
+} from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { createFileTool } from './file-tool.js';
+import { TurnFileLedger } from './file-ledger.js';
 import { TurnContextBudget } from '../context-budget.js';
 import { isMcpToolKey } from './mcp-naming.js';
-import type { CraftedToolExecute } from './crafted-executor.js';
+import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor.js';
 import { filterByEffectiveScore } from '../craft/ema.js';
+import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
@@ -55,8 +66,8 @@ import {
   reviewCommand, formatApproval, approvalGrants,
   type ShellApprovalRequest, type ShellApprovalOutcome,
 } from '../safety/approval-gate.js';
+import { formatExecResult } from '../execution/exec-result.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
-import { createExperienceTool, type ExperienceToolDeps } from './experience-tool.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import {
@@ -69,13 +80,21 @@ import {
   type ProductSourceBinding,
 } from '../product-change/index.js';
 
+/** The crafted tools a sandbox may call, keyed by name. */
+export type CraftedToolSet =
+  Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+
 /**
  * Narrow local shape of the CLI's codemode tool factory
  * (@proteus/cli-backend/execute-tools-factory). Duck-typed so core has no peer
  * dep on a codemode implementation.
  */
 export type CreateExecuteToolFactory = (opts: {
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  /** Resolved PER EXECUTE, not once per toolset: a tool the agent crafts
+   *  mid-turn has to be callable on the very next `execute_tools` call, which
+   *  is what the tool's own description promises and what the in-episode loop
+   *  is for. Cheap to call — compiled bodies are memoised by name and code. */
+  craftedTools: () => CraftedToolSet;
   providers: unknown[];
   loader: unknown;
 }) => unknown;
@@ -144,12 +163,9 @@ export interface BuiltinToolDeps {
    * install one; headless runs leave it unset.
    */
   requestShellApproval?: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
-  /** agent_facts world model. When provided, exposes the `fact` tool
-   *  (remember / recall / forget actions). */
+  /** agent_facts world model. When provided, the `memory` tool also exposes
+   *  the keyed-fact actions (remember / recall / forget). */
   facts?: import('../memory/facts.js').FactsStore;
-  /** The owner's cross-workspace experience library. When provided, exposes
-   *  the `experience` tool (publish / search / import). */
-  experience?: ExperienceToolDeps;
   /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
    *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
    *  ∪ frequently-used recent) are injected — saves context as the store
@@ -177,10 +193,15 @@ export interface BuiltinToolDeps {
    *  on subordinate actors. */
   report?: ReportToolDeps;
   /** Web search + fetch provider. Backend-supplied (the `fetch` impl and the
-   *  Tavily-key auth seam differ per backend). Exposes the `web_search` and
-   *  `web_fetch` tools — and the codemode `web.*` namespace is wired by the
-   *  same provider in each backend's execute_tools assembly. */
+   *  Tavily-key auth seam differ per backend). Exposes the `web` tool — and the
+   *  codemode `web.*` namespace is wired by the same provider in each backend's
+   *  execute_tools assembly. */
   webSearch?: WebSearchProvider;
+  /** The turn's file ledger — what the model has read (so `file` can refuse a
+   *  blind edit) and what its edits did (the durable `file_edit` row). Same
+   *  ownership rule as contextBudget: backends pass their TurnAccumulator's, and
+   *  a caller that omits it gets a fresh one, so the policy is per-root. */
+  fileLedger?: TurnFileLedger;
   /** The turn's cumulative context budget — the per-result clamp tightens once
    *  a turn has admitted its budget, and every spill trip is counted for the
    *  durable `context_budget` row. Backends pass their TurnAccumulator's; a
@@ -253,25 +274,22 @@ export interface ProductChangeToolDeps {
  * All codegen lives behind `craftedToolExecute(tool)` — core has no
  * in-process code-generation path of its own.
  *
- * Filter semantics: effective-score >= minScore, comment-only code dropped,
- * every observed name recorded into `preexistingNames`.
+ * Filter semantics: effective-score >= minScore, comment-only code dropped.
+ * Read fresh on every call, so a tool crafted mid-turn is here on the next one.
  */
 function buildCraftedToolSetFromExecute(
   rt: AgentRuntime,
   factory: CraftedToolExecute,
   minScore: number,
-  preexistingNames: Set<string>,
   surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
-): Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }> {
-  const out: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }> = {};
+): CraftedToolSet {
+  const out: CraftedToolSet = {};
   let list;
   try {
     list = rt.craftStore.list();
   } catch {
     return out;
   }
-
-  for (const t of list) preexistingNames.add(t.name);
 
   // Single injection policy — shared with the CF preamble path.
   const scorePassing = new Set(
@@ -308,13 +326,61 @@ function buildCraftedToolSetFromExecute(
     const description = t.description || `Crafted tool: ${t.name}`;
     try {
       const execute = factory({ name: t.name, description, code: t.code });
-      out[t.name] = { description, execute: async (arg: unknown) => execute(arg) };
+      out[t.name] = {
+        description,
+        // Stamped with the tool's identity so a failure is attributable to the
+        // artifact rather than to the code around it (craft/in-episode.ts).
+        execute: async (arg: unknown) => {
+          try {
+            return await execute(arg);
+          } catch (err) {
+            throw craftInvocationError(t.name, err);
+          }
+        },
+      };
     } catch (err) {
       console.warn(`[proteus] Skipping broken crafted tool "${t.name}":`, (err as Error).message);
     }
   }
 
   return out;
+}
+
+/** One compiled body per (name, code). The platform factories are documented
+ *  as idempotent, so re-deriving the same tool is safe — it is just wasteful,
+ *  and it now happens once per `execute_tools` call rather than once per turn. */
+function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute {
+  const compiled = new Map<string, { code: string; execute: CraftedToolExecuteFn }>();
+  return (tool) => {
+    const hit = compiled.get(tool.name);
+    if (hit && hit.code === tool.code) return hit.execute;
+    const execute = factory(tool);
+    compiled.set(tool.name, { code: tool.code, execute });
+    return execute;
+  };
+}
+
+/** The durable-state tool's one input shape. `key` names a fact, `content` /
+ *  `query` address prose, and the rest scope a session read — which of them the
+ *  call needs follows from its action. */
+interface MemoryToolInput {
+  action: MemoryToolAction;
+  key?: string;
+  value?: unknown;
+  confidence?: number;
+  content?: string;
+  query?: string;
+  around_message_id?: string;
+  window?: number;
+  limit?: number;
+  max_chars?: number;
+}
+
+interface WebToolInput {
+  action: 'search' | 'fetch';
+  query?: string;
+  limit?: number;
+  url?: string;
 }
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
@@ -333,13 +399,18 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // deps.craftedToolExecute (CF → LOADER Worker, CLI → Node eval).
   // Host-side codegen is gone; crafted tools dispatch through the configured
   // runtime executor instead of compiling inside this module.
-  const preexistingCraftNames = new Set<string>();
-  const craftedToolSet = deps.craftedToolExecute
+  // Memoised per toolset: the crafted set is re-read on every execute, and
+  // compiling a stored body is a real cost on both adapters (a child Worker on
+  // cf, `new Function` on the CLI). Keyed by code as well as name, so a tool
+  // the agent rewrites mid-turn recompiles rather than running its old body.
+  const craftedToolExecute = deps.craftedToolExecute
+    ? memoizeCraftedExecute(deps.craftedToolExecute)
+    : undefined;
+  const craftedTools = (): CraftedToolSet => craftedToolExecute
     ? buildCraftedToolSetFromExecute(
         rt,
-        deps.craftedToolExecute,
+        craftedToolExecute,
         deps.minEffectiveScore ?? DEFAULT_CONFIG.craftStore.minEffectiveScoreForInjection,
-        preexistingCraftNames,
         deps.toolSurfacing,
       )
     : {};
@@ -350,7 +421,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     try {
       const providers = router?.getProviders() ?? [];
       tools.execute_tools = deps.createExecuteTool({
-        tools: craftedToolSet,
+        craftedTools,
         providers,
         loader: deps.codemodeLoader,
       }) as ToolSet[string];
@@ -463,9 +534,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
         if (!shell) return 'Error: no workspace shell available in this runtime.';
-        const result = await shell.exec(args.command, signal ? { signal } : undefined);
-        if (result.exitCode !== 0) return clamp(`Error (exit ${result.exitCode}): ${result.stderr}`);
-        return clamp(result.stdout || '(no output)');
+        return clamp(formatExecResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
       const provider = router?.getProvider(runtimeKey);
       if (!provider) {
@@ -498,7 +567,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 2b. skills ──────────────────────────────────────────────────────────
+  // ── 3. file ─────────────────────────────────────────────────────────────
+  // The file plane: read / edit / write over the same CompositeVFS `run` and
+  // execute_tools address, so one tool serves every mount on both backends.
+  // Unconditional — every runtime has rt.storage.vfs, and a model without an
+  // exact-match editor falls back to sed -i and heredocs, which is what this
+  // replaces.
+  tools.file = createFileTool({
+    vfs: rt.storage.vfs,
+    ledger: deps.fileLedger ?? new TurnFileLedger(),
+    budget,
+    memory,
+  });
+
+  // ── 4. skills ──────────────────────────────────────────────────────────
   // Single LLM-facing tool, six actions. Only registered when the
   // orchestrator wires SkillsToolDeps (VFS + per-turn invoke tracker).
   if (deps.skills) {
@@ -531,7 +613,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 3. agents — the ONE delegation tool ──────────────────────────────────
+  // ── 5. agents — the ONE delegation tool ──────────────────────────────────
   // Fork dispatch (heads / mcts settle), subordinate staffing and peer
   // messaging behind a single action surface. Registered when any deps group
   // is wired; per-action gating lives in createAgentsTool.
@@ -539,7 +621,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.agents = createAgentsTool(deps.agents);
   }
 
-  // ── 4. memory — long-term prose notes (save / search) ─────────────────────
+  // ── 6. memory — the ONE durable-state tool ────────────────────────────────
+  // Prose notes (save / search), the typed keyed world model (remember /
+  // recall / forget) and past session transcripts (sessions) are one concept —
+  // state written down now to be read back later — so they are actions here
+  // rather than separate tools the model must choose between by storage shape.
   // search auto-hybridises: Vectorize-backed semantic + FTS5 lexical merged via
   // RRF when a VectorStore is wired + available; pure FTS5 otherwise.
   const vs = deps.vectorStore;
@@ -575,11 +661,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // around_message_id → scroll, query → search, neither → browse.
   const sessionSearch = new SessionSearchStore(rt.storage.sql);
   const runSessionsAction = (args: {
-    query?: string; around_message_id?: string; window?: number; limit?: number;
+    query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number;
   }): unknown => {
     try {
       if (args.around_message_id) {
-        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5);
+        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
         if (!view) return { error: `no message with id ${args.around_message_id}` };
         return { mode: 'scroll', ...view };
       }
@@ -597,23 +683,50 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       return { error: `session search unavailable: ${err instanceof Error ? err.message : String(err)}` };
     }
   };
+  const facts = deps.facts;
+  const runFactAction = (
+    action: (typeof MEMORY_FACT_ACTIONS)[number],
+    args: MemoryToolInput,
+  ): unknown => {
+    if (!facts) return { error: 'the keyed-fact actions are not available on this runtime' };
+    if (typeof args.key !== 'string' || args.key.length === 0) {
+      return { error: 'key must be a non-empty string' };
+    }
+    if (action === 'remember') {
+      // Pre-flight serialize so circular refs / non-serializable values
+      // surface as a clean tool error instead of crashing the turn.
+      try { JSON.stringify(args.value); }
+      catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
+      facts.upsert(args.key, args.value, { confidence: args.confidence });
+      return { ok: true, key: args.key };
+    }
+    if (action === 'recall') {
+      const f = facts.recall(args.key);
+      if (!f) return { found: false, key: args.key };
+      return {
+        found: true, key: f.key, value: f.value, confidence: f.confidence,
+        source: f.source, lastObservedAt: f.lastObservedAt,
+      };
+    }
+    const existed = facts.recall(args.key) !== null;
+    facts.forget(args.key);
+    return { ok: true, key: args.key, existed };
+  };
   tools.memory = tool({
-    description: BUILTIN_TOOL_DESCRIPTIONS.memory,
-    inputSchema: jsonSchema<{
-      action: 'save' | 'search' | 'sessions';
-      content?: string;
-      query?: string;
-      around_message_id?: string;
-      window?: number;
-      limit?: number;
-    }>({
+    description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
+    inputSchema: jsonSchema<MemoryToolInput>({
       type: 'object',
       properties: {
         action: {
           type: 'string',
-          enum: ['save', 'search', 'sessions'],
-          description: 'save a note, search memory notes, or recall past session transcripts (sessions)',
+          enum: [...MEMORY_NOTE_ACTIONS, ...(facts ? MEMORY_FACT_ACTIONS : [])],
+          description: facts
+            ? 'remember/recall/forget a keyed fact, save/search prose notes, or read past session transcripts (sessions)'
+            : 'save a note, search memory notes, or recall past session transcripts (sessions)',
         },
+        key: { type: 'string', description: 'For action=remember/recall/forget: a stable identifier (e.g. "user.tz", "deploy.target").' },
+        value: { description: 'For action=remember: any JSON value — string, number, object, array.' },
+        confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For action=remember: 0..1; default 1.0.' },
         content: { type: 'string', description: 'For action=save: the note text.' },
         query: {
           type: 'string',
@@ -627,6 +740,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           type: 'number',
           description: 'For action=sessions scroll: messages on each side of the anchor (default 5, max 20).',
         },
+        max_chars: {
+          type: 'number',
+          description: 'For action=sessions scroll: per-message character budget (default 700). Raise it to read full messages — truncated messages say how much was cut.',
+        },
         limit: {
           type: 'number',
           description: 'For action=sessions: max search hits (default 5, max 10) or browsed sessions (default 10, max 20).',
@@ -634,119 +751,77 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       },
       required: ['action'],
     }),
-    execute: async (args: {
-      action: 'save' | 'search' | 'sessions';
-      content?: string;
-      query?: string;
-      around_message_id?: string;
-      window?: number;
-      limit?: number;
-    }) => {
-      if (args.action === 'save') {
-        if (!args.content) return 'memory.save requires `content`.';
-        return appendMemoryNote(memory, args.content);
+    execute: async (args: MemoryToolInput) => {
+      switch (args.action) {
+        case 'save':
+          if (!args.content) return 'memory.save requires `content`.';
+          return appendMemoryNote(memory, args.content);
+        case 'search':
+          if (!args.query) return 'memory.search requires `query`.';
+          return searchMemory(args.query);
+        case 'sessions':
+          return runSessionsAction(args);
+        case 'remember':
+        case 'recall':
+        case 'forget':
+          return runFactAction(args.action, args);
+        default:
+          // Only a model that ignored the enum gets here. Naming the action
+          // back is what lets it correct itself; falling through to a
+          // neighbouring branch would mutate state it never asked to touch.
+          return { error: `unknown memory action '${String(args.action)}'` };
       }
-      if (args.action === 'sessions') return runSessionsAction(args);
-      if (!args.query) return 'memory.search requires `query`.';
-      return searchMemory(args.query);
     },
   });
 
-  // ── 5. fact — typed, idempotent, keyed world model (remember/recall/forget) ──
-  const facts = deps.facts;
-  if (facts) {
-    tools.fact = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.fact,
-      inputSchema: jsonSchema<{ action: 'remember' | 'recall' | 'forget'; key: string; value?: unknown; confidence?: number }>({
-        type: 'object',
-        properties: {
-          action: { type: 'string', enum: ['remember', 'recall', 'forget'], description: 'what to do with the keyed fact' },
-          key: { type: 'string', description: 'Stable identifier (e.g. "user.tz", "deploy.target")' },
-          value: { description: 'For action=remember: any JSON value — string, number, object, array' },
-          confidence: { type: 'number', minimum: 0, maximum: 1, description: 'For action=remember: 0..1; default 1.0' },
-        },
-        required: ['action', 'key'],
-      }),
-      execute: async (args) => {
-        if (typeof args.key !== 'string' || args.key.length === 0) {
-          return { error: 'key must be a non-empty string' };
-        }
-        if (args.action === 'remember') {
-          // Pre-flight serialize so circular refs / non-serializable values
-          // surface as a clean tool error instead of crashing the turn.
-          try { JSON.stringify(args.value); }
-          catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
-          facts.upsert(args.key, args.value, { confidence: args.confidence });
-          return { ok: true, key: args.key };
-        }
-        if (args.action === 'recall') {
-          const f = facts.recall(args.key);
-          if (!f) return { found: false, key: args.key };
-          return {
-            found: true, key: f.key, value: f.value, confidence: f.confidence,
-            source: f.source, lastObservedAt: f.lastObservedAt,
-          };
-        }
-        // forget
-        const existed = facts.recall(args.key) !== null;
-        facts.forget(args.key);
-        return { ok: true, key: args.key, existed };
-      },
-    });
-  }
-
-  // ── 6. experience — cross-workspace transfer of proven crafts/lessons/facts ──
-  if (deps.experience) {
-    tools.experience = createExperienceTool(deps.experience);
-  }
-
-  // ── 7. web_search / web_fetch — live web research ─────────────────────────
-  // Two tools, the universal 2026 agent shape: web_search discovers ranked
-  // results, web_fetch retrieves one URL as clean markdown. Both work key-less
-  // (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential upgrades
-  // search quality transparently. Codemode gets the same capability as
-  // `web.search()` / `web.fetch()` via createWebCodemodeProvider, wired in each
-  // backend's execute_tools assembly.
+  // ── 7. web — live web research (search / fetch) ───────────────────────────
+  // One capability used as a pair: search discovers ranked results, fetch
+  // retrieves one URL as clean markdown, and the doctrine is to loop them.
+  // Both work key-less (DuckDuckGo + Markdown-for-Agents); a stored `tavily`
+  // credential upgrades search quality transparently. Codemode gets the same
+  // capability as `web.search()` / `web.fetch()` via createWebCodemodeProvider,
+  // wired in each backend's execute_tools assembly.
   const webSearch = deps.webSearch;
   if (webSearch) {
-    tools.web_search = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.web_search,
-      inputSchema: jsonSchema<{ query: string; limit?: number }>({
+    tools.web = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.web,
+      inputSchema: jsonSchema<WebToolInput>({
         type: 'object',
         properties: {
-          query: { type: 'string', description: 'The search query.' },
-          limit: { type: 'number', description: 'Max results (default 5, max 20).' },
+          action: {
+            type: 'string',
+            enum: ['search', 'fetch'],
+            description: 'search the live web for ranked results, or fetch one URL as markdown',
+          },
+          query: { type: 'string', description: 'For action=search: the search query.' },
+          limit: { type: 'number', description: 'For action=search: max results (default 5, max 20).' },
+          url: { type: 'string', description: 'For action=fetch: the absolute http(s) URL to fetch.' },
         },
-        required: ['query'],
+        required: ['action'],
       }),
-      execute: async (args: { query: string; limit?: number }) => {
+      execute: async (args: WebToolInput) => {
         try {
-          const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
-          return formatSearchResults(res);
-        } catch (err) {
-          return webErrorResult(err);
-        }
-      },
-    });
-
-    tools.web_fetch = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.web_fetch,
-      inputSchema: jsonSchema<{ url: string }>({
-        type: 'object',
-        properties: { url: { type: 'string', description: 'The absolute http(s) URL to fetch.' } },
-        required: ['url'],
-      }),
-      execute: async (args: { url: string }) => {
-        try {
-          const res = await webSearch.fetch(args.url);
-          // Restorable clamp: oversized pages are offloaded to the workspace
-          // VFS and reduced to a re-readable head (see clamp.ts), so a big
-          // page never rots the session.
-          const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
-          const body = await clampToolResult(res.markdown, {
-            vfs: rt.storage.vfs, budget, producer: 'web_fetch',
-          });
-          return header + body;
+          switch (args.action) {
+            case 'search': {
+              if (!args.query) return { error: 'web.search requires `query`' };
+              const res = await webSearch.search(args.query, args.limit !== undefined ? { limit: args.limit } : undefined);
+              return formatSearchResults(res);
+            }
+            case 'fetch': {
+              if (!args.url) return { error: 'web.fetch requires `url`' };
+              const res = await webSearch.fetch(args.url);
+              // Restorable clamp: oversized pages are offloaded to the
+              // workspace VFS and reduced to a re-readable head (see
+              // clamp.ts), so a big page never rots the session.
+              const header = `# ${res.title ?? res.url}\nSource: ${res.url}\nRetrieved: ${res.retrievedAt}\n\n`;
+              const body = await clampToolResult(res.markdown, {
+                vfs: rt.storage.vfs, budget, producer: 'web_fetch',
+              });
+              return header + body;
+            }
+            default:
+              return { error: `unknown web action '${String(args.action)}'` };
+          }
         } catch (err) {
           return webErrorResult(err);
         }
@@ -754,7 +829,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 8. report — subordinate → parent progress spine ────────────────────────
+  // ── 9. report — subordinate → parent progress spine ────────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = tool({
@@ -782,7 +857,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 9. product_change — governed product/UI self-customization lane ───────
+  // ── 10. product_change — governed product/UI self-customization lane ───────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({

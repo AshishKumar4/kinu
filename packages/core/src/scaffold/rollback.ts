@@ -1,7 +1,6 @@
 /**
  * Scaffold rollback — restore a prior version.
  *
- * Architecture reference: final-architecture.md §4
  * Formal spec: Evolution/Scaffold.lean — rollback_nonexistent_is_none
  */
 

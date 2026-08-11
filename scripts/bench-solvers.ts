@@ -120,7 +120,7 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
     ['bun', join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts')],
     {
       cwd: ctx.sandboxDir,
-      env: { ...sandboxEnv(home), PROTEUS_HOME: home },
+      env: sandboxEnv(home),
       stdin: Buffer.from(JSON.stringify(input)),
       stdout: 'pipe',
       stderr: 'pipe',

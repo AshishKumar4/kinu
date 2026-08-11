@@ -65,7 +65,6 @@ import {
   createCodexOAuthClient,
   decodeCodexAccountId,
   tokensToCredential,
-  CODEX_DEVICE_PORTAL,
   mcpToolKey,
   type DeviceCodeStart,
   type DeviceCheckpointHint,
@@ -88,8 +87,9 @@ import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
+  DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
-  type DeviceConsentScope,
+  type DeviceConsentScope, type DeviceConsentDecision,
 } from './device-consent.js';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
@@ -126,6 +126,23 @@ const BACKFILL_MARKER = 'workspace_capability_backfill';
  *  — every server uses this single per-user endpoint so callback routing
  *  is uniform regardless of which agent triggered the addition. */
 const MCP_OAUTH_CALLBACK_PATH = '/api/user/mcp/callback';
+/** Warmup budget for restoring MCP connections at turn start. A single slow
+ *  server must not block a turn — but a server that misses it is REPORTED to
+ *  the turn rather than silently dropped from the tool surface. */
+const MCP_WARMUP_TIMEOUT_MS = 5_000;
+
+/** One configured MCP server that produced no tools for this turn. */
+export interface McpServerUnavailable {
+  server: string;
+  reason: string;
+}
+
+/** What the per-user MCP plane offers a turn: the tools it CAN dispatch, and
+ *  the configured servers it could not reach. */
+export interface McpToolSurface {
+  descriptors: SerializableToolDescriptor[];
+  unavailable: McpServerUnavailable[];
+}
 
 interface SqlRow extends Record<string, unknown> {}
 
@@ -837,7 +854,7 @@ export class UserDO extends Agent<Env> {
     caller: UserCaller,
     method: string,
     params: unknown[],
-    opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint },
+    opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint; timeoutMs?: number },
   ): Promise<unknown> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
@@ -847,12 +864,15 @@ export class UserDO extends Agent<Env> {
       // agent cannot ride a sibling workspace's remembered grant. Calls that
       // pass no agentName (checkpoint bookkeeping) stay consent-free as before.
       const consentAgent = resolved.kind === 'workspace' ? resolved.workspace : opts.agentName;
-      const allowed = await this.checkDeviceConsent(consentAgent, deviceId, method, params);
-      if (!allowed) throw new Error('device use was not approved');
+      const consent = await this.checkDeviceConsent(consentAgent, deviceId, method, params);
+      if (!consent.allowed) throw new Error(consent.reason);
     }
     const tunnel = this._devices.tunnel(deviceId);
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
-    return tunnel.rpc(method, params, opts?.checkpoint ? { checkpoint: opts.checkpoint } : undefined);
+    return tunnel.rpc(method, params, {
+      ...(opts?.checkpoint ? { extra: { checkpoint: opts.checkpoint } } : {}),
+      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    });
   }
 
   // ── Device consent (ask-once-then-remember) ──────────────────────────
@@ -895,12 +915,21 @@ export class UserDO extends Agent<Env> {
   /** Resolve consent for one agent→device call. Remembered policies short-
    *  circuit (either tier covers device actions — full_filesystem implies the
    *  base grant); otherwise the agent renders a card and the user decides. */
-  private async checkDeviceConsent(agentName: string, deviceId: string, method: string, params: unknown[]): Promise<boolean> {
+  /**
+   * Consent for one device call. Fails CLOSED, but says which kind of closed:
+   * a refusal the owner made, or a prompt nobody answered. The caller turns
+   * `reason` into the error the model reads, and the two must not be the same
+   * sentence — an unattended agent that reads an expired prompt as a refusal
+   * concludes the capability was taken away and stops asking for it.
+   */
+  private async checkDeviceConsent(
+    agentName: string, deviceId: string, method: string, params: unknown[],
+  ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
-    if (policy?.policy === 'allow') return true;
-    if (policy?.policy === 'deny') return false;
+    if (policy?.policy === 'allow') return { allowed: true };
+    if (policy?.policy === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
     const action = summarizeDeviceAction(method, params);
-    let decision: 'once' | 'always' | 'deny';
+    let decision: DeviceConsentDecision;
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName)) as unknown as {
         awaitDeviceConsent(req: {
@@ -909,7 +938,7 @@ export class UserDO extends Agent<Env> {
           method: string;
           command: string;
           scope: DeviceConsentScope;
-        }): Promise<'once' | 'always' | 'deny'>;
+        }): Promise<DeviceConsentDecision>;
       };
       decision = await stub.awaitDeviceConsent({
         deviceId,
@@ -919,12 +948,15 @@ export class UserDO extends Agent<Env> {
         scope: DEVICE_CONSENT_SCOPE,
       });
     } catch {
-      return false; // agent unreachable / timed out → fail closed (not remembered)
+      // The agent could not be reached to raise the card at all — nobody was
+      // asked, so this is the unanswered case, not a refusal.
+      return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
     }
-    // Only "always" is remembered; "once" and "deny" are per-call decisions.
-    if (decision === 'deny') return false;
+    // Only "always" is remembered; "once", "deny" and "timeout" are per-call.
+    if (decision === 'deny') return { allowed: false, reason: DEVICE_CONSENT_DENIED };
+    if (decision === 'timeout') return { allowed: false, reason: DEVICE_CONSENT_UNANSWERED };
     if (decision === 'always') this.setDeviceConsentPolicy(agentName, deviceId, 'allow', action);
-    return true;
+    return { allowed: true };
   }
 
   /** The remembered consent policies (Account settings → Devices — see/revoke which agents may
@@ -1018,11 +1050,6 @@ export class UserDO extends Agent<Env> {
   }
 
   // ── Product changes ─────────────────────────────────────────────────
-
-  async listProductSourceBindings(caller: UserCaller): Promise<ProductSourceBinding[]> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().listSourceBindings();
-  }
 
   async upsertProductSourceBinding(caller: UserCaller, input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
     await this.requireTier(caller, 'product_change');
@@ -1758,20 +1785,26 @@ export class UserDO extends Agent<Env> {
 
   /** Serializable tool descriptors for every connected MCP server, filtered
    *  by per-server `allowed_tools`. The orchestrator wraps each into an
-   *  AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`. */
-  async userMcp_toolDescriptors(caller: UserCaller): Promise<SerializableToolDescriptor[]> {
+   *  AI-SDK Tool whose `execute` closure dispatches back via `userMcp_callTool`.
+   *
+   *  `unavailable` names every configured server that produced no tools. A
+   *  server that compiles or fetches on boot misses the warmup budget below and
+   *  its tools are simply ABSENT from the turn — so without this the model
+   *  plans as if a capability the user gave it does not exist, and cannot
+   *  explain why. The bound stays; the silence does not. */
+  async userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
     await this.requireTier(caller, 'mcp.tools');
     const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
       `SELECT id, name, allowed_tools FROM user_mcp_servers`,
     );
-    if (rows.length === 0) return [];
+    if (rows.length === 0) return { descriptors: [], unavailable: [] };
 
     // Ensure connections are restored. Don't await failures — partial
     // descriptors are better than none.
     try {
       await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp');
       // Cap at 5s so a single slow server can't block a turn indefinitely.
-      await this.userMcp().waitForConnections({ timeout: 5_000 });
+      await this.userMcp().waitForConnections({ timeout: MCP_WARMUP_TIMEOUT_MS });
     } catch (err) {
       console.warn('[user-do] userMcp_toolDescriptors warmup:', (err as Error).message);
     }
@@ -1803,7 +1836,14 @@ export class UserDO extends Agent<Env> {
         });
       }
     }
-    return out;
+    const served = new Set(out.map((d) => d.serverId));
+    const unavailable = rows
+      .filter((r) => !served.has(r.id))
+      .map((r) => ({
+        server: r.name,
+        reason: `not connected within ${MCP_WARMUP_TIMEOUT_MS / 1000}s of this turn starting — its tools are absent`,
+      }));
+    return { descriptors: out, unavailable };
   }
 
   /** Execute a single MCP tool call. Called over RPC by the orchestrator's

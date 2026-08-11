@@ -12,7 +12,7 @@
  * Tool surface composes from `(headTrust, phase, role)` as a pure function —
  * never via prompt instructions. The runtime is the gate.
  *
- * See `docs/EVENTS-HUB-SPEC.md` for the authoritative spec.
+ * See docs/ARCHITECTURE.md — "Events and ingress" for the authoritative spec.
  */
 
 // ── Trust ────────────────────────────────────────────────────────
@@ -138,6 +138,11 @@ export interface WebhookPayload {
   http_headers: Record<string, string>;
   body: unknown;
   delivery_id: string;
+  /** Workspace path holding the fully serialized `body`, set at ingress when
+   *  it outgrows the brief budget. The brief's window plus this path is the
+   *  reference-plus-digest pair the woken turn reads back — without it the
+   *  agent is woken BY a delivery it can only see a fragment of. */
+  body_path?: string;
 }
 
 export interface ProcessDonePayload {
@@ -233,6 +238,10 @@ export interface EmailPayload {
   references: string | null;
   /** Attachment metadata only — bytes never enter the event log. */
   attachments: EmailAttachmentMeta[];
+  /** Workspace path holding the full `body_text`, set at ingress when the mail
+   *  outgrows the brief budget — without it the agent is woken BY a message it
+   *  can only read the opening of, with no way to ask for the rest. */
+  body_path?: string;
 }
 
 export interface InternalPayload {
@@ -482,8 +491,6 @@ export type TriggerKind =
   | 'peer_inbox'
   | 'mcp_route'
   | 'email_route';   // per-agent inbound-email allowlist (owner is always allowed)
-
-export type WebhookAuthMode = 'hmac' | 'bearer' | 'mtls';
 
 export interface TriggerRow {
   id: TriggerId;
