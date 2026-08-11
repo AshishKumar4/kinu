@@ -51,7 +51,7 @@ import {
   MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
 } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
-import { fileToolSteer } from './run-file-steer.js';
+import { createFileToolSteer } from './run-file-steer.js';
 import { createFileTool } from './file-tool.js';
 import { TurnFileLedger } from './file-ledger.js';
 import { TurnContextBudget } from '../context-budget.js';
@@ -392,6 +392,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
+  // Same per-turn ownership as the budget: each hand-rolled-write shape gets
+  // its note once, on the call that earned it (run-file-steer.ts).
+  const fileToolSteer = createFileToolSteer();
 
   const tools: ToolSet = {};
 
@@ -530,8 +533,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       // Restorable result budget — full stdout/stderr is offloaded to the
       // workspace VFS before clamping (see clamp.ts), so big outputs never
       // rot the session and nothing is lost. A command that hand-rolls a file
-      // edit carries the `file` steer back with it (run-file-steer.ts) —
-      // outside the clamp, so the note is never the part that gets truncated.
+      // edit carries the `file` steer back with it, the first time this turn
+      // uses that shape (run-file-steer.ts) — outside the clamp, so the note is
+      // never the part that gets truncated.
       const steer = fileToolSteer(args.command);
       const clamp = async (text: string) => {
         const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });

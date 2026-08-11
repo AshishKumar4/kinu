@@ -414,7 +414,7 @@ export {
   TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,
 } from './tools/clamp.js';
-export { handRolledFileWrite, fileToolSteer } from './tools/run-file-steer.js';
+export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer.js';
 export {
   toCraftedToolSource,
   type CraftedToolExecute,
@@ -663,16 +663,6 @@ export {
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema.js';
 export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
-// SKILL.md export/import (Hermes-style git-friendly tool format)
-export {
-  craftedToolToSkillMd,
-  parseSkillMd,
-  exportAllSkillsToVfs,
-  importSkillsFromVfs,
-  type SkillMdParseResult,
-  type ExportSkillsResult,
-  type ImportSkillsResult,
-} from './craft/skill-md.js';
 export { periodicCraftConsolidation } from './craft/consolidation.js';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict.js';
 export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migrate-duplicates.js';

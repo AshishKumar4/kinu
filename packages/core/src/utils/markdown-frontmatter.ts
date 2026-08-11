@@ -1,10 +1,8 @@
 /**
- * Single canonical parser for the `---\n<yaml>\n---\n<body>` shape used by:
+ * Single canonical parser for the `---\n<yaml>\n---\n<body>` shape that
+ * Claude-Code skills use (packages/core/src/skills/).
  *
- *   - Claude-Code skills (packages/core/src/skills/)
- *   - Crafted-tool SKILL.md exports (packages/core/src/craft/skill-md.ts)
- *
- * Deliberately narrow YAML subset — sufficient for our two use sites,
+ * Deliberately narrow YAML subset — sufficient for that use site,
  * deterministic, zero runtime deps. Supports:
  *
  *   - flat scalars:           `key: value`

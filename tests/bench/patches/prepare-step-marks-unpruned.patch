@@ -1,12 +1,13 @@
 diff --git a/packages/core/src/prompting/prepare-step.ts b/packages/core/src/prompting/prepare-step.ts
-index a03aef2..4f1c0d0 100644
+index cf850f1..518354f 100644
 --- a/packages/core/src/prompting/prepare-step.ts
 +++ b/packages/core/src/prompting/prepare-step.ts
-@@ -97,6 +97,6 @@ export function composePrepareStep(
+@@ -102,7 +102,7 @@ export function composePrepareStep(
+   const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot());
    const working = woven ?? shrunk;
    const plan = pipeline.cache;
-   if (!plan) return steered || pruned || woven ? { messages: working } : undefined;
--  const messages = markCacheTail(working, plan.strategy);
-+  const messages = markCacheTail(base, plan.strategy);
-   return plan.system !== undefined ? { system: plan.system, messages } : { messages };
- }
+-  const messages = plan ? markCacheTail(working, plan.strategy) : working;
++  const messages = plan ? markCacheTail(base, plan.strategy) : working;
+   // Measured on the FINAL array, and on every step — including the step that
+   // changed nothing and returns undefined below, which is still a priced
+   // request and still occupies the window.

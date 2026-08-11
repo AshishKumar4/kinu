@@ -8,7 +8,7 @@
 // mechanism. It STEERS and never blocks: the contract these tests pin is that
 // the command runs, its output arrives whole, and a note names `file`.
 import { describe, test, expect } from 'bun:test';
-import { handRolledFileWrite, fileToolSteer } from '../src/tools/run-file-steer.js';
+import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/run-file-steer.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime, Shell } from '../src/types/agent-runtime.js';
@@ -95,5 +95,57 @@ describe('the run tool', () => {
     expect(steer).not.toBeNull();
     expect(steer).not.toMatch(/blocked|denied|refus(ed|ing) to run|not allowed/i);
     expect(steer).toContain('This command ran as written');
+  });
+
+  test('a shape repeated in one turn is noted once, and the output still arrives whole', async () => {
+    const run = runToolOver(echoShell());
+    const first = await run.execute({ command: "sed -i 's/a/b/' one.ts" });
+    const second = await run.execute({ command: "sed -i 's/c/d/' two.ts" });
+    expect(first).toContain('an in-place stream edit');
+    expect(second).not.toContain('Proteus note');
+    expect(second).toBe("ran: sed -i 's/c/d/' two.ts");
+  });
+
+  test('a different shape in the same turn still gets its own note', async () => {
+    const run = runToolOver(echoShell());
+    await run.execute({ command: "sed -i 's/a/b/' one.ts" });
+    const heredoc = await run.execute({ command: "cat > f.json <<'EOF'\n{}\nEOF" });
+    expect(heredoc).toContain('a heredoc written to a file');
+  });
+
+  test('the next turn starts fresh — a new toolset has said nothing yet', async () => {
+    await runToolOver(echoShell()).execute({ command: "sed -i 's/a/b/' one.ts" });
+    const nextTurn = await runToolOver(echoShell()).execute({ command: "sed -i 's/a/b/' one.ts" });
+    expect(nextTurn).toContain('an in-place stream edit');
+  });
+});
+
+describe('createFileToolSteer — once per shape, per turn', () => {
+  test('the second command of a shape says nothing, however it is spelled', () => {
+    const steer = createFileToolSteer();
+    expect(steer("sed -i 's/a/b/' f")).toContain('an in-place stream edit');
+    expect(steer('perl -pi -e "s/a/b/" g')).toBeNull();
+  });
+
+  test('each shape is tracked on its own', () => {
+    const steer = createFileToolSteer();
+    expect(steer("sed -i 's/a/b/' f")).not.toBeNull();
+    expect(steer("cat > f <<'EOF'\nx\nEOF")).not.toBeNull();
+    expect(steer(`python3 -c "open('f','w').write('x')"`)).not.toBeNull();
+    expect(steer("sed -i 's/c/d/' g")).toBeNull();
+  });
+
+  test('commands that hand-roll nothing never consume a shape', () => {
+    const steer = createFileToolSteer();
+    expect(steer('npm test')).toBeNull();
+    expect(steer('grep -i needle f')).toBeNull();
+    expect(steer("sed -i 's/a/b/' f")).not.toBeNull();
+  });
+
+  test('two turns are independent', () => {
+    const first = createFileToolSteer();
+    const second = createFileToolSteer();
+    expect(first("sed -i 's/a/b/' f")).not.toBeNull();
+    expect(second("sed -i 's/a/b/' f")).not.toBeNull();
   });
 });
