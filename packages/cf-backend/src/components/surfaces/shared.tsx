@@ -8,12 +8,14 @@ import { Code } from "@cloudflare/kumo/components/code";
 import { CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { DiffLine } from "@/lib/diff";
+import { MAX_LINES_PER_FILE, type DiffLine } from "@/lib/diff";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
- *  scaffold-version diff (Brain) and the workspace change-set (Output). */
-export function DiffLines({ lines }: { lines: DiffLine[] }) {
+ *  scaffold-version diff (Brain) and the workspace change-set (Output).
+ *  `truncated` marks a body the parser bounded, so a partial hunk never reads
+ *  as the whole file. */
+export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
     <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto max-h-[360px] overflow-y-auto m-0">
       {lines.map((l, i) => (
@@ -21,6 +23,11 @@ export function DiffLines({ lines }: { lines: DiffLine[] }) {
           <span className="select-none opacity-40 mr-2">{l.kind === "add" ? "+" : l.kind === "del" ? "−" : " "}</span>{l.text || " "}
         </div>
       ))}
+      {truncated && (
+        <div className="p-text-3 px-3 italic">
+          … diff truncated at {MAX_LINES_PER_FILE} lines — the +/− totals above cover the whole file.
+        </div>
+      )}
     </pre>
   );
 }

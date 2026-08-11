@@ -19,9 +19,34 @@
  */
 
 import type {
-  EventLog, ReplyChannelStore, EmailPayload, EmailAttachmentMeta, EventId,
+  EventLog, ReplyChannelStore, EmailPayload, EmailAttachmentMeta, EventId, VFS,
+  MissingCapability,
 } from '@proteus/core';
+import { spillEventContent } from '@proteus/core';
 import { normalizeEmailAddress } from '../../email/inbound.js';
+
+/**
+ * The inbox gate as live turn state, while it is still refusing mail.
+ *
+ * A rate-limited delivery leaves no trace the agent can read: the sender gets
+ * nothing, nothing is stored, and the agent goes on believing it has seen its
+ * inbox. The durable `email_inbound_rate_limited` event records that it
+ * happened; this says it is happening NOW and until when — and returns null
+ * once the window has reset, so a turn is never told about a deafness that has
+ * already ended.
+ */
+export function inboundEmailDropNotice(
+  limitPerMin: number, windowResetsAt: number, now: number,
+): MissingCapability | null {
+  if (now >= windowResetsAt) return null;
+  return {
+    source: 'inbound email',
+    reason:
+      `dropping mail right now — more than ${limitPerMin} messages arrived within one minute and the gate `
+      + `refuses the rest until ${new Date(windowResetsAt).toISOString()}. Mail sent in this window did not `
+      + `reach you and was not stored: you have NOT seen your inbox.`,
+  };
+}
 
 /** Threading envelope stored in the reply channel's holder_addr (JSON). */
 export interface EmailThreadAddr {
@@ -45,6 +70,9 @@ export interface EmailIngressDeps {
   allowlist: ReadonlyArray<string>;
   /** Per-agent inbound budget. Returns false when spent. */
   tryConsumeRateLimit(now: number): boolean;
+  /** The receiving agent's file plane — an oversize body is spilled here so
+   *  the woken turn can read the mail it was woken by. */
+  vfs: VFS;
 }
 
 export interface IncomingEmail {
@@ -70,10 +98,10 @@ export type EmailIngressResult =
   | { admitted: false; reason: string };
 
 /** Gate + publish an inbound email. Runs inside the agent DO. */
-export function acceptInboundEmail(
+export async function acceptInboundEmail(
   deps: EmailIngressDeps,
   msg: IncomingEmail,
-): EmailIngressResult {
+): Promise<EmailIngressResult> {
   // Sender identity is the envelope from as delivered by Cloudflare Email
   // Routing, whose edge enforces SPF/DKIM/DMARC before the Worker ever runs —
   // that upstream reliance is why even the owner's mail caps at trust
@@ -93,6 +121,12 @@ export function acceptInboundEmail(
     return { admitted: false, reason: 'inbound email rate limit exceeded' };
   }
 
+  // Spilled after the gate so an unauthorized sender never writes a file —
+  // the same ordering peer ingress uses. A mail longer than the brief budget
+  // gets a readable path alongside the brief, because the agent is woken BY
+  // this message and the brief alone is a fragment it cannot ask past.
+  const bodyPath = await spillEventContent(deps.vfs, msg.body_text);
+
   const payload: EmailPayload = {
     from: msg.from,
     to: msg.to,
@@ -102,6 +136,7 @@ export function acceptInboundEmail(
     in_reply_to: msg.in_reply_to,
     references: msg.references,
     attachments: msg.attachments,
+    ...(bodyPath ? { body_path: bodyPath } : {}),
   };
 
   const reply_channel_id = deps.replies.open({

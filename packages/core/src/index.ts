@@ -268,7 +268,7 @@ export {
 } from './turn-failure.js';
 
 // LLM (Vercel AI SDK wrapper — shared across backends)
-export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM } from './llm.js';
+export { createVercelAILLM, collectStepText, createChatModel, createCompletionLLM, estimateTokens } from './llm.js';
 export type { LLMProviderConfig, ChatModelConfig, LLMUsage } from './llm.js';
 export { contextWindowForModel } from './context-window.js';
 // The per-turn bulk ledger: the cumulative clamp budget + the M1 trip counters.
@@ -430,6 +430,7 @@ export {
   type DynamicContext,
   type DynamicDelegate,
   type DynamicTask,
+  type MissingCapability,
   type TurnLocalContext,
 } from './prompting/volatile-context.js';
 export {
@@ -538,6 +539,7 @@ export {
 export {
   runScaffold,
   scaffoldEventText,
+  SCAFFOLD_TURN_TIMEOUT_MS,
   type ScaffoldRunOptions,
   type ScaffoldRunResult,
   type ScaffoldEvent,

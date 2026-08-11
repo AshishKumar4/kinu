@@ -29,7 +29,7 @@ const logger: ProteusExtension = {
   name: 'my.logger',
   onTurnStart({ system, history }) { /* before the model is streamed */ },
   onToolCall({ toolName, args }) { /* each tool call the model emits */ },
-  onToolResult({ toolName, args, result }) { /* each tool result (≤1000 chars) */ },
+  onToolResult({ toolName, args, result }) { /* each tool result, in full */ },
   onTurnEnd({ text, responseMessages }) { /* after the turn settles */ },
 };
 ```
@@ -142,8 +142,12 @@ narrowed set; they do not widen it.
 
 - Hooks may be async; the engine awaits them. Keep them fast — they run on the
   turn's hot path.
-- `onToolResult.result` is truncated to 1000 characters (the same bound the
-  streamed `tool-result` event uses).
+- `onToolResult.result` is the tool's full rendered output — the same string the
+  streamed `tool-result` event and the durable turn record carry. It is not
+  bounded here because the built-in consumer keys on it (the turn steering
+  hashes it as the call's identity) and a head slice makes two different results
+  look like one. Bound it at your own render; `evidenceWindow` keeps both ends
+  and states what it dropped.
 - The seam is intentionally tiny. It observes and lightly rewrites a turn; it is
   not a place to re-implement the loop. Replacing the inference loop itself is
   the mutable scaffold's job (`core/src/scaffold/inference-transform.ts`), which

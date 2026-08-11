@@ -282,7 +282,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
         case 'tool-result': {
           const raw = chunk.output;
-          const result = renderToolResult(raw).slice(0, 1000);
+          // Full text, never a head slice: this string is the call's durable
+          // record (recordToolCall → the evolution signal) AND the identity the
+          // turn steering hashes. A clipped copy made two different outputs
+          // sharing a long preamble hash identical, and made cf and the CLI
+          // record different evolution evidence for the same call. Every
+          // display path bounds it at render.
+          const result = renderToolResult(raw);
           const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
           await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: true });
           yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
@@ -293,10 +299,9 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // reads. The extension seam sees the error text as the result (same as
           // the cf afterToolCall), and the discriminator rides success/error.
           const error = describeProviderError(chunk.error);
-          const result = error.slice(0, 1000);
           const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
-          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: false });
-          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: false, error };
+          await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, success: false });
+          yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, success: false, error };
           break;
         }
         case 'finish-step': {

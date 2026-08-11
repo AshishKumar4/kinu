@@ -28,6 +28,7 @@ import { Think, Session } from "@cloudflare/think";
 import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
+import type { McpToolSurface } from "./user/user-do.js";
 import { generateJson } from "./lib/generate-json.js";
 import type {
   TurnContext, TurnConfig,
@@ -44,6 +45,7 @@ import {
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  SCAFFOLD_TURN_TIMEOUT_MS,
   JudgeOutputSchema,
   type StructuredJudgeFn, effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
@@ -53,7 +55,8 @@ import {
   buildSystemPromptSync,
   currentDateForPrompt,
   promptModeForTurnEvent,
-  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
+  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates,
+  type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
   // Overflow recovery — the shared turn-failure policy (see turn-failure.ts)
@@ -62,7 +65,6 @@ import {
   openTurnRun, closeTurnRun, persistMeasuredPromptTokens, applyOverflowRecovery,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
-  BACKGROUND_POLICY,
   type SettledSignals,
   type AgentsToolAction,
   type AgentsToolDeps,
@@ -87,8 +89,8 @@ import {
   type SessionWriter, type SqlExecutor,
   // The agents tool's fork substrate (shared factory) + durable MCTS session
   buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
-  // Background-job system (#173 — auto-background >30s tool calls)
-  BackgroundJobStore, BackgroundJobRunner,
+  // Background-job system (#173 — auto-background past the surface threshold)
+  BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   wrapToolsForBackground, resumeForkBackgroundJob,
   MctsSearchStore,
   // EventsHub primitives (spec §1)
@@ -721,8 +723,6 @@ export abstract class ActorAgent extends Think<Env> {
         prompt,
         providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
       });
-    const judgeTask = task.slice(0, 2000);
-
     const result = await runSampledShadowEval({
       rt: this.rt,
       config: this.config,
@@ -740,13 +740,14 @@ export abstract class ActorAgent extends Think<Env> {
       // prompt, tool surface) so a pending that delegates to the default
       // loop is judged on the scaffold delta alone. Costs one extra
       // full-context inference — that IS the shadow run, already sampled.
-      // Fallback (DO restarted between the live turn and this eval): the
-      // old task-only reconstruction.
+      // Fallback (DO restarted between the live turn and this eval): the task
+      // alone, but under the live loop's own step budget — a candidate judged
+      // against the live answer has to be allowed to reach one.
       defaultInference: () => streamText(liveOpts ?? {
         model: this.getModel(),
-        messages: [{ role: 'user', content: judgeTask }],
+        messages: [{ role: 'user', content: task }],
         tools: this.getRawTools(),
-        stopWhen: stepCountIs(50),
+        stopWhen: stepCountIs(this.maxSteps),
         ...effortFor('scaffold_mutation'),
       }).toUIMessageStream(),
     });
@@ -771,12 +772,15 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
    *  resolve against the RAW surface per call, multi-step, scaffold-stage
-   *  reasoning effort. */
+   *  reasoning effort. The step budget is the turn's own — a scaffold that
+   *  delegates through this bridge is doing the turn's work, and giving it
+   *  less room than the default loop makes every comparison between them a
+   *  measurement of the handicap. */
   protected makeScaffoldLLMStream(): ScaffoldRunOptions['llmStream'] {
     return createScaffoldLLMStream({
       model: this.getModel(),
       tools: () => this.getRawTools(),
-      defaultMaxSteps: 50,
+      defaultMaxSteps: this.maxSteps,
       streamOptions: effortFor('scaffold_mutation'),
     });
   }
@@ -837,7 +841,7 @@ export abstract class ActorAgent extends Think<Env> {
         llmStream: this.makeScaffoldLLMStream(),
         callTool: this.makeScaffoldCallTool(),
         history: this.makeScaffoldHistory(),
-        timeoutMs: 5 * 60 * 1000,
+        timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
       },
     });
   }
@@ -917,6 +921,9 @@ export abstract class ActorAgent extends Think<Env> {
   // the user has actually added/removed/edited a server.
   private _cachedMcpTools: ToolSet = {};
   private _cachedMcpToolsKey: number = -1;
+  /** Configured MCP servers whose tools did not make it onto this surface —
+   *  rendered into the turn's dynamic context so their absence is legible. */
+  private _mcpUnavailable: MissingCapability[] = [];
 
   // Preamble-injection: the codemode tool is built once per DO lifetime.
   // Its executor (PreambleCraftedExecutor) reads craftStore.list() on every
@@ -995,14 +1002,11 @@ export abstract class ActorAgent extends Think<Env> {
       this._jobRunner = new BackgroundJobRunner({
         store: this.jobs,
         // The background policy follows the TURN's surface, not the DO: one
-        // workspace serves web-chat turns and one-shot `proteus exec` turns
-        // (readTurnContinuity stamps _turnContinuity in beforeTurn), and the
-        // detach threshold must match the caller — 30s keeps chat responsive,
-        // a one-shot invocation wants its work finished in-turn. The CLI pins
-        // the same policy per process; this is the cf adoption of that split.
-        policy: () => BACKGROUND_POLICY[
-          this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive'
-        ],
+        // workspace serves human-watched web chat, one-shot `proteus exec`
+        // invocations, and autonomous drains, and the detach threshold has to
+        // match the caller. 30s keeps chat responsive; anything with nobody
+        // watching wants its work finished in-turn.
+        policy: () => BACKGROUND_POLICY[this.turnSurface()],
         fiber: this.rt.schedule.fiber,
         signals: this.orch.signals,
         eventLog: this.eventLog,
@@ -1683,8 +1687,23 @@ export abstract class ActorAgent extends Think<Env> {
     }
 
     let descriptors: SerializableToolDescriptor[];
-    try { descriptors = await userDOStub.userMcp_toolDescriptors(caller); }
-    catch (err) {
+    try {
+      // Named at the boundary because Cloudflare's RPC type mapper cannot
+      // prove `SerializableToolDescriptor` serializable (its JSON-Schema
+      // fields are `Record<string, unknown>`) and erases the method's return
+      // to `never` — which assigns silently to anything. Same narrowing the
+      // consent hop uses on its own stub.
+      const answer = await (userDOStub as unknown as {
+        userMcp_toolDescriptors(c: UserCaller): Promise<McpToolSurface>;
+      }).userMcp_toolDescriptors(caller);
+      descriptors = answer.descriptors;
+      // A configured server whose tools never arrived is stated in the turn's
+      // dynamic context, not just logged: the model is otherwise left planning
+      // around a capability it was promised and cannot see.
+      this._mcpUnavailable = answer.unavailable.map((u) => ({
+        source: `MCP server "${u.server}"`, reason: u.reason,
+      }));
+    } catch (err) {
       console.warn('[proteus] mcp descriptor fetch failed:', (err as Error).message);
       return this._cachedMcpTools;
     }
@@ -2052,6 +2071,7 @@ export abstract class ActorAgent extends Think<Env> {
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
       delegates: forkDelegates(this.headJournal.listLive()),
+      ...(this._mcpUnavailable.length > 0 ? { missingCapabilities: this._mcpUnavailable } : {}),
     };
   }
 
@@ -2096,6 +2116,25 @@ export abstract class ActorAgent extends Think<Env> {
     return this.turnUserMessageEvent(null) !== null;
   }
 
+  /** The surface THIS turn runs on. A chat turn is interactive — a human is
+   *  watching the stream, so slow work must hand back a handle fast. Anything
+   *  driven by a queued signal (an event drain, a background-job wake, a timer,
+   *  an overflow retry) has nobody watching and is one-shot: detaching there
+   *  buys nothing and costs a truncated turn plus a synthesis turn, and the
+   *  model answers by polling its own jobs instead of working. */
+  protected turnSurface(): SessionSurface {
+    // Two independent ways a turn can have nobody watching a stream, and both
+    // count. A CLI one-shot invocation against this workspace stamps `oneShot`
+    // on the request body (readTurnContinuity → 'independent_task'). A turn a
+    // queued signal drove — an event drain, a background-job wake, a timer, an
+    // overflow retry — carries `proteusEvent` metadata on the message that
+    // drives it, the same discriminator every other programmatic-turn decision
+    // reads. Continuity alone would miss the whole autonomous population,
+    // which is the population the one-shot policy was measured on.
+    const programmatic = this.turnUserMessageEvent(this._activeProgrammaticUserMessage) !== null;
+    return programmatic || this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive';
+  }
+
   /** The turn's proteusEvent metadata value — from the active programmatic
    *  message when one drove the turn, else the last durable user message.
    *  Null for real chat turns. */
@@ -2128,8 +2167,11 @@ export abstract class ActorAgent extends Think<Env> {
     await this.extensions.emitToolResult({
       toolName: ctx.toolName,
       args: (ctx.input ?? {}) as Record<string, unknown>,
-      // Same shape the CLI seam emits: stringified, capped at 1000 chars.
-      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? '').slice(0, 1000),
+      // Same shape the CLI seam emits: the FULL stringified result. The turn
+      // steering hashes this as the call's identity and reads it to decide
+      // failure, so a head slice made two different outputs sharing a long
+      // preamble indistinguishable and hid every >1000-char structured error.
+      result: String(ctx.success ? ctx.output ?? '' : ctx.error ?? ''),
       success: ctx.success,
     });
   }

@@ -112,6 +112,14 @@ describe('isFailingToolResult', () => {
     expect(isFailingToolResult({ toolName: 'run', args: {}, success: true, result: '{"ok":true}' })).toBe(false);
     expect(isFailingToolResult({ toolName: 'run', args: {}, success: true, result: '{not json' })).toBe(false);
   });
+
+  test('a structured error longer than the old 1000-char clip still parses as a failure', () => {
+    // The clip cut the JSON mid-object, so `JSON.parse` threw and every large
+    // structured failure was scored a success.
+    const payload = JSON.stringify({ error: 'runtime_not_provisioned', log: 'l'.repeat(4_000) });
+    expect(payload.length).toBeGreaterThan(1_000);
+    expect(isFailingToolResult({ toolName: 'run', args: {}, success: true, result: payload })).toBe(true);
+  });
 });
 
 describe('repeated-failure trigger', () => {
@@ -194,6 +202,21 @@ describe('repeated-call trigger', () => {
     for (let i = 0; i < 6; i++) {
       orch.turnExtension.onToolResult!({
         toolName: 'run', args: { command: 'make' }, result: `progress ${i}`, success: true,
+      });
+    }
+    expect(injected(step(orch, 3, [user('q')]))).toEqual([]);
+    expect(orch.steering.snapshot()).toBeNull();
+  });
+
+  test('two runs that differ only past a long shared preamble are not a repeat', () => {
+    // A pytest banner, a cargo preamble: identical for thousands of characters,
+    // then the part that matters. Identity is the whole result, so the harness
+    // must not claim these taught the model nothing.
+    const orch = newTurn();
+    const banner = 'platform linux -- pytest 8.2.0\n'.repeat(200);
+    for (let i = 0; i < IDENTICAL_CALLS_BEFORE_STEER + 2; i++) {
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'pytest' }, result: `${banner}${i} failed`, success: true,
       });
     }
     expect(injected(step(orch, 3, [user('q')]))).toEqual([]);

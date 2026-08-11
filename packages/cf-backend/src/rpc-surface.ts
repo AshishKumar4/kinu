@@ -336,6 +336,7 @@ const ORCHESTRATOR_METHODS = [
   'setEmailNotifications',
   'setProvisionalDisplayName',
   'transitionProductChange',
+  'writeExecutorFile',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 
 export const ORCHESTRATOR_RPC_SURFACE: readonly string[] = [

@@ -6,7 +6,10 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { BackgroundJobRunner, JobNotResumable, MAX_CONCURRENT_DETACHED_JOBS, type JobResumer } from '../src/jobs/runner.js';
 import { SignalDelivery } from '../src/orchestrator/signals.js';
-import { BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY, type BackgroundPolicy } from '../src/jobs/index.js';
+import {
+  BackgroundJobStore, initBackgroundJobsTable, BACKGROUND_POLICY,
+  type BackgroundPolicy, type BackgroundJob, type SessionSurface,
+} from '../src/jobs/index.js';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { Schedule } from '../src/types/primitives.js';
@@ -64,16 +67,17 @@ function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
   const logs: Array<{ e: string; d?: string }> = [];
   const notified: Array<{ id: string; status: string }> = [];
   let drainSchedules = 0;
-  const runner = new BackgroundJobRunner({
+  const runnerDeps = {
     store, fiber, signals: new SignalDelivery(host), eventLog,
     scheduleDrain: () => { drainSchedules++; },
-    logActivity: (e, d) => logs.push({ e, d }),
-    onSettled: (job) => notified.push({ id: job.id, status: job.status }),
+    logActivity: (e: string, d?: string) => logs.push({ e, d }),
+    onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
     ...(opts.resume ? { resume: opts.resume } : {}),
     ...(opts.policy ? { policy: () => opts.policy! } : {}),
-  });
+  };
+  const runner = new BackgroundJobRunner(runnerDeps);
   return {
-    runner, store, eventLog, stashes, runs, settled, host, enqueued,
+    runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
     setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
   };
 }
@@ -347,6 +351,17 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     const oneShot = setup({ policy: BACKGROUND_POLICY['one-shot'] });
     expect(oneShot.runner.thresholdDeps('run', {}, new AbortController()).thresholdMs)
       .toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
+
+    // Resolved per read, not captured once: a backend whose surface is a
+    // property of the TURN (the cloud DO serves a watched chat turn and an
+    // unwatched drain from one agent) switches policy between calls.
+    let surface: SessionSurface = 'interactive';
+    const perTurn = new BackgroundJobRunner({
+      ...oneShot.runnerDeps, policy: () => BACKGROUND_POLICY[surface],
+    });
+    expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
+    surface = 'one-shot';
+    expect(perTurn.policy.detachAfterMs).toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
     // A one-shot run has no human waiting on a fast turn, and a detach there
     // costs a truncated turn plus a synthesis turn — so ordinary long work runs
     // to completion inline instead.

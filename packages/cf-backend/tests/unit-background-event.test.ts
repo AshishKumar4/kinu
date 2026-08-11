@@ -2,6 +2,8 @@
 // decides which messages lose the user bubble, and the parser recovers the
 // events from the prompt the drain wrapped around them.
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { buildDrainBatch } from '@proteus/core';
 import type { ProteusEvent } from '@proteus/core';
 import {
@@ -189,5 +191,41 @@ describe('the card lifecycle', () => {
     // A turn the operator typed belongs to no card.
     expect(messageSignalId({})).toBeNull();
     expect(messageSignalId(undefined)).toBeNull();
+  });
+});
+
+/**
+ * The background threshold is a property of the TURN on this backend.
+ *
+ * One agent serves both a chat turn a human is watching stream and an
+ * email/webhook/timer/peer/MCP drain nobody is waiting on, and the DO's job
+ * runner is a per-agent singleton — so the surface has to be resolved at read
+ * time, not captured at construction. This regressed silently for the whole
+ * life of the one-shot policy: cf passed no policy at all, every turn got the
+ * interactive 30s detach, and the measured pathology of that configuration
+ * (151 of 202 sandbox scripts becoming `agent.jobResult` polls) is the reason
+ * the one-shot policy exists. Nothing observable fails when it goes back to a
+ * fixed policy, so it is pinned here against the source.
+ */
+describe('the cloud backend selects its background policy per turn', () => {
+  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+
+  test('the job runner reads the policy through a thunk, not a captured value', () => {
+    expect(actor).toContain('policy: () => BACKGROUND_POLICY[this.turnSurface()]');
+  });
+
+  test('both unwatched populations are one-shot; only real chat is interactive', () => {
+    const surface = /protected turnSurface\(\): SessionSurface \{([\s\S]*?)\n  \}/.exec(actor);
+    expect(surface).not.toBeNull();
+    // A CLI one-shot invocation AND a signal-driven autonomous turn both have
+    // nobody watching a stream. Continuity alone misses the whole autonomous
+    // population — the population the one-shot policy was measured on — and
+    // the event metadata alone misses `proteus exec` against a cloud
+    // workspace. The discriminators are the ones every other decision already
+    // reads; there is no third notion of "autonomous".
+    expect(surface![1]).toContain('turnUserMessageEvent');
+    expect(surface![1]).toContain("_turnContinuity === 'independent_task'");
+    expect(surface![1]).toContain("'interactive'");
+    expect(surface![1]).toContain("'one-shot'");
   });
 });

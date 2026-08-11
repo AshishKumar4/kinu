@@ -493,6 +493,77 @@ describe('LocalAgentSession.send — a user turn', () => {
     expect(text.indexOf('remember this')).toBeLessThan(text.indexOf('remembered answer'));
     expect(events.some((e) => e.type === 'turn-end')).toBe(true);
   });
+
+  // Restore used to stop at the newest 40 messages — a number nothing ever
+  // passed, applied on every reconnect. A session past 40 messages lost
+  // everything older each time the CLI restarted, silently: no marker in the
+  // transcript, and no way for the model to ask what it had lost.
+  describe('restoring a long transcript', () => {
+    function seed(db: Database, messages: Array<{ role: 'user' | 'assistant'; content: string }>): void {
+      messages.forEach((m, i) => {
+        db.query(
+          `INSERT INTO messages (id, session_id, role, content, created_at) VALUES (?, 'default', ?, ?, ?)`,
+        ).run(`m-${i}`, m.role, m.content, 1_000 + i);
+      });
+    }
+
+    function resume(db: Database, rt: ReturnType<typeof createCLIRuntime>) {
+      let observed: ModelMessage[] = [];
+      const session = new LocalAgentSession({
+        rt, db, sessionId: 'default',
+        model: historyCapturingModel('ok', (messages) => { observed = messages; }),
+        onEvent: () => {}, noAutoEvolve: true,
+      });
+      return { session, seen: () => observed.map(messageText).filter((t) => !isDynamicBlock(t)) };
+    }
+
+    test('a transcript far past the old 40-message cap is restored whole', async () => {
+      const { db, rt } = setup();
+      seed(db, Array.from({ length: 120 }, (_, i) => ({
+        role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: `turn-${i}`,
+      })));
+
+      const { session, seen } = resume(db, rt);
+      await session.send('and now?');
+      await session.end();
+
+      const text = seen();
+      expect(text).toContain('turn-0');
+      expect(text).toContain('turn-119');
+      expect(text.some((t) => t.includes('earlier message'))).toBe(false);
+    });
+
+    test('what does not fit the context window is stated, with its count and where it lives', async () => {
+      const { db, rt } = setup();
+      // The static fallback window is 128k tokens ≈ 512k characters, so 80
+      // messages of 10k characters cannot be restored whole.
+      seed(db, Array.from({ length: 80 }, (_, i) => ({
+        role: (i % 2 === 0 ? 'user' : 'assistant') as 'user' | 'assistant',
+        content: `turn-${i} ${'z'.repeat(10_000)}`,
+      })));
+
+      const { session, seen } = resume(db, rt);
+      await session.send('and now?');
+      await session.end();
+
+      const text = seen();
+      const notice = text.find((t) => t.includes('earlier message'));
+      expect(notice).toBeDefined();
+      // The newest end is what survived, and the count names exactly how much
+      // of the old end did not — the boundary the model can reason about.
+      expect(text.some((t) => t.startsWith('turn-79'))).toBe(true);
+      expect(text.some((t) => t.startsWith('turn-0 '))).toBe(false);
+      const omitted = Number(/(\d+) earlier messages/.exec(notice!)![1]);
+      expect(omitted).toBeGreaterThan(0);
+      expect(omitted).toBeLessThan(80);
+      expect(text.some((t) => t.startsWith(`turn-${omitted - 1} `))).toBe(false);
+      // Not lost, and it says so — an agent that knows it is reading the tail
+      // of its own conversation can ask for the rest.
+      expect(notice).toContain('local session store');
+      expect(notice).toContain('"default"');
+    });
+  });
 });
 
 describe('LocalAgentSession — tool success/error + cache telemetry fidelity', () => {

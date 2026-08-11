@@ -36,6 +36,7 @@ import { handleCliRequest } from "./cli/routes.js";
 import { handleAuthRequest } from "./auth/routes.js";
 import { handleLandingRequest } from "./landing-route.js";
 import { handleHubRequest } from "./events/routes.js";
+import { handleFilesRequest } from "./files-routes.js";
 import { handleInboundEmail } from "./email/handler.js";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do.js";
 import { handleNimbusPreviewRequest } from "./nimbus-route.js";
@@ -277,6 +278,10 @@ export default {
       // EventsHub authenticated routes: /triggers, /events
       const hubResp = await handleHubRequest(reqWithId, env, agentName);
       if (hubResp) return withD1Bookmark(hubResp, identity);
+      // File uploads: HTTP rather than an agent RPC, because the RPC transport
+      // is the chat WebSocket and its frame ceiling is below ordinary files.
+      const filesResp = await handleFilesRequest(reqWithId, env, agentName);
+      if (filesResp) return withD1Bookmark(filesResp, identity);
       const agentResp = await routeAgentRequest(reqWithId, env);
       if (agentResp) return withD1Bookmark(agentResp, identity);
     }

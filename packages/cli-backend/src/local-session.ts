@@ -19,13 +19,14 @@ import {
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
+  ChatOptions,
   AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome,
   AgentsForkDeps, AgentsToolDeps,
-  IngressDescriptor, ProteusEvent, EventVariant,
+  IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery,
   ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
@@ -49,7 +50,7 @@ import {
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
-  createChatModel, runChat, resolveMaxSteps,
+  createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
   openTurnRun, closeTurnRun, snapshotCompletedTurn,
@@ -70,6 +71,7 @@ import {
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  SCAFFOLD_TURN_TIMEOUT_MS,
   createStructuredJudge, modifyScaffold, listScaffoldArchive,
   getPendingScaffold, decidePromotion, applyPromotionDecision, DEFAULT_SHADOW_CONFIG,
   initShadowTables,
@@ -108,9 +110,32 @@ function providerFamilyForSpec(spec: string): string | undefined {
   catch { return undefined; }
 }
 
-/** A scaffold turn is a whole agentic loop, not a tool call — it gets the
- *  same wall-clock budget the DO gives it. */
-const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+/**
+ * The head of a transcript that could not be restored whole.
+ *
+ * A restore bounded by the context window can still leave older turns behind
+ * on a long-lived session. Saying so is the difference between an agent that
+ * knows it is reading the tail of its own conversation and one that believes
+ * the conversation started there — and the session store is still queryable,
+ * so the notice names where the rest is rather than only that it is gone.
+ */
+function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
+  return {
+    role: 'user',
+    content:
+      `[Runtime note — written by the Proteus harness, not by the user.]\n\n`
+      + `${omitted} earlier message${omitted === 1 ? '' : 's'} from this session `
+      + `are not in your context: the transcript is longer than this model's context window, `
+      + `so it was restored from the newest end. They are not lost — they are in this `
+      + `workspace's local session store under session id "${sessionId}", readable with your `
+      + `normal tools. Say so rather than guessing if something earlier in the conversation matters.`,
+  };
+}
+
+/** A turn's inference, replayable outside the turn that ran it: everything
+ *  runChat needs except the two things that belong to one live turn only —
+ *  its abort signal and its extension host. */
+type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
 
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export interface LocalSessionDb {
@@ -204,8 +229,6 @@ export interface LocalAgentSessionOpts {
   sessionId?: string;
   /** Persist user/assistant messages to SQLite. Default: true. */
   persistMessages?: boolean;
-  /** Number of recent messages to restore into LLM context. Default: 40. */
-  historyLimit?: number;
   /** Working directory for AGENTS.md discovery + the prompt's runtime context.
    *  Default: process.cwd(). */
   cwd?: string;
@@ -504,7 +527,7 @@ export class LocalAgentSession implements BackendHost {
     // bootstrapScaffold is idempotent (exists-check + INSERT OR IGNORE v0);
     // tracked so end()/settleEvolution joins it before the process exits.
     this.orch.track(bootstrapScaffold(this.rt), 'Scaffold bootstrap');
-    this.restoreHistory(opts.historyLimit ?? 40);
+    this.restoreHistory();
     this.ensureModelState();
     this.rearmLocalAlarm();
   }
@@ -961,7 +984,20 @@ export class LocalAgentSession implements BackendHost {
       vfs: this.rt.storage.vfs, budget: this.orch.acc.context, producer: 'external_tool',
     });
     this.mcpClose = conn.close;
+    // A server that never came up is stated in the turn's live context, not
+    // only in a diagnostic the model never sees. Its tools are simply ABSENT
+    // otherwise, so the model plans as if a capability the user configured
+    // does not exist and cannot explain why.
+    this.mcpUnavailable = conn.diagnostics
+      .filter((d) => d.status === 'failed')
+      .map((d) => ({
+        source: `MCP server "${d.server}"`,
+        reason: d.reason ?? 'failed to start — its tools are absent from this turn',
+      }));
   }
+
+  /** Configured MCP servers whose tools are not on this session's surface. */
+  private mcpUnavailable: MissingCapability[] = [];
 
   /** Run any pending event drain to completion NOW, bypassing the ~250ms
    *  debounce window. The scheduler daemon fires due triggers then ends the
@@ -1386,11 +1422,17 @@ export class LocalAgentSession implements BackendHost {
     // and overflow recovery all budget against the same number.
     const contextWindow = this.sessionContextWindow();
 
-    const defaultTurn = runChat({
+    // The turn's inference exactly as it ran, minus the two things that belong
+    // to THIS turn and nothing else (its abort signal and its extension host).
+    // Kept as a value so the shadow evaluation of a delegating pending scaffold
+    // replays the live turn rather than a reconstruction of it — the local peer
+    // of the DO's `_lastTurnOpts` stash. `this.history` is snapshotted because
+    // the assistant's answer is appended to it before the eval runs.
+    const liveTurnOpts = {
       model,
       modelContext: { id: this.effectiveModelSpec(), contextWindow },
       system: systemPrompt,
-      history: this.history,
+      history: [...this.history],
       // Model-capability attachment sanitization — runChat applies it to
       // the whole history BEFORE the transform seam and the ledger weave
       // (same ordering as the DO's beforeTurn); this.history itself is
@@ -1404,12 +1446,11 @@ export class LocalAgentSession implements BackendHost {
       ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
       transformTrigger,
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
-      signal: abort.signal,
-      extensions,
       cache,
       budget: this.budget,
       ...(providerOptions ? { providerOptions } : {}),
-    });
+    };
+    const defaultTurn = runChat({ ...liveTurnOpts, history: this.history, signal: abort.signal, extensions });
 
     // The mutable scaffold on the live turn seam — the local peer of the DO's
     // _transformInferenceResult. An agent still on the bootstrap v0 gets
@@ -1578,9 +1619,7 @@ export class LocalAgentSession implements BackendHost {
       // a `proteus exec` process exits the moment the turn ends, and the
       // evaluation that resolves a pending scaffold must not die with it.
       this.orch.track(
-        this.runShadowEvalSampled({
-          task: item.text, currentOutput: fullText, model, tools: turnTools, system: systemPrompt,
-        }),
+        this.runShadowEvalSampled({ task: item.text, currentOutput: fullText, liveTurnOpts }),
         'Scaffold shadow eval',
       );
       this.emit({ type: 'turn-end', turn });
@@ -1747,28 +1786,25 @@ export class LocalAgentSession implements BackendHost {
    * decision is visible and revertable in the Evolution Changelog).
    */
   private async runShadowEvalSampled(opts: {
-    task: string; currentOutput: string; model: LanguageModel; tools: ToolSet; system: string;
+    task: string; currentOutput: string; liveTurnOpts: LiveTurnOpts;
   }): Promise<void> {
+    const { model, tools } = opts.liveTurnOpts;
     const result = await runSampledShadowEval({
       rt: this.rt,
       config: this.config,
       task: opts.task,
       currentOutput: opts.currentOutput,
       judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
-      llmStream: this.makeScaffoldLLMStream(opts.model, opts.tools),
-      callTool: this.makeScaffoldCallTool(opts.tools),
+      llmStream: this.makeScaffoldLLMStream(model, tools),
+      callTool: this.makeScaffoldCallTool(tools),
       history: this.makeScaffoldHistory(),
-      // A pending that delegates is judged on the scaffold delta alone, so
-      // it gets a real default turn for the shadow task — same system prompt
-      // and tool surface, isolated history.
-      defaultInference: () => runChat({
-        model: opts.model,
-        modelContext: { id: this.cachedModelSpec ?? this.fallbackModelSpec },
-        system: opts.system,
-        history: [{ role: 'user', content: opts.task.slice(0, 2000) }],
-        tools: opts.tools,
-        maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
-      }),
+      // A pending that delegates is judged on the scaffold delta alone, so it
+      // replays the live turn's OWN inference — same system prompt, same tool
+      // surface, same conversational history, same step budget. It used to get
+      // the task's first 2000 characters as its entire context, so a candidate
+      // was asked to answer a stub of the question the live answer had answered
+      // in full, and then scored against it.
+      defaultInference: () => runChat(opts.liveTurnOpts),
     });
     if (result?.applied) {
       this.emit({
@@ -1907,6 +1943,7 @@ export class LocalAgentSession implements BackendHost {
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
       delegates: forkDelegates(this.headJournal.listLive()),
+      ...(this.mcpUnavailable.length > 0 ? { missingCapabilities: this.mcpUnavailable } : {}),
     };
   }
 
@@ -2023,20 +2060,45 @@ export class LocalAgentSession implements BackendHost {
     return assistantId;
   }
 
-  private restoreHistory(limit: number): void {
-    if (limit <= 0) return;
+  /**
+   * Restore the session's durable transcript into live context on open.
+   *
+   * Bounded by what the model could ever be shown at once — the resolved
+   * context window — rather than by a message count. The count was 40, was
+   * never overridden by anything, and was applied on EVERY reconnect: a
+   * session past 40 messages silently lost everything older each time the CLI
+   * restarted, with no marker in the transcript and no way for the model to
+   * ask what it had lost. Restoring to the window instead hands the whole
+   * conversation to the compaction ladder, which is the thing that actually
+   * knows how to shed it (summarize, archive verbatim, cite the archive).
+   *
+   * A session larger than the window still cannot be restored whole, so what
+   * did not fit is STATED: the count, and where it is still readable from.
+   */
+  private restoreHistory(): void {
     try {
-      const rows = this.rt.storage.sql<{ role: string; content: string; created_at: number; rowid: number }>`
-        SELECT role, content, created_at
+      const rows = this.rt.storage.sql<{ role: string; content: string }>`
+        SELECT role, content
         FROM messages
         WHERE session_id = ${this.sessionId} AND role IN ('user', 'assistant')
-        ORDER BY created_at DESC, rowid DESC
-        LIMIT ${limit}`;
-      for (const row of rows.reverse()) {
-        if (row.role === 'user' || row.role === 'assistant') {
-          this.history.push({ role: row.role, content: row.content });
-        }
+        ORDER BY created_at DESC, rowid DESC`;
+      const budget = this.sessionContextWindow();
+      const restored: ModelMessage[] = [];
+      let tokens = 0;
+      let omitted = 0;
+      for (const row of rows) {
+        if (row.role !== 'user' && row.role !== 'assistant') continue;
+        if (omitted > 0) { omitted++; continue; }
+        const cost = estimateTokens(row.content.length);
+        // The newest message is always restored: a single message larger than
+        // the whole window is the compaction ladder's problem, not a reason to
+        // open the session with an empty transcript.
+        if (restored.length > 0 && tokens + cost > budget) { omitted++; continue; }
+        tokens += cost;
+        restored.push({ role: row.role, content: row.content });
       }
+      if (omitted > 0) this.history.push(olderHistoryNotice(omitted, this.sessionId));
+      this.history.push(...restored.reverse());
     } catch {
       // Old or partial databases should still open; they just start with no restored transcript.
     }

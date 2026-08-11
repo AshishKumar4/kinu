@@ -124,6 +124,29 @@ describe('renderDynamicContextBlock', () => {
     expect(text!).toContain('- sandbox: ready on demand');
   });
 
+  test('a configured capability that is NOT on the surface is named, with its reason', () => {
+    // A slow MCP server misses its startup budget and its tools are simply
+    // absent. Without this the model plans around a capability it was promised
+    // and cannot explain why the tools it was told about are not there.
+    const text = renderDynamicContextBlock({
+      missingCapabilities: [
+        { source: 'MCP server "github"', reason: 'not connected within 5s of this turn starting — its tools are absent' },
+      ],
+    })!;
+    expect(text).toContain('Configured but NOT available this turn');
+    expect(text).toContain('MCP server "github"');
+    expect(text).toContain('not connected within 5s');
+  });
+
+  test('the missing-capability roster is capped with an honest count', () => {
+    const text = renderDynamicContextBlock({
+      missingCapabilities: Array.from({ length: 11 }, (_, i) => ({ source: `server-${i}`, reason: 'down' })),
+    })!;
+    expect(text).toContain('server-7');
+    expect(text).not.toContain('server-8');
+    expect(text).toContain('…and 3 more, not shown');
+  });
+
   test('unselectable executors are omitted; empty state renders nothing', () => {
     const offline: PromptExecutorInfo = { name: 'laptop', available: false, configured: true, active: false, status: 'disconnected' };
     expect(renderDynamicContextBlock({ executors: [offline] })).toBeNull();

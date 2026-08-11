@@ -2,9 +2,6 @@
 // mapping (one plane for read and write) and the writeExecutorFileOp seam.
 import { describe, test, expect } from "bun:test";
 import {
-  MAX_UPLOAD_BYTES,
-  decodeBase64,
-  encodeBase64,
   sortDirEntries,
   toCompositePath,
   writeExecutorFileOp,
@@ -59,7 +56,7 @@ describe("writeExecutorFileOp", () => {
   test("workspace upload round-trips binary content through the VFS", async () => {
     const { deps, written } = makeDeps();
     const bytes = new Uint8Array([0, 1, 2, 255, 0, 128]); // includes NULs — binary-safe path
-    const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", encodeBase64(bytes));
+    const result = await writeExecutorFileOp(deps, "workspace", "/uploads/blob.bin", bytes);
     expect(result).toEqual({ ok: true });
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
   });
@@ -67,13 +64,13 @@ describe("writeExecutorFileOp", () => {
   test("executor uploads land BINARY-SAFE through the executor's composite mount", async () => {
     const { deps, written } = makeDeps();
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
-    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", encodeBase64(bin))).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", bin)).toEqual({ ok: true });
     expect(written.get("/sandbox/workspace/logo.png")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", encodeBase64(bin))).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", bin)).toEqual({ ok: true });
     expect(written.get("/nimbus/home/user/a.bin")).toEqual(bin);
 
-    expect(await writeExecutorFileOp(deps, "laptop", "/home/me/proj/b.bin", encodeBase64(bin))).toEqual({ ok: true });
+    expect(await writeExecutorFileOp(deps, "laptop", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
     expect(written.get("/pc/home/me/proj/b.bin")).toEqual(bin);
   });
 
@@ -82,30 +79,35 @@ describe("writeExecutorFileOp", () => {
       throwOn: /^\/sandbox\//,
       error: "ENXIO: /sandbox is not available (sandbox executor not configured), open '/sandbox/workspace/x'",
     });
-    const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", encodeBase64(new TextEncoder().encode("y")));
+    const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", new TextEncoder().encode("y"));
     expect(result).toMatchObject({ error: expect.stringContaining("/sandbox is not available") });
   });
 
   test("unknown executor → typed error", async () => {
     const { deps } = makeDeps();
-    const result = await writeExecutorFileOp(deps, "ghost", "/a", encodeBase64(new TextEncoder().encode("x")));
+    const result = await writeExecutorFileOp(deps, "ghost", "/a", new TextEncoder().encode("x"));
     expect(result).toEqual({ error: 'Executor "ghost" not found' });
   });
 
-  test("rejects a missing path, a directory path, oversize and malformed content", async () => {
+  test("rejects a missing path and a directory path", async () => {
+    const one = new Uint8Array([1]);
     const { deps, written } = makeDeps();
-    expect(await writeExecutorFileOp(deps, "workspace", "", "QQ==")).toEqual({ error: "file path required" });
-    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/", "QQ==")).toEqual({ error: "file path required" });
-    expect(await writeExecutorFileOp(deps, "workspace", "/a", "not base64!!")).toEqual({ error: "invalid base64 content" });
-    const over = await writeExecutorFileOp(deps, "workspace", "/a", encodeBase64(new Uint8Array(MAX_UPLOAD_BYTES + 1)));
-    expect(over).toEqual({ error: `file too large (${MAX_UPLOAD_BYTES + 1} bytes; max ${MAX_UPLOAD_BYTES})` });
+    expect(await writeExecutorFileOp(deps, "workspace", "", one)).toEqual({ error: "file path required" });
+    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/", one)).toEqual({ error: "file path required" });
     expect(written.size).toBe(0);
   });
 
-  test("encodeBase64/decodeBase64 round-trip large binary payloads", () => {
-    const bytes = new Uint8Array(70_000);
-    for (let i = 0; i < bytes.length; i++) bytes[i] = i % 256;
-    expect(decodeBase64(encodeBase64(bytes))).toEqual(bytes);
+  test("a file past the old 2 MB cap is written, not refused", async () => {
+    // The cap sat ABOVE the transport it claimed to respect: 2 MB raw is
+    // ~2.7 MB of base64 over a WebSocket whose message ceiling is 1 MiB, so
+    // files between ~750 KB and 2 MB passed the app check and died at the
+    // socket as an opaque connection failure. Uploads are HTTP now, the bytes
+    // are raw, and the VFS chunks what it stores — so there is nothing left
+    // for an app-level cap to protect.
+    const { deps, written } = makeDeps();
+    const big = new Uint8Array(3 * 1024 * 1024);
+    expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", big)).toEqual({ ok: true });
+    expect((written.get("/uploads/big.bin") as Uint8Array).length).toBe(big.length);
   });
 });
 

@@ -200,7 +200,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
                   {f.added > 0 && <span className="text-[10px] p-success shrink-0">+{f.added}</span>}
                   {f.removed > 0 && <span className="text-[10px] p-danger shrink-0">−{f.removed}</span>}
                 </button>
-                {open && <div className="border-t p-border"><DiffLines lines={f.lines} /></div>}
+                {open && <div className="border-t p-border"><DiffLines lines={f.lines} truncated={f.truncated} /></div>}
               </div>
             );
           })}

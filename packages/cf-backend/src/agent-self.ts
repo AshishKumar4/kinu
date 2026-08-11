@@ -16,7 +16,7 @@
  * one spawn/join implementation, with one more caller.
  */
 import type { CodemodeProvider, MissionGovernor } from '@proteus/core';
-import { nanoid, nextCronFire, readMissionLimits } from '@proteus/core';
+import { nanoid, nextCronFire, readMissionLimits, BACKGROUND_POLICY } from '@proteus/core';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
@@ -107,6 +107,21 @@ const TYPES = `export declare const agent: {
   replayEvals(limit?: number): Promise<unknown>;
 };
 `;
+
+/**
+ * What the model is told about auto-backgrounding.
+ *
+ * Both thresholds, named with the rule that picks them, and read from
+ * BACKGROUND_POLICY rather than written down: the surface is a property of the
+ * TURN on this backend, and this provider is built once per DO, so a single
+ * hardcoded number was necessarily wrong on half the turns the agent serves.
+ */
+const BACKGROUND_DESCRIPTION =
+  'Read a background job (status + result). A tool call that outruns this turn\'s background '
+  + `threshold (${BACKGROUND_POLICY.interactive.detachAfterMs / 1000}s on a chat turn a human is `
+  + `watching, ${BACKGROUND_POLICY['one-shot'].detachAfterMs / 1000}s on an autonomous turn woken `
+  + 'by an event, a timer or a job) hands back a { jobId } instead of its result; you are woken on '
+  + 'completion — call this to fetch it.';
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
   return {
@@ -210,7 +225,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         },
       },
       jobResult: {
-        description: 'Read a background job (status + result). Long tool calls auto-background past 30s and return a { jobId }; you are woken on completion — call this to fetch the result.',
+        description: BACKGROUND_DESCRIPTION,
         execute: async (...args: unknown[]) => {
           const id = args[0];
           if (typeof id !== 'string' || !id) return { error: 'agent.jobResult: jobId must be a non-empty string' };

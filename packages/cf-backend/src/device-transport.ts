@@ -29,7 +29,7 @@ export interface DeviceHubClient {
     caller: UserCaller,
     method: string,
     params: unknown[],
-    opts?: { agentName?: string; checkpoint?: DeviceCheckpointHint },
+    opts?: { agentName?: string; checkpoint?: DeviceCheckpointHint; timeoutMs?: number },
   ): Promise<unknown>;
 }
 
@@ -81,7 +81,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
       return snapshot;
     },
     refreshStatus,
-    rpc: async (method, params) => {
+    rpc: async (method, params, rpcOpts) => {
       const hub = opts.hub();
       if (!hub) {
         snapshot = { connected: false, registered: false };
@@ -103,7 +103,11 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           dir: method === 'exec' ? cwd : null,
         } : undefined;
         const result = await hub.deviceRpc(
-          await opts.caller(), method, effectiveParams, { agentName: opts.agentName, checkpoint },
+          await opts.caller(), method, effectiveParams,
+          {
+            agentName: opts.agentName, checkpoint,
+            ...(rpcOpts?.timeoutMs !== undefined ? { timeoutMs: rpcOpts.timeoutMs } : {}),
+          },
         );
         snapshot = { connected: true, registered: true };
         checkedAt = now();

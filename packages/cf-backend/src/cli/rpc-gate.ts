@@ -168,7 +168,6 @@ export const AGENT_RPC_ACCESS = {
   setTurnFeedback: 'interactive',
   spawnSubordinate: 'interactive',
   upsertProductSourceBinding: 'interactive',
-  writeExecutorFile: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',

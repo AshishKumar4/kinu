@@ -11,6 +11,7 @@ import {
   type BackendHost, type EvolutionEngine,
   type SqlExec,
 } from '@proteus/core';
+import { createMemoryVfs } from '@proteus/test-utils';
 import { acceptInboundEmail } from '../src/events/ingress/email.js';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -83,12 +84,13 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     return { sql, log, replies, sent };
   }
 
-  function admitOwnerEmail(log: EventLog, replies: ReplyChannelStore) {
-    const result = acceptInboundEmail({
+  async function admitOwnerEmail(log: EventLog, replies: ReplyChannelStore) {
+    const result = await acceptInboundEmail({
       log, replies,
       owner_email: 'owner@example.com',
       allowlist: [],
       tryConsumeRateLimit: () => true,
+      vfs: createMemoryVfs().vfs,
     }, {
       from: 'owner@example.com',
       to: 'scout-a1b2c3@agents.example.com',
@@ -106,7 +108,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test("the turn's answer threads back to the sender as a real reply", async () => {
     const { log, replies, sent, sql } = setup();
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
 
     // The drain binds the event to a synthetic turn (as AgentOrchestrator does).
     log.markConsumed(eventId, 'evt-turn-1', 0);
@@ -149,7 +151,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('an email injected MID-TURN still threads its reply — bound to the batch id the live turn absorbed', async () => {
     const { log, replies, sent } = setup();
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
 
     // A turn is live: the seam splices the drain into the turn's next step
     // instead of queueing it (the same decision every backend delegates), as
@@ -182,8 +184,9 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('an existing Re: subject is not double-prefixed', async () => {
     const { log, replies, sent } = setup();
-    const result = acceptInboundEmail({
+    const result = await acceptInboundEmail({
       log, replies, owner_email: 'owner@example.com', allowlist: [], tryConsumeRateLimit: () => true,
+      vfs: createMemoryVfs().vfs,
     }, {
       from: 'owner@example.com', to: 'scout-a1b2c3@agents.example.com',
       subject: 'Re: Check the deploy', body_text: 'and now?',
@@ -198,7 +201,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('a send failure keeps the channel open for retry and audits the failure', async () => {
     const { log, replies, sent, sql } = setup({ fail: true });
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
     log.markConsumed(eventId, 'evt-turn-3', 0);
 
     const result = await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-3', 'answer', 2_000);
@@ -219,7 +222,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
 
   test('empty answers are not emailed', async () => {
     const { log, replies, sent } = setup();
-    const eventId = admitOwnerEmail(log, replies);
+    const eventId = await admitOwnerEmail(log, replies);
     log.markConsumed(eventId, 'evt-turn-4', 0);
     expect(await dispatchEmailRepliesForTurn({ log, replies }, 'evt-turn-4', '   ', 2_000))
       .toEqual({ delivered: 0, pending: true });

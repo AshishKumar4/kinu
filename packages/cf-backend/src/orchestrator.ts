@@ -52,7 +52,7 @@ import {
   // Canonical memory-note write primitive
   appendMemoryNote,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventText, modifyScaffold, type ScaffoldRunResult,
+  runScaffold, scaffoldEventText, modifyScaffold, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult,
   initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
   listScaffoldArchive,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
@@ -122,6 +122,7 @@ import {
   spillEventContent,
   EVIDENCE_BUDGETS, evidenceWindow,
   type DynamicApproval,
+  type MissingCapability,
   type DynamicContext,
   type DynamicDelegate,
 } from "@proteus/core";
@@ -139,13 +140,14 @@ import type { CodemodeProvider } from "@proteus/core";
 import { timingSafeEqual } from "./lib/crypto.js";
 import { createAgentSelfProvider } from "./agent-self.js";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
+import type { DeviceConsentDecision } from "./user/device-consent.js";
 import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
 import {
   initWebhookRateLimitTables,
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
 } from "./events/webhook-rate-limit.js";
-import { acceptInboundEmail } from "./events/ingress/email.js";
+import { acceptInboundEmail, inboundEmailDropNotice } from "./events/ingress/email.js";
 import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -166,7 +168,10 @@ const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
 const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
 
 // Inbound-email budget per agent (all senders combined). Email is a wake
-// channel, not a data plane — mail beyond this is dropped at the gate.
+// channel, not a data plane — mail beyond this is dropped at the gate. The
+// drop is announced to the agent (noteEmailRateDrop): a reply storm or a list
+// subscription otherwise makes it silently deaf while it believes it has seen
+// its inbox.
 const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
 function executorOutputIsError(output: string): boolean {
@@ -355,12 +360,15 @@ export class OrchestratorAgent extends ActorAgent {
         kind: 'device consent',
         detail: `${pending.deviceLabel}: ${pending.command}`,
       }));
+    const deafInbox = inboundEmailDropNotice(EMAIL_INBOUND_RATE_PER_MIN, this._emailDropWindow, Date.now());
     return {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
       approvals,
+      ...(deafInbox ? { missingCapabilities: [...(base.missingCapabilities ?? []), deafInbox] } : {}),
     };
   }
+
 
   private broadcastSubordinatesChanged(event?: SubordinatesChangedEvent): void {
     try {
@@ -1231,19 +1239,22 @@ export class OrchestratorAgent extends ActorAgent {
   // listPendingConsents for reload) and await the user's decision via the
   // resolveDeviceConsent RPC. "Always" is persisted on the hub, not here.
   private readonly _pendingConsents = new Map<string, {
-    resolve: (d: 'once' | 'always' | 'deny') => void;
+    resolve: (d: DeviceConsentDecision) => void;
     deviceLabel: string; method: string; command: string; scope: string; createdAt: number;
   }>();
 
-  /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides
-   *  (or denies after 5 min so a device call never hangs forever). */
+  /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides,
+   *  or as `timeout` after 5 minutes so a device call never hangs forever.
+   *  `timeout` is deliberately NOT `deny`: an unanswered prompt means the owner
+   *  was away, and telling the agent it was refused turns that into a
+   *  permanent, self-imposed capability loss. */
   async awaitDeviceConsent(req: {
     deviceId: string;
     deviceLabel: string;
     method: string;
     command: string;
     scope: string;
-  }): Promise<'once' | 'always' | 'deny'> {
+  }): Promise<DeviceConsentDecision> {
     const consentId = `cons-${nanoid(10)}`;
     this.logActivity('device_consent_requested', `${req.deviceLabel}: ${req.command.slice(0, 80)}`);
     try {
@@ -1252,11 +1263,11 @@ export class OrchestratorAgent extends ActorAgent {
         deviceLabel: req.deviceLabel, method: req.method, command: req.command, scope: req.scope,
       }));
     } catch { /* nop */ }
-    return new Promise<'once' | 'always' | 'deny'>((resolve) => {
+    return new Promise<DeviceConsentDecision>((resolve) => {
       const timer = setTimeout(() => {
         if (this._pendingConsents.delete(consentId)) {
           try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
-          resolve('deny');
+          resolve('timeout');
         }
       }, 5 * 60_000);
       this._pendingConsents.set(consentId, {
@@ -2824,10 +2835,12 @@ export class OrchestratorAgent extends ActorAgent {
         model: this.getModel(),
         messages: [{ role: 'user', content: task }],
         tools: this.getRawTools(),
-        stopWhen: stepCountIs(50),
+        stopWhen: stepCountIs(this.maxSteps),
         ...effortFor('scaffold_mutation'),
       }).toUIMessageStream(),
-      timeoutMs: 2 * 60 * 1000,
+      // The live turn budget, not a smaller one: this run IS the candidate's
+      // score, and a candidate cut off early scores as a bad candidate.
+      timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
     });
     if (!result.ok && result.error) throw new Error(result.error);
     return text;
@@ -3160,10 +3173,14 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Upload one file into an executor (file-manager drop/Upload) — binary-
    *  safe through the CompositeVFS for every executor (env-native paths map
-   *  through the executor's mount prefix). */
-  @callable() async writeExecutorFile(executorId: string, path: string, contentBase64: string): Promise<ExecutorWriteResult> {
+   *  through the executor's mount prefix).
+   *
+   *  Reached over HTTP (files-routes.ts), not over the chat WebSocket: an RPC
+   *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
+   *  ordinary files died at the socket as an opaque connection failure. */
+  async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
     try {
-      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, contentBase64);
+      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }
@@ -3791,6 +3808,14 @@ export class OrchestratorAgent extends ActorAgent {
       ttl_ms_override: 30_000,
     }, opts.now);
 
+    // A delivery larger than the brief budget is spilled to this agent's own
+    // file plane first, so the woken turn gets a readable path alongside the
+    // brief instead of an unreachable — and, for JSON, syntactically broken —
+    // fragment of the thing that woke it. After the auth + rate gates, so a
+    // rejected delivery never writes a file.
+    const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
+    const bodyPath = await spillEventContent(this.rt.storage.vfs, bodySerialized);
+
     // Publish.
     const { id, admitted } = this.eventLog.publish({
       descriptor: {
@@ -3802,6 +3827,7 @@ export class OrchestratorAgent extends ActorAgent {
           http_headers: opts.headers,
           body: parsedBody,
           delivery_id,
+          ...(bodyPath ? { body_path: bodyPath } : {}),
         },
         auth_outcome: 'verified',
         webhook_id: opts.trigger_id,
@@ -3967,19 +3993,74 @@ export class OrchestratorAgent extends ActorAgent {
   }): Promise<{ admitted: boolean; duplicate?: boolean; event_id?: string; reason?: string }> {
     const ownerEmail = await this.getOwnerEmail();
     if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
-    const result = acceptInboundEmail({
+    let rateDrop: { limit: number; resetAt: number } | null = null;
+    const result = await acceptInboundEmail({
       log: this.eventLog,
       replies: this.replyChannels,
       owner_email: ownerEmail,
       allowlist: this.emailAllowlist(),
-      tryConsumeRateLimit: (now) =>
-        tryConsumeWebhookRateLimit(this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now).allowed,
+      vfs: this.rt.storage.vfs,
+      tryConsumeRateLimit: (now) => {
+        const decision = tryConsumeWebhookRateLimit(
+          this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now,
+        );
+        if (!decision.allowed) rateDrop = { limit: decision.limit, resetAt: decision.resetAt };
+        return decision.allowed;
+      },
     }, opts);
-    if (!result.admitted) return { admitted: false, reason: result.reason };
+    if (!result.admitted) {
+      if (rateDrop) this.noteEmailRateDrop(rateDrop, opts.now);
+      return { admitted: false, reason: result.reason };
+    }
     // Wake the agent for a turn, debounced — only on fresh admission (a
     // duplicate delivery is already bound or in flight).
     if (!result.duplicate) this.orch.scheduleDrain();
     return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
+  }
+
+  /** The rate-limit window whose drops have already been announced, and how
+   *  many this window has dropped. In memory: an eviction re-announcing once is
+   *  harmless, and a storm must not write a row per message. */
+  private _emailDropWindow = 0;
+  private _emailDropCount = 0;
+
+  /**
+   * Tell the agent its inbox gate is dropping mail.
+   *
+   * A rate-limited delivery leaves no trace the agent can read: the sender gets
+   * nothing, the log gets nothing, and the agent goes on believing it has seen
+   * its inbox. One internal event per rate-limit window turns "I may be deaf
+   * right now" into a fact it can act on — say so, ask the sender to resend,
+   * check back after the window — without a row per dropped message.
+   */
+  private noteEmailRateDrop(drop: { limit: number; resetAt: number }, now: number): void {
+    if (drop.resetAt !== this._emailDropWindow) {
+      this._emailDropWindow = drop.resetAt;
+      this._emailDropCount = 0;
+    }
+    this._emailDropCount += 1;
+    if (this._emailDropCount > 1) return;
+    try {
+      this.eventLog.publish({
+        descriptor: {
+          ingress: 'self_emit',
+          variant: 'internal',
+          emitting_head_trust: 'self',
+          payload: {
+            kind: 'email_inbound_rate_limited',
+            // Audit detail for the operator's event log. It never reaches the
+            // model through the brief (an internal payload's bytes are not
+            // rendered); what the model reads is the live inbox line in the
+            // turn's dynamic context, which also expires with the window.
+            data: { limitPerMin: drop.limit, windowResetsAt: new Date(drop.resetAt).toISOString() },
+          },
+        },
+        now,
+      });
+      this.orch.scheduleDrain();
+    } catch (err) {
+      console.warn('[proteus] email rate-drop notice failed:', (err as Error).message);
+    }
   }
 
   /** The agent's email surface for the operator UI / routes. */

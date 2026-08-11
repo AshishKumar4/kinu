@@ -95,6 +95,19 @@ export interface DynamicContext {
   /** Approvals/consent waiting on the user (oldest first — the one that has
    *  been blocked longest matters most). */
   approvals?: readonly DynamicApproval[];
+  /** Capabilities the agent was configured to have that are NOT on this
+   *  turn's surface — an MCP server that missed its startup budget, say.
+   *  Without this the tools are simply absent: the model plans as if a
+   *  capability it was promised does not exist and cannot explain why. */
+  missingCapabilities?: readonly MissingCapability[];
+}
+
+/** One promised capability that is not reachable this turn, and why. */
+export interface MissingCapability {
+  /** What is missing, in the words the user configured it under. */
+  readonly source: string;
+  /** Why it is not here — a timeout, a crash, an auth failure. */
+  readonly reason: string;
 }
 
 /** The live fork roster as delegates — the ONE mapping both backends apply to
@@ -185,6 +198,7 @@ function describeActivationReason(r: ActivationReason): string {
 const MAX_TASKS = 8;
 const MAX_DELEGATES = 8;
 const MAX_APPROVALS = 5;
+const MAX_MISSING_CAPABILITIES = 8;
 /** Free text from a store (job labels, delegate tasks, gated commands) is one
  *  line at most — the model needs to recognize the item, not re-read it. */
 const ENTRY_CHARS = 120;
@@ -251,6 +265,12 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
     '## Waiting on the user (not on you)',
     ctx.approvals ?? [], MAX_APPROVALS,
     (a) => `- ${clip(a.kind, 40)}: ${clip(a.detail)}`,
+  ));
+
+  sections.push(rosterSection(
+    '## Configured but NOT available this turn — plan without these, and say so if asked',
+    ctx.missingCapabilities ?? [], MAX_MISSING_CAPABILITIES,
+    (m) => `- ${clip(m.source, 60)}: ${clip(m.reason)}`,
   ));
 
   const present = sections.filter((section): section is string => section !== null);

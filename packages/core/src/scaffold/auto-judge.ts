@@ -28,7 +28,7 @@ import {
   DEFAULT_SHADOW_CONFIG, getPendingScaffold, getCurrentScaffoldVersion,
   recordShadowEvaluation, decidePromotion, applyPromotionDecision, readScaffoldVersion,
 } from './shadow.js';
-import { runScaffold, scaffoldEventText, type ScaffoldRunResult } from './executor.js';
+import { runScaffold, scaffoldEventText, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult } from './executor.js';
 
 /**
  * Structured output of ONE judge call. Deliberately neutral: the judge sees
@@ -73,7 +73,8 @@ export interface AutoJudgeConfig {
   autoApply: boolean;
   /** Forwarded to decidePromotion. Default DEFAULT_SHADOW_CONFIG. */
   shadowConfig: ShadowConfig;
-  /** Wall-clock cap per scaffold run, in ms. Default 60s. */
+  /** Wall-clock cap per scaffold run, in ms. Defaults to the LIVE turn budget
+   *  ({@link SCAFFOLD_TURN_TIMEOUT_MS}) — see below for why it cannot be less. */
   scaffoldTimeoutMs: number;
 }
 
@@ -81,7 +82,14 @@ export const DEFAULT_AUTO_JUDGE_CONFIG: AutoJudgeConfig = {
   sampleRate: 0.25,
   autoApply: false,
   shadowConfig: DEFAULT_SHADOW_CONFIG,
-  scaffoldTimeoutMs: 60_000,
+  // The candidate runs under the SAME wall clock the live loop got. This was
+  // 60s against a live 5 minutes, which does not measure scaffold quality: any
+  // candidate that attempted substantial work timed out, scored 0, and was
+  // rolled back for reasons unrelated to how good it was, so the gate could
+  // only ever promote scaffolds that finish fast and do little. Sampling
+  // (`sampleRate`) is where the cost is bounded — evaluate fewer candidates,
+  // not each one under a handicap.
+  scaffoldTimeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
 };
 
 export interface RunAutoShadowEvalOpts {
