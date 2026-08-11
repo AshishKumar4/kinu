@@ -75,6 +75,8 @@ export async function daemonCommand(action: string | undefined): Promise<void> {
 }
 
 export function ensureLocalDaemonRunning(): void {
+  // Skip daemon startup when explicitly disabled (e.g. in tests).
+  if (process.env.PROTEUS_SKIP_DAEMON === '1') return;
   startDaemon({ quiet: true });
 }
 
@@ -88,6 +90,15 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   const entry = process.argv[1];
   if (!entry) {
     if (!opts.quiet) throw new Error('Cannot locate Proteus CLI entrypoint for daemon startup.');
+    return null;
+  }
+
+  // Guard against recursive spawning: if the entry point is a test script
+  // (not the real CLI), spawning a daemon child would re-execute the test,
+  // which would call ensureLocalDaemonRunning() again, creating an infinite
+  // fork loop.  Refuse silently in quiet mode, throw loudly otherwise.
+  if (/test|spec|e2e/i.test(entry)) {
+    if (!opts.quiet) throw new Error(`Refusing to start daemon from a test script: ${entry}`);
     return null;
   }
 
