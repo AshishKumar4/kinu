@@ -43,9 +43,9 @@ declare global {
     BACKUP_BUCKET?: R2Bucket;
     AI_GATEWAY_URL: string;
     AI_GATEWAY_AUTH: string;
-    /** Hostname used by Proteus to build authenticated path-style preview URLs.
-     *  No per-agent subdomain or wildcard TLS/DNS is required. */
-    PREVIEW_HOSTNAME: string;
+    /** Zone sandbox previews are served under, one hostname per exposed port
+     *  (`<port>-<sandbox>-<token>.<suffix>`). Empty disables previews. */
+    PREVIEW_HOST_SUFFIX: string;
     /** Static asset binding — required for SPA fallback when the Worker
      *  runs first on every route (see `run_worker_first` in wrangler). */
     ASSETS: Fetcher;

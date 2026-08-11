@@ -2,8 +2,8 @@
  * Worker entry point — exports all DO classes and routes agent requests.
  *
  * Routing order (Worker runs first for every non-hashed-asset path):
- *   1. proxyToSandbox — if the host is a preview URL (PORT-SANDBOX-TOKEN.host),
- *      forward to the sandbox container.
+ *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves sandbox
+ *      container previews and nothing else.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Proteus session is present.
@@ -27,7 +27,7 @@ import {
   isForeignAgentNamespacePath,
 } from "./agent-routing.js";
 import { handlePcRequest } from "./pc-handler.js";
-import { proxyPreviewRequest } from "./preview-proxy.js";
+import { servePreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
 import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
@@ -44,7 +44,7 @@ import {
   authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
   type AuthIdentity,
 } from "./auth/session.js";
-import { containPreviewResponse, isPreviewHostRequest, isolatedPreviewHost } from "./lib/preview-origin.js";
+import { containPreviewResponse, isPreviewHostRequest, previewHostSuffix } from "./lib/preview-origin.js";
 import { withAppSecurityHeaders } from "./lib/security-headers.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
@@ -84,11 +84,11 @@ export {
 
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {
-  const previewOrigin = isolatedPreviewHost(env);
+  const suffix = previewHostSuffix(env);
   return withAppSecurityHeaders(
     await env.ASSETS.fetch(request),
     new URL(request.url),
-    previewOrigin ? `https://${previewOrigin}` : null,
+    suffix ? `https://*.${suffix}` : null,
   );
 }
 
@@ -190,14 +190,13 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
-    // 1. Preview proxy — sandbox container, token-gated via URL itself.
-    //    On the preview host it is the ONLY thing served: no SPA, no login, no
-    //    OAuth callback, so nothing ever mints a session on that origin and
-    //    hostile preview HTML has none to steal (lib/preview-origin.ts).
-    const previewResp = await proxyPreviewRequest(request, env);
-    if (previewResp) return previewResp;
+    // 1. Preview host — sandbox containers, one hostname per exposed port,
+    //    token-gated by that hostname. It is the ONLY thing served there: no
+    //    SPA, no login, no OAuth callback, so nothing ever mints a session on
+    //    those origins and hostile preview HTML has none to steal
+    //    (lib/preview-origin.ts).
     if (isPreviewHostRequest(url, env)) {
-      return err(404, 'This host serves sandbox previews only.');
+      return servePreviewRequest(request, env);
     }
 
     // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
@@ -271,7 +270,7 @@ export default {
     // session (the tenant check needs it), so they cannot move to the preview
     // host — the sandbox CSP is what keeps them out of the app's origin.
     const nimbusResp = await handleNimbusPreviewRequest(authenticatedRequest, env, identity.userId);
-    if (nimbusResp) return withD1Bookmark(containPreviewResponse(nimbusResp), identity);
+    if (nimbusResp) return withD1Bookmark(containPreviewResponse(nimbusResp, 'app-host'), identity);
 
     // 9. /api/user/* — user-scoped routes.
     const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);

@@ -144,7 +144,7 @@ export type RollbackResult =
 
 const NOT_CONFIGURED =
   'No execution substrate: the sandbox executor is not configured, so product changes cannot be applied, ' +
-  'checked, previewed, or deployed for real. Configure the Sandbox binding + PREVIEW_HOSTNAME first.';
+  'checked, previewed, or deployed for real. Configure the Sandbox binding + PREVIEW_HOST_SUFFIX first.';
 
 const DEFAULT_WORK_ROOT = '/workspace/product-changes';
 const GIT = `git -c user.name=Proteus -c user.email=proteus@agent -c core.hooksPath=/dev/null`;

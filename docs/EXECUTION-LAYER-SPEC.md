@@ -609,7 +609,7 @@ executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell }
 // Conditional on bindings / connection state. Each factory has a zero-arg
 // stub form so the Environment surface can still list the runtime as
 // not-configured rather than hiding it:
-executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+executionRouter.register(createSandboxExecutor(handle, previewSuffix));
 executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
 executionRouter.register(createDeviceTunnelExecutor(deviceTransport));
 ```

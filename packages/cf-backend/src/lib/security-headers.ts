@@ -49,10 +49,11 @@ export function publicHtmlHeaders(): Record<string, string> {
 /**
  * CSP for the authenticated SPA.
  *
- * `frameOrigin` is where previews are served. Naming it explicitly is the
+ * `previewOrigin` is the wildcard the preview hosts live under
+ * (`https://*.<PREVIEW_HOST_SUFFIX>`). Naming it explicitly is the
  * browser-enforced half of the preview-origin rule: whatever URL the agent
- * manages to get in front of the app, only that origin can be framed. Null
- * (previews share the app's origin) falls back to `'self'`.
+ * manages to get in front of the app, only a preview host can be framed. Null
+ * (previews unconfigured) falls back to `'self'`.
  */
 export function appDocumentCsp(url: URL, previewOrigin: string | null): string {
   const frameSrc = previewOrigin ? `'self' ${previewOrigin}` : "'self'";

@@ -10,7 +10,7 @@
  * (executeInExecutor / getExposedPorts) directly, which verifies the
  * infrastructure end-to-end:
  *
- *   Sandbox DO + container, SANDBOX binding, proxyToSandbox preview
+ *   Sandbox DO + container, Sandbox binding, per-host preview
  *   routing, getExposedPorts RPC, Executors UI iframe grid.
  *
  * Steps:

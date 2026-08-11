@@ -131,7 +131,7 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
   const env = {
     LOADER: {},
     Sandbox: {},
-    PREVIEW_HOSTNAME: 'preview.test',
+    PREVIEW_HOST_SUFFIX: 'preview.test',
     AI_GATEWAY_URL: 'https://gateway.test',
     AI_GATEWAY_AUTH: 'token',
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => parent.stub },

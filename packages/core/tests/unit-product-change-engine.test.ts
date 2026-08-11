@@ -35,7 +35,7 @@ class FakeSandbox implements ProductChangeExec {
   commands: string[] = [];
   files = new Map<string, string>();
   exposed: Array<{ port: number; name?: string }> = [];
-  exposeResult: { url: string } | { error: string } = { url: 'https://proteus.example/_preview/8080/sb/tok/' };
+  exposeResult: { url: string } | { error: string } = { url: 'https://8080-sb-tok.previews.example/' };
   private rules: Rule[] = [];
 
   on(match: RegExp, handle: ExecResult | ((command: string) => ExecResult)): this {
@@ -360,9 +360,9 @@ describe('engine.preview', () => {
     await applyAndPass(s);
 
     const result = await s.engine.preview(s.changeId, { port: 8080 });
-    expect(result).toEqual({ ok: true, url: 'https://proteus.example/_preview/8080/sb/tok/' });
+    expect(result).toEqual({ ok: true, url: 'https://8080-sb-tok.previews.example/' });
     expect(s.sandbox.exposed).toEqual([{ port: 8080, name: `pc-${s.changeId}` }]);
-    expect(s.store.getChange(s.changeId)?.previewUrl).toBe('https://proteus.example/_preview/8080/sb/tok/');
+    expect(s.store.getChange(s.changeId)?.previewUrl).toBe('https://8080-sb-tok.previews.example/');
   });
 
   test('a no-listener exposure error propagates and the change keeps no preview URL', async () => {
@@ -497,7 +497,7 @@ describe('engine.deploy', () => {
     expect(result).toMatchObject({
       ok: true,
       workerVersionId: 'a1b2c3d4e5f60718293a4b5c6d7e8f9012345678',
-      deploymentId: 'https://proteus.example/_preview/8080/sb/tok/',
+      deploymentId: 'https://8080-sb-tok.previews.example/',
       status: 'deployed',
     });
   });
@@ -770,10 +770,10 @@ describe('createSandboxProductChangeExec', () => {
     const handle = makeHandle(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
     const ok = createSandboxProductChangeExec(handle, {
       exposePort: async (port, opts) => ({
-        supported: true, url: `https://h/_preview/${port}/sb/t/`, port, name: opts?.name, verified_listening: true,
+        supported: true, url: `https://${port}-sb-t.previews.example/`, port, name: opts?.name, verified_listening: true,
       }),
     });
-    expect(await ok.exposePort(8080, 'pc-x')).toEqual({ url: 'https://h/_preview/8080/sb/t/' });
+    expect(await ok.exposePort(8080, 'pc-x')).toEqual({ url: 'https://8080-sb-t.previews.example/' });
 
     const refused = createSandboxProductChangeExec(handle, {
       exposePort: async () => ({ supported: false, reason: 'nothing is listening on port 8080 inside the sandbox' }),

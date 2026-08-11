@@ -34,6 +34,7 @@ import {
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
+import { previewHostSuffix } from "./lib/preview-origin.js";
 import { Nimbus } from "@nimbus-sh/sdk";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
@@ -221,20 +222,18 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
-  // by the agent's stable name. `PREVIEW_HOSTNAME` is the public host for
-  // path-style preview URLs (see preview-proxy.ts); `sandboxId` is the
-  // stable DO key so URLs round-trip back to the correct container.
+  // by the agent's stable name. `PREVIEW_HOST_SUFFIX` is the zone the SDK
+  // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
+  // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
   const env = agent.env as Env & Record<string, unknown>;
-  const previewHostname = typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0
-    ? env.PREVIEW_HOSTNAME
-    : undefined;
+  const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = `proteus-${actor.workspaceName}`;
   // Every remote mount exposes the environment's REAL root ('/'); the
   // ergonomic working dir is metadata, not a path rewrite.
   const sandboxMountPolicy: MountPolicy =
     { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   let sandboxHandle: SandboxHandle | null = null;
-  if (env.Sandbox && previewHostname) {
+  if (env.Sandbox && previewSuffix) {
     try {
       const rawHandle = getSandbox(
         env.Sandbox as Parameters<typeof getSandbox>[0],
@@ -244,7 +243,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
       const configStore = createAgentConfigStore(sql);
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
-      executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+      executionRouter.register(createSandboxExecutor(handle, previewSuffix));
       // File plane: /sandbox over the same (restoring) raw handle the
       // codemode sandbox.* tools use — two consumers of one handle.
       compositeVfs.mount('sandbox', {
@@ -252,16 +251,16 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
         policy: sandboxMountPolicy,
         workingDir: '/workspace',
       });
-      console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
+      console.log(`[proteus] SandboxExecutor registered (previews=*.${previewSuffix} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
       compositeVfs.reserve('sandbox', (err as Error).message, sandboxMountPolicy);
     }
   } else {
-    if (!previewHostname) console.warn("[proteus] PREVIEW_HOSTNAME not set — Sandbox executor running in stub mode");
+    if (!previewSuffix) console.warn("[proteus] PREVIEW_HOST_SUFFIX not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
-    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOSTNAME missing)', sandboxMountPolicy);
+    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOST_SUFFIX missing)', sandboxMountPolicy);
   }
 
   // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
@@ -350,9 +349,6 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
 function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
   if (typeof env.CLI_PUBLIC_ORIGIN === "string" && env.CLI_PUBLIC_ORIGIN.length > 0) {
     return env.CLI_PUBLIC_ORIGIN.replace(/\/+$/, "");
-  }
-  if (typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0) {
-    return `https://${env.PREVIEW_HOSTNAME}`;
   }
   return "https://proteus.local";
 }

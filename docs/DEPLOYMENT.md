@@ -5,12 +5,14 @@
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
-**Sandbox previews:** https://proteus.ashishkmr472.workers.dev
+**Sandbox previews:** `https://<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>`
 
-The workers.dev hostname serves sandbox previews and nothing else — it is no
-longer an app fallback. Previewed apps are agent-written HTML, so they get an
-origin with no Proteus session on it; see `PREVIEW_HOSTNAME` below and
-`packages/cf-backend/src/lib/preview-origin.ts`.
+Previewed apps are agent-written HTML, so each exposed port gets a hostname of
+its own — isolated from the app and from every other preview, which is what
+lets a previewed app keep cookies, storage and same-origin fetch. This is the
+@cloudflare/sandbox SDK's own scheme, so Proteus derives no hostnames itself.
+It needs a wildcard DNS record; `PREVIEW_HOST_SUFFIX` below has the two steps,
+and `packages/cf-backend/src/lib/preview-origin.ts` has the reasoning.
 
 ## Local Development
 
@@ -250,7 +252,7 @@ exhausted budget returns the original response rather than throwing.
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | AI Gateway endpoint URL |
 | `AI_GATEWAY_AUTH` | Wrangler secret | `Bearer <token>` (NEVER in code) |
 | `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
-| `PREVIEW_HOSTNAME` | wrangler.jsonc `vars` | Host sandbox previews are served on. **Must not be the app's own host** — preview content is agent-written, and on the app's origin it runs with the owner's session. The Worker serves only `/_preview/*` there, and refuses that path anywhere else. |
+| `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone sandbox previews are served under, one hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
 | `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |

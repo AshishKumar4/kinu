@@ -27,13 +27,11 @@ import { formatExecResult } from './exec-result.js';
  * here, so cf-backend can supply the real thing without core having a
  * package dependency.
  *
- * The SDK's `exposePort` enables in-container port forwarding and stores a
- * token in DO storage. It also builds a preview URL like
- * `https://<port>-<sandbox>-<token>.<hostname>` — but that scheme needs a
- * wildcard DNS record we can't create. Proteus overrides the returned URL
- * with a path-style one (`/_preview/<port>/<sandbox>/<token>/`) served by
- * preview-proxy.ts on the main domain. To keep the token in sync we pass
- * an explicit `token` to the SDK so both sides agree.
+ * The SDK's `exposePort` enables in-container port forwarding, stores a secret
+ * token in DO storage, and returns the preview URL it serves that port on:
+ * `https://<port>-<sandbox>-<token>.<previewHostSuffix>`. Proteus hands that
+ * URL straight through — the Worker routes it back with the SDK's own
+ * `proxyToSandbox` (packages/cf-backend/src/preview-proxy.ts).
  */
 export interface SandboxHandle {
   exec(command: string, opts?: { cwd?: string; timeout?: number }):
@@ -47,20 +45,11 @@ export interface SandboxHandle {
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
   deleteFile(path: string): Promise<unknown>;
-  /**
-   * Expose a port. We always pass an explicit `token` so the executor
-   * can build path-style URLs without parsing the SDK return value.
-   * The `hostname` is required by the SDK but only used internally to
-   * construct the URL we throw away.
-   */
-  exposePort(port: number, opts: { hostname: string; name?: string; token?: string }):
+  /** Expose a port; `hostname` is the suffix the returned preview URL is built on. */
+  exposePort(port: number, opts: { hostname: string; name?: string }):
     Promise<{ url: string; port: number; name?: string }>;
   unexposePort(port: number): Promise<unknown>;
-  /**
-   * SDK method is `getExposedPorts(hostname)` — hostname is used to
-   * build the `url` field on each returned row. We parse tokens back
-   * out of those URLs to rebuild path-style URLs on the way out.
-   */
+  /** SDK method is `getExposedPorts(hostname)`; `hostname` builds each row's `url`. */
   getExposedPorts(hostname: string):
     Promise<Array<{ url: string; port: number; status?: string }>>;
   /** Snapshot a directory to R2 (squashfs). Returns a small serializable handle
@@ -130,52 +119,6 @@ export function workspaceBackupOptions(): BackupOptions {
   };
 }
 
-/**
- * Stable token generator — RFC-3986-safe chars matching the SDK's
- * validateCustomToken (lower-case alphanumerics + underscore, 4-63 chars).
- * Using a deterministic-but-unique scheme keeps E2E assertions easier;
- * collisions across agents are impossible because each agent owns its
- * own sandbox DO.
- */
-function generatePortToken(port: number): string {
-  const rand = Math.random().toString(36).slice(2, 10);
-  return `p${port}_${rand}`;
-}
-
-/**
- * Extract the token from an SDK-shaped preview URL. Returns null if the
- * URL doesn't match the `PORT-SANDBOXID-TOKEN.hostname` pattern.
- * Kept in this file so the logic stays alongside the URL contract.
- */
-function extractTokenFromSdkUrl(url: string): string | null {
-  try {
-    const u = new URL(url);
-    const dot = u.hostname.indexOf('.');
-    if (dot === -1) return null;
-    const subdomain = u.hostname.slice(0, dot);
-    const lastHyphen = subdomain.lastIndexOf('-');
-    if (lastHyphen === -1) return null;
-    const token = subdomain.slice(lastHyphen + 1);
-    return /^[a-z0-9_]+$/i.test(token) ? token : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Build the Proteus path-style preview URL. Mirrors
- * `packages/cf-backend/src/preview-proxy.ts#buildPreviewUrl`; kept here
- * because core can't depend on cf-backend.
- */
-function buildPathPreviewUrl(
-  hostname: string,
-  port: number,
-  sandboxId: string,
-  token: string,
-): string {
-  return `https://${hostname}/_preview/${port}/${sandboxId}/${token}/`;
-}
-
 const NOT_CONFIGURED =
   'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
   'and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
@@ -235,22 +178,17 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
  * Pass `undefined` to get a "not configured" stub that appears in the UI's
  * Not-configured footer without breaking the router.
  *
- * @param handle     SDK `getSandbox()` result.
- * @param hostname   `env.PREVIEW_HOSTNAME` — path-proxy host (main custom
- *                   domain). Required when handle is supplied.
- * @param sandboxId  Stable sandbox identifier (`proteus-<agent-name>`).
- *                   Required when handle is supplied; embedded in every
- *                   preview URL so preview-proxy.ts can route back to the
- *                   right DO.
+ * @param handle             SDK `getSandbox()` result.
+ * @param previewHostSuffix  `env.PREVIEW_HOST_SUFFIX` — the zone previews are
+ *                           served under. Required when handle is supplied;
+ *                           the SDK builds every preview URL on it.
  */
 export function createSandboxExecutor(
   handle?: SandboxHandle,
-  hostname?: string,
-  sandboxId?: string,
+  previewHostSuffix?: string,
 ): ExecutorProvider {
   const connected = handle != null
-    && typeof hostname === 'string' && hostname.length > 0
-    && typeof sandboxId === 'string' && sandboxId.length > 0;
+    && typeof previewHostSuffix === 'string' && previewHostSuffix.length > 0;
   let active = false;
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
     active = true;
@@ -358,7 +296,7 @@ export function createSandboxExecutor(
         '(e.g. `nohup python3 -m http.server <port> --directory /workspace/<app> > /tmp/srv.log 2>&1 &` ' +
         'for static sites, or `nohup node server.js > /tmp/srv.log 2>&1 &` for Node) and retry.',
       execute: async (port: unknown, name?: unknown): Promise<string> => {
-        if (!handle || !hostname || !sandboxId) return NOT_CONFIGURED;
+        if (!handle || !previewHostSuffix) return NOT_CONFIGURED;
         const p = Number(port);
         if (!Number.isFinite(p) || p <= 0 || p > 65535) {
           return `expose error: invalid port ${port}`;
@@ -400,11 +338,10 @@ export function createSandboxExecutor(
           console.warn(`[sandbox.exposePort] port probe failed (continuing): ${(err as Error).message}`);
         }
         try {
-          const token = generatePortToken(p);
-          const opts: { hostname: string; name?: string; token?: string } = { hostname, token };
+          const opts: { hostname: string; name?: string } = { hostname: previewHostSuffix };
           if (name != null) opts.name = String(name);
-          await withSandboxRetry(() => touch(() => handle.exposePort(p, opts)));
-          return buildPathPreviewUrl(hostname, p, sandboxId, token);
+          const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(p, opts)));
+          return exposed.url;
         } catch (err) {
           return `expose error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -425,25 +362,12 @@ export function createSandboxExecutor(
     listPorts: {
       description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
       execute: async (): Promise<string> => {
-        if (!handle || !hostname || !sandboxId) return NOT_CONFIGURED;
+        if (!handle || !previewHostSuffix) return NOT_CONFIGURED;
         try {
           // SDK method is getExposedPorts — the tool we expose is still
           // named listPorts for backward compat with the codemode namespace.
-          const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(hostname)));
-          // Rewrite SDK hostname-style URLs into Proteus path-style URLs
-          // so the UI iframe (which lives on the main domain) can load
-          // them without a wildcard DNS record.
-          const remapped = (ports ?? []).map(p => {
-            const token = extractTokenFromSdkUrl(p.url);
-            return {
-              port: p.port,
-              status: p.status,
-              url: token
-                ? buildPathPreviewUrl(hostname, p.port, sandboxId, token)
-                : p.url,
-            };
-          });
-          return JSON.stringify(remapped);
+          const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
+          return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
           return `listPorts error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -501,8 +425,8 @@ declare namespace sandbox {
     // the ExecutorProvider abstraction so any caller can ask any executor
     // to expose a port without knowing it's "sandbox" specifically.
     async exposePort(port, opts) {
-      if (!handle || !hostname || !sandboxId) {
-        return { supported: false, reason: 'sandbox not configured (no handle/hostname/sandboxId)' };
+      if (!handle || !previewHostSuffix) {
+        return { supported: false, reason: 'sandbox not configured (no handle / preview host suffix)' };
       }
       if (!Number.isFinite(port) || port <= 0 || port > 65535) {
         return { supported: false, reason: `invalid port ${port}` };
@@ -533,13 +457,12 @@ declare namespace sandbox {
         // Probe glitch — proceed; SDK call will surface its own error.
       }
       try {
-        const token = generatePortToken(port);
-        const sdkOpts: { hostname: string; name?: string; token?: string } = { hostname, token };
+        const sdkOpts: { hostname: string; name?: string } = { hostname: previewHostSuffix };
         if (opts?.name) sdkOpts.name = opts.name;
-        await withSandboxRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
+        const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
         return {
           supported: true,
-          url: buildPathPreviewUrl(hostname, port, sandboxId, token),
+          url: exposed.url,
           port,
           name: opts?.name,
           verified_listening,
@@ -556,18 +479,15 @@ declare namespace sandbox {
     },
 
     async listExposedPorts() {
-      if (!handle || !hostname || !sandboxId) return [];
+      if (!handle || !previewHostSuffix) return [];
       try {
-        const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(hostname)));
-        return (ports ?? []).map(p => {
-          const token = extractTokenFromSdkUrl(p.url);
-          return {
-            port: p.port,
-            url: token ? buildPathPreviewUrl(hostname, p.port, sandboxId, token) : p.url,
-            name: (p as { name?: string }).name,
-            status: 'unknown' as const,
-          };
-        });
+        const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
+        return (ports ?? []).map(p => ({
+          port: p.port,
+          url: p.url,
+          name: (p as { name?: string }).name,
+          status: 'unknown' as const,
+        }));
       } catch {
         return [];
       }

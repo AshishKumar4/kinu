@@ -142,14 +142,13 @@ function originOf(value: string | null): string | null {
   try { return new URL(value).origin; } catch { return null; }
 }
 
-/** Public routes that bypass auth. Health check + sandbox preview proxy
- *  (which has its own token-in-URL auth). */
+/** Public routes on the app's own host that bypass auth. (Sandbox previews are
+ *  not here: they are served on the preview host, which never reaches this.) */
 export function isPublicPath(pathname: string): boolean {
   if (pathname === '/api/health') return true;
   if (pathname === '/login' || pathname === '/logout') return true;
   if (pathname.startsWith('/auth/')) return true;
   if (pathname.startsWith('/api/auth/')) return true;
-  if (pathname.startsWith('/_preview/')) return true;
   // covers /pc/connect and /pc/connect-ticket — the tunnel uses its own auth
   if (pathname.startsWith(DEVICE_CONNECT_PATH)) return true;
   if (pathname.startsWith('/assets/')) return true;    // hashed static bundles
