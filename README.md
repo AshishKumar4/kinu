@@ -1,6 +1,6 @@
 # Proteus
 
-Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. I built it on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, plus a CI-gated Lean 4 corpus of abstract models covering selected core algorithms.
+Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. It runs in the cloud on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, or entirely on your own machine — the same agent either way. There is also a CI-gated Lean 4 corpus of abstract models covering selected core algorithms.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
@@ -8,44 +8,33 @@ Self-evolving agent workspaces: you create a workspace — a durable container w
 
 ## Architecture
 
-A workspace is one `OrchestratorAgent` Durable Object (`cf-backend/src/orchestrator.ts`, a thin adapter over the shared brain in `packages/core`). The same core runs locally through `LocalAgentSession` (`cli-backend/src/local-session.ts`), so the CLI and the cloud share one turn pipeline. [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detailed diagrams.
+Everything the agent decides lives in `packages/core`, which is platform-clean: one workspace dependency, and no import of `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces — `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
 
-```mermaid
-graph TB
-    subgraph Clients
-        UI["Web UI · 6 work surfaces<br/>Output · Brain · Reasoning<br/>Product · Tasks · Environment"]
-        CLI["proteus CLI<br/>chat · exec · create"]
-    end
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/seam-dark.svg">
+  <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the VFS mount plane, the execution router and the event log. Below it, the AgentRuntime and BackendHost interfaces form the backend seam, implemented twice: by cf-backend on Cloudflare Durable Objects and by cli-backend on your own machine." src="docs/diagrams/seam.svg" width="900">
+</picture>
 
-    subgraph WS["Workspace = OrchestratorAgent Durable Object (1 per name)"]
-        Turn["Turn pipeline<br/>Think 0.8 hooks → ExtensionHost<br/>compaction · mid-turn event injection"]
-        VFS["CompositeVFS mount plane<br/>/local · /sandbox · /nimbus · /pc"]
-        Exec["ExecutionRouter · target-native exec"]
-        Evo["EvolutionEngine · MCTS · CraftStore<br/>mutable scaffold · Evolution Changelog"]
-        Events["EventLog + DrainScheduler<br/>email · webhook · peer · timer"]
-    end
+The turn pipeline itself is `core/orchestrator`. A turn arrives either from a person or from the reactor — a drained event, a finished background job — and is assembled once: a system prompt of eight parts in a fixed order, then the durable history passed through the extension chain, which is where the compaction ladder fires. After that it is a step loop, and the interesting work happens at the step boundary: a dynamic-context block is re-rendered from live state and appended only when its bytes actually change, the cache tail is marked last so no earlier breakpoint moves, and anything asynchronous splices in through one seam rather than N.
 
-    Heads["ExplorationAgent facets<br/>MCTS branches / heads"]
-    Subs["SubordinateAgent facets<br/>durable teammates (team tool)"]
-    UserDO["UserDO<br/>MCP once-auth · devices · registry"]
-    Model["Models<br/>Workers AI (kimi-k2.6 default)<br/>+ bring-your-own providers"]
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
+  <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus transformed history, where the compaction ladder fires — then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
+</picture>
 
-    UI <-->|WebSocket| Turn
-    CLI -->|LocalAgentSession| Turn
-    Turn --> VFS
-    Turn --> Exec
-    Turn --> Evo
-    Events --> Turn
-    Evo -->|subAgent| Heads
-    Turn -->|team.spawn| Subs
-    Turn -->|capability-proxied callTool| UserDO
-    Turn -->|streamText| Model
-```
+Delegation is one tool with one question behind it: how long does the helper need to live? `fork` spawns ephemeral copies that settle back into the same turn; `staff` creates a subordinate that outlives it; the rest talk to what already exists. MCTS lives *inside* the fork rung as a settle policy — the one that scores rival approaches by executing their proposed code — rather than standing beside it as a third kind of helper.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
+  <img alt="One agents tool with seven actions. Fork creates ephemeral copies of the agent that settle back into the same turn under a policy from the strategy registry — heads by default, MCTS to score rival approaches by executing their code. Staff creates a persistent subordinate that outlives the turn and reports back as an event. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
+</picture>
+
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detail these leave out — the workspace object model, message flow, events and ingress, and the Think lifecycle.
 
 ## Key Features
 
-- **MCTS parallel exploration** — score-based selection, backpropagation, pruning, and winner selection. Each branch is an isolated Durable Object via Facets.
-- **Subordinate agents** — the orchestrator can staff a workspace with durable subordinates through the `team` tool: each is its own Durable Object facet running the full turn loop on an independent workstream, sharing the workspace's files and reporting back as an event. `peers` reaches the owner's *other* workspaces.
+- **Delegation as one ladder** — the `agents` tool covers all of it: `fork` for 2–6 ephemeral copies that merge back into this turn, `staff` for durable subordinates that outlive it, and `ask`/`send`/`reply`/`list`/`dismiss` for agents that already exist — subordinates here, or the owner's *other* workspaces as peers. A busy agent is never blocked on; the message is spliced into the turn it is already running.
+- **MCTS parallel exploration** — score-based selection, backpropagation, pruning and winner selection, with each branch scored by executing the code it proposed rather than by rating itself. A branch is an isolated Durable Object facet in the cloud, a child process with its own SQLite file locally.
 - **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (full MCTS exploration)
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
 - **Mutable scaffold** — the agent's agentic loop is code it can rewrite, validated through 4 structural gates
@@ -139,7 +128,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 | Package | Description |
 |---------|-------------|
-| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, CompositeVFS + ExecutionRouter, MCTS engine, EvolutionEngine, CraftStore, scaffold, the 12 builtin tools, EventLog, types |
+| `core/` | The shared brain (platform-independent): turn pipeline + `ExtensionHost`, CompositeVFS + ExecutionRouter, MCTS engine, EvolutionEngine, CraftStore, scaffold, the 9 builtin tools, EventLog + SignalDelivery, types |
 | `agent-utils/` | SqliteFS (chunked VFS), MemoryStore (FTS5), CraftStore (FTS5), POSIX shell emulator |
 | `compaction/` | The default `transformContext` extension: vendored better-compact ladder + the Proteus AI-SDK⇄ladder codec |
 | `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent + SubordinateAgent (Facets), UserDO, React UI |

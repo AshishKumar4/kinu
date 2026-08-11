@@ -1,0 +1,197 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 768" width="900" height="768" role="img" aria-labelledby="t d">
+  <!-- A README figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and the README picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">Proteus: one core, two backends</title>
+  <desc id="d">Clients and autonomous ingress feed a platform-clean core package that owns the turn pipeline, tools, delegation, evolution, context, the VFS mount plane, the execution router and the event log. Below it a seam of two interfaces — AgentRuntime for resource primitives and BackendHost for loop capabilities — is implemented twice: by the Cloudflare backend, where a workspace is a Durable Object, and by the local CLI backend running on your own machine.</desc>
+  <style>
+    :root {
+      --fg: #1f2328;
+      --muted: #59636e;
+      --faint: #818b98;
+      --rule: #d1d9e0;
+      --ruleStrong: #8c959f;
+      --surface: #f6f8fa;
+      --surfaceAlt: #ffffff;
+      --bandFill: #f6f8fa;
+      --bandStroke: #d1d9e0;
+      --blue: #0550ae;
+      --blueFill: #ddf4ff;
+      --blueLine: #0969da;
+      --orange: #953800;
+      --orangeFill: #fff1e5;
+      --orangeLine: #bc4c00;
+      --green: #1a7f37;
+      --greenFill: #dafbe1;
+      --greenLine: #1f883d;
+      --purple: #6639ba;
+      --purpleFill: #fbefff;
+      --purpleLine: #8250df;
+      --pink: #99286e;
+      --pinkFill: #ffeff7;
+      --pinkLine: #bf3989;
+      --slateFill: #eef1f4;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="24" y="30">One core, two backends</text>
+  <text class="s" x="24" y="49">packages/core holds every decision; a backend supplies the platform underneath it</text>
+  <text class="band" x="24" y="76">CLIENTS AND INGRESS</text>
+  <rect x="24" y="88" width="274" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="36" y="109" text-anchor="start" fill="var(--blue)">Web UI</text>
+  <text class="s" x="36" y="124" text-anchor="start">React, six work surfaces</text>
+  <text class="xs" x="36" y="139" text-anchor="start">chat over WebSocket</text>
+  <rect x="313" y="88" width="274" height="56" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="325" y="109" text-anchor="start" fill="var(--blue)">proteus CLI</text>
+  <text class="s" x="325" y="124" text-anchor="start">chat · exec · TUI · ACP</text>
+  <text class="xs" x="325" y="139" text-anchor="start">local session or cloud RPC</text>
+  <rect x="602" y="88" width="274" height="56" rx="7" fill="var(--pinkFill)" stroke="var(--pinkLine)"/>
+  <text class="b" x="614" y="109" text-anchor="start" fill="var(--pink)">Autonomous ingress</text>
+  <text class="s" x="614" y="124" text-anchor="start">webhook · email · timer · MCP</text>
+  <text class="xs" x="614" y="139" text-anchor="start">peer agent · file watch</text>
+  <path d="M161 144 L161 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <path d="M450 144 L450 166" fill="none" stroke="var(--blueLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-blue)"/>
+  <path d="M739 144 L739 166" fill="none" stroke="var(--pinkLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-pink)"/>
+  <rect x="24" y="166" width="852" height="218" rx="10" fill="var(--bandFill)" stroke="var(--bandStroke)"/>
+  <text class="band" x="38" y="186">PACKAGES/CORE — PLATFORM-CLEAN</text>
+  <text class="xs" x="862" y="186" text-anchor="end">one workspace dependency · no import of agents, @cloudflare/* or cloudflare:workers</text>
+  <rect x="38" y="196" width="824" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b mono" x="50" y="217" text-anchor="start">AgentOrchestrator  ·  the turn pipeline</text>
+  <text class="s" x="50" y="232" text-anchor="start">turn-context → prepare-step → stream → signals → completeTurn</text>
+  <rect x="38" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="50" y="275" text-anchor="start">Tools</text>
+  <text class="xs" x="50" y="290" text-anchor="start">9 builtins, dep-gated</text>
+  <text class="xs" x="50" y="305" text-anchor="start">crafted · MCP · extensions</text>
+  <rect x="247" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="259" y="275" text-anchor="start">Delegation</text>
+  <text class="xs" x="259" y="290" text-anchor="start">the agents tool</text>
+  <text class="xs" x="259" y="305" text-anchor="start">strategy registry</text>
+  <rect x="456" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="468" y="275" text-anchor="start">Evolution</text>
+  <text class="xs" x="468" y="290" text-anchor="start">MCTS · CraftStore</text>
+  <text class="xs" x="468" y="305" text-anchor="start">mutable scaffold</text>
+  <rect x="665" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="677" y="275" text-anchor="start">Context</text>
+  <text class="xs" x="677" y="290" text-anchor="start">system prompt · dynamic</text>
+  <text class="xs" x="677" y="305" text-anchor="start">block · compaction ladder</text>
+  <rect x="38" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="50" y="345" text-anchor="start">CompositeVFS</text>
+  <text class="xs" x="50" y="360" text-anchor="start">/local · /sandbox · /nimbus · /pc</text>
+  <rect x="316" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
+  <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · nimbus · laptop</text>
+  <rect x="594" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="606" y="345" text-anchor="start">EventLog + SignalDelivery</text>
+  <text class="xs" x="606" y="360" text-anchor="start">the reactor and the wake seam</text>
+  <line x1="24" y1="406" x2="876" y2="406" stroke="var(--orangeLine)" stroke-width="2"/>
+  <rect x="366" y="394" width="168" height="24" rx="12" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="450" y="410.5" text-anchor="middle" fill="var(--orange)">the backend seam</text>
+  <text class="s" x="24" y="442">AgentRuntime — resource primitives</text>
+  <text class="s" x="610" y="442">BackendHost — loop capabilities</text>
+  <rect x="24" y="452" width="58" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="53" y="466.1" text-anchor="middle" fill="var(--blue)">storage</text>
+  <rect x="89" y="452" width="59" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="118.5" y="466.1" text-anchor="middle" fill="var(--blue)">memory</text>
+  <rect x="155" y="452" width="64" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="187" y="466.1" text-anchor="middle" fill="var(--blue)">executor</text>
+  <rect x="226" y="452" width="35" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="243.5" y="466.1" text-anchor="middle" fill="var(--blue)">llm</text>
+  <rect x="268" y="452" width="67" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="301.5" y="466.1" text-anchor="middle" fill="var(--blue)">schedule</text>
+  <rect x="342" y="452" width="58" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="371" y="466.1" text-anchor="middle" fill="var(--blue)">identity</text>
+  <rect x="407" y="452" width="69" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="441.5" y="466.1" text-anchor="middle" fill="var(--blue)">craftStore</text>
+  <rect x="483" y="452" width="89" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="527.5" y="466.1" text-anchor="middle" fill="var(--blue)">spawnBranch</text>
+  <rect x="24" y="478" width="81" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="64.5" y="492.1" text-anchor="middle" fill="var(--blue)">abortBranch</text>
+  <rect x="112" y="478" width="79" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs mono" x="151.5" y="492.1" text-anchor="middle" fill="var(--fg)">judgeModel</text>
+  <rect x="198" y="478" width="58" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs mono" x="227" y="492.1" text-anchor="middle" fill="var(--fg)">fastLlm</text>
+  <rect x="263" y="478" width="103" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs mono" x="314.5" y="492.1" text-anchor="middle" fill="var(--fg)">executionRouter</text>
+  <rect x="373" y="478" width="45" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs mono" x="395.5" y="492.1" text-anchor="middle" fill="var(--fg)">shell</text>
+  <rect x="425" y="478" width="83" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs mono" x="466.5" y="492.1" text-anchor="middle" fill="var(--fg)">checkpoints</text>
+  <rect x="610" y="452" width="71" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="645.5" y="466.1" text-anchor="middle" fill="var(--blue)">broadcast</text>
+  <rect x="688" y="452" width="87" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="731.5" y="466.1" text-anchor="middle" fill="var(--blue)">enqueueTurn</text>
+  <rect x="782" y="452" width="78" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="821" y="466.1" text-anchor="middle" fill="var(--blue)">turnInFlight</text>
+  <rect x="610" y="478" width="64" height="21" rx="10.5" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="xs mono" x="642" y="492.1" text-anchor="middle" fill="var(--blue)">setTimer</text>
+  <rect x="681" y="478" width="86" height="21" rx="10.5" stroke-dasharray="3 3" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="xs mono" x="724" y="492.1" text-anchor="middle" fill="var(--fg)">headRuntime</text>
+  <text class="xs" x="24" y="519">dashed = optional — its absence degrades one capability rather than breaking the loop</text>
+  <text class="xs" x="24" y="535">Declared, the seam is this small. Effectively it is not: core exports 1,338 symbols, of which cf-backend names 424 and cli-backend 253.</text>
+  <line x1="24" y1="545" x2="876" y2="545" stroke="var(--orangeLine)" stroke-width="2"/>
+  <path d="M231 547 L231 569" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
+  <path d="M669 547 L669 569" fill="none" stroke="var(--greenLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-green)"/>
+  <rect x="24" y="569" width="414" height="175" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="36" y="590" text-anchor="start" fill="var(--orange)">cf-backend  ·  Cloudflare</text>
+  <text class="s" x="36" y="605" text-anchor="start">OrchestratorAgent → ActorAgent → Think, one Durable Object per workspace</text>
+  <text class="xs" x="36" y="629" fill="var(--fg)">storage</text>
+  <text class="xs" x="154" y="629">the DO’s own SQLite + SqliteFS at /local</text>
+  <text class="xs" x="36" y="646" fill="var(--fg)">shell</text>
+  <text class="xs" x="154" y="646">the POSIX emulator over the VFS</text>
+  <text class="xs" x="36" y="663" fill="var(--fg)">schedule</text>
+  <text class="xs" x="154" y="663">DO alarms, cron, durable fibers</text>
+  <text class="xs" x="36" y="680" fill="var(--fg)">executor</text>
+  <text class="xs" x="154" y="680">a Worker Loader isolate</text>
+  <text class="xs" x="36" y="697" fill="var(--fg)">forks</text>
+  <text class="xs" x="154" y="697">ExplorationAgent facets (co-located DOs)</text>
+  <text class="xs" x="36" y="714" fill="var(--fg)">subordinates</text>
+  <text class="xs" x="154" y="714">SubordinateAgent facets</text>
+  <text class="xs" x="36" y="731" fill="var(--fg)">also</text>
+  <text class="xs" x="154" y="731">UserDO — MCP once-auth, devices, registry</text>
+  <rect x="462" y="569" width="414" height="175" rx="7" fill="var(--greenFill)" stroke="var(--greenLine)"/>
+  <text class="b" x="474" y="590" text-anchor="start" fill="var(--green)">cli-backend  ·  your machine</text>
+  <text class="s" x="474" y="605" text-anchor="start">LocalAgentSession implements BackendHost, driving the same orchestrator</text>
+  <text class="xs" x="474" y="629" fill="var(--fg)">storage</text>
+  <text class="xs" x="592" y="629">a bun:sqlite file + SqliteFS at /local</text>
+  <text class="xs" x="474" y="646" fill="var(--fg)">shell</text>
+  <text class="xs" x="592" y="646">the real host process, checkpointed</text>
+  <text class="xs" x="474" y="663" fill="var(--fg)">schedule</text>
+  <text class="xs" x="592" y="663">setTimeout + SQLite-backed fibers</text>
+  <text class="xs" x="474" y="680" fill="var(--fg)">executor</text>
+  <text class="xs" x="592" y="680">a Bun subprocess</text>
+  <text class="xs" x="474" y="697" fill="var(--fg)">forks</text>
+  <text class="xs" x="592" y="697">in-process forks of the parent runtime</text>
+  <text class="xs" x="474" y="714" fill="var(--fg)">MCTS branches</text>
+  <text class="xs" x="592" y="714">child processes, one SQLite file each</text>
+  <text class="xs" x="474" y="731" fill="var(--fg)">subordinates</text>
+  <text class="xs" x="592" y="731">not wired — fork is the only rung</text>
+</svg>

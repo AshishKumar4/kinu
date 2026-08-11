@@ -1,0 +1,148 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 900 797" width="900" height="797" role="img" aria-labelledby="t d">
+  <!-- A README figure. Its sibling in this directory (same name, -dark suffix)
+       is the same geometry under a different :root palette, and the README picks
+       between the two with <picture>. Everything below the palette block must
+       stay byte-identical in both, so edit them together. -->
+  <title id="t">Proteus delegation model</title>
+  <desc id="d">A running turn calls one agents tool with seven actions. Two of them spawn: fork creates ephemeral copies of the agent that settle back into the same turn under a settle policy chosen from the strategy registry (heads by default, MCTS when rival approaches should be scored by executing their code), and staff creates a persistent subordinate agent that outlives the turn and reports back as an event. The remaining actions talk to agents that already exist — subordinates in this workspace, or the owner’s other workspaces as peers.</desc>
+  <style>
+    :root {
+      --fg: #e6edf3;
+      --muted: #9198a1;
+      --faint: #7d8590;
+      --rule: #3d444d;
+      --ruleStrong: #6e7681;
+      --surface: #151b23;
+      --surfaceAlt: #0d1117;
+      --bandFill: #12181f;
+      --bandStroke: #2f3742;
+      --blue: #79c0ff;
+      --blueFill: #0c2d6b22;
+      --blueLine: #4493f8;
+      --orange: #ffa657;
+      --orangeFill: #76210022;
+      --orangeLine: #db6d28;
+      --green: #7ee787;
+      --greenFill: #0f503622;
+      --greenLine: #3fb950;
+      --purple: #d2a8ff;
+      --purpleFill: #4c288922;
+      --purpleLine: #ab7df8;
+      --pink: #ff9bce;
+      --pinkFill: #7d234922;
+      --pinkLine: #f778ba;
+      --slateFill: #1c222b;
+    }
+    text { font-family: ui-sans-serif,-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif; fill: var(--fg); }
+    text.mono { font-family: ui-monospace,SFMono-Regular,'SF Mono',Menlo,Consolas,monospace; }
+    .h  { font-size: 15px; font-weight: 650; letter-spacing: .1px; }
+    .b  { font-size: 13px; font-weight: 600; }
+    .s  { font-size: 11.5px; fill: var(--muted); }
+    .xs { font-size: 10.5px; fill: var(--faint); }
+    .band { font-size: 11px; font-weight: 700; letter-spacing: .9px; fill: var(--faint); }
+    .edge { fill: none; stroke: var(--ruleStrong); stroke-width: 1.4; }
+    .edge-lite { fill: none; stroke: var(--rule); stroke-width: 1.2; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--ruleStrong)"/>
+    </marker>
+    <marker id="a-blue" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--blueLine)"/>
+    </marker>
+    <marker id="a-purple" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--purpleLine)"/>
+    </marker>
+    <marker id="a-pink" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--pinkLine)"/>
+    </marker>
+    <marker id="a-green" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--greenLine)"/>
+    </marker>
+    <marker id="a-orange" viewBox="0 0 10 8" refX="9" refY="4" markerWidth="8" markerHeight="6.4" orient="auto-start-reverse">
+      <path d="M0 0 L10 4 L0 8 z" fill="var(--orangeLine)"/>
+    </marker>
+  </defs>
+  <text class="h" x="24" y="30">Delegation — one tool, one ladder, keyed on lifetime</text>
+  <text class="s" x="24" y="49">the doctrine has a single source: packages/core/src/tools/registry.ts</text>
+  <text class="band" x="24" y="76">THE CALLER</text>
+  <rect x="24" y="88" width="852" height="62" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="36" y="109" text-anchor="start">a turn, running</text>
+  <text class="s" x="36" y="124" text-anchor="start">One agents tool. Seven actions — fork · staff · ask · send · reply · list · dismiss.</text>
+  <text class="xs" x="36" y="139" text-anchor="start">Which ones exist here is structural: an actor gets the actions its backend wired deps for.</text>
+  <path d="M255 150 L255 172" fill="none" stroke="var(--purpleLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-purple)"/>
+  <path d="M691 150 L691 172" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
+  <rect x="215" y="172" width="80" height="22" rx="11" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="xs mono" x="255" y="186.6" text-anchor="middle" fill="var(--purple)">fork</text>
+  <rect x="647" y="172" width="88" height="22" rx="11" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="xs mono" x="691" y="186.6" text-anchor="middle" fill="var(--orange)">staff</text>
+  <rect x="24" y="204" width="462" height="94" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b" x="36" y="225" text-anchor="start" fill="var(--purple)">ephemeral — settles back into this turn</text>
+  <text class="xs" x="36" y="240" text-anchor="start">Fork on breadth (2+ independent angles you would</text>
+  <text class="xs" x="36" y="255" text-anchor="start">otherwise grind through one at a time) or on doubt (a</text>
+  <text class="xs" x="36" y="270" text-anchor="start">failed attempt, two plausible approaches, a step that is</text>
+  <text class="xs" x="36" y="285" text-anchor="start">expensive to undo, output you cannot check yourself).</text>
+  <rect x="38" y="308" width="434" height="105" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="50" y="327" text-anchor="start">settle policy — the strategy registry</text>
+  <text class="xs" x="50" y="342" fill="var(--fg)">heads</text>
+  <text class="xs" x="102" y="342">default — 2–6 forks of you on the same workspace,</text>
+  <text class="xs" x="50" y="357" fill="var(--fg)"></text>
+  <text class="xs" x="102" y="357">files and sandbox, each running its own tool loop;</text>
+  <text class="xs" x="50" y="372" fill="var(--fg)"></text>
+  <text class="xs" x="102" y="372">their findings merge back into this turn</text>
+  <text class="xs" x="50" y="387" fill="var(--fg)">mcts</text>
+  <text class="xs" x="102" y="387">rival approaches scored by EXECUTION — each</text>
+  <text class="xs" x="50" y="402" fill="var(--fg)"></text>
+  <text class="xs" x="102" y="402">branch’s proposed code is actually run</text>
+  <rect x="24" y="423" width="462" height="75" rx="7" fill="var(--purpleFill)" stroke="var(--purpleLine)"/>
+  <text class="b" x="36" y="442" text-anchor="start" fill="var(--purple)">runs as</text>
+  <text class="xs" x="36" y="457" fill="var(--fg)">cf</text>
+  <text class="xs" x="70" y="457">ExplorationAgent facets — co-located Durable Objects</text>
+  <text class="xs" x="36" y="472" fill="var(--fg)">cli</text>
+  <text class="xs" x="70" y="472">in-process runtime forks; an MCTS branch gets its</text>
+  <text class="xs" x="36" y="487" fill="var(--fg)"></text>
+  <text class="xs" x="70" y="487">own child process and SQLite file</text>
+  <rect x="24" y="508" width="462" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="36" y="527" text-anchor="start">still running at 30 s?</text>
+  <text class="xs" x="36" y="542" text-anchor="start">it detaches into a background job whose completion wakes you</text>
+  <rect x="506" y="204" width="370" height="94" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="518" y="225" text-anchor="start" fill="var(--orange)">persistent — outlives this turn</text>
+  <text class="xs" x="518" y="240" text-anchor="start">Staff when the work must outlive the turn:</text>
+  <text class="xs" x="518" y="255" text-anchor="start">several features at once, or a long-running</text>
+  <text class="xs" x="518" y="270" text-anchor="start">effort. One subordinate per independent</text>
+  <text class="xs" x="518" y="285" text-anchor="start">workstream, run in parallel.</text>
+  <rect x="520" y="308" width="342" height="105" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="532" y="327" text-anchor="start">SubordinateAgent</text>
+  <text class="xs" x="532" y="342" text-anchor="start">its own context, carried across turns</text>
+  <text class="xs" x="532" y="357" text-anchor="start">its own full turn loop and evolution</text>
+  <text class="xs" x="532" y="372" text-anchor="start">shares the workspace’s files</text>
+  <text class="xs" x="532" y="387" text-anchor="start">may fork; may not staff or peer</text>
+  <text class="xs" x="532" y="402" text-anchor="start">reports back as an event that wakes you</text>
+  <rect x="506" y="423" width="370" height="75" rx="7" fill="var(--orangeFill)" stroke="var(--orangeLine)"/>
+  <text class="b" x="518" y="442" text-anchor="start" fill="var(--orange)">runs as</text>
+  <text class="xs" x="518" y="457" fill="var(--fg)">cf</text>
+  <text class="xs" x="552" y="457">SubordinateAgent facets</text>
+  <text class="xs" x="518" y="472" fill="var(--fg)">cli</text>
+  <text class="xs" x="552" y="472">not wired — a local session gets the</text>
+  <text class="xs" x="518" y="487" fill="var(--fg)"></text>
+  <text class="xs" x="552" y="487">fork rung and nothing else</text>
+  <rect x="506" y="508" width="370" height="45" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="518" y="527" text-anchor="start">scope</text>
+  <text class="xs" x="518" y="542" text-anchor="start">subordinate staffs this workspace; workspace makes a new one</text>
+  <path d="M691 553 L691 583" fill="none" stroke="var(--orangeLine)" stroke-width="1.4" stroke-linejoin="round" marker-end="url(#a-orange)"/>
+  <text class="xs" x="703" y="573">the roster a subordinate joins</text>
+  <rect x="24" y="587" width="852" height="130" rx="10" fill="var(--blueFill)" stroke="var(--blueLine)"/>
+  <text class="b" x="38" y="609" fill="var(--blue)">ask · send · reply · list · dismiss — talking to what already exists</text>
+  <text class="xs" x="38" y="628">One address space: a name resolves to a subordinate in this workspace, otherwise to one of the owner’s other workspaces.</text>
+  <rect x="38" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="50" y="658" text-anchor="start">subordinates</text>
+  <text class="xs" x="50" y="672" text-anchor="start">ask assigns and expects the answer; send steers,</text>
+  <text class="xs" x="50" y="686" text-anchor="start">fire-and-forget; dismiss ends a role for good</text>
+  <rect x="457" y="639" width="405" height="64" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
+  <text class="b" x="469" y="658" text-anchor="start">peers — the owner’s other workspaces</text>
+  <text class="xs" x="469" y="672" text-anchor="start">same ask/send; reply answers an incoming agent</text>
+  <text class="xs" x="469" y="686" text-anchor="start">message by its event id</text>
+  <text class="xs" x="38" y="735">A busy agent is never blocked on — the message is spliced into the turn it is already running, so follow-ups go out as soon as you have them.</text>
+  <rect x="24" y="747" width="852" height="34" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
+  <text class="xs" x="38" y="768"><tspan font-weight="700" fill="var(--fg)">MCTS is a settle policy inside the fork rung</tspan> — reachable and fully functional, never a third kind of helper. Adding a strategy adds a settle value, not a tool.</text>
+</svg>
