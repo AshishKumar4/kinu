@@ -1,8 +1,8 @@
 // agent.* codemode provider — the agent's self-direction namespace.
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
-import { MissionGovernor } from "@proteus/core";
-import { createAgentSelfProvider, type AgentSelfHost } from "../src/agent-self";
+import { MissionGovernor } from "../src/mission-budget.js";
+import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self.js";
 
 /** A real governor over in-memory SQLite — the ledger is the subject here, so
  *  stubbing it would test nothing. */

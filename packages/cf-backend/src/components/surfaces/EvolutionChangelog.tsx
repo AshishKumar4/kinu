@@ -14,12 +14,11 @@ import {
   SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import type { ChangelogEntry, ChangelogEntryKind } from "@proteus/core";
+import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, Section } from "./shared";
-import type { DiffLine } from "@/lib/diff";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }

@@ -1,29 +1,45 @@
 /**
- * Local `agent.*` codemode namespace.
+ * `agent.*` — the agent's self-direction codemode namespace.
  *
- * The CF backend exposes this through @cloudflare/codemode. The CLI backend's
- * Node execute fallback gets the same namespace shape here, with calls routed
- * back into LocalAgentSession so the EventsHub trigger registry and background
- * job store remain the source of truth.
+ * Lets the LLM steer ITSELF from inside execute_tools: propose + accept its own
+ * Voyager-style curriculum, and schedule future autonomous turns (delivered by
+ * the event→turn reactor). Registered exactly like the RLM provider — zero new
+ * top-level builtins, so it respects the 6-tool surface.
+ *
+ * Every method here calls back into the host, so nothing about it is
+ * platform-shaped and both backends register the same provider. Written twice,
+ * it drifted the way tool surfaces do: the local copy accepted a cron
+ * expression its scheduler could never fire, and told the model nothing about
+ * the threshold that hands it a { jobId } instead of a result. Neither is a
+ * crash — they are an agent quietly worse at steering itself.
+ *
+ * Deliberately NOT here: `forkAgent` — the workspace-clone RPC behind the UI's
+ * fork-chat, which copies the whole agent DO at a message and rejects while a
+ * turn is in flight. Cloning the actor mid-script is not delegation.
+ *
+ * Delegation itself is NOT absent from the sandbox — it just isn't duplicated
+ * here. The `agents.*` namespace projects the existing `agents` tool over the
+ * actor's own deps (core tools/agents-codemode.ts), so there is still exactly
+ * one spawn/join implementation, with one more caller.
  */
-
-import type { CodemodeProvider, MissionGovernor } from '@proteus/core';
-import { nanoid, readMissionLimits } from '@proteus/core';
+import type { CodemodeProvider } from '../rlm.js';
+import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
+import { nextCronFire } from '../events/hub/cron.js';
+import { BACKGROUND_POLICY } from '../jobs/index.js';
+import { nanoid } from '../utils/nanoid.js';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
-export interface LocalAgentSelfHost {
+/** The narrow slice of the agent the `agent.*` tools call through to — all
+ *  existing methods on both backends, so there's no duplicated logic. */
+export interface AgentSelfHost {
   proposeCurriculumTasks(count?: number): Promise<unknown>;
   listCurriculumTasks(status?: CurriculumStatus): Promise<unknown>;
   setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<unknown>;
   proposeScaffold(rationale: string, code: string, baseVersion?: number): Promise<unknown>;
-  listScaffoldVersions(limit?: number): unknown;
+  listScaffoldVersions(limit?: number): Promise<unknown> | unknown;
   createTimerTrigger(opts: {
-    cron?: string;
-    atMs?: number;
-    label?: string;
-    payload?: Record<string, unknown>;
-    trust?: 'authenticated' | 'owner';
+    cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown>;
     missionLabel?: string;
   }): { id: string; kind: string; nextFireAt: number | null };
   /** The cumulative spend governor — a schedule declares its mission budget
@@ -73,15 +89,18 @@ const TYPES = `export declare const agent: {
     cron?: string; atMs?: number; label?: string; payload?: object;
     budget_usd?: number; budget_tokens?: number; budget_label?: string;
   }): Promise<{ id: string; kind: string; nextFireAt: number | null; budget?: unknown }>;
-  /** Cancel a previously-scheduled trigger by id. */
-  cancelSchedule(id: string): Promise<{ ok: boolean; changed?: boolean }>;
+  /** Cancel a previously-scheduled trigger by id. Idempotent: changed is
+   *  false when it was already revoked. */
+  cancelSchedule(id: string): Promise<{ ok: boolean; changed: boolean }>;
   /** Read a mission budget: one label, or everything the CURRENT turn spends
    *  against when called with no argument. Returns [] when this run is
    *  uncapped, which is the default. */
   budget(label?: string): Promise<unknown>;
-  /** Read a background job's status + result. */
-  jobResult(jobId: string): Promise<unknown>;
-  /** List recent background jobs (newest first). */
+  /** Read a background job's status + result. When a long tool call is
+   *  auto-backgrounded you get a { jobId }; you are woken on completion — call
+   *  this to fetch the result, then synthesize/continue. */
+  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed'; result: string | null; error: string | null } | null>;
+  /** List your recent background jobs (newest first). */
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Fold the conversation NOW: arm the compaction ladder so your next turn is
    *  assembled from a fresh handoff checkpoint instead of waiting for the
@@ -100,7 +119,22 @@ const TYPES = `export declare const agent: {
 };
 `;
 
-export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): CodemodeProvider {
+/**
+ * What the model is told about auto-backgrounding.
+ *
+ * Both thresholds, named with the rule that picks them, and read from
+ * BACKGROUND_POLICY rather than written down: the surface is a property of the
+ * TURN on this backend, and this provider is built once per DO, so a single
+ * hardcoded number was necessarily wrong on half the turns the agent serves.
+ */
+const BACKGROUND_DESCRIPTION =
+  'Read a background job (status + result). A tool call that outruns this turn\'s background '
+  + `threshold (${BACKGROUND_POLICY.interactive.detachAfterMs / 1000}s on a chat turn a human is `
+  + `watching, ${BACKGROUND_POLICY['one-shot'].detachAfterMs / 1000}s on an autonomous turn woken `
+  + 'by an event, a timer or a job) hands back a { jobId } instead of its result; you are woken on '
+  + 'completion — call this to fetch it.';
+
+export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
   return {
     name: 'agent',
     types: TYPES,
@@ -115,7 +149,7 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): Codemode
         },
       },
       listCurriculum: {
-        description: 'List your proposed curriculum tasks, optionally filtered by status.',
+        description: 'List your proposed curriculum tasks, optionally filtered by status (pending/accepted/rejected/completed).',
         execute: async (...args: unknown[]) => {
           const status = args[0] as CurriculumStatus | undefined;
           try { return await host.listCurriculumTasks(status); }
@@ -148,7 +182,7 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): Codemode
         description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record — the stepping stones proposeScaffold can branch from.',
         execute: async (...args: unknown[]) => {
           const limit = typeof args[0] === 'number' ? args[0] : undefined;
-          try { return host.listScaffoldVersions(limit); }
+          try { return await host.listScaffoldVersions(limit); }
           catch (err) { return { error: `agent.scaffoldVersions: ${(err as Error).message}` }; }
         },
       },
@@ -161,6 +195,7 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): Codemode
           const cron = typeof opts.cron === 'string' && opts.cron ? opts.cron : undefined;
           const atMs = typeof opts.atMs === 'number' && Number.isFinite(opts.atMs) ? opts.atMs : undefined;
           if (!cron && atMs === undefined) return { error: 'agent.schedule: provide { cron } or { atMs }' };
+          if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
           if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
           // The ledger is declared BEFORE the trigger so the schedule can carry
           // its label from the first fire; a named label re-enters the existing
@@ -173,17 +208,13 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): Codemode
             const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
             return {
               ...host.createTimerTrigger({
-                cron,
-                atMs,
-                missionLabel,
+                cron, atMs, missionLabel,
                 label: typeof opts.label === 'string' ? opts.label : undefined,
                 payload: opts.payload && typeof opts.payload === 'object' ? opts.payload as Record<string, unknown> : undefined,
               }),
               ...(budget ? { budget } : {}),
             };
-          } catch (err) {
-            return { error: `agent.schedule: ${(err as Error).message}` };
-          }
+          } catch (err) { return { error: `agent.schedule: ${(err as Error).message}` }; }
         },
       },
       budget: {
@@ -205,7 +236,7 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): Codemode
         },
       },
       jobResult: {
-        description: 'Read a background job status and result.',
+        description: BACKGROUND_DESCRIPTION,
         execute: async (...args: unknown[]) => {
           const id = args[0];
           if (typeof id !== 'string' || !id) return { error: 'agent.jobResult: jobId must be a non-empty string' };
@@ -214,7 +245,7 @@ export function createLocalAgentSelfProvider(host: LocalAgentSelfHost): Codemode
         },
       },
       backgroundJobs: {
-        description: 'List recent background jobs (newest first) with their status.',
+        description: 'List your recent background jobs (newest first) with their status.',
         execute: async (...args: unknown[]) => {
           const limit = typeof args[0] === 'number' ? args[0] : undefined;
           try { return await host.listBackgroundJobs(limit); }

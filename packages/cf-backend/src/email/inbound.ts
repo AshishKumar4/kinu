@@ -11,16 +11,10 @@
  */
 
 import PostalMime from 'postal-mime';
-import type { EmailAttachmentMeta } from '@proteus/core';
+import { normalizeEmailAddress, type EmailAttachmentMeta } from '@proteus/core';
 
 /** Agent-name charset — mirrors identity/naming.ts slugs (`scout-a1b2c3`). */
 const AGENT_NAME_RE = /^[a-z0-9][a-z0-9-]{0,63}$/;
-
-/** Lowercase, trim, and strip a single `Name <addr>` / `<addr>` wrapper. */
-export function normalizeEmailAddress(raw: string): string {
-  const angled = raw.match(/<([^<>]+)>\s*$/);
-  return (angled ? angled[1] : raw).trim().toLowerCase();
-}
 
 /**
  * Resolve the receiving agent from the envelope RCPT TO. Returns null (drop)

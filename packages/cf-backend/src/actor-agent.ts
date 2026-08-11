@@ -54,7 +54,7 @@ import {
   buildSystemPromptSync,
   currentDateForPrompt,
   promptModeForTurnEvent,
-  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates,
+  DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
@@ -99,6 +99,7 @@ import {
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (takes capture + inherited-context digest)
   recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
+  inheritedContextFromRows, headPhaseRunEvent,
   type ReleaseToolDeps,
   isVfsError,
   type ParentRpcResult,
@@ -117,6 +118,7 @@ import {
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
   generateJson,
+  uiMessageText,
 } from "@proteus/core";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
@@ -224,19 +226,6 @@ function compactionLogDetail(message: string, data?: unknown): string {
   } catch {
     return message;
   }
-}
-
-/** Flatten a stored UIMessage-JSON content string to plain text (assistant_messages rows). */
-export function uiMessageText(content: string): string {
-  try {
-    const parsed = JSON.parse(content) as { parts?: unknown };
-    if (Array.isArray(parsed.parts)) {
-      return parsed.parts
-        .flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])
-        .join('');
-    }
-  } catch { /* plain text fallback */ }
-  return content;
 }
 
 /** The per-actor-class tool deps `getRawTools` wires into the shared
@@ -1592,15 +1581,15 @@ export abstract class ActorAgent extends Think<Env> {
         ) sub
         ORDER BY created_at ASC`;
       const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
-      return [
-        ...inheritedContextOmissionNote(total, rows.length),
-        ...rows.map((r) => ({
+      return inheritedContextFromRows(
+        rows.map((r) => ({
           id: r.id,
-          role: narrowInheritedRole(r.role),
+          role: r.role,
           content: uiMessageText(r.content),
           createdAt: Date.parse(r.created_at) || 0,
         })),
-      ];
+        total,
+      );
     } catch {
       // assistant_messages table may not yet exist on a fresh agent.
       return [];
@@ -1612,23 +1601,7 @@ export abstract class ActorAgent extends Think<Env> {
   private emitHeadPhase(event: SplitPhaseEvent): void {
     try {
       if (!this._currentRunId) return;
-      if (event.kind === 'split') {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'head_split',
-          rootId: event.rootId,
-          headIds: [...event.headIds],
-          rationale: event.rationale,
-        });
-      } else {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'head_merge',
-          rootId: event.rootId,
-          headCount: event.cost.headCount,
-          headsWithFindings: event.cost.headsWithFindings,
-          totalTokens: event.cost.totalTokens,
-          mergedNarrative: event.mergedNarrative,
-        });
-      }
+      this.eventRecorder.emit(this._currentRunId, headPhaseRunEvent(event));
     } catch (err) {
       console.warn('[proteus] event emit failed at head onPhase:', err);
     }
@@ -2059,17 +2032,14 @@ export abstract class ActorAgent extends Think<Env> {
    * the block on every request and append a block per step.
    */
   protected dynamicContextSnapshot(): DynamicContext {
-    const factsBlock = this.renderFactsForTurn();
-    return {
-      ...(factsBlock ? { factsBlock } : {}),
-      ...(this._turnMemoryTail ? { memoryTail: this._turnMemoryTail } : {}),
-      // Re-listed per step: a sandbox provisioned or a device connected mid-turn
-      // flips availability, and the whole point of the block is to say so.
+    return agentDynamicContext({
+      factsBlock: this.renderFactsForTurn(),
+      memoryTail: this._turnMemoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
-      tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
-      delegates: forkDelegates(this.headJournal.listLive()),
-      ...(this._mcpUnavailable.length > 0 ? { missingCapabilities: this._mcpUnavailable } : {}),
-    };
+      runningJobs: this.jobs.listRunning(),
+      liveHeadRuns: this.headJournal.listLive(),
+      missingCapabilities: this._mcpUnavailable,
+    });
   }
 
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
@@ -2096,10 +2066,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  cache-prefix regression. */
   private _lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
-    const hash = fnv1a64(system);
-    const prev = this._lastSystemPromptHash;
+    const { hash, status } = observeSystemPromptHash(this._lastSystemPromptHash, system);
     this._lastSystemPromptHash = hash;
-    this.logActivity('system_prompt_hash', `${hash}${prev === null ? '' : prev === hash ? ' (stable)' : ' (changed)'}`);
+    this.logActivity('system_prompt_hash', status === 'first' ? hash : `${hash} (${status})`);
   }
 
   onChunk(_ctx: ChunkContext): void {

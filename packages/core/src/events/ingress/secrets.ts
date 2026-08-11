@@ -1,0 +1,46 @@
+/**
+ * Webhook secret storage — the workspace-storage implementation of
+ * {@link SecretStore}.
+ *
+ * Secrets live in their own table rather than beside the trigger row, so
+ * `listTriggers` can never return one: reading a trigger and reading its secret
+ * are separate queries, and only the ingress path makes the second.
+ */
+
+import type { SqlExec } from '../../types/primitives.js';
+import type { SecretStore } from './webhook.js';
+
+export interface WebhookSecretStore extends SecretStore {
+  /** Store the secret a freshly registered webhook was created with. */
+  put(secretId: string, triggerId: string, secret: string, now: number): void;
+}
+
+export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
+  return {
+    async get(secretId) {
+      try {
+        const rows = sql.exec(
+          `SELECT secret FROM webhook_secrets WHERE secret_id = ?`, secretId,
+        ).toArray() as Array<{ secret: string }>;
+        return rows[0]?.secret ?? null;
+      } catch {
+        // No webhook has ever been registered here, so the table does not
+        // exist — indistinguishable, to a delivery, from a revoked secret.
+        return null;
+      }
+    },
+    put(secretId, triggerId, secret, now) {
+      sql.exec(`
+        CREATE TABLE IF NOT EXISTS webhook_secrets (
+          secret_id TEXT PRIMARY KEY,
+          trigger_id TEXT NOT NULL,
+          secret TEXT NOT NULL,
+          created_at INTEGER NOT NULL
+        )`);
+      sql.exec(
+        `INSERT INTO webhook_secrets (secret_id, trigger_id, secret, created_at) VALUES (?, ?, ?, ?)`,
+        secretId, triggerId, secret, now,
+      );
+    },
+  };
+}

@@ -39,7 +39,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { diversityDirective, formatInheritedContext, generateJson, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
+import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, parseModelSpec, reasoningEffortOptions, reflectionPrompt } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -267,22 +267,21 @@ export class ExplorationAgent extends Agent<Env> {
     siblings: readonly string[] = [],
   ): Promise<{ text: string; codeUsed: string | null }> {
     const { model, providerOptions } = this.resolveLowEffortModel();
-    const context = formatInheritedContext(priorHistory);
-    const toolHints = craftedTools.length > 0
-      ? `\nKnown patterns:\n${craftedTools.map(t => `- ${t.name}: ${t.description}`).join("\n")}`
-      : "";
+    const { system, user } = explorePrompt({
+      context: formatInheritedContext(priorHistory),
+      craftedTools,
+      siblings,
+    });
 
     const { text } = await generateText({
       model,
-      system: "You are an expert agent exploring one approach to solve a task." + toolHints +
-        "\n\nIf your approach involves code, include it in a ```js code block.",
-      messages: [{ role: "user" as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
+      system,
+      messages: [{ role: "user" as const, content: user }],
       ...(providerOptions ? { providerOptions } : {}),
     });
 
     const trimmed = text.trim();
-    const codeMatch = trimmed.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
-    const codeUsed = codeMatch?.[1]?.trim() ?? null;
+    const codeUsed = extractCodeBlock(trimmed);
     this.sql`INSERT INTO traces (step, text, code_used) VALUES (1, ${trimmed}, ${codeUsed})`;
     return { text: trimmed, codeUsed };
   }
@@ -295,7 +294,7 @@ export class ExplorationAgent extends Agent<Env> {
       model,
       messages: [{
         role: "user" as const,
-        content: `Task: ${task}\nAttempt: ${traces.map(t => t.text).join("\n")}\n\nWhat specifically went wrong? One sentence.`,
+        content: reflectionPrompt(task, traces.map(t => t.text).join("\n")),
       }],
       ...(providerOptions ? { providerOptions } : {}),
     });

@@ -5,8 +5,8 @@ import {
   initWebhookRateLimitTables,
   normalizeWebhookRateLimitPerMin,
   tryConsumeWebhookRateLimit,
-} from '../src/events/webhook-rate-limit.js';
-import type { SqlExec } from '@proteus/core';
+  type SqlExec,
+} from '@proteus/core';
 
 function sqlFor(db: Database): SqlExec {
   return {

@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { MonitorIcon, GitDiffIcon, CheckIcon, CaretDownIcon, CaretRightIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
-import type { FileDiff } from "@/lib/diff";
+import type { FileDiff } from "@proteus/core";
 import {
   pickDefaultExecutor, executorLabel, executorSortKey, isActiveExecutionDevice,
   type ExecutorInfo,

@@ -3,10 +3,13 @@
  *
  * A method name that exists on BOTH a cf actor class and the CLI session class
  * with no shared implementation is a drift site: the two bodies start
- * identical (createTimerTrigger, listScaffoldVersions and armCompactNow are
- * line-for-line copies today) and diverge silently, because nothing ever
- * asserts they agree. Several of the "X never worked on Y backend" defects
- * were exactly a twin whose halves drifted.
+ * identical — createTimerTrigger and markChangelogSeen were line-for-line
+ * copies until they were hoisted — and diverge silently, because nothing ever
+ * asserts they agree. Several of the "X never
+ * worked on Y backend" defects were exactly a twin whose halves drifted — and
+ * the halves need not even disagree loudly: emitHeadPhase fanned the same
+ * split out to one place on cf and two on the CLI, where the second reached
+ * no reader and duplicated the first in `proteus exec --json`.
  *
  * A shared NAME does not always mean unshared logic, though: once a driver is
  * hoisted, both backends keep the method as a transport over the one core
@@ -38,60 +41,48 @@ const REPO = resolve(import.meta.dir, '../../..');
 
 /** The measured twin inventory at seeding time. Shrink by hoisting. */
 const KNOWN_TWINS: readonly string[] = [
+  // Three lines each over ONE core store (CompactionStateStore.armForce-
+  // Compaction). No duplicated logic — only the session key differs, which is
+  // what a backend knows and core does not. Not expected to shrink.
   'armCompactNow',
-  'cancelBackgroundJob',
-  'cancelTrigger',
+  // The file-checkpoint quartet (checkpointStatus, listFileCheckpoints,
+  // planFileRestore, restoreFileCheckpoint): two transports to two DIFFERENT
+  // stores — a device tunnel to the user's machine on cf, a local git engine
+  // on the CLI — not two implementations of one. Their shared vocabulary
+  // (FileCheckpointEntry, FileRestorePlan, CheckpointAvailability) is already
+  // core, which is why neither body carries logic. Not expected to shrink.
   'checkpointStatus',
-  'createMCTSSession',
-  'createTimerTrigger',
-  'dynamicContextSnapshot',
+  // Genuinely different resolutions: cf normalizes the stored spec through its
+  // provider registry (an unset model resolving to "" was the 41%-of-Kimi
+  // context-window bug); the CLI's resolver has already normalized by the time
+  // the spec is cached. Same answer, two legitimate routes to it.
   'effectiveModelSpec',
-  'emitHeadPhase',
-  'getAlwaysActiveSkills',
-  'getEvolutionChangelog',
-  'getReasoningEffort',
-  'getReplayEvals',
-  'getRunEvents',
-  'getShellApprovalMode',
-  'getSkillsVfs',
-  'getStoredModelSpec',
+  // Both build core's default key-less provider, but from different platform
+  // material: cf's owned model services vs node fetch + the local auth store.
   'getWebSearchProvider',
-  'jobResult',
-  'latestAlternateTakes',
-  'listBackgroundJobs',
-  'listCurriculumTasks',
   'listFileCheckpoints',
+  // Both already read the one core EventLog.query; what differs after it is a
+  // projection into the web wire shape, which only cf has. A core symbol here
+  // would be a passthrough. Not expected to shrink.
   'listRecentEvents',
-  'listRuns',
-  'listTriggers',
-  'makeScaffoldCallTool',
-  'makeScaffoldHistory',
-  'makeScaffoldLLMStream',
-  'markChangelogSeen',
-  'pickAlternateTake',
   'planFileRestore',
-  'proposeCurriculumTasks',
+  // One shaper, two sources — the divergence is real: cf digests its durable
+  // assistant_messages rows (inheritedContextFromRows), the CLI reads live
+  // history (inheritedContextFromHistory). Both are core; SHARED_TRANSPORTS
+  // names a single symbol, so this cannot be recorded there honestly.
   'readInheritedContext',
-  'recordHeadsTake',
-  'recordSystemPromptHash',
-  'renderFactsForTurn',
   'restoreFileCheckpoint',
-  'resumeBackgroundJob',
-  'revertChangelogEntry',
   'runShadowEvalSampled',
   // The seam itself, not duplication: each backend describes the inference
   // surface a candidate scaffold runs on (its ToolSet, its history, its
   // default loop). This entry is not expected to shrink.
   'scaffoldControl',
+  // Accessors over ONE core object (ModelCatalogSession), three lines each.
+  // No duplicated logic, but the delegation is a method call on a shared field
+  // rather than a free function, so the gate below cannot verify it — recorded
+  // here rather than asserted away. Not expected to shrink.
   'sessionAcceptedMedia',
   'sessionContextWindow',
-  'setAlwaysActiveSkills',
-  'setCurriculumTaskStatus',
-  'setModel',
-  'setReasoningEffort',
-  'setShellApprovalMode',
-  'settlePendingBranches',
-  'wrapToolsForBackground',
 ];
 
 /**
@@ -100,14 +91,54 @@ const KNOWN_TWINS: readonly string[] = [
  * must call — asserted below, so this list cannot launder a real twin.
  */
 const SHARED_TRANSPORTS: Readonly<Record<string, string>> = {
+  acceptWebhookDelivery: 'acceptWebhookDelivery',
   applyScaffoldDecision: 'applyScaffoldDecision',
+  cancelBackgroundJob: 'cancelBackgroundJob',
+  cancelTrigger: 'cancelTrigger',
+  createDurableWebhook: 'registerDurableWebhook',
+  createMCTSSession: 'createDurableMctsSession',
+  createTimerTrigger: 'createTimerTrigger',
+  dynamicContextSnapshot: 'agentDynamicContext',
+  emitHeadPhase: 'headPhaseRunEvent',
+  getAlwaysActiveSkills: 'getAlwaysActiveSkills',
+  getEvolutionChangelog: 'getEvolutionChangelog',
   getGepaRuns: 'listGepaRuns',
+  getReasoningEffort: 'getReasoningEffort',
+  getReplayEvals: 'listReplayEvals',
+  getRunEvents: 'getRunEvents',
   getShadowStatus: 'getShadowStatus',
+  getShellApprovalMode: 'getShellApprovalMode',
+  getSkillsVfs: 'skillsVfsOver',
+  getStoredModelSpec: 'getStoredModelSpec',
+  jobResult: 'jobResult',
+  latestAlternateTakes: 'latestAlternateTakeSet',
+  listBackgroundJobs: 'listBackgroundJobs',
+  listCurriculumTasks: 'listProposedTasks',
+  listRuns: 'listRuns',
   listScaffoldVersions: 'listScaffoldVersions',
+  listTriggers: 'listTriggers',
+  makeScaffoldCallTool: 'createScaffoldCallTool',
+  makeScaffoldHistory: 'createScaffoldHistory',
+  makeScaffoldLLMStream: 'createScaffoldLLMStream',
+  markChangelogSeen: 'markChangelogSeen',
+  pickAlternateTake: 'pickAlternateTake',
   previewScaffoldLive: 'previewScaffoldLive',
+  proposeCurriculumTasks: 'proposeCurriculumTasks',
   proposeScaffold: 'proposeScaffold',
+  recordHeadsTake: 'recordGroundedHeadsTake',
+  recordSystemPromptHash: 'observeSystemPromptHash',
+  renderFactsForTurn: 'renderFactsForTurn',
+  resumeBackgroundJob: 'resumeForkBackgroundJob',
+  revertChangelogEntry: 'revertChangelogEntryById',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
   runScaffoldOnce: 'runScaffoldOnce',
+  setAlwaysActiveSkills: 'setAlwaysActiveSkills',
+  setCurriculumTaskStatus: 'updateProposedTaskStatus',
+  setModel: 'setModel',
+  setReasoningEffort: 'setReasoningEffort',
+  setShellApprovalMode: 'setShellApprovalMode',
+  settlePendingBranches: 'settlePendingBranches',
+  wrapToolsForBackground: 'wrapToolsForBackground',
 };
 
 /** The class bodies that constitute each backend's composition surface. */
@@ -173,9 +204,21 @@ function scanTwins(): {
   return { cf, cli, twins: [...cf].filter((n) => cli.has(n)).sort(), cfBodies, cliBody: cliBody! };
 }
 
-/** A bare `symbol(` call — not `this.symbol(`, not `store.symbol(`. */
+/** A bare `symbol(` CALL — not `this.symbol(`, not `store.symbol(`, and not
+ *  the method's own declaration header. Without that last exclusion a
+ *  transport whose name matches its core symbol would prove itself by
+ *  existing, which is exactly the laundering this gate exists to stop. */
 function callsFreeFunction(body: string, symbol: string): boolean {
-  return new RegExp(String.raw`(?<![.\w])${symbol}\s*\(`).test(body);
+  const call = new RegExp(String.raw`(?<![.\w])${symbol}\s*(?:<[^>\n]*>)?\(`, 'g');
+  // A member declaration sits at exactly two spaces of indentation (the same
+  // shape methodNames extracts); anything calling it is deeper than that.
+  const declarationHead =
+    /^ {2}(?:@[A-Za-z_][A-Za-z0-9_]*\((?:[^()]|\([^()]*\))*\)\s+)?(?:(?:private|protected|public|readonly|override|static|async|get|set)\s+)*$/;
+  for (const m of body.matchAll(call)) {
+    const lineStart = body.lastIndexOf('\n', m.index) + 1;
+    if (!declarationHead.test(body.slice(lineStart, m.index))) return true;
+  }
+  return false;
 }
 
 describe('backend twin methods', () => {

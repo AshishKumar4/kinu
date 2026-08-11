@@ -125,6 +125,47 @@ export function forkDelegates(
   }));
 }
 
+/** Where a backend reads each plane of its live state. Typed structurally —
+ *  how a backend journals a head run or registers a job is not this layer's
+ *  business, only that it can be asked. */
+export interface DynamicContextSources {
+  /** The turn's rendered recent-facts block (renderFactsForTurn output). */
+  readonly factsBlock: string | undefined;
+  /** The turn's MEMORY.md tail — read once per turn, behind the only await in
+   *  this plane, so the caller closes over it rather than re-reading per step. */
+  readonly memoryTail: string | undefined;
+  readonly executors: readonly PromptExecutorInfo[];
+  readonly runningJobs: ReadonlyArray<{ id: string; kind: string; label: string | null }>;
+  readonly liveHeadRuns: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>;
+  readonly missingCapabilities: readonly MissingCapability[];
+}
+
+/**
+ * The agent's live state for ONE model step, assembled the same way on every
+ * backend.
+ *
+ * Which planes exist, and when a plane is omitted rather than rendered empty,
+ * is the whole content of this function — and it is exactly what drifted while
+ * each backend built the object itself: a plane added on one side simply did
+ * not exist for the other agent, with nothing to say so. Nothing here is
+ * clock-derived; a wall-clock field would re-fingerprint the block every
+ * request and append one per step.
+ */
+export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
+  return {
+    ...(sources.factsBlock ? { factsBlock: sources.factsBlock } : {}),
+    ...(sources.memoryTail ? { memoryTail: sources.memoryTail } : {}),
+    // Re-listed per step: a sandbox provisioned or a device connected mid-turn
+    // flips availability, and the whole point of the block is to say so.
+    executors: sources.executors,
+    tasks: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
+    delegates: forkDelegates(sources.liveHeadRuns),
+    ...(sources.missingCapabilities.length > 0
+      ? { missingCapabilities: sources.missingCapabilities }
+      : {}),
+  };
+}
+
 /** State that only makes sense for THIS turn's user message. */
 export interface TurnLocalContext {
   /** One-turn device change notice (deviceChangeNotice output). */
@@ -405,6 +446,31 @@ export class DynamicContextLedger {
   reset(): void {
     this.blocks = [];
   }
+}
+
+/** What this turn's system prompt did to the cacheable prefix. `first` is the
+ *  session's opening turn, which has nothing to compare against. */
+export interface SystemPromptObservation {
+  readonly hash: string;
+  readonly status: 'first' | 'stable' | 'changed';
+}
+
+/**
+ * Fingerprint a turn's system prompt against the previous turn's.
+ *
+ * The prefix is supposed to be byte-stable across turns — that is what lets a
+ * provider cache survive one — so `changed` is a claim about the agent, not
+ * about the request: a soul edit, a model switch, a skill or tool surface
+ * change. Anything else changing it is a cache-busting bug, and this is the
+ * measurement that catches it. Backends differ only in where they report the
+ * result, never in how it is derived.
+ */
+export function observeSystemPromptHash(
+  previous: string | null,
+  system: string,
+): SystemPromptObservation {
+  const hash = fnv1a64(system);
+  return { hash, status: previous === null ? 'first' : previous === hash ? 'stable' : 'changed' };
 }
 
 /** FNV-1a 64-bit text hash — the shared fingerprint behind the cache-stability

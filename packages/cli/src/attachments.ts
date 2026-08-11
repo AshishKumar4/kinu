@@ -13,7 +13,7 @@
 import { stat, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, extname, resolve } from 'node:path';
-import { MAX_INLINE_ATTACHMENT_BYTES, type PromptFile } from '@proteus/core';
+import type { PromptFile } from '@proteus/core';
 import { formatBytes } from './display.js';
 
 /** File types worth inlining as model-visible parts. Everything else is
@@ -101,19 +101,31 @@ async function statCandidate(token: string, cwd: string): Promise<{ path: string
   return null;
 }
 
+export interface PromptAttachmentOptions {
+  /** Per-message aggregate cap on raw inlined bytes. Every caller passes its
+   *  client's `inlineAttachmentLimitBytes`: the cap is a property of the
+   *  backend that will store and re-send the message, and the two backends
+   *  differ by 8×, so there is no honest default to fall back on. */
+  limitBytes: number;
+  cwd?: string;
+}
+
 /**
  * Resolve a prompt's path mentions into attachments. Both chat surfaces call
  * this in their submit path and hand `{ text, files }` to AgentClient.send.
  */
-export async function resolvePromptAttachments(text: string, cwd = process.cwd()): Promise<PromptAttachments> {
+export async function resolvePromptAttachments(
+  text: string,
+  { limitBytes, cwd = process.cwd() }: PromptAttachmentOptions,
+): Promise<PromptAttachments> {
   const files: PromptFile[] = [];
   const attached: ResolvedAttachment[] = [];
   const errors: string[] = [];
   const seen = new Set<string>();
   const rewrites: Array<{ index: number; raw: string }> = [];
   // The inline cap is a per-message AGGREGATE across all file parts (they
-  // persist together in one backend message row) — spend it as files inline.
-  let inlineBudget = MAX_INLINE_ATTACHMENT_BYTES;
+  // persist together in one backend message) — spend it as files inline.
+  let inlineBudget = limitBytes;
 
   for (const token of extractPathTokens(text)) {
     const found = await statCandidate(token.path, cwd);
@@ -129,9 +141,9 @@ export async function resolvePromptAttachments(text: string, cwd = process.cwd()
       continue;
     }
     if (found.size > inlineBudget) {
-      const reason = found.size > MAX_INLINE_ATTACHMENT_BYTES
-        ? `${formatBytes(found.size)}; max ${formatBytes(MAX_INLINE_ATTACHMENT_BYTES)} per message`
-        : `the ${formatBytes(MAX_INLINE_ATTACHMENT_BYTES)} per-message budget is already used`;
+      const reason = found.size > limitBytes
+        ? `${formatBytes(found.size)}; max ${formatBytes(limitBytes)} per message`
+        : `the ${formatBytes(limitBytes)} per-message budget is already used`;
       errors.push(`${filename} is too large to attach (${reason}) — left as a path reference.`);
       attached.push({ path: found.path, filename, mediaType: null, size: found.size });
       continue;

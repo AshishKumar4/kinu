@@ -1,4 +1,10 @@
-import type { SqlExec } from '@proteus/core';
+/**
+ * Per-trigger inbound rate limiting — a fixed one-minute window counted in
+ * `webhook_rate_windows`, shared by webhook deliveries (keyed by trigger id)
+ * and the inbound-email gate (one synthetic key for all senders).
+ */
+
+import type { SqlExec } from '../../types/primitives.js';
 
 const WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_PER_MIN = 60;

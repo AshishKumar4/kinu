@@ -5,13 +5,13 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
 import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG, type AgentViewSummary } from "@proteus/core";
+import type { TimelineSpan } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import type {
   ToolInfo,
   MemoryEntry,
   MCTSNode,
-  TimelineSpan,
   BackgroundJob,
   PendingConsent,
   Rpc,

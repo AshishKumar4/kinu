@@ -1,14 +1,19 @@
 /**
  * PeerAgent transport — always-async agent-to-agent messaging.
  *
+ * The one thing a host supplies is `deliver` — the hop that reaches another
+ * agent (cross-DO RPC on the cloud backend). Everything the outbox does around
+ * that hop is here: ordering, backoff, dead-lettering, dedupe, the ask waiter.
+ *
  * Sender side:
  *   `enqueueOutboundPeer(...)` writes a `peer_outbox` row; `PeerHub.dispatchOutbox()`
- *   delivers due rows via DO RPC in per-receiver order (ULID id order), with
- *   exponential-backoff retries and a dead-letter state for permanent refusals.
- *   The DO alarm re-drives pending rows, so delivery survives eviction.
+ *   delivers due rows through that hop in per-receiver order (ULID id order),
+ *   with exponential-backoff retries and a dead-letter state for permanent
+ *   refusals. The host's alarm re-drives pending rows, so delivery survives
+ *   eviction.
  *
  * Receiver side:
- *   `receivePeerMessage(...)` is invoked by the sender via DO RPC. The receiver
+ *   `receivePeerMessage(...)` is invoked by the sender's hop. The receiver
  *   writes a PeerAgent event into its own EventLog and acks; the admitted event
  *   drains into a programmatic turn (AgentOrchestrator.drainPendingEvents).
  *
@@ -16,8 +21,8 @@
  * receiver-side dedupe on `(sender_agent, sender_event_id)`.
  *
  * Cross-owner messaging requires the receiver to have granted the specific
- * sender access — the grant is enforced by the receiver's UserDO
- * (`hasPeerGrant`), never trusted from the sender's claim.
+ * sender access — the grant is enforced receiver-side (`hasGrant`, the owner's
+ * UserDO on the cloud backend), never trusted from the sender's claim.
  *
  * Send-and-await (`ask`): the sender enqueues with `reply_expected`, the
  * receiver opens a `peer_back` reply channel keyed on the admitted event, and
@@ -28,13 +33,16 @@
  * wakes the sender's next turn instead.
  */
 
+import type { EventLog } from '../hub/log.js';
+import type { ReplyChannelStore } from '../hub/reply-channel.js';
+import type { PeerAgentPayload, ReplyChannelRow } from '../hub/types.js';
+import { spillEventContent } from '../hub/content-spill.js';
+import { ulid } from '../hub/ulid.js';
 import {
-  PEER_REPLY_TOPIC, spillEventContent, ulid,
-  type EventLog, type PeerAgentPayload,
+  PEER_REPLY_TOPIC,
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
-  type ReplyChannelRow, type ReplyChannelStore, type VFS,
-  type SqlExec,
-} from '@proteus/core';
+} from '../../tools/agents-tool.js';
+import type { SqlExec, VFS } from '../../types/primitives.js';
 
 // ── Wire shapes ──────────────────────────────────────────────────
 
@@ -59,7 +67,7 @@ export interface ReceiveResult {
 export interface SenderDeps {
   /** Sender-side outbox row writer (e.g., direct SQL on the sender's DO). */
   enqueueOutboxRow(row: OutboxRow): void;
-  /** Ask the sender DO to wake up to dispatch the new outbox row. */
+  /** Ask the sender's host to wake up and dispatch the new outbox row. */
   scheduleDispatch(at: number): void;
 }
 
@@ -107,7 +115,7 @@ export interface ReceiverDeps {
   /** The receiver's own file plane — an oversize body is spilled here so the
    *  event brief can name where the rest of it lives. */
   vfs: VFS;
-  /** Whether the sender is the same owner as this receiver (UserDO lookup). */
+  /** Whether the sender is the same owner as this receiver. */
   isSameOwner(sender_user_id: string): Promise<boolean>;
   /** Whether the receiver has explicitly granted this sender access. */
   hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
@@ -115,7 +123,7 @@ export interface ReceiverDeps {
   openPeerBackChannel?(event_id: string, msg: PeerMessage): void;
 }
 
-/** Receiver API: accept a peer message via DO RPC. Returns admitted/dropped. */
+/** Receiver API: accept a peer message off the transport. Admitted/dropped. */
 export async function receivePeerMessage(
   deps: ReceiverDeps,
   msg: PeerMessage,
@@ -185,7 +193,7 @@ interface OutboxDbRow {
 }
 
 export interface PeerHubDeps {
-  /** The agent's own DO SQL (peer_outbox lives next to agent_log). */
+  /** The agent's own storage (peer_outbox lives next to agent_log). */
   sql: SqlExec;
   log: EventLog;
   replyChannels: ReplyChannelStore;
@@ -195,11 +203,12 @@ export interface PeerHubDeps {
   selfAgentName(): string;
   /** The owning user id. Throw when the agent is unclaimed. */
   selfUserId(): string;
-  /** DO RPC to the receiver agent's `receivePeerMessage`. */
+  /** The hop to the receiver agent's `receivePeerMessage` — the only part of
+   *  this transport a host owns (cross-DO RPC on the cloud backend). */
   deliver(receiver_agent_name: string, msg: PeerMessage): Promise<ReceiveResult>;
   isSameOwner(sender_user_id: string): Promise<boolean>;
   hasGrant(sender_agent_name: string, sender_user_id: string): Promise<boolean>;
-  /** Arm the DO alarm so pending outbox rows are re-driven after eviction. */
+  /** Arm the host's alarm so pending outbox rows are re-driven after eviction. */
   scheduleDispatch(at: number): void;
   /** A new external event was admitted — wake the agent loop (drain). */
   onAdmitted(): void;
@@ -212,8 +221,9 @@ export interface PeerHubDeps {
  */
 export class PeerHub {
   /** In-memory ask waiters keyed by outbox id — alive only while an ask()
-   *  awaits inside the current DO activation. A reply with no waiter (timeout
-   *  passed, or DO evicted) stays a pending event and wakes a normal turn. */
+   *  awaits inside the current activation. A reply with no waiter (timeout
+   *  passed, or the agent evicted) stays a pending event and wakes a normal
+   *  turn. */
   private readonly waiters = new Map<string, (envelope: { content: unknown }) => void>();
   private dispatching = false;
 
@@ -225,7 +235,7 @@ export class PeerHub {
 
   // ── Receiving ──────────────────────────────────────────────────
 
-  /** The `receivePeerMessage` @callable body. */
+  /** The receiving half, behind whatever RPC surface a host exposes. */
   async receive(msg: PeerMessage): Promise<ReceiveResult> {
     const now = this.now();
     const result = await receivePeerMessage({
@@ -464,7 +474,7 @@ export class PeerHub {
     }
   }
 
-  /** Soonest pending retry — folded into the DO alarm reschedule. */
+  /** Soonest pending retry — folded into the host's alarm reschedule. */
   nextRetryAt(): number | null {
     const rows = this.deps.sql.exec(
       `SELECT MIN(next_attempt_at) AS next FROM peer_outbox WHERE state = 'pending'`,

@@ -3,6 +3,7 @@ import { Database } from 'bun:sqlite';
 import type { WorkspaceInfo, AgentRuntime, SearchNode, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
 import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, BACKGROUND_POLICY, type GepaOptimizationResult } from '@proteus/core';
 import {
+  LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
   openWorkspaceCLI,
   resolveChatModel,
@@ -182,6 +183,7 @@ export class LocalAgentClient implements AgentClient {
   readonly consents = null;
   readonly localControls: LocalSessionControls;
   readonly checkpoints: FileCheckpointSurface;
+  readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly deps: LocalAgentClientDeps;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();

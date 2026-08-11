@@ -8,6 +8,8 @@
 
 import type { ModelMessage } from 'ai';
 import type { SerializedMessage } from '../heads/types.js';
+import type { SplitPhaseEvent } from '../heads/controller.js';
+import type { RunEventInput } from '../events/types.js';
 
 /** The parent-conversation cap handed to each spawned head — bounds head LLM
  *  context over long sessions. */
@@ -33,6 +35,45 @@ export function serializeContentForHeads(content: ModelMessage['content']): stri
         : part));
   }
   return JSON.stringify(content);
+}
+
+/**
+ * A split's lifecycle as one durable run-event row.
+ *
+ * Both backends fan the same phase event to two places — the live broadcast
+ * their frontends render the branch timeline from, and the run-event ledger
+ * that outlives the process. Which fields a row carries is the thing worth
+ * having once: the cost summary gained `headsWithFindings` for a reason, and
+ * a backend that transcribed the row itself simply would not have it.
+ */
+export function headPhaseRunEvent(event: SplitPhaseEvent): RunEventInput {
+  return event.kind === 'split'
+    ? { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale }
+    : {
+      type: 'head_merge',
+      rootId: event.rootId,
+      headCount: event.cost.headCount,
+      headsWithFindings: event.cost.headsWithFindings,
+      totalTokens: event.cost.totalTokens,
+      mergedNarrative: event.mergedNarrative,
+    };
+}
+
+/** Stored conversation rows as inherited context (the cf backend's source: it
+ *  digests durable message rows, having already decoded each row's text). */
+export function inheritedContextFromRows(
+  rows: ReadonlyArray<{ id: string; role: string; content: string; createdAt: number }>,
+  total: number,
+): SerializedMessage[] {
+  return [
+    ...inheritedContextOmissionNote(total, rows.length),
+    ...rows.map((r) => ({
+      id: r.id,
+      role: narrowInheritedRole(r.role),
+      content: r.content,
+      createdAt: r.createdAt,
+    })),
+  ];
 }
 
 /** The recent live conversation as inherited context (the CLI's source; the

@@ -369,6 +369,9 @@ export {
 } from './tools/agents-tool.js';
 // The same delegation dispatch, projected into the codemode sandbox.
 export { createAgentsCodemodeProvider } from './tools/agents-codemode.js';
+// `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
+// background jobs, compaction) over one host seam both backends implement.
+export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self.js';
 // Subordinate roster, identity, admission and the orchestration policy over
 // them — platform-neutral, so a backend supplies only SubordinateRuntime.
 export {
@@ -479,9 +482,11 @@ export {
 } from './prompting/attachment-sanitizer.js';
 export {
   DynamicContextLedger,
+  agentDynamicContext,
   executorAvailabilityLabel,
   fnv1a64,
   forkDelegates,
+  observeSystemPromptHash,
   fnv1a64Bytes,
   renderDynamicContextBlock,
   renderTurnLocalContext,
@@ -538,6 +543,11 @@ export { converge } from './mcts/convergence.js';
 export { pruneLowValueBranches } from './mcts/pruning.js';
 // Sibling diversity at expansion — backends render this into the explore prompt.
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity.js';
+// The one question a branch is asked, whatever substrate runs it.
+export {
+  explorePrompt, reflectionPrompt, extractCodeBlock,
+  type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
+} from './mcts/explore-prompt.js';
 // Whole-message branch context inheritance (shared by every explore() backend).
 export {
   formatInheritedContext, DEFAULT_INHERITED_MESSAGES,
@@ -563,7 +573,7 @@ export {
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId,
-  startBranchHead, settleBranchIntoTakes, settlePendingBranch,
+  startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type PendingBranch,
 } from './steer-branch.js';
@@ -788,6 +798,11 @@ export {
 // primitives around it. Spec: docs/ARCHITECTURE.md — "Events and ingress".
 export * from './events/hub/index.js';
 
+// Ingress — the gated paths external signals take into that ledger: webhook
+// auth + rate limiting, timer registration and firing, the inbound-email
+// trust gate, the peer outbox, subordinate reports.
+export * from './events/ingress/index.js';
+
 // ExplorationStrategy — single seam for "search candidate continuations,
 // score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.
 export * from './strategy/index.js';
@@ -816,8 +831,8 @@ export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredent
 
 // Wire constants shared by the cf-backend Worker and the CLI.
 export {
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   DEVICE_CONNECT_PATH,
-  MAX_INLINE_ATTACHMENT_BYTES,
   ORCHESTRATOR_AGENT_SLUG,
   SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire.js';
@@ -840,6 +855,7 @@ export {
 
 // Utils
 export { nanoid } from './utils/nanoid.js';
+export { hmacSha256Hex, timingSafeEqual } from './utils/crypto.js';
 // Confidence intervals — every score this system reports travels with one.
 export {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
@@ -932,8 +948,9 @@ export {
 } from './orchestrator/turn-surface.js';
 export { ModelCatalogSession } from './orchestrator/model-catalog.js';
 export {
-  serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
+  serializeContentForHeads, narrowInheritedRole, headPhaseRunEvent,
+  inheritedContextFromHistory, inheritedContextFromRows,
+  INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support.js';
 export { recordGroundedHeadsTake } from './mcts/takes.js';
 
@@ -1019,3 +1036,51 @@ export type {
   CapabilityStatus, ConformanceFinding, ConformanceFindingKind, ConformanceManifest,
   ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
 } from './conformance/index.js';
+
+// ── Read models ──
+// The folds an operator surface asks for: what the workspace is, what a run
+// did, what changed on disk, what work is detached, what the knobs are set to.
+// Every one reads storage the agent already owns, so none of them is
+// backend-shaped — a backend supplies its transport and nothing else.
+export {
+  classifyEvolutionType, getRunTimeline, runEventToSpan, safeJsonParse, toolKindFor,
+} from './read-models/timeline.js';
+export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline.js';
+export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
+export type { RunListEntry, RunSummary } from './read-models/runs.js';
+export {
+  captureWorkspaceBaseline, getExecutorDiff, getWorkspaceDiff, readWorkspaceFiles,
+  resetWorkspaceBaseline,
+} from './read-models/workspace-diff.js';
+export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff.js';
+export {
+  computeWorkspaceDiff, diffLines, parseGitDiff, MAX_LINES_PER_FILE,
+} from './vfs/diff.js';
+export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff.js';
+export {
+  getExecutorFiles, readExecutorFile, sortDirEntries, toCompositePath, writeExecutorFileOp,
+} from './read-models/files.js';
+export type { DirEntry, ExecutorWriteDeps, ExecutorWriteResult } from './read-models/files.js';
+export { getAgentStatus, getChatHistory, getToolList, uiMessageText } from './read-models/status.js';
+export type {
+  AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
+} from './read-models/status.js';
+export {
+  cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
+  jobResult, listBackgroundJobs, retryBackgroundJob,
+} from './read-models/background-jobs.js';
+export type {
+  BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, RetryOutcome,
+} from './read-models/background-jobs.js';
+export {
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
+  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+} from './read-models/config-plane.js';
+export type {
+  EvolutionConfigView, MctsConfigView, SetModelDeps,
+} from './read-models/config-plane.js';
+export {
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+} from './read-models/evolution-views.js';
+export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views.js';

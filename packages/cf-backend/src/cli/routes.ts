@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import { ORCHESTRATOR_AGENT_SLUG, timingSafeEqual } from '@proteus/core';
 import type { AuthIdentity } from '../auth/session.js';
 import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
@@ -6,7 +6,7 @@ import {
   CLI_SOURCE_TARBALL_PATH, CLI_SOURCE_TARBALL_SHA256_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
 } from '../lib/deployed-assets.js';
 import { err, escapeHtml, json, safeJson } from '../lib/http.js';
-import { randomToken, timingSafeEqual } from '../lib/crypto.js';
+import { randomToken } from '../lib/crypto.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,

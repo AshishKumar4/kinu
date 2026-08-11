@@ -13,7 +13,7 @@ import {
   GraduationCapIcon, LightningIcon, DatabaseIcon, ClockIcon, ProhibitIcon,
   ScalesIcon, GitMergeIcon, XIcon,
 } from "@phosphor-icons/react";
-import type { TimelineSpan, TimelineKind } from "@/lib/protocol";
+import type { TimelineKind, TimelineSpan } from "@proteus/core";
 
 type KindMeta = { icon: React.ComponentType<{ size?: number; weight?: "regular" | "bold" | "fill" }>; tone: string };
 

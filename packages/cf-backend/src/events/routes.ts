@@ -24,7 +24,7 @@
 import { getAgentByName } from 'agents';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { readWebhookBodyText } from './body.js';
-import { normalizeWebhookRateLimitPerMin } from './webhook-rate-limit.js';
+import { normalizeWebhookRateLimitPerMin } from '@proteus/core';
 import { err, json, safeJson } from '../lib/http.js';
 import { isFreshAuthTime } from '../auth/session.js';
 

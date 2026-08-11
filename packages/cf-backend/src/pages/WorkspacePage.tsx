@@ -12,7 +12,7 @@ import {
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
-import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
 import type { AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
@@ -35,7 +35,8 @@ import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
-import type { TimelineSpan, TimelineKind, PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
+import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
+import type { TimelineKind, TimelineSpan } from "@proteus/core";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -941,9 +942,9 @@ export default function WorkspacePage() {
 
   const addFiles = useCallback(async (files: FileList | null | undefined) => {
     if (!files || files.length === 0) return;
-    // MAX_INLINE_ATTACHMENT_BYTES is a per-message AGGREGATE: all pending
+    // CLOUD_MAX_INLINE_ATTACHMENT_BYTES is a per-message AGGREGATE: all pending
     // data-URL parts persist inside one DO message row (see core/cloud-wire).
-    let budget = MAX_INLINE_ATTACHMENT_BYTES
+    let budget = CLOUD_MAX_INLINE_ATTACHMENT_BYTES
       - pendingAttachments.reduce((sum, p) => sum + dataUrlRawBytes(p.url), 0);
     const accepted: File[] = [];
     const rejected: string[] = [];
@@ -952,7 +953,7 @@ export default function WorkspacePage() {
       else rejected.push(f.name);
     }
     setAttachError(rejected.length > 0
-      ? `Chat attachments are capped at ${MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
+      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
       : null);
     if (accepted.length === 0) return;
     const dt = new DataTransfer();

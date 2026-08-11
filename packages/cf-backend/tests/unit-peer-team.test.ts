@@ -9,12 +9,11 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   EventLog, ReplyChannelStore, initEventsHubTables, buildDrainBatch, nextAlarmTime,
-  eventContentPath, renderForLLM,
+  eventContentPath, renderForLLM, PeerHub,
   type ReplyDispatcher, type ReplyChannelKind, type PeerAgentPayload,
-  type SqlExec,
+  type PeerMessage, type ReceiveResult, type SqlExec,
 } from '@proteus/core';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { PeerHub, type PeerMessage, type ReceiveResult } from '../src/events/ingress/peer.js';
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');

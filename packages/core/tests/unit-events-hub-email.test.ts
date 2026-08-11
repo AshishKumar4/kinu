@@ -10,7 +10,11 @@ import {
   type IngressDescriptor, type EmailPayload, type ProteusEvent,
   type ReplyDispatcher, type AlarmScheduler,
 } from '../src/events/hub/index.ts';
-import type { SqlExec } from '../src/index.js';
+import {
+  EmailInbox, EMAIL_INBOUND_RATE_PER_MIN, initWebhookRateLimitTables, setEmailAllowlist,
+  type SqlExec,
+} from '../src/index.js';
+import { createMemoryVfs } from '@proteus/test-utils';
 
 function makeSql(): SqlExec {
   const db = new Database(':memory:');
@@ -264,5 +268,86 @@ describe('CHECK-widening rebuild for live DOs', () => {
     initEventsHubTables(sql);
     expect(store.get(preId)?.kind).toBe('peer_back');
     expect(reg.get(emailTrigger)?.kind).toBe('email_route');
+  });
+});
+
+/**
+ * The inbox itself — the gate, the shared rate window, and the one thing an
+ * agent can otherwise never learn: that its inbox is refusing mail right now.
+ */
+describe('the agent inbox', () => {
+  const NOW = 1_700_000_000_000;
+
+  function inbox(ownerEmail: string | null = 'owner@example.com') {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    initWebhookRateLimitTables(sql);
+    const log = new EventLog(sql);
+    const triggers = new TriggerRegistry(sql, { scheduleAt: () => {}, currentAlarm: () => null });
+    const { vfs } = createMemoryVfs();
+    let drains = 0;
+    return {
+      log, triggers,
+      drains: () => drains,
+      inbox: new EmailInbox({
+        log, triggers, sql,
+        replies: new ReplyChannelStore(sql),
+        vfs: () => vfs,
+        ownerEmail: async () => ownerEmail,
+        onAdmitted: () => { drains += 1; },
+      }),
+    };
+  }
+
+  const mail = (from: string, n = 1) => ({
+    from, to: 'scout@agents.example.com', subject: `hello ${n}`, body_text: 'ping',
+    message_id: `<m-${n}@example.com>`, in_reply_to: null, references: null,
+    attachments: [], now: NOW,
+  });
+
+  test('the owner is admitted, a stranger is not, and an allowlisted sender is', async () => {
+    const scene = inbox();
+
+    expect(await scene.inbox.accept(mail('Owner <OWNER@example.com>')))
+      .toMatchObject({ admitted: true, duplicate: false });
+    expect(await scene.inbox.accept(mail('stranger@example.com', 2)))
+      .toEqual({ admitted: false, reason: 'sender not authorized for this agent' });
+
+    setEmailAllowlist(scene.triggers, ['Ally <ally@example.com>'], NOW);
+    expect(await scene.inbox.accept(mail('ally@example.com', 3))).toMatchObject({ admitted: true });
+
+    expect(scene.log.pending({ variant: 'email' })).toHaveLength(2);
+    expect(scene.drains()).toBe(2);
+  });
+
+  test('with no owner email resolvable, nothing is admitted', async () => {
+    const scene = inbox(null);
+    expect(await scene.inbox.accept(mail('owner@example.com')))
+      .toEqual({ admitted: false, reason: 'agent owner email unknown' });
+    expect(scene.log.pending({})).toEqual([]);
+  });
+
+  test('past the rate window the agent is told once, and told it is deaf until it resets', async () => {
+    const scene = inbox();
+    for (let n = 0; n <= EMAIL_INBOUND_RATE_PER_MIN; n += 1) {
+      await scene.inbox.accept(mail('owner@example.com', n));
+    }
+
+    // The last one was refused…
+    expect(await scene.inbox.accept(mail('owner@example.com', 999)))
+      .toEqual({ admitted: false, reason: 'inbound email rate limit exceeded' });
+    // …and the agent learns of it exactly once per window, not once per message.
+    const notices = scene.log.pending({ variant: 'internal' });
+    expect(notices).toHaveLength(1);
+    expect(notices[0].payload).toMatchObject({ kind: 'email_inbound_rate_limited' });
+
+    // The live line stays up while the window is still refusing…
+    expect(scene.inbox.dropNotice(NOW)?.reason).toContain('you have NOT seen your inbox');
+    // …and expires with it, so no turn is told about a deafness that has ended.
+    expect(scene.inbox.dropNotice(NOW + 60_000)).toBeNull();
+  });
+
+  test('before anything is dropped there is no notice at all', () => {
+    expect(inbox().inbox.dropNotice(NOW)).toBeNull();
   });
 });

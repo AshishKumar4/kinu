@@ -7,12 +7,11 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator,
+  AgentOrchestrator, acceptInboundEmail,
   type BackendHost, type EvolutionEngine,
   type SqlExec,
 } from '@proteus/core';
 import { createMemoryVfs } from '@proteus/test-utils';
-import { acceptInboundEmail } from '../src/events/ingress/email.js';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,

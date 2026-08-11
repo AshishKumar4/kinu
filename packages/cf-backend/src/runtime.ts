@@ -28,7 +28,6 @@ import {
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
-  EVIDENCE_BUDGETS, evidenceWindow,
   createAgentConfigStore, selectFastModel,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
@@ -49,7 +48,7 @@ import { createAgentProviderRegistry, type UserCredentialSource } from "./provid
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
-import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
+import { agentAffinityKey, explorePrompt, extractCodeBlock, formatInheritedContext, reflectionPrompt } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,
@@ -717,25 +716,32 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
   const getModel = () => reg.resolveModel(spec);
 
   return {
-    explore: async (history, _tools, siblings = []) => {
-      // Match the Facet's explore() exactly — same context formatter and token
-      // budget — so the fallback path produces branches of equal fidelity, not
-      // a slice(-800) + 512-token stub that can't ground code (WP-A7).
-      const context = formatInheritedContext(history);
+    explore: async (history, craftedTools, siblings = []) => {
+      // The SAME question the facet asks (core explorePrompt), so a fallback
+      // branch is comparable with a facet one — they are scored against each
+      // other. This path once asked a materially weaker version of it while
+      // claiming to match, which is exactly what the shared prompt prevents.
+      const { system, user } = explorePrompt({
+        context: formatInheritedContext(history),
+        craftedTools,
+        siblings,
+      });
       const result = await generateText({
         model: getModel(),
-        system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
-        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
+        system,
+        messages: [{ role: "user" as const, content: user }],
         ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
-      const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
-      return { text, codeUsed: codeMatch?.[1]?.trim() ?? null };
+      return { text, codeUsed: extractCodeBlock(text) };
     },
+    // No trace table on this path — the reflection is about the task alone,
+    // and the shared prompt drops the attempt heading rather than showing an
+    // empty one.
     generateReflection: async (task) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: `What went wrong? ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\nOne sentence.` }],
+        messages: [{ role: "user" as const, content: reflectionPrompt(task, '') }],
         ...effortFor('reflection'),
       });
       return result.text.trim();

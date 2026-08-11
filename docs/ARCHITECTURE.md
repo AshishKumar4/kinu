@@ -292,11 +292,15 @@ Five ingress paths publish into the log:
 
 | Source | Path | Wakes via |
 |---|---|---|
-| Email | `events/ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
-| Webhook | `events/routes.ts` → `acceptWebhookDelivery` | per-trigger HMAC / Bearer / mTLS |
-| Peer | `events/ingress/peer.ts` (`peer_outbox` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
-| Subordinate | `subordinate-support.ts` `admitSubordinateTask` / `admitSubordinateReport` | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
-| Timer | `orchestrator.ts` `alarm()` + `core/src/events/hub/triggers.ts` | `ingress: 'timer_alarm'` (cron / one-shot) |
+| Email | `core/src/events/ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
+| Webhook | `core/src/events/ingress/webhook.ts` (+ `cf` `events/routes.ts`) | per-trigger HMAC / Bearer / mTLS |
+| Peer | `core/src/events/ingress/peer.ts` (`peer_outbox` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
+| Subordinate | `core/src/events/ingress/subordinate.ts` (+ `subordinates/support.ts` admission) | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
+| Timer | `core/src/events/ingress/triggers.ts`, driven by each backend's clock | `ingress: 'timer_alarm'` (cron / one-shot) |
+
+The gates are core's — auth, replay window, rate limit, trust, admission — and
+each backend supplies only the transport in front of one: the Worker's HTTP and
+`email()` routes and the DO alarm on cf, the process timer locally.
 
 The full `IngressKind` union in `core/src/events/hub/types.ts` is wider than
 this — it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,

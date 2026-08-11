@@ -66,14 +66,6 @@ export interface MemoryEntry {
 	updatedAt: string;
 }
 
-/** One directory entry in the per-executor file manager (getExecutorFiles).
- *  Normalized across executors (each provider's readdir has its own format). */
-export interface DirEntry {
-	name: string;
-	type: "file" | "dir";
-	size?: number;
-}
-
 /** One agent in the workspace roster (getWorkspaceAgents). The orchestrator
  *  is the workspace's default agent; durable subordinate facets follow it. */
 export interface WorkspaceAgent {
@@ -112,30 +104,6 @@ export interface SubordinateActivityEvent {
 /** Typed agent RPC. The single boundary cast (unknown → T) lives in the hook's
  *  wrapper, so call sites read `rpc<Foo>("getFoo", [])` cast-free. */
 export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
-
-/** One typed span on the unified Run Timeline spine (getRunTimeline). The
- *  server merges run_events + evolution_events + search_nodes into this single
- *  ordered shape so the client never re-merges three sources (no drift). */
-export type TimelineKind =
-	| "llm-turn" | "tool-call" | "runtime-exec" | "mcts" | "scaffold" | "shadow-eval"
-	| "craft" | "reflection" | "head-split" | "head-merge" | "gepa" | "skills"
-	| "curriculum" | "trigger" | "event-ingress" | "background" | "error" | "abort" | "recovery" | "other";
-
-export interface TimelineSpan {
-	ts: number;
-	kind: TimelineKind;
-	label: string;
-	detail?: string;
-	/** Latency in ms when known (tool calls, activity timings). */
-	elapsedMs?: number;
-	/** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
-	data?: unknown;
-	source: "run" | "evolution" | "mcts" | "background";
-	/** Id for driving the work surface (node id, run-event id, root id…). */
-	refId?: string;
-	/** Original backend event type, for finer UI affordances. */
-	rawType?: string;
-}
 
 /** A background task (auto-detached >30s tool call). Mirrors core BackgroundJob;
  *  surfaced by listBackgroundJobs for the Tasks surface + chat event cards. */

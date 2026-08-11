@@ -20,6 +20,7 @@ import {
   normalizeReportContent,
   parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
+  receiveSubordinateEvent,
   subordinateRelaysTurnEnd,
   type SerializedMessage,
   type SqlExec,
@@ -733,5 +734,86 @@ describe('oversize subordinate reports stay reachable', () => {
     expect(files.size).toBe(0);
     expect(renderForLLM(event).brief)
       .toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
+  });
+});
+
+describe('the parent ingress, in the order it runs', () => {
+  /** One parent, with an open assignment out to `researcher`. */
+  function parent() {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const roster = new SubordinateRosterStore(makeSql());
+    roster.ensureSchema();
+    roster.create(initialRosterEntry);
+    const { vfs, files } = createMemoryVfs();
+    const seen: string[] = [];
+    const announced: Array<{ id: string; content: string }> = [];
+    return {
+      log, roster, files, seen, announced,
+      deps: {
+        log,
+        roster,
+        vfs,
+        transaction: <T,>(body: () => T): T => { seen.push('transaction'); return body(); },
+        announce: (report: { id: string; content: string }) => {
+          seen.push('announce');
+          announced.push({ id: report.id, content: report.content });
+        },
+        onAdmitted: () => { seen.push('drain'); },
+      },
+    };
+  }
+
+  test('spills before opening the storage transaction, so the async write is never inside it', async () => {
+    const scene = parent();
+    const content = 'seam found in the auth module; '.repeat(60).trim();
+    const spilled = eventContentPath(content);
+    // The VFS write is async and the transaction body is not: observing the
+    // file already on the plane when the transaction opens is what proves the
+    // ordering, not the shape of the source.
+    const transaction = scene.deps.transaction;
+    scene.deps.transaction = <T,>(body: () => T): T => {
+      expect(scene.files.has(spilled)).toBe(true);
+      return transaction(body);
+    };
+
+    const result = await receiveSubordinateEvent(scene.deps, {
+      fromSubordinate: 'researcher', status: 'completed', content: `${content}\n`,
+      origin: 'report_tool',
+    }, 11);
+
+    expect(result.admitted).toBe(true);
+    // Normalized before spilling: the cited file is the content the brief
+    // truncates, never the untrimmed wire text.
+    expect(await scene.files.get(spilled)).toBe(content);
+    const event = scene.log.pending({ variant: 'subordinate_report' })[0];
+    expect((event.payload as SubordinateReportPayload).content_path).toBe(spilled);
+    // …and the roster write shares the transaction the admit opened.
+    expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
+    expect(scene.roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
+  });
+
+  test('drops what the parent is not waiting on before the spill, leaving no file behind', async () => {
+    const scene = parent();
+    scene.roster.applyReport('researcher', 'completed');   // no open assignment left
+
+    const result = await receiveSubordinateEvent(scene.deps, {
+      fromSubordinate: 'researcher', status: 'progress', content: 'x'.repeat(4000),
+      origin: 'turn_end',
+    }, 12);
+
+    expect(result).toEqual({ id: '', admitted: false });
+    expect(scene.files.size).toBe(0);
+    expect(scene.seen).toEqual([]);
+    expect(scene.log.pending({ variant: 'subordinate_report' })).toEqual([]);
+  });
+
+  test('a report from a subordinate this parent does not have is refused, not admitted', async () => {
+    const scene = parent();
+    await expect(receiveSubordinateEvent(scene.deps, {
+      fromSubordinate: 'ghost', status: 'progress', content: 'hello', origin: 'report_tool',
+    }, 13)).rejects.toThrow('unknown subordinate "ghost"');
+    expect(scene.files.size).toBe(0);
   });
 });

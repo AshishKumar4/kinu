@@ -36,17 +36,22 @@ import {
   BackgroundJobStore, BackgroundJobRunner, JobNotResumable,
   wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
-  EventLog,
+  EventLog, ReplyChannelStore,
   RunEventRecorder,
-  TriggerRegistry, nextCronFire,
+  TriggerRegistry,
+  // Ingress — core owns the gates; this session owns the local clock and the
+  // process boundary in front of them.
+  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
+  initWebhookRateLimitTables,
+  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
   EvolutionEngine,
   createAgentConfigStore,
   createFactsStore, readMemoryTail,
-  proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
   HeadController, HeadJournal,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
-  recordGroundedHeadsTake, inheritedContextFromHistory,
+  recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
   buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
@@ -60,7 +65,8 @@ import {
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
   createAgentsCodemodeProvider, type CodemodeProvider,
   MissionGovernor,
-  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
+  DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
+  type DynamicContext,
   type MediaModality,
   createReleaseStore, initReleaseTables, releaseSqlFromExec, initWorkspaceSchema,
   // The scaffold evolution control plane — core owns the drivers; this session
@@ -70,27 +76,35 @@ import {
   type GepaOptimizationResult, type GepaRunSummary, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldVersionView, type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
-  buildChangelog, countUnseenChangelog, revertChangelogEntryById,
-  type ChangelogEntry, type ChangelogRevertResult,
-  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet, recordTakePick,
-  buildTakeContinuationPrompt, getCurrentScaffoldVersion,
+  revertChangelogEntryById, type ChangelogRevertResult,
+  claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet,
+  getCurrentScaffoldVersion,
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
   SCAFFOLD_TURN_TIMEOUT_MS,
   createStructuredJudge,
   type AlternateTakeSet, type TakePickOutcome,
-  initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
+  initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type AlarmScheduler, type TriggerRow, type TrustLevel, type BackgroundJob,
-  isReasoningEffort, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  type AlarmScheduler, type BackgroundJob, type SqlExec,
+  type TimerTrigger, type TimerTriggerOpts, type TriggerView,
+  type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
+  reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
   type ReasoningEffort, type CacheRetention,
+  createAgentSelfProvider,
+  // ── Read models: the same implementations the cloud backend's RPCs call ──
+  cancelBackgroundJob, jobResult, listBackgroundJobs,
+  getAlwaysActiveSkills, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
+  setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  type EvolutionChangelogView,
+  getRunEvents, listRuns, type RunListEntry,
 } from '@proteus/core';
 import { makeSqlExec } from './runtime.js';
 import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
-import { createLocalAgentSelfProvider } from './agent-self.js';
 import { createCLIHeadRuntime } from './head-runtime.js';
 import { detectOrphanedFibers } from './fiber.js';
 import { connectMcpServers, type McpServerConfig } from './mcp.js';
@@ -142,6 +156,25 @@ function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
  *  its abort signal and its extension host. */
 type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
 
+/**
+ * Per-message AGGREGATE cap on raw attachment bytes inlined into a chat message
+ * as data-URL file parts, for agents running on THIS backend.
+ *
+ * The cloud backend's cap (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) is a
+ * Durable Object row limit, and a local session has no such limit: messages go
+ * into bun:sqlite, which stores a blob far larger than any attachment worth
+ * inlining. What does bind here is the provider request — an inlined part is
+ * base64 (4/3 × raw) inside a JSON body that is re-sent on EVERY later turn of
+ * the conversation, since the attachment stays in the transcript. So the number
+ * is chosen against request size and repeat cost, not storage: 8 MiB raw ≈ 11 MB
+ * on the wire, comfortably inside the request-body limits of the providers the
+ * local backend can reach, and eight times what a cloud agent accepts.
+ *
+ * Anything larger stays a path reference, which locally is the better answer
+ * anyway: the agent's fs tools read the real file, at full fidelity, on demand.
+ */
+export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
 export interface LocalSessionDb {
   prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
@@ -178,31 +211,6 @@ export interface LocalPublishEventInput {
 export interface LocalPublishEventResult {
   event_id: string;
   admitted: boolean;
-}
-
-export interface LocalTimerTriggerOpts {
-  cron?: string;
-  atMs?: number;
-  label?: string;
-  payload?: Record<string, unknown>;
-  trust?: 'authenticated' | 'owner';
-  /** The mission budget every turn this schedule wakes spends against. */
-  missionLabel?: string;
-}
-
-export interface LocalTriggerView {
-  id: string;
-  kind: string;
-  spec: Record<string, unknown>;
-  creator_trust: TrustLevel;
-  state: TriggerRow['state'];
-  created_at: number;
-  paused_at: number | null;
-  revoked_at: number | null;
-  rate_limit_per_min: number;
-  next_fire_at: number | null;
-  last_fire_at: number | null;
-  fire_count: number;
 }
 
 export interface LocalAgentSessionOpts {
@@ -286,6 +294,14 @@ export class LocalAgentSession implements BackendHost {
   /** The run the in-flight turn belongs to; null between turns. */
   private currentRunId: string | null = null;
   private readonly triggerRegistry: TriggerRegistry;
+  /** Durable reply sinks for the events this session admits — the same table
+   *  and TTLs the cloud backend writes, with no dispatcher in front of them:
+   *  a local session has no socket, mail or peer transport to answer over. */
+  private readonly replyChannels: ReplyChannelStore;
+  /** Where this workspace's webhook secrets live. */
+  private readonly webhookSecrets: WebhookSecretStore;
+  /** The positional-binding handle the hub stores share (bun:sqlite adapter). */
+  private readonly hubSql: SqlExec;
   private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
@@ -461,6 +477,12 @@ export class LocalAgentSession implements BackendHost {
       currentAlarm: () => this.scheduledAlarmAt,
     };
     this.triggerRegistry = new TriggerRegistry(hubSql, alarmScheduler);
+    this.replyChannels = new ReplyChannelStore(hubSql);
+    this.hubSql = hubSql;
+    this.webhookSecrets = createWebhookSecretStore(hubSql);
+    // Webhook + inbound-email deliveries count against a per-minute window
+    // (core events/ingress/rate-limit.ts), which needs its table at boot.
+    initWebhookRateLimitTables(hubSql);
 
     // The durable per-run event log (run_events) — the same recorder, table and
     // RunEvent union the cloud backend records, over local SQLite.
@@ -532,8 +554,8 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** Skills pinned always-active for this agent (the `/always` command). */
-  getAlwaysActiveSkills(): string[] { return this.config.getAlwaysActiveSkills(); }
-  setAlwaysActiveSkills(names: ReadonlyArray<string>): void { this.config.setAlwaysActiveSkills(names); }
+  getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
+  setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
   /** Shadow-git file checkpoints (newest first) for /undo. Empty when git is
    *  unavailable — checkpointStatus() carries the honest reason. */
@@ -560,14 +582,11 @@ export class LocalAgentSession implements BackendHost {
   }
 
   getShellApprovalMode(): { mode: ShellApprovalMode } {
-    return { mode: this.config.getShellApprovalMode() };
+    return getShellApprovalMode(this.config);
   }
 
   setShellApprovalMode(mode: ShellApprovalMode): { ok: true; mode: ShellApprovalMode } {
-    this.config.setShellApprovalMode(mode);
-    this.invalidateModelState();
-    this.ensureModelState();
-    return { ok: true, mode };
+    return setShellApprovalMode({ config: this.config, onChanged: () => this.rebuildToolSurface() }, mode);
   }
 
   /** Install the interactive approval channel for gated shell commands, or
@@ -581,7 +600,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Stored model spec, or null when unset (parity with DO getStoredModelSpec). */
   getStoredModelSpec(): { spec: string | null } {
-    return { spec: this.config.getModel() };
+    return getStoredModelSpec(this.config);
   }
 
   /** Effective normalized model spec used for new turns. */
@@ -592,21 +611,26 @@ export class LocalAgentSession implements BackendHost {
   /** Validate + store a new model spec. Effective on the next turn and for new
    *  think/head runs, matching the DO backend's setModel behavior. */
   setModel(spec: string): { ok: true; spec: string } {
-    const normalized = this.normalizeModelSpec(spec);
-    this.config.setModel(normalized);
-    this.invalidateModelState();
-    this.ensureModelState();
-    return { ok: true, spec: normalized };
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.normalizeModelSpec(s),
+      onChanged: () => this.rebuildToolSurface(),
+    }, spec);
   }
 
   getReasoningEffort(): { effort: ReasoningEffort | null } {
-    return { effort: this.config.getReasoningEffort() };
+    return getReasoningEffort(this.config);
   }
 
   setReasoningEffort(effort: unknown): { ok: true; effort: ReasoningEffort } {
-    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
-    this.config.setReasoningEffort(effort);
-    return { ok: true, effort };
+    return setReasoningEffort(this.config, effort);
+  }
+
+  /** Drop the model-bound state and rebuild it now, so a config change is
+   *  visible to the very next turn rather than at the next resolve. */
+  private rebuildToolSurface(): void {
+    this.invalidateModelState();
+    this.ensureModelState();
   }
 
   listModelProviders() {
@@ -638,82 +662,80 @@ export class LocalAgentSession implements BackendHost {
     return this.eventLog.query(opts);
   }
 
-  listTriggers(): { triggers: LocalTriggerView[] } {
-    return { triggers: this.triggerRegistry.list().map(triggerToView) };
+  listTriggers(): { triggers: TriggerView[] } {
+    return listTriggers(this.triggerRegistry);
   }
 
   cancelTrigger(trigger_id: string): { ok: true; changed: boolean } {
-    const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
+    const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now());
     this.rearmLocalAlarm();
-    return { ok: true, changed };
+    return result;
   }
 
-  createTimerTrigger(opts: LocalTimerTriggerOpts): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
-    const now = Date.now();
-    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
-    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
-    if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
-    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
-    const id = this.triggerRegistry.register({
-      kind,
-      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
-      creator_trust: opts.trust ?? 'authenticated',
-      next_fire_at: nextFireAt ?? undefined,
-    }, now);
-    return { id, kind, nextFireAt };
+  createTimerTrigger(opts: TimerTriggerOpts): TimerTrigger {
+    return createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
+  /** The local clock's half of timer ingress: fire what is due, then re-arm
+   *  the process timer that will call this again. */
   async fireDueTriggers(now = Date.now()): Promise<{ fired: number; nextAlarmAt: number | null }> {
     if (this.ended) return { fired: 0, nextAlarmAt: null };
     if (this.scheduledAlarmAt !== null && this.scheduledAlarmAt <= now) this.clearLocalAlarm();
-    const due = this.triggerRegistry.due(now);
-    let fired = 0;
-    for (const trigger of due) {
-      if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
-      fired += 1;
-      const spec = trigger.spec as { label?: string; payload?: unknown; cron?: string; mission_label?: string };
-      const scheduled_fire_at = trigger.next_fire_at ?? now;
-
-      this.eventLog.publish({
-        descriptor: {
-          ingress: 'timer_alarm',
-          variant: 'timer',
-          payload: {
-            trigger_id: trigger.id,
-            scheduled_fire_at,
-            label: spec.label,
-            user_payload: spec.payload,
-            mission_label: spec.mission_label,
-          },
-          trigger_creator_trust: trigger.creator_trust,
-        },
-        now,
-      });
-
-      if (trigger.kind === 'timer_cron') {
-        const next = spec.cron ? nextCronFire(spec.cron, now) : null;
-        this.triggerRegistry.markFired(trigger.id, now, next);
-      } else {
-        this.triggerRegistry.markFired(trigger.id, now, null);
-        this.triggerRegistry.revoke(trigger.id, now);
-      }
-    }
-
+    const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
     if (fired > 0) this.orch.scheduleDrain();
     this.rearmLocalAlarm();
     return { fired, nextAlarmAt: this.scheduledAlarmAt };
   }
 
+  /**
+   * Register a webhook trigger on this local workspace.
+   *
+   * A local session has no inbound HTTP transport, so it mints no URL: what
+   * this creates is the trigger and its secret, and {@link acceptWebhookDelivery}
+   * is the door a transport in front of it delivers through.
+   */
+  createDurableWebhook(opts: {
+    label: string;
+    auth_mode: 'hmac' | 'bearer' | 'mtls';
+    secret?: string;
+    accepted_content_type?: string;
+    rate_limit_per_min?: number;
+  }): { trigger_id: string; auth_mode: 'hmac' | 'bearer' | 'mtls'; secret: string | null } {
+    const now = Date.now();
+    const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
+    if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
+    return {
+      trigger_id: webhook.trigger_id,
+      auth_mode: webhook.auth_mode,
+      secret: opts.secret ?? null,
+    };
+  }
+
+  /** Gate one webhook delivery and publish it — the same content-type pin,
+   *  HMAC/bearer/mTLS verification, replay window and rate limit the cloud
+   *  backend applies, because both call the one implementation. */
+  async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
+    return acceptWebhookDelivery({
+      triggers: this.triggerRegistry,
+      log: this.eventLog,
+      replies: this.replyChannels,
+      vfs: this.rt.storage.vfs,
+      secrets: this.webhookSecrets,
+      sql: this.hubSql,
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, opts);
+  }
+
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    try { return this.jobs.get(jobId); } catch { return null; }
+    return jobResult(this.jobs, jobId);
   }
 
   async listBackgroundJobs(limit = 20): Promise<BackgroundJob[]> {
-    try { return this.jobs.list(limit); } catch { return []; }
+    return listBackgroundJobs(this.jobs, limit);
   }
 
   cancelBackgroundJob(jobId: string): { ok: boolean } {
-    return { ok: this.jobRunner.cancel(jobId) };
+    return cancelBackgroundJob(this.jobRunner, jobId);
   }
 
   /** Run one replay-eval pass now (also runs periodically inside lifetime
@@ -731,20 +753,13 @@ export class LocalAgentSession implements BackendHost {
   // ── Evolution Changelog (parity with the DO's RPCs) ───────────────
 
   /** The self-change digest over the durable ledgers (core buildChangelog). */
-  getEvolutionChangelog(limit = 50): { entries: ChangelogEntry[]; unseenCount: number; seenAt: number } {
-    const seenAt = this.config.getChangelogSeenAt();
-    return {
-      entries: buildChangelog(this.rt.storage.sql, { limit }),
-      unseenCount: countUnseenChangelog(this.rt.storage.sql, seenAt),
-      seenAt,
-    };
+  getEvolutionChangelog(limit = 50): EvolutionChangelogView {
+    return getEvolutionChangelog(this.config, this.rt.storage.sql, limit);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
   markChangelogSeen(): { ok: true; seenAt: number } {
-    const seenAt = Date.now();
-    this.config.setChangelogSeenAt(seenAt);
-    return { ok: true, seenAt };
+    return markChangelogSeen(this.config);
   }
 
   /** Revert one changelog entry through the real machinery (scaffold
@@ -767,28 +782,12 @@ export class LocalAgentSession implements BackendHost {
    *  pick differs from the answered take, queue a gentle programmatic turn
    *  asking the agent to continue with the chosen approach. */
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
-    const record = recordTakePick(this.rt.storage.sql, {
-      takeId, nodeId,
-      scaffoldVersion: getCurrentScaffoldVersion(this.rt.storage.sql),
-    });
-    await this.engine.applyTakePick(record.set.turnId, record.outcome);
-    let continuationQueued = false;
-    if (record.changedAnswer) {
-      void this.orch.signals.deliver({
-        kind: 'take_pick',
-        text: buildTakeContinuationPrompt(record.set, record.chosen),
-      });
-      continuationQueued = true;
-    }
-    return { ...record, continuationQueued };
+    return pickAlternateTake(
+      { sql: this.rt.storage.sql, engine: this.engine, signals: this.orch.signals }, takeId, nodeId);
   }
 
   async proposeCurriculumTasks(count?: number) {
-    return proposeNextTasks({
-      rt: this.rt,
-      judge: this.rt.judgeModel ?? this.rt.llm,
-      count,
-    });
+    return proposeCurriculumTasks(this.rt, count);
   }
 
   async listCurriculumTasks(status?: CurriculumStatus) {
@@ -1251,14 +1250,12 @@ export class LocalAgentSession implements BackendHost {
   /** A single run's durable events — the local peer of the DO's getRunEvents,
    *  and what an SSE resume replays from (`since` = last seen index). */
   getRunEvents(runId: string, opts: RunEventQuery = {}): RunEvent[] {
-    try { return this.eventRecorder.read(runId, opts); }
-    catch { return []; }
+    return getRunEvents(this.eventRecorder, runId, opts);
   }
 
   /** Recent runs, newest first — the local peer of the DO's listRuns. */
-  listRuns(limit = 50): Array<{ runId: string; lastTs: string; eventCount: number }> {
-    try { return this.eventRecorder.listRuns(limit); }
-    catch { return []; }
+  listRuns(limit = 50): RunListEntry[] {
+    return listRuns(this.eventRecorder, limit);
   }
 
   private async processTurn(item: QueueItem): Promise<void> {
@@ -1671,15 +1668,11 @@ export class LocalAgentSession implements BackendHost {
   /** Settle every branch launched during the just-finished turn (detached —
    *  the shared core settle persists the takes set + broadcasts progress). */
   private settlePendingBranches(turnId: string | null, liveText: string): void {
-    if (this.pendingBranches.length === 0) return;
-    const deps = {
+    settlePendingBranches({
       sql: this.rt.storage.sql,
       sessionId: this.sessionId,
       broadcast: (event: BranchStatusEvent) => this.broadcast(event),
-    };
-    for (const entry of this.pendingBranches.splice(0)) {
-      void settlePendingBranch(deps, entry, turnId, liveText);
-    }
+    }, this.pendingBranches, turnId, liveText);
   }
 
   /** Passthrough SkillsVfs shim over rt.storage.vfs (core turn-surface). */
@@ -1968,16 +1961,14 @@ export class LocalAgentSession implements BackendHost {
    * await), so the caller closes over it.
    */
   private dynamicContextSnapshot(memoryTail: string | undefined): DynamicContext {
-    const factsBlock = this.renderFactsForTurn();
-    return {
-      ...(factsBlock ? { factsBlock } : {}),
-      ...(memoryTail ? { memoryTail } : {}),
-      // Re-listed per step: a sandbox provisioned mid-turn flips availability.
+    return agentDynamicContext({
+      factsBlock: this.renderFactsForTurn(),
+      memoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
-      tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
-      delegates: forkDelegates(this.headJournal.listLive()),
-      ...(this.mcpUnavailable.length > 0 ? { missingCapabilities: this.mcpUnavailable } : {}),
-    };
+      runningJobs: this.jobs.listRunning(),
+      liveHeadRuns: this.headJournal.listLive(),
+      missingCapabilities: this.mcpUnavailable,
+    });
   }
 
   /** The recent-facts world-model block for the volatile turn context (core
@@ -1990,8 +1981,10 @@ export class LocalAgentSession implements BackendHost {
    *  agent events (soul/skill/model). Emits only on change to stay quiet. */
   private lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
-    const hash = fnv1a64(system);
-    if (this.lastSystemPromptHash !== null && this.lastSystemPromptHash !== hash) {
+    const { hash, status } = observeSystemPromptHash(this.lastSystemPromptHash, system);
+    // Only the change is worth a line on an interactive stream — a per-turn
+    // "still stable" is the noise the telemetry exists to make visible against.
+    if (status === 'changed') {
       this.emit({ type: 'evolution', event: 'system_prompt_hash', message: `changed → ${hash}` });
     }
     this.lastSystemPromptHash = hash;
@@ -2036,25 +2029,16 @@ export class LocalAgentSession implements BackendHost {
     return inheritedContextFromHistory(this.history);
   }
 
-  /** Fan head_split / head_merge lifecycle out as broadcasts so the frontends
-   *  can render the branch timeline, AND into the durable run-event log so the
-   *  split's cost and productivity survive the process — the same rows the DO
-   *  writes. Broadcast-only was why local runs (every benchmark trial) left no
-   *  trace of a fork, and 4-of-5 empty forks had to be found by reading
-   *  trajectories by hand. */
+  /** Record head_split / head_merge in the durable run-event log — the same
+   *  rows the DO writes, so a fork's cost and productivity survive the
+   *  process. Broadcast-only was why local runs (every benchmark trial) left
+   *  no trace of a fork, and 4-of-5 empty forks had to be found by reading
+   *  trajectories by hand. The recorder streams every row it writes as a
+   *  `run-event`, so recording IS the fan-out; broadcasting a second copy put
+   *  the split through `proteus exec --json` twice and reached no other
+   *  reader — no CLI surface consumes a head phase as a broadcast. */
   private emitHeadPhase(event: SplitPhaseEvent): void {
-    const payload: RunEventInput = event.kind === 'split'
-      ? { type: 'head_split', rootId: event.rootId, headIds: [...event.headIds], rationale: event.rationale }
-      : {
-        type: 'head_merge',
-        rootId: event.rootId,
-        headCount: event.cost.headCount,
-        headsWithFindings: event.cost.headsWithFindings,
-        totalTokens: event.cost.totalTokens,
-        mergedNarrative: event.mergedNarrative,
-      };
-    this.broadcast(payload);
-    this.recordRunEvent(payload);
+    this.recordRunEvent(headPhaseRunEvent(event));
   }
 
   /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO
@@ -2223,7 +2207,7 @@ export class LocalAgentSession implements BackendHost {
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
         extraProviders: [
-          createLocalAgentSelfProvider(this),
+          createAgentSelfProvider(this),
           // `agents.*` — the delegation tool projected into the sandbox, over
           // the same deps the top-level tool holds. Locally that is fork only.
           createAgentsCodemodeProvider(() => this.agentsToolDeps()),
@@ -2267,24 +2251,6 @@ function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: Readonl
 }
 
 export { serializeContentForHeads } from '@proteus/core';
-
-/** Adapt a bun:sqlite handle to core's SqlExec primitive (DO storage.sql). */
-function triggerToView(t: TriggerRow): LocalTriggerView {
-  return {
-    id: t.id,
-    kind: t.kind,
-    spec: t.spec,
-    creator_trust: t.creator_trust,
-    state: t.state,
-    created_at: t.created_at,
-    paused_at: t.paused_at,
-    revoked_at: t.revoked_at,
-    rate_limit_per_min: t.rate_limit_per_min,
-    next_fire_at: t.next_fire_at,
-    last_fire_at: t.last_fire_at,
-    fire_count: t.fire_count,
-  };
-}
 
 /** Resolve when `work` settles or `ms` elapses, whichever comes first. The timer
  *  is always cleared, so a fast settle leaves nothing holding the event loop. */

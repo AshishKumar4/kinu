@@ -1,5 +1,5 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
 } from '@proteus/core';
@@ -84,6 +84,7 @@ export class CloudAgentClient implements AgentClient {
   readonly consents: DeviceConsentSurface;
   readonly localControls = null;
   readonly checkpoints: FileCheckpointSurface;
+  readonly inlineAttachmentLimitBytes = CLOUD_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly origin: string;
   private readonly token: string;

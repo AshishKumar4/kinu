@@ -18,16 +18,11 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
-  TimelineSpan,
-  DirEntry,
   WorkspaceAgent,
   SubordinateActivityEvent,
 } from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
-import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
-import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
-import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
-import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
+import { nextAlarmTime } from "./lib/cron.js";
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
@@ -67,14 +62,14 @@ import {
   // agent_facts world model
   DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
   // Voyager curriculum + Absolute Zero learnability proposer
-  proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
   effortFor,
   type BackgroundJob, TriggerRegistry, ReplyChannelStore,
-  isReasoningEffort, type ReasoningEffort,
+  type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA run lineage (the pass itself is core's evolution control plane)
   listGepaRuns, loadGepaCandidates, type GepaRunSummary,
@@ -88,14 +83,13 @@ import {
   ensembleReport, runEnsemble, createCompletionLLM,
   type EnsembleReport, type EnsembleRunResult,
   // Evolution Changelog — the self-change digest + revert dispatch
-  buildChangelog, countUnseenChangelog, revertChangelogEntryById,
+  revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
-  recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
-  initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
+  initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
   type ReleaseApproval, type ReleaseStatus,
   type ReleaseToolDeps, type ReleaseSourceInput,
@@ -123,8 +117,35 @@ import {
   type MissingCapability,
   type DynamicContext,
   type DynamicDelegate,
+  // Ingress — core owns the gates; this actor owns the transports in front
+  // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
+  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
+  initWebhookRateLimitTables,
+  type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
+  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
+  EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
+  type EmailAdmission, type IncomingEmail, type OwnerNotification,
+  receiveSubordinateEvent,
+  PeerHub, type PeerMessage, type ReceiveResult,
+  // ── Read models: the folds a surface asks for, one implementation each ──
+  getAgentStatus, getChatHistory, getToolList, type ChatHistoryEntry,
+  getRunTimeline, type TimelineSpan,
+  getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
+  getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
+  type ExecutorDiffResult, type WorkspaceDiffResult,
+  diffLines, type DiffLine,
+  getExecutorFiles, readExecutorFile, writeExecutorFileOp,
+  type DirEntry, type ExecutorWriteResult,
+  cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
+  jobResult, listBackgroundJobs, retryBackgroundJob,
+  type CancelWorkOutcome, type RetryOutcome,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
+  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  type EvolutionConfigView, type MctsConfigView,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from "@proteus/core";
-import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
@@ -135,20 +156,12 @@ import {
   parentAdmitsSubordinateReport,
   type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
+  createAgentSelfProvider,
 } from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
-import { timingSafeEqual } from "./lib/crypto.js";
-import { createAgentSelfProvider } from "./agent-self.js";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
 import type { DeviceConsentDecision } from "./user/device-consent.js";
-import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
-import {
-  initWebhookRateLimitTables,
-  normalizeWebhookRateLimitPerMin,
-  tryConsumeWebhookRateLimit,
-} from "./events/webhook-rate-limit.js";
-import { acceptInboundEmail, inboundEmailDropNotice } from "./events/ingress/email.js";
-import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
+import { agentEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
 } from "./email/outbound.js";
@@ -166,13 +179,6 @@ const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
  *  framework stops recovering the fiber a continuation callback would resume,
  *  so dispatching the row can only replay dead work. */
 const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
-
-// Inbound-email budget per agent (all senders combined). Email is a wake
-// channel, not a data plane — mail beyond this is dropped at the gate. The
-// drop is announced to the agent (noteEmailRateDrop): a reply storm or a list
-// subscription otherwise makes it silently deaf while it believes it has seen
-// its inbox.
-const EMAIL_INBOUND_RATE_PER_MIN = 30;
 
 // The Activity surface's retained sample. Bounded because `run_events` and
 // `activity_log` are append-only: 400 steps is deep enough for a p95 that
@@ -372,7 +378,7 @@ export class OrchestratorAgent extends ActorAgent {
         kind: 'device consent',
         detail: `${pending.deviceLabel}: ${pending.command}`,
       }));
-    const deafInbox = inboundEmailDropNotice(EMAIL_INBOUND_RATE_PER_MIN, this._emailDropWindow, Date.now());
+    const deafInbox = this.emailInbox.dropNotice(Date.now());
     return {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
@@ -1210,86 +1216,55 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
   // Lifecycle (detach → settle → wake + cancel + recover) lives in the core
-  // BackgroundJobRunner (this.jobRunner); the @callable control plane below is
-  // the cf adapter over it + the BackgroundJobStore.
+  // BackgroundJobRunner (this.jobRunner) and the control plane above it in core
+  // read-models; what follows is the @callable transport for that plane.
 
   /** Read a background job's result (the synthesis turn calls this). */
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    try { return this.jobs.get(jobId); } catch { return null; }
+    return jobResult(this.jobs, jobId);
   }
 
-  /** List recent background jobs (newest first). */
   @callable()
   async listBackgroundJobs(limit: number = 20): Promise<BackgroundJob[]> {
-    try { return this.jobs.list(limit); } catch { return []; }
+    return listBackgroundJobs(this.jobs, limit);
   }
 
-  /** Hard-cancel a running background job: abort the underlying work (its merged
-   *  AbortSignal) and mark it cancelled. The detach fiber sees 'cancelled' and
-   *  won't relabel the abort rejection or wake the agent. */
   @callable()
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return { ok: this.jobRunner.cancel(jobId) };
+    return cancelBackgroundJob(this.jobRunner, jobId);
   }
 
-  /** Re-run a settled job's tool with its original input as a fresh background
-   *  job. Detaches immediately (the work already proved slow). */
   @callable()
-  async retryBackgroundJob(jobId: string): Promise<{ ok: boolean; jobId?: string; error?: string }> {
-    const job = this.jobs.get(jobId);
-    if (!job) return { ok: false, error: 'job not found' };
-    if (job.status === 'running') return { ok: false, error: 'job still running' };
-    const inputJson = this.jobs.getInput(jobId);
-    if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
-    const tool = this.getRawTools()[job.kind];
-    if (!tool || typeof tool.execute !== 'function') return { ok: false, error: `tool "${job.kind}" unavailable` };
-    let input: unknown;
-    try { input = JSON.parse(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
-    const controller = new AbortController();
-    const newId = this.jobRunner.create(job.kind, input, controller);
-    this.logActivity('bg_job_retry', `${jobId} → ${newId}`);
-    const promise = Promise.resolve(
-      (tool.execute as (i: unknown, o: unknown) => unknown)(input, { abortSignal: controller.signal, toolCallId: newId, messages: [] }),
-    );
-    this.jobRunner.detach(newId, job.kind, promise);
-    return { ok: true, jobId: newId };
+  async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
+    return retryBackgroundJob({
+      jobs: this.jobs,
+      jobRunner: this.jobRunner,
+      rawTools: () => this.getRawTools(),
+      logActivity: (event, detail) => this.logActivity(event, detail),
+    }, jobId);
   }
 
-  /** Remove a settled job from the registry (UI dismiss). */
   @callable()
   async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    try { this.jobs.dismiss(jobId); return { ok: true }; } catch { return { ok: false }; }
+    return dismissBackgroundJob(this.jobs, jobId);
   }
 
-  /** Clear all settled jobs (keep running ones). */
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
-    try { this.jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
+    return clearBackgroundJobs(this.jobs);
   }
 
-  /** Stop visible work: abort foreground tool calls and cancel detached jobs. */
   @callable()
-  async cancelCurrentWork(): Promise<{ ok: boolean; cancelledJobs: string[]; abortedTools: number }> {
-    const cancelledJobs = this.jobRunner.cancelRunning();
-    let abortedTools = 0;
-    for (const controller of [...this._activeToolControllers]) {
-      if (!controller.signal.aborted) {
-        try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
-        abortedTools++;
-      }
-      this._activeToolControllers.delete(controller);
-    }
-    this._inFlight = false;
-    this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'work_cancelled',
-        cancelledJobs,
-        abortedTools,
-        timestamp: Date.now(),
-      }));
-    } catch { /* nop */ }
-    return { ok: true, cancelledJobs, abortedTools };
+  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
+    return cancelCurrentWork({
+      jobRunner: this.jobRunner,
+      activeToolControllers: this._activeToolControllers,
+      broadcast: (payload) => this.broadcast(payload),
+      onCancelled: ({ cancelledJobs, abortedTools }) => {
+        this._inFlight = false;
+        this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
+      },
+    });
   }
 
   // ── Device consent (P2) — ask-once-then-remember ─────────────────────
@@ -1510,42 +1485,11 @@ export class OrchestratorAgent extends ActorAgent {
   async _proteusTimerTick(): Promise<void> {
     const now = Date.now();
     try {
-      const due = this.triggerRegistry.due(now);
-      for (const trigger of due) {
-        const spec = trigger.spec as {
-          label?: string; payload?: unknown; cron?: string; mission_label?: string;
-        };
-        const scheduled_fire_at = trigger.next_fire_at ?? now;
-
-        this.eventLog.publish({
-          descriptor: {
-            ingress: 'timer_alarm',
-            variant: 'timer',
-            payload: {
-              trigger_id: trigger.id,
-              scheduled_fire_at,
-              label: spec.label,
-              user_payload: spec.payload,
-              mission_label: spec.mission_label,
-            },
-            trigger_creator_trust: trigger.creator_trust,
-          },
-          now,
-        });
-
-        if (trigger.kind === 'timer_cron') {
-          const next = spec.cron ? nextCronFire(spec.cron, now) : null;
-          this.triggerRegistry.markFired(trigger.id, now, next);
-        } else {
-          this.triggerRegistry.markFired(trigger.id, now, null);
-          this.triggerRegistry.revoke(trigger.id, now);
-        }
-      }
-
       // Wake the agent to act on the freshly-published timer events (and any
       // other pending events) — an autonomous turn, debounced so events
       // arriving alongside the alarm coalesce into it.
-      if (due.length > 0) this.orch.scheduleDrain();
+      const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+      if (fired > 0) this.orch.scheduleDrain();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
@@ -1637,100 +1581,24 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   async getAgentStatus() {
-    try {
-      const soul = readSoul(this.boundSql) ?? "";
-      const purpose = summarizeSoul(soul);
-      const identity = this.sql<{ id: string; name: string; created_at: number }>`
-        SELECT id, name, created_at FROM workspace_identity LIMIT 1`;
-      const scaffoldVersion = this.sql<{ v: number }>`
-        SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
-      const searchNodes = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
-      const craftedTools = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
-      // Message count reflects the persisted `messages` table, which is the
-      // authoritative turn history used for fork cut-points. For non-fork
-      // agents this table is populated by onChatResponse's mirror; for forks
-      // it's populated by forkWorkspaceStorage's copy. Falling back to the
-      // in-memory AIChatAgent array keeps behavior sane before the first
-      // turn has been mirrored.
-      const tableCount = this.sql<{ c: number }>`
-        SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'
-      `;
-      const messageCount = tableCount[0]?.c ?? this.messages.length;
-      // Fork lineage — null for non-forked agents.
-      const forkLineage = readForkLineage(this.boundSql);
-      return {
-        id: identity[0]?.id ?? this.ctx.id.toString(),
-        name: identity[0]?.name ?? this.name,
-        displayName: this.getDisplayName(),
-        purpose,
-        soul,
-        createdAt: identity[0]?.created_at ?? 0,
-        scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
-        searchNodeCount: searchNodes[0]?.c ?? 0,
-        craftedToolCount: craftedTools[0]?.c ?? 0,
-        messageCount,
-        model: this.getStoredModelId(),
-        reasoningEffort: this.config.getReasoningEffort(),
-        forkLineage,
-      };
-    } catch {
-      return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", soul: "", createdAt: 0,
-        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
-        model: this.getStoredModelId(),
-        reasoningEffort: this.config.getReasoningEffort(),
-        forkLineage: null };
-    }
+    return getAgentStatus({
+      sql: this.boundSql,
+      config: this.config,
+      fallbackId: this.ctx.id.toString(),
+      name: this.name,
+      displayName: this.getDisplayName(),
+      // Before the first turn has been mirrored into `messages`, the in-memory
+      // AIChatAgent array is the only count there is.
+      fallbackMessageCount: this.messages.length,
+    });
   }
 
-  async getChatHistory(limit = 100): Promise<Array<{ id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string | number }>> {
-    const bounded = Math.max(1, Math.min(200, Math.floor(limit)));
-    try {
-      const rows = this.sql<{ id: string; role: string; content: string; created_at: string }>`
-        SELECT id, role, content, created_at
-        FROM (
-          SELECT id, role, content, created_at
-          FROM assistant_messages
-          WHERE role IN ('user', 'assistant', 'system')
-          ORDER BY created_at DESC
-          LIMIT ${bounded}
-        ) sub
-        ORDER BY created_at ASC
-      `;
-      return rows.flatMap((row) => {
-        const role = normalizeUiRole(row.role);
-        if (!role) return [];
-        return [{ id: row.id, role, content: uiMessageText(row.content), createdAt: row.created_at }];
-      });
-    } catch {
-      const rows = this.sql<{ id: string; role: string; content: string; created_at: number }>`
-        SELECT id, role, content, created_at
-        FROM messages
-        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
-        ORDER BY created_at ASC
-        LIMIT ${bounded}
-      `;
-      return rows.flatMap((row) => {
-        const role = normalizeUiRole(row.role);
-        if (!role) return [];
-        return [{ id: row.id, role, content: row.content, createdAt: row.created_at }];
-      });
-    }
+  async getChatHistory(limit = 100): Promise<ChatHistoryEntry[]> {
+    return getChatHistory(this.boundSql, limit);
   }
 
   async getToolList() {
-    const crafted = this.rt.craftStore.list().map(t => {
-      const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;
-      return {
-        name: t.name, description: t.description, scope: t.scope,
-        qualityScore: scoreRow[0]?.score ?? 0.5,
-        usageCount: scoreRow[0]?.uses ?? 0,
-      };
-    });
-    return {
-      builtIn: [...BUILTIN_TOOLS],
-      crafted,
-    };
+    return getToolList(this.boundSql, this.rt.craftStore);
   }
 
   @callable() async getMctsTree() {
@@ -1804,20 +1672,13 @@ export class OrchestratorAgent extends ActorAgent {
   async getEvolutionChangelog(opts?: { limit?: number }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
-    const seenAt = this.config.getChangelogSeenAt();
-    return {
-      entries: buildChangelog(this.boundSql, { limit: opts?.limit ?? 50 }),
-      unseenCount: countUnseenChangelog(this.boundSql, seenAt),
-      seenAt,
-    };
+    return getEvolutionChangelog(this.config, this.boundSql, opts?.limit);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
   @callable()
   async markChangelogSeen(): Promise<{ ok: true; seenAt: number }> {
-    const seenAt = Date.now();
-    this.config.setChangelogSeenAt(seenAt);
-    return { ok: true, seenAt };
+    return markChangelogSeen(this.config);
   }
 
   /** Revert one changelog entry through the REAL machinery (scaffold
@@ -1902,15 +1763,11 @@ export class OrchestratorAgent extends ActorAgent {
   /** Settle every branch launched during the just-finished turn (detached —
    *  the shared core settle persists the takes set + broadcasts progress). */
   private settlePendingBranches(turnId: string | null, liveText: string): void {
-    if (this._pendingBranches.length === 0) return;
-    const deps = {
+    settlePendingBranches({
       sql: this.boundSql,
       sessionId: 'default',
       broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
-    };
-    for (const entry of this._pendingBranches.splice(0)) {
-      void settlePendingBranch(deps, entry, turnId, liveText);
-    }
+    }, this._pendingBranches, turnId, liveText);
   }
 
   /** Record the user's pick between the explored takes — the explicit
@@ -1920,30 +1777,10 @@ export class OrchestratorAgent extends ActorAgent {
    *  seam (same machinery as the reactor / background-job wake). */
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
-    if (typeof takeId !== 'string' || !takeId || typeof nodeId !== 'string' || !nodeId) {
-      throw new Error('pickAlternateTake requires takeId and nodeId');
-    }
-    const record = recordTakePick(this.boundSql, {
-      takeId, nodeId,
-      scaffoldVersion: getCurrentScaffoldVersion(this.boundSql),
-    });
-    try {
-      await this.engine.applyTakePick(record.set.turnId, record.outcome);
-    } catch (err) {
-      console.warn('[proteus] applyTakePick lesson corroboration failed:', err instanceof Error ? err.message : err);
-    }
-    let continuationQueued = false;
-    if (record.changedAnswer) {
-      const result = await this.orch.signals.deliver({
-        kind: 'take_pick',
-        text: buildTakeContinuationPrompt(record.set, record.chosen),
-      });
-      // Delivered either way — riding the live turn's next step is the same
-      // continuation, just sooner than a turn of its own.
-      continuationQueued = result !== 'undelivered';
-    }
-    this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
-    return { ...record, continuationQueued };
+    const outcome = await pickAlternateTake(
+      { sql: this.boundSql, engine: this.engine, signals: this.orch.signals }, takeId, nodeId);
+    this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
+    return outcome;
   }
 
   /**
@@ -1956,63 +1793,12 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<TimelineSpan[]> {
-    const limit = opts?.limit ?? 200;
-    const recent = (() => {
-      try { return this.sql<{ run_id: string }>`SELECT run_id FROM run_events ORDER BY ts DESC LIMIT 1`[0]?.run_id; }
-      catch { return undefined; }
-    })();
-    const runId = opts?.runId || this._currentRunId || recent;
-    const spans: TimelineSpan[] = [];
-
-    // 1) Durable per-run events for the focused run (skip noisy text_delta).
-    if (runId) {
-      try {
-        for (const e of this.eventRecorder.read(runId, { limit })) {
-          if (e.type === 'text_delta') continue;
-          spans.push(runEventToSpan(e));
-        }
-      } catch { /* run_events may not exist yet */ }
-    }
-    // 2) Agent-level evolution events — PRESERVE the `data` payload.
-    try {
-      const rows = this.sql<{ id: string; type: string; message: string; data: string | null; created_at: number }>`
-        SELECT id, type, message, data, created_at FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
-      for (const r of rows) {
-        spans.push({
-          ts: r.created_at, kind: classifyEvolutionType(r.type), label: r.message || r.type,
-          data: r.data ? safeJsonParse(r.data) : undefined,
-          source: 'evolution', refId: r.id, rawType: r.type,
-        });
-      }
-    } catch { /* table may not exist */ }
-    // 3) MCTS search nodes.
-    try {
-      const nodes = this.sql<{ id: string; action: string; value: number; status: string; created_at: number }>`
-        SELECT id, action, value, status, created_at FROM search_nodes ORDER BY created_at DESC LIMIT ${limit}`;
-      for (const n of nodes) {
-        spans.push({
-          ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
-          detail: `value ${Number(n.value).toFixed(2)} · ${n.status}`,
-          source: 'mcts', refId: n.id,
-        });
-      }
-    } catch { /* table may not exist */ }
-    // 4) Background jobs — auto-detached >30s tool calls, as first-class spans
-    // (the run that "ended" because work moved to the background must say so).
-    try {
-      for (const j of this.jobs.list(limit)) {
-        const detail = j.status === 'running' ? 'running in background'
-          : j.error ? `${j.status}: ${j.error}` : j.status;
-        spans.push({
-          ts: j.createdAt, kind: 'background',
-          label: `Background ${j.kind}`, detail,
-          source: 'background', refId: j.id, rawType: j.status,
-        });
-      }
-    } catch { /* table may not exist */ }
-
-    spans.sort((a, b) => a.ts - b.ts);
-    return spans.slice(-limit);
+    return getRunTimeline({
+      sql: this.boundSql,
+      events: this.eventRecorder,
+      jobs: this.jobs,
+      currentRunId: this._currentRunId,
+    }, opts);
   }
 
   // ── Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
@@ -2139,21 +1925,18 @@ export class OrchestratorAgent extends ActorAgent {
    *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
    */
   @callable()
-  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: string }> {
-    if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
-      throw new Error(`invalid mode: ${mode}`);
-    }
-    this.config.setShellApprovalMode(mode);
-    // Force a tool cache rebuild on next getTools().
-    this._cachedTools = null;
-    this._cachedToolsKey = '';
-    return { ok: true, mode };
+  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: ShellApprovalMode }> {
+    return setShellApprovalMode({
+      config: this.config,
+      // Force a tool cache rebuild on the next getTools().
+      onChanged: () => { this._cachedTools = null; this._cachedToolsKey = ''; },
+    }, mode);
   }
 
   /** Current shell-approval mode (strict | allow_all | deny_all). */
   @callable()
-  async getShellApprovalMode(): Promise<{ mode: 'strict' | 'allow_all' | 'deny_all' }> {
-    return { mode: this.config.getShellApprovalMode() };
+  async getShellApprovalMode(): Promise<{ mode: ShellApprovalMode }> {
+    return getShellApprovalMode(this.config);
   }
 
   /**
@@ -2164,18 +1947,13 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async setAlwaysActiveSkills(names: string[]): Promise<{ ok: true; names: string[] }> {
-    if (!Array.isArray(names)) throw new Error('names must be a string array');
-    for (const n of names) {
-      if (typeof n !== 'string') throw new Error('names must contain only strings');
-    }
-    this.config.setAlwaysActiveSkills(names);
-    return { ok: true, names: this.config.getAlwaysActiveSkills() };
+    return setAlwaysActiveSkills(this.config, names);
   }
 
   /** Current pinned always-active skill names. Empty array means none. */
   @callable()
   async getAlwaysActiveSkills(): Promise<{ names: string[] }> {
-    return { names: this.config.getAlwaysActiveSkills() };
+    return getAlwaysActiveSkills(this.config);
   }
 
   // ── File checkpoints (device shadow-git) ─────────────────────────────
@@ -2424,101 +2202,27 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Read the current workspace text files (path → content) for diffing. Skips
-   * directories, binary files (NUL byte), and anything over 256 KB; caps at 400
-   * files. Backs the Output cumulative change-set.
-   */
-  private async readWorkspaceFiles(): Promise<Record<string, string>> {
-    const out: Record<string, string> = {};
-    let paths: string[];
-    try {
-      paths = this.sql<{ path: string }>`
-        SELECT DISTINCT path FROM vfs_files WHERE is_dir = 0 AND path != '' LIMIT 400`.map((r) => r.path);
-    } catch { return out; }
-    for (const path of paths) {
-      try {
-        const stat = await this.rt.storage.vfs.stat(path);
-        if (stat && stat.size > 256 * 1024) continue;
-        const content = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-        const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
-        if (text.includes(String.fromCharCode(0))) continue; // binary (NUL byte = binary)
-        out[path] = text;
-      } catch { /* unreadable — skip */ }
-    }
-    return out;
-  }
-
-  /**
    * The cumulative workspace change-set since the baseline — what the agent has
    * created/changed/deleted, for review on the Output surface. The baseline is
    * captured lazily on first call (returns empty + baselineJustCaptured) and
    * re-markable via resetWorkspaceBaseline ("mark reviewed").
    */
-  async getWorkspaceDiff(): Promise<{ files: FileDiff[]; baselineJustCaptured: boolean }> {
-    const current = await this.readWorkspaceFiles();
-    let baselineRows: Array<{ path: string; content: string }> = [];
-    try {
-      baselineRows = this.sql<{ path: string; content: string }>`SELECT path, content FROM vfs_baseline`;
-    } catch { baselineRows = []; }
-    if (baselineRows.length === 0) {
-      // No baseline yet → capture the current state as the baseline.
-      this.captureWorkspaceBaseline(current);
-      return { files: [], baselineJustCaptured: true };
-    }
-    const baseline: Record<string, string> = {};
-    for (const r of baselineRows) baseline[r.path] = r.content;
-    return { files: computeWorkspaceDiff(baseline, current), baselineJustCaptured: false };
+  async getWorkspaceDiff(): Promise<WorkspaceDiffResult> {
+    return getWorkspaceDiff(this.rt);
   }
 
-  /**
-   * General per-executor change-set. The agent VFS ("workspace") has no shell,
-   * so it uses the snapshot baseline (computeWorkspaceDiff). Shell executors
-   * (sandbox/laptop/nimbus) use a real `git diff` of /workspace — the only way
-   * to capture changes the agent made inside a container (feedback: the diff
-   * didn't reflect sandbox repo changes). `git add -A -N` first so newly-created
-   * (untracked) files show as additions; it stages intent-to-add only (no
-   * content), respects .gitignore, and is cleared by the agent's next commit.
-   */
+  /** General per-executor change-set: the VFS snapshot baseline for the agent
+   *  workspace, a real `git diff` of /workspace for shell executors. */
   @callable()
-  async getExecutorDiff(executorId: string): Promise<{
-    files: FileDiff[]; mode: 'git' | 'vfs-baseline';
-    baselineJustCaptured?: boolean; notGitRepo?: boolean; error?: string;
-  }> {
-    if (executorId === 'workspace') {
-      const r = await this.getWorkspaceDiff();
-      return { files: r.files, mode: 'vfs-baseline', baselineJustCaptured: r.baselineJustCaptured };
-    }
-    const provider = this.rt.executionRouter?.getProvider(executorId);
-    if (!provider) return { files: [], mode: 'git', error: `Executor "${executorId}" not found` };
-    const execTool = provider.tools.exec;
-    if (!execTool) return { files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` };
-    const root = '/workspace';
-    try {
-      const isRepo = String(await execTool.execute(`git -C ${root} rev-parse --is-inside-work-tree 2>/dev/null || echo no`));
-      if (!isRepo.includes('true')) return { files: [], mode: 'git', notGitRepo: true };
-      const raw = String(await execTool.execute(`git -C ${root} add -A -N >/dev/null 2>&1; git -C ${root} --no-pager diff`));
-      return { files: parseGitDiff(raw), mode: 'git' };
-    } catch (err) {
-      return { files: [], mode: 'git', error: err instanceof Error ? err.message : String(err) };
-    }
+  async getExecutorDiff(executorId: string): Promise<ExecutorDiffResult> {
+    return getExecutorDiff(this.rt, executorId);
   }
 
   /** Mark the current workspace as the new baseline ("reviewed" — the diff
    *  resets to empty and accrues from here). */
   @callable()
   async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
-    const current = await this.readWorkspaceFiles();
-    this.captureWorkspaceBaseline(current);
-    return { ok: true, files: Object.keys(current).length };
-  }
-
-  private captureWorkspaceBaseline(files: Record<string, string>): void {
-    try {
-      this.sql`DELETE FROM vfs_baseline`;
-      for (const [path, content] of Object.entries(files)) {
-        this.sql`INSERT OR REPLACE INTO vfs_baseline (path, content) VALUES (${path}, ${content})`;
-      }
-    } catch { /* table may not exist on very first start */ }
+    return resetWorkspaceBaseline(this.rt);
   }
 
   /** Recent branching-head runs (think strategy=heads): each split grouped by
@@ -2607,12 +2311,12 @@ export class OrchestratorAgent extends ActorAgent {
    * after it.
    */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
-    return this.eventRecorder.read(runId, opts ?? {});
+    return getRunEvents(this.eventRecorder, runId, opts);
   }
 
   /** List the agent's recent runs with their latest timestamp + event count. */
-  async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
-    return this.eventRecorder.listRuns(limit);
+  async listRuns(limit: number = 50): Promise<RunListEntry[]> {
+    return listRuns(this.eventRecorder, limit);
   }
 
   /**
@@ -2622,31 +2326,8 @@ export class OrchestratorAgent extends ActorAgent {
    * tokenUsage out of the durable event log.
    */
   @callable()
-  async getRunSummaries(limit: number = 30): Promise<Array<{
-    runId: string; startedAt: number; causedBy: string | null; userMessage: string | null;
-    status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number;
-  }>> {
-    return this.eventRecorder.listRuns(limit).map((run) => {
-      let tokensIn = 0, tokensOut = 0, tokensCached = 0;
-      let causedBy: string | null = null, userMessage: string | null = null, status: string | null = null;
-      let startedAt = Date.parse(run.lastTs) || Date.now();
-      try {
-        for (const e of this.eventRecorder.read(run.runId, { limit: 1000 })) {
-          if (e.type === 'run_start') {
-            causedBy = e.caused_by ?? 'chat';
-            userMessage = e.userMessage ?? null;
-            startedAt = Date.parse(e.timestamp) || startedAt;
-          } else if (e.type === 'turn_end' && e.tokenUsage) {
-            tokensIn += e.tokenUsage.input;
-            tokensOut += e.tokenUsage.output;
-            tokensCached += e.tokenUsage.cached ?? 0;
-          } else if (e.type === 'run_end') {
-            status = e.reason ?? null;
-          }
-        }
-      } catch { /* run events unreadable — return the bare summary */ }
-      return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, tokensCached, eventCount: run.eventCount };
-    });
+  async getRunSummaries(limit: number = 30): Promise<RunSummary[]> {
+    return getRunSummaries(this.eventRecorder, limit);
   }
 
   /**
@@ -2943,64 +2624,23 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Typed directory listing for the file manager — read straight off the
-   *  CompositeVFS for every executor (accurate types + sizes), workspace paths
-   *  as-is and remote executors through their mount prefix. */
+   *  CompositeVFS for every executor (accurate types + sizes). */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
-    const dir = toCompositePath(executorId, path || '/');
-    if (dir === null) return { error: `Executor "${executorId}" not found` };
-    try {
-      const names = await this.rt.storage.vfs.readdir(dir);
-      const entries: DirEntry[] = [];
-      for (const name of names) {
-        const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
-        // Entries of the composite root are mounts — directories by
-        // construction, even when the environment behind one can't answer
-        // a stat right now.
-        let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
-        let size: number | undefined;
-        try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — keep the default */ }
-        entries.push({ name, type, size });
-      }
-      return { entries: sortDirEntries(entries) };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
+    return getExecutorFiles(this.rt.storage.vfs, executorId, path);
   }
 
-  /** Read a single file's text content for the file-manager viewer — off the
-   *  CompositeVFS for every executor (structured bytes, not tool strings). Caps
-   *  size and refuses binary (NUL byte). */
+  /** Read a single file's text content for the file-manager viewer. */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
-    if (!path) return { error: 'path required' };
-    const target = toCompositePath(executorId, path);
-    if (target === null) return { error: `Executor "${executorId}" not found` };
-    const MAX = 512 * 1024;
-    try {
-      const stat = await this.rt.storage.vfs.stat(target);
-      if (stat?.isDir) return { error: 'path is a directory' };
-      const raw = await this.rt.storage.vfs.readFile(target, { encoding: 'utf8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
-      if (text.length > MAX) return { content: text.slice(0, MAX), truncated: true };
-      return { content: text };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
+    return readExecutorFile(this.rt.storage.vfs, executorId, path);
   }
 
-  /** Upload one file into an executor (file-manager drop/Upload) — binary-
-   *  safe through the CompositeVFS for every executor (env-native paths map
-   *  through the executor's mount prefix).
+  /** Upload one file into an executor (file-manager drop/Upload).
    *
    *  Reached over HTTP (files-routes.ts), not over the chat WebSocket: an RPC
    *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
    *  ordinary files died at the socket as an opaque connection failure. */
   async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
-    try {
-      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
+    return writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
   }
 
   /**
@@ -3040,45 +2680,29 @@ export class OrchestratorAgent extends ActorAgent {
    *  preselect; the full available-models list comes from /api/user/models
    *  (UserDO) so connections are user-scoped. */
   @callable() async getStoredModelSpec(): Promise<{ spec: string | null }> {
-    return { spec: this.getStoredModelId() };
+    return getStoredModelSpec(this.config);
   }
 
   @callable() async setModel(spec: string) {
-    try {
-      const reg = this.providerRegistry();
-      // Validate before storing — surfaces unknown-provider / invalid-spec
-      // errors at config time, not on the next chat turn.
-      const normalized = reg.normalizeSpecSync(spec);
-      this.config.setModel(normalized);
-      this.invalidateModelCaches();
-      console.log(`[orchestrator] setModel: ${spec} → ${normalized}`);
-      return { ok: true, spec: normalized };
-    } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      console.error(`[orchestrator] setModel(${spec}) failed:`, msg);
-      throw new Error(`setModel(${spec}) failed: ${msg}`);
-    }
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => this.invalidateModelCaches(),
+    }, spec);
   }
 
   @callable() async getReasoningEffort(): Promise<{ effort: ReasoningEffort | null }> {
-    return { effort: this.config.getReasoningEffort() };
+    return getReasoningEffort(this.config);
   }
 
   @callable() async setReasoningEffort(effort: unknown): Promise<{ ok: true; effort: ReasoningEffort }> {
-    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
-    this.config.setReasoningEffort(effort);
-    return { ok: true, effort };
+    return setReasoningEffort(this.config, effort);
   }
 
   // ── Voyager curriculum: propose / list / accept next tasks ─────────
 
   @callable() async proposeCurriculumTasks(count?: number) {
-    const proposals = await proposeNextTasks({
-      rt: this.rt,
-      judge: this.rt.llm,
-      count: count ?? 5,
-    });
-    return { proposals };
+    return { proposals: await proposeCurriculumTasks(this.rt, count) };
   }
 
   @callable() async listCurriculumTasks(status?: 'pending' | 'accepted' | 'rejected' | 'completed') {
@@ -3104,59 +2728,20 @@ export class OrchestratorAgent extends ActorAgent {
     return { soul: text, purpose: summarizeSoul(text) };
   }
 
-  @callable() async getMctsConfig() {
-    // Effective values: stored overrides over the engine defaults — exactly
-    // what the think-tool path and lifetime evolution will run with.
-    const o = this.config.getMctsOverrides();
-    const d = DEFAULT_CONFIG.mcts;
-    return {
-      explorationConstant: o.explorationWeight ?? d.explorationWeight,
-      maxIterations: o.budget ?? d.budget,
-      maxDepth: o.maxDepth ?? d.maxDepth,
-      branchBudget: o.branches ?? d.branches,
-    };
+  @callable() async getMctsConfig(): Promise<MctsConfigView> {
+    return getMctsConfig(this.config);
   }
 
-  @callable() async setMctsConfig(config: {
-    explorationConstant?: number; maxIterations?: number;
-    maxDepth?: number; branchBudget?: number;
-  }) {
-    this.config.setMctsOverrides({
-      explorationWeight: config.explorationConstant,
-      budget: config.maxIterations,
-      maxDepth: config.maxDepth,
-      branches: config.branchBudget,
-    });
-    return config;
+  @callable() async setMctsConfig(config: Partial<MctsConfigView>) {
+    return setMctsConfig(this.config, config);
   }
 
-  /** The self-evolution knobs: who judges the agent, whether a proven scaffold
-   *  promotes itself, and how much each loop is allowed to spend. */
-  @callable() async getEvolutionConfig() {
-    return {
-      reviewModel: this.config.getReviewModel(),
-      autoPromoteScaffold: this.config.getAutoPromoteScaffold(),
-      gepaEvalBudget: this.config.getGepaEvalBudget(),
-      shadowSampleRate: this.config.getShadowSampleRate(),
-      scaffoldExploreShare: this.config.getScaffoldExploreShare(),
-    };
+  @callable() async getEvolutionConfig(): Promise<EvolutionConfigView> {
+    return getEvolutionConfig(this.config);
   }
 
-  /** Set any subset of the evolution knobs. Returns the effective config, so a
-   *  caller sees what a clamped value actually became. */
-  @callable() async setEvolutionConfig(config: {
-    reviewModel?: string | null;
-    autoPromoteScaffold?: boolean;
-    gepaEvalBudget?: number;
-    shadowSampleRate?: number;
-    scaffoldExploreShare?: number;
-  }) {
-    if (config.reviewModel !== undefined) this.config.setReviewModel(config.reviewModel);
-    if (config.autoPromoteScaffold !== undefined) this.config.setAutoPromoteScaffold(config.autoPromoteScaffold);
-    if (config.gepaEvalBudget !== undefined) this.config.setGepaEvalBudget(config.gepaEvalBudget);
-    if (config.shadowSampleRate !== undefined) this.config.setShadowSampleRate(config.shadowSampleRate);
-    if (config.scaffoldExploreShare !== undefined) this.config.setScaffoldExploreShare(config.scaffoldExploreShare);
-    return this.getEvolutionConfig();
+  @callable() async setEvolutionConfig(config: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
+    return setEvolutionConfig(this.config, config);
   }
 
   /**
@@ -3372,22 +2957,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  for the Supervise Automations block. */
   @callable()
   async listTriggers() {
-    return {
-      triggers: this.triggerRegistry.list().map((t) => ({
-        id: t.id,
-        kind: t.kind,
-        spec: t.spec,
-        creator_trust: t.creator_trust,
-        state: t.state,
-        created_at: t.created_at,
-        paused_at: t.paused_at,
-        revoked_at: t.revoked_at,
-        rate_limit_per_min: t.rate_limit_per_min,
-        next_fire_at: t.next_fire_at,
-        last_fire_at: t.last_fire_at,
-        fire_count: t.fire_count,
-      })),
-    };
+    return listTriggers(this.triggerRegistry);
   }
 
   /** Create a durable webhook trigger. Returns the public URL.
@@ -3404,41 +2974,13 @@ export class OrchestratorAgent extends ActorAgent {
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
-    const rateLimit = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
-    // Secret stored opaquely; lookup later by trigger id.
-    const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
-    const id = this.triggerRegistry.register({
-      kind: 'webhook_durable',
-      spec: {
-        label: opts.label,
-        auth_mode: opts.auth_mode,
-        secret_id,
-        accepted_content_type: opts.accepted_content_type ?? 'application/json',
-      },
-      creator_trust: 'owner',
-      rate_limit_per_min: rateLimit,
-    }, Date.now());
-
-    // Store the secret in the per-agent webhook_secrets table (kept
-    // separate from the trigger row so it's never returned by listTriggers).
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS webhook_secrets (
-        secret_id TEXT PRIMARY KEY,
-        trigger_id TEXT NOT NULL,
-        secret TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )`);
-    if (opts.secret) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO webhook_secrets (secret_id, trigger_id, secret, created_at) VALUES (?, ?, ?, ?)`,
-        secret_id, id, opts.secret, Date.now(),
-      );
-    }
-
+    const now = Date.now();
+    const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
+    if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
     return {
-      trigger_id: id,
-      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
-      auth_mode: opts.auth_mode,
+      trigger_id: webhook.trigger_id,
+      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(webhook.trigger_id)}`,
+      auth_mode: webhook.auth_mode,
       // For HMAC/bearer modes, the operator needs the secret once to give
       // to the external system; we return it inline now and never again.
       secret: opts.secret ?? null,
@@ -3447,18 +2989,11 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Cancel a trigger (revoke). Idempotent. */
   async cancelTrigger(trigger_id: string) {
-    const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
-    return { ok: true, changed };
+    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now());
   }
 
-  /**
-   * Register a timer trigger — `timer_cron` (recurring, from a cron expr) or
-   * `timer_oneshot` (a single future fire at `atMs`). Shared by the agent's
-   * `agent.schedule` tool and the auto-GEPA scheduler, so trigger creation has
-   * one home (not inlined SQL). When it fires, alarm() publishes a timer event
-   * and the reactor wakes the agent. `trust` defaults to 'authenticated' so
-   * agent-created schedules are distinguishable from operator ones.
-   */
+  /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
+   *  scheduler's one way to create one. */
   createTimerTrigger(opts: {
     cron?: string;
     atMs?: number;
@@ -3467,19 +3002,8 @@ export class OrchestratorAgent extends ActorAgent {
     trust?: 'authenticated' | 'owner';
     /** The mission budget every turn this schedule wakes spends against. */
     missionLabel?: string;
-	  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
-	    const now = Date.now();
-	    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
-	    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
-	    if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
-	    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
-	    const id = this.triggerRegistry.register({
-	      kind,
-	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
-      creator_trust: opts.trust ?? 'authenticated',
-      next_fire_at: nextFireAt ?? undefined,
-    }, now);
-    return { id, kind, nextFireAt };
+  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
+    return createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
   /**
@@ -3519,174 +3043,24 @@ export class OrchestratorAgent extends ActorAgent {
    *  RPC is invoked by the top-level webhook route (`handleHubRequest`) so
    *  the publish + dedupe + reply channel open run atomically in the agent's
    *  storage context. */
-  async acceptWebhookDelivery(opts: {
-    trigger_id: string;
-    method: string;
-    headers: Record<string, string>;
-    body_text: string;
-    cf_mtls_verified: boolean;
-    delivery_id: string | null;
-    hmac_signature: string | null;
-    hmac_timestamp: string | null;
-    bearer_header: string | null;
-    content_type: string | null;
-    now: number;
-  }): Promise<{
-    status: 'admitted' | 'rejected';
-    http_status?: number;
-    reason?: string;
-    event_id?: string;
-    admitted?: boolean;
-  }> {
-    // Validate trigger.
-    const trigger = this.triggerRegistry.get(opts.trigger_id);
-    if (!trigger) return { status: 'rejected', http_status: 404, reason: 'trigger not found' };
-    if (trigger.state !== 'active') {
-      return { status: 'rejected', http_status: 503, reason: `trigger ${trigger.state}` };
-    }
-    if (trigger.kind !== 'webhook_durable' && trigger.kind !== 'webhook_ephemeral') {
-      return { status: 'rejected', http_status: 400, reason: 'not a webhook trigger' };
-    }
-
-    const spec = trigger.spec as {
-      accepted_content_type?: string;
-      auth_mode: 'hmac' | 'bearer' | 'mtls';
-      secret_id?: string;
-    };
-
-    // Content-type pin.
-    const receivedCT = opts.content_type?.split(';')[0].trim() ?? '';
-    if (spec.accepted_content_type && spec.accepted_content_type !== receivedCT) {
-      return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
-    }
-
-    // Auth.
-    let ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
-    if (spec.auth_mode === 'hmac') {
-      if (!spec.secret_id) return { status: 'rejected', http_status: 401, reason: 'no hmac secret configured' };
-      const secret = (await this.getWebhookSecret(opts.trigger_id)).secret;
-      if (!secret) return { status: 'rejected', http_status: 401, reason: 'secret revoked' };
-      if (!opts.hmac_signature || !opts.hmac_timestamp) {
-        return { status: 'rejected', http_status: 401, reason: 'missing hmac headers' };
-      }
-      const ts = parseInt(opts.hmac_timestamp, 10);
-      if (!Number.isFinite(ts) || Math.abs(opts.now - ts) > 5 * 60 * 1000) {
-        return { status: 'rejected', http_status: 401, reason: 'timestamp out of window' };
-      }
-      const expected = await this.computeHmacSha256(secret, `${ts}.${opts.body_text}`);
-      if (!timingSafeEqual(expected, opts.hmac_signature)) {
-        return { status: 'rejected', http_status: 401, reason: 'signature mismatch' };
-      }
-      ingress = 'webhook_hmac';
-    } else if (spec.auth_mode === 'bearer') {
-      if (!spec.secret_id) return { status: 'rejected', http_status: 401, reason: 'no bearer secret' };
-      const stored = (await this.getWebhookSecret(opts.trigger_id)).secret;
-      if (!stored) return { status: 'rejected', http_status: 401, reason: 'secret revoked' };
-      if (!opts.bearer_header || !opts.bearer_header.startsWith('Bearer ')) {
-        return { status: 'rejected', http_status: 401, reason: 'missing bearer' };
-      }
-      const presented = opts.bearer_header.slice('Bearer '.length).trim();
-      if (!timingSafeEqual(stored, presented)) {
-        return { status: 'rejected', http_status: 401, reason: 'bearer mismatch' };
-      }
-      ingress = 'webhook_bearer';
-    } else {
-      if (!opts.cf_mtls_verified) {
-        return { status: 'rejected', http_status: 401, reason: 'client cert not verified' };
-      }
-      ingress = 'webhook_mtls';
-    }
-
-    const rate = tryConsumeWebhookRateLimit(this.ctx.storage.sql, opts.trigger_id, trigger.rate_limit_per_min, opts.now);
-    if (!rate.allowed) {
-      return {
-        status: 'rejected',
-        http_status: 429,
-        reason: `rate limit exceeded (${rate.limit}/min)`,
-      };
-    }
-
-    // Parse body.
-    let parsedBody: unknown;
-    try {
-      parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
-    } catch { parsedBody = opts.body_text; }
-
-    const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
-
-	    // Open a reply channel for the event system. HTTP delivery itself returns
-	    // 202 immediately; a future held-response path can wait on this channel
-	    // without changing the durable event shape.
-    const reply_channel_id = this.replyChannels.open({
-      event_id: 'pending',
-      kind: 'http_pending',
-      holder_addr: `delivery:${delivery_id}`,
-      payload_policy: 'redact',
-      ttl_ms_override: 30_000,
-    }, opts.now);
-
-    // A delivery larger than the brief budget is spilled to this agent's own
-    // file plane first, so the woken turn gets a readable path alongside the
-    // brief instead of an unreachable — and, for JSON, syntactically broken —
-    // fragment of the thing that woke it. After the auth + rate gates, so a
-    // rejected delivery never writes a file.
-    const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
-    const bodyPath = await spillEventContent(this.rt.storage.vfs, bodySerialized);
-
-    // Publish.
-    const { id, admitted } = this.eventLog.publish({
-      descriptor: {
-        ingress,
-        variant: 'webhook',
-        payload: {
-          webhook_id: opts.trigger_id,
-          http_method: opts.method,
-          http_headers: opts.headers,
-          body: parsedBody,
-          delivery_id,
-          ...(bodyPath ? { body_path: bodyPath } : {}),
-        },
-        auth_outcome: 'verified',
-        webhook_id: opts.trigger_id,
-      },
-      now: opts.now,
-      reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
-    });
-
-    // Wake the agent to act on the new webhook event — an autonomous turn,
-    // debounced so a delivery burst drains as ONE turn. Only when newly
-    // admitted (a duplicate is already bound or in flight).
-    if (admitted) this.orch.scheduleDrain();
-
-    return { status: 'admitted', event_id: id, admitted };
+  async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
+    return acceptWebhookDelivery({
+      triggers: this.triggerRegistry,
+      log: this.eventLog,
+      replies: this.replyChannels,
+      vfs: this.rt.storage.vfs,
+      secrets: this.webhookSecrets,
+      sql: this.ctx.storage.sql,
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, opts);
   }
 
-  private async computeHmacSha256(secret: string, message: string): Promise<string> {
-    const key = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign'],
-    );
-    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
-    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  /** Look up a webhook secret by trigger id. Used by the webhook ingress at
-   *  request time. Returns null if the trigger has no secret or doesn't exist.
-   *  Deliberately NOT @callable: secret material must never be readable over
-   *  the browser websocket. */
-  async getWebhookSecret(trigger_id: string): Promise<{ secret: string | null }> {
-    try {
-      const rows = this.ctx.storage.sql.exec(
-        `SELECT secret FROM webhook_secrets WHERE trigger_id = ? ORDER BY created_at DESC LIMIT 1`,
-        trigger_id,
-      ).toArray() as Array<{ secret: string }>;
-      return { secret: rows[0]?.secret ?? null };
-    } catch {
-      return { secret: null };
-    }
+  private _webhookSecrets: WebhookSecretStore | null = null;
+  /** This workspace's webhook secrets. Deliberately not reachable over RPC:
+   *  secret material must never be readable over the browser websocket. */
+  private get webhookSecrets(): WebhookSecretStore {
+    this._webhookSecrets ??= createWebhookSecretStore(this.ctx.storage.sql);
+    return this._webhookSecrets;
   }
 
   /** Peer-agent ingress: a sender agent's DO delivers one outbox message via
@@ -3731,50 +3105,17 @@ export class OrchestratorAgent extends ActorAgent {
     origin: SubordinateReportOrigin;
   }): Promise<{ id: string; admitted: boolean }> {
     this.ensureSchema();
-    const subordinate = this.subordinateRoster.get(input.fromSubordinate);
-    if (!subordinate || subordinate.status === 'dismissed') {
-      throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
-    }
-    // Before the spill: a relay this workspace is not the audience for must not
-    // leave a file behind on its file plane either. No event exists, so no id.
-    if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate })) {
-      return { id: '', admitted: false };
-    }
-    const receivedAt = Date.now();
-    // A report longer than the brief budget is spilled to this workspace's own
-    // file plane first, so the drained turn gets a readable path alongside the
-    // brief's head instead of an unreachable tail. Before the transaction: the
-    // VFS write is async, admission is not.
-    const content = normalizeReportContent(input.content);
-    const contentPath = await spillEventContent(this.rt.storage.vfs, content);
-    const result = this.ctx.storage.transactionSync(() => {
-      const published = admitSubordinateReport(this.eventLog, {
-        fromSubordinate: input.fromSubordinate,
-        status: input.status,
-        content,
-        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
-        ...(contentPath ? { contentPath } : {}),
-        now: receivedAt,
-      });
-      if (published.admitted) {
-        this.subordinateRoster.applyReport(input.fromSubordinate, input.status);
-      }
-      return published;
-    });
-    if (result.admitted) {
-      this.broadcastSubordinatesChanged();
-      this.broadcastSubordinateEvent({
-        id: result.id,
-        kind: 'report',
-        subordinate: input.fromSubordinate,
-        status: input.status,
-        content: input.content,
-        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
-        timestamp: receivedAt,
-      });
-      this.orch.scheduleDrain();
-    }
-    return result;
+    return receiveSubordinateEvent({
+      log: this.eventLog,
+      roster: this.subordinateRoster,
+      vfs: this.rt.storage.vfs,
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      announce: (report) => {
+        this.broadcastSubordinatesChanged();
+        this.broadcastSubordinateEvent({ ...report, kind: 'report' });
+      },
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, input, Date.now());
   }
 
   // ── Mission Inbox: email ingress + owner notifications ─────────
@@ -3787,15 +3128,21 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
-  /** Union of active email_route allowlists (normally zero or one trigger). */
-  private emailAllowlist(): string[] {
-    try {
-      return this.triggerRegistry.list({ kind: 'email_route', state: 'active' })
-        .flatMap((t) => {
-          const allow = (t.spec as { allow?: unknown }).allow;
-          return Array.isArray(allow) ? allow.filter((a): a is string => typeof a === 'string') : [];
-        });
-    } catch { return []; }
+  private _emailInbox: EmailInbox | null = null;
+  /** This workspace's inbox: the trust gate, the shared inbound rate window,
+   *  and the deafness notice the agent reads while that window is refusing
+   *  mail. Held across the activation, like the in-memory window it owns. */
+  private get emailInbox(): EmailInbox {
+    this._emailInbox ??= new EmailInbox({
+      log: this.eventLog,
+      replies: this.replyChannels,
+      triggers: this.triggerRegistry,
+      vfs: () => this.rt.storage.vfs,
+      sql: this.ctx.storage.sql,
+      ownerEmail: () => this.getOwnerEmail(),
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    });
+    return this._emailInbox;
   }
 
   /** Run an inbound email through the hub from within the agent DO — the
@@ -3803,87 +3150,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  parses MIME + resolves the agent; the trust gate (owner email /
    *  email_route allowlist), publish, and thread reply channel run here
    *  atomically. Unauthorized senders never produce an event row. */
-  async acceptEmailDelivery(opts: {
-    from: string;
-    to: string;
-    subject: string;
-    body_text: string;
-    message_id: string | null;
-    in_reply_to: string | null;
-    references: string | null;
-    attachments: Array<{ filename: string; content_type: string; size: number }>;
-    now: number;
-  }): Promise<{ admitted: boolean; duplicate?: boolean; event_id?: string; reason?: string }> {
-    const ownerEmail = await this.getOwnerEmail();
-    if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
-    let rateDrop: { limit: number; resetAt: number } | null = null;
-    const result = await acceptInboundEmail({
-      log: this.eventLog,
-      replies: this.replyChannels,
-      owner_email: ownerEmail,
-      allowlist: this.emailAllowlist(),
-      vfs: this.rt.storage.vfs,
-      tryConsumeRateLimit: (now) => {
-        const decision = tryConsumeWebhookRateLimit(
-          this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now,
-        );
-        if (!decision.allowed) rateDrop = { limit: decision.limit, resetAt: decision.resetAt };
-        return decision.allowed;
-      },
-    }, opts);
-    if (!result.admitted) {
-      if (rateDrop) this.noteEmailRateDrop(rateDrop, opts.now);
-      return { admitted: false, reason: result.reason };
-    }
-    // Wake the agent for a turn, debounced — only on fresh admission (a
-    // duplicate delivery is already bound or in flight).
-    if (!result.duplicate) this.orch.scheduleDrain();
-    return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
-  }
-
-  /** The rate-limit window whose drops have already been announced, and how
-   *  many this window has dropped. In memory: an eviction re-announcing once is
-   *  harmless, and a storm must not write a row per message. */
-  private _emailDropWindow = 0;
-  private _emailDropCount = 0;
-
-  /**
-   * Tell the agent its inbox gate is dropping mail.
-   *
-   * A rate-limited delivery leaves no trace the agent can read: the sender gets
-   * nothing, the log gets nothing, and the agent goes on believing it has seen
-   * its inbox. One internal event per rate-limit window turns "I may be deaf
-   * right now" into a fact it can act on — say so, ask the sender to resend,
-   * check back after the window — without a row per dropped message.
-   */
-  private noteEmailRateDrop(drop: { limit: number; resetAt: number }, now: number): void {
-    if (drop.resetAt !== this._emailDropWindow) {
-      this._emailDropWindow = drop.resetAt;
-      this._emailDropCount = 0;
-    }
-    this._emailDropCount += 1;
-    if (this._emailDropCount > 1) return;
-    try {
-      this.eventLog.publish({
-        descriptor: {
-          ingress: 'self_emit',
-          variant: 'internal',
-          emitting_head_trust: 'self',
-          payload: {
-            kind: 'email_inbound_rate_limited',
-            // Audit detail for the operator's event log. It never reaches the
-            // model through the brief (an internal payload's bytes are not
-            // rendered); what the model reads is the live inbox line in the
-            // turn's dynamic context, which also expires with the window.
-            data: { limitPerMin: drop.limit, windowResetsAt: new Date(drop.resetAt).toISOString() },
-          },
-        },
-        now,
-      });
-      this.orch.scheduleDrain();
-    } catch (err) {
-      console.warn('[proteus] email rate-drop notice failed:', (err as Error).message);
-    }
+  async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
+    return this.emailInbox.accept(opts);
   }
 
   /** The agent's email surface for the operator UI / routes. */
@@ -3891,7 +3159,7 @@ export class OrchestratorAgent extends ActorAgent {
     const domain = this.env.EMAIL_DOMAIN;
     return {
       address: domain ? agentEmailAddress(this.name, domain) : null,
-      allowlist: this.emailAllowlist(),
+      allowlist: readEmailAllowlist(this.triggerRegistry),
       notifications: this.config.getEmailNotificationsEnabled(),
     };
   }
@@ -3902,19 +3170,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  an empty list just revokes it. Reached only through the owner-
    *  authenticated + step-up route. */
   async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
-    const cleaned = [...new Set(
-      allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
-    )];
-    const now = Date.now();
-    for (const t of this.triggerRegistry.list({ kind: 'email_route' })) {
-      if (t.state !== 'revoked') this.triggerRegistry.revoke(t.id, now);
-    }
-    if (cleaned.length > 0) {
-      this.triggerRegistry.register({
-        kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner',
-      }, now);
-    }
-    return { allowlist: cleaned };
+    return setEmailAllowlist(this.triggerRegistry, allow, Date.now());
   }
 
   /** Toggle owner-email notifications (changelog digests, job completions). */
@@ -3928,14 +3184,16 @@ export class OrchestratorAgent extends ActorAgent {
    *  Also skipped while an operator socket is live — the owner sees the
    *  card in-app; email is the away channel, not a duplicate feed. */
   private emailOwnerNotification(subject: string, text: string): void {
+    let notification: OwnerNotification | null;
     try {
-      if (!this.config.getEmailNotificationsEnabled()) return;
-      if (this.ctx.getWebSockets().length > 0) return;
+      notification = planOwnerNotification({
+        enabled: this.config.getEmailNotificationsEnabled(),
+        operatorConnected: this.ctx.getWebSockets().length > 0,
+        subject,
+        text,
+      });
     } catch { return; }
-    // Idempotency key = content hash: a retry of the same notification dedupes,
-    // while two genuinely distinct notifications (different job/status/digest)
-    // key apart and both send.
-    const key = argumentDigest({ subject, text });
+    if (!notification) return;
     void (async () => {
       await sendOwnerEmail({
         email: this.env.EMAIL,
@@ -3944,7 +3202,7 @@ export class OrchestratorAgent extends ActorAgent {
         agentDisplayName: this.safeDisplayName(),
         ownerEmail: await this.getOwnerEmail(),
         outbox: this.emailOutbox,
-      }, { subject, text, key });
+      }, notification);
     })().catch((err) => console.warn('[proteus-email] notification failed:', err));
   }
 
@@ -3990,8 +3248,4 @@ function parseArchiveCursor(value: unknown): ArchiveCursor | null {
   if (after !== null && !Number.isSafeInteger(after)) return null;
   if (!Number.isSafeInteger(rows) || (rows as number) < 0) return null;
   return { table, after: after as number | null, rows: rows as number };
-}
-
-function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
-  return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }

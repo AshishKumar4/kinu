@@ -228,8 +228,9 @@ pass:
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state` | `compaction/src/stores.ts` |
 | Subordinates | `workspace_subordinates` (parent), `subordinate_identity` (child DO) | `cf-backend/src/subordinate-support.ts` |
-| Orchestrator-local | `agent_config`, `vfs_baseline`, `turn_feedback`, `turn_craft_usage`, `webhook_secrets` | `cf-backend/src/orchestrator.ts` |
-| Email + webhooks | `email_outbox`, `webhook_rate_windows` | `cf-backend/src/email/outbox.ts`, `events/webhook-rate-limit.ts` |
+| Orchestrator-local | `agent_config`, `vfs_baseline`, `turn_feedback`, `turn_craft_usage` | `cf-backend/src/orchestrator.ts` |
+| Email + webhooks | `email_outbox` | `cf-backend/src/email/outbox.ts` |
+| Ingress gates | `webhook_rate_windows`, `webhook_secrets` (both backends) | `core/src/events/ingress/rate-limit.ts`, `secrets.ts` |
 
 ## Schema Initialization
 

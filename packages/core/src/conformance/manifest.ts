@@ -69,7 +69,6 @@ const SUBORDINATE_SCOPED = (what: string): string =>
   `${what} is a workspace-level surface; a subordinate reaches it through its orchestrator, not directly`;
 const NO_USER_PLANE = (what: string): string =>
   `${what} rides the owner's UserDO; a local session has no user plane to serve it`;
-const CF_ONLY_PLANE = (what: string): string => `${what} is a Cloudflare-plane feature with no local equivalent`;
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
 const CLI_HAS_NO_STAFF = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
@@ -228,10 +227,15 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: CLI_HAS_NO_STAFF },
     },
+    // The webhook gate — auth, replay window, rate limit — is core's, so a
+    // local session provisions the same window table the cloud one does. What
+    // the CLI has no equivalent of is the inbound HTTP transport in front of
+    // it: a local workspace mints no URL, and a delivery reaches it only
+    // through acceptWebhookDelivery.
     webhook_rate_windows: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('webhook ingress') },
-      cli: { absent: CF_ONLY_PLANE('webhook ingress') },
+      cli: WIRED,
     },
     vfs_baseline: {
       'cf-orchestrator': WIRED,

@@ -171,6 +171,30 @@ export async function settlePendingBranch(
 }
 
 /**
+ * Settle every branch launched during the just-finished turn, draining the
+ * pending list as it goes.
+ *
+ * Detached per branch: a slow head must never hold up the turn queue that is
+ * already free to take the next message. Draining is the reason this is one
+ * function rather than a loop at each call site — a branch left in the list
+ * would be settled a second time against the NEXT turn's answer.
+ */
+export function settlePendingBranches(
+  deps: {
+    sql: SqlExecutor;
+    sessionId: string;
+    broadcast: (event: BranchStatusEvent) => void;
+  },
+  pending: PendingBranch[],
+  turnId: string | null,
+  liveText: string,
+): void {
+  for (const entry of pending.splice(0)) {
+    void settlePendingBranch(deps, entry, turnId, liveText);
+  }
+}
+
+/**
  * Settle a finished branch against the finished live turn: persist the pair
  * as a branch-sourced AlternateTakeSet claimed on the live turn's assistant
  * message. Honest failures (errored branch, interrupted live turn, identical

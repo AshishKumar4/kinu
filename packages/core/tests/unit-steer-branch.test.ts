@@ -18,7 +18,9 @@ import type { HeadRuntime, SpawnedHead } from '../src/heads/controller.js';
 import type { HeadInput, HeadReport } from '../src/heads/types.js';
 import {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, startBranchHead, settleBranchIntoTakes,
+  settlePendingBranches, type BranchStatusEvent, type PendingBranch,
 } from '../src/steer-branch.js';
+import { headPhaseRunEvent } from '../src/orchestrator/heads-support.js';
 
 function setup() {
   const db = new Database(':memory:');
@@ -222,5 +224,70 @@ describe('alternate_takes schema migration', () => {
     expect(recordBranchTakeSet(sql, {
       task: 't', turnId: 'turn-1', sessionId: 'default', liveText: 'a', branchText: 'b',
     })).not.toBeNull();
+  });
+});
+
+describe('settlePendingBranches — the drain both backends run at turn end', () => {
+  /** A pending branch whose head resolves with the given answer. */
+  function pending(id: string, answer: string) {
+    const { runtime } = fakeRuntime(async (input) => completedReport(input.id, answer));
+    return { runtime, id, task: `try ${id}` };
+  }
+
+  test('settles every pending branch and empties the list', async () => {
+    const { sql } = setup();
+    const journal = new HeadJournal(sql);
+    const events: BranchStatusEvent[] = [];
+    const branches: PendingBranch[] = [];
+    for (const spec of [pending('one', 'first alternative'), pending('two', 'second alternative')]) {
+      const handle = await startBranchHead(spec.runtime, journal, {
+        task: spec.task,
+        inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
+      });
+      branches.push({ id: handle.branchId, task: spec.task, handle: Promise.resolve(handle) });
+    }
+
+    settlePendingBranches(
+      { sql, sessionId: 'default', broadcast: (e) => { events.push(e); } },
+      branches,
+      'turn-1',
+      'the live answer',
+    );
+    // Draining is synchronous even though each settle is detached: a branch
+    // left behind would be settled again against the NEXT turn's answer.
+    expect(branches).toEqual([]);
+
+    await new Promise((r) => setTimeout(r, 50));
+    expect(events.filter((e) => e.status === 'settled')).toHaveLength(2);
+  });
+
+  test('an empty list is a no-op', () => {
+    const { sql } = setup();
+    const events: BranchStatusEvent[] = [];
+    settlePendingBranches({ sql, sessionId: 'default', broadcast: (e) => { events.push(e); } }, [], 'turn-1', 'x');
+    expect(events).toEqual([]);
+  });
+});
+
+describe('headPhaseRunEvent — one row shape for both backends', () => {
+  test('a split carries the real head ids and the rationale', () => {
+    expect(headPhaseRunEvent({
+      kind: 'split', rootId: 'run-7', headIds: ['h1', 'h2'], rationale: 'two ways in',
+    })).toEqual({ type: 'head_split', rootId: 'run-7', headIds: ['h1', 'h2'], rationale: 'two ways in' });
+  });
+
+  test('a merge carries the whole cost summary, not just a head count', () => {
+    // headsWithFindings is the productivity figure: 4-of-5 empty forks were
+    // invisible until it was recorded, and a backend transcribing the row by
+    // hand is exactly how it goes missing again.
+    expect(headPhaseRunEvent({
+      kind: 'merge',
+      rootId: 'run-7',
+      cost: { headCount: 3, headsWithFindings: 1, totalTokens: 900 },
+      mergedNarrative: 'one lead held up',
+    })).toEqual({
+      type: 'head_merge', rootId: 'run-7', headCount: 3, headsWithFindings: 1,
+      totalTokens: 900, mergedNarrative: 'one lead held up',
+    });
   });
 });

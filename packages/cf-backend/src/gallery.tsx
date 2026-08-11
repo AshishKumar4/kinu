@@ -36,7 +36,8 @@ import { BrainSurface } from "@/components/surfaces/BrainSurface";
 import { EmptyState } from "@/components/surfaces/shared";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
-import type { TimelineSpan, Rpc, ToolInfo } from "@/lib/protocol";
+import type { Rpc, ToolInfo } from "@/lib/protocol";
+import type { TimelineSpan } from "@proteus/core";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ModelMenuEntry } from "@/lib/user-api";
 

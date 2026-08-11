@@ -8,7 +8,7 @@ import { Code } from "@cloudflare/kumo/components/code";
 import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { MAX_LINES_PER_FILE, type DiffLine } from "@/lib/diff";
+import { MAX_LINES_PER_FILE, type DiffLine } from "@proteus/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the

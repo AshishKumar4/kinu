@@ -6,16 +6,13 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
-  type SqlExec,
+  acceptInboundEmail, inboundEmailDropNotice, normalizeEmailAddress,
+  type EmailIngressDeps, type IncomingEmail, type SqlExec,
 } from '@proteus/core';
 import {
-  agentEmailAddress, agentNameFromRecipient, normalizeEmailAddress,
+  agentEmailAddress, agentNameFromRecipient,
   parseInboundMime, stripQuotedReply,
 } from '../src/email/inbound.js';
-import {
-  acceptInboundEmail, inboundEmailDropNotice,
-  type EmailIngressDeps, type IncomingEmail,
-} from '../src/events/ingress/email.js';
 import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route.js';
 import { createMemoryVfs } from '@proteus/test-utils';
 

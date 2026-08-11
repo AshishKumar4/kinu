@@ -155,11 +155,6 @@ async function runOneShot(
   opts: AgentClientFlags & OneShotSessionFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
-  // Same @path semantics as the chat surfaces: images/PDFs inline as file
-  // parts, other files stay path references the agent reads with its tools.
-  const prompt = await resolvePromptAttachments(rawPrompt);
-  for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
-
   // The daemon is this process's deferred-work host: a one-shot run never
   // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
   // what eventually runs it (see AgentOrchestrator's exit contract).
@@ -169,6 +164,12 @@ async function runOneShot(
     { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },
     'one-shot',
   );
+
+  // Same @path semantics as the chat surfaces: images/PDFs inline as file
+  // parts, other files stay path references the agent reads with its tools.
+  // Resolved after the client exists — it reports the backend's inline cap.
+  const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes });
+  for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;

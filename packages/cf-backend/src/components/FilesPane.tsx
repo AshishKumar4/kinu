@@ -16,7 +16,8 @@ import {
   WarningIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import { useParams } from "react-router";
-import type { DirEntry, Rpc } from "@/lib/protocol";
+import type { Rpc } from "@/lib/protocol";
+import type { DirEntry } from "@proteus/core";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
 

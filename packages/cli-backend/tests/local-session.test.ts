@@ -11,13 +11,12 @@ import type { LLMProviderConfig } from '@proteus/core';
 import {
   DEFAULT_WORKERS_AI_MODEL_SPEC, FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
   initSearchTables, initAlternateTakesTable, captureAlternateTakes, MAX_CONCURRENT_DETACHED_JOBS,
-  type AgentsToolDeps, type StrategyContext,
+  type AgentsToolDeps, type StrategyContext, createAgentSelfProvider,
 } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
-import { createLocalAgentSelfProvider } from '../src/agent-self.js';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -1053,7 +1052,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('Node execute fallback exposes the local agent.schedule namespace', async () => {
     let received: { atMs?: number; label?: string } | null = null;
     const executeTool = createNodeExecuteToolFactory({
-      extraProviders: [createLocalAgentSelfProvider({
+      extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
@@ -1078,7 +1077,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('Node execute fallback exposes agent.compactNow, arming the ladder for the next turn', async () => {
     let arms = 0;
     const executeTool = createNodeExecuteToolFactory({
-      extraProviders: [createLocalAgentSelfProvider({
+      extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),

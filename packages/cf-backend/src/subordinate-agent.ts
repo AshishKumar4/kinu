@@ -13,6 +13,8 @@ import {
   type ParentRpcFileHandle,
   type SubordinateHandoff,
   type SubordinateReportStatus,
+  // Read models — the same control-plane implementations the orchestrator uses.
+  cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome,
 } from '@proteus/core';
 import {
   ActorAgent,
@@ -249,44 +251,27 @@ export class SubordinateAgent extends ActorAgent {
   @callable()
   async getStoredModelSpec(): Promise<{ spec: string | null }> {
     this.ensureSchema();
-    return { spec: this.getStoredModelId() };
+    return getStoredModelSpec(this.config);
   }
 
   @callable()
   async setModel(spec: string): Promise<{ ok: true; spec: string }> {
     this.ensureSchema();
-    try {
-      const normalized = this.providerRegistry().normalizeSpecSync(spec);
-      this.config.setModel(normalized);
-      this.invalidateModelCaches();
-      return { ok: true, spec: normalized };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`setModel(${spec}) failed: ${message}`);
-    }
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => this.invalidateModelCaches(),
+    }, spec);
   }
 
   @callable()
-  async cancelCurrentWork(): Promise<{ ok: true; cancelledJobs: string[]; abortedTools: number }> {
+  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
     this.ensureSchema();
-    const cancelledJobs = this.jobRunner.cancelRunning();
-    let abortedTools = 0;
-    for (const controller of [...this._activeToolControllers]) {
-      if (!controller.signal.aborted) {
-        try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
-        abortedTools++;
-      }
-      this._activeToolControllers.delete(controller);
-    }
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'work_cancelled',
-        cancelledJobs,
-        abortedTools,
-        timestamp: Date.now(),
-      }));
-    } catch { /* no connected clients */ }
-    return { ok: true, cancelledJobs, abortedTools };
+    return cancelCurrentWork({
+      jobRunner: this.jobRunner,
+      activeToolControllers: this._activeToolControllers,
+      broadcast: (payload) => this.broadcast(payload),
+    });
   }
 
   private async sendReport(
