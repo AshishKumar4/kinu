@@ -28,6 +28,7 @@ import {
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
+  EVIDENCE_BUDGETS, evidenceWindow,
   createAgentConfigStore, selectFastModel,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
@@ -738,7 +739,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
     generateReflection: async (task) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: `What went wrong? ${task.slice(0, 500)}\nOne sentence.` }],
+        messages: [{ role: "user" as const, content: `What went wrong? ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\nOne sentence.` }],
         ...effortFor('reflection'),
       });
       return result.text.trim();

@@ -20,6 +20,10 @@ import type { SqlExecutor } from '../types/primitives.js';
 
 // session_id 'mcts' holds MCTS tree nodes, not conversation — excluded from
 // search and browse inline below.
+/** Default per-message budget in scroll/browse results. A DEFAULT, not a
+ *  ceiling: scroll honours the caller's max_chars, because scroll IS the
+ *  read-back path — a recall surface whose reads are capped with no way to
+ *  ask for more is a keyhole, not recall. */
 const MAX_MESSAGE_CHARS = 700;
 const SNIPPET_TOKENS = 24;
 
@@ -62,8 +66,10 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, n));
 }
 
-function truncate(text: string): string {
-  return text.length > MAX_MESSAGE_CHARS ? text.slice(0, MAX_MESSAGE_CHARS) + '…' : text;
+function truncate(text: string, maxChars = MAX_MESSAGE_CHARS): string {
+  return text.length > maxChars
+    ? `${text.slice(0, maxChars)}… [+${text.length - maxChars} chars — pass max_chars to read the full message]`
+    : text;
 }
 
 interface HitRow { id: string; session_id: string; role: string; created_at: number; snip: string }
@@ -131,7 +137,7 @@ export class SessionSearchStore {
 
   /** A window of ±`window` messages around the anchor message, in transcript
    *  order. Returns null when the anchor id doesn't exist. */
-  scroll(aroundMessageId: string, window = 5): SessionScrollResult | null {
+  scroll(aroundMessageId: string, window = 5, maxChars?: number): SessionScrollResult | null {
     this.ensure();
     const anchor = this.sql<MsgRow & { session_id: string }>`
       SELECT id, session_id, role, content, created_at, rowid AS rid
@@ -157,8 +163,9 @@ export class SessionSearchStore {
     const totalBefore = this.count(anchor.session_id, anchor.created_at, anchor.rid, 'before');
     const totalAfter = this.count(anchor.session_id, anchor.created_at, anchor.rid, 'after');
 
+    const perMessage = maxChars !== undefined ? Math.max(50, Math.trunc(maxChars)) : MAX_MESSAGE_CHARS;
     const shape = (m: MsgRow): SessionScrollMessage => ({
-      id: m.id, role: m.role, content: truncate(m.content), createdAt: m.created_at,
+      id: m.id, role: m.role, content: truncate(m.content, perMessage), createdAt: m.created_at,
     });
     return {
       sessionId: anchor.session_id,

@@ -685,4 +685,26 @@ describe("proteus exec — stdin must not hang a scripted run", () => {
     // EOF that never arrives.
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 20_000);
+
+  test("a pipe that starts delivering within the grace is read to EOF — bytes are never dropped", async () => {
+    const cli = join(import.meta.dir, "..", "bin", "cli.ts");
+    const home = mkdtempSync(join(tmpdir(), "proteus-stdin-"));
+    const proc = Bun.spawn(["bun", cli, "exec", "--workspace", "nonexistent", "hello"], {
+      stdin: "pipe",
+      stdout: "ignore",
+      stderr: "pipe",
+      env: { ...process.env, PROTEUS_HOME: home },
+    });
+    // First chunk inside the grace window, second well past it: the old
+    // whole-read race resolved '' at 250ms and dropped BOTH chunks silently.
+    proc.stdin.write("chunk-one ");
+    await new Promise((r) => setTimeout(r, 600));
+    proc.stdin.write("chunk-two");
+    await proc.stdin.end();
+    await proc.exited;
+    const stderr = await new Response(proc.stderr).text();
+    rmSync(home, { recursive: true, force: true });
+    // A delivering pipe is a real pipe: it must never be reported as ignored.
+    expect(stderr).not.toContain("stdin was open but idle");
+  }, 20_000);
 });

@@ -317,8 +317,9 @@ export function buildProgram(): Command {
       .command('evolve <name>')
       .helpGroup(INSPECT)
       .description('Trigger an MCTS evolution cycle')
-      .option('--budget <n>', 'MCTS iterations', '2')
-      .option('--branches <n>', 'Branches per expansion', '2'),
+      .option('--budget <n>', 'MCTS iterations (default: the engine default)')
+      .option('--branches <n>', 'Branches per expansion (default: the engine default)')
+      .option('--max-cost <usd>', 'Cost ceiling in USD (default: the engine default)'),
   ).action(wrapAction(evolveCommand));
 
   llmOpts(

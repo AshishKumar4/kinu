@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import { runMCTS, type MCTSProgressEvent, type SearchNode } from '@proteus/core';
+import { runMCTS, DEFAULT_CONFIG, type MCTSProgressEvent, type SearchNode } from '@proteus/core';
 import type { AgentRuntime, SessionWriter, SessionMessage } from '@proteus/core';
 import { openWorkspaceCLI } from '@proteus/cli-backend';
 import { CONFIG_PATH, agentDbPath, createCodexAuthStore, resolveAgentRef, resolveLLMConfig, resolveProviderCredentials } from '../config.js';
@@ -10,7 +10,7 @@ import {
 } from '../display.js';
 
 export async function evolveCommand(name: string, opts: {
-  budget?: string; branches?: string; model?: string; baseUrl?: string; auth?: string;
+  budget?: string; branches?: string; maxCost?: string; model?: string; baseUrl?: string; auth?: string;
 }): Promise<void> {
   const configured = resolveAgentRef(name);
   if (configured?.mode === 'cloud') {
@@ -25,8 +25,11 @@ export async function evolveCommand(name: string, opts: {
     process.exit(1);
   }
 
-  const budget = parseInt(opts.budget ?? '2', 10);
-  const branches = parseInt(opts.branches ?? '2', 10);
+  // One set of defaults: the engine's (core DEFAULT_CONFIG.mcts). The CLI
+  // used to half them silently — a weaker search than every other caller ran.
+  const budget = opts.budget !== undefined ? parseInt(opts.budget, 10) : DEFAULT_CONFIG.mcts.budget;
+  const branches = opts.branches !== undefined ? parseInt(opts.branches, 10) : DEFAULT_CONFIG.mcts.branches;
+  const maxCostUSD = opts.maxCost !== undefined ? Number(opts.maxCost) : DEFAULT_CONFIG.mcts.maxCostUSD;
   const llmConfig = resolveLLMConfig(opts);
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
@@ -58,7 +61,7 @@ export async function evolveCommand(name: string, opts: {
 
   try {
     const result = await runMCTS(rt, session, task, {
-      budget, branches, maxCostUSD: 5,
+      budget, branches, maxCostUSD,
       onProgress: (event) => {
         if (event.type === 'branch-failed') failed++;
         const line = formatMctsProgress(event, budget);

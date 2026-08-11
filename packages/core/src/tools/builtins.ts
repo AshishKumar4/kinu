@@ -368,6 +368,7 @@ interface MemoryToolInput {
   around_message_id?: string;
   window?: number;
   limit?: number;
+  max_chars?: number;
 }
 
 interface WebToolInput {
@@ -642,11 +643,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // around_message_id → scroll, query → search, neither → browse.
   const sessionSearch = new SessionSearchStore(rt.storage.sql);
   const runSessionsAction = (args: {
-    query?: string; around_message_id?: string; window?: number; limit?: number;
+    query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number;
   }): unknown => {
     try {
       if (args.around_message_id) {
-        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5);
+        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
         if (!view) return { error: `no message with id ${args.around_message_id}` };
         return { mode: 'scroll', ...view };
       }
@@ -720,6 +721,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         window: {
           type: 'number',
           description: 'For action=sessions scroll: messages on each side of the anchor (default 5, max 20).',
+        },
+        max_chars: {
+          type: 'number',
+          description: 'For action=sessions scroll: per-message character budget (default 700). Raise it to read full messages — truncated messages say how much was cut.',
         },
         limit: {
           type: 'number',

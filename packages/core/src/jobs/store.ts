@@ -58,14 +58,17 @@ function toJob(r: Row): BackgroundJob {
 }
 
 /** Serialize a job result for storage — never throws (a non-serializable value,
- *  e.g. a BigInt from execute_tools, falls back to String()), with a truncation
- *  marker so the synthesis turn knows when content was clipped. */
-export function serializeJobResult(result: unknown, limit = 16_000): string {
-  let s: string;
-  try { s = JSON.stringify(result ?? null); } catch { s = String(result); }
-  return s.length > limit
-    ? s.slice(0, limit) + `\n…[truncated ${s.length - limit} chars; the full result was longer]`
-    : s;
+ *  e.g. a BigInt from execute_tools, falls back to String()). Stored WHOLE:
+ *  the wake message promises "read the full result with agent.jobResult", and
+ *  a row truncated at storage time made that a lie with no recovery path —
+ *  while the read-back already rides the execute_tools clamp, which windows an
+ *  oversize result and spills the full text with an address. Inputs must be
+ *  whole for a different reason: driveResume JSON.parses them, and a marker
+ *  appended to a clipped input turned every resumed fork into a corrupted
+ *  string input. Both are model-authored payloads, bounded far below the row
+ *  ceiling by the tool-result clamp and provider output limits. */
+export function serializeJobResult(result: unknown): string {
+  try { return JSON.stringify(result ?? null); } catch { return String(result); }
 }
 
 export function initBackgroundJobsTable(execRaw: RawSqlExec): void {

@@ -17,6 +17,7 @@
 import * as v from 'valibot';
 import { nanoid } from '../utils/nanoid.js';
 import { jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import {
   type HeadId,
   type HeadInput,
@@ -477,10 +478,10 @@ async function scoreMergeNarrative(judge: LLM, rationale: string, narrative: str
   const prompt = `You are scoring how well a synthesized answer resolves a task that was explored by several parallel reasoning heads.
 
 Task / split rationale:
-${rationale.slice(0, 1500)}
+${evidenceWindow(rationale, EVIDENCE_BUDGETS.mergeRationale)}
 
 Synthesized answer:
-${narrative.slice(0, 3000)}
+${evidenceWindow(narrative, EVIDENCE_BUDGETS.mergeNarrative)}
 
 Score from 0.0 to 1.0 for how completely and correctly the answer resolves the task: specific and grounded beats vague.
 JSON shape:

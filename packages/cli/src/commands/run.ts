@@ -579,13 +579,44 @@ function parseRpc(line: string): { ok: true; value: Record<string, unknown> } | 
   }
 }
 
-/** Grace period for OPTIONAL stdin — see buildPrompt. Long enough for a real
- *  pipe that already holds data, short enough that a harness which inherits an
- *  idle stdin is not stalled. */
+/** Grace period for OPTIONAL stdin's FIRST byte — see buildPrompt. Long
+ *  enough for a real pipe to start delivering, short enough that a harness
+ *  which inherits an idle stdin is not stalled. */
 const OPTIONAL_STDIN_GRACE_MS = 250;
 
 async function readStdin(): Promise<string> {
   return await new Response(Bun.stdin.stream()).text();
+}
+
+/**
+ * Read optional stdin with first-byte semantics: if ANY data arrives within
+ * the grace window, the pipe is real — wait for EOF and keep every byte. Only
+ * a pipe that stayed silent for the whole window reads as absent. The old
+ * whole-read race dropped bytes already received when EOF missed the window
+ * (a slow `cat bigfile |` lost its input mid-stream, silently).
+ */
+async function readOptionalStdin(): Promise<string> {
+  const reader = Bun.stdin.stream().getReader();
+  const first = await Promise.race([
+    reader.read(),
+    new Promise<'idle'>((resolve) => setTimeout(() => resolve('idle'), OPTIONAL_STDIN_GRACE_MS)),
+  ]);
+  if (first === 'idle') {
+    void reader.cancel().catch(() => {});
+    process.stderr.write(
+      `note: stdin was open but idle for ${OPTIONAL_STDIN_GRACE_MS}ms and was ignored; ` +
+      'pipe data promptly or close it (< /dev/null)\n',
+    );
+    return '';
+  }
+  const decoder = new TextDecoder();
+  let text = first.done ? '' : decoder.decode(first.value, { stream: true });
+  while (true) {
+    const chunk = await reader.read();
+    if (chunk.done) break;
+    text += decoder.decode(chunk.value, { stream: true });
+  }
+  return text + decoder.decode();
 }
 
 /**
@@ -603,12 +634,7 @@ async function buildPrompt(parts: string[]): Promise<string> {
   const argvPrompt = chunks.join(' ').trim();
   let stdin = '';
   if (!process.stdin.isTTY) {
-    stdin = argvPrompt
-      ? await Promise.race([
-          readStdin(),
-          new Promise<string>((resolve) => setTimeout(() => resolve(''), OPTIONAL_STDIN_GRACE_MS)),
-        ])
-      : await readStdin();
+    stdin = argvPrompt ? await readOptionalStdin() : await readStdin();
   }
   if (stdin.trim()) chunks.push(`<stdin>\n${stdin.trim()}\n</stdin>`);
   return chunks.join(' ').trim();

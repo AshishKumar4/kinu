@@ -109,7 +109,7 @@ export class BackgroundJobRunner {
    *  (threshold-detach logs 'bg_job_started'; retry logs 'bg_job_retry'). */
   create(kind: string, input: unknown, controller: AbortController): string {
     const id = `bgjob-${nanoid()}`;
-    this.deps.store.create({ id, kind, input: serializeJobResult(input, 8_000), now: Date.now() });
+    this.deps.store.create({ id, kind, input: serializeJobResult(input), now: Date.now() });
     this.controllers.set(id, controller);
     return id;
   }

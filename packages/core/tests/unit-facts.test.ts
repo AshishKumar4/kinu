@@ -83,12 +83,13 @@ describe('agent_facts', () => {
     expect(top[1].key).toBe('b');
   });
 
-  test('renderFactsBlock truncates at maxChars', () => {
+  test('renderFactsBlock truncates at maxChars and DISCLOSES what it dropped', () => {
     const { facts } = createTestFactsStore();
     for (let i = 0; i < 100; i++) facts.upsert(`k${i}`, `v${i}`.repeat(20));
     const block = renderFactsBlock(facts.recentTopK(50), { maxChars: 200 });
-    expect(block.length).toBeLessThanOrEqual(200);
-    expect(block.split('\n').length).toBeGreaterThan(0);
+    const [disclosure, ...factLines] = block.split('\n').reverse();
+    expect(factLines.join('\n').length).toBeLessThanOrEqual(200);
+    expect(disclosure).toMatch(/…and \d+ more facts not shown/);
   });
 
   test('renderFactsBlock empty input returns empty string', () => {

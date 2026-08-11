@@ -14,6 +14,8 @@
 /** First line of every stored summary — lets consumers and tests recognize a
  *  compaction checkpoint, and `stripCheckpointPreamble` recover the body for
  *  iterative updates. */
+import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
+
 export const CONTEXT_CHECKPOINT_PREFIX = '[CONTEXT CHECKPOINT — reference only]';
 
 const CHECKPOINT_PREAMBLE =
@@ -88,7 +90,7 @@ function rules(budgetTokens: number): string {
 
 function activeTaskBlock(latestUserAsk?: string): string {
   if (!latestUserAsk?.trim()) return '';
-  const ask = latestUserAsk.length > 4_000 ? `${latestUserAsk.slice(0, 4_000)}…` : latestUserAsk;
+  const ask = evidenceWindow(latestUserAsk, EVIDENCE_BUDGETS.storedUserMessage);
   return `THE USER'S MOST RECENT REQUEST (copy this verbatim into "## Active Task"):
 """
 ${ask}

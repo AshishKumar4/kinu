@@ -360,8 +360,9 @@ Trigger an MCTS evolution cycle.
 
 | Option | What it does |
 | --- | --- |
-| `--budget <n>` | MCTS iterations (default: "2") |
-| `--branches <n>` | Branches per expansion (default: "2") |
+| `--budget <n>` | MCTS iterations (default: the engine default) |
+| `--branches <n>` | Branches per expansion (default: the engine default) |
+| `--max-cost <usd>` | Cost ceiling in USD (default: the engine default) |
 | `--model <id>` | Model ID (env: PROTEUS_MODEL) |
 | `--base-url <url>` | LLM API base URL (env: PROTEUS_BASE_URL) |
 | `--auth <header>` | Auth header value (env: PROTEUS_AUTH) |

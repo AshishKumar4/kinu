@@ -14,15 +14,22 @@ export async function cmdFind(vfs: VFS, args: string[]): Promise<string> {
 	const namePattern = opts.name ? picomatch(opts.name as string) : null;
 	const typeFilter = opts.type as string | undefined;
 
-	const entries = await walkRecursive(vfs, path, maxDepth, 200);
+	const walk = await walkRecursive(vfs, path, maxDepth, 2000);
 	const results: string[] = [];
 
-	for (const e of entries) {
+	for (const e of walk.entries) {
 		if (typeFilter === "f" && e.stat.isDirectory()) continue;
 		if (typeFilter === "d" && !e.stat.isDirectory()) continue;
 		const basename = e.path.split("/").pop() ?? "";
 		if (namePattern && !namePattern(basename)) continue;
 		results.push(e.path);
+	}
+
+	// The entry bound is a runaway guard, never intent — always disclosed. The
+	// default depth is a guard too, but -maxdepth is the user's own filter.
+	if (walk.truncated) results.push("... (walk stopped at 2000 entries; narrow the path or add -maxdepth)");
+	else if (walk.depthPruned && !args.some((a) => a === "-maxdepth" || a.startsWith("--maxdepth"))) {
+		results.push(`... (directories deeper than ${maxDepth} levels not listed)`);
 	}
 
 	return results.join("\n");

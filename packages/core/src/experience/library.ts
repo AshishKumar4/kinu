@@ -93,7 +93,7 @@ export interface ExperienceLibraryStore {
 }
 
 const DEFAULT_SEARCH_LIMIT = 10;
-const MAX_SEARCH_LIMIT = 25;
+
 
 interface LibraryRow extends Record<string, unknown> {
   id: string;
@@ -166,7 +166,9 @@ export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
     },
 
     search(options: ExperienceSearchOptions = {}) {
-      const limit = Math.min(MAX_SEARCH_LIMIT, Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT));
+      // The caller's limit is honoured — a reader that asks for 50 rows gets
+      // 50 rows, not a silent 25.
+      const limit = Math.max(1, options.limit ?? DEFAULT_SEARCH_LIMIT);
       const match = options.query ? ftsQuery(options.query) : null;
       // '' matches nothing for kind (the CHECK constraint forbids it) and
       // nothing for a workspace name, so one statement per shape serves both

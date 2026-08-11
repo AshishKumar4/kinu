@@ -96,7 +96,7 @@ import {
   resolveTurnSkills, filterToolNamesBySkills, skillsVfsOver, renderFactsForTurn,
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (takes capture + inherited-context digest)
-  recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP,
+  recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
   type ProductChangeToolDeps,
   isVfsError,
   type ParentRpcResult,
@@ -720,6 +720,7 @@ export abstract class ActorAgent extends Think<Env> {
         providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
       });
     const judgeTask = task.slice(0, 2000);
+
     const result = await runSampledShadowEval({
       rt: this.rt,
       config: this.config,
@@ -1578,12 +1579,16 @@ export abstract class ActorAgent extends Think<Env> {
           LIMIT ${INHERITED_CONTEXT_CAP}
         ) sub
         ORDER BY created_at ASC`;
-      return rows.map((r) => ({
-        id: r.id,
-        role: narrowInheritedRole(r.role),
-        content: uiMessageText(r.content),
-        createdAt: Date.parse(r.created_at) || 0,
-      }));
+      const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
+      return [
+        ...inheritedContextOmissionNote(total, rows.length),
+        ...rows.map((r) => ({
+          id: r.id,
+          role: narrowInheritedRole(r.role),
+          content: uiMessageText(r.content),
+          createdAt: Date.parse(r.created_at) || 0,
+        })),
+      ];
     } catch {
       // assistant_messages table may not yet exist on a fresh agent.
       return [];

@@ -58,9 +58,9 @@ export async function cmdGrep(vfs: VFS, args: string[], stdin?: string): Promise
 	if (opts.r) {
 		const root = paths[0] ?? ".";
 		const base = root === "." ? "" : root;
-		const entries = await walkRecursive(vfs, base, 20, 200);
+		const walk = await walkRecursive(vfs, base, 20, 2000);
 
-		for (const e of entries) {
+		for (const e of walk.entries) {
 			if (e.stat.isDirectory()) continue;
 			const basename = e.path.split("/").pop() ?? "";
 			if (includeMatch && !includeMatch(basename)) continue;
@@ -70,6 +70,9 @@ export async function cmdGrep(vfs: VFS, args: string[], stdin?: string): Promise
 			} catch { continue; }
 			if (matchCount >= maxMatches) break;
 		}
+		// A silently bounded walk turns "no matches" into a falsehood — say so.
+		if (walk.truncated) results.push("... (file walk stopped at 2000 entries; narrow the path or use --include)");
+		else if (walk.depthPruned) results.push("... (directories deeper than 20 levels not searched)");
 	} else {
 		for (const p of paths) {
 			try {

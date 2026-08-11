@@ -7,6 +7,15 @@
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { upsertCraftedTool } from './conflict.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS } from '../prompts/evidence-window.js';
+
+/** Head-only cut with a named omission — code must stay contiguous for a
+ *  rewriter (same rationale as gepaParentSource). */
+function truncateSource(code: string): string {
+  return code.length <= EVIDENCE_BUDGETS.assertionCode
+    ? code
+    : `${code.slice(0, EVIDENCE_BUDGETS.assertionCode)}\n// [... ${code.length - EVIDENCE_BUDGETS.assertionCode} chars omitted — generalize what is shown]`;
+}
 
 /**
  * When a branch scores high (>0.8) and used codemode, try to generalize
@@ -17,12 +26,17 @@ export async function maybeStoreCraftedTool(
   codemodeCode: string,
   score: number,
 ): Promise<void> {
-  // Size filters: too small (trivial) or too large (task-specific)
-  if (codemodeCode.length < 50 || codemodeCode.length > 1500) return;
+  // Too small to encode a pattern (trivial one-liners). There is no upper
+  // gate: whether a winning branch's code generalizes is a semantic question
+  // the generalization call below answers — a 1500-char size ceiling was a
+  // proxy that silently excluded every substantial win from the craft loop.
+  // The prompt budget is the same contiguous-code window the GEPA rewriter
+  // uses (a rewrite of code with a hole comes back with a hole).
+  if (codemodeCode.length < 50) return;
 
   // Ask LLM to generalize the pattern
   const generalized = await rt.llm.complete(
-    `This JavaScript code was effective (score ${score.toFixed(2)}):\n\`\`\`js\n${codemodeCode}\n\`\`\`\n\n` +
+    `This JavaScript code was effective (score ${score.toFixed(2)}):\n\`\`\`js\n${truncateSource(codemodeCode)}\n\`\`\`\n\n` +
     `Rewrite as a parameterized reusable function.\n` +
     `JSON shape: {"name":"snake_case","description":"one line","code":"async ({param1,param2}) => { ... }"}\n` +
     jsonObjectOnlyInstruction(),

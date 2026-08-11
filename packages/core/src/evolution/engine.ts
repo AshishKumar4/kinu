@@ -44,6 +44,7 @@ import type {
 import { DEFAULT_EVOLUTION_CONFIG } from './types.js';
 import { isoDate } from '../utils/date.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
 import { updateCraftScores } from '../craft/ema.js';
@@ -163,7 +164,7 @@ export function buildScaffoldProposalPrompt(
     `\`\`\`js\n${baseScaffold}\n\`\`\`\n\n` +
     (archive ? renderArchiveBlock(archive) : '') +
     (pathologies.length > 0 ? renderPathologyBlock(pathologies) : '') +
-    `Based on these session patterns:\n${reflection.slice(0, 500)}\n\n` +
+    `Based on these session patterns:\n${evidenceWindow(reflection, EVIDENCE_BUDGETS.reflection)}\n\n` +
     `Propose an improved scaffold. The scaffold MUST:\n` +
     `1. Export exactly \`async function* run(rt, task)\`. There is NO host runtime object in the ` +
     `sandbox — BOTH parameters receive the task STRING; read the task from either.\n` +
@@ -642,7 +643,7 @@ export class EvolutionEngine {
 
     const reflection = await this.fastLlm.complete(
       `You are reflecting on your recent interactions to improve yourself.\n\n` +
-      `Recent lessons:\n${recentLessons.slice(0, 1500)}\n\n` +
+      `Recent lessons:\n${evidenceWindow(recentLessons, EVIDENCE_BUDGETS.lessons)}\n\n` +
       `In 2-3 bullet points, what patterns do you see? What should you do differently?\n` +
       `Focus on actionable changes to your behavior.`,
     );
@@ -888,20 +889,20 @@ export class EvolutionEngine {
   private async generateTurnReflection(
     turn: CompletedTurn, outcome: TurnOutcome | null, quality: number, followup: string | null,
   ): Promise<string> {
-    const summary = turn.assistantResponse.slice(0, 300);
+    const summary = evidenceWindow(turn.assistantResponse, EVIDENCE_BUDGETS.outcomeAssistantResponse);
     const toolSummary = turn.toolCalls.length > 0
       ? `Tools used: ${turn.toolCalls.map(tc => tc.name).join(', ')}`
       : 'No tools used';
 
     return this.fastLlm.complete(
       `A recent interaction landed ${outcome ?? 'unobserved'} at ${quality.toFixed(2)}/1.0 quality.\n` +
-      `User asked: "${turn.userMessage.slice(0, 200)}"\n` +
+      `User asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n` +
       `Response: "${summary}"\n` +
       `${toolSummary}\n` +
       `${renderDelegationFeatures(delegationFeatures(turn))}\n` +
       `Delegation rubric: On corrected/frustrated requests with 2+ independent parts, consider a long linear grind with zero delegation a lesson to decompose and staff subordinates or fork; credit effective staffing/forking on accepted turns; flag delegation overhead when spawned subordinates contributed nothing.\n` +
       `${turn.hadError ? 'An error occurred.\n' : ''}` +
-      `${followup ? `The user then replied: "${followup.slice(0, 300)}"\n` : ''}\n` +
+      `${followup ? `The user then replied: "${evidenceWindow(followup, EVIDENCE_BUDGETS.outcomeFollowup)}"\n` : ''}\n` +
       `In one sentence, what specifically should be done differently next time?`,
     );
   }
@@ -915,13 +916,13 @@ export class EvolutionEngine {
     if (meaningfulCalls.length === 0) return;
 
     const callSummary = meaningfulCalls
-      .map(tc => `${tc.name}(${JSON.stringify(tc.args).slice(0, 200)}) → ${JSON.stringify(tc.result).slice(0, 200)}`)
+      .map(tc => `${tc.name}(${evidenceWindow(JSON.stringify(tc.args), EVIDENCE_BUDGETS.patternToolCall)}) → ${evidenceWindow(JSON.stringify(tc.result), EVIDENCE_BUDGETS.patternToolCall)}`)
       .join('\n');
 
     // Ask the LLM to generalize into a reusable function
     const generalized = await this.fastLlm.complete(
       `A successful interaction used these tool calls:\n${callSummary}\n\n` +
-      `The user asked: "${turn.userMessage.slice(0, 200)}"\n\n` +
+      `The user asked: "${evidenceWindow(turn.userMessage, EVIDENCE_BUDGETS.outcomeUserMessage)}"\n\n` +
       `Extract a reusable pattern as a JavaScript async arrow function.\n` +
       `{"name":"snake_case_name","description":"one line description","params":{"type":"object","properties":{...},"required":[...]},"code":"async (args) => { ... }"}\n` +
       `The code must be a self-contained async arrow function that takes an args object.\n` +

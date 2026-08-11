@@ -15,11 +15,12 @@ import { generateText, tool, jsonSchema, type ToolSet, type LanguageModel } from
 import {
   type HeadInput, type HeadReport, type HeadId,
   type Evidence, type Decision, type ArtifactRef,
-  budgetExhausted, MAX_HEAD_STEPS, NOMINAL_STEP_TOKENS,
+  budgetExhausted, NOMINAL_STEP_TOKENS,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -234,8 +235,7 @@ export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: rea
 export function buildHeadMessages(input: HeadInput): Array<{ role: 'user' | 'assistant'; content: string }> {
   const lines: string[] = ['Here is the conversation you inherit:', ''];
   for (const m of input.inheritedContext) {
-    const trimmed = m.content.length > 400 ? m.content.slice(0, 400) + '…' : m.content;
-    lines.push(`[${m.role}${m.toolName ? `/${m.toolName}` : ''}] ${trimmed}`);
+    lines.push(`[${m.role}${m.toolName ? `/${m.toolName}` : ''}] ${evidenceWindow(m.content, EVIDENCE_BUDGETS.inheritedMessage)}`);
   }
   lines.push('', `Now focus on your assigned task: ${input.task}`);
   return [{ role: 'user', content: lines.join('\n') }];
@@ -289,7 +289,12 @@ export interface HeadInferenceDeps {
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
   const { capture } = deps;
   const startedAt = Date.now();
-  const maxSteps = Math.min(MAX_HEAD_STEPS, Math.max(1, Math.floor(input.budget.maxTokens / NOMINAL_STEP_TOKENS)));
+  // Runaway guard, not a working limit: it exists for the loops the marginal
+  // token meter cannot see (steps that add ~no prompt growth and ~no output),
+  // so it is sized at twice the budget's nominal step estimate — genuine work
+  // is ended by the token pool or the wall clock, and when this guard itself
+  // fires the report says so instead of presenting the head as finished.
+  const maxSteps = Math.max(1, 2 * Math.floor(input.budget.maxTokens / NOMINAL_STEP_TOKENS));
 
   // Gross spend — what the report carries and the cost ledger debits. The budget
   // gate below reads `budgetCharged` instead (see HeadCapture.recordStepUsage).
@@ -320,15 +325,24 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       },
     });
 
+    const budgetGate = budgetExhausted(input.budget, capture.tokenUsage.budgetCharged);
+    // A run that used every step without the model ever choosing to stop was
+    // ended by the guard mid-flight — reporting it 'completed' would hand the
+    // parent a mid-flight thought as a finished answer, the exact fabrication
+    // incompleteHeadSummary exists to prevent on the token/wall-clock paths.
+    const ranOutOfSteps = result.steps.length >= maxSteps && result.finishReason !== 'stop';
     const status: HeadReport['status'] = deps.isAborted()
       ? 'aborted'
-      : budgetExhausted(input.budget, capture.tokenUsage.budgetCharged).exhausted ? 'budget_exceeded' : 'completed';
-    const abortReason = deps.abortReason?.() ?? null;
+      : budgetGate.exhausted || ranOutOfSteps ? 'budget_exceeded' : 'completed';
+    const stopReason = deps.abortReason?.()
+      ?? (budgetGate.exhausted
+        ? `${budgetGate.reason} budget exhausted`
+        : ranOutOfSteps ? `step guard tripped at ${maxSteps} steps without a finish` : null);
     const summary = status === 'completed'
       ? (extractFinalText(result)
         || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
         || `Head ${input.id} completed without producing a textual summary.`)
-      : incompleteHeadSummary(input, status, capture, abortReason);
+      : incompleteHeadSummary(input, status, capture, stopReason);
 
     return {
       id: input.id, status, summary,
@@ -340,7 +354,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       steps: extractHeadSteps(result.steps),
       tokenUsage: usageTotal(),
       wallClockMs: Date.now() - startedAt,
-      errorMessage: abortReason ?? undefined,
+      errorMessage: status === 'completed' ? undefined : stopReason ?? undefined,
     };
   } catch (err) {
     return {

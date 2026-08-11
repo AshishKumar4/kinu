@@ -397,25 +397,33 @@ function optionalText(value: string | undefined): string | undefined {
   return text ? text : undefined;
 }
 
-const SUBORDINATE_CONTEXT_MAX_CHARS = 2400;
+// 4x the original keyhole (2400/500), the same uniform multiple the evidence
+// window applied everywhere else: a subordinate's whole view of why it was
+// staffed should not be one screen of head-only fragments.
+const SUBORDINATE_CONTEXT_MAX_CHARS = 9_600;
 const SUBORDINATE_CONTEXT_MAX_MESSAGES = 8;
-const SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS = 500;
+const SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS = 2_000;
 
-/** A bounded conversational handoff, not a fork of the parent's history. */
+/** A bounded conversational handoff, not a fork of the parent's history. The
+ *  bound DISCLOSES itself: per-message cuts keep head+tail and name the cut,
+ *  and a digest that dropped earlier messages says how many. */
 export function renderSubordinateInheritedContext(
   messages: readonly SerializedMessage[],
 ): string | undefined {
-  const relevant = messages
+  const conversational = messages
     .filter((message) => message.role === 'user' || message.role === 'assistant')
     .map((message) => ({
       role: message.role,
       content: message.content.replace(/\s+/g, ' ').trim(),
     }))
-    .filter((message) => message.content.length > 0)
-    .slice(-SUBORDINATE_CONTEXT_MAX_MESSAGES);
+    .filter((message) => message.content.length > 0);
+  const relevant = conversational.slice(-SUBORDINATE_CONTEXT_MAX_MESSAGES);
   if (relevant.length === 0) return undefined;
 
-  const header = '<inherited_context>\nRecent relevant parent conversation (digest only; subordinate history remains separate):\n';
+  const omittedNote = conversational.length > relevant.length
+    ? `(${conversational.length - relevant.length} earlier messages omitted)\n`
+    : '';
+  const header = '<inherited_context>\nRecent relevant parent conversation (digest only; subordinate history remains separate):\n' + omittedNote;
   const footer = '\n</inherited_context>';
   let remaining = SUBORDINATE_CONTEXT_MAX_CHARS - header.length - footer.length;
   const lines: string[] = [];
@@ -427,15 +435,26 @@ export function renderSubordinateInheritedContext(
       SUBORDINATE_CONTEXT_MESSAGE_MAX_CHARS,
       remaining - prefix.length - (lines.length > 0 ? 1 : 0),
     );
-    if (available <= 0) break;
-    const clipped = message.content.length > available
-      ? `${message.content.slice(0, Math.max(0, available - 1)).trimEnd()}…`
-      : message.content;
-    const line = `${prefix}${clipped}`;
+    if (available <= 40) break;
+    const line = `${prefix}${windowMessage(message.content, available)}`;
     lines.unshift(line);
     remaining -= line.length + (lines.length > 1 ? 1 : 0);
   }
   return lines.length > 0 ? `${header}${lines.join('\n')}${footer}` : undefined;
+}
+
+/** Head+tail with the omission named — a message's point is as often at its
+ *  end (the ask, the error) as its start. */
+function windowMessage(content: string, budget: number): string {
+  if (content.length <= budget) return content;
+  const marker = (n: number) => ` [+${n} cut] `;
+  const omitted = content.length - budget;
+  const overhead = marker(omitted + 40).length;
+  const keep = Math.max(20, budget - overhead);
+  const head = Math.ceil(keep / 2);
+  const tail = keep - head;
+  const cut = content.length - keep;
+  return `${content.slice(0, head)}${marker(cut)}${tail > 0 ? content.slice(-tail) : ''}`;
 }
 
 export function admitSubordinateTask(log: EventLog, input: {

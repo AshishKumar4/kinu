@@ -126,7 +126,11 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
     }
     case '/memory': {
       const content = await client.readMemory();
-      return { kind: 'text', text: content ? `Memory:\n${content.slice(0, 1500)}` : 'Memory is empty.' };
+      if (!content) return { kind: 'text', text: 'Memory is empty.' };
+      const shown = content.length > 1500
+        ? `${content.slice(0, 1500)}\n… [+${content.length - 1500} chars — read memory/MEMORY.md for the rest]`
+        : content;
+      return { kind: 'text', text: `Memory:\n${shown}` };
     }
     case '/changelog': {
       if (rest[0] === 'revert') {

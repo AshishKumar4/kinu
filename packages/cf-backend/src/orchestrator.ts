@@ -119,6 +119,7 @@ import {
   // Shared turn lifecycle
   snapshotCompletedTurn,
   spillEventContent,
+  EVIDENCE_BUDGETS, evidenceWindow,
   type DynamicApproval,
   type DynamicContext,
   type DynamicDelegate,
@@ -1071,8 +1072,8 @@ export class OrchestratorAgent extends ActorAgent {
       // Mechanical work — schema-constrained fact upsert/decay over a turn
       // summary. Runs on the chat vendor's small tier when it has one.
       const update = await runSleepTimeCompute(this.rt.fastLlm ?? this.rt.llm, {
-        task: task.slice(0, 2000),
-        output: output.slice(0, 4000),
+        task,
+        output,
         toolCalls: toolCalls.map(tc => tc.name),
         currentFacts,
       });
@@ -2445,11 +2446,11 @@ export class OrchestratorAgent extends ActorAgent {
       const exp = instance.expected;
       const criterion = exp && exp.outcome === 'accepted'
         ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
-          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${exp.recordedResponse.slice(0, 2500)}`
+          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${evidenceWindow(exp.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
         : `The agent's previous response to this task FAILED — the user had to correct it. Score 1.0 when ` +
           `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
-          `Previous (failed) response:\n${(exp?.recordedResponse ?? '').slice(0, 1500)}\n\n` +
-          `User's correction:\n${(exp?.followup ?? '(not recorded)').slice(0, 1000)}`;
+          `Previous (failed) response:\n${evidenceWindow(exp?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
+          `User's correction:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
       try {
         const obj = await generateJson({
           model: await this.getModelForReview(),
@@ -2460,7 +2461,7 @@ export class OrchestratorAgent extends ActorAgent {
           prompt:
             `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
             `actionable feedback on how the agent's behaviour could improve.\n\n` +
-            `Task:\n${instance.input}\n\nNew response:\n${output.slice(0, 4000)}\n\n` +
+            `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
             `${criterion}\n\n` +
             `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
           providerOptions: effortFor('judge').providerOptions,

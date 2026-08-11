@@ -23,6 +23,7 @@ import { contextWindowForModel } from './context-window.js';
 import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
 import { describeProviderError } from './providers/util.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -358,7 +359,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     for (const step of steps) {
       for (const tr of step.toolResults) {
         const output = tr.output;
-        summaries.push(`[${tr.toolName}] ${renderToolResult(output).slice(0, 200)}`);
+        summaries.push(`[${tr.toolName}] ${evidenceWindow(renderToolResult(output), EVIDENCE_BUDGETS.toolFallbackSummary)}`);
       }
     }
     if (summaries.length > 0) allText = summaries.join('\n');

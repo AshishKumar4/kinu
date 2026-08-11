@@ -801,7 +801,7 @@ export {
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  MAX_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH,
+  NOMINAL_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH,
   type HeadInferenceDeps,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
@@ -864,7 +864,7 @@ export {
 export { ModelCatalogSession } from './orchestrator/model-catalog.js';
 export {
   serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, INHERITED_CONTEXT_CAP,
+  inheritedContextFromHistory, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support.js';
 export { recordGroundedHeadsTake } from './mcts/takes.js';
 

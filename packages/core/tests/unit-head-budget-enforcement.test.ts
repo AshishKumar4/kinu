@@ -12,7 +12,7 @@ import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import {
   budgetExhausted, deriveChildBudget, DEFAULT_HEAD_BUDGET,
-  MAX_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH, type HeadBudget,
+  NOMINAL_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH, type HeadBudget,
 } from '../src/heads/types.js';
 import { runHeadInference, HeadCapture } from '../src/heads/head-inference.js';
 import type { HeadInput } from '../src/heads/types.js';
@@ -89,24 +89,32 @@ function loopingHeadModel(perStep: {
   promptTokens: number; promptGrowth: number; outputTokens: number;
   /** Mid-flight prose the model emits alongside its tool call each step. */
   text?: string;
+  /** After this many steps the model CHOOSES to stop (text only, finishReason
+   *  'stop') — a head that genuinely finishes. Omitted = loops forever. */
+  stopAfterSteps?: number;
 }): LanguageModel {
   let step = 0;
   return {
     specificationVersion: 'v2', provider: 'fake', modelId: 'fake-loop', supportedUrls: {},
-    doGenerate: async () => ({
-      content: [
-        ...(perStep.text ? [{ type: 'text' as const, text: perStep.text }] : []),
-        { type: 'tool-call' as const, toolCallId: `tc-${Math.random()}`, toolName: 'record_evidence',
-          input: JSON.stringify({ kind: 'fact', body: 'still working' }) },
-      ],
-      finishReason: 'tool-calls' as const,
-      usage: {
-        inputTokens: perStep.promptTokens + step++ * perStep.promptGrowth,
-        outputTokens: perStep.outputTokens,
-      },
-      response: { id: 'r', modelId: 'fake-loop', timestamp: new Date(0) },
-      warnings: [],
-    }),
+    doGenerate: async () => {
+      const finishes = perStep.stopAfterSteps !== undefined && step >= perStep.stopAfterSteps;
+      return {
+        content: [
+          ...(perStep.text ? [{ type: 'text' as const, text: perStep.text }] : []),
+          ...(finishes ? [] : [
+            { type: 'tool-call' as const, toolCallId: `tc-${Math.random()}`, toolName: 'record_evidence',
+              input: JSON.stringify({ kind: 'fact', body: 'still working' }) },
+          ]),
+        ],
+        finishReason: finishes ? 'stop' as const : 'tool-calls' as const,
+        usage: {
+          inputTokens: perStep.promptTokens + step++ * perStep.promptGrowth,
+          outputTokens: perStep.outputTokens,
+        },
+        response: { id: 'r', modelId: 'fake-loop', timestamp: new Date(0) },
+        warnings: [],
+      };
+    },
   } as unknown as LanguageModel;
 }
 
@@ -145,17 +153,21 @@ describe('runHeadInference — the budget meters marginal work, not the re-sent 
     // The defect this locks: a 20k inherited prompt re-sent every step used to
     // be charged in full every step, so a 25k head died after one or two steps
     // having produced nothing. The prompt here never grows — the head adds only
-    // its own 400-token turns — so it must run its full step cap instead.
+    // its own 400-token turns — so the token gate stays open and the head does
+    // real work (a genuine finish after 12 steps of it).
     const report = await runHeadInference(
       loopInput(25_000),
       {
-        model: loopingHeadModel({ promptTokens: 20_000, promptGrowth: 0, outputTokens: 400 }),
+        model: loopingHeadModel({
+          promptTokens: 20_000, promptGrowth: 0, outputTokens: 400,
+          text: 'Here is my conclusion.', stopAfterSteps: 12,
+        }),
         tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
       },
     );
     expect(report.status).toBe('completed');
-    expect(report.steps.length).toBe(MAX_HEAD_STEPS);
-    expect(capture.tokenUsage.budgetCharged).toBe(400 * MAX_HEAD_STEPS);
+    expect(report.steps.length).toBe(13);
+    expect(capture.tokenUsage.budgetCharged).toBe(400 * 13);
   });
 
   test('gross provider spend is still reported in full', async () => {
@@ -163,14 +175,36 @@ describe('runHeadInference — the budget meters marginal work, not the re-sent 
     const report = await runHeadInference(
       loopInput(25_000),
       {
-        model: loopingHeadModel({ promptTokens: 20_000, promptGrowth: 0, outputTokens: 400 }),
+        model: loopingHeadModel({
+          promptTokens: 20_000, promptGrowth: 0, outputTokens: 400, stopAfterSteps: 9,
+        }),
         tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
       },
     );
     // The cost ledger debits real tokens; only the BUDGET is metered marginally.
-    expect(report.tokenUsage.input).toBe(20_000 * MAX_HEAD_STEPS);
-    expect(report.tokenUsage.output).toBe(400 * MAX_HEAD_STEPS);
+    expect(report.tokenUsage.input).toBe(20_000 * 10);
+    expect(report.tokenUsage.output).toBe(400 * 10);
     expect(report.tokenUsage.total).toBeGreaterThan(capture.tokenUsage.budgetCharged);
+  });
+
+  test('the step guard is a runaway backstop that reports itself honestly', async () => {
+    const capture = new HeadCapture();
+    // A degenerate loop the token meter cannot see: no prompt growth, near-zero
+    // output. The guard (2 x nominal estimate) ends it — and the report says a
+    // guard ended it, never that the head finished.
+    const report = await runHeadInference(
+      loopInput(6_000),
+      {
+        model: loopingHeadModel({ promptTokens: 4_000, promptGrowth: 0, outputTokens: 1 }),
+        tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
+      },
+    );
+    expect(report.steps.length).toBe(2 * Math.floor(6_000 / NOMINAL_STEP_TOKENS));
+    expect(report.status).toBe('budget_exceeded');
+    expect(report.errorMessage).toContain('step guard');
+    expect(report.summary).toContain('did not complete');
+    // What it genuinely banked is still reported.
+    expect(report.summary).toContain('still working');
   });
 });
 
@@ -215,7 +249,10 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
     const report = await runHeadInference(
       loopInput(50_000),
       {
-        model: loopingHeadModel({ promptTokens: 500, promptGrowth: 0, outputTokens: 10, text: 'Here is what I found.' }),
+        model: loopingHeadModel({
+          promptTokens: 500, promptGrowth: 0, outputTokens: 10,
+          text: 'Here is what I found.', stopAfterSteps: 3,
+        }),
         tools: buildHeadAccumulatorTools(capture), capture, isAborted: () => false,
       },
     );
@@ -252,6 +289,6 @@ describe('DEFAULT_HEAD_BUDGET — the pool survives its own divisor', () => {
     const child = deriveChildBudget(parent, MAX_FORK_WIDTH, undefined, parent.spawnedAt);
     // Below this the pool, not the step cap, is what stops a head — which is how
     // a fork comes back empty having produced nothing.
-    expect(child.maxTokens).toBeGreaterThanOrEqual(MAX_HEAD_STEPS * NOMINAL_STEP_TOKENS);
+    expect(child.maxTokens).toBeGreaterThanOrEqual(NOMINAL_HEAD_STEPS * NOMINAL_STEP_TOKENS);
   });
 });

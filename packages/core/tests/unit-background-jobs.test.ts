@@ -139,11 +139,14 @@ describe('serializeJobResult', () => {
     expect(typeof serializeJobResult(circular)).toBe('string');
   });
 
-  test('truncates oversized results with a marker', () => {
+  test('an oversize result is stored whole — the wake message promises the full result', () => {
     const big = 'x'.repeat(40_000);
-    const out = serializeJobResult(big, 16_000);
-    expect(out.length).toBeLessThan(big.length);
-    expect(out).toContain('[truncated');
+    expect(serializeJobResult(big)).toBe(JSON.stringify(big));
+  });
+
+  test('an oversize input survives a JSON.parse round-trip — resume depends on it', () => {
+    const input = { code: 'y'.repeat(20_000) };
+    expect(JSON.parse(serializeJobResult(input))).toEqual(input);
   });
 });
 

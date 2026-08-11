@@ -451,7 +451,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'volatile-context/facts-budget',
-        asserts: 'the facts block stops at its char budget rather than truncating mid-fact',
+        asserts: 'the facts block stops at its char budget rather than truncating mid-fact, and discloses the count it dropped',
         observe: (s) => s.renderFactsBlock(
           [
             { key: 'deploy_target', value: 'staging', confidence: 0.9, source: 'turn', lastObservedAt: 0 },
@@ -679,15 +679,25 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'compaction/latest-ask-is-verbatim',
-        asserts: 'the most recent user ask is handed in mechanically, bounded, never left to retrieval',
+        asserts: 'the most recent user ask is handed in mechanically — verbatim within the stored budget, windowed head+tail with a named omission beyond it',
         observe: (s) => {
-          const prompt = s.buildCompactionSummaryPrompt({
+          const inBudget = s.buildCompactionSummaryPrompt({
             transcript: 't',
             latestUserAsk: 'Q'.repeat(5_000),
             budgetTokens: 1_000,
           });
-          const block = prompt.slice(prompt.indexOf('THE USER'), prompt.indexOf('"""', prompt.indexOf('"""') + 3) + 3);
-          return { length: block.length, head: block.slice(0, 120), truncated: block.includes('…') };
+          const oversize = s.buildCompactionSummaryPrompt({
+            transcript: 't',
+            latestUserAsk: 'Q'.repeat(10_000),
+            budgetTokens: 1_000,
+          });
+          const block = (p: string) => p.slice(p.indexOf('THE USER'), p.indexOf('"""', p.indexOf('"""') + 3) + 3);
+          return {
+            verbatimInBudget: block(inBudget).includes('Q'.repeat(5_000)),
+            oversizeLength: block(oversize).length,
+            oversizeKeepsTail: block(oversize).includes('Q'.repeat(4_000) + '\n"""'),
+            oversizeNamed: block(oversize).includes('chars omitted from the middle'),
+          };
         },
       },
       {
@@ -1382,7 +1392,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     probes: [
       {
         id: 'subordinate-runtime/inherited-context-digest',
-        asserts: 'the digest caps the parent history, narrows roles, and keeps ids index-stable',
+        asserts: 'the digest caps the parent history, DISCLOSES the omission it made, narrows roles, and keeps ids index-stable',
         observe: (s) => {
           const history: ModelMessage[] = [
             ...Array.from({ length: 60 }, (_, i): ModelMessage =>

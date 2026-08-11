@@ -16,6 +16,7 @@ import type { SearchNode } from '../types/mcts.js';
 import { recordTurnOutcome } from '../evolution/outcomes.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /** Most candidates a take set carries (including the winner). Two near-tied
  *  alternatives are a meaningful choice; ten are noise. */
@@ -410,16 +411,16 @@ export function takeEvidence(candidate: AlternateTakeCandidate): string {
  *  approach — single source for both backends' continuation enqueue. */
 export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: AlternateTakeCandidate): string {
   const framing = set.source === 'branch'
-    ? `While you answered, the user redirected with "${set.task.slice(0, 200)}" and that redirect ran ` +
+    ? `While you answered, the user redirected with "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" and that redirect ran ` +
       `as a parallel branch. Comparing both answers, the user picked the branch's:`
     : set.source === 'heads'
-    ? `While exploring "${set.task.slice(0, 200)}" you fanned out into parallel reasoning heads, ` +
+    ? `While exploring "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" you fanned out into parallel reasoning heads, ` +
       `and the user compared their findings and picked a different head's answer than the one you merged to:`
-    : `While exploring "${set.task.slice(0, 200)}" you surfaced several near-tied approaches, ` +
+    : `While exploring "${evidenceWindow(set.task, EVIDENCE_BUDGETS.taskEcho)}" you surfaced several near-tied approaches, ` +
       `and the user compared them and picked a different take than the one you answered with:`;
   return (
     `${framing}\n\n` +
-    `${chosen.text.slice(0, 2000)}\n\n` +
+    `${evidenceWindow(chosen.text, EVIDENCE_BUDGETS.takeChosen)}\n\n` +
     `Please continue with this approach — briefly acknowledge the switch, then carry the work forward from it.`
   );
 }

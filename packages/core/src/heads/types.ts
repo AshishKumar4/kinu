@@ -261,9 +261,10 @@ export interface HeadScore {
   readonly grounding: 'execution' | 'judge';
 }
 
-/** Hard ceiling on a head's reasoning steps. Ordinarily this — not the token
- *  pool — is what ends a head; the pool is sized so it only bites on a runaway. */
-export const MAX_HEAD_STEPS = 16;
+/** Steps of room the DEFAULT pool gives each head at the widest legal fan-out
+ *  — a pool-sizing factor, not a ceiling. The runaway step guard in
+ *  head-inference derives from each head's own token budget. */
+export const NOMINAL_HEAD_STEPS = 16;
 
 /** Nominal marginal cost of one head step: the head's own output plus the tool
  *  output it pulls in. Two things derive from it — the tighter step cap a small
@@ -278,15 +279,15 @@ export const MAX_FORK_WIDTH = 6;
  * Default budget for a fresh root head if the parent doesn't specify.
  *
  * `maxTokens` is a subtree pool, divided among siblings on spawn. It is sized so
- * that even at the widest legal fan-out each head still has room for the full
- * step cap at nominal cost: below that the pool, not the step cap, is what stops
- * a head, and a fork returns empty because it was starved rather than because it
- * finished. (The old flat 50_000 gave a 6-wide split 8.3k per head — under half
- * of what its own step cap assumes.)
+ * that even at the widest legal fan-out each head still has room for
+ * NOMINAL_HEAD_STEPS of nominal-cost work: below that the pool starves a head
+ * before it can do the work the split assumed, and a fork returns empty because
+ * it was starved rather than because it finished. (The old flat 50_000 gave a
+ * 6-wide split 8.3k per head — under half of that room.)
  */
 export const DEFAULT_HEAD_BUDGET: Omit<HeadBudget, 'spawnedAt'> = {
   maxDepth: 3,
-  maxTokens: MAX_FORK_WIDTH * MAX_HEAD_STEPS * NOMINAL_STEP_TOKENS,
+  maxTokens: MAX_FORK_WIDTH * NOMINAL_HEAD_STEPS * NOMINAL_STEP_TOKENS,
   maxWallClockMs: 5 * 60 * 1000,
 };
 

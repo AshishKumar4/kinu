@@ -64,6 +64,7 @@
 
 import type { LLM, Executor } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { DEFAULT_CONFIG } from '../config.js';
 
 /** Score bands. Execution verdicts dominate: fail ceiling < pass floor, and
@@ -242,11 +243,11 @@ export async function generateAssertions(judge: LLM, task: string, code: string)
   const prompt = `You are writing a verification harness for code proposed by another agent.
 
 Task the code is meant to solve:
-${task.slice(0, 1500)}
+${evidenceWindow(task, EVIDENCE_BUDGETS.judgeTask)}
 
 Proposed code:
 \`\`\`js
-${code.slice(0, 4000)}
+${evidenceWindow(code, EVIDENCE_BUDGETS.assertionCode)}
 \`\`\`
 
 Write a SHORT JavaScript snippet that runs AFTER the code above in the same
@@ -306,22 +307,22 @@ function buildJudgePrompt(
   const siblingBlock = siblings
     .filter((s) => s.trim().length > 0)
     .slice(0, 4)
-    .map((s, i) => `${i + 1}. ${s.slice(0, 400)}`)
+    .map((s, i) => `${i + 1}. ${evidenceWindow(s, EVIDENCE_BUDGETS.judgeSibling)}`)
     .join('\n');
 
   const executionBlock = execution
     ? execution.passed
       ? '\nExecution evidence: the candidate\'s code was run and PASSED.\n'
-      : `\nExecution evidence: the candidate's code was run and FAILED: ${(execution.error ?? 'unknown error').slice(0, 300)}\n`
+      : `\nExecution evidence: the candidate's code was run and FAILED: ${evidenceWindow(execution.error ?? 'unknown error', EVIDENCE_BUDGETS.judgeExecutionError)}\n`
     : '';
 
   return `You are scoring ONE candidate approach produced during a tree search over competing approaches.
 
 Task:
-${task.slice(0, 1500)}
+${evidenceWindow(task, EVIDENCE_BUDGETS.judgeTask)}
 
 Candidate approach:
-${trajectory.slice(0, 3000)}
+${evidenceWindow(trajectory, EVIDENCE_BUDGETS.judgeTrajectory)}
 ${siblingBlock ? `\nSibling approaches competing in the same expansion (calibration only — do NOT score them):\n${siblingBlock}\n` : ''}${executionBlock}
 Score the CANDIDATE from 0.0 to 1.0 for how well it solves the Task:
 - correctness and completeness with respect to the Task (dominant criterion)
