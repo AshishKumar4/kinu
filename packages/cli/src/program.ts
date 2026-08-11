@@ -76,6 +76,7 @@ export function buildProgram(): Command {
     .option('--provider <name>', 'Provider: codex, openai, openrouter, anthropic, openai-compatible, skip')
     .option('--model <id>', 'Default model for the selected provider')
     .option('--local-model', 'Configure credentials for local-only agents')
+    .option('--local', 'Keep the provider key on this machine instead of your Proteus account')
     .option('-y, --yes', 'Accept recommended setup choices where possible')
     .option('--skip-cloud', 'Skip account sign-in')
     .addOption(new Option('--account-only', 'Only complete Proteus account sign-in').hideHelp())
@@ -88,6 +89,7 @@ export function buildProgram(): Command {
     .description('List, connect, or disconnect model and account providers')
     .option('--origin <url>', 'Proteus app origin')
     .option('--model <id>', 'Default model for the selected provider')
+    .option('--local', 'Keep the provider key on this machine instead of your Proteus account')
     .action(wrapAction(providersCommand));
 
   program
@@ -425,7 +427,7 @@ export function buildProgram(): Command {
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
-    .description('Link this computer as the desktop execution daemon')
+    .description('Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days)')
     .option('--label <name>', 'Device label')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 

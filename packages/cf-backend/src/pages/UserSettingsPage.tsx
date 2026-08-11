@@ -215,6 +215,16 @@ export default function UserSettingsPage() {
  *  account state on the user-do device hub, not a per-run concern). The
  *  daemon opens one outbound WebSocket; no inbound ports, runs as your user,
  *  never root. Per-agent file-access tiers live in each workspace's settings. */
+/** Device links renew themselves on every connect, so the only ones worth
+ *  mentioning are the ones close enough to lapsing that the owner may need to
+ *  go and start the daemon. Anything further out would be noise. */
+const DEVICE_LAPSE_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
+
+function lapsingDevices(devices: UserDevice[] | null): UserDevice[] {
+  const soon = Date.now() + DEVICE_LAPSE_NOTICE_MS;
+  return (devices ?? []).filter((d) => d.expiresAt !== null && d.expiresAt <= soon);
+}
+
 function DevicesCard() {
   const [devices, setDevices] = useState<UserDevice[] | null>(null);
   const [install, setInstall] = useState<string | null>(null);
@@ -283,6 +293,12 @@ function DevicesCard() {
         {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
           <p className="text-[11px] p-text-3">
             Offline device? Restart the daemon on that machine with <code className="font-mono p-elevated px-1 rounded">proteus connect</code>.
+          </p>
+        )}
+        {lapsingDevices(devices).length > 0 && (
+          <p className="text-[11px] p-text-3">
+            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon
+            — connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
           </p>
         )}
 

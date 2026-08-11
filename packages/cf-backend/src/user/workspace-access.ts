@@ -6,7 +6,7 @@ import type { OrchestratorAgent } from '../orchestrator.js';
 import type { UserDO } from './user-do.js';
 import { createCloudWorkspaceForUser } from './workspace-create.js';
 import { err, json, safeJson } from '../lib/http.js';
-import { OWNER_SESSION } from './workspace-capability.js';
+import { ownerCaller } from './workspace-capability.js';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
 export async function handleCreateWorkspaceRequest(
@@ -20,7 +20,7 @@ export async function handleCreateWorkspaceRequest(
   if (!body) return err(400, 'Body must be JSON');
   if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
   try {
-    const entry = await createCloudWorkspaceForUser(env, userId, userDO, OWNER_SESSION, body, {
+    const entry = await createCloudWorkspaceForUser(env, userId, userDO, await ownerCaller(env), body, {
       waitUntil: (promise) => ctx?.waitUntil(promise),
     });
     return json(entry, { status: 201 });
@@ -43,7 +43,7 @@ export function notifyWorkspacesCredentialsChanged(
   ctx?: ExecutionContext,
 ): void {
   const task = (async () => {
-    const workspaces = await userDO.listWorkspaces(OWNER_SESSION);
+    const workspaces = await userDO.listWorkspaces(await ownerCaller(env));
     await Promise.allSettled(workspaces
       .filter((a) => a.archivedAt === null)
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
@@ -68,7 +68,7 @@ export async function claimOwnedWorkspace(
   workspaceName: string,
 ): Promise<OwnedWorkspaceResult> {
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-  if (!(await userDO.hasWorkspace(OWNER_SESSION, workspaceName))) {
+  if (!(await userDO.hasWorkspace(await ownerCaller(env), workspaceName))) {
     return {
       ok: false,
       status: 404,

@@ -42,9 +42,15 @@ they default to Workers AI with no key of your own. To bring your own provider
 instead:
 
 ```bash
-proteus providers list                 # what's connected, with status
+proteus providers list                 # what's connected, and where each key lives
 proteus providers connect openai       # or anthropic, openrouter, codex, openai-compatible
 ```
+
+Signed in, the key goes to your Proteus account rather than this disk, and this
+machine uses it through Proteus without holding a copy — so the same key works
+from every machine you sign in on, and connecting a provider in the web UI is
+enough. Add `--local` to keep a key on this machine instead (for offline work,
+or an endpoint only this machine can reach); a local key always wins.
 
 `--alias jarvis` puts a `jarvis` command on your PATH that means
 `proteus run jarvis`. It is the difference between using this daily and not.

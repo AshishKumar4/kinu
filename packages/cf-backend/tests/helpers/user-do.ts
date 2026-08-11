@@ -7,6 +7,7 @@
 import { Database } from 'bun:sqlite';
 import { mockAgentsSdk } from './agents-sdk.js';
 import { sha256Hex } from '../../src/lib/crypto.js';
+import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability.js';
 import type { SqlExec } from '@proteus/core';
 
 mockAgentsSdk();
@@ -44,11 +45,28 @@ export interface TestUserDO {
   close(): void;
 }
 
+/** A fixed key so a harness DB written in one test opens in another. */
+export const TEST_CREDENTIAL_ENCRYPTION_KEY = 'test-credential-encryption-key-0123456789';
+
+/** The env every harness DO is built with — also what mints the owner
+ *  capability tests present, so they exercise the real derivation. */
+export const TEST_USER_ENV = { CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY };
+
+export function testOwner(): Promise<UserCaller> {
+  return ownerCaller(TEST_USER_ENV);
+}
+
 export interface TestUserDOOptions {
   /** Attach a connected device so the device plane is LIVE. Without one, every
    *  device call short-circuits on "no device connected" before reaching the
    *  consent path, which would leave that path untested. */
   connectedDeviceId?: string;
+  /** Override the credential encryption key — rotation tests supply the key
+   *  that succeeds the one the store was written under. */
+  credentialEncryptionKey?: string;
+  credentialEncryptionKeyPrevious?: string;
+  /** Stand in for a different user's Durable Object. */
+  durableObjectId?: string;
 }
 
 export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
@@ -76,11 +94,20 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
   } as TestUserDO;
 
   const ctx = {
+    // Sealed values are bound to the Durable Object's id, so the harness has
+    // to have one — a fixed value, so a DB written in one test opens in another.
+    id: { toString: () => options.durableObjectId ?? 'test-user-do' },
     storage: { sql },
     getWebSockets: () => sockets,
     acceptWebSocket: () => {},
   };
   const env = {
+    // The credential store refuses to operate without its key, so a harness
+    // exercising the real methods has to supply one exactly as a deployment does.
+    CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
+    ...(options.credentialEncryptionKeyPrevious
+      ? { CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: options.credentialEncryptionKeyPrevious }
+      : {}),
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
@@ -104,8 +131,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
 /** Register a workspace and provision its capability, returning the token the
  *  UserDO delivered into it — the same handshake `claimOwnedWorkspace` runs. */
 export async function provisionTestWorkspace(harness: TestUserDO, name: string, displayName?: string): Promise<string> {
-  const { OWNER_SESSION } = await import('../../src/user/workspace-capability.js');
-  await harness.userDO.registerWorkspace(OWNER_SESSION, name, displayName ?? name);
+  await harness.userDO.registerWorkspace(await testOwner(), name, displayName ?? name);
   await harness.userDO.ensureWorkspaceCapability(name, null);
   const token = harness.installed.get(name);
   if (!token) throw new Error(`workspace ${name} was not provisioned`);

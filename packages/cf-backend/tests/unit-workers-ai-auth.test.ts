@@ -158,7 +158,7 @@ describe('Workers AI credential refresh', () => {
     expect(userDO).toContain('opts?.forceRefresh || isCloudflareCredentialExpiring(cred)');
     // …persisted back to storage so the next caller gets the rotated tokens…
     expect(userDO).toContain('refreshCloudflareCredential(this.env, current)');
-    expect(userDO).toMatch(/UPDATE user_credentials SET value = \?, updated_at = \? WHERE key = \?`,\s*\n\s*JSON\.stringify\(next\), Date\.now\(\), CLOUDFLARE_OAUTH_CRED_KEY/);
+    expect(userDO).toContain('await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, next);');
     // …and the base-URL gate treats expired-but-refreshable as usable.
     expect(userDO).toContain('if (!isCloudflareCredentialUsable(cred)) return null;');
     // A terminal invalid_grant strips the dead refresh token so the

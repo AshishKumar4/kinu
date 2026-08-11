@@ -1,5 +1,6 @@
 import { checkClaudeAvailability, checkOpenCodeAvailability } from '@proteus/cli-backend';
-import { loadConfigFile, updateConfigFile, type ProteusConfig } from '../config.js';
+import { deleteCloudCredential, listCloudCredentials, type CloudCredentialSummary } from '../cloud-api.js';
+import { loadConfigFile, resolveCloudSession, updateConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { authCommand } from './auth.js';
 import { setupCommand } from './setup.js';
@@ -33,11 +34,18 @@ const CLAUDE_READY = 'Claude subscription ready — use proteus create --model c
 export async function providersCommand(actionOrProvider: string | undefined, providerArg: string | undefined, opts: {
   origin?: string;
   model?: string;
+  /** Keep the secret on this machine instead of the Proteus account. */
+  local?: boolean;
 }): Promise<void> {
-  const { action, provider } = parseArgs(actionOrProvider, providerArg);
+  const { action, provider, raw } = parseArgs(actionOrProvider, providerArg);
 
   if (action === 'list') {
     await printProviders();
+    return;
+  }
+
+  if (action === 'disconnect' && !provider && raw) {
+    await disconnectAccountProvider(raw);
     return;
   }
 
@@ -46,7 +54,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
   }
 
   if (action === 'disconnect') {
-    disconnectProvider(provider);
+    await disconnectProvider(provider);
     return;
   }
 
@@ -75,6 +83,7 @@ export async function providersCommand(actionOrProvider: string | undefined, pro
     model: opts.model,
     localModel: true,
     skipCloud: true,
+    local: opts.local ?? false,
   });
 }
 
@@ -129,6 +138,8 @@ const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode,
 function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): {
   action: ProviderAction;
   provider?: ProviderName;
+  /** What the user typed, when it named nothing this CLI knows. */
+  raw?: string;
 } {
   if (!actionOrProvider) return { action: 'list' };
 
@@ -139,7 +150,10 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
     return { action: 'connect', provider: providerArg ? normalizeProvider(providerArg) : undefined };
   }
   if (first === 'disconnect' || first === 'remove' || first === 'rm' || first === 'delete') {
-    return { action: 'disconnect', provider: providerArg ? normalizeProvider(providerArg) : undefined };
+    // A name this CLI has no branch for may still be one of the models.dev
+    // providers connected in the web UI, which `provider list` now shows. It
+    // is resolved against the account rather than rejected here.
+    return { action: 'disconnect', provider: providerArg ? maybeProvider(providerArg) : undefined, raw: providerArg };
   }
 
   return { action: 'connect', provider: normalizeProvider(actionOrProvider) };
@@ -151,6 +165,10 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
 const LOCAL_CREDENTIALS: Partial<Record<ProviderName, {
   clear: (providers: NonNullable<ProteusConfig['providers']>) => boolean;
   envVars: string[];
+  /** The account-side key the same provider is stored under, when it can be.
+   *  Absent for codex: its subscription token is deliberately machine-local
+   *  (the Codex endpoint refuses Cloudflare Workers egress). */
+  credKey?: string;
 }>> = {
   codex: {
     clear: (p) => deleteKey(p, 'codex'),
@@ -159,18 +177,22 @@ const LOCAL_CREDENTIALS: Partial<Record<ProviderName, {
   openai: {
     clear: (p) => deleteKey(p, 'openai'),
     envVars: ['OPENAI_API_KEY'],
+    credKey: 'openai.bearer',
   },
   anthropic: {
     clear: (p) => deleteKey(p, 'anthropic'),
     envVars: ['ANTHROPIC_API_KEY'],
+    credKey: 'anthropic.bearer',
   },
   openrouter: {
     clear: (p) => deleteKey(p, 'openrouter'),
     envVars: ['OPENROUTER_API_KEY'],
+    credKey: 'openrouter.bearer',
   },
   'openai-compatible': {
     clear: (p) => deleteKey(p, 'openaiCompat'),
     envVars: ['PROTEUS_BASE_URL', 'PROTEUS_AUTH'],
+    credKey: 'openai-compat.default',
   },
 };
 
@@ -205,7 +227,7 @@ const MODEL_SPEC_PREFIXES: Partial<Record<ProviderName, readonly string[]>> = {
  * bridges (claude, opencode) are other tools' logins — Proteus holds nothing
  * to delete, and saying so beats pretending the command did something.
  */
-function disconnectProvider(provider: ProviderName): void {
+async function disconnectProvider(provider: ProviderName): Promise<void> {
   console.log('');
   if (provider === 'cloudflare') {
     console.log(`${WARN('!')} The Cloudflare/Workers AI connection rides your Proteus account.`);
@@ -229,9 +251,23 @@ function disconnectProvider(provider: ProviderName): void {
   updateConfigFile((config) => {
     if (config.providers) removed = credential.clear(config.providers);
   });
+  if (removed) console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from this machine.`);
 
-  if (removed) console.log(`${OK('✓')} Disconnected ${ACCENT(provider)} — the stored credential was removed.`);
-  else console.log(`${WARN('!')} ${provider} was not connected — nothing to remove.`);
+  // The account copy is the one most connections now use, so disconnecting
+  // has to reach it too — otherwise the provider keeps working and the command
+  // looks broken.
+  const cloud = credential.credKey ? resolveCloudSession() : null;
+  if (cloud && credential.credKey) {
+    try {
+      await deleteCloudCredential(cloud.origin, cloud.token, credential.credKey);
+      console.log(`${OK('✓')} Removed the ${ACCENT(provider)} credential from your Proteus account.`);
+      removed = true;
+    } catch (e) {
+      console.log(`${WARN('!')} Could not reach your Proteus account: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  if (!removed) console.log(`${WARN('!')} ${provider} was not connected — nothing to remove.`);
 
   clearDefaultModelFor(provider);
 
@@ -242,9 +278,34 @@ function disconnectProvider(provider: ProviderName): void {
   }
 }
 
+/**
+ * Disconnect one of the models.dev providers connected in the web UI. This CLI
+ * has no branch for those — they are catalog ids, not one of its eight named
+ * providers — but `provider list` shows them, and a list you cannot act on is
+ * a one-way door.
+ */
+async function disconnectAccountProvider(name: string): Promise<void> {
+  const cloud = resolveCloudSession();
+  console.log('');
+  if (!cloud) {
+    throw new Error(`Unknown provider "${name}". Sign in with \`proteus auth\` to disconnect a provider held by your account.`);
+  }
+  const credKey = `${name.trim().toLowerCase()}.bearer`;
+  const connected = (await listCloudCredentials(cloud.origin, cloud.token)).some((c) => c.key === credKey);
+  if (!connected) {
+    throw new Error(`Neither this machine nor your Proteus account has a "${name}" credential. Run \`proteus provider list\` to see what is connected.`);
+  }
+  await deleteCloudCredential(cloud.origin, cloud.token, credKey);
+  console.log(`${OK('✓')} Removed the ${ACCENT(name)} credential from your Proteus account.`);
+  clearDefaultModelPrefixes([`${name}/`]);
+}
+
 /** Drop the default model spec when it names the provider being removed. */
 function clearDefaultModelFor(provider: ProviderName): void {
-  const prefixes = MODEL_SPEC_PREFIXES[provider] ?? [];
+  clearDefaultModelPrefixes(MODEL_SPEC_PREFIXES[provider] ?? []);
+}
+
+function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
   let cleared: string | null = null;
   updateConfigFile((config) => {
     const model = config.model;
@@ -253,6 +314,11 @@ function clearDefaultModelFor(provider: ProviderName): void {
     delete config.model;
   });
   if (cleared) console.log(DIM(`  Cleared the default model (${cleared}).`));
+}
+
+/** `normalizeProvider`, but undefined instead of throwing. */
+function maybeProvider(value: string): ProviderName | undefined {
+  try { return normalizeProvider(value); } catch { return undefined; }
 }
 
 function normalizeProvider(value: string): ProviderName {
@@ -277,13 +343,32 @@ function normalizeToken(value: string): string {
   return value.trim().toLowerCase();
 }
 
+/** What the account holds, or null when there is no account to ask (or it
+ *  cannot be reached — an unreachable account is not evidence of an empty one,
+ *  so the listing says nothing rather than something false). */
+async function accountCredentials(): Promise<CloudCredentialSummary[] | null> {
+  const cloud = resolveCloudSession();
+  if (!cloud) return null;
+  try { return await listCloudCredentials(cloud.origin, cloud.token); }
+  catch { return null; }
+}
+
 async function printProviders(): Promise<void> {
   const config = loadConfigFile();
+  const account = await accountCredentials();
+  const inAccount = (credKey: string): boolean => (account ?? []).some((c) => c.key === credKey);
   const connected = (label: string, detail?: string) => {
     console.log(`  ${OK('✓')} ${ACCENT(label)}${detail ? ` ${DIM(detail)}` : ''}`);
   };
   const missing = (label: string, hint: string) => {
     console.log(`  ${WARN('!')} ${label} ${DIM(hint)}`);
+  };
+  /** One provider line: a local key wins, the account is the fallback, and the
+   *  line says which so "where does this secret live" is never a guess. */
+  const provider = (label: string, opts: { localKey: boolean; credKey?: string; model?: string; hint: string }) => {
+    if (opts.localKey) return connected(label, [opts.model, 'this machine'].filter(Boolean).join(' · '));
+    if (opts.credKey && inAccount(opts.credKey)) return connected(label, [opts.model, 'your account'].filter(Boolean).join(' · '));
+    return missing(label, opts.hint);
   };
 
   console.log('');
@@ -307,17 +392,29 @@ async function printProviders(): Promise<void> {
   if (providers.codex?.accessToken || providers.codex?.refreshToken) connected('Codex', currentModel(config.model, 'codex'));
   else missing('Codex', 'proteus provider connect codex');
 
-  if (providers.openai?.apiKey) connected('OpenAI', currentModel(config.model, 'openai'));
-  else missing('OpenAI', 'proteus provider connect openai');
+  provider('OpenAI', {
+    localKey: Boolean(providers.openai?.apiKey), credKey: 'openai.bearer',
+    model: currentModel(config.model, 'openai'), hint: 'proteus provider connect openai',
+  });
+  provider('OpenRouter', {
+    localKey: Boolean(providers.openrouter?.apiKey), credKey: 'openrouter.bearer',
+    model: currentModel(config.model, 'openrouter'), hint: 'proteus provider connect openrouter',
+  });
+  provider('Anthropic', {
+    localKey: Boolean(providers.anthropic?.apiKey), credKey: 'anthropic.bearer',
+    model: currentModel(config.model, 'anthropic'), hint: 'proteus provider connect anthropic',
+  });
+  provider('OpenAI-compatible', {
+    localKey: Boolean(providers.openaiCompat?.default), credKey: 'openai-compat.default',
+    model: currentModel(config.model, 'openai-compat'), hint: 'proteus provider connect openai-compatible',
+  });
 
-  if (providers.openrouter?.apiKey) connected('OpenRouter', currentModel(config.model, 'openrouter'));
-  else missing('OpenRouter', 'proteus provider connect openrouter');
-
-  if (providers.anthropic?.apiKey) connected('Anthropic', currentModel(config.model, 'anthropic'));
-  else missing('Anthropic', 'proteus provider connect anthropic');
-
-  if (providers.openaiCompat?.default) connected('OpenAI-compatible', currentModel(config.model, 'openai-compat'));
-  else missing('OpenAI-compatible', 'proteus provider connect openai-compatible');
+  // Everything else the account holds — the models.dev tail connected in the
+  // web UI, which this machine can use without ever holding the key.
+  const named = new Set(['openai.bearer', 'openrouter.bearer', 'anthropic.bearer', 'openai-compat.default', 'cloudflare.oauth', 'cloudflare.ai-gateway', 'codex.oauth']);
+  for (const cred of (account ?? []).filter((c) => !named.has(c.key))) {
+    connected(cred.key.replace(/\.bearer$/, ''), 'your account');
+  }
 
   const oc = await checkOpenCodeAvailability();
   if (oc.binary && oc.authenticated) connected('OpenCode', currentModel(config.model, 'opencode'));
@@ -325,6 +422,8 @@ async function printProviders(): Promise<void> {
   else missing('OpenCode', 'proteus provider connect opencode');
 
   console.log('');
+  console.log(DIM('  Keys connect to your Proteus account by default — no copy on this disk.'));
+  console.log(DIM('  Keep one here instead: proteus provider connect <name> --local'));
   console.log(DIM('  Remove a stored credential: proteus provider disconnect <name>'));
   console.log('');
 }

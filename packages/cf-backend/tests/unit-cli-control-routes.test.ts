@@ -1,3 +1,4 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
 
@@ -121,8 +122,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
       get() { return agent; },
-    },
-  } as unknown as Env;
+    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 
@@ -267,8 +267,7 @@ describe('CLI control routes', () => {
           async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
           async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
         }),
-      },
-    } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
     expect((await thrown?.json() as { error: string }).error).toContain('Timer trigger requires cron or atMs');
@@ -291,8 +290,7 @@ describe('shared ownership claim status mapping', () => {
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({ async claimOwner() { throw new Error(message); } }),
-      },
-    } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   }
 
   test('cross-user collision → 403', async () => {

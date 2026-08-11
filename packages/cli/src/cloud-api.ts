@@ -173,6 +173,37 @@ export async function listCloudAvailableModels(origin: string, token: string): P
   return cloudJson(origin, '/api/cli/models', { token });
 }
 
+/** A stored credential as the account will describe it — key, kind, and when
+ *  it changed. There is no read-back: once submitted, a secret is not
+ *  viewable again from anywhere. */
+export interface CloudCredentialSummary {
+  key: string;
+  kind: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export async function listCloudCredentials(origin: string, token: string): Promise<CloudCredentialSummary[]> {
+  return cloudJson(origin, '/api/cli/credentials', { token });
+}
+
+/** Put a provider secret in the owner's account rather than on this disk. It
+ *  is sealed at rest there, and every machine signed into the account reaches
+ *  it through the provider proxy without holding a copy. */
+export async function setCloudCredential(
+  origin: string, token: string, key: string, credential: unknown,
+): Promise<{ ok: boolean }> {
+  return cloudJson(origin, `/api/cli/credentials/${encodeURIComponent(key)}`, {
+    method: 'POST', token, body: credential,
+  });
+}
+
+export async function deleteCloudCredential(
+  origin: string, token: string, key: string,
+): Promise<{ ok: boolean }> {
+  return cloudJson(origin, `/api/cli/credentials/${encodeURIComponent(key)}`, { method: 'DELETE', token });
+}
+
 export interface CreateCloudAgentInput {
   name?: string;
   displayName?: string;

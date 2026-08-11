@@ -344,8 +344,8 @@ describe('UserDO gateway selection wiring', () => {
 
   test('login-time discovery auto-selects a sole gateway', () => {
     // setCredential(cloudflare.oauth) triggers discovery…
-    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(OWNER_SESSION);');
+    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));');
     // …and listAIGateways persists the only gateway as the selection.
-    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(OWNER_SESSION, gateways\[0\]\.id\);/);
+    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(await ownerCaller\(this\.env\), gateways\[0\]\.id\);/);
   });
 });

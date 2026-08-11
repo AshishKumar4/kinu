@@ -5,6 +5,7 @@
 // (b) surfaced its result honestly, and (c) is gated by the SAME auth +
 // per-agent ownership as the read tools — a scoped access token can't reach the
 // write surface at all, and an unowned agent is refused before any tool runs.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
@@ -50,8 +51,7 @@ function mcpEnv() {
   const env = {
     AUTH_DB: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
-  } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 

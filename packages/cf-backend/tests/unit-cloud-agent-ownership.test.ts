@@ -1,5 +1,6 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
-import { OWNER_SESSION } from '../src/user/workspace-capability.js';
+import { testOwner } from './helpers/user-do.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create.js';
@@ -69,12 +70,11 @@ describe('cloud agent ownership safety', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() { return orchestrator; },
-      },
-    } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      const entry = await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
+      const entry = await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         purpose: 'Build a hello world app in react',
       }, {
         waitUntil: (promise) => background.push(promise),
@@ -154,12 +154,11 @@ describe('cloud agent ownership safety', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() { return orchestrator; },
-      },
-    } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         name: 'jarvis',
         displayName: 'Jarvis',
         purpose: 'Help with software projects',
@@ -205,12 +204,11 @@ describe('cloud agent ownership safety', () => {
     };
     const env = {
       UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
-      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
-    } as unknown as Env;
+      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         name: 'jarvis',
       })).rejects.toThrow('boot failure');
     } finally {
@@ -254,13 +252,12 @@ describe('cloud agent ownership safety', () => {
     };
     const env = {
       UserDO: { idFromName: (n: string) => n, get: () => userDO },
-      OrchestratorAgent: { idFromName: (n: string) => n, get: () => orchestrator },
-    } as unknown as Env;
+      OrchestratorAgent: { idFromName: (n: string) => n, get: () => orchestrator }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => new Response('{}', { status: 503 });
     try {
-      await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, OWNER_SESSION, {
+      await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         name: 'jarvis',
         displayName: 'Jarvis',
       });
@@ -295,8 +292,7 @@ describe('cloud agent ownership safety', () => {
       };
       const env = {
         UserDO: { idFromName: (n: string) => n, get: () => userDO },
-        OrchestratorAgent: { idFromName: (n: string) => n, get: () => workspace },
-      } as unknown as Env;
+        OrchestratorAgent: { idFromName: (n: string) => n, get: () => workspace }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
       return { env, calls };
     }
 
@@ -334,7 +330,7 @@ describe('cloud agent ownership safety', () => {
     const userDO = source('src/user/user-do.ts');
     const orchestrator = source('src/orchestrator.ts');
 
-    expect(userRoutes).toContain('stub.removeWorkspace(OWNER_SESSION, decodeURIComponent(agentMatch[1]), identity.userId)');
+    expect(userRoutes).toContain('stub.removeWorkspace(await ownerCaller(env), decodeURIComponent(agentMatch[1]), identity.userId)');
     expect(userDO).toContain('async removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>');
     expect(userDO).toContain('await stub.destroyAgent(ownerUserId)');
     expect(orchestrator).toContain('async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }>');

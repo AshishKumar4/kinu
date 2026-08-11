@@ -11,12 +11,11 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestUserDO, provisionTestWorkspace, type TestUserDO } from './helpers/user-do.js';
+import { createTestUserDO, provisionTestWorkspace, testOwner, type TestUserDO } from './helpers/user-do.js';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
 import { sha256Hex } from '../src/lib/crypto.js';
 import {
   CapabilityDeniedError,
-  OWNER_SESSION,
   WORKSPACE_CAPABILITY_TIERS,
   setWorkspaceTier,
   type UserCaller,
@@ -216,8 +215,8 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
 
   test('the credential store hides non-model keys from a tainted workspace', async () => {
     const harness = await setupWorkspaces();
-    await harness.userDO.setCredential(OWNER_SESSION, 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
-    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_secret' });
+    await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-model' });
+    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_secret' });
     const caller: UserCaller = { workspaceToken: harness.fullToken };
 
     expect((await harness.userDO.listCredentials(caller)).map((c) => c.key)).toEqual(['github', 'openai.bearer']);
@@ -238,7 +237,7 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
     await expect(harness.userDO.setWorkspaceDisplayName(caller, OTHER_WORKSPACE, 'Hijacked'))
       .rejects.toThrow('may only rename itself');
 
-    const names = await harness.userDO.listWorkspaces(OWNER_SESSION);
+    const names = await harness.userDO.listWorkspaces(await testOwner());
     expect(names.find((w) => w.name === WORKSPACE)?.displayName).toBe('Renamed by itself');
     expect(names.find((w) => w.name === OTHER_WORKSPACE)?.displayName).toBe('Workspace B');
     harness.close();
@@ -273,7 +272,7 @@ describe('a full workspace behaves exactly as before', () => {
     const harness = await setupWorkspaces();
     const cut: string[] = [];
     for (const call of GATED_CALLS) {
-      if (await refused(call, harness.userDO, OWNER_SESSION)) cut.push(`${call.capability}:${call.name}`);
+      if (await refused(call, harness.userDO, await testOwner())) cut.push(`${call.capability}:${call.name}`);
     }
     expect(cut).toEqual([]);
     harness.close();
@@ -282,7 +281,7 @@ describe('a full workspace behaves exactly as before', () => {
   test('the pre-existing surfaces still answer: registry, credentials, consent', async () => {
     const harness = await setupWorkspaces();
     const caller: UserCaller = { workspaceToken: harness.fullToken };
-    await harness.userDO.setCredential(OWNER_SESSION, 'openai.bearer', { kind: 'bearer', token: 'sk-1' });
+    await harness.userDO.setCredential(await testOwner(), 'openai.bearer', { kind: 'bearer', token: 'sk-1' });
 
     expect((await harness.userDO.listWorkspaces(caller)).map((w) => w.name).sort())
       .toEqual([WORKSPACE, OTHER_WORKSPACE]);
@@ -345,7 +344,7 @@ describe('the boundary fails closed', () => {
     const caller: UserCaller = { workspaceToken: harness.otherToken };
     expect(await harness.userDO.listWorkspaces(caller)).toHaveLength(2);
 
-    await harness.userDO.removeWorkspace(OWNER_SESSION, OTHER_WORKSPACE, USER_ID);
+    await harness.userDO.removeWorkspace(await testOwner(), OTHER_WORKSPACE, USER_ID);
     expect(harness.destroyedWorkspaces).toEqual([OTHER_WORKSPACE]);
     await expect(harness.userDO.listWorkspaces(caller)).rejects.toThrow('Unrecognized workspace capability token');
     harness.close();
@@ -380,7 +379,7 @@ describe('capability provisioning', () => {
     // token — a workspace that can never authenticate and never re-provisions,
     // because it does hold a token.
     const harness = createTestUserDO();
-    await harness.userDO.registerWorkspace(OWNER_SESSION, WORKSPACE, 'Workspace A');
+    await harness.userDO.registerWorkspace(await testOwner(), WORKSPACE, 'Workspace A');
 
     await Promise.all([
       harness.userDO.ensureWorkspaceCapability(WORKSPACE, null),
@@ -450,7 +449,7 @@ describe('facets attenuate with their workspace', () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     const facetCaller: UserCaller = { workspaceToken: harness.fullToken };
     // The owner grants the full-filesystem tier to workspace-a only.
-    await harness.userDO.setDeviceConsentScope(OWNER_SESSION, WORKSPACE, 'dev-1', 'full_filesystem');
+    await harness.userDO.setDeviceConsentScope(await testOwner(), WORKSPACE, 'dev-1', 'full_filesystem');
 
     // A facet of workspace-a naming anything at all still gets workspace-a's
     // answer — its identity is the token, not the argument.
@@ -469,7 +468,7 @@ describe('facets attenuate with their workspace', () => {
   test('a workspace cannot ride a sibling\'s remembered device grant', async () => {
     const harness = await setupWorkspaces({ connectedDeviceId: 'dev-1' });
     // workspace-a has already said "always" for this device.
-    await harness.userDO.setDeviceConsentScope(OWNER_SESSION, WORKSPACE, 'dev-1', 'all_local_actions');
+    await harness.userDO.setDeviceConsentScope(await testOwner(), WORKSPACE, 'dev-1', 'all_local_actions');
     const sibling: UserCaller = { workspaceToken: harness.otherToken };
 
     // workspace-b calls while CLAIMING to be workspace-a. Consent is resolved
@@ -481,7 +480,7 @@ describe('facets attenuate with their workspace', () => {
 
     // The remembered grant still belongs to workspace-a alone; being asked did
     // not create one for the caller that tried to borrow it.
-    const consents = await harness.userDO.listDeviceConsents(OWNER_SESSION);
+    const consents = await harness.userDO.listDeviceConsents(await testOwner());
     expect(consents.map((c) => c.agentName)).toEqual([WORKSPACE]);
     harness.close();
   });

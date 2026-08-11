@@ -6,9 +6,9 @@
 // workspace can only ever publish as itself and can never be handed back its
 // own entries — and that an owner session, which is not any workspace, cannot
 // publish at all.
+import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
-import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do.js';
-import { OWNER_SESSION, type UserCaller } from '../src/user/workspace-capability.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 import type { PublishableCandidate } from '@proteus/core';
 
 const ALPHA = 'workspace-a';
@@ -64,8 +64,8 @@ describe('the experience library is owner-scoped and provenance is proven', () =
     await harness.userDO.publishExperience(alpha, lesson('Alpha knows this.'));
 
     // No workspace identity, so nothing is excluded and nothing can be attributed.
-    expect((await harness.userDO.searchExperience(OWNER_SESSION, {})).map((e) => e.sourceWorkspace)).toEqual([ALPHA]);
-    await expect(harness.userDO.publishExperience(OWNER_SESSION, lesson('From nowhere.')))
+    expect((await harness.userDO.searchExperience(await testOwner(), {})).map((e) => e.sourceWorkspace)).toEqual([ALPHA]);
+    await expect(harness.userDO.publishExperience(await testOwner(), lesson('From nowhere.')))
       .rejects.toThrow('Only a workspace can publish experience');
     harness.close();
   });

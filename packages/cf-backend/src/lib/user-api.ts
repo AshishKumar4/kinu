@@ -113,6 +113,10 @@ export interface UserDevice {
   connected: boolean;
   createdAt: number;
   lastSeenAt: number | null;
+  /** When this device's link lapses if it does not connect again. Renewed on
+   *  every successful connect, so an active machine never reaches it. Null on
+   *  links made before the window existed, until their next connect. */
+  expiresAt: number | null;
 }
 export interface RegisteredDevice {
   origin: string;

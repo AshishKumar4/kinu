@@ -1,6 +1,7 @@
 // Regression test: the run-events SSE stream must stop polling the agent DO
 // as soon as the client goes away (request abort or stream cancellation)
 // instead of polling every 500ms for up to 5 minutes.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
@@ -14,8 +15,7 @@ function sseEnv() {
     async getRunEvents() { polls += 1; return []; },
   };
   const env = {
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub },
-  } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, pollCount: () => polls };
 }
 

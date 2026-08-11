@@ -320,10 +320,19 @@ it. A second in-SQL check covers server membership + `allowed_tools`.
 Every secret a user owns lives in one `UserDO`, and every privileged method on
 it takes a `UserCaller` first and gates on `requireTier`
 (`cf-backend/src/user/workspace-capability.ts`). Worker routes act for the owner
-whose identity the edge verified and pass `OWNER_SESSION`; a workspace presents
-the per-workspace secret minted for it at claim time and stored hashed, and the
-UserDO looks its tier up live in `workspace_tiers`. The token is identity, not
-capability, so re-tainting a workspace is a single row update.
+whose identity the edge verified and present the owner capability —
+`ownerCaller(env)`, an HMAC of the Worker's own secret, so owner authority is
+something the deployment holds rather than a string any module can type. A
+workspace presents the per-workspace secret minted for it at claim time and
+stored hashed, and the UserDO looks its tier up live in `workspace_tiers`. The
+token is identity, not capability, so re-tainting a workspace is a single row
+update.
+
+Neither kind is an attestation of who is calling: Cloudflare gives a Durable
+Object no way to learn that, so a sibling DO sharing `env` can derive the owner
+capability too. What the boundary buys is that the tool surface — the part an
+injected prompt can steer — reaches the UserDO only through code presenting a
+workspace token, and is attenuated by tier whichever tool gate someone forgets.
 
 Today every workspace is registered `full` — the whole user surface, exactly as
 before. The `shared` tier is what a workspace shared with a second human will

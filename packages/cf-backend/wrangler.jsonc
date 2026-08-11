@@ -90,6 +90,14 @@
   // scripts/deploy.sh runs at deploy time, kept running afterwards. No
   // third-party monitoring service is involved.
   "triggers": { "crons": ["*/15 * * * *"] },
+  // CREDENTIAL_ENCRYPTION_KEY is a REQUIRED Wrangler secret — the root secret
+  // for the user plane. It encrypts every provider credential a user connects
+  // (user/credential-envelope.ts) and derives the owner capability every
+  // privileged UserDO call presents (user/workspace-capability.ts), so a
+  // deployment without it cannot serve a signed-in user at all. Set via:
+  //   openssl rand -base64 32 | npx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
+  // Rotation uses CREDENTIAL_ENCRYPTION_KEY_PREVIOUS — see docs/DEPLOYMENT.md.
+  //
   // AI_GATEWAY_AUTH is a Wrangler secret — set via:
   //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
   // For local dev, add to .dev.vars:

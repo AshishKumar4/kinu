@@ -81,7 +81,7 @@ proteus <command> [options]
 
 | Command | What it does |
 | --- | --- |
-| [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon |
+| [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
 | [`proteus desktop [action]`](#proteus-desktop-action) | Connect or inspect the local desktop execution daemon |
 | [`proteus daemon [action]`](#proteus-daemon-action) | Manage the local scheduler daemon: start, stop, restart, status, logs |
 | [`proteus doctor`](#proteus-doctor) | Inspect local Proteus CLI installation state |
@@ -100,6 +100,7 @@ Connect your account; optionally configure local-only model credentials.
 | `--provider <name>` | Provider: codex, openai, openrouter, anthropic, openai-compatible, skip |
 | `--model <id>` | Default model for the selected provider |
 | `--local-model` | Configure credentials for local-only agents |
+| `--local` | Keep the provider key on this machine instead of your Proteus account |
 | `-y, --yes` | Accept recommended setup choices where possible |
 | `--skip-cloud` | Skip account sign-in |
 
@@ -113,6 +114,7 @@ Also: `proteus providers`
 | --- | --- |
 | `--origin <url>` | Proteus app origin |
 | `--model <id>` | Default model for the selected provider |
+| `--local` | Keep the provider key on this machine instead of your Proteus account |
 
 ### proteus auth
 
@@ -479,7 +481,7 @@ Inspect the governed release lane: sources, changes, checks, approvals, deployme
 
 ### proteus connect
 
-Link this computer as the desktop execution daemon.
+Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days).
 
 | Option | What it does |
 | --- | --- |

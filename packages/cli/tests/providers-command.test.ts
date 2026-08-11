@@ -130,7 +130,7 @@ describe('providers command — disconnect', () => {
 
     const res = runProviders(['disconnect', 'codex'], { home });
     expect(res.exitCode).toBe(0);
-    expect(res.stdout).toContain('Disconnected codex');
+    expect(res.stdout).toContain('Removed the codex credential from this machine');
 
     const config = readConfig(home);
     expect(config.providers).toEqual({ openai: { apiKey: 'sk-keep-me' } });
@@ -172,14 +172,16 @@ describe('providers command — disconnect', () => {
   test('remove and rm are accepted spellings', () => {
     for (const verb of ['remove', 'rm']) {
       const home = homeWith({ providers: { openrouter: { apiKey: 'sk' } } });
-      expect(runProviders([verb, 'openrouter'], { home }).stdout).toContain('Disconnected openrouter');
+      expect(runProviders([verb, 'openrouter'], { home }).stdout).toContain('Removed the openrouter credential from this machine');
       expect(readConfig(home).providers).toEqual({});
     }
   });
 
   test('rejects an unknown provider instead of silently doing nothing', () => {
+    // Signed out there is no account to hold a models.dev provider under that
+    // name either, so the rejection names both halves of the answer.
     const res = runProviders(['disconnect', 'not-a-provider'], { home: freshHome() });
     expect(res.exitCode).not.toBe(0);
-    expect(res.stderr).toContain('Provider must be');
+    expect(res.stderr).toContain('Unknown provider "not-a-provider"');
   });
 });

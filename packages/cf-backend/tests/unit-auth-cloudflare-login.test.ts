@@ -3,6 +3,7 @@
 // token) to the user's UserDO in the same authorization — one login grants
 // both app access and AI. Drives the real /auth/cloudflare/callback handler
 // against the real D1 auth schema, faking only the network seams.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes.js';
 import { createOAuthState } from '../src/auth/d1-store.js';
@@ -29,8 +30,7 @@ function setupEnv() {
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({ async onCredentialsChanged() {} }) },
     CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
-    CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
-  } as unknown as Env;
+    CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret', CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, credentials, config };
 }
 

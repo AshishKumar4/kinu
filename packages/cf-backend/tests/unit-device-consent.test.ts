@@ -1,3 +1,4 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
@@ -88,7 +89,7 @@ function consentRoutesSetup() {
       return { ok: true };
     },
   };
-  const env = { UserDO: { idFromName: (n: string) => n, get: () => stub } } as unknown as Env;
+  const env = { UserDO: { idFromName: (n: string) => n, get: () => stub }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   const call = (path: string, method: string, body?: unknown) =>
     handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
       method,

@@ -8,7 +8,7 @@
  *   1. TypeScript `private` is erased at compile time, so a `private` method is
  *      an ordinary prototype method and IS callable over RPC. Every
  *      `requireTier` check in `user/workspace-capability.ts` sits at the top of
- *      a public method; a stub-holder that calls `sqlx` or `getCredentialRow`
+ *      a public method; a stub-holder that calls `sqlx` or `readCredential`
  *      instead never reaches one.
  *   2. SUPERCLASS methods are reachable too — the walk does not stop at the
  *      most-derived class. `Agent.sql` from the agents SDK is a tagged-template
@@ -195,7 +195,7 @@ function inheritedDescriptor(instance: object, name: string): PropertyDescriptor
  * lists are the same list: a name here is a name the gate has already vetted.
  *
  * Nothing else on this class or anywhere in its inheritance chain is reachable
- * from a stub — not `sqlx`, not `getCredentialRow`, and not the SDK's inherited
+ * from a stub — not `sqlx`, not `readCredential`, and not the SDK's inherited
  * `sql`, which would otherwise hand any Durable Object in this Worker arbitrary
  * queries against the credential store.
  *

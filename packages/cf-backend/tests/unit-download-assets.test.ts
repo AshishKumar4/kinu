@@ -10,6 +10,7 @@
  * /api/health must report the deployed build stamp — one GET that says whether
  * the asset half of a deploy landed.
  */
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
 import { handleHealthRequest } from '../src/health-route.js';
@@ -32,8 +33,7 @@ function envWithAssets(files: Record<string, { body: string; contentType: string
         }
         return new Response(SPA_SHELL, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
       },
-    },
-  } as unknown as Env;
+    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
 }
 
 const PUBLISHED = {
@@ -69,8 +69,7 @@ describe('CLI download assets', () => {
 
   test('404 when the asset worker itself errors', async () => {
     const env = {
-      ASSETS: { async fetch() { return new Response('boom', { status: 500 }); } },
-    } as unknown as Env;
+      ASSETS: { async fetch() { return new Response('boom', { status: 500 }); } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     for (const path of DOWNLOAD_PATHS) {
       const res = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
       expect(res?.status).toBe(404);

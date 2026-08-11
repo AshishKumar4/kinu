@@ -15,16 +15,28 @@
  * Secrets are hashed at rest exactly like `user_cli_tokens` / `user_devices`:
  * the raw token is returned once to the workspace DO and never stored here.
  *
- * Trust boundary, stated honestly: Cloudflare gives a Durable Object no way to
- * learn which stub-holder is calling it, so `OWNER_SESSION` is a claim, not a
- * proof. What this boundary buys is that the *tool surface* — the part of
- * Proteus an injected prompt can steer — reaches the UserDO only through code
- * that presents a workspace token, and is therefore attenuated by tier no
- * matter which tool gate someone forgets. It is not a defence against edits to
- * Proteus's own trusted source.
+ * Trust boundary, stated honestly. Cloudflare gives a Durable Object no way to
+ * learn which stub-holder is calling it, so no caller kind here is an
+ * attestation of WHO is calling — both kinds are secrets, and the boundary is
+ * exactly "does the caller hold this secret".
+ *
+ *   - A workspace token is held only by that workspace's Durable Object, so it
+ *     genuinely names one workspace and carries its tier.
+ *   - The owner capability is derived from a Worker secret, so it cannot be
+ *     typed, guessed, or reached by code running without the bindings — the
+ *     Loader-sandboxed crafted tools, the sandbox container, the CLI, the
+ *     browser. It is NOT a defence against other Durable Objects in this same
+ *     Worker script, which share `env` and can derive it too; that is not
+ *     expressible on this platform, and pretending otherwise would be worse
+ *     than saying so.
+ *
+ * What the boundary buys is unchanged and still the point: the *tool surface* —
+ * the part of Proteus an injected prompt can steer — reaches the UserDO only
+ * through code that presents a workspace token, and is therefore attenuated by
+ * tier no matter which tool gate someone forgets.
  */
 import { nanoid, type SqlExec } from '@proteus/core';
-import { sha256Hex } from '../lib/crypto.js';
+import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto.js';
 
 /** A workspace's reach into the owner's wider world.
  *  - `full`   — solo-owner workspace: the whole user surface.
@@ -111,18 +123,67 @@ export type WorkspaceCapability = keyof typeof WORKSPACE_CAPABILITY_TIERS;
 
 /** Who is invoking a privileged UserDO method.
  *
- *  `OWNER_SESSION` — a Worker route acting for the owner, whose identity the
- *  edge already verified (session cookie, CLI bearer, or the DO's own internal
- *  use of a sibling method).
+ *  `{ ownerToken }` — Worker code acting for the owner, whose identity the edge
+ *  already verified (session cookie, CLI bearer), or the DO's own internal use
+ *  of a sibling method. Obtained from `ownerCaller(env)`; see the trust-boundary
+ *  note at the top of this file for exactly what it proves.
  *
  *  `{ workspaceToken }` — a workspace Durable Object presenting the secret the
  *  owner's UserDO minted for it. */
-export const OWNER_SESSION = 'owner_session' as const;
-export type UserCaller = typeof OWNER_SESSION | { readonly workspaceToken: string };
+export type UserCaller = { readonly ownerToken: string } | { readonly workspaceToken: string };
 
 export type ResolvedCaller =
   | { readonly kind: 'owner_session' }
   | { readonly kind: 'workspace'; readonly workspace: string; readonly tier: WorkspaceTier };
+
+/** The bindings the owner capability is derived from. Deliberately the same
+ *  secret that seals the credential store: both are the Worker's root trust
+ *  material for the user plane, so there is one thing to provision, one thing
+ *  to rotate, and no second key whose absence is a silent downgrade. The two
+ *  uses are domain-separated by the label below, so neither value can stand in
+ *  for the other. */
+export interface OwnerCapabilityEnv {
+  CREDENTIAL_ENCRYPTION_KEY?: string;
+}
+
+const OWNER_CAPABILITY_LABEL = 'proteus.owner-capability.v1';
+
+/** Derived tokens, cached per secret — the derivation is deterministic, so the
+ *  cache holds nothing the process was not already holding. */
+const ownerTokens = new Map<string, Promise<string>>();
+
+/**
+ * The caller a Worker route presents when it is acting for the signed-in
+ * owner. Async and env-bound on purpose: owner authority is a secret this
+ * deployment holds, not a string any module can type.
+ */
+export async function ownerCaller(env: OwnerCapabilityEnv): Promise<UserCaller> {
+  return { ownerToken: await ownerToken(env) };
+}
+
+/** Thrown when the deployment holds no root secret. Its own class because the
+ *  whole signed-in surface depends on it, and both the browser and CLI planes
+ *  turn it into one deliberate answer instead of an opaque 500. */
+export class OwnerCapabilityUnavailableError extends Error {
+  constructor() {
+    super(
+      'This deployment is not configured to serve signed-in users: CREDENTIAL_ENCRYPTION_KEY is not set. '
+      + 'See docs/DEPLOYMENT.md.',
+    );
+    this.name = 'OwnerCapabilityUnavailableError';
+  }
+}
+
+function ownerToken(env: OwnerCapabilityEnv): Promise<string> {
+  const secret = (env.CREDENTIAL_ENCRYPTION_KEY ?? '').trim();
+  if (!secret) throw new OwnerCapabilityUnavailableError();
+  let pending = ownerTokens.get(secret);
+  if (!pending) {
+    pending = hmacSha256Hex(secret, OWNER_CAPABILITY_LABEL);
+    ownerTokens.set(secret, pending);
+  }
+  return pending;
+}
 
 /** Thrown by `requireTier`. Crosses the Worker→DO RPC boundary as its message,
  *  which is written to be honest to both a human and an LLM reading a tool
@@ -226,8 +287,12 @@ export function setWorkspaceTier(sql: SqlExec, workspaceName: string, tier: Work
 /** Resolve a caller to a principal. Fails closed at every step: an
  *  unrecognized shape, an unknown token, or a token whose workspace has no
  *  registry row is denied rather than defaulted. */
-async function resolveCaller(sql: SqlExec, caller: UserCaller): Promise<ResolvedCaller> {
-  if (caller === OWNER_SESSION) return { kind: 'owner_session' };
+async function resolveCaller(sql: SqlExec, env: OwnerCapabilityEnv, caller: UserCaller): Promise<ResolvedCaller> {
+  const presentedOwner = (caller as { ownerToken?: unknown } | null)?.ownerToken;
+  if (typeof presentedOwner === 'string' && presentedOwner) {
+    if (timingSafeEqual(presentedOwner, await ownerToken(env))) return { kind: 'owner_session' };
+    throw new CapabilityDeniedError('Unrecognized owner capability.');
+  }
   const token = (caller as { workspaceToken?: unknown } | null)?.workspaceToken;
   if (typeof token !== 'string' || token === '') {
     throw new CapabilityDeniedError(
@@ -256,10 +321,11 @@ async function resolveCaller(sql: SqlExec, caller: UserCaller): Promise<Resolved
  *  only the calling workspace). */
 export async function requireTier(
   sql: SqlExec,
+  env: OwnerCapabilityEnv,
   caller: UserCaller,
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
-  const resolved = await resolveCaller(sql, caller);
+  const resolved = await resolveCaller(sql, env, caller);
   if (resolved.kind === 'owner_session') return resolved;
   const minimum = WORKSPACE_CAPABILITY_TIERS[capability];
   if (TIER_RANK[resolved.tier] < TIER_RANK[minimum]) {

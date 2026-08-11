@@ -31,7 +31,7 @@ import type { UserCaller } from '../user/workspace-capability.js';
 
 /** Stub for the per-user DO that owns this user's credentials, paired with the
  *  identity this context presents to it — a Worker route acting for the
- *  signed-in owner passes OWNER_SESSION, an agent passes its workspace
+ *  signed-in owner presents the owner capability, an agent passes its workspace
  *  capability token (resolved per call, since a facet reads it from its
  *  parent). The two travel together so no context can hold the stub without
  *  saying who it is. */

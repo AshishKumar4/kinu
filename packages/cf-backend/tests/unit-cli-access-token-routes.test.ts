@@ -1,6 +1,7 @@
 // Route-level behavior for scoped `pta_…` CI access tokens: exec/read scopes
 // gate exactly the surfaces they name, everything sensitive stays
 // interactive-session-only, and minting is step-up gated.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
 
@@ -114,8 +115,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
   };
   const env = {
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
-  } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 

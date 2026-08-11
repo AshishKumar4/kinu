@@ -16,6 +16,13 @@ import { sha256Hex } from '../lib/crypto.js';
 // Scopes renamed from agent.read/agent.exec with no back-compat migration by
 // design — pre-production, tokens are reissued on redeploy (owner decision
 // 2026-06-13).
+//
+// `ai.proxy` means "spend the owner's inference credentials", and that is now
+// ALL of them: the Cloudflare-pinned /api/user/ai/v1 proxy and the general
+// provider proxy, which also lets the holder enumerate which providers are
+// connected. It stays one scope because it is one capability — running models
+// on the owner's account — and the general proxy admits only inference
+// endpoints, never a provider's account-management routes.
 export const ACCESS_TOKEN_SCOPES = ['workspace.read', 'workspace.exec', 'ai.proxy'] as const;
 export type AccessTokenScope = (typeof ACCESS_TOKEN_SCOPES)[number];
 

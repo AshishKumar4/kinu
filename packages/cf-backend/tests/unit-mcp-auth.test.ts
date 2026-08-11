@@ -4,6 +4,7 @@
 // step 6b) because external MCP clients can't do browser OAuth — they
 // authenticate with their per-user CLI bearer token, and every request runs
 // the same ownership claim as the rest of the per-agent API.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
@@ -32,8 +33,7 @@ function mcpEnv() {
     // its presence makes the unauthenticated path a clean AuthError 401.
     AUTH_DB: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
-  } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 

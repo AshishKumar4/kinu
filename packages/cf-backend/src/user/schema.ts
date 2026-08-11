@@ -106,7 +106,9 @@ export function initUserTables(sql: SqlExec): void {
   //
   // `transport` is one of: 'auto' (streamable-http with SSE fallback) | 'sse'
   // | 'streamable-http'. `headers` is an optional JSON object of static
-	  // request headers (e.g. Bearer tokens for self-hosted/private servers).
+	  // request headers (e.g. Bearer tokens for self-hosted/private servers),
+  // sealed at rest by user/credential-envelope.ts exactly like a credential —
+  // it holds the same class of secret.
   // `allowed_tools` is a JSON array of MCP tool names; null = expose all.
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_mcp_servers (
@@ -125,8 +127,8 @@ export function initUserTables(sql: SqlExec): void {
   // User-level connected devices (laptops/PCs). One row per device the user has
   // linked via `proteus connect`. The reverse-WS tunnel + the live socket live
   // on THIS UserDO (the user-level hub) so every one of the user's agents can
-  // request the device. `token_hash` is the device's long-lived connect secret;
-  // raw tokens are returned only once to the authenticated CLI and never stored.
+  // request the device. `token_hash` is the device's connect secret; raw tokens
+  // are returned only once to the authenticated CLI and never stored.
   if (fromVersion < 1) resetRawTokenTable(sql, 'user_devices');
   sql.exec(`
     CREATE TABLE IF NOT EXISTS user_devices (
@@ -138,10 +140,17 @@ export function initUserTables(sql: SqlExec): void {
       created_at    INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
       connected_at  INTEGER,
       last_seen_at  INTEGER,
+      expires_at    INTEGER,
       revoked_at    INTEGER
     )
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_user_devices_token_hash ON user_devices (token_hash)`);
+  // Device tokens expire on IDLENESS, not on a wall clock: every successful
+  // verification pushes `expires_at` out again, so a machine that keeps
+  // connecting is never re-linked, and one that stopped connecting stops being
+  // a live credential. NULL on rows that predate the column — stamped on their
+  // next verification rather than locked out.
+  ensureColumn(sql, 'user_devices', 'expires_at', 'INTEGER');
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is

@@ -1,3 +1,4 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import {
   approveCliAuth,
@@ -29,8 +30,7 @@ function setupEnv() {
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
-      },
-    } as unknown as Env,
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env,
   };
 }
 
@@ -100,8 +100,7 @@ describe('CLI auth error propagation', () => {
     const broken = new Database(':memory:'); // no tables at all
     const env = {
       AUTH_DB: makeD1(broken),
-      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
-    } as unknown as Env;
+      UserDO: { idFromName: (n: string) => n, get: () => ({}) }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
       .rejects.toThrow(/no such table/i);
   });
@@ -133,8 +132,7 @@ describe('CLI auth route status mapping', () => {
   test('infra failure during start → 500, not 429', async () => {
     const env = {
       AUTH_DB: makeD1(new Database(':memory:')),
-      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
-    } as unknown as Env;
+      UserDO: { idFromName: (n: string) => n, get: () => ({}) }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const res = await handleCliRequest(startRequest(), env);
     expect(res?.status).toBe(500);
     expect((await res?.json() as { error: string }).error).toMatch(/no such table/i);
