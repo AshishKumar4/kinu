@@ -11,29 +11,34 @@
  *   2. run            — shell via executionRouter; `runtime` param explicitly
  *                       chooses workspace / nimbus / sandbox / laptop, with
  *                       workspace (rt.shell) as the conservative default.
- *   3. skills         — Claude-Code / Hermes SKILL.md store; one tool, six
+ *   3. file           — the ONE file plane: read / edit / write over the same
+ *                       CompositeVFS every other surface addresses. The edit is
+ *                       exact-match, atomic and unique-or-refused; the read is
+ *                       capped and names the offset that continues it.
+ *                       Unconditional — every runtime has rt.storage.vfs.
+ *   4. skills         — Claude-Code / Hermes SKILL.md store; one tool, six
  *                       actions. Gated on deps.skills.
- *   4. agents         — the ONE delegation tool: ephemeral forks (heads /
+ *   5. agents         — the ONE delegation tool: ephemeral forks (heads /
  *                       mcts settle), persistent subordinates, and peer
  *                       workspace messaging behind a single action surface.
  *                       Gated on deps.agents; each ACTION is further gated on
  *                       the deps group that powers it (fork / team / peers),
  *                       so a CLI session gets fork only and a subordinate
  *                       actor never sees staff. See tools/agents-tool.ts.
- *   5. memory         — the ONE durable-state tool: prose notes (save / search,
+ *   6. memory         — the ONE durable-state tool: prose notes (save / search,
  *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
  *                       wired), the typed keyed world model (remember / recall
  *                       / forget, gated on deps.facts) and past session
  *                       transcripts (sessions).
- *   6. experience     — cross-workspace transfer of proven crafts / lessons /
+ *   7. experience     — cross-workspace transfer of proven crafts / lessons /
  *                       facts through the owner's library. Gated on
  *                       deps.experience (workspace orchestrator only).
- *   7. web            — live web access: search / fetch. Gated on
+ *   8. web            — live web access: search / fetch. Gated on
  *                       deps.webSearch.
- *   8. report         — the subordinate's progress spine back to its parent
+ *   9. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
- *   9. product_change — governed product/UI self-customization lane.
+ *  10. product_change — governed product/UI self-customization lane.
  *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -49,6 +54,8 @@ import {
   MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
 } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { createFileTool } from './file-tool.js';
+import { TurnFileLedger } from './file-ledger.js';
 import { TurnContextBudget } from '../context-budget.js';
 import { isMcpToolKey } from './mcp-naming.js';
 import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executor.js';
@@ -197,6 +204,11 @@ export interface BuiltinToolDeps {
    *  codemode `web.*` namespace is wired by the same provider in each backend's
    *  execute_tools assembly. */
   webSearch?: WebSearchProvider;
+  /** The turn's file ledger — what the model has read (so `file` can refuse a
+   *  blind edit) and what its edits did (the durable `file_edit` row). Same
+   *  ownership rule as contextBudget: backends pass their TurnAccumulator's, and
+   *  a caller that omits it gets a fresh one, so the policy is per-root. */
+  fileLedger?: TurnFileLedger;
   /** The turn's cumulative context budget — the per-result clamp tightens once
    *  a turn has admitted its budget, and every spill trip is counted for the
    *  durable `context_budget` row. Backends pass their TurnAccumulator's; a
@@ -562,7 +574,20 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 2b. skills ──────────────────────────────────────────────────────────
+  // ── 3. file ─────────────────────────────────────────────────────────────
+  // The file plane: read / edit / write over the same CompositeVFS `run` and
+  // execute_tools address, so one tool serves every mount on both backends.
+  // Unconditional — every runtime has rt.storage.vfs, and a model without an
+  // exact-match editor falls back to sed -i and heredocs, which is what this
+  // replaces.
+  tools.file = createFileTool({
+    vfs: rt.storage.vfs,
+    ledger: deps.fileLedger ?? new TurnFileLedger(),
+    budget,
+    memory,
+  });
+
+  // ── 4. skills ──────────────────────────────────────────────────────────
   // Single LLM-facing tool, six actions. Only registered when the
   // orchestrator wires SkillsToolDeps (VFS + per-turn invoke tracker).
   if (deps.skills) {
@@ -595,7 +620,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 3. agents — the ONE delegation tool ──────────────────────────────────
+  // ── 5. agents — the ONE delegation tool ──────────────────────────────────
   // Fork dispatch (heads / mcts settle), subordinate staffing and peer
   // messaging behind a single action surface. Registered when any deps group
   // is wired; per-action gating lives in createAgentsTool.
@@ -603,7 +628,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.agents = createAgentsTool(deps.agents);
   }
 
-  // ── 4. memory — the ONE durable-state tool ────────────────────────────────
+  // ── 6. memory — the ONE durable-state tool ────────────────────────────────
   // Prose notes (save / search), the typed keyed world model (remember /
   // recall / forget) and past session transcripts (sessions) are one concept —
   // state written down now to be read back later — so they are actions here
@@ -756,12 +781,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 5. experience — cross-workspace transfer of proven crafts/lessons/facts ──
+  // ── 7. experience — cross-workspace transfer of proven crafts/lessons/facts ──
   if (deps.experience) {
     tools.experience = createExperienceTool(deps.experience);
   }
 
-  // ── 6. web — live web research (search / fetch) ───────────────────────────
+  // ── 8. web — live web research (search / fetch) ───────────────────────────
   // One capability used as a pair: search discovers ranked results, fetch
   // retrieves one URL as clean markdown, and the doctrine is to loop them.
   // Both work key-less (DuckDuckGo + Markdown-for-Agents); a stored `tavily`
@@ -816,7 +841,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 7. report — subordinate → parent progress spine ────────────────────────
+  // ── 9. report — subordinate → parent progress spine ────────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = tool({
@@ -844,7 +869,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 8. product_change — governed product/UI self-customization lane ───────
+  // ── 10. product_change — governed product/UI self-customization lane ───────
   if (deps.productChanges) {
     const productChanges = deps.productChanges;
     tools.product_change = tool({

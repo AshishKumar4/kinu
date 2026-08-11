@@ -12,6 +12,7 @@
 export const BUILTIN_TOOLS = [
   'execute_tools',
   'run',
+  'file',
   'skills',
   'agents',
   'memory',
@@ -177,6 +178,33 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     doctrine:
       'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them.',
     result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
+  },
+  // ── The file plane (single source) ────────────────────────────────────────
+  // ONE tool, three actions, for the same reason `memory` is one tool: reading
+  // a file, changing part of it and creating it are one concept, and which
+  // action a call needs follows from what the model is doing rather than from a
+  // comparison it has to make. The actions are named after the codemode calls
+  // they mirror (workspace.readFile / writeFile), so there is one vocabulary.
+  file: {
+    name: 'file',
+    summary: 'Read files, replace exact text inside them, and create them, on any filesystem this agent can reach.',
+    whenToUse:
+      'Every file you read and every file you change. '
+      + 'read returns the file, with offset/limit to page through a large one. '
+      + 'edit replaces old_text with new_text: copy old_text exactly as the read showed it, with enough surrounding lines that it occurs once. Several changes to one file go in one call as several edits, all matched against the file as you read it and applied together or not at all. '
+      + 'write creates a file, or replaces one whole.',
+    whenNotToUse:
+      'Do not rewrite a whole file with write to change part of it — edit it. '
+      + 'Do not change files by pointing `run` at sed -i, a heredoc, or an inline python/perl script: those write whether or not the text they aimed at was there.',
+    // The two rules that make an edit safe, stated where the model decides how
+    // to write the call — not after it has already failed one.
+    doctrine:
+      'Read a file here before editing or overwriting it: the change is refused otherwise, and refused again if the file moved on after that read. '
+      + 'An edit whose old_text is missing, or present more than once, fails and touches nothing — widen old_text until it is unique rather than retrying the same anchor.',
+    result:
+      'read returns the content, naming the offset that continues it when a cap or a limit stopped it early. '
+      + 'edit returns the line each replacement landed on, or one failure naming what was wrong. '
+      + 'write returns the size written and whether the file was created or replaced.',
   },
   skills: {
     name: 'skills',

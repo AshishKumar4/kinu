@@ -37,6 +37,7 @@ import {
 } from '../prompting/cache-breakpoints.js';
 import { contextWindowForModel } from '../context-window.js';
 import { clampSerializedToolResult, clampToolResult } from '../tools/clamp.js';
+import { applyFileEdits, readFileSlice } from '../tools/file-edit.js';
 import { classifyTurnFailure, planOverflowRecovery } from '../turn-failure.js';
 import {
   buildCompactionSummaryPrompt,
@@ -157,6 +158,10 @@ export interface PipelineSubjects {
   // ── tool contract ──
   readonly renderToolSchemaDescription: typeof renderToolSchemaDescription;
 
+  // ── file plane ──
+  readonly applyFileEdits: typeof applyFileEdits;
+  readonly readFileSlice: typeof readFileSlice;
+
   // ── execution signal ──
   readonly devicePresence: typeof devicePresence;
   readonly deviceChangeNotice: typeof deviceChangeNotice;
@@ -233,6 +238,9 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   craftInvocationError: 'craft/in-episode.ts',
 
   renderToolSchemaDescription: 'tools/registry.ts',
+
+  applyFileEdits: 'tools/file-edit.ts',
+  readFileSlice: 'tools/file-edit.ts',
 
   devicePresence: 'execution/device-status.ts',
   deviceChangeNotice: 'execution/device-status.ts',
@@ -311,6 +319,9 @@ export function createPipelineSubjects(rt: AgentRuntime): PipelineSubjects {
     craftInvocationError,
 
     renderToolSchemaDescription,
+
+    applyFileEdits,
+    readFileSlice,
 
     devicePresence,
     deviceChangeNotice,

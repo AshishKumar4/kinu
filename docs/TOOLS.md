@@ -2,13 +2,13 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 11 names). All filesystem operations are available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
+The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 10 names). Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@proteus/core/tools`. The registry and descriptions
 live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
-the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, and
-`memory` are unconditional; every other tool is registered when — and only
+the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
+and `memory` are unconditional; every other tool is registered when — and only
 when — the backend wires its deps. That gating is structural rather than
 flagged, and it is how a subordinate gets `report` and never gets the `staff`
 action of `agents`.
@@ -19,6 +19,7 @@ action of `agents`.
 |------|---------|
 | `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
+| `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same CompositeVFS every other surface addresses |
 | `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
 | `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
@@ -26,6 +27,62 @@ action of `agents`.
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
 | `product_change` | Governed lane for changing the Proteus product/UI itself |
+
+## file — the file plane
+
+There is **one** file tool, with three actions, for the same reason `memory` is
+one tool: reading a file, replacing text inside it and creating it are one
+concept, and which action a call needs follows from what the agent is doing
+rather than from a comparison it has to make. The action names mirror the
+codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
+across the tool surface and the sandbox.
+
+Everything goes through `rt.storage.vfs` — which **is** the `CompositeVFS` — so
+one implementation reaches `/local`, `/workspace`, `/sandbox`, `/nimbus` and
+`/pc` on both backends. There is deliberately no second filesystem path and no
+per-runtime variant: a mount that is reserved or offline answers with its own
+`ENXIO` reason.
+
+### Why it exists
+
+Before it, the agent had no read/write/edit primitive at all: file work went
+through `run`. Over the preserved Terminal-Bench trajectories
+(`bench-artifacts/`) the split was **789 `run` calls against 6 `execute_tools`
+calls**, and of the 374 `run` commands in the 2.1 set, 65 were inline
+`python3 -c`, 55 were heredocs, 23 were shell redirects and 14 were `sed -i` —
+roughly two in five shell calls were the model hand-rolling a file mutation
+through the three most failure-prone mechanisms available. None of them can
+report that the text they aimed at was not there: `sed -i` exits 0 either way.
+
+### The properties that make it worth a tool
+
+| Property | What it means |
+|---|---|
+| **Exact match** | `old_text` must occur in the file **exactly once**. Absent → fail. Repeated → fail, with the occurrence count and the instruction to widen it. Occurrences are counted at every position, overlapping ones included, so `aa` in `aaa` is ambiguous rather than a silent first-match. Nothing is written either way. |
+| **Atomic batches** | Every edit in a call matches the file *as it was read*, never a sibling's result; offsets are applied back-to-front. One bad anchor applies none of them. Overlapping edits are refused by name. |
+| **Read-before-write** | `edit` — and `write` over an existing file — are refused unless the file has been read, and refused again (`stale`) if it changed after that read. The refusal names the exact call to make next. Authorization is keyed on the **content digest**, so a different spelling of the same path is not a spurious refusal, and a write authorizes the edits that follow it. |
+| **Seen depth, not just seen** | How much was read matters. A capped or paged read authorizes an `edit` — the anchor still has to be exactly and uniquely present — but not a `write` that discards lines the model never saw. Coverage is the contiguous prefix the turn has paged through, which is exactly the shape the read's own `offset=N` recipe produces, so paging to the end earns the overwrite and the gate is never a dead end. |
+| **No silent truncation** | A capped or limited `read` always names the offset that continues it, and no read is ever a bare empty string — an empty file says so, an offset past the end says so, and a single line too large to show at all hands over the `workspace.readFile`-inside-`execute_tools` recipe. A trailing newline ends the last line rather than creating a phantom one, so the offsets it hands back always resolve. Reads are counted against the same per-turn bulk budget as every other tool result (`context-budget.ts`). |
+| **Nothing invisible** | A BOM is stripped from what the read shows, so the first line can be copied back as `old_text` and match. Restored on write. |
+| **Faithful round-trip** | Matching happens on LF text with the BOM stripped, so an anchor typed with `\n` matches a CRLF file — but the splice lands on the **original** string at mapped indices, so a file with mixed endings keeps every ending it had outside the replaced span. Only the inserted text takes the file's ending. |
+| **A gradable outcome** | Every attempt is counted by outcome into the turn's `TurnFileLedger`, and the settle spine writes one `file_edit` run event per turn: `attempts` and `applied` (calls), `failures` by reason, `recoveredPaths` and `abandonedPaths` (paths — recovery is a property of a file, not of a call). |
+
+Reads are **not** line-numbered. `old_text` is built by copying out of a read,
+and a line-number gutter is the most reliable way to make a model copy
+something that is not in the file.
+
+There is deliberately **no fuzzy fallback**. pi's editor, when its exact match
+misses, re-matches in a normalized space (NFKC, smart quotes, dashes, per-line
+`trimEnd`) and then writes the whole file back *from that normalized space* — so
+one tolerated smart quote in the anchor silently rewrites every unrelated line.
+That is the corruption class this tool exists to remove. A miss fails loudly and
+the agent re-reads: one round trip, honest.
+
+`hashline` (oh-my-pi's line-anchored patch DSL) was considered and rejected: it
+costs ~6 KB of always-on system prompt teaching a 17-rule DSL plus a
+line-numbered read format, a snapshot store and 3-way merge, and its published
+gains concentrate on weak models. Exact match captures most of the benefit at no
+prompt cost.
 
 ## agents — the delegation surface
 
@@ -220,6 +277,27 @@ neither is wired, `execute_tools` still registers but returns a sharp
 "not configured" error rather than quietly compiling code with `new Function()`,
 which would break in a V8 isolate anyway.
 
+## file — action reference
+
+```
+file { action: "read",  path, offset?, limit? }   → the content, or a marker naming the next offset
+file { action: "edit",  path, edits: [{ old_text, new_text }] }
+                                                  → { ok, path, applied: [{ line, removed_lines, added_lines }] }
+                                                  → or { error } naming exactly what was wrong
+file { action: "write", path, content }           → { ok, path, bytes, action: "created" | "replaced" }
+```
+
+Failure reasons, as counted in the `file_edit` run event: `not_found`,
+`ambiguous`, `empty_anchor`, `overlap`, `no_change`, `unread`, `stale`,
+`missing`, `io`. A malformed edit is never read as the destructive option: a
+missing `new_text` is refused, while an explicit `""` deletes.
+
+The engine is pure string math in `packages/core/src/tools/file-edit.ts` (no
+I/O), the per-turn state is `tools/file-ledger.ts`, and the tool itself is
+`tools/file-tool.ts`. The `file-plane` layergate layer locks the two properties
+that matter — an anchor lands exactly once or not at all, and no read is clipped
+without saying how to continue it — with faults that model each being lost.
+
 ## run — Shell Command
 
 Direct POSIX shell execution over the agent's virtual filesystem (SqliteFS).
@@ -299,11 +377,12 @@ Crafted tools are discovered, scored, and retired automatically:
 
 ## Why so few tools
 
-The tool roster is deliberately small: filesystem work folds into the
+The tool roster is deliberately small: file work is one tool with three
+actions rather than three tools, the rest of filesystem work folds into the
 `execute_tools` codemode sandbox rather than living as a dozen flat
-per-operation tools, and delegation folds into `agents` rather than one tool
-per delegation shape. The whole schema surface the model sees is the 11 names
-plus their docstrings — roughly 1.9k tokens of description text
-(`BUILTIN_TOOL_DESCRIPTIONS`), and that stays flat as the CraftStore grows,
-because crafted tools live inside the sandbox namespace instead of the top-level
-schema.
+per-operation tools, and delegation folds into `agents` rather than one tool per
+delegation shape. The whole schema surface the model sees is the 10 names plus
+their docstrings — 9,777 characters of description text
+(`BUILTIN_TOOL_DESCRIPTIONS`), ~2.4k tokens at the chars/4 estimate — and that
+stays flat as the CraftStore grows, because crafted tools live inside the
+sandbox namespace instead of the top-level schema.

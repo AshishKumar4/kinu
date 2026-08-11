@@ -1217,6 +1217,7 @@ export class LocalAgentSession implements BackendHost {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
       context: this.orch.acc.context,
+      files: this.orch.acc.files,
       steering: this.orch.steering.snapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
@@ -2121,6 +2122,9 @@ export class LocalAgentSession implements BackendHost {
       // The turn's cumulative bulk budget — held on the accumulator so this
       // toolset (rebuilt only on model change) reads the live turn's state.
       contextBudget: this.orch.acc.context,
+      // Same ownership for the read-before-edit state and the per-edit outcome
+      // counters the `file` tool writes.
+      fileLedger: this.orch.acc.files,
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecuteToolFactory({
         extraProviders: [

@@ -10,6 +10,7 @@
  */
 
 import type { ContextBudgetSnapshot } from '../context-budget.js';
+import type { FileEditSnapshot } from '../tools/file-ledger.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
 
 export type RunEventType =
@@ -25,6 +26,7 @@ export type RunEventType =
   | 'scaffold_rollback'
   | 'memory_write'
   | 'context_budget'
+  | 'file_edit'
   | 'turn_steering'
   | 'completion_gate'
   | 'craft_cycle'
@@ -72,6 +74,14 @@ export type RunEvent =
    *  any of it back. Written once per turn by the settle spine (M1 trip
    *  counters); `turn_end` is the denominator. */
   | (RunEventBase & { type: 'context_budget' } & ContextBudgetSnapshot)
+  /** What this turn's `file` edits did: how many were attempted, how many
+   *  landed, which exact-match failures they hit, and whether the model came
+   *  back and got the file right. Written once per turn by the settle spine
+   *  like `context_budget`, only for turns that attempted an edit. Shell-based
+   *  edits could not produce this row at all — `sed -i` exits 0 whether or not
+   *  it matched anything — which is why the primitive is what makes edit
+   *  success a gradable signal. */
+  | (RunEventBase & { type: 'file_edit' } & FileEditSnapshot)
   /** The harness mechanically steered the turn, and whether the model then did
    *  what the steer asked. At most one per turn, written by the settle spine
    *  like `context_budget`; `turn_end` is the denominator, `converted` the

@@ -103,6 +103,18 @@ function summarizeMemory(input: Record<string, unknown>): string {
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
 
+/** The file plane — every action reads by its path, and an edit says how many
+ *  replacements it carried, which is the one thing the path does not tell you. */
+function summarizeFile(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  const path = str(input, "path");
+  const edits = input.edits;
+  if (action === "edit" && Array.isArray(edits) && edits.length > 1) {
+    return `${action} ${clip(path, 56)} (${edits.length} edits)`;
+  }
+  return path ? `${action} ${clip(path, 60)}` : action;
+}
+
 /** The unified web tool — a search reads by its query, a fetch by its url. */
 function summarizeWeb(input: Record<string, unknown>): string {
   const action = str(input, "action");
@@ -179,6 +191,7 @@ function summarizeProductChange(input: Record<string, unknown>): string {
 const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = {
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
+  file: summarizeFile,
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   agents: summarizeAgents,
   memory: summarizeMemory,

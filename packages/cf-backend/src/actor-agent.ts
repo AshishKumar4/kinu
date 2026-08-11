@@ -500,6 +500,7 @@ export abstract class ActorAgent extends Think<Env> {
         turnIndex: this.orch.sessionTurnIndex,
         usage: this.acc.usage,
         context: this.acc.context,
+        files: this.acc.files,
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         reason: result.status,
@@ -1481,6 +1482,10 @@ export abstract class ActorAgent extends Think<Env> {
         // cached toolset holds a stable reference across turns and the reset
         // rides the turn's own accounting.
         contextBudget: this.acc.context,
+        // Same ownership: read-before-edit state and the per-edit outcome
+        // counters ride the accumulator, so the cached toolset sees the turn's
+        // ledger and the reset rides the turn's own accounting.
+        fileLedger: this.acc.files,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
         // settle) is universal; staff/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution

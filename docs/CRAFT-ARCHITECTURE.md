@@ -73,7 +73,7 @@ Normalization of stored code is a single `.trim()`. No semicolon stripping, no d
 
 ## 5. Proteus Pre-Phase-A State
 
-Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). All paths are relative to the repo root, and describe the tree **as it was then** — several of these files have since moved or been deleted (`craft-executor.ts` on the CF side is gone; `getExecuteToolsTool` now lives in `actor-agent.ts`; `BUILTIN_TOOLS` is 12 names, not 5).
+Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). All paths are relative to the repo root, and describe the tree **as it was then** — several of these files have since moved or been deleted (`craft-executor.ts` on the CF side is gone; `getExecuteToolsTool` now lives in `actor-agent.ts`; `BUILTIN_TOOLS` is 10 names, not 5).
 
 ### 5.1 Files observed
 

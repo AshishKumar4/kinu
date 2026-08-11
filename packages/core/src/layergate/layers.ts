@@ -20,6 +20,7 @@ import { ExtensionHost } from '../extension.js';
 import { DynamicContextLedger } from '../prompting/volatile-context.js';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
 import { TurnContextBudget } from '../context-budget.js';
+import { TurnFileLedger } from '../tools/file-ledger.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
@@ -1146,6 +1147,65 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   },
 
   {
+    id: 'file-plane',
+    owns: 'the exact-match file editor and the honest read behind the `file` tool (core tools/file-edit.ts) — ' +
+      'an edit lands exactly once or not at all, and no read is ever clipped without saying how to continue it',
+    subjects: ['applyFileEdits', 'readFileSlice'],
+    probes: [
+      {
+        id: 'file-plane/anchor-must-be-unique',
+        asserts: 'an absent, empty, or repeated anchor fails by reason and changes nothing; a unique one lands',
+        observe: (s) => {
+          const file = 'alpha\nbeta\nalpha\n';
+          return [
+            ['unique', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'BETA' }], '/f')],
+            ['repeated', s.applyFileEdits(file, [{ oldText: 'alpha', newText: 'A' }], '/f')],
+            ['absent', s.applyFileEdits(file, [{ oldText: 'gamma', newText: 'G' }], '/f')],
+            ['empty', s.applyFileEdits(file, [{ oldText: '', newText: 'G' }], '/f')],
+            ['no-op', s.applyFileEdits(file, [{ oldText: 'beta', newText: 'beta' }], '/f')],
+          ];
+        },
+      },
+      {
+        id: 'file-plane/batch-is-atomic-and-original-anchored',
+        asserts: 'every anchor matches the file as read, overlaps are refused, and one bad edit applies none',
+        observe: (s) => [
+          ['chained', s.applyFileEdits('one\ntwo\n', [
+            { oldText: 'one', newText: 'two' }, { oldText: 'two', newText: 'three' },
+          ], '/f')],
+          ['overlapping', s.applyFileEdits('abcdef\n', [
+            { oldText: 'abcd', newText: 'X' }, { oldText: 'cdef', newText: 'Y' },
+          ], '/f')],
+          ['one-bad', s.applyFileEdits('alpha\nbeta\n', [
+            { oldText: 'alpha', newText: 'A' }, { oldText: 'missing', newText: 'M' },
+          ], '/f')],
+          ['crlf-bom', s.applyFileEdits('\uFEFFa\r\nb\r\n', [{ oldText: 'a\nb', newText: 'c' }], '/f')],
+          ['mixed-endings', s.applyFileEdits('crlf\r\nlf\nT\r\n', [{ oldText: 'T', newText: 'X\nY' }], '/f')],
+          ['self-overlapping', s.applyFileEdits('aaa\n', [{ oldText: 'aa', newText: 'b' }], '/f')],
+        ],
+      },
+      {
+        id: 'file-plane/no-silent-truncation',
+        asserts: 'a capped or limited read names the offset that continues it; an oversize line names its recipe',
+        observe: (s) => {
+          const file = Array.from({ length: 8 }, (_, i) => `line ${i + 1}`).join('\n');
+          return [
+            ['whole', s.readFileSlice(file, { path: '/f', maxChars: 1000 })],
+            ['capped', s.readFileSlice(file, { path: '/f', maxChars: 20 })],
+            ['limited', s.readFileSlice(file, { path: '/f', limit: 3, maxChars: 1000 })],
+            ['limit-reaches-end', s.readFileSlice(file, { path: '/f', offset: 7, limit: 5, maxChars: 1000 })],
+            ['past-end', s.readFileSlice(file, { path: '/f', offset: 99, maxChars: 1000 })],
+            ['one-huge-line', s.readFileSlice('z'.repeat(60), { path: '/f', maxChars: 20 })],
+            ['trailing-newline', s.readFileSlice('a\nb\n', { path: '/f', limit: 2, maxChars: 1000 })],
+            ['empty-file', s.readFileSlice('', { path: '/f', maxChars: 1000 })],
+            ['sub-line-limit', s.readFileSlice(file, { path: '/f', limit: 0.5, maxChars: 1000 })],
+          ];
+        },
+      },
+    ],
+  },
+
+  {
     id: 'craft-fitness',
     owns: 'the in-episode fitness signal for crafted tools: which tools a submitted block actually called, ' +
       'and which of them a failure is attributable to',
@@ -1287,6 +1347,27 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             turnIndex: 3, usage: { input: 10, output: 5, cached: 2 }, reason: 'error', error: 'boom',
           });
           return emitted;
+        },
+      },
+      {
+        id: 'backend-turn-driver/file-edit-row',
+        asserts: 'the file_edit row rides the bracket only when the turn attempted an edit, carrying failures and recovery',
+        observe: (s) => {
+          const rows = (files: TurnFileLedger) => {
+            const emitted: unknown[] = [];
+            s.closeTurnRun({ emit: (_r: string, input: unknown) => { emitted.push(input); } }, 'run-1', {
+              turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed', files,
+            });
+            return emitted;
+          };
+          const untouched = new TurnFileLedger();
+          const readOnly = new TurnFileLedger();
+          readOnly.observeWhole('/a', 'x');
+          const edited = new TurnFileLedger();
+          edited.recordEdit('/a', 'ambiguous');
+          edited.recordEdit('/a', null);
+          edited.recordEdit('/b', 'unread');
+          return [['untouched', rows(untouched)], ['read-only', rows(readOnly)], ['edited', rows(edited)]];
         },
       },
       {

@@ -1,6 +1,16 @@
 // Tiny VFS helpers shared across modules.
 import type { VFS } from '../types/primitives.js';
 
+/** The directory part of a VFS path, POSIX-style: '' for a bare name, '/' for a
+ *  top-level one. Shared because `path.slice(0, path.lastIndexOf('/'))` is
+ *  wrong for both of those cases — on a bare name lastIndexOf returns -1 and
+ *  the slice silently drops the last character. */
+export function vfsDirname(path: string): string {
+  const i = path.lastIndexOf('/');
+  if (i < 0) return '';
+  return i === 0 ? '/' : path.slice(0, i);
+}
+
 /** Idempotent mkdir — swallows "already exists" errors so callers don't
  *  need a try/catch around every call. Other errors propagate.
  *  Only depends on `mkdir`, so it accepts any VFS-like value that has it

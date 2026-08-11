@@ -191,7 +191,7 @@ describe('E2E Full Lifecycle', () => {
   test('2. buildBuiltinTools returns the dep-gated subset, all of it canonical', () => {
     const names = Object.keys(tools);
     for (const name of names) expect(BUILTIN_TOOLS).toContain(name);
-    for (const core of ['execute_tools', 'run', 'memory']) expect(names).toContain(core);
+    for (const core of ['execute_tools', 'run', 'file', 'memory']) expect(names).toContain(core);
     for (const ungated of ['skills', 'agents', 'product_change']) {
       expect(names).not.toContain(ungated);
     }

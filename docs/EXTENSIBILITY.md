@@ -285,9 +285,9 @@ an output-token cap, is the cheapness lever for most of these paths.
 
 ## The agent's runtime surface
 
-The top-level tools are the 12 in `BUILTIN_TOOLS` (`core/src/tools/registry.ts`)
-— `execute_tools`, `run`, `skills`, `agents`, `memory`, `experience`, `web`,
-`report`, `product_change` — narrowed per actor by
+The top-level tools are the 10 in `BUILTIN_TOOLS` (`core/src/tools/registry.ts`)
+— `execute_tools`, `run`, `file`, `skills`, `agents`, `memory`, `experience`,
+`web`, `report`, `product_change` — narrowed per actor by
 `actorActiveTools()`. See [TOOLS.md](./TOOLS.md).
 
 Inside `execute_tools`, the LLM additionally sees:

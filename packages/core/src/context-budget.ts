@@ -51,6 +51,7 @@ const SPILL_DIR_VALUES: readonly string[] = Object.values(SPILL_DIRS);
  *  aggregating with new ones. */
 export type BulkProducer =
   | 'run'
+  | 'file_read'
   | 'web_fetch'
   | 'execute_tools'
   | 'external_tool'

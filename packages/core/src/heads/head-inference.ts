@@ -156,6 +156,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
   'record_decision',
   'execute_tools',
   'run',
+  'file',
   'web',
   'split_subheads',
 ] as const;
@@ -163,7 +164,7 @@ const HEAD_PROMPT_TOOL_NAMES = [
 /** Every tool through which a head can reach a filesystem or run a command. If
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
-const HEAD_WORK_TOOLS = ['execute_tools', 'run'] as const;
+const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const;
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
   return names.some((name) => tools.has(name));
@@ -191,6 +192,12 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
     lines.push(
       '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments; '
       + 'the default `workspace` runtime is only YOUR private scratch shell.',
+    );
+  }
+  if (hasHeadTool(tools, 'file')) {
+    lines.push(
+      '- file reads and edits over that same mount table. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read '
+      + 'rather than rewriting the file or shelling out to sed.',
     );
   }
   if (hasHeadTool(tools, 'web')) {

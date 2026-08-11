@@ -37,11 +37,15 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types.js';
 import type { WebSearchProvider } from '../web/index.js';
 
-/** The builtin tools a head keeps. `execute_tools` is the file plane + the
- *  crafted/`llm`/`web` namespaces; `run` is the real executor; `web` is live
- *  research. `memory` and `skills` are withheld: they would address this head's
- *  OWN stores, which nothing outside a single head run ever reads. */
-export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'web'] as const;
+/** The builtin tools a head keeps. `file` is the file plane, `execute_tools`
+ *  the crafted/`llm`/`web` namespaces, `run` the real executor, `web` live
+ *  research. `file` is kept deliberately, not by drift: a head does real
+ *  implementation work on the parent's real files, and withholding the
+ *  exact-match editor from it would leave the sed/heredoc corruption path open
+ *  on exactly the branch whose output gets scored. `memory` and `skills` are
+ *  withheld: they would address this head's OWN stores, which nothing outside a
+ *  single head run ever reads. */
+export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const;
 
 export interface HeadSplitRequest {
   rationale: string;

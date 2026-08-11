@@ -14,6 +14,7 @@
  */
 
 import type { TurnContextBudget } from '../context-budget.js';
+import type { TurnFileLedger } from '../tools/file-ledger.js';
 import type {
   CompletionGateRecord, CraftCycleRecord, RunEventInput, TurnSteeringRecord,
 } from '../events/types.js';
@@ -55,11 +56,11 @@ export function openTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   }
 }
 
-/** Seal the run: the turn's context-budget ledger (when it moved), its
- *  mechanical steer, its completion gate and its in-episode craft record (when
- *  each fired), then turn_end (index + token usage),
- *  then run_end (status + the failure text — the durable evidence trail, since
- *  the platform layers keep only the LAST terminal error). Never throws. */
+/** Seal the run: the turn's context-budget ledger (when it moved), what its
+ *  file edits did, its mechanical steer, its completion gate and its in-episode
+ *  craft record (when each fired), then turn_end (index + token usage), then
+ *  run_end (status + the failure text — the durable evidence trail, since the
+ *  platform layers keep only the LAST terminal error). Never throws. */
 export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   turnIndex: number;
   usage: TurnUsage;
@@ -68,6 +69,9 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   /** The turn's bulk-ingestion budget (acc.context). A turn that neither
    *  admitted nor spilled bulk writes no row — `turn_end` is the denominator. */
   context?: TurnContextBudget | undefined;
+  /** The turn's file ledger (acc.files). A turn that attempted no edit writes
+   *  no row — `turn_end` is the denominator here too. */
+  files?: TurnFileLedger | undefined;
   /** The turn's mechanical steering (orch.steering.snapshot()), or null when
    *  the turn was never steered — no row, `turn_end` being the denominator
    *  here too. */
@@ -83,6 +87,9 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
   try {
     if (opts.context?.active) {
       recorder.emit(runId, { type: 'context_budget', ...opts.context.snapshot() });
+    }
+    if (opts.files?.active) {
+      recorder.emit(runId, { type: 'file_edit', ...opts.files.snapshot() });
     }
     if (opts.steering) recorder.emit(runId, { type: 'turn_steering', ...opts.steering });
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
