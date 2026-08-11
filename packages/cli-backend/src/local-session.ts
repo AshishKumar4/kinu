@@ -487,7 +487,7 @@ export class LocalAgentSession implements BackendHost {
     });
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
-      policy: opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
+      policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
       fiber: (name, fn) => this.trackFiber(name, fn),
       signals: this.orch.signals,
       eventLog: this.eventLog,

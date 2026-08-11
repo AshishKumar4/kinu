@@ -69,7 +69,8 @@ import {
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, initBackgroundJobsTable, initMctsSearchTable, type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  effortFor, initBackgroundJobsTable, initMctsSearchTable, initImportedExperienceTable,
+  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
   isReasoningEffort, type ReasoningEffort,
   initEventsHubTables,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
@@ -1382,6 +1383,12 @@ export class OrchestratorAgent extends ActorAgent {
     initBackgroundJobsTable(execRaw);
     // Durable MCTS search checkpoints — an evicted fork(settle=mcts) resumes from here.
     initMctsSearchTable(execRaw);
+    // Experience-import staging ledger. The `experience` tool is wired on this
+    // actor (actorToolDeps), and its import action SELECTs this table with no
+    // guard — it must exist wherever the tool does. It was created on the CLI
+    // but never here: the import action hard-errored in production
+    // ("no such table: imported_experience").
+    initImportedExperienceTable(execRaw);
 
     // Compaction: the replayable plan snapshot + the measured prompt-token
     // trigger signal, one row per session (@proteus/compaction stores).

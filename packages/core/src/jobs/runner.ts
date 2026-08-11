@@ -60,8 +60,12 @@ export const MAX_CONCURRENT_DETACHED_JOBS = 8;
 export interface BackgroundJobRunnerDeps {
   store: BackgroundJobStore;
   /** How long work may run before it detaches, and how long teardown waits on
-   *  it — fixed by the session's surface. Defaults to the interactive policy. */
-  policy?: BackgroundPolicy;
+   *  it. A thunk because the surface that fixes it is not always
+   *  session-scoped: the CLI pins one policy per process, but a cf workspace
+   *  DO serves web-chat turns and one-shot `proteus exec` turns through the
+   *  same runner, so it resolves the policy from the turn in flight. Read at
+   *  threshold time. Defaults to the interactive policy. */
+  policy?: () => BackgroundPolicy;
   /** Durable fiber — AgentRuntime.schedule.fiber. */
   fiber: Schedule['fiber'];
   /** The one signal-delivery seam — the wake at the end of a settled job. */
@@ -117,7 +121,7 @@ export class BackgroundJobRunner {
   /** The surface's background policy — the detach threshold and the teardown
    *  grace, read by the backend that owns the session lifecycle. */
   get policy(): BackgroundPolicy {
-    return this.deps.policy ?? BACKGROUND_POLICY.interactive;
+    return this.deps.policy?.() ?? BACKGROUND_POLICY.interactive;
   }
 
   /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep

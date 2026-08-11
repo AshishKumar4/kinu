@@ -266,7 +266,6 @@ interface ForkSpec {
   rationale: string;
   /** Per-fork model spec (e.g. `codex/gpt-5.5`). Omit to inherit the agent's. */
   model?: string;
-  allowedSandboxes?: string[];
   allowedTools?: string[];
 }
 
@@ -279,7 +278,6 @@ export interface AgentsToolInput {
    *  Any other registered strategy id stays dispatchable (eval harness path). */
   settle?: string;
   merge_strategy?: MergeStrategy;
-  merge_model?: string;
   budget?: number;
   wall_clock_ms?: number;
   options?: Record<string, unknown>;
@@ -324,7 +322,7 @@ export function resumableForkInput(kind: string, input: unknown): AgentsToolInpu
   if (kind !== 'think' || !isPlainObject(input)) return null;
   const legacy = input as {
     strategy?: string; task?: string; heads?: ForkSpec[];
-    merge_strategy?: MergeStrategy; merge_model?: string;
+    merge_strategy?: MergeStrategy;
     budget?: number; wall_clock_ms?: number; options?: Record<string, unknown>;
   };
   if (typeof legacy.task !== 'string') return null;
@@ -337,7 +335,6 @@ export function resumableForkInput(kind: string, input: unknown): AgentsToolInpu
     ...(settle !== undefined ? { settle } : {}),
     ...(legacy.heads ? { forks: legacy.heads } : {}),
     ...(legacy.merge_strategy ? { merge_strategy: legacy.merge_strategy } : {}),
-    ...(legacy.merge_model ? { merge_model: legacy.merge_model } : {}),
     ...(legacy.budget !== undefined ? { budget: legacy.budget } : {}),
     ...(legacy.wall_clock_ms !== undefined ? { wall_clock_ms: legacy.wall_clock_ms } : {}),
     ...(legacy.options ? { options: legacy.options } : {}),
@@ -407,7 +404,6 @@ async function runFork(
       ...(isPlainObject(options.heads) ? options.heads : {}),
       heads: input.forks,
       ...(input.merge_strategy ? { mergeStrategy: input.merge_strategy } : {}),
-      ...(input.merge_model ? { mergeModel: input.merge_model } : {}),
     };
   }
 
@@ -482,7 +478,6 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
           task: { type: 'string', description: 'What this fork explores. Be concrete.' },
           rationale: { type: 'string', description: 'Why this angle matters.' },
           model: { type: 'string', description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit." },
-          allowedSandboxes: { type: 'array', items: { type: 'string' }, description: 'Sandbox namespaces this fork may use.' },
           allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this fork may invoke.' },
         },
       },
@@ -499,7 +494,6 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
       enum: ['synthesize', 'best_of', 'consensus'],
       description: 'For action=fork: how to combine fork findings. Default synthesize.',
     },
-    merge_model: { type: 'string', description: 'For action=fork: model spec for the merge LLM. Omit to inherit.' },
     budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
     wall_clock_ms: { type: 'integer', minimum: 1000, description: 'For action=fork: wall-clock cap in ms.' },
     options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },

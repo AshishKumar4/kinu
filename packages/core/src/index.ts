@@ -925,3 +925,18 @@ export type {
   Layer, Probe, PipelineSubjects, SubjectName,
   Baseline, LayerGateReport, LayerScore, Fault, FaultImpact,
 } from './layergate/index.js';
+
+// Backend conformance gate — the manifest of which composition root wires
+// which capability (or why deliberately not), plus the comparator the
+// per-backend harnesses run their observed surfaces through. Kills the
+// "X never worked on Y backend" class: a forgotten wire can no longer look
+// like a design decision.
+export {
+  BACKEND_CONFORMANCE, CONFORMANCE_PLANES, CONFORMANCE_ROOTS, PLANE_UNIVERSE, WIRED,
+  compareSurface, normalizeObservedTables, observedActionEnum, phantomCallables,
+  renderConformanceFindings,
+} from './conformance/index.js';
+export type {
+  CapabilityStatus, ConformanceFinding, ConformanceFindingKind, ConformanceManifest,
+  ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
+} from './conformance/index.js';

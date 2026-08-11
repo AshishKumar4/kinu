@@ -96,6 +96,24 @@ function broadcastChannels(): Map<string, string[]> {
 
 const CHANNELS = broadcastChannels();
 
+/**
+ * Consumer evidence must be COMPARISON-shaped: `.type === 'x'`, `!== 'x'`,
+ * `case 'x':`. A bare quoted-substring match is not evidence — producers
+ * construct `{ type: 'x' }` (colon form, also via helpers this scan cannot
+ * trace), type declarations declare `type: 'x';`, and SQL DDL can contain the
+ * same word as a table name. Under the old substring match every one of those
+ * counted as a consumer, so the gate was passing for the wrong reason: a
+ * channel whose real handler was deleted stayed green off its own producer.
+ */
+function readsChannel(text: string, channel: string): boolean {
+  const name = channel.replace(/[.*+?^${}()|[\]\\-]/g, '\\$&');
+  return new RegExp(
+    `[!=]==?\\s*['"]${name}['"]` +      // msg.type === 'x' / value.type !== "x"
+    `|['"]${name}['"]\\s*[!=]==?` +     // 'x' === msg.type
+    `|case\\s+['"]${name}['"]\\s*:`,    // switch (msg.type) { case 'x': }
+  ).test(text);
+}
+
 describe('broadcast channels reach a consumer', () => {
   test('the scan finds the broadcast surface at all', () => {
     // Guards the guard: if `broadcast(` is renamed or the object shape changes,
@@ -105,15 +123,24 @@ describe('broadcast channels reach a consumer', () => {
     expect([...CHANNELS.keys()]).toContain('signal_card');
   });
 
+  test('the consumer predicate can fail (canaries)', () => {
+    // Producer/declaration shapes must NOT count as consumption…
+    expect(readsChannel(`broadcast({ type: 'ghost_channel', x: 1 })`, 'ghost_channel')).toBe(false);
+    expect(readsChannel(`interface P { type: 'ghost_channel'; }`, 'ghost_channel')).toBe(false);
+    expect(readsChannel(`CREATE TABLE ghost_channel (id TEXT)`, 'ghost_channel')).toBe(false);
+    // …and no file in the consumer roots reads a channel nobody broadcasts.
+    const readers = CONSUMER_ROOTS
+      .flatMap((root) => sourceFiles(root, ['.ts', '.tsx']))
+      .filter((file) => readsChannel(readFileSync(file, 'utf8'), 'channel_nobody_ever_broadcast'));
+    expect(readers).toEqual([]);
+  });
+
   for (const [channel, producers] of [...CHANNELS].sort(([a], [b]) => a.localeCompare(b))) {
     test(`"${channel}" is read by a client surface`, () => {
       const consumers = CONSUMER_ROOTS
         .flatMap((root) => sourceFiles(root, ['.ts', '.tsx']))
         .filter((file) => !producers.includes(file))
-        .filter((file) => {
-          const text = readFileSync(file, 'utf8');
-          return text.includes(`'${channel}'`) || text.includes(`"${channel}"`);
-        })
+        .filter((file) => readsChannel(readFileSync(file, 'utf8'), channel))
         .map((file) => relative(REPO, file));
 
       // The failure names the channel and where it is broadcast from, because

@@ -74,6 +74,18 @@ describe('renderForLLM', () => {
       'hash'));
     expect(r.brief).toContain('redacted');
   });
+  test('opaque-handle brief states the withholding and invents no read-back API', () => {
+    // Regression: this brief once instructed the model to call
+    // `read_external_payload(event_id)` — a function that existed nowhere on
+    // any backend. Text injected into the prompt is an API contract; it may
+    // only cite what the runtime can actually serve.
+    const r = renderForLLM(eventFor('webhook',
+      { _visibility: 'opaque_handle', handle: 'opaque:abcd1234' },
+      'opaque_handle' as never));
+    expect(r.brief).toContain('opaque:abcd1234');
+    expect(r.brief).toContain('withheld');
+    expect(r.brief).not.toContain('read_external_payload');
+  });
   test('is_self_caused is true for self_emit', () => {
     const e = eventFor('internal', { kind: 'reflect', data: {} });
     e.ingress = 'self_emit';

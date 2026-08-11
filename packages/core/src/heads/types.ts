@@ -83,11 +83,6 @@ export interface HeadInput {
   readonly budget: HeadBudget;
   /** The model to use for this head — usually the same as the parent's. */
   readonly model?: string;
-  /**
-   * Namespaces of sandboxes this head may use. Empty = none allowed (read-only
-   * exploration). Default = all the parent has access to.
-   */
-  readonly allowedSandboxes?: readonly string[];
   /** Names of crafted tools this head may invoke. Empty = none. Undefined = all. */
   readonly allowedTools?: readonly string[];
   /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
@@ -197,12 +192,9 @@ export interface SplitRequest {
     /** Per-head provider/model spec (e.g. `codex/gpt-5.5`). Heterogeneous
      *  models per head enable multi-agent debate / panel-of-experts. */
     readonly model?: string;
-    readonly allowedSandboxes?: readonly string[];
     readonly allowedTools?: readonly string[];
   }>;
   readonly mergeStrategy?: MergeStrategy;
-  /** Model spec for the merge LLM. Falls back to controller's default. */
-  readonly mergeModel?: string;
   readonly budget?: Partial<{
     maxDepth: number;
     maxTokens: number;

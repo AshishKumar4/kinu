@@ -70,7 +70,7 @@ function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
     logActivity: (e, d) => logs.push({ e, d }),
     onSettled: (job) => notified.push({ id: job.id, status: job.status }),
     ...(opts.resume ? { resume: opts.resume } : {}),
-    ...(opts.policy ? { policy: opts.policy } : {}),
+    ...(opts.policy ? { policy: () => opts.policy! } : {}),
   });
   return {
     runner, store, eventLog, stashes, runs, settled, host, enqueued,

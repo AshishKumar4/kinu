@@ -62,6 +62,7 @@ import {
   openTurnRun, closeTurnRun, persistMeasuredPromptTokens, applyOverflowRecovery,
   // backend-agnostic per-turn accounting + orchestration (shared by cf + cli)
   TurnAccumulator, type StepLike, AgentOrchestrator, type BackendHost,
+  BACKGROUND_POLICY,
   type SettledSignals,
   type AgentsToolAction,
   type AgentsToolDeps,
@@ -992,6 +993,15 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._jobRunner) {
       this._jobRunner = new BackgroundJobRunner({
         store: this.jobs,
+        // The background policy follows the TURN's surface, not the DO: one
+        // workspace serves web-chat turns and one-shot `proteus exec` turns
+        // (readTurnContinuity stamps _turnContinuity in beforeTurn), and the
+        // detach threshold must match the caller — 30s keeps chat responsive,
+        // a one-shot invocation wants its work finished in-turn. The CLI pins
+        // the same policy per process; this is the cf adoption of that split.
+        policy: () => BACKGROUND_POLICY[
+          this._turnContinuity === 'independent_task' ? 'one-shot' : 'interactive'
+        ],
         fiber: this.rt.schedule.fiber,
         signals: this.orch.signals,
         eventLog: this.eventLog,

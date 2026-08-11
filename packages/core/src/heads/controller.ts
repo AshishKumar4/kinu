@@ -164,7 +164,6 @@ export class HeadController {
         // Per-head model wins over the parent default — enables heterogeneous
         // model fleets (multi-agent debate / panel-of-experts).
         model: h.model ?? opts.model,
-        allowedSandboxes: h.allowedSandboxes,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
       };

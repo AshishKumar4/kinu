@@ -15,6 +15,8 @@ import {
   initFactsTable,
   initGepaTables,
   initHeadsTables,
+  initImportedExperienceTable,
+  initMctsSearchTable,
   initRunEventTables,
   initScaffoldTables,
   initSearchTables,
@@ -125,6 +127,14 @@ export class SubordinateAgent extends ActorAgent {
     initCurriculumTable(execRaw);
     initGepaTables(execRaw);
     initBackgroundJobsTable(execRaw);
+    // Durable MCTS search checkpoints. The fork substrate — including
+    // settle=mcts — is universal across actor profiles (getAgentsToolDeps on
+    // the base class), so the checkpoint table must exist here exactly as it
+    // does on the orchestrator; only the orchestrator had it.
+    initMctsSearchTable(execRaw);
+    // Experience-import staging ledger — read by the shared EvolutionEngine's
+    // settleImports on every root, not only where the `experience` tool is.
+    initImportedExperienceTable(execRaw);
     initCompactionStateTable(execRaw);
     execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
       key TEXT PRIMARY KEY,

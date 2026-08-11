@@ -1246,7 +1246,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
     unmeasuredBecause:
       'buildBuiltinTools is a composition root, not a layer: it wires tools/clamp, safety/approval-gate and ' +
       'memory/hybrid-search into one ToolSet, so a fault in it is not attributable to a single layer. Splitting it ' +
-      'is a production change, out of scope for the gate.',
+      'is a production change, out of scope for the gate. Composition output is covered by the backend conformance ' +
+      'gate instead (src/conformance): each backend runs its real root and diffs the result against the manifest.',
   },
   {
     id: 'compaction-ladder',

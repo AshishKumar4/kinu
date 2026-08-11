@@ -197,7 +197,12 @@ function briefForVariant(event: ProteusEvent): string {
       return `[opaque body verified by hmac, size=${v.size}]`;
     }
     if (v && v._visibility === 'opaque_handle') {
-      return `[opaque handle: use read_external_payload(event_id) if authorized]`;
+      // The payload was replaced with a pointer into a side store the agent
+      // cannot reach (applyVisibilityForStorage). Say so — do not invent a
+      // read-back API. This line once instructed the model to call
+      // `read_external_payload(event_id)`, which existed nowhere.
+      const handle = (v as { handle?: string }).handle ?? 'unknown';
+      return `[opaque payload ${handle}: withheld by visibility policy; not readable from this agent]`;
     }
     // `redact` keeps the structure visible.
   }
