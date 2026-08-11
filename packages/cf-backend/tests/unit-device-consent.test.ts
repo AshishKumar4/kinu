@@ -4,7 +4,7 @@ import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
-} from '../src/user/device-consent.js';
+} from '@proteus/core';
 import { handleUserRequest } from '../src/user/routes.js';
 import type { AuthIdentity } from '../src/auth/session.js';
 

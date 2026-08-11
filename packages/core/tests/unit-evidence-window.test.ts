@@ -8,7 +8,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   EVIDENCE_BUDGETS, evidenceWindow,
-  initScaffoldTables, initShadowTables, runAutoShadowEval, runSampledShadowEval,
+  initScaffoldTables, initShadowTables, runAutoShadowEval, runTurnShadowEval, type AgentConfigStore,
   type JudgeOutput,
 } from '../src/index.js';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate.js';
@@ -120,16 +120,24 @@ describe('the readers can see the end of a long turn', () => {
 
     const prompts: string[] = [];
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
-    await runSampledShadowEval({
+    await runTurnShadowEval({
       rt,
-      config: { getShadowSampleRate: () => 1, getAutoPromoteScaffold: () => false },
+      sql: rt.storage.sql,
+      config: { getShadowSampleRate: () => 1, getAutoPromoteScaffold: () => false } as unknown as AgentConfigStore,
+      surface: () => ({
+        llmStream: async function* () { yield ''; },
+        callTool: async () => ({}),
+        history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
+      }),
+      model: () => ({}) as never,
+      judge: async ({ prompt }) => {
+        prompts.push(prompt);
+        return { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 } as never;
+      },
+    }, {
       task: 'short task',
       currentOutput,
-      judge: async (prompt) => { prompts.push(prompt); return { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 }; },
-      llmStream: async function* () { yield ''; },
-      callTool: async () => ({}),
-      defaultInference: async function* () { yield ''; },
-      history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
+      replayLiveTurn: async function* () { yield ''; },
     });
 
     expect(prompts.length).toBeGreaterThan(0);

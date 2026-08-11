@@ -47,6 +47,26 @@ function spendingStrategy(id: string, opts: { reportedTokens?: number } = {}): E
   };
 }
 
+/** A fork strategy shaped like heads: it debits its own spend through the
+ *  scope it was handed (each head does, per step) and reports the total as
+ *  already metered. */
+function selfMeteringStrategy(id: string, tokens: number): ExplorationStrategy {
+  return {
+    id,
+    async explore(ctx: StrategyContext) {
+      if (ctx.mission) {
+        await ctx.mission.port.debit(tokens, { labels: ctx.mission.labels, calls: 1 });
+      }
+      return {
+        strategy: id,
+        best: { text: 'done', score: 1, source: id },
+        all: [{ text: 'done', score: 1, source: id }],
+        cost: { durationMs: 0, iterations: 1, tokens, ...(ctx.mission ? { selfMetered: true } : {}) },
+      };
+    },
+  };
+}
+
 /** The sandbox's view of `agents.*`, over deps that record every spawn. */
 function sandbox(deps: AgentsToolDeps) {
   const provider = createAgentsCodemodeProvider(() => deps);
@@ -58,10 +78,14 @@ function sandbox(deps: AgentsToolDeps) {
 function forkableDeps(opts: {
   budget?: MissionGovernor;
   reportedTokens?: number;
+  /** Register a heads-shaped strategy that charges its own spend instead. */
+  selfMetering?: number;
   spawns?: string[];
 }): AgentsToolDeps {
   const registry = createStrategyRegistry();
-  registry.register(spendingStrategy(FORK_STRATEGY_ID, opts.reportedTokens !== undefined ? { reportedTokens: opts.reportedTokens } : {}));
+  registry.register(opts.selfMetering !== undefined
+    ? selfMeteringStrategy(FORK_STRATEGY_ID, opts.selfMetering)
+    : spendingStrategy(FORK_STRATEGY_ID, opts.reportedTokens !== undefined ? { reportedTokens: opts.reportedTokens } : {}));
   const { rt } = createTestRuntime({ llmResponses: { qqqq: 'a'.repeat(40) } });
   const spawns = opts.spawns ?? [];
   return {
@@ -161,6 +185,79 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     const withoutGovernor = await sandbox(forkableDeps({ reportedTokens: 7 })).fork!({ task: 'x' });
     expect(withGovernorNoScope).toEqual(withoutGovernor);
     expect(withoutGovernor).not.toHaveProperty('mission_budget');
+  });
+});
+
+describe('spawn seam — work that runs where the ledger is not reachable', () => {
+  test('a fork is handed the scope, so a head in another process can charge it', async () => {
+    const governor = newGovernor();
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+
+    let handed: { labels: readonly string[] } | undefined;
+    const registry = createStrategyRegistry();
+    registry.register({
+      id: FORK_STRATEGY_ID,
+      async explore(ctx: StrategyContext) {
+        handed = ctx.mission ? { labels: ctx.mission.labels } : undefined;
+        return {
+          strategy: FORK_STRATEGY_ID,
+          best: { text: 'x', score: 1, source: 'x' },
+          all: [], cost: { durationMs: 0 },
+        };
+      },
+    });
+    const { rt } = createTestRuntime();
+    await sandbox({ fork: { registry, rt, model: rt.llm as never }, budget: governor }).fork!({ task: 't' });
+    expect(handed).toEqual({ labels: ['nightly'] });
+  });
+
+  test('an unbudgeted fork is handed no scope at all', async () => {
+    let handed: unknown = 'unset';
+    const registry = createStrategyRegistry();
+    registry.register({
+      id: FORK_STRATEGY_ID,
+      async explore(ctx: StrategyContext) {
+        handed = ctx.mission;
+        return {
+          strategy: FORK_STRATEGY_ID,
+          best: { text: 'x', score: 1, source: 'x' },
+          all: [], cost: { durationMs: 0 },
+        };
+      },
+    });
+    const { rt } = createTestRuntime();
+    await sandbox({ fork: { registry, rt, model: rt.llm as never } }).fork!({ task: 't' });
+    expect(handed).toBeUndefined();
+  });
+
+  test('spend a strategy already charged is not charged again at this seam', async () => {
+    // Heads debit every step as they make it — that is what lets an exhausted
+    // budget stop one mid-flight. Charging the reported total here too would
+    // bill the same tokens twice and halve every budget.
+    const governor = newGovernor();
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+
+    const deps = forkableDeps({ budget: governor, selfMetering: 900 });
+    await sandbox(deps).fork!({ task: 'explore' });
+
+    const [mission] = governor.snapshot('nightly');
+    expect(mission?.spent.tokens).toBe(900);
+    // The spawn is still recorded — only the tokens moved.
+    expect(mission?.spawns).toBe(1);
+  });
+
+  test('a strategy that could NOT charge itself is still billed the lump', async () => {
+    // An MCTS rollout runs where the ledger is not reachable, so its total is
+    // seen only at this seam.
+    const governor = newGovernor();
+    governor.declare('nightly', {});
+    governor.activate(['nightly']);
+
+    const deps = forkableDeps({ budget: governor, reportedTokens: 900 });
+    await sandbox(deps).fork!({ task: 'explore' });
+    expect(governor.snapshot('nightly')[0]?.spent.tokens).toBe(920);
   });
 });
 

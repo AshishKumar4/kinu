@@ -107,7 +107,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const engine = new EvolutionEngine(rt);
 
     const turn = makeTurn({
-      toolCalls: [{ name: 'my_crafted_tool', args: {}, result: 'x' }],
+      toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
+      craftedToolsUsed: ['my_crafted_tool'],
     });
     await engine.reviewTurn(turn, 'wrong again — that broke the deploy');
     const after = rt.storage.sql<{ score: number }>`
@@ -122,11 +123,26 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
                     VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine2 = new EvolutionEngine(rt2);
     await engine2.reviewTurn(makeTurn({
-      toolCalls: [{ name: 'my_crafted_tool', args: {}, result: 'x' }],
+      toolCalls: [{ name: 'execute_tools', args: {}, result: 'x' }],
+      craftedToolsUsed: ['my_crafted_tool'],
     }), 'thanks, that worked — next please deploy it');
     const after2 = rt2.storage.sql<{ score: number }>`
       SELECT score FROM craft_scores WHERE tool_name = 'my_crafted_tool'`[0];
     expect(after2.score).toBeGreaterThan(0.5);
+  });
+
+  test('an MCP tool call is not a crafted-tool use and scores nothing', async () => {
+    // The defect: the crafted set was "every tool name that is not built in",
+    // which crafted tools are never in (they are codemode-only) — so the EMA
+    // was written against MCP and extension tools exclusively.
+    const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
+    initCraftScoreTables(rt.storage.execRaw);
+    const engine = new EvolutionEngine(rt);
+    await engine.reviewTurn(makeTurn({
+      toolCalls: [{ name: 'mcp__github__create_issue', args: {}, result: 'x' }],
+      craftedToolsUsed: [],
+    }), 'wrong again — that broke the deploy');
+    expect(rt.storage.sql`SELECT tool_name FROM craft_scores`).toEqual([]);
   });
 
   test('trivial turn (greeting): no LLM call, no outcome row, no events', async () => {

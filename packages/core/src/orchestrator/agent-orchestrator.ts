@@ -154,7 +154,7 @@ export class AgentOrchestrator {
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
-    this.craft = new CraftCycle(deps.engine.craftLedger);
+    this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
     this.signals = new SignalDelivery(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d));
     this.reflectionInterval = deps.sessionReflectionInterval ?? DEFAULT_SESSION_REFLECTION_INTERVAL;
     this.settleTimeoutMs = deps.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;

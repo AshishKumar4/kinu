@@ -85,6 +85,20 @@ export interface HeadInput {
   readonly model?: string;
   /** Names of crafted tools this head may invoke. Empty = none. Undefined = all. */
   readonly allowedTools?: readonly string[];
+  /**
+   * The mission-budget labels this head's model calls charge, carried down so a
+   * head running in another process can find the ledger its spend belongs to.
+   *
+   * Strings, not a port: this input crosses a facet boundary as structured
+   * data, and the boundary is exactly why the labels have to travel at all.
+   * The runtime on the far side turns them back into a
+   * {@link import('../mission-budget.js').MissionScope} over whatever reaches
+   * the ledger from there.
+   *
+   * Absent or empty means unbudgeted — the default, and then nothing is asked:
+   * no query, no RPC, no refusal.
+   */
+  readonly missionLabels?: readonly string[];
   /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
   readonly mergeStrategy: MergeStrategy;
 }

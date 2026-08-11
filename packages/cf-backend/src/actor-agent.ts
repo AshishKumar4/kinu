@@ -43,10 +43,10 @@ import {
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
-  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
+  runTurnShadowEval, createJsonJudge, type ScaffoldControl,
   SCAFFOLD_TURN_TIMEOUT_MS,
-  JudgeOutputSchema,
-  type StructuredJudgeFn, effortFor, type CompletedTurn, type TurnContinuity,
+  effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   withClampedToolResults,
@@ -78,7 +78,7 @@ import {
   // Durable run-event log
   RunEventRecorder,
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
-  MissionGovernor,
+  MissionGovernor, type MissionSeam, type MissionBudgetRefusal, type MissionCallUsage,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -117,7 +117,6 @@ import {
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  generateJson,
   uiMessageText,
 } from "@proteus/core";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
@@ -624,6 +623,33 @@ export abstract class ActorAgent extends Think<Env> {
     return this._budget;
   }
 
+  /**
+   * The mission ledger, reached from a facet.
+   *
+   * A forked head runs as its own Durable Object with its own storage and its
+   * own resolved model, so the governed `LLM` the fork seam wraps never sees
+   * the calls it actually makes. These two are the ledger's other end: the head
+   * guards before each step and debits after it, over a cross-DO stub back to
+   * the actor that declared the budget.
+   *
+   * NOT `@callable`: cross-DO stub RPC never needed the decorator, and a
+   * spend ledger must not be writable over the public WS/HTTP transport. They
+   * are also inert without labels — `guard`/`debit` with an empty label set
+   * return immediately and touch no storage — so an unbudgeted head that
+   * somehow called them would still not create a cap.
+   */
+  async missionGuard(
+    seam: MissionSeam, labels: readonly string[],
+  ): Promise<MissionBudgetRefusal | null> {
+    return this.budget.guard(seam, labels);
+  }
+
+  async missionDebit(tokens: number, opts: {
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+  }): Promise<void> {
+    this.budget.debit(tokens, opts);
+  }
+
   /** True while a keepAlive heartbeat is holding the DO open for evolution. */
   private _evolutionSettling = false;
 
@@ -668,7 +694,7 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * `orch.recordTurn` opens the outcome review + session cadence (which is
    * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, and `runShadowEvalSampled`
+   * holds the DO open for that detached work, and core's `runTurnShadowEval`
    * scores + promotes whatever proposal is pending. Split across subclasses
    * these drift: a facet that recorded turns but never settled or scored them
    * proposes exactly one scaffold and then stalls forever on it.
@@ -682,75 +708,68 @@ export abstract class ActorAgent extends Think<Env> {
     // never blocked, and held open by the keepAlive heartbeat instead.
     this.orch.recordTurn(turn, this._turnContinuity);
     this.settleEvolutionInBackground();
-    void this.runShadowEvalSampled(texts.userText, texts.assistantText);
-  }
-
-  /**
-   * Sampled per-turn auto-judge shadow rollout — the promotion half of the
-   * scaffold loop. When a pending scaffold exists, sample-and-run (default
-   * 25%) the pending against this turn's task, ask a judge LLM to compare,
-   * record. When minTrials is reached AND agent_config.auto_promote_scaffold
-   * allows it (default ON; the changelog makes the decision visible and
-   * revertable), auto-apply. Fire-and-forget — never extends the TurnQueue.
-   * Reads sampling/auto-promote from agent_config so the user can toggle
-   * without redeploys.
-   */
-  protected async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
-    // Captured synchronously (before any await) so a later turn's stash can
-    // never bleed into this turn's shadow run.
+    // Read synchronously (before any await) so a later turn's stash can never
+    // bleed into this turn's shadow run.
     const liveOpts = this._lastTurnOpts;
-    const judge: StructuredJudgeFn = async (prompt) =>
-      generateJson({
-        model: await this.getModelForReview(),
-        schema: JudgeOutputSchema,
-        prompt,
-        providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
-      });
-    const result = await runSampledShadowEval({
-      rt: this.rt,
-      config: this.config,
-      task,
-      currentOutput,
-      judge,
-      llmStream: this.makeScaffoldLLMStream(),
-      // Pass the same tool dispatcher the production chat path uses, so the
-      // pending scaffold runs with the real tool surface, not the disabled
-      // tool-call fallback that would penalize any tool-using pending.
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      // host.defaultInference for the pending: replay the EXACT streamText
-      // opts the live answer ran with (full conversational context, system
-      // prompt, tool surface) so a pending that delegates to the default
-      // loop is judged on the scaffold delta alone. Costs one extra
-      // full-context inference — that IS the shadow run, already sampled.
-      // Fallback (DO restarted between the live turn and this eval): the task
-      // alone, but under the live loop's own step budget — a candidate judged
-      // against the live answer has to be allowed to reach one.
-      defaultInference: () => streamText(liveOpts ?? {
-        model: this.getModel(),
-        messages: [{ role: 'user', content: task }],
-        tools: this.getRawTools(),
-        stopWhen: stepCountIs(this.maxSteps),
-        ...effortFor('scaffold_mutation'),
-      }).toUIMessageStream(),
-    });
-    if (!result) return;
-
-    if (!result.skipped && result.evaluation) {
-      // Emit a structured note to the event log for visibility.
-      try {
-        if (this._currentRunId) {
+    void runTurnShadowEval(this.scaffoldControl, {
+      task: texts.userText,
+      currentOutput: texts.assistantText,
+      // Replay the EXACT streamText opts the live answer ran with — full
+      // conversational context, system prompt, tool surface — so a pending
+      // that delegates to the default loop is judged on the scaffold delta
+      // alone. Costs one extra full-context inference: that IS the shadow run,
+      // already sampled.
+      ...(liveOpts ? { replayLiveTurn: () => streamText(liveOpts).toUIMessageStream() } : {}),
+    }).then((result) => {
+      // What a DO does with the verdict: a note in the durable event log, so
+      // the Reasoning surface shows the comparison happened.
+      if (!result) return;
+      if (!result.skipped && result.evaluation && this._currentRunId) {
+        try {
           this.eventRecorder.emit(this._currentRunId, {
             type: 'memory_write',
             path: 'shadow-eval',
             bytes: result.evaluation.rationale.length,
           });
-        }
-      } catch { /* nop */ }
-    }
-    if (result.applied) {
-      console.log(`[proteus] auto-judge applied: ${result.applied}`);
-    }
+        } catch { /* nop */ }
+      }
+      if (result.applied) console.log(`[proteus] auto-judge applied: ${result.applied}`);
+    });
+  }
+
+  /**
+   * The scaffold evolution control plane's view of this actor: the four ports
+   * a candidate loop runs against, plus the two models it needs. The plane
+   * itself is core's (evolution/control.ts); this is the whole of what being a
+   * Durable Object contributes to it.
+   *
+   * On the substrate rather than on the orchestrator because the shadow eval
+   * above runs for EVERY actor, and a facet with a control plane it cannot
+   * reach would score no proposal at all.
+   */
+  protected get scaffoldControl(): ScaffoldControl {
+    return {
+      rt: this.rt,
+      sql: this.boundSql,
+      config: this.config,
+      surface: (task) => ({
+        llmStream: this.makeScaffoldLLMStream(),
+        // The same tool dispatcher the production chat path uses, so a
+        // candidate runs with the real tool surface rather than the disabled
+        // tool-call fallback that penalizes any tool-using candidate.
+        callTool: this.makeScaffoldCallTool(),
+        history: this.makeScaffoldHistory(),
+        defaultInference: () => streamText({
+          model: this.getModel(),
+          messages: [{ role: 'user', content: task }],
+          tools: this.getRawTools(),
+          stopWhen: stepCountIs(this.maxSteps),
+          ...effortFor('scaffold_mutation'),
+        }).toUIMessageStream(),
+      }),
+      model: () => this.getModel(),
+      judge: createJsonJudge(() => this.getModelForReview()),
+    };
   }
 
   /** The scaffold's host.llmStream bridge (core scaffold-host): tool names

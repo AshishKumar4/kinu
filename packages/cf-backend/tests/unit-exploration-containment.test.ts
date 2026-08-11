@@ -265,3 +265,47 @@ describe('recursive split budget', () => {
     expect(spawned.map((input) => input.depth)).toEqual([1, 1]);
   });
 });
+
+describe('the mission ledger crosses the facet boundary', () => {
+  // A head runs as its own Durable Object with its own storage, resolving its
+  // own model — so the governed `LLM` the fork seam wraps around the PARENT's
+  // runtime never sees a call the head makes. Head execution caps were removed
+  // outright (no wall clock, no token pool, no step guard), which makes the
+  // mission budget the only remaining bound, and it reaches the head only over
+  // an RPC to the actor that holds the ledger. That RPC cannot be exercised in
+  // this runner, so the wiring is asserted at the source, like the branch
+  // isolation above.
+  const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+  const surface = readFileSync(join(import.meta.dir, '..', 'src', 'rpc-surface.ts'), 'utf8');
+
+  test('a head with no labels takes no stub and issues no RPC', () => {
+    const scope = exploration.slice(
+      exploration.indexOf('private missionScope('),
+      exploration.indexOf('// ── Head-mode tool builders'),
+    );
+    // The empty-label return comes BEFORE the parent stub is resolved, so an
+    // unbudgeted head never even addresses the ledger.
+    expect(scope.indexOf('labels.length === 0')).toBeLessThan(scope.indexOf('getSharedParentStub'));
+    expect(scope).toContain('return null');
+  });
+
+  test('the head guards and debits over the parent, not over its own storage', () => {
+    expect(exploration).toContain('parent.missionGuard(seam, scope)');
+    expect(exploration).toContain('parent.missionDebit(tokens, opts)');
+  });
+
+  test('a subtree charges the mission its root does', () => {
+    // Otherwise a head escapes its budget simply by splitting again.
+    expect(exploration).toContain('missionLabels: parentInput.missionLabels');
+  });
+
+  test('the two ledger RPCs are cross-DO only, never public transport', () => {
+    const guard = actor.slice(actor.indexOf('async missionGuard('), actor.indexOf('async missionDebit('));
+    expect(guard).not.toContain('@callable');
+    expect(actor).not.toContain("@callable()\n  async missionDebit(");
+    // Reachable on a stub — and nowhere else — because the seal is an allowlist.
+    expect(surface).toContain("'missionGuard'");
+    expect(surface).toContain("'missionDebit'");
+  });
+});

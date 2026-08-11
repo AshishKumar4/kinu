@@ -15,7 +15,7 @@
 import { callable, type AgentContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { getSandbox } from "@cloudflare/sandbox";
-import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
+import { generateText, convertToModelMessages } from "ai";
 import type {
   ActivitySnapshot,
   WorkspaceAgent,
@@ -32,14 +32,14 @@ import {
   initWorkspaceSchema,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
-  BUILTIN_TOOL_NAMES,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   argumentDigest,
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
   // Fork feature
-  forkWorkspaceStorage, readForkLineage,
+  forkWorkspace, writeForkSnapshot, readForkLineage,
+  type ForkTransport, type ForkSnapshot,
   // Workspace archive — the owner's portable copy of this workspace's storage
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
   nanoid, type HeadRunView,
@@ -51,10 +51,10 @@ import {
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
   // supplies the surface they run against).
-  applyScaffoldDecision, createJsonJudge, getShadowStatus, listScaffoldVersions,
+  applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
   runScaffoldOnce,
-  type GepaOptimizationResult, type ScaffoldControl, type ScaffoldDecisionResult,
+  type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
   getPendingScaffold,
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
@@ -103,7 +103,7 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
-  readSoul, SOUL_PATH, summarizeSoul, writeSoul,
+  readSoul, summarizeSoul, writeSoul,
   // Automatic workspace titling (first turn + legacy slug heal)
   applyWorkspaceTitle, isPlaceholderWorkspaceTitle, parseWorkspaceIdentityOutput,
   WORKSPACE_IDENTITY_SYSTEM_PROMPT, workspaceIdentityPrompt,
@@ -157,10 +157,12 @@ import {
   type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
   createAgentSelfProvider,
+  DeviceConsentRegistry,
+  type DeviceConsentAnswer, type DeviceConsentDecision,
+  type DeviceConsentRequest, type PendingDeviceConsent,
 } from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
-import type { DeviceConsentDecision } from "./user/device-consent.js";
 import { agentEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -196,108 +198,6 @@ function executorOutputIsError(output: string): boolean {
   const text = output.trim();
   if (!text) return false;
   return /^(error\b|exit\b|exec error:|read error:|write error:|list error:|delete error:|expose error:|unexpose error:|listports error:|runtime error:)/i.test(text);
-}
-
-// ── Fork payload types ────────────────────────────────────────────
-// The source DO assembles this and sends it to the fork DO's rawCopyFromFork.
-// Everything is JSON-serializable (strings, numbers, null, base64 if ever
-// needed for binary VFS content — currently all VFS memory is text).
-
-interface ForkPayload {
-  forkName: string;
-  lineage: {
-    forkOriginAgentId: string;
-    forkOriginAgentName: string;
-    forkOriginMessageId: string;
-    forkOriginCreatedAt: number;
-    forkedAt: number;
-  };
-  messages: Array<{
-    id: string; session_id: string; parent_id: string | null;
-    role: string; content: string; created_at: number;
-  }>;
-  conversationHistory: Array<{
-    session_id: string; role: string; message: string; created_at: number;
-  }>;
-  vfsFiles: Array<{
-    path: string; chunk_index: number; parent_path: string;
-    data: unknown; is_dir: number; size: number; mtime: number;
-  }>;
-  memoryChunks: Array<{
-    id: string; path: string; start_line: number; end_line: number;
-    hash: string; text: string; updated_at: number;
-  }>;
-  craftedTools: Array<{
-    name: string; description: string; params: string | null; code: string;
-    scope: string; created_at: number; updated_at: number;
-  }>;
-  agentConfig: Array<{ key: string; value: string }>;
-  // Think/Session-owned message rows — the table the chat UI actually reads
-  // from. Carried as raw strings (datetime). Includes the time-cutoff at
-  // snapshot time; the shim answers the same query with a no-op filter so
-  // the helper's time-based SELECT still works across DO boundaries.
-  assistantMessages: Array<{
-    id: string; session_id: string; parent_id: string | null;
-    role: string; content: string; created_at: string;
-  }>;
-}
-
-/**
- * Build an ephemeral SqlExecutor that answers the queries forkWorkspaceStorage
- * makes against the source DB, using the serialized payload as the source
- * of truth. Only the exact SELECT shapes that forkWorkspaceStorage issues are
- * supported — this is a minimal shim, not a general SQL engine.
- */
-function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
-  const rawSql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown[] =
-    (strings, ...values) => {
-      const query = strings.join("?").replace(/\s+/g, " ").trim();
-      // Route the small known set of read queries the helper issues.
-      if (query.startsWith("SELECT created_at FROM messages WHERE id =")) {
-        const wantedId = values[0] as string;
-        const hit = payload.messages.find(m => m.id === wantedId);
-        return hit ? [{ created_at: hit.created_at }] : [];
-      }
-      if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM messages")) {
-        const cutoff = values[0] as number;
-        return payload.messages
-          .filter(m => m.created_at <= cutoff && m.session_id === "default")
-          .sort((a, b) => a.created_at - b.created_at);
-      }
-      if (query.startsWith("SELECT session_id, role, message, created_at FROM conversation_history")) {
-        const cutoff = values[0] as number;
-        return payload.conversationHistory
-          .filter(c => c.created_at <= cutoff && c.session_id === "default");
-      }
-      if (query.startsWith("SELECT path, chunk_index, parent_path, data, is_dir, size, mtime FROM vfs_files")) {
-        return payload.vfsFiles;
-      }
-      if (query.startsWith("SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks")) {
-        return payload.memoryChunks;
-      }
-      if (query.startsWith("SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools")) {
-        return payload.craftedTools;
-      }
-      if (query.startsWith("SELECT key, value FROM agent_config")) {
-        return payload.agentConfig;
-      }
-      if (query.startsWith("SELECT id, name FROM workspace_identity")) {
-        return [{ id: payload.lineage.forkOriginAgentId, name: payload.lineage.forkOriginAgentName }];
-      }
-      // Think-Session messages: the source DO already time-filtered the
-      // snapshot, so the payload contains exactly the rows to copy. We
-      // accept any SELECT against assistant_messages that mentions the
-      // same columns and return all rows (the time-filter was already
-      // applied during snapshot).
-      if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM assistant_messages")) {
-        return payload.assistantMessages;
-      }
-      return [];
-    };
-  // SqlExecutor uses a generic-bound tagged-template signature; the shim
-  // is single-return-type. Cast to SqlExecutor (not `never`) so callers
-  // get proper template-tag typing without unsafe widening.
-  return rawSql as unknown as SqlExecutor;
 }
 
 export class OrchestratorAgent extends ActorAgent {
@@ -372,17 +272,11 @@ export class OrchestratorAgent extends ActorAgent {
       phase: entry.status,
       task: entry.currentTask,
     }));
-    const approvals: DynamicApproval[] = [...this._pendingConsents.entries()]
-      .map(([consentId, pending]) => ({
-        id: consentId,
-        kind: 'device consent',
-        detail: `${pending.deviceLabel}: ${pending.command}`,
-      }));
     const deafInbox = this.emailInbox.dropNotice(Date.now());
     return {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
-      approvals,
+      approvals: this._consents.approvals(),
       ...(deafInbox ? { missingCapabilities: [...(base.missingCapabilities ?? []), deafInbox] } : {}),
     };
   }
@@ -601,34 +495,6 @@ export class OrchestratorAgent extends ActorAgent {
     if (dropped > 0) {
       console.warn(`[proteus] dropped ${dropped} unrunnable schedule row(s) overdue by more than ${STALE_SCHEDULE_HORIZON_MS}ms`);
     }
-  }
-
-  /**
-   * The scaffold evolution control plane's view of this actor: the ports a
-   * candidate loop runs against, plus the two models it needs. The plane
-   * itself is core's (evolution/control.ts); this is the whole of what being
-   * a Durable Object contributes to it.
-   */
-  private get scaffoldControl(): ScaffoldControl {
-    return {
-      rt: this.rt,
-      sql: this.boundSql,
-      config: this.config,
-      surface: (task) => ({
-        llmStream: this.makeScaffoldLLMStream(),
-        callTool: this.makeScaffoldCallTool(),
-        history: this.makeScaffoldHistory(),
-        defaultInference: () => streamText({
-          model: this.getModel(),
-          messages: [{ role: 'user', content: task }],
-          tools: this.getRawTools(),
-          stopWhen: stepCountIs(this.maxSteps),
-          ...effortFor('scaffold_mutation'),
-        }).toUIMessageStream(),
-      }),
-      model: () => this.getModel(),
-      judge: createJsonJudge(() => this.getModelForReview()),
-    };
   }
 
   protected get engine(): EvolutionEngine {
@@ -1054,9 +920,12 @@ export class OrchestratorAgent extends ActorAgent {
           turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
         });
       } catch { /* no takes table yet — the first MCTS run creates it */ }
-      const craftNames = this.acc.toolCalls
-        .map(tc => tc.name)
-        .filter(name => !BUILTIN_TOOL_NAMES.has(name));
+      // The crafted tools this turn called, as the in-episode craft clock saw
+      // them. Not "every tool name that is not built in": a crafted tool is
+      // codemode-only and never appears as a tool-call name, so that filter
+      // only ever matched MCP and extension tools — and the thumbs re-score
+      // below reads this row to write craft_scores.
+      const craftNames = this.acc.craftedToolsUsed();
       if (craftNames.length > 0) {
         this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
                  VALUES (${msgId}, ${JSON.stringify(craftNames)}, ${Date.now()})
@@ -1267,83 +1136,58 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  // ── Device consent (P2) — ask-once-then-remember ─────────────────────
+  // ── Device consent — ask-once-then-remember ──────────────────────────
   // The UserDO (device hub) calls awaitDeviceConsent when this agent touches a
-  // device with no remembered policy. We raise a card in the chat (broadcast +
-  // listPendingConsents for reload) and await the user's decision via the
-  // resolveDeviceConsent RPC. "Always" is persisted on the hub, not here.
-  private readonly _pendingConsents = new Map<string, {
-    resolve: (d: DeviceConsentDecision) => void;
-    deviceLabel: string; method: string; command: string; scope: string; createdAt: number;
-  }>();
+  // device with no remembered policy. The registry is core's; what a Durable
+  // Object contributes is fanning the prompt out to connected sockets and the
+  // activity line. "Always" is persisted on the hub, not here.
+  private readonly _consents = new DeviceConsentRegistry({
+    newId: () => `cons-${nanoid(10)}`,
+    // The wire shapes stay written out here rather than behind a helper: the
+    // broadcast-wiring gate reads `broadcast({ type: … })` off the source, and
+    // a channel it cannot see is a channel it cannot prove has a consumer.
+    announce: (notice) => {
+      if (notice.kind === 'raised') {
+        const { consent } = notice;
+        this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
+        try {
+          this.broadcast(JSON.stringify({
+            type: 'device_consent',
+            consentId: consent.consentId,
+            deviceId: consent.deviceId,
+            deviceLabel: consent.deviceLabel,
+            method: consent.method,
+            command: consent.command,
+            scope: consent.scope,
+          }));
+        } catch { /* no connected clients */ }
+        return;
+      }
+      try {
+        this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
+      } catch { /* no connected clients */ }
+    },
+  });
 
   /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides,
-   *  or as `timeout` after 5 minutes so a device call never hangs forever.
-   *  `timeout` is deliberately NOT `deny`: an unanswered prompt means the owner
-   *  was away, and telling the agent it was refused turns that into a
+   *  or as `timeout` after the registry's window so a device call never hangs
+   *  forever. `timeout` is deliberately NOT `deny`: an unanswered prompt means
+   *  the owner was away, and telling the agent it was refused turns that into a
    *  permanent, self-imposed capability loss. */
-  async awaitDeviceConsent(req: {
-    deviceId: string;
-    deviceLabel: string;
-    method: string;
-    command: string;
-    scope: string;
-  }): Promise<DeviceConsentDecision> {
-    const consentId = `cons-${nanoid(10)}`;
-    this.logActivity('device_consent_requested', `${req.deviceLabel}: ${req.command.slice(0, 80)}`);
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'device_consent', consentId, deviceId: req.deviceId,
-        deviceLabel: req.deviceLabel, method: req.method, command: req.command, scope: req.scope,
-      }));
-    } catch { /* nop */ }
-    return new Promise<DeviceConsentDecision>((resolve) => {
-      const timer = setTimeout(() => {
-        if (this._pendingConsents.delete(consentId)) {
-          try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
-          resolve('timeout');
-        }
-      }, 5 * 60_000);
-      this._pendingConsents.set(consentId, {
-        resolve: (d) => { clearTimeout(timer); resolve(d); },
-        deviceLabel: req.deviceLabel,
-        method: req.method,
-        command: req.command,
-        scope: req.scope,
-        createdAt: Date.now(),
-      });
-    });
+  async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
+    return this._consents.request(req);
   }
 
   /** The chat UI calls this when the user clicks a consent card button. */
   @callable()
-  async resolveDeviceConsent(consentId: string, decision: 'once' | 'always' | 'deny'): Promise<{ ok: boolean }> {
-    const p = this._pendingConsents.get(consentId);
-    if (!p) return { ok: false };
-    this._pendingConsents.delete(consentId);
-    try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
-    p.resolve(decision === 'always' || decision === 'deny' ? decision : 'once');
-    return { ok: true };
+  async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
+    return { ok: this._consents.resolve(consentId, decision) };
   }
 
   /** Pending consent requests — so the chat re-renders cards after a reload. */
   @callable()
-  async listPendingConsents(): Promise<Array<{
-    consentId: string;
-    deviceLabel: string;
-    method: string;
-    command: string;
-    scope: string;
-    createdAt: number;
-  }>> {
-    return [...this._pendingConsents.entries()].map(([consentId, p]) => ({
-      consentId,
-      deviceLabel: p.deviceLabel,
-      method: p.method,
-      command: p.command,
-      scope: p.scope,
-      createdAt: p.createdAt,
-    }));
+  async listPendingConsents(): Promise<PendingDeviceConsent[]> {
+    return this._consents.list();
   }
 
   // ── DO initialization ──────────────────────────────────────────
@@ -1824,7 +1668,7 @@ export class OrchestratorAgent extends ActorAgent {
    * its own agentic loop from inside execute_tools. Routes through the
    * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
    * status='pending' and is scored by the sampled shadow eval + promotion
-   * gate (runShadowEvalSampled) like any other proposal — no new safety
+   * gate (core runTurnShadowEval) like any other proposal — no new safety
    * surface.
    */
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
@@ -2777,6 +2621,10 @@ export class OrchestratorAgent extends ActorAgent {
    *     memory copied, agent_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, craft_scores RESET
    *
+   * The driver is core's (identity/fork-driver.ts); what a Durable Object
+   * contributes is the transport below — addressing a workspace that does not
+   * exist yet — plus the web route the UI navigates to.
+   *
    * See docs/WORKSPACES.md for the full spec.
    */
   @callable()
@@ -2784,175 +2632,80 @@ export class OrchestratorAgent extends ActorAgent {
     untilMessageId: string,
     opts?: { name?: string },
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
-    // 1. Busy check — reject during an in-flight turn.
-    if (this._inFlight) {
-      throw new Error("agent busy, retry when current turn finishes");
-    }
+    const fork = await forkWorkspace({
+      sql: this.boundSql,
+      sourceName: this.name,
+      busy: () => this._inFlight,
+      transport: this.forkTransport,
+    }, untilMessageId, opts);
+    return {
+      id: fork.workspaceId,
+      name: fork.name,
+      url: `/workspace/${fork.name}`,
+      forkPointMs: fork.forkPointMs,
+    };
+  }
 
-    // 2. Resolve the fork point here (early) so we can reject with a useful
-    //    error before paying the cost of spinning up a new DO.
-    const hit = this.sql<{ created_at: number }>`
-      SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
-    `;
-    if (hit.length === 0) {
-      throw new Error(`fork point not found: message id "${untilMessageId}"`);
-    }
-
-    // 3. Generate / validate the fork's name.
-    const requestedName = opts?.name?.trim();
-    const forkName = requestedName && requestedName.length > 0
-      ? requestedName
-      : `${this.name}-fork-${nanoid(6)}`;
-    if (!/^[A-Za-z0-9_-]+$/.test(forkName)) {
-      throw new Error(`invalid agent name: "${forkName}" — allowed: A-Z, a-z, 0-9, _ and -`);
-    }
-
-    // 4. Validate name uniqueness by checking if a DO at that name already
-    //    has identity data. Fresh DOs return an empty workspace_identity query.
-    const env = this.env as unknown as {
+  /** Reaching a workspace that does not exist yet: a Durable Object addressed
+   *  by name, and the raw-copy RPC that carries the snapshot to it. */
+  private get forkTransport(): ForkTransport {
+    const ns = (this.env as unknown as {
       OrchestratorAgent: {
         idFromName(name: string): DurableObjectId;
         get(id: DurableObjectId): DurableObjectStub<OrchestratorAgent>;
       };
-    };
-    const forkStubForPrecheck = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
-    let existingIdentity: { id: string; name: string } | null = null;
-    try {
-      // A bare getAgentStatus call on a fresh DO may create workspace_identity,
-      // but it does not seed SOUL.md. Existing agents have either chat history
-      // or a SOUL.md file written by the creation path.
-      const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; soul: string; name: string }> }).getAgentStatus();
-      if (status.messageCount > 0 || status.soul.length > 0) {
-        existingIdentity = { id: "", name: status.name };
-      }
-    } catch {
-      // If the pre-check RPC fails for transient reasons, let the copy path
-      // surface the error. Don't block on a brittle signal.
-    }
-    if (existingIdentity && requestedName) {
-      throw new Error(`agent name already exists: "${forkName}"`);
-    }
-
-    // 5. Build the snapshot payload.
-    const payload = this.buildForkPayload(untilMessageId, forkName);
-
-    // 6. Send it to the fork DO via the rawCopyFromFork RPC.
-    const forkStub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
-    const copyResult = await (forkStub as unknown as {
-      rawCopyFromFork(p: ForkPayload): Promise<{ ok: true; agentId: string }>;
-    }).rawCopyFromFork(payload);
-
+    }).OrchestratorAgent;
+    const stubFor = (name: string) => ns.get(ns.idFromName(name));
     return {
-      id: copyResult.agentId,
-      name: forkName,
-      url: `/workspace/${forkName}`,
-      forkPointMs: hit[0]!.created_at,
+      async occupied(name) {
+        try {
+          // A bare getAgentStatus on a fresh DO may create workspace_identity,
+          // but it does not seed SOUL.md. An agent that exists has either chat
+          // history or a SOUL.md written by the creation path.
+          const status = await (stubFor(name) as unknown as {
+            getAgentStatus(): Promise<{ messageCount: number; soul: string }>;
+          }).getAgentStatus();
+          return status.messageCount > 0 || status.soul.length > 0;
+        } catch {
+          // A transient RPC failure must not block a fork — the copy below
+          // surfaces anything real.
+          return false;
+        }
+      },
+      async deliver(name, snapshot) {
+        // The name rides along: a DO reached by cross-DO stub has not been
+        // routed through the agent router, so it cannot read its own name.
+        const result = await (stubFor(name) as unknown as {
+          rawCopyFromFork(n: string, s: ForkSnapshot): Promise<{ ok: true; agentId: string }>;
+        }).rawCopyFromFork(name, snapshot);
+        return { workspaceId: result.agentId };
+      },
     };
   }
 
   /**
-   * Receive a fork payload from a source agent. INTERNAL — called only by
-   * the source DO's forkAgent RPC via cross-DO stub. NOT @callable: cross-DO
-   * stub RPC never needed the decorator, and this is a raw storage write that
-   * must never be reachable over the public agents WS/HTTP transport.
+   * Receive a fork snapshot from a source agent. INTERNAL — called only by the
+   * source DO's fork transport via cross-DO stub. NOT @callable: cross-DO stub
+   * RPC never needed the decorator, and this is a raw storage write that must
+   * never be reachable over the public agents WS/HTTP transport.
    */
-  async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
+  async rawCopyFromFork(forkName: string, snapshot: ForkSnapshot): Promise<{ ok: true; agentId: string }> {
     // Apply the FULL schema before copying rows. onStart runs on first access,
     // but this RPC can be invoked before it completes — ensureSchema creates
-    // every table (not just initAllTables') so forkWorkspaceStorage's copy of
-    // events-hub/heads/shadow/etc. rows never hits a missing table.
+    // every table so the copy's events-hub/heads/shadow/etc. rows never hit a
+    // missing table.
     this.ensureSchema();
 
-    // Build an ephemeral SqlExecutor over the source's row payload. We don't
-    // have cross-DO SQL queries — the payload IS the materialized source view.
-    const srcSql = buildSqlFromPayload(payload);
-
-    // Copy atomically. `this.boundSql` is a stable closure over `this.sql`
-    // that preserves the `this`-binding the Agent base class needs.
+    // Atomic. `this.boundSql` is a stable closure over `this.sql` that
+    // preserves the `this`-binding the Agent base class needs.
     this.ctx.storage.transactionSync(() => {
-      forkWorkspaceStorage(srcSql, this.boundSql, {
-        untilMessageId: payload.lineage.forkOriginMessageId,
-        targetWorkspaceId: this.ctx.id.toString(),
-        targetWorkspaceName: payload.forkName,
-        now: payload.lineage.forkedAt,
+      writeForkSnapshot(this.boundSql, snapshot, {
+        workspaceId: this.ctx.id.toString(),
+        workspaceName: forkName,
       });
     });
 
     return { ok: true, agentId: this.ctx.id.toString() };
-  }
-
-  /**
-   * Snapshot every row the fork helper will need into a JSON-serializable
-   * payload. Runs inside the source DO where `this.sql` has direct SQL access.
-   */
-  private buildForkPayload(untilMessageId: string, forkName: string): ForkPayload {
-    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
-    const hit = this.sql<{ created_at: number }>`
-      SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
-    `;
-    const forkPointMs = hit[0]!.created_at;
-    const messages = this.sql<ForkPayload["messages"][number]>`
-      SELECT id, session_id, parent_id, role, content, created_at
-      FROM messages
-      WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-      ORDER BY created_at ASC
-    `;
-    const conv = this.sql<ForkPayload["conversationHistory"][number]>`
-      SELECT session_id, role, message, created_at
-      FROM conversation_history
-      WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-      ORDER BY id ASC
-    `;
-    const vfs = this.sql<ForkPayload["vfsFiles"][number]>`
-      SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
-      FROM vfs_files WHERE path = ${SOUL_PATH} OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
-    `;
-    let memChunks: ForkPayload["memoryChunks"] = [];
-    try {
-      memChunks = this.sql<ForkPayload["memoryChunks"][number]>`
-        SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
-      `;
-    } catch { /* table may not exist yet */ }
-    const tools = this.sql<ForkPayload["craftedTools"][number]>`
-      SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
-    `;
-    let agentConfig: ForkPayload["agentConfig"] = [];
-    try {
-      agentConfig = this.sql<ForkPayload["agentConfig"][number]>`SELECT key, value FROM agent_config`;
-    } catch { /* agent_config may not exist yet */ }
-
-    // Snapshot Think's Session-owned messages up to the cut point. The chat
-    // UI hydrates from assistant_messages (via session.getHistory()'s
-    // recursive CTE), so we must carry these or the fork's chat pane shows
-    // the empty state. Time comparison uses strftime to turn the datetime
-    // column into a unix-ms for comparison with our forkPointMs.
-    let amsgs: ForkPayload["assistantMessages"] = [];
-    try {
-      amsgs = this.sql<ForkPayload["assistantMessages"][number]>`
-        SELECT id, session_id, parent_id, role, content, created_at
-        FROM assistant_messages
-        WHERE strftime('%s', created_at) * 1000 <= ${forkPointMs}
-        ORDER BY created_at ASC
-      `;
-    } catch { /* assistant_messages created lazily by Session — may not exist */ }
-
-    return {
-      forkName,
-      lineage: {
-        forkOriginAgentId: identity[0]?.id ?? this.ctx.id.toString(),
-        forkOriginAgentName: identity[0]?.name ?? this.name,
-        forkOriginMessageId: untilMessageId,
-        forkOriginCreatedAt: forkPointMs,
-        forkedAt: Date.now(),
-      },
-      messages,
-      conversationHistory: conv,
-      vfsFiles: vfs,
-      memoryChunks: memChunks,
-      craftedTools: tools,
-      agentConfig,
-      assistantMessages: amsgs,
-    };
   }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────

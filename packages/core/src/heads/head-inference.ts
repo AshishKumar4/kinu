@@ -18,6 +18,7 @@ import {
   budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
+import type { MissionBudgetRefusal, MissionScope } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
@@ -254,6 +255,41 @@ function incompleteHeadSummary(
     + (recorded ? `What it recorded before stopping: ${recorded}` : 'It produced no findings.');
 }
 
+/**
+ * The report of a head the mission governor stopped.
+ *
+ * Deliberately the same shape as any other incomplete head — its findings, its
+ * status, and no mid-flight speculation dressed up as a conclusion — with the
+ * refusal's own words as the reason, so the parent's merge can say which budget
+ * ran out rather than reporting an unexplained short run.
+ */
+function exhaustedMissionReport(
+  input: HeadInput,
+  capture: HeadCapture,
+  refusal: MissionBudgetRefusal,
+  wallClockMs: number,
+  steps: Parameters<typeof extractHeadSteps>[0] = [],
+): HeadReport {
+  return {
+    id: input.id,
+    status: 'budget_exceeded',
+    summary: incompleteHeadSummary(input, 'budget_exceeded', capture, refusal.note),
+    evidence: [...capture.evidence],
+    decisions: [...capture.decisions],
+    artifactRefs: [...capture.artifacts],
+    childHeadIds: [...capture.childHeadIds],
+    toolCalls: [...capture.toolCalls],
+    steps: extractHeadSteps(steps),
+    tokenUsage: {
+      input: capture.tokenUsage.input,
+      output: capture.tokenUsage.output,
+      total: capture.tokenUsage.input + capture.tokenUsage.output,
+    },
+    wallClockMs,
+    errorMessage: refusal.note,
+  };
+}
+
 export interface HeadInferenceDeps {
   /** The LanguageModel this head reasons with (per-head model override applied upstream). */
   model: LanguageModel;
@@ -275,6 +311,19 @@ export interface HeadInferenceDeps {
   isAborted: () => boolean;
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
+  /**
+   * The mission ledger this head charges, when it runs under one.
+   *
+   * The head's own envelope has no token dimension on purpose — a fork gets its
+   * parent's room — so this is the ONLY thing that can stop a head for spending
+   * too much, and it stops it only where a budget was declared. Omitted is the
+   * default and the loop then never asks: an undeclared run must not touch the
+   * table.
+   *
+   * The backend builds it from {@link HeadInput.missionLabels}: in-process over
+   * the governor itself, out-of-process over an RPC to whoever holds the ledger.
+   */
+  mission?: MissionScope;
 }
 
 /**
@@ -286,7 +335,7 @@ export interface HeadInferenceDeps {
  * budget_exceeded anyway).
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  const { capture, maxSteps } = deps;
+  const { capture, maxSteps, mission } = deps;
   const startedAt = Date.now();
 
   const usageTotal = () => ({
@@ -295,24 +344,57 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     total: capture.tokenUsage.input + capture.tokenUsage.output,
   });
 
+  // The mission refusal that stopped this head, if one did. Held so the report
+  // says which budget ran out rather than reporting a bare stop.
+  let refusal: MissionBudgetRefusal | null = null;
+  /** Ask the ledger for room. Never called for an unbudgeted run: `mission` is
+   *  built only from a non-empty label set, so there is nothing to ask. */
+  const outOfBudget = async (): Promise<boolean> => {
+    if (!mission || refusal) return refusal !== null;
+    refusal = await mission.port.guard('model_call', mission.labels);
+    return refusal !== null;
+  };
+
   try {
+    // Before the first call as well as between steps: a head spawned into an
+    // already-spent mission must not get one free inference out of it.
+    if (await outOfBudget()) {
+      return exhaustedMissionReport(input, capture, refusal!, Date.now() - startedAt);
+    }
     const result = await generateText({
       model: deps.model,
       system: buildHeadSystemPrompt(input, Object.keys(deps.tools)),
       messages: buildHeadMessages(input),
       tools: deps.tools,
-      onStepFinish: (step) => {
-        const u = (step as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-        if (u) capture.recordStepUsage(u.inputTokens ?? 0, u.outputTokens ?? 0);
+      onStepFinish: async (step) => {
+        const u = (step as {
+          usage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number };
+        }).usage;
+        if (!u) return;
+        const inTok = u.inputTokens ?? 0;
+        const outTok = u.outputTokens ?? 0;
+        capture.recordStepUsage(inTok, outTok);
+        // Charged per step, from the provider's own report, so the ledger is
+        // current when the guard below reads it — rather than one lump debit
+        // after the whole fork has already been paid for.
+        const cached = u.cachedInputTokens ?? 0;
+        await mission?.port.debit(inTok + outTok, {
+          labels: mission.labels,
+          calls: 1,
+          usage: { input: inTok, output: outTok, ...(cached > 0 ? { cached } : {}) },
+        });
       },
-      stopWhen: ({ steps }) => {
+      stopWhen: async ({ steps }) => {
         if (deps.isAborted()) return true;
         if (steps.length >= maxSteps) return true;
         if (budgetExhausted(input.budget).exhausted) return true;
-        return false;
+        return outOfBudget();
       },
     });
 
+    if (refusal) {
+      return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, result.steps);
+    }
     const budgetGate = budgetExhausted(input.budget);
     // A run that used the whole step envelope without the model ever choosing to
     // stop was cut off mid-flight — reporting it 'completed' would hand the

@@ -125,6 +125,9 @@ export class HeadController {
     request: SplitRequest;
     parentBudget?: HeadBudget;
     model?: string;
+    /** Mission-budget labels every head in this split charges. Carried down to
+     *  each HeadInput so a head running out of process can find the ledger. */
+    missionLabels?: readonly string[];
     onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
     const rootId = opts.rootId ?? opts.parentHeadId ?? nanoid();
@@ -165,6 +168,7 @@ export class HeadController {
         model: h.model ?? opts.model,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
+        ...(opts.missionLabels?.length ? { missionLabels: opts.missionLabels } : {}),
       };
       this.journal.insertSpawn(input);
       return this.runtime.spawnHead(input);

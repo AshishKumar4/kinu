@@ -18,6 +18,18 @@
  * against both bodies, so an entry cannot be moved out of the twin count
  * without the delegation actually existing.
  *
+ * Two delegation FORMS are checkable, and an entry declares which one it uses:
+ *
+ *   'symbol'   a free-function call — a hoisted driver, which is what most
+ *              hoists produce.
+ *   '.symbol'  a method call on a shared core OBJECT (a store, a session).
+ *              Some transports are three lines over one core object rather
+ *              than over a free function, and the gate used to be blind to
+ *              them, so they sat in KNOWN_TWINS with a comment explaining they
+ *              were not really twins. Declaring the form makes the claim
+ *              machine-checked instead. `this.symbol(` never counts: a method
+ *              must not prove itself by calling itself.
+ *
  * This gate does not forbid the twins that exist — they are recorded below as
  * the measured baseline. It forbids the inventory from drifting in either
  * direction:
@@ -41,10 +53,6 @@ const REPO = resolve(import.meta.dir, '../../..');
 
 /** The measured twin inventory at seeding time. Shrink by hoisting. */
 const KNOWN_TWINS: readonly string[] = [
-  // Three lines each over ONE core store (CompactionStateStore.armForce-
-  // Compaction). No duplicated logic — only the session key differs, which is
-  // what a backend knows and core does not. Not expected to shrink.
-  'armCompactNow',
   // The file-checkpoint quartet (checkpointStatus, listFileCheckpoints,
   // planFileRestore, restoreFileCheckpoint): two transports to two DIFFERENT
   // stores — a device tunnel to the user's machine on cf, a local git engine
@@ -72,27 +80,26 @@ const KNOWN_TWINS: readonly string[] = [
   // names a single symbol, so this cannot be recorded there honestly.
   'readInheritedContext',
   'restoreFileCheckpoint',
-  'runShadowEvalSampled',
   // The seam itself, not duplication: each backend describes the inference
   // surface a candidate scaffold runs on (its ToolSet, its history, its
   // default loop). This entry is not expected to shrink.
   'scaffoldControl',
-  // Accessors over ONE core object (ModelCatalogSession), three lines each.
-  // No duplicated logic, but the delegation is a method call on a shared field
-  // rather than a free function, so the gate below cannot verify it — recorded
-  // here rather than asserted away. Not expected to shrink.
-  'sessionAcceptedMedia',
-  'sessionContextWindow',
 ];
 
 /**
  * Same name on both backends, one implementation in core: the method is the
  * backend's transport for it. Each entry names the core symbol both bodies
- * must call — asserted below, so this list cannot launder a real twin.
+ * must call, and a leading `.` says the call is a method on a shared core
+ * object rather than a free function — asserted below either way, so this list
+ * cannot launder a real twin.
  */
 const SHARED_TRANSPORTS: Readonly<Record<string, string>> = {
   acceptWebhookDelivery: 'acceptWebhookDelivery',
   applyScaffoldDecision: 'applyScaffoldDecision',
+  // Three lines each over ONE core store (CompactionStateStore). No duplicated
+  // logic — only the session key differs, which is what a backend knows and
+  // core does not.
+  armCompactNow: '.armForceCompaction',
   cancelBackgroundJob: 'cancelBackgroundJob',
   cancelTrigger: 'cancelTrigger',
   createDurableWebhook: 'registerDurableWebhook',
@@ -132,6 +139,9 @@ const SHARED_TRANSPORTS: Readonly<Record<string, string>> = {
   revertChangelogEntry: 'revertChangelogEntryById',
   runScaffoldGepaOptimization: 'runScaffoldGepaOptimization',
   runScaffoldOnce: 'runScaffoldOnce',
+  // Accessors over ONE core object (ModelCatalogSession), three lines each.
+  sessionAcceptedMedia: '.acceptedMedia',
+  sessionContextWindow: '.contextWindow',
   setAlwaysActiveSkills: 'setAlwaysActiveSkills',
   setCurriculumTaskStatus: 'updateProposedTaskStatus',
   setModel: 'setModel',
@@ -204,21 +214,39 @@ function scanTwins(): {
   return { cf, cli, twins: [...cf].filter((n) => cli.has(n)).sort(), cfBodies, cliBody: cliBody! };
 }
 
-/** A bare `symbol(` CALL — not `this.symbol(`, not `store.symbol(`, and not
- *  the method's own declaration header. Without that last exclusion a
- *  transport whose name matches its core symbol would prove itself by
- *  existing, which is exactly the laundering this gate exists to stop. */
-function callsFreeFunction(body: string, symbol: string): boolean {
-  const call = new RegExp(String.raw`(?<![.\w])${symbol}\s*(?:<[^>\n]*>)?\(`, 'g');
-  // A member declaration sits at exactly two spaces of indentation (the same
-  // shape methodNames extracts); anything calling it is deeper than that.
-  const declarationHead =
-    /^ {2}(?:@[A-Za-z_][A-Za-z0-9_]*\((?:[^()]|\([^()]*\))*\)\s+)?(?:(?:private|protected|public|readonly|override|static|async|get|set)\s+)*$/;
-  for (const m of body.matchAll(call)) {
+/** A member declaration sits at exactly two spaces of indentation (the same
+ *  shape methodNames extracts); anything calling one is deeper than that. */
+const DECLARATION_HEAD =
+  /^ {2}(?:@[A-Za-z_][A-Za-z0-9_]*\((?:[^()]|\([^()]*\))*\)\s+)?(?:(?:private|protected|public|readonly|override|static|async|get|set)\s+)*$/;
+
+/** Whether `body` contains a call matching `pattern` that is not the method's
+ *  own declaration header. Without that exclusion a transport whose name
+ *  matches its core symbol would prove itself by existing, which is exactly
+ *  the laundering this gate exists to stop. */
+function containsCall(body: string, pattern: RegExp): boolean {
+  for (const m of body.matchAll(pattern)) {
     const lineStart = body.lastIndexOf('\n', m.index) + 1;
-    if (!declarationHead.test(body.slice(lineStart, m.index))) return true;
+    if (!DECLARATION_HEAD.test(body.slice(lineStart, m.index))) return true;
   }
   return false;
+}
+
+/**
+ * Whether `body` delegates to `declared` — a free-function `symbol(` call, or,
+ * when the entry is written `.symbol`, a method call on some object OTHER than
+ * `this`.
+ *
+ * The `this` exclusion is what keeps the method form honest: `this.foo(` inside
+ * `foo` proves nothing, while `this.store.foo(` reaches a shared object and
+ * does. Member chains are fine — the check looks only at what sits immediately
+ * before the dot.
+ */
+function delegatesTo(body: string, declared: string): boolean {
+  if (declared.startsWith('.')) {
+    const symbol = declared.slice(1);
+    return containsCall(body, new RegExp(String.raw`(?<!\bthis)\.${symbol}\s*(?:<[^>\n]*>)?\(`, 'g'));
+  }
+  return containsCall(body, new RegExp(String.raw`(?<![.\w])${declared}\s*(?:<[^>\n]*>)?\(`, 'g'));
 }
 
 describe('backend twin methods', () => {
@@ -246,12 +274,29 @@ describe('backend twin methods', () => {
     expect(KNOWN_TWINS.filter((n) => n in SHARED_TRANSPORTS)).toEqual([]);
   });
 
+  test('the delegation check cannot be satisfied by a method calling itself', () => {
+    // Guards the guard. Both forms exist to prove a body reaches a SHARED
+    // implementation; a body that only reaches itself proves nothing, and the
+    // method form is the one where that mistake is easy to make.
+    expect(delegatesTo('  armCompactNow(): void {\n    this.armForceCompaction();\n  }', '.armForceCompaction'))
+      .toBe(false);
+    expect(delegatesTo('  armCompactNow(): void {\n    this.state.armForceCompaction(k);\n  }', '.armForceCompaction'))
+      .toBe(true);
+    // A declaration header is not a call, in either form.
+    expect(delegatesTo('  setModel(spec: string) {\n    return 1;\n  }', 'setModel')).toBe(false);
+    expect(delegatesTo('  setModel(spec: string) {\n    return setModel(this.config, spec);\n  }', 'setModel'))
+      .toBe(true);
+    // A method form never accepts a bare free-function call, and vice versa.
+    expect(delegatesTo('    return acceptedMedia();', '.acceptedMedia')).toBe(false);
+    expect(delegatesTo('    return this.catalog.acceptedMedia();', 'acceptedMedia')).toBe(false);
+  });
+
   test('every declared transport really delegates to its core symbol', () => {
     // Without this, SHARED_TRANSPORTS would be a way to assert duplication
     // away. Both sides must actually reach the named core implementation.
     const unproven = Object.entries(SHARED_TRANSPORTS)
       .filter(([, symbol]) =>
-        !callsFreeFunction(cliBody, symbol) || !cfBodies.some((b) => callsFreeFunction(b, symbol)))
+        !delegatesTo(cliBody, symbol) || !cfBodies.some((b) => delegatesTo(b, symbol)))
       .map(([name]) => name);
     expect(unproven).toEqual([]);
   });

@@ -18,8 +18,9 @@ import {
   type HeadRuntime, type HeadGrounding, type SpawnedHead, type HeadInput, type HeadReport, type MergeOutput,
   type WebSearchProvider, type AgentRuntime, type CodemodeProvider,
   type HeadSplitRequest, type HeadSplitResult,
+  type MissionGovernor,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
-  extractJsonObject, reasoningEffortOptions, resolveMaxSteps,
+  extractJsonObject, reasoningEffortOptions, resolveMaxSteps, localMissionScope,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime.js';
@@ -46,6 +47,12 @@ export interface CLIHeadRuntimeDeps {
    *  so head outcomes + the merge are grounded, not heuristic. Omit ⇒ neutral
    *  scores + n=1 merge. */
   grounding?: HeadGrounding;
+  /** The session's mission governor. A local head runs in the same process as
+   *  the ledger, so its port is the governor itself — the cf backend's has to
+   *  cross a facet boundary to reach the same thing. Consulted only for a head
+   *  that carries labels, so an unbudgeted run never reads the table. Read per
+   *  head, because the runtime is built before the governor exists. */
+  governor: () => MissionGovernor;
 }
 
 /** Per-head abort flag — flipped by SpawnedHead.abort (a caller-requested
@@ -94,6 +101,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       webSearch: deps.webSearch,
       split: (request) => runLocalSplit(request, input, deps),
     });
+    const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
     return await runHeadInference(input, {
       model: deps.model, tools, capture,
       // The same envelope the parent session's turn runs to — local-session
@@ -101,6 +109,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
+      ...(mission ? { mission } : {}),
     });
   } finally {
     db.close();
@@ -123,6 +132,9 @@ async function runLocalSplit(request: HeadSplitRequest, input: HeadInput, deps: 
       request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
       parentBudget: input.budget,
       model: input.model,
+      // A subtree charges the same mission its root does — otherwise a head
+      // escapes its budget simply by splitting again.
+      ...(input.missionLabels?.length ? { missionLabels: input.missionLabels } : {}),
     });
     return {
       narrative: result.mergedNarrative,

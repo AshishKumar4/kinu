@@ -33,7 +33,7 @@ import {
   type AgentsToolAction,
 } from './registry.js';
 import { FORK_STRATEGY_ID } from '../strategy/heads.js';
-import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
+import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget.js';
 import type { StrategyContext, StrategyRegistry } from '../strategy/types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MergeStrategy } from '../heads/types.js';
@@ -427,6 +427,11 @@ async function runFork(
     rt,
     model: deps.model,
     signal: readAbortSignal(toolOptions),
+    // The governed `rt.llm` above covers everything that reaches a model
+    // through this process. A head does not: it resolves its own model in its
+    // own runtime, so it needs the ledger itself, and that is what this
+    // carries. Only present when a budget was actually declared.
+    ...(mission ? { mission: { labels: mission.labels, port: localMissionPort(mission.governor) } } : {}),
     budget: {
       // Unset = strategy default (lets stored agent-config overrides apply).
       maxIterations: input.budget,
@@ -442,10 +447,15 @@ async function runFork(
   };
   try {
     const result = await strat.explore(ctx);
-    // The sub-agents' own spend, reported by the strategy rather than seen at
-    // this seam — the heads runtime counts its heads' tokens, so the fork's
-    // total lands on the ledger (and every ancestor label) exactly once.
-    mission?.governor.debit(result.cost.tokens ?? 0, { labels: mission.labels, spawns: 1 });
+    // The spawn always records. The TOKENS record here only when the strategy
+    // could not charge them itself — an MCTS rollout runs where the ledger is
+    // not reachable, so its total is seen only at this seam. A heads fork
+    // debits every step as it makes it, which is what lets an exhausted budget
+    // stop it mid-flight; charging its total again here would double-count it.
+    mission?.governor.debit(result.cost.selfMetered ? 0 : result.cost.tokens ?? 0, {
+      labels: mission.labels,
+      spawns: 1,
+    });
     return {
       strategy: result.strategy,
       text: result.best.text,

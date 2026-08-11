@@ -35,7 +35,7 @@
  */
 import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from './user-do.js';
-import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS } from './device-consent.js';
+import { DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS } from '@proteus/core';
 import { buildCliAuthCommand, buildCliInstallCommand, buildCliSetupCommand, normalizeCliOrigin } from '../cli/install-command.js';
 import { listAvailableModels, listProviderCatalog } from './available-models.js';
 import { handleCreateWorkspaceRequest, notifyWorkspacesCredentialsChanged } from './workspace-access.js';

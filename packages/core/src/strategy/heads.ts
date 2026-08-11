@@ -72,6 +72,9 @@ export function createHeadsStrategy(): ExplorationStrategy {
         parentBudget,
         model: o.defaultModel,
         onPhase: o.onPhase,
+        // Labels only: HeadInput crosses a process boundary as data, and the
+        // far side rebuilds a port over whatever reaches the ledger there.
+        ...(ctx.mission ? { missionLabels: ctx.mission.labels } : {}),
       });
 
       o.onComplete?.(merge, ctx.task);
@@ -107,6 +110,9 @@ export function createHeadsStrategy(): ExplorationStrategy {
           tokens: merge.costSummary.totalTokens,
           durationMs: Date.now() - t0,
           iterations: merge.costSummary.headCount,
+          // Each head debited its own steps as it ran (head-inference.ts), so
+          // the caller must not charge the total a second time.
+          ...(ctx.mission ? { selfMetered: true } : {}),
         },
         trace: `Heads(n=${merge.headIds.length}) → merge(strategy=${strategy})`,
       };

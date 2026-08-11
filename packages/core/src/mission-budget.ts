@@ -478,6 +478,62 @@ export class MissionGovernor {
 }
 
 /**
+ * The governor as work running OUT OF PROCESS sees it.
+ *
+ * The ledger lives with the actor that declared the budget, and a forked head
+ * does not run there: on Cloudflare it is a separate facet with its own
+ * storage, resolving its own model, so the governed `LLM` the fork seam wraps
+ * never reaches the calls that head actually makes. Coverage without this is
+ * refuse-to-spawn plus one lump debit after the whole fork returns — which
+ * cannot stop a run mid-flight, and is exactly when a budget matters.
+ *
+ * Async because the answer may have to cross a process boundary. In-process
+ * backends satisfy it with {@link localMissionPort}, which is the governor
+ * itself; a facet satisfies it over an RPC to the actor that holds the ledger.
+ *
+ * OPT-IN, like everything else here: a port is reached only for a scope with
+ * labels in it, so a run that declared no budget issues no call, no query and
+ * no refusal.
+ */
+export interface MissionBudgetPort {
+  guard(seam: MissionSeam, labels: readonly string[]): Promise<MissionBudgetRefusal | null>;
+  debit(tokens: number, opts: {
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+  }): Promise<void>;
+}
+
+/**
+ * A budget scope handed to work that will run elsewhere: which labels it
+ * charges, and how to reach them.
+ *
+ * Carried as a whole rather than as bare labels because the two halves are
+ * useless apart — labels with no port charge nothing, and a port with no labels
+ * has nothing to charge. Absent means unbudgeted, which is the default.
+ */
+export interface MissionScope {
+  readonly labels: readonly string[];
+  readonly port: MissionBudgetPort;
+}
+
+/** The port over a governor in this process — the local backend's, and the
+ *  receiving half of a remote one. */
+export function localMissionPort(governor: MissionGovernor): MissionBudgetPort {
+  return {
+    async guard(seam, labels) { return governor.guard(seam, labels); },
+    async debit(tokens, opts) { governor.debit(tokens, opts); },
+  };
+}
+
+/** A scope over an in-process governor, or null when `labels` is empty — the
+ *  shape that keeps "no budget declared" from ever reaching the ledger. */
+export function localMissionScope(
+  governor: MissionGovernor,
+  labels: readonly string[],
+): MissionScope | null {
+  return labels.length === 0 ? null : { labels: [...labels], port: localMissionPort(governor) };
+}
+
+/**
  * The programmatic-turn metadata key that carries a woken turn's mission scope
  * from the schedule that fired it. One name, read by both backends at turn
  * start and written by the reactor — the labels are the only thing linking a

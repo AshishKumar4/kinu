@@ -91,7 +91,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision,
-} from './device-consent.js';
+} from '@proteus/core';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,

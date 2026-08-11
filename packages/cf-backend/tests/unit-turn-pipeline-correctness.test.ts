@@ -99,12 +99,18 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
 
-    const shadowJudge = actor.slice(
-      actor.indexOf('protected async runShadowEvalSampled'),
-      actor.indexOf('/** Build a streaming LLM callback'),
+    // The shadow eval's judge is the control plane's, and the plane builds it
+    // over the cross-family REVIEW model at the judge stage's own effort. The
+    // actor used to build a second judge here carrying provider options derived
+    // from the CHAT model's family — options a review model on a different
+    // provider cannot apply — so the effort is no longer named at this seam.
+    const control = actor.slice(
+      actor.indexOf('protected get scaffoldControl()'),
+      actor.indexOf("/** The scaffold's host.llmStream bridge"),
     );
-    expect(shadowJudge).not.toContain('maxOutputTokens');
-    expect(shadowJudge).toContain("reasoningEffortOptions('low', this.effectiveModelProviderFamily())");
+    expect(control).not.toContain('maxOutputTokens');
+    expect(control).toContain('judge: createJsonJudge(() => this.getModelForReview())');
+    expect(control).not.toContain('reasoningEffortOptions');
     expect(generateJson).not.toContain('opts.maxOutputTokens ??');
   });
 

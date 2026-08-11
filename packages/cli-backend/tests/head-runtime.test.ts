@@ -12,6 +12,7 @@ import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
+  MissionGovernor,
   type HeadInput, type WebSearchProvider, type AgentRuntime,
 } from '@proteus/core';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
@@ -30,11 +31,19 @@ function makeParent(): AgentRuntime {
   });
 }
 
+/** A governor over its own scratch ledger. A local head charges through this
+ *  directly — the cf backend's has to cross a facet boundary to reach one. */
+function makeGovernor(): MissionGovernor {
+  const db = new Database(':memory:');
+  return new MissionGovernor({ storage: { sql: makeSql(db), execRaw: makeExecRaw(db) } });
+}
+
 /** Head-runtime deps around a fresh parent, with test overrides. */
 function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLIHeadRuntimeDeps {
+  const governor = makeGovernor();
   return {
     model, parentRuntime: makeParent(), cwd: process.cwd(),
-    webSearch: stubWeb, codemodeExtras: () => [], ...over,
+    webSearch: stubWeb, codemodeExtras: () => [], governor: () => governor, ...over,
   };
 }
 
@@ -220,5 +229,64 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const out = await tools.run!.execute({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' }, {});
     expect(String(out)).toContain('real file content');
+  });
+});
+
+describe('createCLIHeadRuntime — the mission ledger', () => {
+  // A local head runs in the same process as the ledger, so its port is the
+  // governor itself. The invariant is the same on both backends: labels or
+  // nothing. Head execution caps were removed entirely, so this is the only
+  // remaining bound on a head's spend — and it must not become a default one.
+  test('a head with no labels never touches the ledger', async () => {
+    const governor = makeGovernor();
+    // A cap that WOULD refuse everything, if anything ever asked about it.
+    governor.declare('someone-elses-mission', { tokens: 1 }, {});
+    governor.debit(10_000, { labels: ['someone-elses-mission'], calls: 1 });
+
+    const runtime = createCLIHeadRuntime(headDeps(
+      capturingHeadModel('did the work', () => {}),
+      { governor: () => governor },
+    ));
+    const head = await runtime.spawnHead(aHeadInput());
+    const report = await head.run();
+
+    expect(report.status).toBe('completed');
+    expect(report.summary).toBe('did the work');
+    // The exhausted label is untouched: nothing bound this head to it.
+    expect(governor.snapshot('someone-elses-mission')[0]!.calls).toBe(1);
+  });
+
+  test('a head carrying labels charges them as it runs', async () => {
+    const governor = makeGovernor();
+    governor.declare('sweep', { tokens: 1_000_000 }, {});
+
+    const runtime = createCLIHeadRuntime(headDeps(
+      capturingHeadModel('did the work', () => {}),
+      { governor: () => governor },
+    ));
+    const head = await runtime.spawnHead(aHeadInput({ missionLabels: ['sweep'] }));
+    expect((await head.run()).status).toBe('completed');
+
+    const snap = governor.snapshot('sweep')[0]!;
+    expect(snap.calls).toBe(1);
+    expect(snap.spent.tokens).toBe(2);
+  });
+
+  test('a head carrying an exhausted label is refused before its first call', async () => {
+    const governor = makeGovernor();
+    governor.declare('sweep', { tokens: 5 }, {});
+    governor.debit(10, { labels: ['sweep'], calls: 1 });
+
+    let calls = 0;
+    const runtime = createCLIHeadRuntime(headDeps(
+      capturingHeadModel('should never run', () => { calls++; }),
+      { governor: () => governor },
+    ));
+    const head = await runtime.spawnHead(aHeadInput({ missionLabels: ['sweep'] }));
+    const report = await head.run();
+
+    expect(report.status).toBe('budget_exceeded');
+    expect(report.errorMessage).toContain('Mission budget "sweep" is spent');
+    expect(calls).toBe(0);
   });
 });

@@ -2,7 +2,7 @@
  * Canonical tool registry — the single source of truth for Proteus's built-in
  * tool names and descriptions. Consumed by:
  *   - tools/builtins.ts      (factory for the built-in ToolSet)
- *   - evolution/engine.ts    (crafted-tool filter — BUILT_IN_TOOL_NAMES)
+ *   - prompting/surface.ts   (crafted-tool projection of the live ToolSet)
  *   - cf-backend/orchestrator.ts  (getToolList, getToolDescriptions, beforeTurn)
  *   - cli surfaces           (chat-loop, tui)
  *

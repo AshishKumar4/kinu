@@ -79,6 +79,12 @@ export class TurnAccumulator {
    *  measurement is always reported against the usage of the very request it
    *  measured rather than the next one. Reset with the rest of the turn. */
   readonly composition = new TurnContextMeter();
+  /** The crafted tools this turn called. Written by the in-episode craft clock
+   *  (orchestrator/craft-cycle.ts), which is the only thing that can see them:
+   *  a crafted tool is reached from inside an `execute_tools` block, so it is
+   *  never a `toolCalls` name. Read at turn end for the craft EMA and the
+   *  durable turn↔craft usage row. Reset with the rest of the turn. */
+  private readonly craftUsed = new Set<string>();
 
   constructor(
     private readonly sinks: TurnSinks = {},
@@ -100,6 +106,18 @@ export class TurnAccumulator {
     this.context.reset();
     this.files.reset();
     this.composition.reset();
+    this.craftUsed.clear();
+  }
+
+  /** Record crafted tools the turn invoked — the craft clock's call-site scan
+   *  of a settled `execute_tools` block, deduped across the turn. */
+  noteCraftedToolUse(names: readonly string[]): void {
+    for (const name of names) this.craftUsed.add(name);
+  }
+
+  /** The crafted tools this turn called, in first-observed order. */
+  craftedToolsUsed(): string[] {
+    return [...this.craftUsed];
   }
 
   /** What the turn spent, or undefined when no step reported usage — so a

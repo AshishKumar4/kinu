@@ -8,6 +8,7 @@
 // registry entries — no tool/UI/orchestrator changes.
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { MissionScope } from '../mission-budget.js';
 import type { LanguageModel } from 'ai';
 
 export interface StrategyBudget {
@@ -32,6 +33,13 @@ export interface StrategyContext {
   history?: ReadonlyArray<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
   /** Per-strategy options. Strategies validate their own shape. */
   options?: Record<string, unknown>;
+  /**
+   * The mission budget this exploration charges. `ctx.rt.llm` is already
+   * governed for whatever reaches a model through it in THIS process; this is
+   * for the work that does not — a head resolving its own model in another
+   * facet, which the wrapper cannot reach. Absent = unbudgeted.
+   */
+  mission?: MissionScope;
   signal?: AbortSignal;
 }
 
@@ -57,7 +65,19 @@ export interface StrategyResult {
   /** Free-form trace the LLM can use to follow what happened. */
   trace?: string;
   /** Cost summary — tokens, ms, iterations actually performed. */
-  cost: { tokens?: number; durationMs: number; iterations?: number };
+  cost: {
+    tokens?: number;
+    durationMs: number;
+    iterations?: number;
+    /**
+     * True when these tokens were ALREADY charged to the mission ledger by the
+     * strategy itself. Heads do, per step, from the process that made each
+     * call; the fork seam then records only the spawn, so spend is never
+     * counted twice. A strategy whose work is not reachable from the ledger
+     * leaves this unset and is charged the lump.
+     */
+    selfMetered?: boolean;
+  };
 }
 
 export interface ExplorationStrategy {

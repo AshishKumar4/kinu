@@ -17,7 +17,13 @@ export {
 } from './identity/soul.js';
 export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
-export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
+export {
+  forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
+  type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
+} from './identity/fork.js';
+export {
+  forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
+} from './identity/fork-driver.js';
 // Workspace archive — one portable backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
@@ -330,6 +336,10 @@ export {
   MISSION_LABELS_METADATA_KEY,
   readMissionLabels,
   readMissionLimits,
+  localMissionPort,
+  localMissionScope,
+  type MissionBudgetPort,
+  type MissionScope,
   type MissionBudgetLimits,
   type MissionBudgetRefusal,
   type MissionBudgetSnapshot,
@@ -841,6 +851,22 @@ export {
   argumentDigest,
   sha256Hex,
   stableStringify,
+  DeviceConsentRegistry,
+  DEVICE_CONSENT_SCOPE,
+  DEVICE_CONSENT_SCOPE_FULL_FS,
+  DEVICE_CONSENT_DENIED,
+  DEVICE_CONSENT_UNANSWERED,
+  DEVICE_CONSENT_TIMEOUT_MS,
+  parseConsentScope,
+  mergeConsentScope,
+  summarizeDeviceAction,
+  type DeviceConsentScope,
+  type DeviceConsentDecision,
+  type DeviceConsentAnswer,
+  type DeviceActionSummary,
+  type DeviceConsentRequest,
+  type PendingDeviceConsent,
+  type DeviceConsentNotice,
 } from './safety/index.js';
 
 // Utils
@@ -925,7 +951,6 @@ export {
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host.js';
-export { runSampledShadowEval, type ShadowEvalConfig } from './orchestrator/shadow-eval.js';
 export {
   BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeForkBackgroundJob,
 } from './orchestrator/background-tools.js';
@@ -975,7 +1000,7 @@ export type {
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
-  runScaffoldOnce,
+  runScaffoldOnce, runTurnShadowEval,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldSurface, type ScaffoldVersionView, type ShadowStatus,
 } from './evolution/control.js';

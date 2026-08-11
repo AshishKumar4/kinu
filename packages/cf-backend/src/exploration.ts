@@ -61,6 +61,7 @@ import {
   type MergeOutput,
   HeadCapture,
   runHeadInference,
+  type MissionScope,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services.js";
 import { spawnHeadFacet } from "./facet-spawn.js";
@@ -330,6 +331,7 @@ export class ExplorationAgent extends Agent<Env> {
     // The loop + report assembly live in core (runHeadInference); the Facet
     // supplies its model + the forked tool surface. Abort is driven by
     // abortHead() flipping this.headAborted.
+    const mission = this.missionScope(input);
     return runHeadInference(input, {
       model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
@@ -339,7 +341,34 @@ export class ExplorationAgent extends Agent<Env> {
       maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
       isAborted: () => this.headAborted,
       abortReason: () => this.headAbortReason,
+      ...(mission ? { mission } : {}),
     });
+  }
+
+  /**
+   * The mission ledger this head charges, or null when it charges none.
+   *
+   * The ledger lives on the parent workspace — a facet has its own storage and
+   * resolves its own model, so nothing the parent wrapped around `rt.llm`
+   * reaches these calls. The port is therefore an RPC back to the actor that
+   * declared the budget: guard before each step, debit after it.
+   *
+   * Null for a head with no labels, which is every head of an ordinary
+   * unbudgeted run: no stub is taken, no RPC is issued, and the parent's
+   * mission table is never opened.
+   */
+  private missionScope(input: HeadInput): MissionScope | null {
+    const labels = input.missionLabels ?? [];
+    if (labels.length === 0) return null;
+    const parent = this.getSharedParentStub();
+    if (!parent) return null;
+    return {
+      labels,
+      port: {
+        guard: (seam, scope) => parent.missionGuard(seam, scope),
+        debit: (tokens, opts) => parent.missionDebit(tokens, opts),
+      },
+    };
   }
 
   // ── Head-mode tool builders ─────────────────────────────────────
@@ -411,6 +440,9 @@ export class ExplorationAgent extends Agent<Env> {
       request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
       parentBudget,
       model: parentInput.model,
+      // A subtree charges the same mission its root does — otherwise a head
+      // escapes its budget simply by splitting again.
+      ...(parentInput.missionLabels?.length ? { missionLabels: parentInput.missionLabels } : {}),
     });
 
     return {

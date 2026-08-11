@@ -40,6 +40,9 @@ import {
   DEFAULT_SHADOW_CONFIG, applyPromotionDecision, decidePromotion, getPendingScaffold,
   readScaffoldVersion,
 } from '../scaffold/shadow.js';
+import {
+  DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval, type AutoShadowEvalResult,
+} from '../scaffold/auto-judge.js';
 import { buildOutcomeEvalSplit, describeSplitDegeneracy, type OutcomeEvalExpectation } from './outcomes.js';
 import { runScaffoldGepa } from './gepa/scaffold-bridge.js';
 import {
@@ -151,6 +154,76 @@ export async function runScaffoldOnce(
     ...(codeOverride != null ? { scaffoldCodeOverride: codeOverride } : {}),
     ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
   }));
+}
+
+/**
+ * The turn-bound half of the shadow loop: sample this turn, run the pending
+ * scaffold against the same task the live answer answered, judge the two, and
+ * promote or roll back.
+ *
+ * Written twice until now — once per backend — because it is the only
+ * control-plane operation with a LIVE TURN in it, and each backend holds the
+ * turn's prepared inference differently (a `_lastTurnOpts` stash on the DO, a
+ * `liveTurnOpts` local on the CLI). That is the whole of the difference, and it
+ * arrives here as `replayLiveTurn`: a candidate that delegates to the default
+ * loop must replay the turn's OWN inference — same system prompt, same tool
+ * surface, same conversational history — or it is judged on a handicap rather
+ * than on the scaffold delta. Everything else (the sampling gate, the four
+ * ports, the judge, swallowing failures so a shadow eval can never fail a turn)
+ * is policy, and both copies had already drifted on the judge: cf sent
+ * reasoning options derived from the CHAT model's provider family to a
+ * cross-family REVIEW model, where they cannot apply.
+ *
+ * Returns the result for the caller's telemetry, or null when sampling is off
+ * or the eval failed.
+ */
+export async function runTurnShadowEval(
+  control: ScaffoldControl,
+  turn: {
+    task: string;
+    /** What the live turn actually answered — the shadow run's comparand. */
+    currentOutput: string;
+    /** Replay of the live turn's prepared inference, captured synchronously by
+     *  the caller so a later turn's state can never bleed into this one.
+     *  Omitted when the host no longer holds it — a DO restarted between the
+     *  live turn and this eval — and then the surface's own default loop
+     *  stands in, under the live loop's full step envelope: a candidate judged
+     *  against the live answer has to be allowed to reach one. */
+    replayLiveTurn?: ScaffoldSurface['defaultInference'];
+  },
+): Promise<AutoShadowEvalResult | null> {
+  try {
+    const sampleRate = control.config.getShadowSampleRate();
+    if (sampleRate <= 0) return null;
+    const surface = control.surface(turn.task);
+    const defaultInference = turn.replayLiveTurn ?? surface.defaultInference;
+    return await runAutoShadowEval({
+      rt: control.rt,
+      // Passed WHOLE. runAutoShadowEval owns the evidence budget and applies it
+      // once, to the judge and the trial row together; a second clamp here both
+      // duplicated the policy and lied about it — windowing an already windowed
+      // string reports the second pass's omission count, not the total. It also
+      // mattered beyond tidiness: `task` is what the PENDING scaffold is run on,
+      // so a slice here would ask the pending to answer a truncated version of
+      // the question the live turn answered in full, then judge the two against
+      // each other.
+      task: turn.task,
+      currentOutput: turn.currentOutput,
+      judge: (prompt, schema) => control.judge({ schema, prompt }),
+      llmStream: surface.llmStream,
+      ...(surface.callTool ? { callTool: surface.callTool } : {}),
+      ...(surface.history ? { history: surface.history } : {}),
+      ...(defaultInference ? { defaultInference } : {}),
+      config: {
+        ...DEFAULT_AUTO_JUDGE_CONFIG,
+        sampleRate,
+        autoApply: control.config.getAutoPromoteScaffold(),
+      },
+    });
+  } catch (err) {
+    console.warn('[proteus] shadow eval failed:', err instanceof Error ? err.message : err);
+    return null;
+  }
 }
 
 /**

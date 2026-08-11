@@ -73,6 +73,7 @@ import {
   // supplies the local surface they run against.
   applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listGepaRuns, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldGepaOptimization, runScaffoldOnce,
+  runTurnShadowEval,
   type GepaOptimizationResult, type GepaRunSummary, type ScaffoldControl,
   type ScaffoldDecisionResult, type ScaffoldVersionView, type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
@@ -81,9 +82,8 @@ import {
   getCurrentScaffoldVersion,
   scaffoldChatTransform, type ScaffoldRunOptions,
   bootstrapScaffold,
-  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
   SCAFFOLD_TURN_TIMEOUT_MS,
-  createStructuredJudge,
   type AlternateTakeSet, type TakePickOutcome,
   initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
@@ -458,6 +458,7 @@ export class LocalAgentSession implements BackendHost {
       webSearch: this.getWebSearchProvider(),
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
+      governor: () => this.budget,
     });
     this.headController = new HeadController(this._headRuntime, this.headJournal);
 
@@ -1603,11 +1604,30 @@ export class LocalAgentSession implements BackendHost {
       this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
       await this.orch.completeTurn(turn, this.turnContinuity);
-      // Sampled auto-judge shadow rollout. Tracked rather than fire-and-forget:
-      // a `proteus exec` process exits the moment the turn ends, and the
+      // Sampled auto-judge shadow rollout — core's control plane, the same
+      // driver the cloud backend runs. Tracked rather than fire-and-forget: a
+      // `proteus exec` process exits the moment the turn ends, and the
       // evaluation that resolves a pending scaffold must not die with it.
       this.orch.track(
-        this.runShadowEvalSampled({ task: item.text, currentOutput: fullText, liveTurnOpts }),
+        runTurnShadowEval(this.scaffoldControl, {
+          task: item.text,
+          currentOutput: fullText,
+          // A candidate that delegates is judged on the scaffold delta alone,
+          // so it replays the live turn's OWN inference — same system prompt,
+          // same tool surface, same conversational history, same step budget.
+          replayLiveTurn: () => runChat(liveTurnOpts),
+        }).then((result) => {
+          // What a local session does with the verdict: surface it, and drop
+          // the model-bound state so the next turn's toolset is rebuilt over
+          // whichever scaffold now stands.
+          if (!result?.applied) return;
+          this.emit({
+            type: 'evolution',
+            event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+            message: `Shadow eval ${result.applied}d the pending scaffold`,
+          });
+          this.invalidateModelState();
+        }),
         'Scaffold shadow eval',
       );
       this.emit({ type: 'turn-end', turn });
@@ -1757,48 +1777,6 @@ export class LocalAgentSession implements BackendHost {
     return filterToolSetBySkills(this.tools, activeSkills);
   }
 
-  /**
-   * Sampled per-turn auto-judge shadow rollout — the local peer of the DO's
-   * runShadowEvalSampled, and the ONLY thing that can resolve a pending
-   * scaffold. Without it the evolution engine proposes exactly one scaffold
-   * ever (engine.maybeEvolveScaffold refuses to propose while one is pending)
-   * and that proposal is never evaluated, promoted, or rolled back.
-   *
-   * Runs the pending against the same task the user just sent, with the same
-   * tool surface the live turn had, and judges the two outputs. `autoApply`
-   * follows agent_config.auto_promote_scaffold (default ON — every applied
-   * decision is visible and revertable in the Evolution Changelog).
-   */
-  private async runShadowEvalSampled(opts: {
-    task: string; currentOutput: string; liveTurnOpts: LiveTurnOpts;
-  }): Promise<void> {
-    const { model, tools } = opts.liveTurnOpts;
-    const result = await runSampledShadowEval({
-      rt: this.rt,
-      config: this.config,
-      task: opts.task,
-      currentOutput: opts.currentOutput,
-      judge: createStructuredJudge(this.rt.judgeModel ?? this.rt.llm),
-      llmStream: this.makeScaffoldLLMStream(model, tools),
-      callTool: this.makeScaffoldCallTool(tools),
-      history: this.makeScaffoldHistory(),
-      // A pending that delegates is judged on the scaffold delta alone, so it
-      // replays the live turn's OWN inference — same system prompt, same tool
-      // surface, same conversational history, same step budget. It used to get
-      // the task's first 2000 characters as its entire context, so a candidate
-      // was asked to answer a stub of the question the live answer had answered
-      // in full, and then scored against it.
-      defaultInference: () => runChat(opts.liveTurnOpts),
-    });
-    if (result?.applied) {
-      this.emit({
-        type: 'evolution',
-        event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-        message: `Shadow eval ${result.applied}d the pending scaffold`,
-      });
-      this.invalidateModelState();
-    }
-  }
 
   /**
    * This session's view for the scaffold evolution control plane: the ports a
@@ -2183,6 +2161,7 @@ export class LocalAgentSession implements BackendHost {
       webSearch: this.getWebSearchProvider(),
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
+      governor: () => this.budget,
     });
     this.headController = new HeadController(this._headRuntime, this.headJournal);
 

@@ -276,9 +276,15 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
 
 /**
  * The members every actor exposes to a stub-holder — the workspace-capability
- * handshake, the credential-change fan-out, and the workspace filesystem a
- * forked facet (a subordinate, or a head) reaches on its parent. Concrete actors
- * add their own on top.
+ * handshake, the credential-change fan-out, the workspace filesystem a forked
+ * facet (a subordinate, or a head) reaches on its parent, and the mission
+ * ledger that facet charges. Concrete actors add their own on top.
+ *
+ * `missionGuard`/`missionDebit` are here rather than on the public transport
+ * for the same reason `rawCopyFromFork` is: they are how a facet reaches the
+ * actor that declared a budget, and nothing else should be able to move a
+ * spend ledger. They are inert without labels either way — both return
+ * immediately on an empty label set, so reaching them cannot create a cap.
  *
  * Everything else this class declares — including every `protected` member a
  * subclass relies on — stays an ordinary method and stays unreachable, because
@@ -288,6 +294,8 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
   'installWorkspaceCapability',
   'listWorkspaceFiles',
+  'missionDebit',
+  'missionGuard',
   'onCredentialsChanged',
   'readWorkspaceFile',
   'statWorkspaceFile',
