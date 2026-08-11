@@ -28,7 +28,7 @@ import type {
   AgentsForkDeps, AgentsToolDeps,
   IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery,
-  ProductChangeStore, ProductChangeToolDeps, BuiltinToolName,
+  ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
 } from '@proteus/core';
 import {
@@ -62,7 +62,7 @@ import {
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates, type DynamicContext,
   type MediaModality,
-  createProductChangeStore, initProductChangeTables, productChangeSqlFromExec, initWorkspaceSchema,
+  createReleaseStore, initReleaseTables, releaseSqlFromExec, initWorkspaceSchema,
   // The scaffold evolution control plane — core owns the drivers; this session
   // supplies the local surface they run against.
   applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listGepaRuns, listScaffoldVersions,
@@ -286,7 +286,7 @@ export class LocalAgentSession implements BackendHost {
   /** The run the in-flight turn belongs to; null between turns. */
   private currentRunId: string | null = null;
   private readonly triggerRegistry: TriggerRegistry;
-  private readonly productChanges: ProductChangeStore;
+  private readonly releases: ReleaseStore;
   private _webSearchProvider: WebSearchProvider | null = null;
   private alarmTimer: ReturnType<typeof setTimeout> | null = null;
   private scheduledAlarmAt: number | null = null;
@@ -447,10 +447,10 @@ export class LocalAgentSession implements BackendHost {
 
     // The EventsHub substrate (reactor source of truth). Local external
     // ingresses enter through publishEvent(), then drain via AgentOrchestrator.
-    // The product-change board is the one local-only plane: on cf it lives in
+    // The release board is the one local-only plane: on cf it lives in
     // the owner's UserDO (core/conformance/manifest.ts records that).
-    initProductChangeTables(hubSql);
-    this.productChanges = createProductChangeStore(productChangeSqlFromExec(hubSql), {
+    initReleaseTables(hubSql);
+    this.releases = createReleaseStore(releaseSqlFromExec(hubSql), {
       validateAgentName: (name) => {
         if (!/^[A-Za-z0-9_-]{1,80}$/.test(name)) throw new Error('invalid agent name');
       },
@@ -1721,16 +1721,16 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  private productChangeToolDeps(): ProductChangeToolDeps {
+  private releaseToolDeps(): ReleaseToolDeps {
     return {
-      board: async () => this.productChanges.board(this.agentName(), 20),
-      bindSource: async (input) => this.productChanges.upsertSourceBinding(input),
-      create: async (input) => this.productChanges.createChange(this.agentName(), input),
-      update: async (changeId, patch) => this.productChanges.updateChange(changeId, patch),
-      transition: async (changeId, status) => this.productChanges.transitionChange(changeId, status),
-      recordCheck: async (changeId, input) => this.productChanges.recordCheck(changeId, input),
-      requestApproval: async (changeId, approvalType) => this.productChanges.requestApproval(changeId, approvalType),
-      recordDeployment: async (changeId, input) => this.productChanges.recordDeployment(changeId, input),
+      board: async () => this.releases.board(this.agentName(), 20),
+      bindSource: async (input) => this.releases.upsertSourceBinding(input),
+      create: async (input) => this.releases.createChange(this.agentName(), input),
+      update: async (changeId, patch) => this.releases.updateChange(changeId, patch),
+      transition: async (changeId, status) => this.releases.transitionChange(changeId, status),
+      recordCheck: async (changeId, input) => this.releases.recordCheck(changeId, input),
+      requestApproval: async (changeId, approvalType) => this.releases.requestApproval(changeId, approvalType),
+      recordDeployment: async (changeId, input) => this.releases.recordDeployment(changeId, input),
     };
   }
 
@@ -2243,7 +2243,7 @@ export class LocalAgentSession implements BackendHost {
         recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
         currentlyInvoked: () => Array.from(this.turnInvokedSkills),
       },
-      productChanges: this.productChangeToolDeps(),
+      releases: this.releaseToolDeps(),
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;

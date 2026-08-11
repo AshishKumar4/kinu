@@ -10,6 +10,7 @@
  *   workspace.searchMemory("how to handle errors")
  *   workspace.saveNote("User prefers TypeScript strict mode")
  *   workspace.listTools()
+ *   workspace.createView("deploy-health", { v: 1, title: "Deploy health", blocks: [...] })
  */
 
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types.js';
@@ -22,6 +23,8 @@ import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
 import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold/misevolution.js';
 import { seedCraftScore } from '../craft/in-episode.js';
+import { createView, deleteView, viewSlug } from '../views/store.js';
+import { VIEW_DATA_SOURCES } from '../views/sources.js';
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -239,6 +242,32 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         }
       },
     },
+
+    // Views sit here rather than on a top-level tool for the same reason
+    // crafted tools do: this is the lane for artifacts the agent authors for
+    // itself, ungated because the containment is the vocabulary rather than an
+    // approval. A tenth tool would cost the cacheable prefix a full schema to
+    // say what two lines of the codemode surface already say.
+    createView: {
+      description:
+        'Publish a dashboard as a tab in the workspace UI. `spec` is declarative JSON — ' +
+        'blocks are stat | table | list | kv | markdown | section, and every block reads from ' +
+        'one of the allowed workspace RPCs. Upserts by name. Returns { ok, slug, version, action }.',
+      execute: async (name: unknown, spec: unknown) => {
+        if (!sql) return { ok: false, error: 'This workspace has no SQL store, so views cannot be published.' };
+        return createView({ vfs, sql }, name, spec);
+      },
+    },
+
+    deleteView: {
+      description: 'Remove a published view. Its versions stay in the changelog and can be restored.',
+      execute: async (name: unknown) => {
+        if (!sql) return { ok: false, error: 'This workspace has no SQL store, so views cannot be removed.' };
+        const slug = viewSlug(String(name ?? ''));
+        if (!slug) return { ok: false, error: 'A view name must contain at least one letter or digit.' };
+        return deleteView({ vfs, sql }, slug);
+      },
+    },
   };
 
   const types = `declare namespace workspace {
@@ -259,6 +288,21 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   function createTool(
     name: string, description: string, code: string
   ): Promise<{ ok: boolean; name?: string; action?: 'created' | 'updated'; error?: string }>;
+  /** Publish a dashboard tab in the workspace UI, upserting by name. The host
+   *  draws it: no code, no HTML, no links, no images, nothing clickable. */
+  function createView(name: string, spec: ViewSpec): Promise<{ ok: boolean; slug?: string; version?: number; error?: string }>;
+  function deleteView(name: string): Promise<{ ok: boolean; error?: string }>;
+  type ViewSpec = { v: 1; title: string; subtitle?: string; refreshMs?: number; blocks: ViewBlock[] };
+  /** \`path\`/\`field\` are dotted paths into the RPC's result; omit for the whole result. */
+  type ViewSource = { rpc: ${VIEW_DATA_SOURCES.map(s => `'${s}'`).join(' | ')}; limit?: number; path?: string };
+  type ViewCell = { field: string; label: string; as?: 'text' | 'number' | 'badge' | 'time' };
+  type ViewBlock =
+    | { type: 'stat'; label: string; source: ViewSource; agg?: 'count' | 'value'; suffix?: string }
+    | { type: 'table'; title?: string; source: ViewSource; columns: ViewCell[] }
+    | { type: 'list'; title?: string; source: ViewSource; field?: string }
+    | { type: 'kv'; title?: string; source: ViewSource; rows: ViewCell[] }
+    | { type: 'markdown'; text: string }
+    | { type: 'section'; title: string; blocks: Exclude<ViewBlock, { type: 'section' }>[] };
 }`;
 
   return {

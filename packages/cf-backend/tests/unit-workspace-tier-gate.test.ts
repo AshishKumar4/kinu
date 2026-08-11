@@ -115,16 +115,16 @@ const GATED_CALLS: GatedCall[] = [
     }),
   },
 
-  { capability: 'product_change', name: 'upsertProductSourceBinding', run: (u, c) => u.upsertProductSourceBinding(c, { kind: 'github', repo: 'o/r' } as never) },
-  { capability: 'product_change', name: 'createProductChange', run: (u, c) => u.createProductChange(c, WORKSPACE, { bindingId: 'b1', userPrompt: 'x' }) },
-  { capability: 'product_change', name: 'updateProductChange', run: (u, c) => u.updateProductChange(c, 'pc_1', { plan: 'x' }) },
-  { capability: 'product_change', name: 'transitionProductChange', run: (u, c) => u.transitionProductChange(c, 'pc_1', 'planning') },
-  { capability: 'product_change', name: 'recordProductChangeCheck', run: (u, c) => u.recordProductChangeCheck(c, 'pc_1', { name: 'test', status: 'passed' }) },
-  { capability: 'product_change', name: 'requestProductChangeApproval', run: (u, c) => u.requestProductChangeApproval(c, 'pc_1', 'deploy') },
-  { capability: 'product_change', name: 'decideProductChangeApproval', run: (u, c) => u.decideProductChangeApproval(c, 'ap_1', 'approved', USER_ID) },
-  { capability: 'product_change', name: 'recordProductDeployment', run: (u, c) => u.recordProductDeployment(c, 'pc_1', { environment: 'production' }) },
-  { capability: 'product_change', name: 'getProductChangeBoard', run: (u, c) => u.getProductChangeBoard(c, WORKSPACE) },
-  { capability: 'product_change', name: 'getProductChangeDetail', run: (u, c) => u.getProductChangeDetail(c, 'pc_1') },
+  { capability: 'release', name: 'upsertReleaseSource', run: (u, c) => u.upsertReleaseSource(c, { kind: 'github', repo: 'o/r' } as never) },
+  { capability: 'release', name: 'createReleaseChange', run: (u, c) => u.createReleaseChange(c, WORKSPACE, { bindingId: 'b1', userPrompt: 'x' }) },
+  { capability: 'release', name: 'updateReleaseChange', run: (u, c) => u.updateReleaseChange(c, 'pc_1', { plan: 'x' }) },
+  { capability: 'release', name: 'transitionReleaseChange', run: (u, c) => u.transitionReleaseChange(c, 'pc_1', 'planning') },
+  { capability: 'release', name: 'recordReleaseCheck', run: (u, c) => u.recordReleaseCheck(c, 'pc_1', { name: 'test', status: 'passed' }) },
+  { capability: 'release', name: 'requestReleaseApproval', run: (u, c) => u.requestReleaseApproval(c, 'pc_1', 'deploy') },
+  { capability: 'release', name: 'decideReleaseApproval', run: (u, c) => u.decideReleaseApproval(c, 'ap_1', 'approved', USER_ID) },
+  { capability: 'release', name: 'recordReleaseDeployment', run: (u, c) => u.recordReleaseDeployment(c, 'pc_1', { environment: 'production' }) },
+  { capability: 'release', name: 'getReleaseBoard', run: (u, c) => u.getReleaseBoard(c, WORKSPACE) },
+  { capability: 'release', name: 'getReleaseDetail', run: (u, c) => u.getReleaseDetail(c, 'pc_1') },
 
   { capability: 'profile', name: 'getProfile', run: (u, c) => u.getProfile(c) },
   { capability: 'profile', name: 'ensureProfile', run: (u, c) => u.ensureProfile(c, 'owner@example.com') },
@@ -205,7 +205,7 @@ describe('a tainted workspace loses exactly the capabilities the matrix cuts', (
     expect(cut).toContain('credentials.other:getAuthHeaders(github)');
     expect(cut).toContain('workspaces.read:listWorkspaces');
     expect(cut).toContain('workspaces.write:registerWorkspace');
-    expect(cut).toContain('product_change:getProductChangeBoard');
+    expect(cut).toContain('release:getReleaseBoard');
     expect(cut).toContain('experience.read:searchExperience');
     expect(cut).toContain('experience.write:publishExperience');
     expect(cut).toContain('profile:getProfile');
@@ -513,7 +513,7 @@ describe('facets attenuate with their workspace', () => {
       .rejects.toThrow('may only rename itself');
     await expect(harness.userDO.getDeviceFsConsent(facetCaller, OTHER_WORKSPACE))
       .rejects.toThrow(CapabilityDeniedError);
-    await expect(harness.userDO.getProductChangeBoard(facetCaller, OTHER_WORKSPACE))
+    await expect(harness.userDO.getReleaseBoard(facetCaller, OTHER_WORKSPACE))
       .rejects.toThrow(CapabilityDeniedError);
     harness.close();
   });

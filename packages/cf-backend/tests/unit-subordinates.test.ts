@@ -54,7 +54,7 @@ describe('subordinate wiring', () => {
     }
   });
 
-  test('subordinate tools are structurally confined to report, without team, peers, or product changes', () => {
+  test('subordinate tools are structurally confined to report, without team, peers, or release changes', () => {
     const subordinate = source('subordinate-agent.ts');
     const profile = subordinate.slice(
       subordinate.indexOf('protected actorToolDeps()'),
@@ -63,7 +63,7 @@ describe('subordinate wiring', () => {
     expect(profile).toContain('report:');
     expect(profile).not.toContain('team:');
     expect(profile).not.toContain('peers:');
-    expect(profile).not.toContain('productChanges:');
+    expect(profile).not.toContain('releases:');
     // Cross-workspace experience transfer is no longer a tool at all — it is
     // the owner's RPC on the orchestrator, and reaches no actor's profile.
     expect(profile).not.toContain('experience:');
@@ -72,7 +72,7 @@ describe('subordinate wiring', () => {
     // …and absence is structural: a deps-gated name is dropped from the
     // advertised surface too, not just from the ToolSet.
     expect(source('actor-agent.ts'))
-      .toContain("const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;");
+      .toContain("const DEPS_GATED_TOOLS = ['report', 'release'] as const;");
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {

@@ -17,17 +17,19 @@ import type { FactsStore } from '../memory/facts.js';
 import { listScaffoldArchive } from '../scaffold/archive.js';
 import { getPendingScaffold, applyPromotionDecision } from '../scaffold/shadow.js';
 import { rollbackScaffold } from '../scaffold/rollback.js';
+import { revertView } from '../views/store.js';
 import { listGepaRuns } from './gepa/persistence.js';
 import { listReplayEvals } from './replay.js';
 import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
 import { describePathology } from './pathology.js';
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
 
-export type ChangelogEntryKind = 'scaffold' | 'tool' | 'fact' | 'gepa' | 'replay' | 'outcomes';
+export type ChangelogEntryKind = 'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes';
 
 export type ChangelogRevertAction =
   | { type: 'scaffold_rollback'; target: string }
   | { type: 'craft_retire'; target: string }
+  | { type: 'view_revert'; target: string }
   | { type: 'fact_forget'; target: string }
   | { type: 'fact_forget_many'; targets: string[] };
 
@@ -157,6 +159,33 @@ function toolEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
         revert: { type: 'craft_retire' as const, target: r.name },
       };
     });
+  } catch {
+    return [];
+  }
+}
+
+/** Views the agent published. The revert restores the previous version, or
+ *  removes the tab when there was no previous version — the owner-facing undo
+ *  for a dashboard, kept in host chrome rather than inside the view itself. */
+function viewEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
+  try {
+    const rows = sql<{ slug: string; title: string; version: number; written_at: number; status: string }>`
+      SELECT slug, title, version, written_at, status
+      FROM agent_views ORDER BY written_at DESC LIMIT ${limit}`;
+    return rows.map((r) => ({
+      id: `view:${r.slug}:v${r.version}`,
+      kind: 'view' as const,
+      at: r.written_at,
+      summary: r.version === 1
+        ? `Added a view to the workspace UI: ${r.title}`
+        : `Updated the ${r.title} view (v${r.version})`,
+      evidence: r.status === 'deleted'
+        ? `views/${r.slug}.json v${r.version} — removed`
+        : `views/${r.slug}.json v${r.version} — ${r.status}`,
+      // Only the live version is revertible: an older row is already reverted,
+      // and a deleted one has no tab to take back.
+      ...(r.status === 'current' ? { revert: { type: 'view_revert' as const, target: r.slug } } : {}),
+    }));
   } catch {
     return [];
   }
@@ -307,6 +336,7 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
   const entries = [
     ...scaffoldEntries(sql),
     ...toolEntries(sql, limit),
+    ...viewEntries(sql, limit),
     ...gepaEntries(sql, limit),
     ...replayEntries(sql, limit),
   ].filter((e) => opts.since === undefined || e.at > opts.since);
@@ -326,7 +356,7 @@ export function countUnseenChangelog(sql: SqlExecutor, seenAt: number): number {
 // ── The one text renderer (TUI overlay + classic print + tests) ──
 
 const KIND_GLYPH: Record<ChangelogEntryKind, string> = {
-  scaffold: '⟳', tool: '⚒', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
+  scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
 };
 
 export function renderChangelogText(
@@ -420,6 +450,19 @@ export async function executeChangelogRevert(
         ctx.rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${action.target}`;
       } catch { /* no scores table — the tool itself is gone, which is the revert */ }
       return { ok: true, detail: `retired crafted tool ${action.target}` };
+    }
+    case 'view_revert': {
+      const result = await revertView(
+        { vfs: ctx.rt.storage.vfs, sql: ctx.rt.storage.sql },
+        action.target,
+      );
+      if (!result.ok) return { ok: false, error: result.error ?? `could not revert view ${action.target}` };
+      return {
+        ok: true,
+        detail: result.revertedTo === undefined
+          ? `removed the ${action.target} view`
+          : `restored the ${action.target} view to v${result.revertedTo}`,
+      };
     }
     case 'fact_forget': {
       if (!ctx.facts.recall(action.target)) {

@@ -282,7 +282,7 @@ exhausted budget returns the original response rather than throwing.
 |---------|------|-------------|
 | `OrchestratorAgent` | Durable Object | The workspace agent (extends `ActorAgent` → `Think`) |
 | `ExplorationAgent` | Durable Object | MCTS branches and heads (Facets) |
-| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, product changes |
+| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, release changes |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk` — built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox) — one container per agent |

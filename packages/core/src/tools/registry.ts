@@ -18,7 +18,7 @@ export const BUILTIN_TOOLS = [
   'memory',
   'web',
   'report',
-  'product_change',
+  'release',
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
@@ -272,13 +272,13 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
   },
-  product_change: {
-    name: 'product_change',
-    summary: 'Governed lane for changing the Proteus product/UI itself — plan, then apply/check/preview/deploy/rollback the change for real in the sandbox.',
-    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
-    whenNotToUse: 'Do not use for ordinary user project work outside the Proteus product.',
+  release: {
+    name: 'release',
+    summary: 'Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.',
+    whenToUse: 'Use when the user asks Proteus to change its own app, UI, prompts, or deployment. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
+    whenNotToUse: 'Not for ordinary project work, and not for adding a workspace dashboard — that is workspace.createView, which needs no deploy.',
     result: 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.',
-    example: "product_change({action:'run_checks', changeId:'chg_4f2'})",
+    example: "release({action:'run_checks', changeId:'chg_4f2'})",
   },
 };
 

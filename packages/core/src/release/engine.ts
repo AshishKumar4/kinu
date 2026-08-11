@@ -1,5 +1,5 @@
 /**
- * ProductChangeEngine — the execution engine beneath the product-change
+ * ReleaseEngine — the execution engine beneath the release
  * governance ledger.
  *
  * The ledger (sql-store.ts) records what happened; the engine MAKES it
@@ -7,7 +7,7 @@
  * container:
  *
  *   apply     → the change's stored unified diff is applied for real in a
- *               per-change git working copy (`/workspace/product-changes/<id>`),
+ *               per-change git working copy (`/workspace/releases/<id>`),
  *               committed, and the commit sha recorded. For `github` sources
  *               the repo is cloned and a `proteus/<changeId>` branch created.
  *   runChecks → declared build/test/lint commands run via sandbox exec; each
@@ -33,13 +33,13 @@
  */
 
 import type {
-  ProductChangeApproval,
-  ProductChangeCheck,
-  ProductChangeDetail,
-  ProductChangeRequest,
-  ProductChangeStatus,
-  ProductDeploymentRecord,
-  ProductSourceBinding,
+  ReleaseApproval,
+  ReleaseCheck,
+  ReleaseDetail,
+  ReleaseChange,
+  ReleaseStatus,
+  ReleaseDeployment,
+  ReleaseSource,
 } from './types.js';
 import { shellQuote } from '../utils/shell.js';
 import {
@@ -53,7 +53,7 @@ import {
 /** Raw execution surface — adapted from the sandbox executor's raw handle
  *  (cf-backend) so pass/fail is grounded in real exit codes, not the lossy
  *  LLM-facing tool strings. */
-export interface ProductChangeExec {
+export interface ReleaseExec {
   exec(command: string, opts?: { cwd?: string; timeout?: number }): Promise<{
     stdout: string;
     stderr: string;
@@ -68,33 +68,33 @@ export interface ProductChangeExec {
 /** Ledger surface — the existing governance store, unchanged. The engine
  *  writes through it so every execution result lands on the same board the
  *  UI and approvals already read. */
-export interface ProductChangeLedger {
-  detail(changeId: string): Promise<ProductChangeDetail>;
+export interface ReleaseLedger {
+  detail(changeId: string): Promise<ReleaseDetail>;
   update(
     changeId: string,
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
-  ): Promise<ProductChangeRequest>;
-  transition(changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest>;
+  ): Promise<ReleaseChange>;
+  transition(changeId: string, to: ReleaseStatus): Promise<ReleaseChange>;
   recordCheck(changeId: string, input: {
     name: string;
-    status: ProductChangeCheck['status'];
+    status: ReleaseCheck['status'];
     stdout?: string | null;
     stderr?: string | null;
     durationMs?: number | null;
-  }): Promise<ProductChangeCheck>;
+  }): Promise<ReleaseCheck>;
   recordDeployment(changeId: string, input: {
-    environment: ProductDeploymentRecord['environment'];
+    environment: ReleaseDeployment['environment'];
     workerVersionId?: string | null;
     deploymentId?: string | null;
     rollbackTarget?: string | null;
-  }): Promise<ProductDeploymentRecord>;
+  }): Promise<ReleaseDeployment>;
 }
 
-export interface ProductChangeEngineOptions {
+export interface ReleaseEngineOptions {
   /** null → no execution substrate (sandbox not configured). Every action
    *  then returns an honest actionable error instead of fake progress. */
-  exec: ProductChangeExec | null;
-  ledger: ProductChangeLedger;
+  exec: ReleaseExec | null;
+  ledger: ReleaseLedger;
   /** Git auth for `github` sources: the value for an
    *  `AUTHORIZATION: Basic …` http.extraheader, or null when the user has
    *  no GitHub credential stored. */
@@ -107,7 +107,7 @@ export interface ProductChangeEngineOptions {
 // ── Results (discriminated so the agent tool can relay them verbatim) ──────
 
 export type ApplyResult =
-  | { ok: true; workdir: string; commit: string; status: ProductChangeStatus }
+  | { ok: true; workdir: string; commit: string; status: ReleaseStatus }
   | { ok: false; error: string };
 
 export interface CheckRunResult {
@@ -118,7 +118,7 @@ export interface CheckRunResult {
 }
 
 export type RunChecksResult =
-  | { ok: true; allPassed: boolean; results: CheckRunResult[]; status: ProductChangeStatus }
+  | { ok: true; allPassed: boolean; results: CheckRunResult[]; status: ReleaseStatus }
   | { ok: false; error: string };
 
 export type PreviewResult =
@@ -128,25 +128,25 @@ export type PreviewResult =
 export type DeployResult =
   | {
       ok: true;
-      environment: ProductDeploymentRecord['environment'];
+      environment: ReleaseDeployment['environment'];
       workerVersionId: string | null;
       deploymentId: string | null;
       rollbackTarget: string | null;
-      status: ProductChangeStatus;
+      status: ReleaseStatus;
     }
   | { ok: false; error: string };
 
 export type RollbackResult =
-  | { ok: true; restored: string; verified: boolean; status: ProductChangeStatus }
+  | { ok: true; restored: string; verified: boolean; status: ReleaseStatus }
   | { ok: false; error: string };
 
 // ── Internals ──────────────────────────────────────────────────────────────
 
 const NOT_CONFIGURED =
-  'No execution substrate: the sandbox executor is not configured, so product changes cannot be applied, ' +
+  'No execution substrate: the sandbox executor is not configured, so release changes cannot be applied, ' +
   'checked, previewed, or deployed for real. Configure the Sandbox binding + PREVIEW_HOST_SUFFIX first.';
 
-const DEFAULT_WORK_ROOT = '/workspace/product-changes';
+const DEFAULT_WORK_ROOT = '/workspace/releases';
 const GIT = `git -c user.name=Proteus -c user.email=proteus@agent -c core.hooksPath=/dev/null`;
 const OUTPUT_CAP = 20_000;
 const APPLY_TIMEOUT_MS = 120_000;
@@ -173,7 +173,7 @@ export function parseDeployOutput(output: string): { versionId: string | null; d
   return { versionId: version?.[1] ?? null, deploymentId: deployment?.[1] ?? null };
 }
 
-function hasApproved(approvals: ProductChangeApproval[], type: ProductChangeApproval['approvalType']): boolean {
+function hasApproved(approvals: ReleaseApproval[], type: ReleaseApproval['approvalType']): boolean {
   return approvals.some((a) => a.approvalType === type && a.decision === 'approved');
 }
 
@@ -183,13 +183,13 @@ function combinedOutput(res: { stdout: string; stderr: string; exitCode: number 
 
 // ── Engine ─────────────────────────────────────────────────────────────────
 
-export class ProductChangeEngine {
-  private readonly exec: ProductChangeExec | null;
-  private readonly ledger: ProductChangeLedger;
+export class ReleaseEngine {
+  private readonly exec: ReleaseExec | null;
+  private readonly ledger: ReleaseLedger;
   private readonly gitHubAuth?: () => Promise<string | null>;
   private readonly workRoot: string;
 
-  constructor(opts: ProductChangeEngineOptions) {
+  constructor(opts: ReleaseEngineOptions) {
     this.exec = opts.exec;
     this.ledger = opts.ledger;
     this.gitHubAuth = opts.gitHubAuth;
@@ -201,29 +201,29 @@ export class ProductChangeEngine {
   }
 
   private async requireDetail(changeId: string): Promise<
-    | { ok: true; detail: ProductChangeDetail; exec: ProductChangeExec }
+    | { ok: true; detail: ReleaseDetail; exec: ReleaseExec }
     | { ok: false; error: string }
   > {
-    if (!isSafeChangeId(changeId)) return { ok: false, error: `invalid product change id: ${changeId}` };
+    if (!isSafeChangeId(changeId)) return { ok: false, error: `invalid release change id: ${changeId}` };
     if (!this.exec) return { ok: false, error: NOT_CONFIGURED };
     const detail = await this.ledger.detail(changeId);
     return { ok: true, detail, exec: this.exec };
   }
 
   private async run(
-    exec: ProductChangeExec,
+    exec: ReleaseExec,
     command: string,
     opts?: { cwd?: string; timeout?: number },
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     return exec.exec(command, { timeout: APPLY_TIMEOUT_MS, ...opts });
   }
 
-  private async pathExists(exec: ProductChangeExec, path: string): Promise<boolean> {
+  private async pathExists(exec: ReleaseExec, path: string): Promise<boolean> {
     const res = await this.run(exec, `test -e ${shellQuote(path)} && echo yes || echo no`);
     return res.stdout.includes('yes');
   }
 
-  private async headSha(exec: ProductChangeExec, workdir: string): Promise<string | null> {
+  private async headSha(exec: ReleaseExec, workdir: string): Promise<string | null> {
     const res = await this.run(exec, `${GIT} rev-parse HEAD`, { cwd: workdir });
     if (res.exitCode !== 0) return null;
     const sha = res.stdout.trim();
@@ -233,9 +233,9 @@ export class ProductChangeEngine {
   /** Clone (or fetch-refresh) the github working copy and check out the
    *  change branch on a pristine base. Returns an error string on failure. */
   private async ensureGithubWorkdir(
-    exec: ProductChangeExec,
+    exec: ReleaseExec,
     changeId: string,
-    binding: ProductSourceBinding,
+    binding: ReleaseSource,
     workdir: string,
   ): Promise<string | null> {
     if (!binding.repoUrl) return 'github source binding has no repoUrl';
@@ -299,7 +299,7 @@ export class ProductChangeEngine {
    *  base files the agent staged into the workdir as the rollback anchor;
    *  re-applies reset back to that base so the stored patch stays the single
    *  source of truth. */
-  private async ensureLocalWorkdir(exec: ProductChangeExec, workdir: string): Promise<string | null> {
+  private async ensureLocalWorkdir(exec: ReleaseExec, workdir: string): Promise<string | null> {
     const hasRepo = await this.pathExists(exec, `${workdir}/.git`);
     if (!hasRepo) {
       const init = await this.run(
@@ -318,8 +318,8 @@ export class ProductChangeEngine {
   }
 
   /** Walk the change to `patching` through allowed lifecycle edges. */
-  private async normalizeToPatching(change: ProductChangeRequest): Promise<string | null> {
-    const steps: Partial<Record<ProductChangeStatus, ProductChangeStatus[]>> = {
+  private async normalizeToPatching(change: ReleaseChange): Promise<string | null> {
+    const steps: Partial<Record<ReleaseStatus, ReleaseStatus[]>> = {
       draft: ['planning', 'patching'],
       planning: ['patching'],
       patching: [],
@@ -382,7 +382,7 @@ export class ProductChangeEngine {
 
     const commit = await this.run(
       exec,
-      `${GIT} add -A && ${GIT} commit -m ${shellQuote(`product change ${changeId}`)}`,
+      `${GIT} add -A && ${GIT} commit -m ${shellQuote(`release change ${changeId}`)}`,
       { cwd: workdir },
     );
     if (commit.exitCode !== 0) {
@@ -493,7 +493,7 @@ export class ProductChangeEngine {
 
   async deploy(
     changeId: string,
-    opts: { environment: ProductDeploymentRecord['environment']; command?: string },
+    opts: { environment: ReleaseDeployment['environment']; command?: string },
   ): Promise<DeployResult> {
     const pre = await this.requireDetail(changeId);
     if (!pre.ok) return pre;
@@ -510,7 +510,7 @@ export class ProductChangeEngine {
         ok: false,
         error:
           `deploy to ${environment} requires an APPROVED '${requiredApproval}' approval. ` +
-          `Use action=request_approval, then the owner approves it on the Product Changes surface.`,
+          `Use action=request_approval, then the owner approves it on the Releases surface.`,
       };
     }
     if (change.status !== 'awaiting_approval' && change.status !== 'applying') {

@@ -1,8 +1,7 @@
-diff --git a/packages/core/src/product-change/lifecycle.ts b/packages/core/src/product-change/lifecycle.ts
-index df01214..463cf08 100644
---- a/packages/core/src/product-change/lifecycle.ts
-+++ b/packages/core/src/product-change/lifecycle.ts
-@@ -7,7 +7,7 @@ const ALLOWED: Record<ProductChangeStatus, ReadonlySet<ProductChangeStatus>> = {
+diff --git a/packages/core/src/release/lifecycle.ts b/packages/core/src/release/lifecycle.ts
+--- a/packages/core/src/release/lifecycle.ts
++++ b/packages/core/src/release/lifecycle.ts
+@@ -5,7 +5,7 @@
    planning: new Set(['patching', 'rejected', 'failed']),
    patching: new Set(['validating', 'planning', 'rejected', 'failed']),
    validating: new Set(['preview_ready', 'patching', 'failed']),

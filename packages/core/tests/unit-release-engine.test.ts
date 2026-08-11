@@ -1,7 +1,7 @@
 /**
- * ProductChangeEngine — behavior tests, grounded at the exec seam.
+ * ReleaseEngine — behavior tests, grounded at the exec seam.
  *
- * The ledger is the REAL ProductChangeStore over bun:sqlite (so lifecycle,
+ * The ledger is the REAL ReleaseStore over bun:sqlite (so lifecycle,
  * redaction, and approval rules stay authoritative); only the sandbox exec
  * seam is scripted. Every pass/fail below comes from a scripted exit code,
  * never from an asserted string.
@@ -10,18 +10,18 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  ProductChangeEngine,
+  ReleaseEngine,
   buildBuiltinTools,
-  createProductChangeStore,
-  createSandboxProductChangeExec,
+  createReleaseStore,
+  createSandboxReleaseExec,
   deployTargetAsCommand,
-  initProductChangeTables,
+  initReleaseTables,
   parseDeployOutput,
-  productChangeSqlFromExec,
-  type ProductChangeExec,
-  type ProductChangeLedger,
-  type ProductChangeStore,
-  type ProductChangeToolDeps,
+  releaseSqlFromExec,
+  type ReleaseExec,
+  type ReleaseLedger,
+  type ReleaseStore,
+  type ReleaseToolDeps,
   type SandboxHandle,
 } from '../src/index.js';
 import { createTestRuntime } from './helpers.js';
@@ -31,7 +31,7 @@ import { createTestRuntime } from './helpers.js';
 type ExecResult = { stdout?: string; stderr?: string; exitCode?: number };
 type Rule = { match: RegExp; handle: (command: string) => ExecResult };
 
-class FakeSandbox implements ProductChangeExec {
+class FakeSandbox implements ReleaseExec {
   commands: string[] = [];
   files = new Map<string, string>();
   exposed: Array<{ port: number; name?: string }> = [];
@@ -68,7 +68,7 @@ class FakeSandbox implements ProductChangeExec {
 
 // ── Real ledger over bun:sqlite ────────────────────────────────────────────
 
-function makeStore(): ProductChangeStore {
+function makeStore(): ReleaseStore {
   const db = new Database(':memory:');
   const exec = {
     exec(query: string, ...bindings: unknown[]) {
@@ -80,14 +80,14 @@ function makeStore(): ProductChangeStore {
       return { toArray: () => [] };
     },
   };
-  initProductChangeTables(exec);
+  initReleaseTables(exec);
   let seq = 0;
-  return createProductChangeStore(productChangeSqlFromExec(exec), {
+  return createReleaseStore(releaseSqlFromExec(exec), {
     id: (prefix) => `${prefix}-${String(++seq).padStart(10, '0')}`,
   });
 }
 
-function makeLedger(store: ProductChangeStore): ProductChangeLedger {
+function makeLedger(store: ReleaseStore): ReleaseLedger {
   return {
     detail: async (id) => store.detail(id),
     update: async (id, patch) => store.updateChange(id, patch),
@@ -107,8 +107,8 @@ const PATCH = [
 ].join('\n');
 
 interface Setup {
-  store: ProductChangeStore;
-  engine: ProductChangeEngine;
+  store: ReleaseStore;
+  engine: ReleaseEngine;
   sandbox: FakeSandbox;
   changeId: string;
   workdir: string;
@@ -121,7 +121,7 @@ function setup(opts?: {
 }): Setup {
   const store = makeStore();
   const sandbox = new FakeSandbox();
-  const engine = new ProductChangeEngine({
+  const engine = new ReleaseEngine({
     exec: sandbox,
     ledger: makeLedger(store),
     gitHubAuth: opts?.gitHubAuth,
@@ -137,7 +137,7 @@ function setup(opts?: {
   });
   const change = store.createChange('jarvis', { bindingId: binding.id, userPrompt: 'ship the hello page' });
   if (opts?.patch !== null) store.updateChange(change.id, { patch: opts?.patch ?? PATCH });
-  return { store, engine, sandbox, changeId: change.id, workdir: `/workspace/product-changes/${change.id}` };
+  return { store, engine, sandbox, changeId: change.id, workdir: `/workspace/releases/${change.id}` };
 }
 
 /** Script a healthy local git workdir: fresh init, apply/commit succeed. */
@@ -176,7 +176,7 @@ describe('engine.apply', () => {
     // ...and were applied + committed via real git commands in the workdir.
     expect(s.sandbox.commands.some((c) => c.includes('init -b main'))).toBe(true);
     expect(s.sandbox.commands.some((c) => c.includes(`apply --whitespace=nowarn '/tmp/${s.changeId}.patch'`))).toBe(true);
-    expect(s.sandbox.commands.some((c) => c.includes(`commit -m 'product change ${s.changeId}'`))).toBe(true);
+    expect(s.sandbox.commands.some((c) => c.includes(`commit -m 'release change ${s.changeId}'`))).toBe(true);
 
     const detail = s.store.detail(s.changeId);
     expect(detail.change.status).toBe('validating');
@@ -283,7 +283,7 @@ describe('engine.apply', () => {
 
   test('without an execution substrate every action returns the honest not-configured error', async () => {
     const store = makeStore();
-    const engine = new ProductChangeEngine({ exec: null, ledger: makeLedger(store) });
+    const engine = new ReleaseEngine({ exec: null, ledger: makeLedger(store) });
     const binding = store.upsertSourceBinding({ kind: 'local', label: 'x', localRoot: '/x' });
     const change = store.createChange('jarvis', { bindingId: binding.id, userPrompt: 'x' });
     for (const result of [
@@ -721,7 +721,7 @@ describe('deploy output parsing', () => {
 
 // ── Sandbox exec adapter ───────────────────────────────────────────────────
 
-describe('createSandboxProductChangeExec', () => {
+describe('createSandboxReleaseExec', () => {
   function makeHandle(execImpl: SandboxHandle['exec']): SandboxHandle {
     return {
       exec: execImpl,
@@ -739,7 +739,7 @@ describe('createSandboxProductChangeExec', () => {
 
   test('passes raw exit codes and cwd/timeout through; normalizes legacy output field', async () => {
     const calls: Array<{ command: string; opts?: { cwd?: string; timeout?: number } }> = [];
-    const exec = createSandboxProductChangeExec(
+    const exec = createSandboxReleaseExec(
       makeHandle(async (command, opts) => {
         calls.push({ command, opts });
         return { output: 'legacy out', stderr: 'boom', exitCode: 3 };
@@ -753,7 +753,7 @@ describe('createSandboxProductChangeExec', () => {
 
   test('retries once on a transient container disconnect, then returns the real result', async () => {
     let attempts = 0;
-    const exec = createSandboxProductChangeExec(
+    const exec = createSandboxReleaseExec(
       makeHandle(async () => {
         attempts += 1;
         if (attempts === 1) throw new Error('Container suddenly disconnected, try again');
@@ -768,32 +768,32 @@ describe('createSandboxProductChangeExec', () => {
 
   test('exposePort maps the provider result: supported → url, unsupported → the honest reason', async () => {
     const handle = makeHandle(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
-    const ok = createSandboxProductChangeExec(handle, {
+    const ok = createSandboxReleaseExec(handle, {
       exposePort: async (port, opts) => ({
         supported: true, url: `https://${port}-sb-t.previews.example/`, port, name: opts?.name, verified_listening: true,
       }),
     });
     expect(await ok.exposePort(8080, 'pc-x')).toEqual({ url: 'https://8080-sb-t.previews.example/' });
 
-    const refused = createSandboxProductChangeExec(handle, {
+    const refused = createSandboxReleaseExec(handle, {
       exposePort: async () => ({ supported: false, reason: 'nothing is listening on port 8080 inside the sandbox' }),
     });
     expect(await refused.exposePort(8080)).toEqual({ error: 'nothing is listening on port 8080 inside the sandbox' });
 
-    const none = createSandboxProductChangeExec(handle, {});
+    const none = createSandboxReleaseExec(handle, {});
     const noPortSurface = await none.exposePort(8080);
     expect('error' in noPortSurface).toBe(true);
   });
 });
 
-// ── product_change tool ← engine wiring (governance gates) ─────────────────
+// ── release tool ← engine wiring (governance gates) ─────────────────
 
-describe('product_change tool with an engine wired', () => {
+describe('release tool with an engine wired', () => {
   type ToolExecute = (args: Record<string, unknown>) => Promise<unknown>;
 
   function buildTool(opts?: { engine?: false }): { s: Setup; execute: ToolExecute } {
     const s = setup();
-    const deps: ProductChangeToolDeps = {
+    const deps: ReleaseToolDeps = {
       board: async () => s.store.board('jarvis', 20),
       bindSource: async (input) => s.store.upsertSourceBinding(input),
       create: async (input) => s.store.createChange('jarvis', input),
@@ -808,9 +808,9 @@ describe('product_change tool with an engine wired', () => {
     const tools = buildBuiltinTools({
       rt,
       craftedToolExecute: () => async () => undefined,
-      productChanges: deps,
+      releases: deps,
     });
-    const tool = tools.product_change as { execute: ToolExecute };
+    const tool = tools.release as { execute: ToolExecute };
     return { s, execute: (args) => tool.execute(args) };
   }
 

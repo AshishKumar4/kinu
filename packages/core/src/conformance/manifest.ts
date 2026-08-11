@@ -73,9 +73,9 @@ const CF_ONLY_PLANE = (what: string): string => `${what} is a Cloudflare-plane f
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
 const CLI_HAS_NO_STAFF = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
-const PRODUCT_CHANGE_TABLE: RootStatuses = {
-  'cf-orchestrator': { absent: "the product-change board lives in the owner's UserDO on cf, not on the workspace DO" },
-  'cf-subordinate': { absent: SUBORDINATE_SCOPED('the product-change lane') },
+const RELEASE_TABLE: RootStatuses = {
+  'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
+  'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
   cli: WIRED,
 };
 
@@ -95,9 +95,9 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-subordinate': WIRED,
       cli: { absent: `${ORCHESTRATOR_IS_SINK}, and ${CLI_HAS_NO_STAFF}` },
     },
-    product_change: {
+    release: {
       'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the product-change lane') },
+      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
       cli: WIRED,
     },
   },
@@ -199,15 +199,23 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     gepa_candidates: EVERYWHERE,
     gepa_pareto_membership: EVERYWHERE,
 
-    // ── product change ──
+    // ── agent-authored views ──
+    // One table per workspace, wherever a workspace lives: `initViewTables` is
+    // part of `initActorTables`, so every root that can run a turn can publish
+    // a dashboard. The subordinate gets it too — its UI surface is the parent's,
+    // but its storage is its own and a half-initialized schema is worse than an
+    // unused table.
+    agent_views: EVERYWHERE,
+
+    // ── release change ──
     // The board's home differs by backend and nothing recorded that until this
     // manifest: on cf it lives in the owner's UserDO (user-do.ts calls
-    // initProductChangeTables), on the CLI it lives on the session db.
-    product_source_bindings: PRODUCT_CHANGE_TABLE,
-    product_change_requests: PRODUCT_CHANGE_TABLE,
-    product_change_checks: PRODUCT_CHANGE_TABLE,
-    product_change_approvals: PRODUCT_CHANGE_TABLE,
-    product_deployments: PRODUCT_CHANGE_TABLE,
+    // initReleaseTables), on the CLI it lives on the session db.
+    release_sources: RELEASE_TABLE,
+    release_changes: RELEASE_TABLE,
+    release_checks: RELEASE_TABLE,
+    release_approvals: RELEASE_TABLE,
+    release_deployments: RELEASE_TABLE,
 
     // ── cf-orchestrator-local planes ──
     workspace_subordinates: {

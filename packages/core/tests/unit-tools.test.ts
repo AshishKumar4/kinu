@@ -9,7 +9,7 @@
  *   - agents           ← agents (fork substrate and/or team + peers deps;
  *                        the ONE delegation tool, actions gated per group)
  *   - web              ← webSearch (WebSearchProvider; search/fetch actions)
- *   - product_change   ← productChanges (source bindings + approvals store)
+ *   - release   ← releases (source bindings + approvals store)
  *
  * BUILTIN_TOOLS lists every canonical name so crafted-tool filtering
  * (BUILT_IN_TOOL_NAMES) excludes them all from craft suggestions, regardless
@@ -74,9 +74,9 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-// skills, agents, web, and product_change are conditional on their deps. Base =
+// skills, agents, web, and release are conditional on their deps. Base =
 // everything else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'agents', 'web', 'report', 'product_change'] as const;
+const CONDITIONAL_TOOLS = ['skills', 'agents', 'web', 'report', 'release'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
@@ -110,7 +110,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       recordInvoke() { /* nop */ },
       currentlyInvoked: () => [],
     };
-    const stubProductChanges = {
+    const stubReleases = {
       board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
       bindSource: async () => ({
         id: 'psb-test',
@@ -187,7 +187,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       codemodeLoader: { __test: true } as unknown,
       facts: stubFacts,
       skills: stubSkillsDeps,
-      productChanges: stubProductChanges,
+      releases: stubReleases,
       webSearch: stubWebSearch,
       agents: { team: stubTeam, peers: stubPeers },
       report: stubReport,

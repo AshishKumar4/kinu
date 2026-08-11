@@ -223,7 +223,8 @@ pass:
 | Session search | `messages_fts` (FTS5 + sync triggers) | `core/src/memory/session-search.ts` |
 | Background jobs | `background_jobs` | `core/src/jobs/store.ts` |
 | Curriculum | `proposed_tasks` | `core/src/curriculum/proposer.ts` |
-| Product change | `product_source_bindings`, `product_change_requests`, `product_change_checks`, `product_change_approvals`, `product_deployments` | `core/src/product-change/sql-store.ts` |
+| Release lane | `release_sources`, `release_changes`, `release_checks`, `release_approvals`, `release_deployments` | `core/src/release/sql-store.ts` |
+| Agent views | `agent_views` (one row per published version; the specs themselves live in the VFS at `views/<slug>.json[.vN]`) | `core/src/views/store.ts` |
 | Imported experience | `imported_experience` (staged until a turn outcome settles it) | `core/src/experience/imports.ts` |
 | Compaction | `compaction_state` | `compaction/src/stores.ts` |
 | Subordinates | `workspace_subordinates` (parent), `subordinate_identity` (child DO) | `cf-backend/src/subordinate-support.ts` |

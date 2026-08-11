@@ -1,4 +1,4 @@
-export const PRODUCT_CHANGE_STATUSES = [
+export const RELEASE_STATUSES = [
   'draft',
   'planning',
   'patching',
@@ -12,13 +12,13 @@ export const PRODUCT_CHANGE_STATUSES = [
   'failed',
 ] as const;
 
-export type ProductChangeStatus = (typeof PRODUCT_CHANGE_STATUSES)[number];
+export type ReleaseStatus = (typeof RELEASE_STATUSES)[number];
 
-export type ProductSourceKind = 'local' | 'github';
+export type ReleaseSourceKind = 'local' | 'github';
 
-export interface ProductSourceBinding {
+export interface ReleaseSource {
   id: string;
-  kind: ProductSourceKind;
+  kind: ReleaseSourceKind;
   label: string;
   repoUrl: string | null;
   defaultBranch: string | null;
@@ -29,11 +29,11 @@ export interface ProductSourceBinding {
   updatedAt: number;
 }
 
-export interface ProductChangeRequest {
+export interface ReleaseChange {
   id: string;
   agentName: string;
   bindingId: string;
-  status: ProductChangeStatus;
+  status: ReleaseStatus;
   userPrompt: string;
   plan: string | null;
   summary: string | null;
@@ -43,7 +43,7 @@ export interface ProductChangeRequest {
   updatedAt: number;
 }
 
-export interface ProductChangeCheck {
+export interface ReleaseCheck {
   id: string;
   changeId: string;
   name: string;
@@ -55,7 +55,7 @@ export interface ProductChangeCheck {
   updatedAt: number;
 }
 
-export interface ProductChangeApproval {
+export interface ReleaseApproval {
   id: string;
   changeId: string;
   approvalType: 'apply' | 'deploy_staging' | 'deploy_production' | 'rollback';
@@ -69,7 +69,7 @@ export interface ProductChangeApproval {
   decidedAt: number | null;
 }
 
-export interface ProductDeploymentRecord {
+export interface ReleaseDeployment {
   id: string;
   changeId: string;
   environment: 'local' | 'staging' | 'production';
@@ -80,14 +80,14 @@ export interface ProductDeploymentRecord {
 }
 
 /** Full ledger view of one change — what the execution engine reads. */
-export interface ProductChangeDetail {
-  change: ProductChangeRequest;
-  binding: ProductSourceBinding | null;
-  checks: ProductChangeCheck[];
-  approvals: ProductChangeApproval[];
-  deployments: ProductDeploymentRecord[];
+export interface ReleaseDetail {
+  change: ReleaseChange;
+  binding: ReleaseSource | null;
+  checks: ReleaseCheck[];
+  approvals: ReleaseApproval[];
+  deployments: ReleaseDeployment[];
 }
 
-export type ProductChangeTransitionResult =
-  | { ok: true; from: ProductChangeStatus; to: ProductChangeStatus }
-  | { ok: false; from: ProductChangeStatus; to: ProductChangeStatus; error: string };
+export type ReleaseTransitionResult =
+  | { ok: true; from: ReleaseStatus; to: ReleaseStatus }
+  | { ok: false; from: ReleaseStatus; to: ReleaseStatus; error: string };

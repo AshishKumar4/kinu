@@ -3,7 +3,7 @@
  * boundary.
  *
  * Every secret a Proteus user owns (provider credentials, MCP servers, the
- * physical-machine tunnel, the product-change ledger) lives in their UserDO,
+ * physical-machine tunnel, the release ledger) lives in their UserDO,
  * and until now any holder of a UserDO stub reached all of it. This module is
  * the attenuation primitive: a workspace Durable Object proves WHICH workspace
  * it is with a per-workspace secret, and the UserDO looks its tier up live.
@@ -92,9 +92,9 @@ export const WORKSPACE_CAPABILITY_TIERS = {
    *  a guest's; letting it flow into the owner's other workspaces would carry
    *  injected content straight past the boundary. */
   'experience.write': 'full',
-  /** The product-change ledger. Deploy governance is owner-level by
+  /** The release ledger. Deploy governance is owner-level by
    *  definition. */
-  'product_change': 'full',
+  'release': 'full',
   /** The owner's profile — their verified email is what outbound notifications
    *  and inbound email trust are keyed on. */
   'profile': 'full',

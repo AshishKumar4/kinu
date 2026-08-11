@@ -49,7 +49,7 @@ const TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   agents: 'think',
   skills: 'read',
   web: 'fetch',
-  product_change: 'edit',
+  release: 'edit',
 };
 
 /** `file` is the one builtin whose kind depends on the call rather than the

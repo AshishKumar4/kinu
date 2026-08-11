@@ -1,6 +1,6 @@
-import type { ProductChangeStatus, ProductChangeTransitionResult } from './types.js';
+import type { ReleaseStatus, ReleaseTransitionResult } from './types.js';
 
-const ALLOWED: Record<ProductChangeStatus, ReadonlySet<ProductChangeStatus>> = {
+const ALLOWED: Record<ReleaseStatus, ReadonlySet<ReleaseStatus>> = {
   draft: new Set(['planning', 'rejected', 'failed']),
   planning: new Set(['patching', 'rejected', 'failed']),
   patching: new Set(['validating', 'planning', 'rejected', 'failed']),
@@ -16,27 +16,27 @@ const ALLOWED: Record<ProductChangeStatus, ReadonlySet<ProductChangeStatus>> = {
 
 /** States EARNED by the execution engine (apply/run_checks/deploy/rollback),
  *  never asserted: entering them requires real command results. The agent
- *  tool and the MCP product_change surface refuse manual transitions into
+ *  tool and the MCP release surface refuse manual transitions into
  *  these targets when an engine is wired; owner/UI RPCs keep full
  *  transition power. */
-const ENGINE_OWNED_TARGETS = new Set<ProductChangeStatus>([
+const ENGINE_OWNED_TARGETS = new Set<ReleaseStatus>([
   'validating', 'preview_ready', 'applying', 'deployed', 'rolled_back',
 ]);
 
-export function isEngineOwnedTransitionTarget(to: ProductChangeStatus): boolean {
+export function isEngineOwnedTransitionTarget(to: ReleaseStatus): boolean {
   return ENGINE_OWNED_TARGETS.has(to);
 }
 
-export function assertProductChangeTransition(
-  from: ProductChangeStatus,
-  to: ProductChangeStatus,
-): ProductChangeTransitionResult {
+export function assertReleaseTransition(
+  from: ReleaseStatus,
+  to: ReleaseStatus,
+): ReleaseTransitionResult {
   if (from === to) return { ok: true, from, to };
   if (ALLOWED[from]?.has(to)) return { ok: true, from, to };
   return {
     ok: false,
     from,
     to,
-    error: `Product change transition ${from} -> ${to} is not allowed`,
+    error: `Release transition ${from} -> ${to} is not allowed`,
   };
 }

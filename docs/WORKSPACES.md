@@ -19,7 +19,7 @@ agents are the actors that work inside it.
 │                /pc       the user's own machine  (connect + consent)   │
 │   exec plane ExecutionRouter — the same environments as executors      │
 │   state      sessions · SOUL.md · memory · scaffold · craft store ·    │
-│              evolution ledgers · triggers · product changes            │
+│              evolution ledgers · triggers · release changes            │
 │                                                                        │
 │   ┌────────────────────────────────────────────────────────────────┐  │
 │   │  AGENTS  (actors)                                               │  │

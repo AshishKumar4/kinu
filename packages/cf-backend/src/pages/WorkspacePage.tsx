@@ -1460,6 +1460,7 @@ export default function WorkspacePage() {
             onRefreshTasks={state.refreshBackgroundJobs}
             changelogUnseen={state.changelogUnseen}
             onChangelogSeen={state.clearChangelogUnseen}
+            agentViews={state.agentViews}
             rpc={state.rpc}
           />
         </Panel>

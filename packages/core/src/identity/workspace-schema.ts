@@ -124,6 +124,37 @@ function repairLegacyTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
 }
 
 /**
+ * product_change -> release. The lane kept its behaviour and lost its name, so
+ * the rows must survive: approvals and deployment records are precisely the
+ * audit trail an owner would least want silently discarded. Renaming without
+ * this would leave CREATE TABLE IF NOT EXISTS quietly minting empty tables
+ * beside the populated originals — nothing would crash, and the history would
+ * simply stop being visible.
+ *
+ * Guarded both ways so it is a no-op on a fresh workspace and on one already
+ * migrated, and safe to run on every boot.
+ */
+const RELEASE_TABLE_RENAMES: ReadonlyArray<readonly [from: string, to: string]> = [
+  ['product_source_bindings', 'release_sources'],
+  ['product_change_requests', 'release_changes'],
+  ['product_change_checks', 'release_checks'],
+  ['product_change_approvals', 'release_approvals'],
+  ['product_deployments', 'release_deployments'],
+];
+
+function renameReleaseTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
+  for (const [from, to] of RELEASE_TABLE_RENAMES) {
+    try {
+      const old = sql<{ name: string }>`SELECT name FROM sqlite_master WHERE type='table' AND name=${from}`;
+      if (old.length === 0) continue;
+      const already = sql<{ name: string }>`SELECT name FROM sqlite_master WHERE type='table' AND name=${to}`;
+      if (already.length > 0) continue;
+      execRaw(`ALTER TABLE ${from} RENAME TO ${to}`);
+    } catch { /* a backend without sqlite_master, or a concurrent boot won the race */ }
+  }
+}
+
+/**
  * Create and migrate every table a workspace has, on any backend. Idempotent:
  * safe on every boot, on every open, and on a workspace created years ago.
  */
@@ -131,6 +162,7 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   const { execRaw, sql, exec } = db;
 
   repairLegacyTables(execRaw, sql);
+  renameReleaseTables(execRaw, sql);
 
   initAllTables(execRaw);
   // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound

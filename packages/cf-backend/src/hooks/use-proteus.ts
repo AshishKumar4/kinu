@@ -4,7 +4,7 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
-import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG } from "@proteus/core";
+import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG, type AgentViewSummary } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
 import type {
@@ -168,6 +168,10 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // Background tasks (auto-detached >30s tool calls) — single source for the
   // Tasks surface + the Tasks-tab running badge (visible on any surface).
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
+  // Dashboards Proteus published for this workspace — the agent-authored tabs
+  // at the right of the work-surface strip. Refreshed with the rest of the
+  // live data, because publishing one is a mid-turn `workspace.createView`.
+  const [agentViews, setAgentViews] = useState<AgentViewSummary[]>([]);
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
@@ -475,6 +479,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     rpc<ExecutorInfo[]>("getExecutors", []).then(setExecutors).catch(() => {});
     refreshBackgroundJobs();
     refreshExposedPorts();
+    rpc<AgentViewSummary[]>("listAgentViews", []).then(setAgentViews).catch(() => {});
     // Unseen self-changes for the Brain-tab badge.
     rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
       .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
@@ -729,6 +734,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
     backgroundJobs,
     runningTaskCount: backgroundJobs.filter((j) => j.status === "running").length,
     refreshBackgroundJobs,
+    /** Agent-authored dashboards, as tabs. */
+    agentViews,
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,

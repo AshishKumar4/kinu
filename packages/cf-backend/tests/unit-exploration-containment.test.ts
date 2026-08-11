@@ -100,9 +100,9 @@ function buildSurface(opts?: {
 }
 
 describe('head tool surface — containment', () => {
-  test('a head has no think / team / peers / report / product_change tool', () => {
+  test('a head has no think / team / peers / report / release tool', () => {
     const { tools } = buildSurface();
-    for (const forbidden of ['think', 'team', 'peers', 'report', 'product_change']) {
+    for (const forbidden of ['think', 'team', 'peers', 'report', 'release']) {
       expect(Object.keys(tools)).not.toContain(forbidden);
     }
   });

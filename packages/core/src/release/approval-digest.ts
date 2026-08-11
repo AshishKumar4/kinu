@@ -1,5 +1,5 @@
 /**
- * Digest binding for product-change deploy approvals (agent-core SPEC §7.3).
+ * Digest binding for release deploy approvals (agent-core SPEC §7.3).
  *
  * A deploy approval is a human's yes to deploying THIS patch via THIS command
  * to THIS environment. Between `request_approval` and the engine's `deploy`,
@@ -10,12 +10,12 @@
  * run, rejecting any drift (fail-closed).
  *
  * The command bound is the binding's DECLARED deploy target (reviewable on the
- * Product Changes surface), never an argument supplied at deploy time — that is
+ * Releases surface), never an argument supplied at deploy time — that is
  * exactly the value an injection would try to swap.
  */
 
 import { argumentDigest } from '../safety/argument-digest.js';
-import type { ProductChangeApproval, ProductDeploymentRecord } from './types.js';
+import type { ReleaseApproval, ReleaseDeployment } from './types.js';
 
 /** A binding's deployTarget doubles as the deploy command when it reads like
  *  one (has whitespace, e.g. "bunx wrangler deploy"); a bare label like
@@ -28,15 +28,15 @@ export function deployTargetAsCommand(deployTarget: string | null): string | nul
 
 /** The approval type a deploy to `environment` requires. */
 export function approvalTypeForEnvironment(
-  environment: ProductDeploymentRecord['environment'],
-): ProductChangeApproval['approvalType'] {
+  environment: ReleaseDeployment['environment'],
+): ReleaseApproval['approvalType'] {
   if (environment === 'production') return 'deploy_production';
   if (environment === 'staging') return 'deploy_staging';
   return 'apply';
 }
 
 export interface DeployApprovalBinding {
-  approvalType: ProductChangeApproval['approvalType'];
+  approvalType: ReleaseApproval['approvalType'];
   /** The change's stored unified diff at binding time (the reviewed artifact). */
   patch: string | null;
   /** The resolved deploy command, or null when the change promotes a preview. */

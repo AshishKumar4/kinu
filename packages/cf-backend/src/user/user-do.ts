@@ -46,21 +46,21 @@ import {
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createExperienceLibrary,
-  createProductChangeStore,
-  productChangeSqlFromExec,
+  createReleaseStore,
+  releaseSqlFromExec,
   type Credential,
   type ExperienceEntry,
   type ExperienceKind,
   type PublishableCandidate,
-  type ProductChangeBoard,
-  type ProductChangeApproval,
-  type ProductChangeCheck,
-  type ProductChangeDetail,
-  type ProductChangeRequest,
-  type ProductChangeStatus,
-  type ProductDeploymentRecord,
-  type ProductSourceBinding,
-  type ProductSourceBindingInput,
+  type ReleaseBoard,
+  type ReleaseApproval,
+  type ReleaseCheck,
+  type ReleaseDetail,
+  type ReleaseChange,
+  type ReleaseStatus,
+  type ReleaseDeployment,
+  type ReleaseSource,
+  type ReleaseSourceInput,
   CODEX_CRED_KEY,
   createCodexOAuthClient,
   decodeCodexAccountId,
@@ -334,9 +334,9 @@ export class UserDO extends Agent<Env> {
     return { provisioned: names.length - failed.length };
   }
 
-  private productChanges() {
+  private releases() {
     this.ensureInit();
-    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
+    return createReleaseStore(releaseSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
   // ── Profile ────────────────────────────────────────────────────────
@@ -1049,75 +1049,75 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  // ── Product changes ─────────────────────────────────────────────────
+  // ── Releases ─────────────────────────────────────────────────
 
-  async upsertProductSourceBinding(caller: UserCaller, input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().upsertSourceBinding(input);
+  async upsertReleaseSource(caller: UserCaller, input: ReleaseSourceInput & { id?: string }): Promise<ReleaseSource> {
+    await this.requireTier(caller, 'release');
+    return this.releases().upsertSourceBinding(input);
   }
 
-  async createProductChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().createChange(agentName, input);
+  async createReleaseChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ReleaseChange> {
+    await this.requireTier(caller, 'release');
+    return this.releases().createChange(agentName, input);
   }
 
-  async updateProductChange(
+  async updateReleaseChange(
     caller: UserCaller,
     changeId: string,
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
-  ): Promise<ProductChangeRequest> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().updateChange(changeId, patch);
+  ): Promise<ReleaseChange> {
+    await this.requireTier(caller, 'release');
+    return this.releases().updateChange(changeId, patch);
   }
 
-  async transitionProductChange(caller: UserCaller, changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().transitionChange(changeId, to);
+  async transitionReleaseChange(caller: UserCaller, changeId: string, to: ReleaseStatus): Promise<ReleaseChange> {
+    await this.requireTier(caller, 'release');
+    return this.releases().transitionChange(changeId, to);
   }
 
-  async recordProductChangeCheck(
+  async recordReleaseCheck(
     caller: UserCaller,
     changeId: string,
-    input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
-  ): Promise<ProductChangeCheck> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().recordCheck(changeId, input);
+    input: { name: string; status: ReleaseCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
+  ): Promise<ReleaseCheck> {
+    await this.requireTier(caller, 'release');
+    return this.releases().recordCheck(changeId, input);
   }
 
-  async requestProductChangeApproval(caller: UserCaller, changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().requestApproval(changeId, approvalType);
+  async requestReleaseApproval(caller: UserCaller, changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval> {
+    await this.requireTier(caller, 'release');
+    return this.releases().requestApproval(changeId, approvalType);
   }
 
-  async decideProductChangeApproval(
+  async decideReleaseApproval(
     caller: UserCaller,
     approvalId: string,
     decision: 'approved' | 'rejected',
     approvedBy: string,
     note?: string | null,
-  ): Promise<ProductChangeApproval> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().decideApproval(approvalId, decision, approvedBy, note);
+  ): Promise<ReleaseApproval> {
+    await this.requireTier(caller, 'release');
+    return this.releases().decideApproval(approvalId, decision, approvedBy, note);
   }
 
-  async recordProductDeployment(
+  async recordReleaseDeployment(
     caller: UserCaller,
     changeId: string,
-    input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
-  ): Promise<ProductDeploymentRecord> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().recordDeployment(changeId, input);
+    input: { environment: ReleaseDeployment['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
+  ): Promise<ReleaseDeployment> {
+    await this.requireTier(caller, 'release');
+    return this.releases().recordDeployment(changeId, input);
   }
 
-  async getProductChangeBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ProductChangeBoard> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().board(agentName, limit);
+  async getReleaseBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ReleaseBoard> {
+    await this.requireTier(caller, 'release');
+    return this.releases().board(agentName, limit);
   }
 
   /** Full ledger view of one change — the execution engine's read surface. */
-  async getProductChangeDetail(caller: UserCaller, changeId: string): Promise<ProductChangeDetail> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().detail(changeId);
+  async getReleaseDetail(caller: UserCaller, changeId: string): Promise<ReleaseDetail> {
+    await this.requireTier(caller, 'release');
+    return this.releases().detail(changeId);
   }
 
   // ── Experience library (cross-workspace transfer) ───────────────────

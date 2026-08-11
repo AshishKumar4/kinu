@@ -9,6 +9,9 @@
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=timeline → Run Timeline at Column B's real widths
+ *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
+ *   /gallery.html?frame=viewfail → the same View when its spec stops validating
+ *   /gallery.html?frame=releases → the Releases board with a pending approval
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
@@ -27,6 +30,8 @@ import { ConnectionIndicator } from "@/components/connection-indicator";
 import { ModelPicker } from "@/components/ModelPicker";
 import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
+import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { BrainSurface } from "@/components/surfaces/BrainSurface";
 import { EmptyState } from "@/components/surfaces/shared";
 import { Modal } from "@/components/ui/Modal";
@@ -446,6 +451,172 @@ const BRAIN_STATUS = {
   createdAt: NOW - 7 * 864e5,
 } as unknown as AgentStatus;
 
+/* ── Agent-authored view ────────────────────────────────────────── */
+
+// A spec of the shape `workspace.createView` accepts, over a release board of
+// the shape `getReleaseBoard` returns. Both are real: the frame below exercises
+// the production renderer, not a mock of it.
+const VIEW_SPEC = {
+  v: 1,
+  title: "Deploy health",
+  subtitle: "Everything I have shipped this week, and what is waiting on you.",
+  refreshMs: 15000,
+  blocks: [
+    { type: "stat", label: "Open changes", source: { rpc: "getReleaseBoard", path: "changes" }, agg: "count" },
+    { type: "stat", label: "Deployments", source: { rpc: "getReleaseBoard", path: "deployments" }, agg: "count" },
+    { type: "stat", label: "Jobs running", source: { rpc: "listBackgroundJobs" }, agg: "count" },
+    {
+      type: "table", title: "Recent changes",
+      source: { rpc: "getReleaseBoard", path: "changes", limit: 5 },
+      columns: [
+        { field: "userPrompt", label: "Change" },
+        { field: "status", label: "Status", as: "badge" },
+        { field: "updatedAt", label: "Updated", as: "time" },
+      ],
+    },
+    {
+      type: "section", title: "Background work",
+      blocks: [
+        { type: "list", title: "Jobs", source: { rpc: "listBackgroundJobs" }, field: "label" },
+        {
+          type: "kv", title: "Latest deployment",
+          source: { rpc: "getReleaseBoard", path: "deployments.0" },
+          rows: [
+            { field: "environment", label: "Environment" },
+            { field: "versionId", label: "Version" },
+            { field: "status", label: "Status" },
+          ],
+        },
+      ],
+    },
+    { type: "markdown", text: "Two checks are still red on `chg_4f2`. I have not requested approval for it." },
+  ],
+};
+
+const VIEW_BOARD = {
+  changes: [
+    { id: "chg_4f2", userPrompt: "Warm up the empty-state copy", status: "deployed", updatedAt: NOW - 36e5 },
+    { id: "chg_9a1", userPrompt: "Collapse the duplicate model picker", status: "awaiting_approval", updatedAt: NOW - 72e5 },
+    { id: "chg_2c8", userPrompt: "Stop the timeline flickering on reconnect", status: "preview_ready", updatedAt: NOW - 108e5 },
+    { id: "chg_7b3", userPrompt: "Retire the second markdown pipeline", status: "failed", updatedAt: NOW - 20e5 },
+  ],
+  deployments: [{ environment: "production", versionId: "a8d02b4f", status: "deployed" }],
+};
+
+const VIEW_JOBS = [
+  { label: "bun test packages/core (2,454 tests)" },
+  { label: "GEPA pass over the release prompt" },
+  { label: "replay eval — 40 turns" },
+];
+
+const viewRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getAgentView") return { ok: true, version: 3, spec: VIEW_SPEC } as unknown as T;
+  if (method === "getReleaseBoard") return VIEW_BOARD as unknown as T;
+  if (method === "listBackgroundJobs") return VIEW_JOBS as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+const VIEW_TABS = [
+  { slug: "deploy-health", title: "Deploy health", subtitle: null, version: 3, writtenAt: NOW - 36e5 },
+  { slug: "coupon-drift", title: "Coupon drift", subtitle: null, version: 1, writtenAt: NOW - 72e5 },
+];
+
+/** Column C at its real width, so the agent tab group is seen where it lives:
+ *  after the six host surfaces, behind a divider, marked with a sparkle. */
+function ViewsFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="view:deploy-health" onSurface={() => {}}
+          agentViews={VIEW_TABS}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()}
+          onExecute={async () => ({})}
+          backgroundJobs={[]} onRefreshTasks={() => {}}
+          rpc={viewRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** What the owner sees when the live spec no longer validates — the shape of a
+ *  view whose file was rewritten on disk after it was published. */
+function ViewFailFrame() {
+  const failRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "getAgentView") {
+      return {
+        ok: false,
+        error: "view spec invalid — blocks.0.type: Invalid type: Expected (\"stat\" | \"table\" | \"list\" | \"kv\" | \"markdown\" | \"section\") but received \"html\"",
+      } as unknown as T;
+    }
+    return viewRpc<T>(method, args);
+  };
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] min-h-screen border-x p-border p-5">
+        <AgentViewSurface slug="deploy-health" rpc={failRpc} />
+      </div>
+    </div>
+  );
+}
+
+/** The renderer alone, wide, for reading the block vocabulary. */
+function ViewBlocksFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] min-h-screen border-x p-border p-5">
+        <AgentViewSurface slug="deploy-health" rpc={viewRpc} />
+      </div>
+    </div>
+  );
+}
+
+/* ── Releases ───────────────────────────────────────────────────── */
+
+// A board with one pending approval, so the row that carries the Approve button
+// is the thing under the lens: the digest binds the source's deployTarget, and
+// this frame is where you check that the owner can actually read it first.
+const RELEASE_BOARD = {
+  bindings: [{
+    id: "src_1", kind: "local", label: "proteus", repoUrl: null, defaultBranch: "main",
+    localDeviceId: null, localRoot: "~/Proteus", deployTarget: "bunx wrangler deploy --env production",
+    createdAt: NOW - 9 * 864e5, updatedAt: NOW - 9 * 864e5,
+  }],
+  changes: [{
+    id: "chg_4f2", bindingId: "src_1", agentName: "jarvis",
+    userPrompt: "Warm up the empty-state copy", plan: "Rewrite the six EMPTY_HINTS in the owner's voice.",
+    patch: "--- a/packages/cf-backend/src/components/surfaces/shared.tsx\n+++ b/packages/cf-backend/src/components/surfaces/shared.tsx\n@@\n-  memory: \"Your agent will remember important information here.\",\n+  memory: \"Anything worth keeping lands here. Ask me to remember something.\",",
+    status: "awaiting_approval", previewUrl: null, commitSha: "a8d02b4f", createdAt: NOW - 36e5, updatedAt: NOW - 12e5,
+  }],
+  checks: [
+    { id: "chk_1", changeId: "chg_4f2", name: "typecheck", status: "passed", exitCode: 0, output: null, createdAt: NOW - 30e5 },
+    { id: "chk_2", changeId: "chg_4f2", name: "bun test", status: "passed", exitCode: 0, output: null, createdAt: NOW - 28e5 },
+  ],
+  approvals: [{
+    id: "apr_1", changeId: "chg_4f2", approvalType: "deploy_production", decision: "pending",
+    decidedBy: null, decidedAt: null, argumentDigest: "9f2c…", createdAt: NOW - 12e5,
+  }],
+  deployments: [],
+};
+
+const releaseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getReleaseBoard") return RELEASE_BOARD as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+function ReleasesFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[1100px] min-h-screen border-x p-border p-5">
+        <ReleasesSurface rpc={releaseRpc} />
+      </div>
+    </div>
+  );
+}
+
 function BrainFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -470,6 +641,10 @@ async function mount() {
   else if (frame === "landing2") node = <LandingV2 />;
   else if (frame === "timeline") node = <TimelineWidths />;
   else if (frame === "panels") node = <BrainFrame />;
+  else if (frame === "views") node = <ViewsFrame />;
+  else if (frame === "viewblocks") node = <ViewBlocksFrame />;
+  else if (frame === "viewfail") node = <ViewFailFrame />;
+  else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
     node = <div className="h-screen p-bg p-text"><HomePage /></div>;

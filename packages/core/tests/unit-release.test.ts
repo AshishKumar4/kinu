@@ -1,14 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
-  assertProductChangeTransition,
-  createProductChangeStore,
-  initProductChangeTables,
-  normalizeProductSourcePath,
-  productChangeSqlFromExec,
-  redactProductDiff,
-  validateProductPatchPath,
-} from '../src/product-change/index.js';
+  assertReleaseTransition,
+  createReleaseStore,
+  initReleaseTables,
+  isSecretReleasePath,
+  normalizeReleasePath,
+  releaseSqlFromExec,
+  redactReleaseDiff,
+  validateReleasePatchPath,
+} from '../src/release/index.js';
 
 function makeExec(db: Database) {
   return {
@@ -23,8 +24,8 @@ function makeExec(db: Database) {
   };
 }
 
-describe('product-change lifecycle', () => {
-  test('allows the happy-path product change progression', () => {
+describe('release lifecycle', () => {
+  test('allows the happy-path release change progression', () => {
     const flow = [
       ['draft', 'planning'],
       ['planning', 'patching'],
@@ -36,28 +37,46 @@ describe('product-change lifecycle', () => {
     ] as const;
 
     for (const [from, to] of flow) {
-      expect(assertProductChangeTransition(from, to).ok).toBe(true);
+      expect(assertReleaseTransition(from, to).ok).toBe(true);
     }
   });
 
-  test('rejects applying a product change before owner approval', () => {
-    const result = assertProductChangeTransition('preview_ready', 'applying');
+  test('rejects applying a release change before owner approval', () => {
+    const result = assertReleaseTransition('preview_ready', 'applying');
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error).toContain('not allowed');
   });
 });
 
-describe('product-change path safety', () => {
+describe('release path safety', () => {
   test('normalizes safe repo-relative paths', () => {
-    expect(normalizeProductSourcePath('./packages/cf-backend/src/App.tsx')).toBe('packages/cf-backend/src/App.tsx');
-    expect(normalizeProductSourcePath('packages/core/../core/src/index.ts')).toBe('packages/core/src/index.ts');
+    expect(normalizeReleasePath('./packages/cf-backend/src/App.tsx')).toBe('packages/cf-backend/src/App.tsx');
+    expect(normalizeReleasePath('packages/core/../core/src/index.ts')).toBe('packages/core/src/index.ts');
   });
 
   test('rejects outside-root and secret paths', () => {
-    expect(() => normalizeProductSourcePath('../outside.ts')).toThrow('outside');
-    expect(validateProductPatchPath('packages/cf-backend/.dev.vars').ok).toBe(false);
-    expect(validateProductPatchPath('.env.production').ok).toBe(false);
-    expect(validateProductPatchPath('packages/cf-backend/src/pages/WorkspacePage.tsx').ok).toBe(true);
+    expect(() => normalizeReleasePath('../outside.ts')).toThrow('outside');
+    expect(validateReleasePatchPath('packages/cf-backend/.dev.vars').ok).toBe(false);
+    expect(validateReleasePatchPath('.env.production').ok).toBe(false);
+    expect(validateReleasePatchPath('packages/cf-backend/src/pages/WorkspacePage.tsx').ok).toBe(true);
+  });
+
+  test('secrecy is a decided fact, not a phrase inside the error message', () => {
+    // isSecretReleasePath used to run /secret|config/ over the human-readable
+    // error, so rewording that sentence silently changed the predicate. It now
+    // reads a field, and a rejection for a DIFFERENT reason is not secret even
+    // when its message happens to contain neither word.
+    expect(isSecretReleasePath('packages/cf-backend/.dev.vars')).toBe(true);
+    expect(isSecretReleasePath('.ssh/id_rsa')).toBe(true);
+    expect(isSecretReleasePath('packages/core/src/index.ts')).toBe(false);
+    expect(isSecretReleasePath('../outside.ts')).toBe(false);
+    expect(isSecretReleasePath('/etc/passwd')).toBe(false);
+
+    const secret = validateReleasePatchPath('.env.production');
+    expect(secret.secret).toBe(true);
+    const traversal = validateReleasePatchPath('../outside.ts');
+    expect(traversal.ok).toBe(false);
+    expect(traversal.secret).toBeUndefined();
   });
 
   test('redacts secret-looking diff lines while keeping code context', () => {
@@ -68,7 +87,7 @@ describe('product-change path safety', () => {
       '-CLOUDFLARE_API_TOKEN=secret',
     ].join('\n');
 
-    const redacted = redactProductDiff(diff);
+    const redacted = redactReleaseDiff(diff);
     expect(redacted).toContain('const label = "safe"');
     expect(redacted).not.toContain('sk-test');
     expect(redacted).not.toContain('secret');
@@ -76,12 +95,12 @@ describe('product-change path safety', () => {
   });
 });
 
-describe('product-change sql store', () => {
-  test('persists a governed product change board', () => {
+describe('release sql store', () => {
+  test('persists a governed release change board', () => {
     const db = new Database(':memory:');
     const exec = makeExec(db);
-    initProductChangeTables(exec);
-    const store = createProductChangeStore(productChangeSqlFromExec(exec), {
+    initReleaseTables(exec);
+    const store = createReleaseStore(releaseSqlFromExec(exec), {
       now: () => 1700000000000,
       id: (prefix, size) => `${prefix}-${size}`,
       validateAgentName: (name) => {

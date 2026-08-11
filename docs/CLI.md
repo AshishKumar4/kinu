@@ -75,7 +75,7 @@ proteus <command> [options]
 | [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
 | [`proteus alignment <name>`](#proteus-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
 | [`proteus label [action] [name] [file]`](#proteus-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
-| [`proteus product <name>`](#proteus-product-name) | Inspect product self-customization state |
+| [`proteus release <name>`](#proteus-release-name) | Inspect the governed release lane: sources, changes, checks, approvals, deployments |
 
 ### This computer
 
@@ -468,9 +468,9 @@ Hand-label turn outcomes (export | ingest | ensemble | report) to measure and co
 | `--limit <n>` | Labeled turns to put to the raters (score; default: 25) |
 | `--json` | Print raw JSON |
 
-### proteus product <name>
+### proteus release <name>
 
-Inspect product self-customization state.
+Inspect the governed release lane: sources, changes, checks, approvals, deployments.
 
 | Option | What it does |
 | --- | --- |

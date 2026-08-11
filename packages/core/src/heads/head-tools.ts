@@ -11,7 +11,7 @@
  *
  * Containment is two independent mechanisms, both structural:
  *
- *   1. Absent deps. `agents` / `report` / `product_change` exist only when
+ *   1. Absent deps. `agents` / `report` / `release` exist only when
  *      `buildBuiltinTools` is handed the deps that implement them. A head is
  *      handed none, so those tools cannot be built — the same mechanism that
  *      confines subordinates.

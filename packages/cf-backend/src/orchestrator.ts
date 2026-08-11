@@ -6,7 +6,7 @@
  * ActorAgent (actor-agent.ts); this class is the workspace-facing actor on
  * top of it: owner claim + schema, the @callable RPC surface, evolution /
  * scaffold / GEPA / alternate-takes flows, onChatResponse sequencing, peer
- * teams, email + webhook ingress, product changes, and fork.
+ * teams, email + webhook ingress, release changes, and fork.
  *
  * Tool factory, system prompt, and crafted-tool injection all live in
  * @proteus/core so the CLI surface shares them verbatim.
@@ -50,6 +50,8 @@ import {
   nanoid, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
+  // Agent-authored views — core owns the spec, the ledger and the validation.
+  listViews, readView, type AgentViewSummary, type ReadViewResult,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
   type ScaffoldRunResult,
   // The scaffold evolution control plane (core owns the drivers; this actor
@@ -95,13 +97,13 @@ import {
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type ProductChangeApproval, type ProductChangeStatus,
-  type ProductChangeToolDeps, type ProductSourceBindingInput,
+  type ReleaseApproval, type ReleaseStatus,
+  type ReleaseToolDeps, type ReleaseSourceInput,
   runExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,
-  // Product-change execution engine — the driver beneath the governance ledger
-  ProductChangeEngine, createSandboxProductChangeExec,
+  // Release execution engine — the driver beneath the governance ledger
+  ReleaseEngine, createSandboxReleaseExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
@@ -834,41 +836,41 @@ export class OrchestratorAgent extends ActorAgent {
     return runExperienceAction(deps, input);
   }
 
-  private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
+  private getReleaseToolDeps(): ReleaseToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
     return {
-      board: async () => { const { stub, caller } = await hub(); return stub.getProductChangeBoard(caller, this.name, 20); },
-      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertProductSourceBinding(caller, input); },
-      create: async (input) => { const { stub, caller } = await hub(); return stub.createProductChange(caller, this.name, input); },
-      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
-      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, status); },
-      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
-      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestProductChangeApproval(caller, changeId, approvalType); },
-      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
-      engine: this.getProductChangeEngine(),
+      board: async () => { const { stub, caller } = await hub(); return stub.getReleaseBoard(caller, this.name, 20); },
+      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertReleaseSource(caller, input); },
+      create: async (input) => { const { stub, caller } = await hub(); return stub.createReleaseChange(caller, this.name, input); },
+      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
+      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionReleaseChange(caller, changeId, status); },
+      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseCheck(caller, changeId, input); },
+      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestReleaseApproval(caller, changeId, approvalType); },
+      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseDeployment(caller, changeId, input); },
+      engine: this.getReleaseEngine(),
     };
   }
 
-  private _productChangeEngine: ProductChangeEngine | null = null;
-  /** The execution engine beneath the product-change ledger: apply/checks in
+  private _releaseEngine: ReleaseEngine | null = null;
+  /** The execution engine beneath the release ledger: apply/checks in
    *  the agent's sandbox container (raw exit codes), preview through the
    *  path-style preview proxy, deploy/rollback verified against real command
    *  output. Ledger writes go through the owner's UserDO so the engine's
    *  results land on the same governed board the UI reads. */
-  private getProductChangeEngine(): ProductChangeEngine {
-    if (this._productChangeEngine) return this._productChangeEngine;
+  private getReleaseEngine(): ReleaseEngine {
+    if (this._releaseEngine) return this._releaseEngine;
     const handle = this.rt.sandboxHandle;
     const provider = this.rt.executionRouter?.getProvider('sandbox');
     const hub = () => this.userHub();
-    this._productChangeEngine = new ProductChangeEngine({
-      exec: handle && provider ? createSandboxProductChangeExec(handle, provider) : null,
+    this._releaseEngine = new ReleaseEngine({
+      exec: handle && provider ? createSandboxReleaseExec(handle, provider) : null,
       ledger: {
-        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getProductChangeDetail(caller, changeId); },
-        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
-        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, to); },
-        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
-        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
+        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getReleaseDetail(caller, changeId); },
+        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
+        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionReleaseChange(caller, changeId, to); },
+        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseCheck(caller, changeId, input); },
+        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseDeployment(caller, changeId, input); },
       },
       // A stored `github` credential (POST /api/user/credentials/github with a
       // bearer PAT) authorizes clone/push for github source bindings; absent →
@@ -879,16 +881,16 @@ export class OrchestratorAgent extends ActorAgent {
         return headers?.Authorization ?? null;
       },
     });
-    return this._productChangeEngine;
+    return this._releaseEngine;
   }
 
   /** The actor profile (ActorAgent): the orchestrator wires the full
    *  user-facing tool surface — cross-workspace peers, cross-workspace
-   *  experience transfer, and the product-change lane. */
+   *  experience transfer, and the release lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
       team: this.getTeamToolDeps(),
-      productChanges: this.getProductChangeToolDeps(),
+      releases: this.getReleaseToolDeps(),
       peers: this.getPeersToolDeps(),
     };
   }
@@ -1596,40 +1598,40 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable()
-  async getProductChangeBoard(limit: number = 20) {
+  async getReleaseBoard(limit: number = 20) {
     const { stub, caller } = await this.userHub();
-    return stub.getProductChangeBoard(caller, this.name, limit);
+    return stub.getReleaseBoard(caller, this.name, limit);
   }
 
   @callable()
-  async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }) {
+  async upsertReleaseSource(input: ReleaseSourceInput & { id?: string }) {
     const { stub, caller } = await this.userHub();
-    return stub.upsertProductSourceBinding(caller, input);
+    return stub.upsertReleaseSource(caller, input);
   }
 
   @callable()
-  async createProductChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
+  async createReleaseChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
     const { stub, caller } = await this.userHub();
-    return stub.createProductChange(caller, this.name, input);
+    return stub.createReleaseChange(caller, this.name, input);
   }
 
-  async transitionProductChange(changeId: string, status: ProductChangeStatus) {
+  async transitionReleaseChange(changeId: string, status: ReleaseStatus) {
     const { stub, caller } = await this.userHub();
-    return stub.transitionProductChange(caller, changeId, status);
-  }
-
-  @callable()
-  async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']) {
-    const { stub, caller } = await this.userHub();
-    return stub.requestProductChangeApproval(caller, changeId, approvalType);
+    return stub.transitionReleaseChange(caller, changeId, status);
   }
 
   @callable()
-  async decideProductChangeApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
+  async requestReleaseApproval(changeId: string, approvalType: ReleaseApproval['approvalType']) {
     const { stub, caller } = await this.userHub();
-    const decided = await stub.decideProductChangeApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+    return stub.requestReleaseApproval(caller, changeId, approvalType);
+  }
+
+  @callable()
+  async decideReleaseApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
+    const { stub, caller } = await this.userHub();
+    const decided = await stub.decideReleaseApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
     if (decision === 'rejected') {
-      try { await stub.transitionProductChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
+      try { await stub.transitionReleaseChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
     }
     return decided;
   }
@@ -2750,6 +2752,24 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async getMemoryContent() {
     try { return await this.rt.memory.read("memory/MEMORY.md") ?? ""; }
     catch { return ""; }
+  }
+
+  // ── Agent-authored views ───────────────────────────────────────
+  // Two reads and nothing else. Publishing is `workspace.createView` inside
+  // execute_tools; reverting is the Evolution Changelog, which is host chrome.
+  // Neither of those belongs on a surface the rendered view can reach.
+
+  /** The tabs to draw. Titles are agent-authored, so the UI marks them. */
+  @callable() async listAgentViews(): Promise<AgentViewSummary[]> {
+    try { return listViews(this.boundSql); }
+    catch { return []; }
+  }
+
+  /** The spec for one tab. Re-validated in core against the live file, so a
+   *  spec edited on disk after it was published fails here rather than in the
+   *  browser. */
+  @callable() async getAgentView(slug: string): Promise<ReadViewResult> {
+    return readView({ vfs: this.rt.storage.vfs, sql: this.boundSql }, String(slug));
   }
 
   @callable() async getToolDescriptions() {

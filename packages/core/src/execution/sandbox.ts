@@ -151,7 +151,7 @@ export function isSandboxTransientError(err: unknown): boolean {
  * errors. Backoff: 500ms, 1000ms (i.e. 500ms × 2^attempt). Non-transient
  * errors throw immediately. Used to swallow the brief disconnect window
  * during container/DO eviction without forcing the agent to error-handle.
- * Exported for other consumers of the same raw handle (product-change exec).
+ * Exported for other consumers of the same raw handle (release exec).
  */
 export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
   let lastErr: unknown;

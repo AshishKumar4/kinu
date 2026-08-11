@@ -150,11 +150,11 @@ export interface BackgroundJob {
 	settledAt: number | null;
 }
 
-export type ProductChangeStatus =
+export type ReleaseStatus =
 	| "draft" | "planning" | "patching" | "validating" | "preview_ready" | "awaiting_approval"
 	| "applying" | "deployed" | "rejected" | "rolled_back" | "failed";
 
-export interface ProductSourceBinding {
+export interface ReleaseSource {
 	id: string;
 	kind: "local" | "github";
 	label: string;
@@ -167,11 +167,11 @@ export interface ProductSourceBinding {
 	updatedAt: number;
 }
 
-export interface ProductChangeRequest {
+export interface ReleaseChange {
 	id: string;
 	agentName: string;
 	bindingId: string;
-	status: ProductChangeStatus;
+	status: ReleaseStatus;
 	userPrompt: string;
 	plan: string | null;
 	summary: string | null;
@@ -181,7 +181,7 @@ export interface ProductChangeRequest {
 	updatedAt: number;
 }
 
-export interface ProductChangeCheck {
+export interface ReleaseCheck {
 	id: string;
 	changeId: string;
 	name: string;
@@ -193,7 +193,7 @@ export interface ProductChangeCheck {
 	updatedAt: number;
 }
 
-export interface ProductChangeApproval {
+export interface ReleaseApproval {
 	id: string;
 	changeId: string;
 	approvalType: "apply" | "deploy_staging" | "deploy_production" | "rollback";
@@ -204,7 +204,7 @@ export interface ProductChangeApproval {
 	decidedAt: number | null;
 }
 
-export interface ProductDeploymentRecord {
+export interface ReleaseDeployment {
 	id: string;
 	changeId: string;
 	environment: "local" | "staging" | "production";
@@ -214,12 +214,12 @@ export interface ProductDeploymentRecord {
 	deployedAt: number;
 }
 
-export interface ProductChangeBoard {
-	bindings: ProductSourceBinding[];
-	changes: ProductChangeRequest[];
-	checks: ProductChangeCheck[];
-	approvals: ProductChangeApproval[];
-	deployments: ProductDeploymentRecord[];
+export interface ReleaseBoard {
+	bindings: ReleaseSource[];
+	changes: ReleaseChange[];
+	checks: ReleaseCheck[];
+	approvals: ReleaseApproval[];
+	deployments: ReleaseDeployment[];
 }
 
 /** A pending device-consent request — an agent wants to run a command on a

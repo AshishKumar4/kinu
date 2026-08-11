@@ -11,7 +11,7 @@ import type { ComponentType } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockCounterClockwiseIcon, GitBranchIcon, PackageIcon, BrainIcon,
-  SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
+  SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
 import type { ChangelogEntry, ChangelogEntryKind } from "@proteus/core";
@@ -27,6 +27,7 @@ interface ScaffoldDiff { version: number; previousVersion: number | null; added:
 const KIND_ICON: Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>> = {
   scaffold: GitBranchIcon,
   tool: PackageIcon,
+  view: SquaresFourIcon,
   fact: BrainIcon,
   gepa: SparkleIcon,
   replay: TimerIcon,

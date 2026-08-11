@@ -2,7 +2,7 @@
 // keyed by the stable Proteus userId resolved by the D1 auth store.
 // Idempotent — safe to call on every DO boot.
 
-import { initExperienceLibraryTables, initProductChangeTables, type SqlExec } from '@proteus/core';
+import { initExperienceLibraryTables, initReleaseTables, type SqlExec } from '@proteus/core';
 import { initAccessTokenTable } from '../cli/access-token-store.js';
 import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
@@ -215,7 +215,7 @@ export function initUserTables(sql: SqlExec): void {
   `);
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_cli_agent_connect_tickets_exp ON cli_agent_connect_tickets (expires_at, used_at)`);
 
-  initProductChangeTables(sql);
+  initReleaseTables(sql);
 
   // The owner's cross-workspace experience library: crafts, lessons and facts
   // one workspace proved and published for the owner's others to reuse.

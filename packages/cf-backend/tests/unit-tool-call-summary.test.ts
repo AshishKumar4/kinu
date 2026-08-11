@@ -116,18 +116,28 @@ describe('tool call summaries — builtins', () => {
     expect(summarizeToolCall('execute_tools', { code: '// only a comment' })).toBe('');
   });
 
-  test('product_change distinguishes its thirteen actions', () => {
+  test('release distinguishes its thirteen actions', () => {
+    expect(summarizeToolCall('release', { action: 'create', userPrompt: 'dark mode toggle' }))
+      .toBe('create — "dark mode toggle"');
+    expect(summarizeToolCall('release', { action: 'run_checks', checks: [{ name: 'build' }, { name: 'test' }] }))
+      .toBe('run_checks — build, test');
+    expect(summarizeToolCall('release', { action: 'transition', changeId: 'abcdef1234', status: 'deployed' }))
+      .toBe('transition abcdef12 → deployed');
+    expect(summarizeToolCall('release', { action: 'deploy', changeId: 'abcdef1234', deployment: { environment: 'staging' } }))
+      .toBe('deploy abcdef12 staging');
+    expect(summarizeToolCall('release', { action: 'preview', changeId: 'abcdef1234', port: 3000 }))
+      .toBe('preview abcdef12 :3000');
+    expect(summarizeToolCall('release', { action: 'board' })).toBe('board');
+  });
+
+  test('retired tool names still render, so stored transcripts do not degrade', () => {
+    // Every name here was once live. A transcript recorded under the old name
+    // must keep summarizing after the rename — the alternative is a wall of
+    // `summarizeUnknownTool` in history the owner cannot re-record.
     expect(summarizeToolCall('product_change', { action: 'create', userPrompt: 'dark mode toggle' }))
       .toBe('create — "dark mode toggle"');
-    expect(summarizeToolCall('product_change', { action: 'run_checks', checks: [{ name: 'build' }, { name: 'test' }] }))
-      .toBe('run_checks — build, test');
-    expect(summarizeToolCall('product_change', { action: 'transition', changeId: 'abcdef1234', status: 'deployed' }))
-      .toBe('transition abcdef12 → deployed');
-    expect(summarizeToolCall('product_change', { action: 'deploy', changeId: 'abcdef1234', deployment: { environment: 'staging' } }))
-      .toBe('deploy abcdef12 staging');
-    expect(summarizeToolCall('product_change', { action: 'preview', changeId: 'abcdef1234', port: 3000 }))
-      .toBe('preview abcdef12 :3000');
-    expect(summarizeToolCall('product_change', { action: 'board' })).toBe('board');
+    expect(summarizeToolCall('think', { task: 'compare the two designs' })).not.toBe('');
+    expect(summarizeToolCall('web_search', { query: 'valibot strict object' })).not.toBe('');
   });
 });
 

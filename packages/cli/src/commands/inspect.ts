@@ -14,7 +14,7 @@ import {
   getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
-  getLocalProductBoard,
+  getLocalReleaseBoard,
   listLocalEvents,
   listLocalExecutors,
   listLocalGepaRuns,
@@ -248,12 +248,12 @@ export async function alignmentCommand(name: string, opts: InspectOpts = {}): Pr
   console.log(renderCalibrationReport(calibration));
 }
 
-export async function productCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+export async function releaseCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getProductChangeBoard', [limit]),
-    local: () => getLocalProductBoard(target.localName, limit),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReleaseBoard', [limit]),
+    local: () => getLocalReleaseBoard(target.localName, limit),
   });
   printData(data, opts);
 }

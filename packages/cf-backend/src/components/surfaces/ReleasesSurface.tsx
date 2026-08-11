@@ -6,19 +6,20 @@ import {
   ShieldCheckIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import type {
-  ProductChangeApproval,
-  ProductChangeBoard,
-  ProductChangeCheck,
-  ProductChangeRequest,
-  ProductChangeStatus,
-  ProductDeploymentRecord,
-  ProductSourceBinding,
+  ReleaseApproval,
+  ReleaseBoard,
+  ReleaseCheck,
+  ReleaseChange,
+  ReleaseStatus,
+  ReleaseDeployment,
+  ReleaseSource,
   Rpc,
 } from "@/lib/protocol";
+import { deployTargetAsCommand } from "@proteus/core";
 import { isPreviewUrl } from "@/lib/preview-origin";
 import { EmptyState } from "./shared";
 
-const STATUS_META: Record<ProductChangeStatus, { label: string; tone: string }> = {
+const STATUS_META: Record<ReleaseStatus, { label: string; tone: string }> = {
   draft: { label: "Draft", tone: "p-card p-text-2" },
   planning: { label: "Planning", tone: "p-badge-info" },
   patching: { label: "Patching", tone: "p-badge-danger" },
@@ -32,7 +33,7 @@ const STATUS_META: Record<ProductChangeStatus, { label: string; tone: string }> 
   failed: { label: "Failed", tone: "p-badge-danger" },
 };
 
-const CHECK_TONE: Record<ProductChangeCheck["status"], string> = {
+const CHECK_TONE: Record<ReleaseCheck["status"], string> = {
   pending: "p-card p-text-3",
   running: "p-badge-warning",
   passed: "p-badge-success",
@@ -45,14 +46,14 @@ function timeShort(ts: number): string {
   return new Date(ts).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
-function sourceLabel(binding: ProductSourceBinding | undefined): string {
+function sourceLabel(binding: ReleaseSource | undefined): string {
   if (!binding) return "Unknown source";
   return binding.kind === "github"
     ? `${binding.label} · ${binding.repoUrl ?? "GitHub"}`
     : `${binding.label} · ${binding.localRoot ?? "local"}`;
 }
 
-function statusBadge(status: ProductChangeStatus) {
+function statusBadge(status: ReleaseStatus) {
   const meta = STATUS_META[status];
   return <span className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-medium ${meta.tone}`}>{meta.label}</span>;
 }
@@ -95,7 +96,7 @@ function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
 }
 
 function SourceBindingForm({ rpc, onSaved }: { rpc: Rpc; onSaved: () => void }) {
-  const [kind, setKind] = useState<ProductSourceBinding["kind"]>("local");
+  const [kind, setKind] = useState<ReleaseSource["kind"]>("local");
   const [label, setLabel] = useState("Proteus checkout");
   const [repoUrl, setRepoUrl] = useState("");
   const [defaultBranch, setDefaultBranch] = useState("main");
@@ -108,7 +109,7 @@ function SourceBindingForm({ rpc, onSaved }: { rpc: Rpc; onSaved: () => void }) 
   const save = useCallback(async () => {
     setBusy(true); setErr(null);
     try {
-      await rpc("upsertProductSourceBinding", [{
+      await rpc("upsertReleaseSource", [{
         kind, label,
         repoUrl: kind === "github" ? repoUrl : null,
         defaultBranch: kind === "github" ? defaultBranch : null,
@@ -155,7 +156,7 @@ function SourceBindingForm({ rpc, onSaved }: { rpc: Rpc; onSaved: () => void }) 
 
 function CreateChangeForm({
   bindings, rpc, onCreated,
-}: { bindings: ProductSourceBinding[]; rpc: Rpc; onCreated: (id: string) => void }) {
+}: { bindings: ReleaseSource[]; rpc: Rpc; onCreated: (id: string) => void }) {
   const [bindingId, setBindingId] = useState("");
   const [prompt, setPrompt] = useState("");
   const [plan, setPlan] = useState("");
@@ -170,7 +171,7 @@ function CreateChangeForm({
     if (!bindingId || !prompt.trim()) return;
     setBusy(true); setErr(null);
     try {
-      const change = await rpc<ProductChangeRequest>("createProductChange", [{ bindingId, userPrompt: prompt, plan: plan || null }]);
+      const change = await rpc<ReleaseChange>("createReleaseChange", [{ bindingId, userPrompt: prompt, plan: plan || null }]);
       setPrompt(""); setPlan("");
       onCreated(change.id);
     } catch (e) {
@@ -203,9 +204,9 @@ function CreateChangeForm({
 
 function ChangeList({
   changes, selectedId, onSelect, bindings,
-}: { changes: ProductChangeRequest[]; selectedId: string | null; onSelect: (id: string) => void; bindings: Map<string, ProductSourceBinding> }) {
+}: { changes: ReleaseChange[]; selectedId: string | null; onSelect: (id: string) => void; bindings: Map<string, ReleaseSource> }) {
   if (changes.length === 0) {
-    return <EmptyState icon={<GitDiffIcon size={28} />} title="No product changes" />;
+    return <EmptyState icon={<GitDiffIcon size={28} />} title="No release changes" />;
   }
   return (
     <div className="space-y-2">
@@ -229,36 +230,60 @@ function ChangeList({
   );
 }
 
-function ApprovalRow({ approval, rpc, onRefresh }: { approval: ProductChangeApproval; rpc: Rpc; onRefresh: () => void }) {
+function ApprovalRow({ approval, binding, rpc, onRefresh }: {
+  approval: ReleaseApproval; binding: ReleaseSource | undefined; rpc: Rpc; onRefresh: () => void;
+}) {
   const [busy, setBusy] = useState<"approved" | "rejected" | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const decide = async (decision: "approved" | "rejected") => {
     setBusy(decision);
     setErr(null);
-    try { await rpc("decideProductChangeApproval", [approval.id, decision]); onRefresh(); }
+    try { await rpc("decideReleaseApproval", [approval.id, decision]); onRefresh(); }
     catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusy(null); }
   };
 
+  // The digest an approval signs binds {approvalType, patch, command}, and the
+  // command is the binding's own deployTarget — agent-supplied, and until now
+  // displayed nowhere. Approving a shell string you were never shown is not an
+  // approval, however well the digest pins it afterwards.
+  const command = deployTargetAsCommand(binding?.deployTarget ?? null);
+
   return (
-    <div className="flex items-center gap-2 py-2 border-b p-border last:border-0">
-      <ShieldCheckIcon size={14} className="p-text-2 shrink-0" />
-      <div className="min-w-0 flex-1">
-        <div className="text-xs p-text">{approval.approvalType.replace(/_/g, " ")}</div>
-        <div className="text-[10px] p-text-3">{approval.decision} · {timeShort(approval.decidedAt ?? approval.createdAt)}</div>
-        {err && <div className="text-[11px] p-danger mt-0.5">{err}</div>}
+    <div className="py-2 border-b p-border last:border-0 space-y-1.5">
+      <div className="flex items-center gap-2">
+        <ShieldCheckIcon size={14} className="p-text-2 shrink-0" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs p-text">{approval.approvalType.replace(/_/g, " ")}</div>
+          <div className="text-[10px] p-text-3">{approval.decision} · {timeShort(approval.decidedAt ?? approval.createdAt)}</div>
+        </div>
+        {approval.decision === "pending" && (
+          <div className="flex items-center gap-1">
+            <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => decide("approved")} icon={busy === "approved" ? <Loader size="sm" /> : <CheckIcon size={12} />}>Approve</Button>
+            <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rejected")} icon={busy === "rejected" ? <Loader size="sm" /> : <XIcon size={12} />}>Reject</Button>
+          </div>
+        )}
       </div>
       {approval.decision === "pending" && (
-        <div className="flex items-center gap-1">
-          <Button size="sm" variant="secondary" disabled={!!busy} onClick={() => decide("approved")} icon={busy === "approved" ? <Loader size="sm" /> : <CheckIcon size={12} />}>Approve</Button>
-          <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rejected")} icon={busy === "rejected" ? <Loader size="sm" /> : <XIcon size={12} />}>Reject</Button>
+        <div className="p-recessed rounded-md px-2 py-1.5">
+          <div className="p-eyebrow p-text-3 mb-0.5">Runs on approval</div>
+          {command
+            ? <code className="text-[11px] font-mono p-text break-all">{command}</code>
+            : (
+              <span className="text-[11px] p-text-3">
+                Nothing. This approval promotes the reviewed patch; the source declares
+                {" "}<span className="font-mono">{binding?.deployTarget || "no deploy target"}</span>, which is an
+                environment label rather than a command.
+              </span>
+            )}
         </div>
       )}
+      {err && <div className="text-[11px] p-danger">{err}</div>}
     </div>
   );
 }
 
-function CheckRow({ check }: { check: ProductChangeCheck }) {
+function CheckRow({ check }: { check: ReleaseCheck }) {
   return (
     <div className="py-2 border-b p-border last:border-0">
       <div className="flex items-center gap-2">
@@ -275,7 +300,7 @@ function CheckRow({ check }: { check: ProductChangeCheck }) {
   );
 }
 
-function DeploymentRow({ deployment }: { deployment: ProductDeploymentRecord }) {
+function DeploymentRow({ deployment }: { deployment: ReleaseDeployment }) {
   return (
     <div className="py-2 border-b p-border last:border-0">
       <div className="flex items-center gap-2">
@@ -295,11 +320,11 @@ function DeploymentRow({ deployment }: { deployment: ProductDeploymentRecord }) 
 function ChangeDetail({
   change, binding, checks, approvals, deployments, rpc, onRefresh,
 }: {
-  change: ProductChangeRequest | null;
-  binding: ProductSourceBinding | undefined;
-  checks: ProductChangeCheck[];
-  approvals: ProductChangeApproval[];
-  deployments: ProductDeploymentRecord[];
+  change: ReleaseChange | null;
+  binding: ReleaseSource | undefined;
+  checks: ReleaseCheck[];
+  approvals: ReleaseApproval[];
+  deployments: ReleaseDeployment[];
   rpc: Rpc;
   onRefresh: () => void;
 }) {
@@ -311,7 +336,7 @@ function ChangeDetail({
   const requestApproval = async () => {
     setBusyApproval(true);
     setApprovalErr(null);
-    try { await rpc("requestProductChangeApproval", [change.id, "apply"]); onRefresh(); }
+    try { await rpc("requestReleaseApproval", [change.id, "apply"]); onRefresh(); }
     catch (e) { setApprovalErr(e instanceof Error ? e.message : String(e)); }
     finally { setBusyApproval(false); }
   };
@@ -377,7 +402,7 @@ function ChangeDetail({
       <section>
         <SectionTitle icon={<ShieldCheckIcon size={14} />} title="Approvals" count={approvals.length} />
         {approvals.length === 0 ? <div className="text-xs p-text-3">None</div> : approvals.map((approval) => (
-          <ApprovalRow key={approval.id} approval={approval} rpc={rpc} onRefresh={onRefresh} />
+          <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />
         ))}
       </section>
 
@@ -396,8 +421,8 @@ function ChangeDetail({
   );
 }
 
-export function ProductChangesSurface({ rpc }: { rpc: Rpc }) {
-  const [board, setBoard] = useState<ProductChangeBoard | null>(null);
+export function ReleasesSurface({ rpc }: { rpc: Rpc }) {
+  const [board, setBoard] = useState<ReleaseBoard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -405,7 +430,7 @@ export function ProductChangesSurface({ rpc }: { rpc: Rpc }) {
   const load = useCallback(async () => {
     setErr(null);
     try {
-      const next = await rpc<ProductChangeBoard>("getProductChangeBoard", [30]);
+      const next = await rpc<ReleaseBoard>("getReleaseBoard", [30]);
       setBoard(next);
       setSelectedId((current) => current && next.changes.some((c) => c.id === current) ? current : next.changes[0]?.id ?? null);
     } catch (e) {
@@ -429,7 +454,7 @@ export function ProductChangesSurface({ rpc }: { rpc: Rpc }) {
     <div className="space-y-5 animate-fade-in">
       <div className="flex items-center gap-2">
         <GitDiffIcon size={15} className="p-text-2" />
-        <span className="text-sm font-medium p-text">Product Changes</span>
+        <span className="text-sm font-medium p-text">Releases</span>
         {board && <Badge variant="secondary">{board.changes.length}</Badge>}
         <div className="flex-1" />
         <Button size="sm" variant="ghost" onClick={load} icon={<ArrowClockwiseIcon size={12} />}>Refresh</Button>

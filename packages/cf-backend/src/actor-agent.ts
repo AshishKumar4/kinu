@@ -99,7 +99,7 @@ import {
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (takes capture + inherited-context digest)
   recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
-  type ProductChangeToolDeps,
+  type ReleaseToolDeps,
   isVfsError,
   type ParentRpcResult,
   type ParentRpcWrite,
@@ -250,14 +250,14 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
-  productChanges?: ProductChangeToolDeps | undefined;
+  releases?: ReleaseToolDeps | undefined;
 }
 
 /** The deps-gated builtins: names dropped from the advertised tool surface
  *  when the actor profile wires no deps for them. The `agents` tool is never
  *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
  *  on the same profile (see actorAgentsActions). */
-const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
+const DEPS_GATED_TOOLS = ['report', 'release'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
@@ -265,7 +265,7 @@ const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
     report: !!deps.report,
-    product_change: !!deps.productChanges,
+    release: !!deps.releases,
   };
   return ACTIVE_TOOLS.filter((name) =>
     !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
@@ -341,7 +341,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Tool deps only this actor class wires. Structural absence is the gating
    *  mechanism (the same way staffing is absent on the CLI backend): an actor
-   *  that returns {} has no staffing/peer actions and no product-change tool. */
+   *  that returns {} has no staffing/peer actions and no release tool. */
   protected abstract actorToolDeps(): ActorToolDeps;
 
   /** Codemode providers beyond the shared set. Spliced between `rlm` and
@@ -1507,9 +1507,9 @@ export abstract class ActorAgent extends Think<Env> {
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
         // The remaining actor-profile deps (subordinate report spine,
-        // product-change lane).
+        // release lane).
         ...(actorDeps.report ? { report: actorDeps.report } : {}),
-        ...(actorDeps.productChanges ? { productChanges: actorDeps.productChanges } : {}),
+        ...(actorDeps.releases ? { releases: actorDeps.releases } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       });
@@ -1849,7 +1849,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
     // The actor's REAL tool surface: deps-gated builtins (report/
-    // product_change) are advertised only when this actor class wires them,
+    // release) are advertised only when this actor class wires them,
     // and the agents ladder renders only the actions this profile supports —
     // then restricted to the active skills' allowed union (skills tool kept,
     // core turn-surface).

@@ -1,7 +1,12 @@
-export interface ProductPathValidation {
+export interface ReleasePathValidation {
   ok: boolean;
   path?: string;
   error?: string;
+  /** The rejection was a secret/config path rather than a traversal or an
+   *  absolute path. Carried as a field because `isSecretReleasePath` used to
+   *  recover it by running /secret|config/ over this record's human-readable
+   *  `error`, which made rewording that sentence silently change the predicate. */
+  secret?: boolean;
 }
 
 const SECRET_PATH_PATTERNS: RegExp[] = [
@@ -22,41 +27,41 @@ const SECRET_LINE_PATTERNS: RegExp[] = [
   /\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\b/,
 ];
 
-export function normalizeProductSourcePath(rawPath: string): string {
+export function normalizeReleasePath(rawPath: string): string {
   const raw = rawPath.replace(/\\/g, '/').trim();
-  if (!raw) throw new Error('product path is empty');
+  if (!raw) throw new Error('release path is empty');
   if (/^[A-Za-z]:\//.test(raw) || raw.startsWith('/')) {
-    throw new Error(`product path "${rawPath}" must be repo-relative, not absolute`);
+    throw new Error(`release path "${rawPath}" must be repo-relative, not absolute`);
   }
 
   const parts: string[] = [];
   for (const part of raw.split('/')) {
     if (!part || part === '.') continue;
     if (part === '..') {
-      if (parts.length === 0) throw new Error(`product path "${rawPath}" escapes outside the source root`);
+      if (parts.length === 0) throw new Error(`release path "${rawPath}" escapes outside the source root`);
       parts.pop();
       continue;
     }
     parts.push(part);
   }
-  if (parts.length === 0) throw new Error('product path resolves to repository root');
+  if (parts.length === 0) throw new Error('release path resolves to repository root');
   return parts.join('/');
 }
 
-export function validateProductPatchPath(rawPath: string): ProductPathValidation {
+export function validateReleasePatchPath(rawPath: string): ReleasePathValidation {
   let path: string;
   try {
-    path = normalizeProductSourcePath(rawPath);
+    path = normalizeReleasePath(rawPath);
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
-  for (const pattern of SECRET_PATH_PATTERNS) {
-    if (pattern.test(path)) return { ok: false, path, error: `secret/config path is not patchable: ${path}` };
+  if (SECRET_PATH_PATTERNS.some((pattern) => pattern.test(path))) {
+    return { ok: false, path, secret: true, error: `secret/config path is not patchable: ${path}` };
   }
   return { ok: true, path };
 }
 
-export function redactProductDiff(diff: string): string {
+export function redactReleaseDiff(diff: string): string {
   return diff.split('\n').map((line) => {
     if (!/^[+-]/.test(line) || line.startsWith('+++') || line.startsWith('---')) return line;
     if (SECRET_LINE_PATTERNS.some((pattern) => pattern.test(line))) {
@@ -66,7 +71,6 @@ export function redactProductDiff(diff: string): string {
   }).join('\n');
 }
 
-export function isSecretProductPath(rawPath: string): boolean {
-  const normalized = validateProductPatchPath(rawPath);
-  return !normalized.ok && /secret|config/.test(normalized.error ?? '');
+export function isSecretReleasePath(rawPath: string): boolean {
+  return validateReleasePatchPath(rawPath).secret === true;
 }

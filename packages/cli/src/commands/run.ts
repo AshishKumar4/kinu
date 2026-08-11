@@ -16,7 +16,7 @@ import {
   getLocalAgentState,
   getLocalGepaRun,
   getLocalMctsNode,
-  getLocalProductBoard,
+  getLocalReleaseBoard,
   getLocalToolSurface,
   listLocalEvents,
   listLocalExecutors,
@@ -387,7 +387,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('executeInExecutor', [executor, command]);
     }
     case 'product':
-      return rpc('getProductChangeBoard', [numberField(cmd, 'limit') ?? 20]);
+      return rpc('getReleaseBoard', [numberField(cmd, 'limit') ?? 20]);
     case 'stop':
       return rpc('cancelCurrentWork');
     case 'webhook': {
@@ -461,7 +461,7 @@ async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, cl
       return executeLocalExecutor(name, executor, command);
     }
     case 'product':
-      return getLocalProductBoard(name, numberField(cmd, 'limit') ?? 20);
+      return getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20);
     case 'stop':
       client.stop();
       return { interrupted: true, cancelledBackgroundJobs: markLocalBackgroundJobsCancelled(name) };

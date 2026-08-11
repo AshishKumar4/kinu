@@ -117,7 +117,7 @@ prompt/model/tool caches, and the whole Think hook bridge — you inherit.
 
 The one thing to understand before adding an actor is that **the tool surface
 follows from `actorToolDeps()` alone**. `DEPS_GATED_TOOLS` is
-`['team', 'peers', 'report', 'product_change']`, and `actorActiveTools()` drops
+`['team', 'peers', 'report', 'release']`, and `actorActiveTools()` drops
 any of those whose deps you did not wire. There is no flag and no allowlist to
 edit: `SubordinateAgent` cannot spawn subordinates because it returns
 `{ report }` and nothing else.
@@ -287,12 +287,12 @@ an output-token cap, is the cheapness lever for most of these paths.
 
 The top-level tools are the 10 in `BUILTIN_TOOLS` (`core/src/tools/registry.ts`)
 — `execute_tools`, `run`, `file`, `skills`, `agents`, `memory`, `experience`,
-`web`, `report`, `product_change` — narrowed per actor by
+`web`, `report`, `release` — narrowed per actor by
 `actorActiveTools()`. See [TOOLS.md](./TOOLS.md).
 
 Inside `execute_tools`, the LLM additionally sees:
 
-- `workspace.*` — VFS + shell + memory (always available)
+- `workspace.*` — VFS + shell + memory + `createTool` / `createView` (always available)
 - `sandbox.*` — Linux container exec + port preview (when bound)
 - `codemode.*` — every crafted tool, dispatched through the preamble
 - `llm.query(text, opts?)` — Recursive Language Models. Sub-call has no

@@ -61,7 +61,7 @@ graph TB
     A["Agent&lt;Env&gt; — agents SDK"]
     T["Think — @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
-    O["OrchestratorAgent<br/>deps: team · peers · productChanges"]
+    O["OrchestratorAgent<br/>deps: team · peers · releases"]
     S["SubordinateAgent<br/>deps: report"]
     E["ExplorationAgent<br/>hand-built head tools only"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
@@ -82,9 +82,9 @@ hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`
 (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 
 **Tool gating is structural, not flagged.** `DEPS_GATED_TOOLS` is
-`['team', 'peers', 'report', 'product_change']`, and `actorActiveTools()` filters
+`['team', 'peers', 'report', 'release']`, and `actorActiveTools()` filters
 the active set by which deps the profile actually wired. The orchestrator wires
-`team`, `peers`, and `productChanges`; a subordinate wires only `report`. That
+`team`, `peers`, and `releases`; a subordinate wires only `report`. That
 is the whole mechanism — a subordinate cannot staff subordinates of its own
 because there is no `team` tool in its ToolSet to call.
 

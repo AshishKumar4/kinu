@@ -30,7 +30,7 @@ import {
   headsCommand,
   mctsCommand,
   memoryCommand,
-  productCommand,
+  releaseCommand,
   stateCommand,
   stopCommand,
   timelineCommand,
@@ -413,12 +413,12 @@ export function buildProgram(): Command {
     .action(wrapAction(labelCommand));
 
   program
-    .command('product <name>')
+    .command('release <name>')
     .helpGroup(INSPECT)
-    .description('Inspect product self-customization state')
+    .description('Inspect the governed release lane: sources, changes, checks, approvals, deployments')
     .option('--limit <n>', 'Change limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(productCommand));
+    .action(wrapAction(releaseCommand));
 
   // ── This computer ──────────────────────────────────────────────
 

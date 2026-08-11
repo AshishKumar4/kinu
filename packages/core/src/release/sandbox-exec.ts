@@ -1,5 +1,5 @@
 /**
- * ProductChangeExec over the sandbox executor's RAW handle.
+ * ReleaseExec over the sandbox executor's RAW handle.
  *
  * The engine needs real exit codes, so this adapter rides `SandboxHandle.exec`
  * directly (the LLM-facing `sandbox.exec` tool flattens results into lossy
@@ -10,12 +10,12 @@
 
 import type { ExecutorProvider } from '../execution/types.js';
 import { withSandboxRetry, type SandboxHandle } from '../execution/sandbox.js';
-import type { ProductChangeExec } from './engine.js';
+import type { ReleaseExec } from './engine.js';
 
-export function createSandboxProductChangeExec(
+export function createSandboxReleaseExec(
   handle: SandboxHandle,
   provider: Pick<ExecutorProvider, 'exposePort'>,
-): ProductChangeExec {
+): ReleaseExec {
   return {
     async exec(command, opts) {
       const res = await withSandboxRetry(() => handle.exec(command, {

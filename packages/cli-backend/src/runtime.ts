@@ -78,7 +78,7 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
   return (ddl: string) => db.exec(ddl);
 }
 
-/** Positional-binding SQL — what the events hub, the product-change board and
+/** Positional-binding SQL — what the events hub, the release board and
  *  the experience library speak. A Durable Object's `ctx.storage.sql` is this
  *  natively; bun:sqlite is one wrapper away. */
 export function makeSqlExec(db: {

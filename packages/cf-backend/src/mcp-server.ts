@@ -40,7 +40,7 @@
  *   • run_task           — enqueue a turn into the agent's serialized loop
  *   • send_peer          — message one of the owner's other agents (agents `send`)
  *   • list_peers         — the owner's other agents (send_peer roster helper)
- *   • product_change     — list / create / advance a product-change request
+ *   • release     — list / create / advance a release request
  *
  * v1 resources:
  *   • proteus://workspace/<name>/memory       — full memory content
@@ -55,10 +55,10 @@ import type {
   ScaffoldRunResult,
   EnqueueTurnResult,
   PeerSendOutcome,
-  ProductChangeBoard,
-  ProductChangeRequest,
+  ReleaseBoard,
+  ReleaseChange,
 } from "@proteus/core";
-import { PRODUCT_CHANGE_STATUSES, isEngineOwnedTransitionTarget } from "@proteus/core";
+import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import { AuthError, authenticateRequest } from "./auth/session.js";
 import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
@@ -328,40 +328,40 @@ function buildServer(env: Env, agentName: string): McpServer {
   );
 
   server.registerTool(
-    "product_change",
+    "release",
     {
       description:
-        "Drive the agent's product-change board. Actions: `list` (recent changes + bindings), " +
-        "`create` (open a change against a bound product source — needs bindingId + prompt), " +
+        "Drive the agent's release board. Actions: `list` (recent changes + bindings), " +
+        "`create` (open a change against a bound release source — needs bindingId + prompt), " +
         "`advance` (transition a change to a new status — the lifecycle validates the move).",
       inputSchema: {
         action: z.enum(["list", "create", "advance"]),
-        bindingId: z.string().optional().describe("create: the product source binding to change (see list)."),
+        bindingId: z.string().optional().describe("create: the release source to change (see list)."),
         prompt: z.string().optional().describe("create: what to change, in the owner's words."),
         plan: z.string().optional().describe("create: an optional up-front plan."),
         changeId: z.string().optional().describe("advance: the change to transition."),
-        status: z.enum(PRODUCT_CHANGE_STATUSES).optional().describe("advance: the target status (e.g. planning, patching, awaiting_approval)."),
+        status: z.enum(RELEASE_STATUSES).optional().describe("advance: the target status (e.g. planning, patching, awaiting_approval)."),
       },
     },
     async ({ action, bindingId, prompt, plan, changeId, status }) => {
       try {
         const agent = await resolveAgent(env, agentName);
         if (action === "list") {
-          const board: ProductChangeBoard = await agent.getProductChangeBoard(20);
+          const board: ReleaseBoard = await agent.getReleaseBoard(20);
           return { content: [{ type: "text", text: JSON.stringify(board, null, 2) }] };
         }
         if (action === "create") {
           if (!bindingId || !prompt) {
-            return { content: [{ type: "text", text: "product_change create requires bindingId and prompt." }] };
+            return { content: [{ type: "text", text: "release create requires bindingId and prompt." }] };
           }
-          const change: ProductChangeRequest = await agent.createProductChange({ bindingId, userPrompt: prompt, plan: plan ?? null });
+          const change: ReleaseChange = await agent.createReleaseChange({ bindingId, userPrompt: prompt, plan: plan ?? null });
           return { content: [{ type: "text", text: `Created change ${change.id} (${change.status}) for binding ${change.bindingId}.` }] };
         }
         // advance
         if (!changeId || !status) {
-          return { content: [{ type: "text", text: "product_change advance requires changeId and status." }] };
+          return { content: [{ type: "text", text: "release advance requires changeId and status." }] };
         }
-        // Same governance gate as the builtin product_change tool: on this
+        // Same governance gate as the builtin release tool: on this
         // backend the execution engine owns validating/preview_ready/applying/
         // deployed/rolled_back — those states are earned by real execution,
         // never asserted by an external MCP actor.
@@ -370,15 +370,15 @@ function buildServer(env: Env, agentName: string): McpServer {
             content: [{
               type: "text",
               text:
-                `product_change advance refused: status '${status}' is earned by execution, not asserted — ` +
-                `use the agent's product_change tool actions apply / run_checks / deploy / rollback to get there for real.`,
+                `release advance refused: status '${status}' is earned by execution, not asserted — ` +
+                `use the agent's release tool actions apply / run_checks / deploy / rollback to get there for real.`,
             }],
           };
         }
-        const advanced: ProductChangeRequest = await agent.transitionProductChange(changeId, status);
+        const advanced: ReleaseChange = await agent.transitionReleaseChange(changeId, status);
         return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `product_change error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `release error: ${(err as Error).message}` }] };
       }
     },
   );

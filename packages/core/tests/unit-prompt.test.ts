@@ -336,17 +336,17 @@ describe('buildSystemPromptSync', () => {
     expect(memory).toMatch(/sessions reads what past sessions said, before re-deriving/);
   });
 
-  test('the product-change flow is stated once, in the schema, plus the mode overlay', () => {
+  test('the release flow is stated once, in the schema, plus the mode overlay', () => {
     // It used to be stated three times: the schema whenToUse, a standalone
-    // `## Proteus product changes` section, and the product_change mode
+    // `## Proteus release changes` section, and the release mode
     // overlay. The overlay stays — it is mode-gated and adds the approval
     // constraint — and the standalone section is gone.
     const { rt } = createTestRuntime();
-    expect(buildSystemPromptSync(rt)).not.toContain('## Proteus product changes');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.product_change)
+    expect(buildSystemPromptSync(rt)).not.toContain('## Proteus release changes');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.release)
       .toMatch(/bind_source → create → update .* → apply → run_checks → preview → request_approval → deploy/);
-    expect(buildSystemPromptSync(rt, { mode: 'product_change' }))
-      .toContain('Never deploy Proteus product changes without an explicit approval record');
+    expect(buildSystemPromptSync(rt, { mode: 'release' }))
+      .toContain('Never deploy Proteus release changes without an explicit approval record');
   });
 
   test('renders executor section when registeredExecutors supplied', () => {
@@ -634,7 +634,7 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt)).not.toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'background_resume' })).toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'cron' })).toContain('Scheduled wake mode');
-    expect(buildSystemPromptSync(rt, { mode: 'product_change' })).toContain('Never deploy Proteus product changes');
+    expect(buildSystemPromptSync(rt, { mode: 'release' })).toContain('Never deploy Proteus release changes');
   });
 
   test('turn-mode classification is one shared rule for both backends', () => {

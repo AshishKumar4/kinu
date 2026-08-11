@@ -130,8 +130,15 @@ proteus jobs jarvis       # background jobs, and cancel them
 
 The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
 has the same information as six work surfaces — Output, Brain, Reasoning,
-Product, Tasks, Environment — plus the Evolution Changelog, where you approve or
+Releases, Tasks, Environment — plus the Evolution Changelog, where you approve or
 revert the changes the agent proposes to itself.
+
+Proteus can add work surfaces of its own. Ask it for a dashboard and it publishes
+a **view**: a tab, after the six, marked with a sparkle and labelled *written by
+Proteus*. A view is data, not code — it reads workspace state you can already see
+and draws it with the same components everything else uses, so it can show you
+numbers but can never ask you for anything. "View source" shows exactly what it
+wrote, and the Evolution Changelog reverts it.
 
 ## 7. Backup, and moving a workspace
 

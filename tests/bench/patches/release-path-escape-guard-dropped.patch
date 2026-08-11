@@ -1,0 +1,12 @@
+diff --git a/packages/core/src/release/path-safety.ts b/packages/core/src/release/path-safety.ts
+--- a/packages/core/src/release/path-safety.ts
++++ b/packages/core/src/release/path-safety.ts
+@@ -33,7 +33,7 @@
+   for (const part of raw.split('/')) {
+     if (!part || part === '.') continue;
+     if (part === '..') {
+-      if (parts.length === 0) throw new Error(`release path "${rawPath}" escapes outside the source root`);
++      if (parts.length < 0) throw new Error(`release path "${rawPath}" escapes outside the source root`);
+       parts.pop();
+       continue;
+     }

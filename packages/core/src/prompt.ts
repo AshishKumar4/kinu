@@ -95,9 +95,9 @@ function renderOperatingGuidance(surface: PromptSurface): string {
 
   if (mode === 'plan') {
     lines.push('- Planning mode: leave state as you found it and produce a concrete plan with affected files and verification.');
-  } else if (mode === 'product_change') {
-    lines.push('- Product-change mode: use product_change to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
-    lines.push('- Never deploy Proteus product changes without an explicit approval record.');
+  } else if (mode === 'release') {
+    lines.push('- Release mode: use release to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
+    lines.push('- Never deploy Proteus release changes without an explicit approval record.');
   } else if (mode === 'cron') {
     lines.push('- Scheduled wake mode: identify why you were woken, do only the scheduled work, persist any durable outcome, then stop.');
   } else if (mode === 'background_resume') {

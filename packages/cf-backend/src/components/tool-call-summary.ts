@@ -147,7 +147,7 @@ function summarizePeers(input: Record<string, unknown>): string {
   }
 }
 
-function summarizeProductChange(input: Record<string, unknown>): string {
+function summarizeRelease(input: Record<string, unknown>): string {
   const action = str(input, "action");
   const changeId = str(input, "changeId").slice(0, 8);
   switch (action) {
@@ -197,9 +197,10 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   memory: summarizeMemory,
   web: summarizeWeb,
   // think/team/peers were unified into `agents`, fact into `memory`,
-  // web_search/web_fetch into `web`, and `experience` became an owner-driven
-  // RPC rather than a tool; their summarizers remain so tool calls in STORED
-  // transcripts keep rendering.
+  // web_search/web_fetch into `web`, `experience` became an owner-driven
+  // RPC rather than a tool, and `product_change` was renamed `release`;
+  // their summarizers remain so tool calls in STORED transcripts keep
+  // rendering under the name they were recorded with.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
@@ -209,7 +210,8 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   web_search: (input) => quoted(str(input, "query")),
   web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
-  product_change: summarizeProductChange,
+  release: summarizeRelease,
+  product_change: summarizeRelease,
 };
 
 /** MCP and crafted tools have no known argument contract. A single string

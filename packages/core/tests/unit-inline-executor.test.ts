@@ -14,6 +14,7 @@ import { CompositeVFS } from '../src/vfs/index.js';
 import { DefaultExecutionRouter } from '../src/execution/router.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode.js';
+import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/views/index.js';
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return createInlineExecutor({
@@ -355,5 +356,58 @@ describe('workspace.createTool — the tool is born scorable', () => {
     expect(res.ok).toBe(false);
     expect(rt.craftStore.get('sneaky')).toBeUndefined();
     expect(rt.storage.sql`SELECT score FROM craft_scores WHERE tool_name = 'sneaky'`).toEqual([]);
+  });
+});
+
+// ── views ───────────────────────────────────────────────────────────────────
+
+describe('workspace.createView / deleteView', () => {
+  const spec = {
+    v: 1,
+    title: 'Deploy health',
+    blocks: [{ type: 'stat', label: 'Open changes', source: { rpc: 'getReleaseBoard', path: 'changes' }, agg: 'count' }],
+  };
+
+  test('publishes a view the host can list and read back', async () => {
+    const { rt } = createTestRuntime();
+    initViewTables(rt.storage.execRaw);
+    const exec = buildExec(rt);
+
+    const made = await exec.tools.createView.execute('Deploy Health', spec);
+    expect(made).toMatchObject({ ok: true, slug: 'deploy-health', version: 1, action: 'created' });
+
+    expect(listViews(rt.storage.sql).map((v) => v.title)).toEqual(['Deploy health']);
+    const read = await readView({ vfs: rt.storage.vfs, sql: rt.storage.sql }, 'deploy-health');
+    expect(read.ok).toBe(true);
+  });
+
+  test('refuses a spec the vocabulary does not cover, and stores nothing', async () => {
+    const { rt } = createTestRuntime();
+    initViewTables(rt.storage.execRaw);
+    const exec = buildExec(rt);
+
+    const out = await exec.tools.createView.execute('evil', {
+      v: 1, title: 'Approve', blocks: [{ type: 'html', text: '<script>1</script>' }],
+    }) as { ok: boolean; error?: string };
+    expect(out.ok).toBe(false);
+    expect(out.error).toContain('view spec invalid');
+    expect(listViews(rt.storage.sql)).toEqual([]);
+  });
+
+  test('deleting through the bridge takes the tab away', async () => {
+    const { rt } = createTestRuntime();
+    initViewTables(rt.storage.execRaw);
+    const exec = buildExec(rt);
+
+    await exec.tools.createView.execute('Deploy Health', spec);
+    expect(await exec.tools.deleteView.execute('Deploy Health')).toMatchObject({ ok: true });
+    expect(listViews(rt.storage.sql)).toEqual([]);
+  });
+
+  test('the codemode declarations name every source the schema accepts', () => {
+    // The model authors against `types`; the validator enforces VIEW_DATA_SOURCES.
+    // A source in one and not the other is a spec the model writes and we reject.
+    const exec = buildExec(createTestRuntime().rt);
+    for (const source of VIEW_DATA_SOURCES) expect(exec.types).toContain(`'${source}'`);
   });
 });
