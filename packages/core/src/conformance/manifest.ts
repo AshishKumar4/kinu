@@ -90,11 +90,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     agents: EVERYWHERE,
     memory: EVERYWHERE,
     web: EVERYWHERE,
-    experience: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the experience library') },
-      cli: { absent: NO_USER_PLANE('the cross-workspace experience library') },
-    },
     report: {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
       'cf-subordinate': WIRED,

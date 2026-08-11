@@ -102,7 +102,9 @@ import {
   type PendingBranch, type BranchStatusEvent,
   type ProductChangeApproval, type ProductChangeStatus,
   type ProductChangeToolDeps, type ProductSourceBindingInput,
-  type ExperienceToolDeps,
+  runExperienceAction,
+  type ExperienceActionDeps,
+  type ExperienceActionInput,
   // Product-change execution engine — the driver beneath the governance ledger
   ProductChangeEngine, createSandboxProductChangeExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
@@ -134,6 +136,8 @@ import {
   admitSubordinateReport,
   createTeamToolDeps,
   normalizeReportContent,
+  parentAdmitsSubordinateReport,
+  type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
 } from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
@@ -758,11 +762,10 @@ export class OrchestratorAgent extends ActorAgent {
     });
   }
 
-  /** The `experience` tool's deps: this workspace's own stores plus a client
-   *  for the owner's library, every call of which crosses the UserDO
-   *  capability gate. Absent until the workspace is claimed — there is no
-   *  owner library to reach before that. */
-  private getExperienceToolDeps(): ExperienceToolDeps | undefined {
+  /** This workspace's own stores plus a client for the owner's library, every
+   *  call of which crosses the UserDO capability gate. Absent until the
+   *  workspace is claimed — there is no owner library to reach before that. */
+  private getExperienceDeps(): ExperienceActionDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
     return {
@@ -774,6 +777,27 @@ export class OrchestratorAgent extends ActorAgent {
         get: async (id) => { const { stub, caller } = await hub(); return stub.getExperienceEntry(caller, id); },
       },
     };
+  }
+
+  /**
+   * The owner's experience library — publish / search / import, driven by the
+   * owner rather than by the agent.
+   *
+   * It was a tool once. Sharing proven work between workspaces is a rare and
+   * deliberate decision, and a tool costs the model attention on every turn it
+   * is not the answer to, so the same dispatcher now sits behind this RPC for
+   * the webUI to call. It runs on the workspace DO, not the UserDO, for a
+   * reason the UserDO enforces: publishing happens under a workspace's own
+   * name, and import stages into this workspace's ledger.
+   */
+  @callable()
+  async experienceAction(input: ExperienceActionInput): Promise<Record<string, unknown>> {
+    this.ensureSchema();
+    const deps = this.getExperienceDeps();
+    if (!deps) {
+      return { error: 'This workspace has no owner yet, so there is no experience library to reach.' };
+    }
+    return runExperienceAction(deps, input);
   }
 
   private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
@@ -832,7 +856,6 @@ export class OrchestratorAgent extends ActorAgent {
       team: this.getTeamToolDeps(),
       productChanges: this.getProductChangeToolDeps(),
       peers: this.getPeersToolDeps(),
-      experience: this.getExperienceToolDeps(),
     };
   }
 
@@ -3911,11 +3934,17 @@ export class OrchestratorAgent extends ActorAgent {
     fromSubordinate: string;
     status: SubordinateReportStatus;
     content: string;
+    origin: SubordinateReportOrigin;
   }): Promise<{ id: string; admitted: boolean }> {
     this.ensureSchema();
     const subordinate = this.subordinateRoster.get(input.fromSubordinate);
     if (!subordinate || subordinate.status === 'dismissed') {
       throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
+    }
+    // Before the spill: a relay this workspace is not the audience for must not
+    // leave a file behind on its file plane either. No event exists, so no id.
+    if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate })) {
+      return { id: '', admitted: false };
     }
     const receivedAt = Date.now();
     // A report longer than the brief budget is spilled to this workspace's own

@@ -88,6 +88,13 @@ describe('tool call summaries — builtins', () => {
     expect(summarizeToolCall('web_search', { query: 'workers ai session affinity' }))
       .toBe('"workers ai session affinity"');
     expect(summarizeToolCall('web_fetch', { url: 'https://example.com/docs' })).toBe('https://example.com/docs');
+    // `experience` left the tool surface for the owner's RPC; the calls the
+    // agent already made stay in history and keep their line.
+    expect(summarizeToolCall('experience', { action: 'search', query: 'auth retry backoff' }))
+      .toBe('search — "auth retry backoff"');
+    expect(summarizeToolCall('experience', { action: 'publish', kind: 'craft', key: 'slugify' }))
+      .toBe('publish craft — "slugify"');
+    expect(summarizeToolCall('experience', { action: 'import', id: 'exp-71' })).toBe('import — "exp-71"');
   });
 
   test('peers distinguishes the addressee and the reply lane', () => {

@@ -64,14 +64,15 @@ describe('subordinate wiring', () => {
     expect(profile).not.toContain('team:');
     expect(profile).not.toContain('peers:');
     expect(profile).not.toContain('productChanges:');
-    // Cross-workspace experience transfer is reach beyond the workspace, so it
-    // rides the orchestrator's profile for the same reason peers does.
+    // Cross-workspace experience transfer is no longer a tool at all — it is
+    // the owner's RPC on the orchestrator, and reaches no actor's profile.
     expect(profile).not.toContain('experience:');
-    expect(source('orchestrator.ts')).toContain('experience: this.getExperienceToolDeps(),');
+    expect(source('orchestrator.ts')).toContain('async experienceAction(input: ExperienceActionInput)');
+    expect(source('actor-agent.ts')).not.toContain('experience');
     // …and absence is structural: a deps-gated name is dropped from the
     // advertised surface too, not just from the ToolSet.
     expect(source('actor-agent.ts'))
-      .toContain("const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;");
+      .toContain("const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;");
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {
@@ -95,5 +96,57 @@ describe('subordinate wiring', () => {
       .toBeLessThan(ingress.indexOf('transactionSync'));
     expect(ingress).toContain('const content = normalizeReportContent(input.content);');
     expect(ingress).toContain('...(contentPath ? { contentPath } : {}),');
+  });
+
+  // The policy itself is core's, and its behaviour is proven there
+  // (core/tests/unit-subordinates.test.ts). What is backend-specific is that
+  // BOTH hops actually consult it, and that neither hop can be reached around.
+  test('every upward channel is tagged with the origin the relay policy reads', () => {
+    const subordinate = source('subordinate-agent.ts');
+    expect(subordinate).toContain(
+      'private async sendReport(\n    status: SubordinateReportStatus,\n'
+      + '    content: string,\n    origin: SubordinateReportOrigin,\n  )');
+    // The three senders, and what each of them is: a deliberate choice, and two
+    // automatic relays.
+    expect(subordinate).toContain("await this.sendReport(input.status, input.content, 'report_tool')");
+    expect(subordinate).toContain("void this.sendReport('progress', assistantText, 'turn_end')");
+    expect(subordinate).toContain("void this.sendReport('progress', `${subject}\\n\\n${body}`, 'turn_end')");
+    // …and those three are all of them: one declaration plus exactly the three
+    // call sites above, so no upward channel can skip the origin.
+    expect(subordinate.match(/sendReport\(/g)).toHaveLength(4);
+  });
+
+  test('the subordinate withholds an owner-driven turn, and the parent drops what it is not waiting on', () => {
+    const subordinate = source('subordinate-agent.ts');
+    const orchestrator = source('orchestrator.ts');
+
+    expect(subordinate).toContain(
+      'const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();');
+    expect(subordinate).toContain(
+      'if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText }))');
+
+    const ingress = orchestrator.slice(
+      orchestrator.indexOf('async receiveSubordinateEvent('),
+      orchestrator.indexOf('// ── Mission Inbox'),
+    );
+    expect(ingress).toContain(
+      'if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate }))');
+    // Dropped before the spill: a relay the parent is not the audience for
+    // leaves no file on its plane either.
+    expect(ingress.indexOf('parentAdmitsSubordinateReport'))
+      .toBeLessThan(ingress.indexOf('await spillEventContent'));
+  });
+
+  test('the live roster stays a push channel; only the report rail is gated', () => {
+    const orchestrator = source('orchestrator.ts');
+    // subordinates_changed is the webUI's roster feed and is emitted from the
+    // team policy on every spawn/assign/message/dismiss, independently of
+    // whether any report was admitted.
+    expect(orchestrator).toContain('broadcast: (event) => orchestrator.broadcastSubordinatesChanged(event),');
+    const changed = orchestrator.slice(
+      orchestrator.indexOf('private broadcastSubordinatesChanged('),
+      orchestrator.indexOf('private broadcastSubordinateEvent('),
+    );
+    expect(changed).not.toContain('parentAdmitsSubordinateReport');
   });
 });

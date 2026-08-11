@@ -190,7 +190,7 @@ describe('buildSystemPromptSync', () => {
     expect(DELEGATION_RUNGS.fork).toMatch(/Breadth: work splits into 2\+ independent angles/);
     expect(DELEGATION_RUNGS.fork).toMatch(/Doubt: your first attempt failed/);
     expect(DELEGATION_RUNGS.fork).toMatch(/you cannot check your own output/);
-    expect(DELEGATION_RUNGS.fork).toMatch(/being unsure is a reason to fork, not a reason to push on alone/);
+    expect(DELEGATION_RUNGS.fork).toMatch(/being unsure is itself a reason to fork/);
 
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -243,7 +243,7 @@ describe('buildSystemPromptSync', () => {
     expect(kimi).not.toContain(BUILTIN_TOOL_SPECS.run.summary);
     expect(kimi).not.toContain('Search docs.');
     // The guard line is family-independent.
-    expect(kimi).toContain('Only call tools listed here');
+    expect(kimi).toContain('Call the tools listed here');
 
     // Anthropic/OpenAI families: one summary line per tool.
     expect(anthropic).toContain(`- **run** — ${BUILTIN_TOOL_SPECS.run.summary}`);
@@ -474,13 +474,13 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toContain('## Verification');
-    expect(prompt).toMatch(/Reasoning it out correctly is not evidence that you wrote it down correctly/);
+    expect(prompt).toMatch(/The artifact is the evidence — read it/);
     // The transposition test: check the artifact's literal shape, not the plan.
     expect(prompt).toMatch(/Re-read the artifact itself/);
     expect(prompt).toMatch(/column order, direction, units, filenames/);
     // The self-graded-signature test.
-    expect(prompt).toMatch(/Build to the interface the task states, not the one that was convenient/);
-    expect(prompt).toMatch(/prove only that it is self-consistent/);
+    expect(prompt).toMatch(/Build to the interface the task states/);
+    expect(prompt).toMatch(/A result is something you executed/);
     // The old buried line is gone — one home for the doctrine, not two.
     expect(prompt).not.toContain('narrowest reliable checks');
     // It lands last, right before the answer it governs.
@@ -506,7 +506,7 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
     expect(withRun).toMatch(/Run the real check and report what passed or failed/);
-    expect(withRun).toMatch(/an unexecuted claim is not a result/);
+    expect(withRun).toMatch(/A result is something you executed/);
   });
 
   test('includes output-format guidance', () => {
@@ -623,7 +623,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('when the backend supports them');
     // The model must not wrap up early because of token-budget fears.
     expect(prompt).toContain('Your context window is automatically compacted as it approaches its limit');
-    expect(prompt).toContain('do not stop or wrap up tasks early due to token-budget concerns');
+    expect(prompt).toContain('so work each task through to completion');
   });
 
   test('per-section char budgets stay pinned (additions must be deliberate)', () => {
@@ -641,7 +641,11 @@ describe('buildSystemPromptSync', () => {
       // tool (2026-07, Subordinates A2). Real actors advertise a
       // deps-filtered subset; this representative surface carries all three.
       // 2026-08: think/team summaries now name the lifetime rung they are.
-      'Tools available this turn': 1800,
+      // 2026-08: +1 concrete example call per tool, and the index lost the
+      // `experience` line. The prompt teaches tool use by showing a real
+      // argument shape rather than by describing one — deliberate, and the
+      // only place the specs' `example` field is rendered.
+      'Tools available this turn': 2100,
       // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
       // /pc file plane; exec stays target-native) — deliberate (2026-07).
       'Execution environments': 2450,

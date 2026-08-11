@@ -30,15 +30,12 @@
  *                       wired), the typed keyed world model (remember / recall
  *                       / forget, gated on deps.facts) and past session
  *                       transcripts (sessions).
- *   7. experience     — cross-workspace transfer of proven crafts / lessons /
- *                       facts through the owner's library. Gated on
- *                       deps.experience (workspace orchestrator only).
- *   8. web            — live web access: search / fetch. Gated on
+ *   7. web            — live web access: search / fetch. Gated on
  *                       deps.webSearch.
- *   9. report         — the subordinate's progress spine back to its parent
+ *   8. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
- *  10. product_change — governed product/UI self-customization lane.
+ *   9. product_change — governed product/UI self-customization lane.
  *                       Gated on deps.productChanges.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -71,7 +68,6 @@ import {
 } from '../safety/approval-gate.js';
 import { formatExecResult } from '../execution/exec-result.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
-import { createExperienceTool, type ExperienceToolDeps } from './experience-tool.js';
 import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import {
@@ -170,9 +166,6 @@ export interface BuiltinToolDeps {
   /** agent_facts world model. When provided, the `memory` tool also exposes
    *  the keyed-fact actions (remember / recall / forget). */
   facts?: import('../memory/facts.js').FactsStore;
-  /** The owner's cross-workspace experience library. When provided, exposes
-   *  the `experience` tool (publish / search / import). */
-  experience?: ExperienceToolDeps;
   /** Voyager/Tool-Search-style relevance filter for crafted tool surfacing.
    *  Default 'all'. In 'relevant' mode, only top-K matches (FTS5 by `query`
    *  ∪ frequently-used recent) are injected — saves context as the store
@@ -781,12 +774,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 7. experience — cross-workspace transfer of proven crafts/lessons/facts ──
-  if (deps.experience) {
-    tools.experience = createExperienceTool(deps.experience);
-  }
-
-  // ── 8. web — live web research (search / fetch) ───────────────────────────
+  // ── 7. web — live web research (search / fetch) ───────────────────────────
   // One capability used as a pair: search discovers ranked results, fetch
   // retrieves one URL as clean markdown, and the doctrine is to loop them.
   // Both work key-less (DuckDuckGo + Markdown-for-Agents); a stored `tavily`

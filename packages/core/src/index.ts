@@ -203,11 +203,18 @@ export {
 
 // Cross-workspace experience transfer (owner-scoped library + gated imports).
 // The gate, the staging ledger and the settle path are driven from inside core
-// (the tool and EvolutionEngine), so what crosses the package boundary is the
-// library a backend hosts, the two schema initializers, and the read surfaces.
+// (runExperienceAction and EvolutionEngine), so what crosses the package
+// boundary is the library a backend hosts, the two schema initializers, the
+// read surfaces, and the action dispatcher the owner's RPC drives.
 export {
   createExperienceLibrary,
   findPublishable,
+  runExperienceAction,
+  EXPERIENCE_ACTIONS,
+  type ExperienceAction,
+  type ExperienceActionDeps,
+  type ExperienceActionInput,
+  type ExperienceLibraryClient,
   initExperienceLibraryTables,
   initImportedExperienceTable,
   listImportedExperience,
@@ -223,11 +230,6 @@ export {
   type PublishSources,
   type PublishableCandidate,
 } from './experience/index.js';
-export {
-  createExperienceTool,
-  type ExperienceLibraryClient,
-  type ExperienceToolDeps,
-} from './tools/experience-tool.js';
 
 // Chat engine (shared between server and CLI)
 export { runChat, type ChatEvent, type ChatOptions } from './chat.js';
@@ -339,10 +341,13 @@ export {
   createTeamToolDeps,
   describeSubordinateHandoff,
   normalizeReportContent,
+  parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
   renderSubordinateInheritedContext,
+  subordinateRelaysTurnEnd,
   type SubordinateIdentity,
   type SubordinateLiveStatus,
+  type SubordinateReportOrigin,
   type SubordinateRuntime,
   type SubordinatesChangedEvent,
 } from './subordinates/support.js';

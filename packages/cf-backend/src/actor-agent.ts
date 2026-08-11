@@ -106,8 +106,6 @@ import {
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
-  // Cross-workspace experience transfer
-  type ExperienceToolDeps,
   readSoul,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
@@ -252,9 +250,6 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
-  /** Cross-workspace experience transfer — orchestrator-only, for the same
-   *  reason peers is: a subordinate's world is its workspace. */
-  experience?: ExperienceToolDeps | undefined;
   productChanges?: ProductChangeToolDeps | undefined;
 }
 
@@ -262,7 +257,7 @@ export interface ActorToolDeps {
  *  when the actor profile wires no deps for them. The `agents` tool is never
  *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
  *  on the same profile (see actorAgentsActions). */
-const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;
+const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
@@ -270,7 +265,6 @@ const DEPS_GATED_TOOLS = ['report', 'experience', 'product_change'] as const;
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
     report: !!deps.report,
-    experience: !!deps.experience,
     product_change: !!deps.productChanges,
   };
   return ACTIVE_TOOLS.filter((name) =>
@@ -1515,7 +1509,6 @@ export abstract class ActorAgent extends Think<Env> {
         // The remaining actor-profile deps (subordinate report spine,
         // product-change lane).
         ...(actorDeps.report ? { report: actorDeps.report } : {}),
-        ...(actorDeps.experience ? { experience: actorDeps.experience } : {}),
         ...(actorDeps.productChanges ? { productChanges: actorDeps.productChanges } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),

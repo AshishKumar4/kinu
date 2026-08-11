@@ -522,6 +522,68 @@ export function normalizeReportContent(content: string): string {
   return requiredText(content, 'content');
 }
 
+/**
+ * Where a subordinate's outbound message came from, and therefore who it is
+ * for.
+ *
+ * A subordinate answers to two audiences and only one of them is its parent.
+ * `report_tool` is the subordinate deliberately choosing to speak upward.
+ * `turn_end` is the automatic relay of a finished turn's answer, which belongs
+ * to whoever asked the question — and that is not always the parent.
+ */
+export type SubordinateReportOrigin = 'report_tool' | 'turn_end';
+
+/**
+ * Subordinate side: does this finished turn's answer go up to the parent?
+ *
+ * Yes when a queued signal drove the turn — the parent's assignment, or a
+ * background job that assignment detached. That relay is the "or its
+ * completion" half of reporting, and it is why an assigned subordinate need
+ * not remember to call `report`.
+ *
+ * No when the owner drove the turn by typing into the subordinate's own chat.
+ * That answer is the owner's. Relaying it would spend the parent's turns on a
+ * conversation it is not part of and paste someone else's dialogue into its
+ * context. The parent can still read the subordinate's state whenever it wants
+ * (`agents` status, the roster in its dynamic context) — visibility on request,
+ * not push. And the subordinate may always choose to speak up: the `report`
+ * tool does not come through here.
+ */
+export function subordinateRelaysTurnEnd(input: {
+  /** The `report` tool already spoke for this turn; a relay would duplicate it. */
+  reportedThisTurn: boolean;
+  /** True when the owner typed this turn's driving message, false when a queued
+   *  signal did (an event drain carrying a parent assignment, a background-job
+   *  wake, a timer). */
+  ownerDriven: boolean;
+  assistantText: string;
+}): boolean {
+  return !input.reportedThisTurn
+    && !input.ownerDriven
+    && input.assistantText.trim().length > 0;
+}
+
+/**
+ * Parent side: does an arriving report enter the parent's event rail — the rail
+ * that wakes it, bills a turn and writes into its history?
+ *
+ * The subordinate cannot answer this, because only the parent knows whether it
+ * is waiting on this subordinate for anything. A deliberate `report` always
+ * enters: the subordinate chose to speak, and that choice is the whole contract.
+ * An automatic turn-end relay enters only while the roster still shows work the
+ * parent actually handed over. With no open assignment the turn was driven by
+ * something downstream of the owner's own conversation — most often a
+ * background job that conversation detached, which wakes the subordinate
+ * programmatically and would otherwise smuggle the owner's dialogue upward one
+ * hop removed.
+ */
+export function parentAdmitsSubordinateReport(input: {
+  origin: SubordinateReportOrigin;
+  entry: SubordinateRosterEntry;
+}): boolean {
+  return input.origin === 'report_tool' || input.entry.currentTask !== null;
+}
+
 /** `contentPath` addresses the spill the caller already wrote for this exact
  *  content (`spillEventContent`), letting the parent's brief cite a report
  *  longer than the brief budget instead of dropping its tail. Producers spill

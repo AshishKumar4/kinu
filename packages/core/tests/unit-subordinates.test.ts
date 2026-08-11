@@ -18,12 +18,16 @@ import {
   createTeamToolDeps,
   describeSubordinateHandoff,
   normalizeReportContent,
+  parentAdmitsSubordinateReport,
   readSubordinateLiveStatus,
+  subordinateRelaysTurnEnd,
   type SerializedMessage,
   type SqlExec,
   type SubordinateDelivery,
   type SubordinateHandoff,
+  type SubordinateReportOrigin,
   type SubordinateReportPayload,
+  type SubordinateReportStatus,
   type SubordinateRosterEntry,
   type SubordinateRuntime,
 } from '../src/index.js';
@@ -558,6 +562,125 @@ describe('subordinate event admission', () => {
       fromSubordinate: 'researcher', status: 'progress', content: ' ', now: 1,
     })).toThrow('content');
     expect(log.pending()).toEqual([]);
+  });
+});
+
+describe('the owner talking to a subordinate does not wake its parent', () => {
+  /**
+   * Both hops of the real path, composed in the order production runs them:
+   * the subordinate decides whether a finished turn owes the parent an answer
+   * (subordinate-agent `onChatResponse`), then the parent decides whether what
+   * arrives enters the rail that wakes it (orchestrator
+   * `receiveSubordinateEvent`). The assertions read the parent's event log,
+   * because that log IS the wake — a report that never lands there bills no
+   * turn and enters no context.
+   */
+  function scenario() {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    const roster = new SubordinateRosterStore(makeSql());
+    roster.ensureSchema();
+    // Spawned with a mission, so the parent starts out waiting on an answer.
+    roster.create(initialRosterEntry);
+
+    const arrivesAtParent = (
+      origin: SubordinateReportOrigin,
+      content: string,
+      status: SubordinateReportStatus,
+    ) => {
+      const entry = roster.requireActive('researcher');
+      if (!parentAdmitsSubordinateReport({ origin, entry })) return;
+      admitSubordinateReport(log, { fromSubordinate: 'researcher', status, content, now: 1 });
+      roster.applyReport('researcher', status);
+    };
+
+    return {
+      roster,
+      /** A subordinate turn finishes. */
+      turnEnds(input: { ownerDriven: boolean; assistantText: string; reportedThisTurn?: boolean }) {
+        if (!subordinateRelaysTurnEnd({ reportedThisTurn: false, ...input })) return;
+        arrivesAtParent('turn_end', input.assistantText, 'progress');
+      },
+      /** The subordinate chooses to speak, via the `report` tool. */
+      reportTool: (content: string, status: SubordinateReportStatus = 'completed') =>
+        arrivesAtParent('report_tool', content, status),
+      /** A detached background job settles (the subordinate's `notifyOwner`). */
+      jobSettles: (content: string) => arrivesAtParent('turn_end', content, 'progress'),
+      /** What the parent was actually woken with. */
+      woken: () => log.pending({ variant: 'subordinate_report' })
+        .map((event) => (event.payload as SubordinateReportPayload).content),
+    };
+  }
+
+  test('the owner’s own conversation reaches the parent never, however long it runs', () => {
+    const scene = scenario();
+
+    // Note the parent HAS an open assignment throughout: the answer is withheld
+    // because of who asked, not because the parent is idle.
+    for (const reply of ['Hi — what do you need?', 'Here are three angles.', 'Done.']) {
+      scene.turnEnds({ ownerDriven: true, assistantText: reply });
+    }
+
+    expect(scene.woken()).toEqual([]);
+  });
+
+  test('the answer to the parent’s own assignment still arrives automatically', () => {
+    const scene = scenario();
+
+    scene.turnEnds({ ownerDriven: false, assistantText: 'Mapped 14 competitors.' });
+    // A turn that said nothing has no answer to relay.
+    scene.turnEnds({ ownerDriven: false, assistantText: '   ' });
+
+    expect(scene.woken()).toEqual(['Mapped 14 competitors.']);
+  });
+
+  test('a subordinate that decides to report is heard mid owner-conversation', () => {
+    const scene = scenario();
+    scene.reportTool('Market mapped.', 'completed');
+    expect(scene.roster.requireActive('researcher').currentTask).toBeNull();
+
+    scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
+    scene.reportTool('You should see this: incumbent pricing just moved.');
+
+    expect(scene.woken()).toEqual([
+      'Market mapped.',
+      'You should see this: incumbent pricing just moved.',
+    ]);
+  });
+
+  test('work the owner’s conversation detached cannot smuggle it upward one hop later', () => {
+    const scene = scenario();
+    scene.reportTool('Market mapped.', 'completed');
+
+    // A >30s tool the owner's chat turn detached: the job settles, and its wake
+    // drives a turn that IS programmatic — the discriminator the subordinate
+    // alone can read says "not the owner", and only the roster knows better.
+    scene.jobSettles('Background run job completed.');
+    scene.turnEnds({ ownerDriven: false, assistantText: 'The crawl finished: 402 pages.' });
+
+    expect(scene.woken()).toEqual(['Market mapped.']);
+  });
+
+  test('the same job settling under a live assignment does reach the parent', () => {
+    const scene = scenario();
+
+    scene.jobSettles('Background run job completed.');
+
+    expect(scene.woken()).toEqual(['Background run job completed.']);
+  });
+
+  test('a turn the report tool already spoke for is not relayed twice', () => {
+    const scene = scenario();
+
+    scene.reportTool('Done — 14 competitors.', 'completed');
+    scene.turnEnds({
+      ownerDriven: false,
+      assistantText: 'Done — 14 competitors.',
+      reportedThisTurn: true,
+    });
+
+    expect(scene.woken()).toEqual(['Done — 14 competitors.']);
   });
 });
 

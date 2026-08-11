@@ -196,13 +196,16 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   agents: summarizeAgents,
   memory: summarizeMemory,
   web: summarizeWeb,
-  // think/team/peers were unified into `agents`, fact into `memory`, and
-  // web_search/web_fetch into `web`; their summarizers remain so tool calls in
-  // STORED transcripts keep rendering.
+  // think/team/peers were unified into `agents`, fact into `memory`,
+  // web_search/web_fetch into `web`, and `experience` became an owner-driven
+  // RPC rather than a tool; their summarizers remain so tool calls in STORED
+  // transcripts keep rendering.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
   fact: (input) => actionOn(str(input, "action"), str(input, "key")),
+  experience: (input) =>
+    actionOn(str(input, "action"), str(input, "kind"), str(input, "query") || str(input, "key") || str(input, "id")),
   web_search: (input) => quoted(str(input, "query")),
   web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
