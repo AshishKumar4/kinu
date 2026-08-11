@@ -7,7 +7,7 @@
  */
 import { useEffect, useRef } from "react";
 import {
-  MonitorIcon, BrainIcon, TreeStructureIcon, ClockIcon, GitDiffIcon, StackIcon,
+  MonitorIcon, BrainIcon, TreeStructureIcon, ClockIcon, GitDiffIcon, StackIcon, GaugeIcon,
 } from "@phosphor-icons/react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
@@ -19,11 +19,16 @@ import { ReasoningSurface } from "./ReasoningSurface";
 import { TasksSurface } from "./TasksSurface";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { ProductChangesSurface } from "./ProductChangesSurface";
+import { ActivitySurface } from "./ActivitySurface";
 
 export const SURFACES = ["Output", "Brain", "Reasoning", "Product", "Tasks", "Environment"] as const;
-export type SurfaceKind = (typeof SURFACES)[number];
+/** Not one of the segmented work surfaces: Activity is about the run rather
+ *  than a place to work in it, so it sits apart at the right of the strip and
+ *  carries no label. */
+export const ACTIVITY_SURFACE = "Activity";
+export type SurfaceKind = (typeof SURFACES)[number] | typeof ACTIVITY_SURFACE;
 
-const SURFACE_ICON: Record<SurfaceKind, React.ComponentType<{ size?: number }>> = {
+const SURFACE_ICON: Record<(typeof SURFACES)[number], React.ComponentType<{ size?: number }>> = {
   Output: MonitorIcon,
   Brain: BrainIcon,
   Reasoning: TreeStructureIcon,
@@ -103,6 +108,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
               </button>
             );
           })}
+        <button
+          onClick={() => onSurface(ACTIVITY_SURFACE)}
+          aria-label="Activity"
+          title="Activity — context, cost and cache"
+          className={`ml-auto px-2.5 py-2.5 transition-colors border-b-2 shrink-0 cursor-pointer ${
+            surface === ACTIVITY_SURFACE ? "p-tab-active" : "p-text-3 border-transparent hover:p-text-2"
+          }`}>
+          <GaugeIcon size={14} />
+        </button>
         </div>
       </div>
 
@@ -130,6 +144,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               pinnedPorts={props.pinnedPorts}
             />
           )}
+          {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}
         </ErrorBoundary>
       </div>
     </div>

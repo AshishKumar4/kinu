@@ -26,6 +26,7 @@
  */
 
 import type { ModelMessage, SystemModelMessage } from 'ai';
+import type { TurnContextMeter } from '../context-meter.js';
 import type { ExtensionHost } from '../extension.js';
 import { MissionBudgetExhausted, type MissionGovernor } from '../mission-budget.js';
 import { markCacheTail, type PromptCacheStrategy } from './cache-breakpoints.js';
@@ -71,6 +72,11 @@ export interface StepPipeline {
   readonly budget?: MissionGovernor | undefined;
   /** The live-state plane. Absent leaves the array without dynamic blocks. */
   readonly dynamic?: StepDynamicContext | undefined;
+  /** Per-step context measurement. This is the only place that holds the FINAL
+   *  composed array, so it is the only place the breakdown can be measured
+   *  against what the request actually was rather than what it was going to be
+   *  before the rewrites, the pruning and the weave. Absent = not measured. */
+  readonly meter?: TurnContextMeter | undefined;
 }
 
 /** Run the step pipeline. Returns the step overrides (AI SDK
@@ -96,7 +102,11 @@ export function composePrepareStep(
   const woven = pipeline.dynamic?.ledger.weave(shrunk, pipeline.dynamic.snapshot());
   const working = woven ?? shrunk;
   const plan = pipeline.cache;
-  if (!plan) return steered || pruned || woven ? { messages: working } : undefined;
-  const messages = markCacheTail(working, plan.strategy);
+  const messages = plan ? markCacheTail(working, plan.strategy) : working;
+  // Measured on the FINAL array, and on every step — including the step that
+  // changed nothing and returns undefined below, which is still a priced
+  // request and still occupies the window.
+  pipeline.meter?.measure(messages);
+  if (!plan) return steered || pruned || woven ? { messages } : undefined;
   return plan.system !== undefined ? { system: plan.system, messages } : { messages };
 }

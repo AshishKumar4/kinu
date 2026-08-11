@@ -74,8 +74,12 @@ export interface MissionSpendProvenance {
 }
 
 /** USD for one call at catalog rates (USD per 1M tokens). Cache reads are
- *  charged at the cache-read rate when the catalog publishes one. */
-function priceCall(usage: MissionCallUsage, pricing: ModelPricing): number {
+ *  charged at the cache-read rate when the catalog publishes one.
+ *
+ *  Exported because per-step cost telemetry must price a call exactly as the
+ *  ledger debits it — two implementations of this would drift, and the same
+ *  step would then cost different amounts depending on which surface asked. */
+export function priceCall(usage: MissionCallUsage, pricing: ModelPricing): number {
   const cached = Math.min(Math.max(0, usage.cached ?? 0), usage.input);
   const fresh = usage.input - cached;
   const cachedRate = pricing.cacheRead ?? pricing.input;
@@ -398,6 +402,14 @@ export class MissionGovernor {
     };
     if (delta.tokens === 0 && delta.calls === 0 && delta.spawns === 0) return;
     for (const label of new Set(labels)) this.ledger.debit(label, delta);
+  }
+
+  /** The catalog rates for the model the next call resolves to, or null while
+   *  the lookup is still in flight / the model is unpriced. The one pricing
+   *  source: telemetry that prices a call reads it here rather than opening a
+   *  second route to the catalog. */
+  pricing(): ModelPricing | null {
+    return this.deps.pricing?.() ?? null;
   }
 
   /** One label's state, or every active label's when omitted. */

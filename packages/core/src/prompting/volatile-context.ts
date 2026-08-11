@@ -43,6 +43,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import { DYNAMIC_CONTEXT_OPEN_TAG } from './sections.js';
 import { executorIsSelectable, type PromptExecutorInfo } from './surface.js';
 import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
 
@@ -276,7 +277,7 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   const present = sections.filter((section): section is string => section !== null);
   if (present.length === 0) return null;
   const body = [DYNAMIC_CONTEXT_HEADER, ...present].join('\n\n');
-  return `<dynamic_context fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
+  return `${DYNAMIC_CONTEXT_OPEN_TAG} fingerprint="${fnv1a64(body)}">\n${body}\n</dynamic_context>`;
 }
 
 /** The per-turn tail block (or null when there is nothing to say). */

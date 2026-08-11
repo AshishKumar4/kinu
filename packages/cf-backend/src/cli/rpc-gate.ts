@@ -129,6 +129,7 @@ export const AGENT_RPC_ACCESS = {
   // importing from it, is the owner's call — interactive for the same reason.
   experienceAction: 'interactive',
   forkAgent: 'interactive',
+  getActivitySnapshot: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
   getExecutorFiles: 'interactive',

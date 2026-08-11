@@ -2,6 +2,10 @@
  * Shared UI domain types for the agent RPC surface (@callable methods).
  */
 
+import type {
+	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, StepUsage,
+} from "@proteus/core";
+
 export interface MCTSNode {
 	id: string;
 	parentId: string | null;
@@ -227,4 +231,35 @@ export interface PendingConsent {
 	command: string;
 	scope: "all_local_actions";
 	createdAt: number;
+}
+
+/**
+ * The Activity surface's whole payload — one round trip, refreshed per step.
+ *
+ * The split down the middle is the point: `latest.usage` is what the provider
+ * said the newest request cost, `latest.context` is what that request was
+ * locally measured to be made of, and the two are carried separately because
+ * they do not reconcile. Anything the agent could not source is null, never a
+ * plausible-looking stand-in.
+ */
+export interface ActivitySnapshot {
+	/** The newest step the provider reported usage for. Null before the first
+	 *  measured step of the workspace's life. */
+	latest: {
+		at: number;
+		runId: string;
+		stepIndex: number;
+		usage: StepUsage;
+		/** Absent for steps recorded before the meter existed, or when the
+		 *  turn driver never measured. */
+		context: ContextComposition | null;
+	} | null;
+	/** The resolved model's context window, or null when the catalog has not
+	 *  answered — a percentage against a guessed window would be fiction. */
+	contextWindow: number | null;
+	telemetry: StepTelemetry;
+	/** Mission budgets, empty when the workspace runs under no mission label
+	 *  (the default). `pricing.source` says how honest each USD figure is. */
+	budgets: MissionBudgetSnapshot[];
+	log: ActivityLogEntry[];
 }

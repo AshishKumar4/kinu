@@ -503,9 +503,7 @@ export class LocalAgentSession implements BackendHost {
       oneShot: opts.oneShot === true,
       sinks: {
         onToolCallEvent: (ev) => this.recordRunEvent({ type: 'tool_call_end', ...ev }),
-        onStepEvent: (ev) => this.recordRunEvent({
-          type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason,
-        }),
+        onStepEvent: (ev) => this.recordRunEvent({ type: 'step_finish', ...ev }),
       },
     });
     this.jobRunner = new BackgroundJobRunner({
@@ -1450,7 +1448,13 @@ export class LocalAgentSession implements BackendHost {
       budget: this.budget,
       ...(providerOptions ? { providerOptions } : {}),
     };
-    const defaultTurn = runChat({ ...liveTurnOpts, history: this.history, signal: abort.signal, extensions });
+    // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
+    // replay re-runs those opts off the priced path, and its composition would
+    // otherwise overwrite the measurement the next real step reports.
+    const defaultTurn = runChat({
+      ...liveTurnOpts, history: this.history, signal: abort.signal, extensions,
+      meter: this.orch.acc.composition,
+    });
 
     // The mutable scaffold on the live turn seam — the local peer of the DO's
     // _transformInferenceResult. An agent still on the bootstrap v0 gets

@@ -19,6 +19,7 @@ import { getSandbox } from "@cloudflare/sandbox";
 import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
 import * as v from "valibot";
 import type {
+  ActivitySnapshot,
   TimelineSpan,
   DirEntry,
   WorkspaceAgent,
@@ -33,6 +34,8 @@ import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWrit
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
+  readActivityLog,
+  summarizeSteps,
   bootstrapScaffold,
   initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
   shouldBackupWorkspace, workspaceBackupOptions,
@@ -177,6 +180,18 @@ const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
 // subscription otherwise makes it silently deaf while it believes it has seen
 // its inbox.
 const EMAIL_INBOUND_RATE_PER_MIN = 30;
+
+// The Activity surface's retained sample. Bounded because `run_events` and
+// `activity_log` are append-only: 400 steps is deep enough for a p95 that
+// means something and shallow enough to stay one cheap indexed read.
+const ACTIVITY_STEP_WINDOW = 400;
+const ACTIVITY_LOG_WINDOW = 200;
+
+/** A caller-supplied row limit, clamped to [1, max]. */
+function clampLimit(requested: number | undefined, max: number): number {
+  if (!Number.isFinite(requested)) return max;
+  return Math.min(Math.max(Math.floor(requested as number), 1), max);
+}
 
 function executorOutputIsError(output: string): boolean {
   const text = output.trim();
@@ -2917,6 +2932,41 @@ export class OrchestratorAgent extends ActorAgent {
       } catch { /* run events unreadable — return the bare summary */ }
       return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, tokensCached, eventCount: run.eventCount };
     });
+  }
+
+  /**
+   * The Activity surface: what the newest request cost, what it was made of,
+   * and how the recent ones have behaved.
+   *
+   * The retained sample is the run-event log itself — `step_finish` rows are
+   * durable and indexed by type, so the percentile has a real window without a
+   * second store. `steps` bounds it, and the bound is reported back on the
+   * result so the reader can see what the numbers are over.
+   */
+  @callable()
+  async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
+    const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
+    const logLimit = clampLimit(opts?.logs, ACTIVITY_LOG_WINDOW);
+    const events = this.eventRecorder.readRecentByType('step_finish', windowLimit);
+    const steps = events.flatMap((e) => (e.type === 'step_finish' && e.usage ? [e] : []));
+    const newest = steps[steps.length - 1];
+    return {
+      latest: newest?.usage
+        ? {
+          at: Date.parse(newest.timestamp) || Date.now(),
+          runId: newest.runId,
+          stepIndex: newest.stepIndex,
+          usage: newest.usage,
+          context: newest.context ?? null,
+        }
+        : null,
+      // Null rather than a default: a share-of-window shown against a guessed
+      // window would be a made-up percentage.
+      contextWindow: this.sessionContextWindow() || null,
+      telemetry: summarizeSteps(steps.map((e) => e.usage!), { windowLimit }),
+      budgets: this.budget.snapshot(),
+      log: readActivityLog(this.boundSql, logLimit),
+    };
   }
 
   // ── MCP server bridge — small RPCs the MCP handler needs ──

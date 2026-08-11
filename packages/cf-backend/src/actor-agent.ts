@@ -604,7 +604,7 @@ export abstract class ActorAgent extends Think<Env> {
           },
           onStepEvent: (ev) => {
             try {
-              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
+              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
             } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
           },
         },
@@ -2031,6 +2031,10 @@ export abstract class ActorAgent extends Think<Env> {
       stopWhen: stepCountIs(this.maxSteps),
       ...(providerOptions ? { providerOptions } : {}),
     };
+    // The turn's constants for the per-step context breakdown. Tool schemas
+    // ride every request of the turn and are otherwise invisible to anyone
+    // asking where the window went.
+    this.acc.composition.openTurn({ system: systemOverride, tools: this._lastTurnOpts.tools });
     return cfg;
   }
 
@@ -2081,6 +2085,7 @@ export abstract class ActorAgent extends Think<Env> {
       prune: this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
       budget: this.budget,
       dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
+      meter: this.acc.composition,
     }, { stepNumber: ctx.stepNumber, messages: ctx.messages });
   }
 

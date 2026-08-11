@@ -9,8 +9,10 @@
 
 import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
+import { TurnContextMeter, type ContextComposition } from '../context-meter.js';
+import type { StepUsage } from '../events/types.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
-import type { MissionGovernor } from '../mission-budget.js';
+import { priceCall, type MissionGovernor } from '../mission-budget.js';
 
 /** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
  *  StepResult, minus the fields we don't use). */
@@ -42,8 +44,15 @@ export interface TurnSinks {
   logActivity?(event: string, detail?: string): void;
   /** A completed tool call, for a durable run-event log (cf RunEventRecorder). */
   onToolCallEvent?(e: { name: string; toolCallId: string; result: unknown; error?: string; durationMs?: number }): void;
-  /** A finished step, for the durable run-event log. */
-  onStepEvent?(e: { stepIndex: number; reason?: string }): void;
+  /** A finished step, for the durable run-event log. `usage` is the provider's
+   *  own report; `context` is the local measurement of the request that
+   *  produced it. Either may be absent — neither is ever fabricated. */
+  onStepEvent?(e: {
+    stepIndex: number;
+    reason?: string;
+    usage?: StepUsage;
+    context?: ContextComposition;
+  }): void;
 }
 
 export class TurnAccumulator {
@@ -65,6 +74,11 @@ export class TurnAccumulator {
    *  toolset so an edit can refuse to run blind, and read at turn end for the
    *  durable `file_edit` row. Reset with the rest of the turn. */
   readonly files = new TurnFileLedger();
+  /** What each of the turn's requests was made of. Handed to the step pipeline
+   *  (the one holder of the final composed array) and drained here, so a
+   *  measurement is always reported against the usage of the very request it
+   *  measured rather than the next one. Reset with the rest of the turn. */
+  readonly composition = new TurnContextMeter();
 
   constructor(
     private readonly sinks: TurnSinks = {},
@@ -85,6 +99,7 @@ export class TurnAccumulator {
     this.startedAt = now;
     this.context.reset();
     this.files.reset();
+    this.composition.reset();
   }
 
   /** What the turn spent, or undefined when no step reported usage — so a
@@ -165,9 +180,30 @@ export class TurnAccumulator {
       `textLen=${textLen} tools=${toolCalls.length}[${toolCallNames}] results=${toolResults.length} ` +
       `in=${inTok} out=${outTok}${extrasStr}`,
     );
+    // The provider's own report of this request, priced at the catalog rate
+    // the model carried when the call was made — the same rate and the same
+    // arithmetic the mission ledger debits with, so one step never costs two
+    // different amounts depending on who asks. No rate means no `usd`: an
+    // unpriced step is reported unpriced rather than blended into a number
+    // that looks like a measurement.
+    const pricing = this.budget?.pricing() ?? null;
+    const reported = inTok > 0 || outTok > 0;
+    const stepUsage: StepUsage | undefined = reported
+      ? {
+        input: inTok,
+        output: outTok,
+        cached,
+        reasoning,
+        ...(pricing ? { usd: priceCall({ input: inTok, output: outTok, cached }, pricing) } : {}),
+        ...(ctx.response?.modelId ? { modelId: ctx.response.modelId } : {}),
+      }
+      : undefined;
+    const composition = this.composition.take();
     this.sinks.onStepEvent?.({
       stepIndex: this.stepCount,
       reason: typeof ctx.finishReason === 'string' ? ctx.finishReason : undefined,
+      ...(stepUsage ? { usage: stepUsage } : {}),
+      ...(composition ? { context: composition } : {}),
     });
   }
 }

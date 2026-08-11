@@ -2,6 +2,7 @@
 
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
+export { readActivityLog, type ActivityLogEntry } from './identity/activity-log.js';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -385,6 +386,24 @@ export {
   FALLBACK_PURPOSE,
   type SystemPromptOptions,
 } from './prompt.js';
+// The boundaries of an assembled request — shared by the renderers that write
+// them and the meter that measures against them.
+export {
+  splitPromptSections,
+  DYNAMIC_CONTEXT_OPEN_TAG,
+  SOUL_SECTION_TITLE,
+  type PromptSection,
+} from './prompting/sections.js';
+// What one request was locally measured to be made of — an estimate, carried
+// next to the provider's authoritative totals rather than reconciled into them.
+export {
+  TurnContextMeter,
+  measureContext,
+  type ContextComposition,
+  type ContextPlane,
+  type ContextSegment,
+  type ToolDefsLike,
+} from './context-meter.js';
 export {
   compilePromptSurface,
   executorIsSelectable,
@@ -706,17 +725,21 @@ export {
   type SleepTimeInput, type SleepTimeUpdate,
 } from './memory/sleep-time-compute.js';
 
-// durable run-event log (Flue-style, SSE-resumable)
-// NOTE: superseded by the unified `events/hub/agent_log` table. The
-// RunEventRecorder API stays as a thin façade over `agent_log` writes for
-// SSE-stream compatibility. New code uses the EventsHub directly.
+// durable run-event log (Flue-style, SSE-resumable) — its own `run_events`
+// table. The EventsHub's `agent_log` is a separate ledger (ingress events,
+// phases, reactor decisions); the two coexist rather than one fronting the
+// other, and the per-step telemetry sample reads this one.
 export type {
-  RunEvent, RunEventBase, RunEventInput, RunEventType,
+  RunEvent, RunEventBase, RunEventInput, RunEventType, StepUsage,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
+  CacheHitStats, StepTelemetry,
 } from './events/index.js';
 export {
   initRunEventTables,
   RunEventRecorder,
+  cacheHitRate,
+  summarizeSteps,
+  CACHE_HIT_EMA_ALPHA,
   type RunEventListener,
   type RunEventQuery,
 } from './events/index.js';

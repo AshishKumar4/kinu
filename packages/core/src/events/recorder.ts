@@ -112,6 +112,30 @@ export class RunEventRecorder {
     return rows.map((r) => JSON.parse(r.payload) as RunEvent);
   }
 
+  /**
+   * The most recent events of ONE type, across every run, oldest first.
+   *
+   * This is the retained sample behind the step telemetry: `run_events` is
+   * already durable and already indexed by type, so a percentile over recent
+   * steps needs no ring buffer and no roll-up table. A single-value equality
+   * binds cleanly across every SqlExecutor (unlike `read`'s IN-clause), so the
+   * filter runs in SQL and `limit` is a real bound rather than a post-filter
+   * slice that can come back short.
+   *
+   * Ties on `ts` break by rowid — insertion order. `event_index` restarts at 0
+   * for every run and is therefore meaningless across runs; using it here put
+   * a new run's first step before an old run's last one whenever both landed
+   * in the same millisecond.
+   */
+  readRecentByType(type: RunEventType, limit = 200): RunEvent[] {
+    const rows = this.sql<{ payload: string }>`
+      SELECT payload FROM run_events
+      WHERE type = ${type}
+      ORDER BY ts DESC, rowid DESC
+      LIMIT ${limit}`;
+    return rows.map((r) => JSON.parse(r.payload) as RunEvent).reverse();
+  }
+
   /** Subscribe to future events; returns an unsubscribe function. */
   observe(listener: RunEventListener): () => void {
     this.listeners.add(listener);

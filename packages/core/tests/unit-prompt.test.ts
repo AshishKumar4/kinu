@@ -13,6 +13,7 @@ import {
   DELEGATION_RUNGS,
   modelSupportsTools,
   promptModeForTurnEvent,
+  splitPromptSections,
 } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
 
@@ -686,11 +687,7 @@ describe('buildSystemPromptSync', () => {
       currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
     });
-    const sections = new Map<string, number>();
-    for (const block of prompt.split(/\n(?=## )/)) {
-      const title = block.split('\n', 1)[0].replace(/^## /, '');
-      sections.set(title, block.length);
-    }
+    const sections = new Map(splitPromptSections(prompt).map((s) => [s.title, s.chars]));
     const problems: string[] = [];
     for (const [title, budget] of Object.entries(BUDGETS)) {
       const size = sections.get(title);

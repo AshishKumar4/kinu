@@ -23,6 +23,8 @@ import { Modal } from "@/components/ui/Modal";
 import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
 import type { Rpc, BackgroundJob } from "@/lib/protocol";
+import { fmtTokens, fmtPct } from "@/lib/format";
+import { cacheHitRate } from "@proteus/core";
 
 interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
 interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number }
@@ -36,12 +38,6 @@ interface TriggerRow {
   next_fire_at?: number | null;
   last_fire_at?: number | null;
   fire_count?: number;
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
-  return String(n);
 }
 
 export interface SupervisePageProps {
@@ -191,9 +187,9 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   const runs = lastValue(resource);
   const totalTokens = (runs ?? []).reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
   const totalCached = (runs ?? []).reduce((s, r) => s + (r.tokensCached ?? 0), 0);
-  // Cache hit-rate = cached input / total input (a proxy; cached is a subset of in).
   const totalIn = (runs ?? []).reduce((s, r) => s + r.tokensIn, 0);
-  const hitRate = totalIn > 0 ? Math.round((totalCached / totalIn) * 100) : 0;
+  // One definition of a cache hit, shared with the Activity surface.
+  const hitRate = cacheHitRate({ input: totalIn, cached: totalCached });
   return (
     <section>
       <div className="flex items-center gap-2 mb-3">
@@ -201,7 +197,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
         <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
         {runs && <Badge variant="secondary">{runs.length}</Badge>}
         <span className="ml-auto flex items-center gap-2">
-          {totalCached > 0 && <span className="text-[11px] p-success" title="prompt-cache hit rate (cached input / total input)">{hitRate}% cached</span>}
+          {totalCached > 0 && <span className="text-[11px] p-success" title="prompt-cache hit rate (cached input / total input)">{fmtPct(hitRate)} cached</span>}
           {totalTokens > 0 && <span className="text-[11px] p-text-3">{fmtTokens(totalTokens)} tokens</span>}
         </span>
       </div>
