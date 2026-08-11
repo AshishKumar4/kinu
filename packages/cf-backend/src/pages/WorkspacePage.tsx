@@ -9,6 +9,7 @@ import {
   GearIcon, GearSixIcon, TimerIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
   ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon, LightningIcon,
+  StackIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
@@ -26,7 +27,8 @@ import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
-import { summarizeToolCall } from "@/components/tool-call-summary";
+import { describeToolCall, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
+import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import {
   classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
@@ -248,6 +250,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   // What this call is actually about, from its own arguments — without it a
   // row of `agents` chips is six identical rows for six different calls.
   const summary = summarizeToolCall(toolName, input);
+  const description = describeToolCall(toolName, input);
 
   const failed = isError || !!provisionErr;
   return (
@@ -259,6 +262,10 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
             : <WrenchIcon size={13} className="p-text-3 opacity-60" />}
         </span>
         <span className={`font-mono text-[12px] shrink-0 ${isRunning ? "p-shimmer" : failed ? "p-danger" : ""}`}>{toolName}</span>
+        {/* What the call does, then what it was passed. The description is
+            derived from the same arguments as the summary — when they do
+            not say, it is absent rather than invented. */}
+        {description && <span className="shrink-0 p-text">{description}</span>}
         {summary && (
           <span className="min-w-0 truncate p-text-3" title={summary}>{summary}</span>
         )}
@@ -301,6 +308,65 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
               <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>
             </div>
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A run of consecutive finished tool calls, as one row.
+ *
+ * A repair is rarely one call — it is read, read, edit, write, delegate, run
+ * — and rendering each as its own row turns a turn into a wall of identical
+ * chrome that buries the prose around it. The run collapses to a single line
+ * carrying the tally, and opens to the same rows as before.
+ *
+ * Only FINISHED calls are folded in; a call still running keeps its own row
+ * so the count never changes under the reader's eye while the agent works.
+ */
+function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const failed = parts.some((p) => p.state === "output-error");
+  const headline = summarizeToolRun(parts.map((p) => ({ toolName: getToolName(p), input: p.input })));
+
+  return (
+    <div className="my-0.5">
+      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
+        className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
+        <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
+          {failed ? <span className="size-1.5 rounded-full p-dot-danger" />
+            : <StackIcon size={13} className="p-text-3 opacity-60" />}
+        </span>
+        <span className="min-w-0 truncate">{headline}</span>
+        <CaretRightIcon size={11} className={`ml-auto shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90 opacity-100" : "opacity-0 group-hover/tool:opacity-100"}`} />
+      </button>
+      {expanded && (
+        <div className="mt-0.5 ml-[7px] border-l p-border pl-3 animate-scale-in">
+          {parts.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One tool part: its row, plus the live preview a tool can return. */
+function ToolCallPart({ part }: { part: AnyToolPart }) {
+  const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+  const previewUrl = extractPreviewUrl(output);
+  return (
+    <div>
+      <ToolCallBlock toolName={getToolName(part)}
+        input={part.input as Record<string, unknown> | undefined}
+        output={output}
+        isRunning={part.state === "input-available" || part.state === "input-streaming"}
+        isError={part.state === "output-error"} />
+      {/* Inline preview card — when a tool returns a /_preview/ URL, surface a
+          live iframe under the tool block so the user sees the running app
+          inline (also promoted to the Output surface). */}
+      {previewUrl && (
+        <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
+          <PreviewFrame url={previewUrl} />
         </div>
       )}
     </div>
@@ -598,7 +664,11 @@ export const MessageView = memo(function MessageView({
           <GitBranchIcon size={12} />
         </button>
       )}
-      {message.parts.map((part, i) => {
+      {groupMessageParts(message.parts).map((block, i) => {
+        if (block.kind === "tool-run") {
+          return <ToolCallGroup key={block.parts[0]!.toolCallId} parts={block.parts} />;
+        }
+        const part = block.part;
         if (part.type === "reasoning") {
           const t = (part as { text?: string }).text;
           return t ? <ReasoningBlock key={i} text={t} /> : null;
@@ -609,7 +679,7 @@ export const MessageView = memo(function MessageView({
         if (part.type === "text") {
           const t = (part as { text: string }).text;
           if (!t) return null;
-          const isLastText = message.parts.slice(i + 1).every(p => p.type !== "text");
+          const isLastText = message.parts.slice(message.parts.indexOf(part) + 1).every(p => p.type !== "text");
           return (
             <div key={i} className="prose-chat p-text">
               <MarkdownContent content={t} />
@@ -617,27 +687,7 @@ export const MessageView = memo(function MessageView({
             </div>
           );
         }
-        if (isToolUIPart(part)) {
-          const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
-          const previewUrl = extractPreviewUrl(output);
-          return (
-            <div key={part.toolCallId}>
-              <ToolCallBlock toolName={getToolName(part)}
-                input={part.input as Record<string, unknown> | undefined}
-                output={output}
-                isRunning={part.state === "input-available" || part.state === "input-streaming"}
-                isError={part.state === "output-error"} />
-              {/* Inline preview card — when a tool returns a /_preview/ URL,
-                  surface a live iframe under the tool block so the user sees
-                  the running app inline (also promoted to the Output surface). */}
-              {previewUrl && (
-                <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
-                  <PreviewFrame url={previewUrl} />
-                </div>
-              )}
-            </div>
-          );
-        }
+        if (isToolUIPart(part)) return <ToolCallPart key={part.toolCallId} part={part} />;
         return null;
       })}
       {!isLive && (

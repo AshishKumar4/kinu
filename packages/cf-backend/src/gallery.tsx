@@ -9,6 +9,8 @@
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=timeline → Run Timeline at Column B's real widths
+ *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
+ *   /gallery.html?frame=markdown → everything MarkdownContent has to render
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
  *   /gallery.html?frame=viewfail → the same View when its spec stops validating
  *   /gallery.html?frame=releases → the Releases board with a pending approval
@@ -33,7 +35,8 @@ import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { BrainSurface } from "@/components/surfaces/BrainSurface";
-import { EmptyState } from "@/components/surfaces/shared";
+import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
+import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
 import type { Rpc, ToolInfo } from "@/lib/protocol";
@@ -52,7 +55,10 @@ const STUB: Record<string, unknown> = {
     { name: "email-triage", displayName: "Email triage automation", createdAt: NOW - 30 * 864e5, lastVisited: NOW - 864e5, archivedAt: null },
     { name: "design-sys", displayName: "Design system v2", createdAt: NOW - 864e5, lastVisited: NOW - 5 * 864e5, archivedAt: null },
   ],
-  "/api/user/models": MODEL_STUBS(),
+  // The endpoint returns a ModelMenu, not a bare array. Stubbing the array
+  // made `menu.models.length` throw and HomePage rendered as a blank canvas,
+  // so the one page a signed-in user lands on was never actually looked at.
+  "/api/user/models": { models: MODEL_STUBS(), failures: [] },
 };
 
 function MODEL_STUBS(): ModelMenuEntry[] {
@@ -93,10 +99,17 @@ const MESSAGES: UIMessage[] = [
     id: "a1", role: "assistant", createdAt: NOW - 5 * 60e3,
     parts: [
       { type: "reasoning", text: "The coupon path goes through /api/cart/apply. I should reproduce first, then bisect: the handler, the pricing service, then the migration that landed Tuesday. The 500 with SAVE20 but not SAVE10 suggests a percentage-vs-fixed branch." },
-      { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", cmd: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
+      { type: "tool-run", toolCallId: "t1", state: "output-available", input: { runtime: "sandbox", command: "curl -s -X POST localhost:8788/api/cart/apply -d '{\"code\":\"SAVE20\"}'" }, output: "HTTP 500\n{\"error\":\"TypeError: Cannot read properties of undefined (reading 'percent')\"}" },
       { type: "tool-execute_tools", toolCallId: "t2", state: "output-available", input: { code: "const rows = await sql`SELECT code, kind, value FROM coupons WHERE code LIKE 'SAVE%'`;\nreturn rows;" }, output: '[{"code":"SAVE10","kind":"fixed","value":10},{"code":"SAVE20","kind":null,"value":20}]' },
       { type: "text", text: "Found it. Tuesday's migration backfilled `kind` for fixed coupons only — percentage coupons have `kind: null`, and `applyCoupon` dereferences `rules[kind].percent`.\n\n```ts\nconst rule = rules[coupon.kind ?? inferKind(coupon)];\n```\n\nI'll patch the migration, add a regression test, and run the suite." },
-      { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "sandbox", cmd: "bun test packages/checkout" } },
+      // A real repair is a RUN of calls, not one — this is the case the chat
+      // has to survive without becoming a wall of identical rows.
+      { type: "tool-file", toolCallId: "t4", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "t5", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
+      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: "ok" },
+      { type: "tool-file", toolCallId: "t7", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
+      { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], settle: "merge", task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
+      { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "sandbox", command: "bun test packages/checkout" } },
     ],
   }),
   msg({
@@ -182,7 +195,9 @@ function ChatMessages() {
 function Shell() {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
-      <aside className="hidden w-64 shrink-0 h-full p-elevated border-r p-border md:block"><Sidebar /></aside>
+      {/* Mirrors components/layout.tsx — a harness that photographs a
+          different surface than the app renders is worse than no harness. */}
+      <aside className="hidden w-64 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
           <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
@@ -282,12 +297,124 @@ function Controls() {
   );
 }
 
+/* The chat column at the width Column A actually gets — 42% of the shell, so
+   roughly 540px on a laptop. Rendering it full-bleed would flatter every
+   truncation and every line length the real column does not have. */
+function ChatFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <SubordinateTabs
+          workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
+          onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+        />
+        <ChatHeader />
+        <ChatMessages />
+        <Composer />
+      </div>
+    </div>
+  );
+}
+
 function All() {
   return (
     <div className="p-bg p-text min-h-screen">
       <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><ChatHeader /><ChatMessages /><Composer /></div></Section>
       <Section title="Run timeline"><div className="max-w-sm h-96 border p-border rounded-lg overflow-hidden"><RunTimeline spans={SPANS} selectedRef="m1" onSelect={() => {}} follow onToggleFollow={() => {}} /></div></Section>
       <Section title="Controls">{<Controls />}</Section>
+    </div>
+  );
+}
+
+/* ── Agent tab strip ────────────────────────────────────────────── */
+
+const SUBORDINATES = [
+  { name: "coupon-tester", displayName: "Coupon tester", role: "QA", status: "working", currentTask: "Running the checkout regression suite" },
+  { name: "migration-review", displayName: "Migration review", role: "Reviewer", status: "awaiting_input", currentTask: "Needs a call on the backfill order" },
+  { name: "docs", displayName: "Release notes", role: "Writer", status: "idle", currentTask: null },
+] as unknown as Parameters<typeof SubordinateTabs>[0]["subordinates"];
+
+/* The strip sits at the top of Column A, on the chat column's own ground —
+   photographing it anywhere else hides the seam that the complaint is about. */
+function TabsFrame() {
+  return (
+    <div className="p-bg min-h-screen p-8 space-y-8">
+      {[520, 380].map((w) => (
+        <div key={w} className="flex flex-col border p-border overflow-hidden" style={{ width: w, height: 190 }}>
+          <SubordinateTabs
+            workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
+            onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+          />
+          <div className="flex-1 px-5 py-4 p-row-text p-text-3">Main chat body</div>
+        </div>
+      ))}
+      <div className="flex flex-col border p-border overflow-hidden" style={{ width: 520, height: 190 }}>
+        <SubordinateTabs
+          workspace="checkout-fixes" subordinates={SUBORDINATES} activeName="coupon-tester"
+          onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+        />
+        <div className="flex-1 px-5 py-4 p-row-text p-text-3">Subordinate chat body</div>
+      </div>
+    </div>
+  );
+}
+
+/* ── Markdown ───────────────────────────────────────────────────── */
+
+/* Everything the agent actually emits: fenced blocks in several languages, a
+   line far wider than the column, inline code inside prose, a table, nested
+   lists, a quote — the cases that have to survive a 420px chat column. */
+const MARKDOWN_SAMPLE = `Here is what the migration is doing wrong, and the patch.
+
+The handler reads \`rules[coupon.kind]\` before \`kind\` is backfilled, so a percentage coupon dereferences \`undefined.percent\`. Fix is one line in \`apply-coupon.ts\` plus a guard in the migration.
+
+\`\`\`ts
+export function applyCoupon(cart: Cart, coupon: Coupon): Cart {
+  const kind = coupon.kind ?? inferKind(coupon);
+  const rule = rules[kind];
+  if (!rule) throw new CouponError(\`no pricing rule for kind=\${kind}\`, { code: coupon.code });
+  return rule.kind === "percent" ? discountByPercent(cart, rule.percent) : discountByAmount(cart, rule.amount);
+}
+\`\`\`
+
+\`\`\`sql
+UPDATE coupons SET kind = CASE WHEN value <= 100 AND code LIKE '%PCT%' THEN 'percent' ELSE 'fixed' END WHERE kind IS NULL;
+\`\`\`
+
+\`\`\`bash
+bun test packages/checkout --reporter=verbose && bunx wrangler deploy --env staging --var COUPON_STRICT:1
+\`\`\`
+
+\`\`\`
+plain fence, no language — this is the one that used to render as an unstyled grey slab
+\`\`\`
+
+| Coupon | Kind | Value | Status |
+| --- | --- | ---: | --- |
+| SAVE10 | fixed | 10 | ok |
+| SAVE20 | null | 20 | **500** |
+
+1. Patch the migration
+2. Add the regression test
+   - one for \`percent\`
+   - one for the \`null\` legacy row
+3. Re-run the suite
+
+> The backfill ran before the enum existed, which is why nothing failed in CI.
+
+See [the migration](https://example.com/migrations/0042) for the original.`;
+
+function MarkdownFrame() {
+  return (
+    <div className="p-bg min-h-screen p-8 flex flex-wrap gap-8 items-start">
+      {[420, 720].map((w) => (
+        <div key={w}>
+          <div className="p-eyebrow mb-2">{w}px</div>
+          <div className="border p-border p-4 overflow-hidden" style={{ width: w }}>
+            <div className="prose-chat p-text"><MarkdownContent content={MARKDOWN_SAMPLE} /></div>
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
@@ -641,6 +768,9 @@ async function mount() {
   else if (frame === "palette") node = <Palette />;
   else if (frame === "landing2") node = <LandingV2 />;
   else if (frame === "timeline") node = <TimelineWidths />;
+  else if (frame === "tabs") node = <TabsFrame />;
+  else if (frame === "markdown") node = <MarkdownFrame />;
+  else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "panels") node = <BrainFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;

@@ -4,7 +4,6 @@
  * markdown rendering, code blocks, and empty states.
  */
 import { memo, useState } from "react";
-import { Code } from "@cloudflare/kumo/components/code";
 import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -32,22 +31,36 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
   );
 }
 
+/**
+ * A fenced code block.
+ *
+ * Kumo's `<Code>` is its deprecated no-highlight component: it renders a
+ * transparent, unpadded `w-auto` slab and nothing else, so every long line
+ * escaped its container and was clipped by the wrapper's `overflow-hidden`.
+ * Kumo's replacement (`CodeHighlighted`) hardcodes `github-light`/`vesper`
+ * with no way to pass a theme, which would put GitHub's blues and purples on
+ * a warm umber ground. So the block owns its own surface, in the same terms
+ * the landing page sets its install command: one warm ink, a recessed
+ * ground, a hairline, and a header welded to the body.
+ *
+ * `min-w-0` on the scroller is load-bearing — inside the flex column the
+ * chat is built from, a track without it takes its content's width and
+ * overflows the column instead of scrolling.
+ */
 export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
   const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
   return (
-    <div className="relative group my-2">
-      <div className="flex items-center justify-between px-3 py-1 rounded-t-lg p-elevated border border-b-0 p-border text-[10px] p-text-3">
-        <span>{lang || "code"}</span>
-        <button onClick={() => copy(code)}
-          className={`flex items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
+    <div className="p-code my-2 rounded-lg overflow-hidden">
+      <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 text-[10px]">
+        <span className="truncate font-mono">{lang || "code"}</span>
+        <button onClick={() => copy(code)} type="button"
+          className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
           <CopyIcon size={12} />{copyLabel(status)}
         </button>
       </div>
-      <div className="rounded-b-lg border border-t-0 p-border overflow-hidden">
-        <Code code={code} lang={(lang || "text") as React.ComponentProps<typeof Code>["lang"]} />
-      </div>
+      <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
     </div>
   );
 }
@@ -57,14 +70,25 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
 export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown remarkPlugins={[remarkGfm]} components={{
+      // A fence with no language gets no className, which is also what real
+      // inline code gets — so ``` blocks used to come out as an inline pill
+      // wrapping across lines. The block/inline question is answered by the
+      // node's position (react-markdown puts a fence inside a <pre>), which
+      // `pre` below unwraps, so the check here is on the content itself: a
+      // fence is the thing that spans lines.
       code({ className, children, ...props }) {
-        if (!className) return <code className="p-elevated px-1.5 py-0.5 rounded text-xs font-mono" {...props}>{children}</code>;
+        const text = String(children ?? "");
+        if (!className && !text.includes("\n")) {
+          return <code className="p-code-inline" {...props}>{children}</code>;
+        }
         return <CodeBlock className={className}>{children}</CodeBlock>;
       },
       a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
-      table({ children }) { return <div className="overflow-x-auto my-2"><table className="w-full text-xs border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border p-border px-2 py-1 text-left font-medium p-elevated">{children}</th>; },
-      td({ children }) { return <td className="border p-border px-2 py-1">{children}</td>; },
+      table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="w-full text-xs border-collapse">{children}</table></div>; },
+      th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-elevated whitespace-nowrap">{children}</th>; },
+      td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
+      // The fence's own <pre> is dropped: CodeBlock supplies one, and nesting
+      // them would put a scroll container inside a scroll container.
       pre({ children }) { return <>{children}</>; },
     }}>{content}</Markdown>
   );

@@ -110,11 +110,14 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
 
   return (
     <>
-      <nav aria-label="Workspace agents" className="flex shrink-0 items-stretch gap-1 overflow-x-auto border-b p-border px-2 pt-1.5">
+      {/* One tab grammar with the work surfaces: a bottom edge, not a box.
+          `-mb-px` puts the active bar on the strip's own rule so the two
+          read as one line rather than two. */}
+      <nav aria-label="Workspace agents" className="p-tabstrip flex shrink-0 items-stretch border-b p-border px-2">
         <Link
           to={mainPath}
           aria-current={!activeName ? "page" : undefined}
-          className={`flex shrink-0 items-center gap-1.5 rounded-t-md border border-b-0 px-3 py-2 text-xs transition-colors ${!activeName ? "p-card p-text font-medium" : "border-transparent p-text-3 hover:p-text hover:p-card-hover"}`}
+          className={`p-tab -mb-px flex shrink-0 items-center gap-1.5 px-3 py-2 text-xs transition-colors ${!activeName ? "p-tab-active font-medium" : ""}`}
         >
           <HouseIcon size={13} weight={!activeName ? "fill" : "regular"} />
           Main
@@ -127,7 +130,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
                 to={`${mainPath}/agents/${subordinate.name}`}
                 aria-current={active ? "page" : undefined}
                 title={`${subordinate.role}${subordinate.currentTask ? ` — ${subordinate.currentTask}` : ""}`}
-                className={`flex h-full max-w-52 items-center gap-2 rounded-t-md border border-b-0 py-2 pl-3 pr-8 text-xs transition-colors ${active ? "p-card p-text font-medium" : "border-transparent p-text-2 hover:p-text hover:p-card-hover"}`}
+                className={`p-tab -mb-px flex h-full max-w-52 items-center gap-2 py-2 pl-3 pr-8 text-xs transition-colors ${active ? "p-tab-active font-medium" : ""}`}
               >
                 <span className="truncate">{subordinate.displayName}</span>
                 <StatusMark subordinate={subordinate} />
@@ -147,7 +150,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
         <button
           type="button"
           onClick={() => setShowSpawn(true)}
-          className="mb-1.5 flex size-7 shrink-0 self-center items-center justify-center rounded-md p-text-3 transition-colors hover:p-text hover:p-card-hover"
+          className="p-btn-ghost my-1 ml-1 flex size-7 shrink-0 self-center items-center justify-center"
           title="Add a subordinate"
           aria-label="Add a subordinate"
         >

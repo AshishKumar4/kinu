@@ -11,6 +11,7 @@ import {
   SparkleIcon,
 } from "@phosphor-icons/react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
 import type { ToolInfo, MemoryEntry, MCTSNode, BackgroundJob, Rpc } from "@/lib/protocol";
@@ -116,9 +117,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               : "p-badge-success";
             return (
               <button key={s} onClick={() => onSurface(s)} title={s} aria-current={surface === s ? "true" : undefined}
-                className={`px-2 @[38rem]:px-3 py-2.5 p-row-text font-medium transition-colors border-b-2 shrink-0 whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
-                  surface === s ? "p-tab-active" : "p-text-3 border-transparent hover:p-text-2"
-                }`}>
+                className={`${tabCls} ${surface === s ? "p-tab-active" : ""}`}>
                 <Icon size={14} /><span className={surface === s ? "" : "hidden @[38rem]:inline"}>{s}</span>
                 {badge > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold p-num ${badgeTone}`}>{badge}</span>
@@ -140,9 +139,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
             <button key={view.slug} onClick={() => onSurface(kind)}
               title={`${view.title} — written by Proteus`}
               aria-current={surface === kind ? "true" : undefined}
-              className={`px-2 @[38rem]:px-3 py-2.5 p-row-text font-medium transition-colors border-b-2 shrink-0 whitespace-nowrap flex items-center gap-1.5 cursor-pointer ${
-                surface === kind ? "p-tab-active" : "p-text-3 border-transparent hover:p-text-2"
-              }`}>
+              className={`${tabCls} ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} />
               <span className={surface === kind ? "" : "hidden @[38rem]:inline"}>{view.title}</span>
             </button>
@@ -153,9 +150,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           onClick={() => onSurface(ACTIVITY_SURFACE)}
           aria-label="Activity"
           title="Activity — context, cost and cache"
-          className={`px-2.5 py-2.5 -mb-px transition-colors border-b-2 shrink-0 cursor-pointer ${
-            surface === ACTIVITY_SURFACE ? "p-tab-active" : "p-text-3 border-transparent hover:p-text-2"
-          }`}>
+          className={`${tabCls} px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>
       </div>

@@ -30,6 +30,11 @@ const outIndex = args.indexOf('--out');
 const outDir = outIndex === -1 ? join(REPO, 'docs', 'screenshots', 'gallery') : args[outIndex + 1]!;
 const frames = args.filter((a, i) => !a.startsWith('--') && i !== outIndex + 1);
 if (frames.length === 0) frames.push('views');
+/** Both widths unless `--desktop`: a three-column shell and a phone are
+ *  different designs, and only one of them is ever looked at by default. */
+const WIDTHS = args.includes('--desktop')
+  ? ([{ name: 'desktop', width: 1280, height: 1100 }] as const)
+  : ([{ name: 'desktop', width: 1280, height: 1100 }, { name: 'mobile', width: 390, height: 844 }] as const);
 
 function chromePath(): string | undefined {
   for (const candidate of ['/usr/bin/google-chrome', '/usr/bin/google-chrome-stable', '/usr/bin/chromium']) {
@@ -50,9 +55,14 @@ async function waitForServer(url: string, timeoutMs = 30_000): Promise<void> {
   throw new Error(`gallery server never came up at ${url}`);
 }
 
-async function shoot(browser: Browser, frame: string, mode: 'dark' | 'light'): Promise<string> {
+async function shoot(
+  browser: Browser,
+  frame: string,
+  mode: 'dark' | 'light',
+  size: (typeof WIDTHS)[number],
+): Promise<string> {
   const page = await browser.newPage();
-  await page.setViewport({ width: 1280, height: 1100, deviceScaleFactor: 2 });
+  await page.setViewport({ width: size.width, height: size.height, deviceScaleFactor: 2 });
   const url = `http://127.0.0.1:${PORT}/gallery.html?frame=${frame}`;
   await page.evaluateOnNewDocument((m: string) => {
     localStorage.setItem('theme', m);
@@ -64,7 +74,7 @@ async function shoot(browser: Browser, frame: string, mode: 'dark' | 'light'): P
   await page.goto(url, { waitUntil: 'networkidle0' });
   // React renders after the RPC stubs resolve; the mock is async.
   await new Promise((r) => setTimeout(r, 600));
-  const path = join(outDir, `${frame}-${mode}.png`);
+  const path = join(outDir, `${frame}-${size.name}-${mode}.png`);
   await page.screenshot({ path: path as `${string}.png`, fullPage: true });
   await page.close();
   if (failures.length > 0) console.warn(`  ! ${frame}/${mode} console errors:\n    ${failures.join('\n    ')}`);
@@ -82,12 +92,22 @@ try {
   const executablePath = chromePath();
   const browser = await puppeteer.launch({
     ...(executablePath ? { executablePath } : {}),
-    args: ['--no-sandbox', '--disable-dev-shm-usage'],
+    // Headless Chrome reports no pointing device, so `(hover: hover)` and
+    // `(pointer: fine)` are both false and every `hover:` utility Tailwind
+    // emits behind them is dead in a capture. Declaring the mouse restores
+    // the states a desktop user actually sees.
+    args: [
+      '--no-sandbox',
+      '--disable-dev-shm-usage',
+      '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
+    ],
   });
   try {
     for (const frame of frames) {
-      for (const mode of ['dark', 'light'] as const) {
-        console.log(`wrote ${await shoot(browser, frame, mode)}`);
+      for (const size of WIDTHS) {
+        for (const mode of ['dark', 'light'] as const) {
+          console.log(`wrote ${await shoot(browser, frame, mode, size)}`);
+        }
       }
     }
   } finally {

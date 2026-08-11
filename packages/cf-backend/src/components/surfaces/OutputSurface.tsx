@@ -16,6 +16,7 @@ import {
 } from "@/lib/executors";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { LoadFailure } from "@/components/ui/LoadFailure";
+import { tabCls } from "@/components/ui/form";
 import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState, EMPTY_HINTS, DiffLines } from "./shared";
 
@@ -63,10 +64,10 @@ function PreviewView({ pinnedPorts }: { pinnedPorts: PinnedPort[] }) {
   return (
     <div className="flex flex-col h-full">
       {pinnedPorts.length > 1 && (
-        <div className="flex items-center gap-1 px-2 pt-2 border-b p-border">
+        <div className="flex items-center px-2 border-b p-border">
           {pinnedPorts.map((p, i) => (
             <button key={p.port} onClick={() => setActive(i)}
-              className={`px-2.5 py-1 text-[11px] rounded-t-md border-b -mb-px transition-colors ${i === idx ? "p-tab-active border-b-[1.5px]" : "p-text-3 border-transparent hover:p-text-2"}`}>
+              className={`${tabCls} py-1.5 text-[11px] ${i === idx ? "p-tab-active" : ""}`}>
               {p.name ?? `:${p.port}`}
             </button>
           ))}
