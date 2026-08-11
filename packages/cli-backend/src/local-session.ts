@@ -629,7 +629,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   listAvailableModels() {
-    return this.modelResolver?.listModels() ?? Promise.resolve([]);
+    return this.modelResolver?.listModels() ?? Promise.resolve({ models: [], failures: [] });
   }
 
   /** Local ingress parity with the DO EventsHub routes: publish through the

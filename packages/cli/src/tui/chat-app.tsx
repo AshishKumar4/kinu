@@ -50,7 +50,7 @@ import {
 } from '../slash-commands.js';
 import { describePromptAttachment, resolvePromptAttachments } from '../attachments.js';
 import { watchDeviceConsents } from '../consent-watch.js';
-import { contextWindowForSpec, type AgentModelEntry } from '../model-catalog.js';
+import { contextWindowForSpec, EMPTY_MODEL_MENU, type AgentModelEntry, type AgentModelMenu } from '../model-catalog.js';
 import { requireInteractiveTerminal } from '../prompt.js';
 import { guideFailure } from '../provider-guidance.js';
 import { openBrowser } from '../commands/auth.js';
@@ -96,7 +96,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   const [modelSpec, setModelSpec] = useState<string>('');
   const [modelCatalog, setModelCatalog] = useState<AgentModelEntry[]>([]);
   const [sessionPicker, setSessionPicker] = useState<{ sessions: CliSessionInfo[] } | null>(null);
-  const [modelPicker, setModelPicker] = useState<{ models: AgentModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
   const [changelogView, setChangelogView] = useState<AgentChangelogView | null>(null);
   const [takesView, setTakesView] = useState<AlternateTakeSet | null>(null);
   const [pendingConsent, setPendingConsent] = useState<PendingDeviceConsent | null>(null);
@@ -272,13 +272,13 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   }, [addMessage, client, stream]);
 
   const openModelPicker = useCallback(async () => {
-    setModelPicker({ models: [], loading: true, error: null });
+    setModelPicker({ menu: EMPTY_MODEL_MENU, loading: true, error: null });
     try {
-      const models = await client.listModels();
-      setModelCatalog(models);
-      setModelPicker({ models, loading: false, error: null });
+      const menu = await client.listModels();
+      setModelCatalog(menu.models);
+      setModelPicker({ menu, loading: false, error: null });
     } catch (err) {
-      setModelPicker({ models: [], loading: false, error: err instanceof Error ? err.message : String(err) });
+      setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: err instanceof Error ? err.message : String(err) });
     }
   }, [client]);
 
@@ -632,7 +632,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
       })
       .catch(() => {});
     void client.listModels()
-      .then((models) => { if (!cancelled) setModelCatalog(models); })
+      .then((menu) => { if (!cancelled) setModelCatalog(menu.models); })
       .catch(() => {});
     return () => { cancelled = true; };
   }, [client]);
@@ -870,7 +870,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
 
       {modelPicker ? (
         <ModelPickerOverlay
-          models={modelPicker.models}
+          models={modelPicker.menu.models}
+          failures={modelPicker.menu.failures}
           currentSpec={modelSpec}
           terminal={{ width, height }}
           loading={modelPicker.loading}

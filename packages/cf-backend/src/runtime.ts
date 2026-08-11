@@ -232,7 +232,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // Every remote mount exposes the environment's REAL root ('/'); the
   // ergonomic working dir is metadata, not a path rewrite.
   const sandboxMountPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewHostname) {
     try {
@@ -269,7 +269,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // endpoint/token secrets. The handle is lazy: no session is touched until
   // the agent actually calls nimbus.*.
   const nimbusMountPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   if (env.NIMBUS_SESSION) {
     try {
       const nimbusBox = createAgentNimbusHandle(agent, actor);
@@ -325,7 +325,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
         catch { return false; } // consent unverifiable → subtree scope (fail closed)
       },
     }),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
     live: () => deviceTransport.status().connected,
   });
 

@@ -69,7 +69,7 @@ describe('createLocalModelResolver', () => {
     expect(providers.find((p) => p.id === 'workers-ai')?.available).toBe(true);
     expect(providers.find((p) => p.id === 'openai')?.available).toBe(false);
 
-    const models = await resolver.listModels();
+    const { models } = await resolver.listModels();
     expect(models.find((model) => model.provider === 'workers-ai' && model.id === '@cf/moonshotai/kimi-k2.6')?.contextWindow)
       .toBe(262_144);
   });
@@ -188,17 +188,20 @@ function cloudMenuFetch(origin = CLOUD_ORIGIN): typeof fetch {
     const url = String(input);
     if (url === `${origin}/api/cli/models`) {
       expect(new Headers(init?.headers).get('authorization')).toBe(`Bearer ${CLOUD_TOKEN}`);
-      return Response.json([
-        {
-          spec: 'workers-ai/@cf/moonshotai/kimi-k2.6', label: 'Kimi K2.6', provider: 'workers-ai',
-          capabilities: ['tools', 'streaming'], contextWindow: 262144,
-        },
-        {
-          spec: 'my-gateway/openai/gpt-4.1', label: 'GPT-4.1', provider: 'my-gateway',
-          capabilities: ['tools'], contextWindow: 1047576,
-        },
-        { spec: 'codex/gpt-5.3-codex', label: 'Codex', provider: 'codex' },
-      ]);
+      return Response.json({
+        models: [
+          {
+            spec: 'workers-ai/@cf/moonshotai/kimi-k2.6', label: 'Kimi K2.6', provider: 'workers-ai',
+            capabilities: ['tools', 'streaming'], contextWindow: 262144,
+          },
+          {
+            spec: 'my-gateway/openai/gpt-4.1', label: 'GPT-4.1', provider: 'my-gateway',
+            capabilities: ['tools'], contextWindow: 1047576,
+          },
+          { spec: 'codex/gpt-5.3-codex', label: 'Codex', provider: 'codex' },
+        ],
+        failures: [],
+      });
     }
     return fetch(input, init);
   }) as typeof fetch;
@@ -217,7 +220,7 @@ describe('createLocalModelResolver — signed in (cloud proxy)', () => {
     expect(providers.find((p) => p.id === 'workers-ai')?.available).toBe(true);
     expect(providers.find((p) => p.id === 'my-gateway')?.available).toBe(true);
 
-    const models = await resolver.listModels();
+    const { models } = await resolver.listModels();
     const workersAI = models.find((m) => m.provider === 'workers-ai' && m.id === '@cf/moonshotai/kimi-k2.6');
     expect(workersAI?.contextWindow).toBe(262144);
     expect(workersAI?.capabilities).toEqual(['tools', 'streaming']);
@@ -334,7 +337,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
     const providers = await resolver.listProviders();
     expect(providers.find((p) => p.id === 'claude')?.available).toBe(true);
 
-    const models = await resolver.listModels();
+    const { models } = await resolver.listModels();
     const opus = models.find((m) => m.provider === 'claude' && m.id === 'claude-opus-4-x');
     expect(opus).toBeDefined();
     expect(resolver.normalizeSpecSync('claude/claude-opus-4-x')).toBe('claude/claude-opus-4-x');

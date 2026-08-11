@@ -188,7 +188,8 @@ describe('registry with dynamic catalog source', () => {
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
     }, mock.fetch);
 
-    const models = await registry.listAllModels(deps);
+    const { models, failures } = await registry.listAllModels(deps);
+    expect(failures).toEqual([]);
     const groq = models.filter((m) => m.provider === 'groq');
     expect(groq.map((m) => m.id)).toEqual(['llama-3.3-70b-versatile']); // no-tools-model filtered
     expect(groq[0].contextWindow).toBe(131072);
@@ -208,7 +209,7 @@ describe('registry with dynamic catalog source', () => {
     expect(model.provider).toBe('static-openai');
 
     // listings contain openai exactly once (the static entry).
-    const models = await registry.listAllModels(deps);
+    const { models } = await registry.listAllModels(deps);
     expect(models.filter((m) => m.provider === 'openai')).toEqual([
       { id: 'gpt-5.5', label: 'openai static', provider: 'openai' },
     ]);

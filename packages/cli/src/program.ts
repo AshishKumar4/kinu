@@ -85,7 +85,7 @@ export function buildProgram(): Command {
     .command('provider [action] [name]')
     .alias('providers')
     .helpGroup(ACCOUNT)
-    .description('List or connect model and account providers')
+    .description('List, connect, or disconnect model and account providers')
     .option('--origin <url>', 'Proteus app origin')
     .option('--model <id>', 'Default model for the selected provider')
     .action(wrapAction(providersCommand));

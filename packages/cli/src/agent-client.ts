@@ -15,7 +15,7 @@ import type {
 } from '@proteus/core';
 import type { ShellApprovalHandler } from '@proteus/cli-backend';
 import type { CliSession, CliSessionInfo } from './session.js';
-import type { AgentModelEntry } from './model-catalog.js';
+import type { AgentModelMenu } from './model-catalog.js';
 
 export type AgentClientMode = 'local' | 'cloud';
 
@@ -308,7 +308,7 @@ export interface AgentClient {
   setModel(spec: string): Promise<{ spec: string }>;
   getReasoningEffort(): Promise<ReasoningEffort | null>;
   setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }>;
-  listModels(): Promise<AgentModelEntry[]>;
+  listModels(): Promise<AgentModelMenu>;
 }
 
 export interface AgentUiMessage {

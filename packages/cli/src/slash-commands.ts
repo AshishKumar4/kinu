@@ -185,11 +185,14 @@ export async function executeSlashCommand(client: AgentClient, input: string): P
       for (const provider of providers) {
         lines.push(`  ${provider.id} — ${provider.available ? 'available' : provider.unavailableReason ?? 'unavailable'}`);
       }
-      const models = await client.listModels();
-      if (models.length > 0) {
+      const menu = await client.listModels();
+      if (menu.models.length > 0) {
         lines.push('', 'Models:');
-        for (const model of models.slice(0, 40)) lines.push(`  ${model.spec} — ${model.label}`);
-        if (models.length > 40) lines.push(`  … ${models.length - 40} more`);
+        for (const model of menu.models.slice(0, 40)) lines.push(`  ${model.spec} — ${model.label}`);
+        if (menu.models.length > 40) lines.push(`  … ${menu.models.length - 40} more`);
+      }
+      for (const failure of menu.failures) {
+        lines.push(`  ! ${failure.label ?? failure.provider} could not be listed — ${failure.reason}`);
       }
       return { kind: 'text', text: lines.join('\n') };
     }

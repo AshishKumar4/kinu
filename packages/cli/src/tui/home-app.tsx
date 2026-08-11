@@ -19,7 +19,7 @@ import {
   type AgentMode,
 } from '../config.js';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
-import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from '../model-catalog.js';
+import { EMPTY_MODEL_MENU, normalizeModelMenu, type AgentModelEntry, type AgentModelMenu } from '../model-catalog.js';
 import { requireInteractiveTerminal } from '../prompt.js';
 import { VERSION } from '../display.js';
 import { DeviceConnectOverlay, ModelPickerOverlay } from './overlays.js';
@@ -49,7 +49,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
   const [mode, setMode] = useState<AgentMode>(() => defaultCreateMode());
   const [defaultModel, setDefaultModelState] = useState(initialDefaults.model ?? '');
   const [reasoningEffort, setReasoningEffortState] = useState<ReasoningEffort>(initialDefaults.reasoningEffort ?? 'medium');
-  const [modelPicker, setModelPicker] = useState<{ models: AgentModelEntry[]; loading: boolean; error: string | null } | null>(null);
+  const [modelPicker, setModelPicker] = useState<{ menu: AgentModelMenu; loading: boolean; error: string | null } | null>(null);
   const [catalogHint, setCatalogHint] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,19 +104,23 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
     const request = ++modelPickerRequestRef.current;
     setFocusArea('model');
     setCatalogHint(null);
-    setModelPicker({ models: [], loading: true, error: null });
+    setModelPicker({ menu: EMPTY_MODEL_MENU, loading: true, error: null });
     try {
-      const models = await loadHomeModelCatalog(mode, opts);
-      if (models.length === 0) throw new Error(`No ${mode} models are available.`);
+      const menu = await loadHomeModelCatalog(mode, opts);
+      // A menu with failures explains itself in the picker; only a menu with
+      // nothing at all to show is a catalog error.
+      if (menu.models.length === 0 && menu.failures.length === 0) {
+        throw new Error(`No ${mode} models are available.`);
+      }
       if (modelPickerRequestRef.current !== request) return;
-      setModelPicker({ models, loading: false, error: null });
+      setModelPicker({ menu, loading: false, error: null });
     } catch (err) {
       if (modelPickerRequestRef.current !== request) return;
       const detail = err instanceof Error ? err.message : String(err);
       const current = defaultModel || 'provider default';
       const message = `Catalog unavailable: ${detail} Current default: ${current}. Esc keeps it.`;
       setCatalogHint('Catalog unavailable — the current default remains active.');
-      setModelPicker({ models: [], loading: false, error: message });
+      setModelPicker({ menu: EMPTY_MODEL_MENU, loading: false, error: message });
     }
   }, [defaultModel, mode, opts]);
 
@@ -467,7 +471,8 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
 
       {modelPicker && (
         <ModelPickerOverlay
-          models={modelPicker.models}
+          models={modelPicker.menu.models}
+          failures={modelPicker.menu.failures}
           currentSpec={defaultModel || null}
           terminal={{ width, height }}
           loading={modelPicker.loading}
@@ -548,11 +553,10 @@ function nextFocus(current: HomeFocus, hasAgents: boolean): HomeFocus {
   return order[(index + 1) % order.length] ?? order[0]!;
 }
 
-async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelEntry[]> {
-  const rows = mode === 'cloud'
+async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelMenu> {
+  return normalizeModelMenu(mode === 'cloud'
     ? await loadCloudHomeModels(opts.origin)
-    : await createConfiguredLocalModelResolver(opts).resolver.listModels();
-  return dedupeModelEntries(normalizeModelEntries(rows));
+    : await createConfiguredLocalModelResolver(opts).resolver.listModels());
 }
 
 async function loadCloudHomeModels(originOverride: string | undefined) {

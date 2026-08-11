@@ -33,13 +33,16 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
         };
         if (path === "/api/cli/models") {
           requests.push(entry);
-          return Response.json([
-            {
-              spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: "Kimi K2.6", provider: "workers-ai",
-              capabilities: ["tools", "streaming"], contextWindow: 262144,
-            },
-            { spec: "my-gateway/openai/gpt-4.1", label: "GPT-4.1", provider: "my-gateway", contextWindow: 1047576 },
-          ]);
+          return Response.json({
+            models: [
+              {
+                spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: "Kimi K2.6", provider: "workers-ai",
+                capabilities: ["tools", "streaming"], contextWindow: 262144,
+              },
+              { spec: "my-gateway/openai/gpt-4.1", label: "GPT-4.1", provider: "my-gateway", contextWindow: 1047576 },
+            ],
+            failures: [],
+          });
         }
         if (path === "/api/user/ai/v1/chat/completions") {
           const body = await request.json() as { model?: unknown };
@@ -65,7 +68,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
         import { createConfiguredLocalModelResolver } from './packages/cli/src/local-model-resolver.ts';
         const { llmConfig, resolver } = createConfiguredLocalModelResolver({ agentName: 'jarvis' });
         const providers = await resolver.listProviders();
-        const models = await resolver.listModels();
+        const { models } = await resolver.listModels();
         const turn = await generateText({ model: resolver.resolveModel(null), prompt: 'ping' });
         console.log(JSON.stringify({
           llmName: llmConfig.name,

@@ -18,7 +18,7 @@ proteus <command> [options]
 | Command | What it does |
 | --- | --- |
 | [`proteus setup`](#proteus-setup) | Connect your account; optionally configure local-only model credentials |
-| [`proteus provider [action] [name]`](#proteus-provider-action-name) | List or connect model and account providers |
+| [`proteus provider [action] [name]`](#proteus-provider-action-name) | List, connect, or disconnect model and account providers |
 | [`proteus auth`](#proteus-auth) | Sign the CLI into your Proteus account |
 | [`proteus whoami`](#proteus-whoami) | Show the signed-in Proteus account |
 | [`proteus logout`](#proteus-logout) | Sign out of the Proteus CLI |
@@ -105,7 +105,7 @@ Connect your account; optionally configure local-only model credentials.
 
 ### proteus provider [action] [name]
 
-List or connect model and account providers.
+List, connect, or disconnect model and account providers.
 
 Also: `proteus providers`
 

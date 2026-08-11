@@ -106,6 +106,13 @@ export interface CloudModelMenuEntry {
   contextWindow?: number;
 }
 
+/** `/api/cli/models` — pickable models plus the providers the server could
+ *  not reach while building them. */
+export interface CloudModelMenu {
+  models: CloudModelMenuEntry[];
+  failures: Array<{ provider: string; label?: string; reason: string }>;
+}
+
 export interface CloudWebhookTriggerInput {
   label: string;
   auth_mode: 'hmac' | 'bearer' | 'mtls';
@@ -162,7 +169,7 @@ export async function listCloudAgents(origin: string, token: string): Promise<Cl
   return cloudJson(origin, '/api/cli/workspaces', { token });
 }
 
-export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenuEntry[]> {
+export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenu> {
   return cloudJson(origin, '/api/cli/models', { token });
 }
 

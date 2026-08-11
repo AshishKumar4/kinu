@@ -182,7 +182,7 @@ describe('workspace.writeFile over the CompositeVFS — the file plane both back
     // The cf backend's sandbox mount: the container's REAL root.
     vfs.mount('sandbox', {
       vfs: sandboxVfs,
-      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true },
+      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral' },
       workingDir: '/workspace',
     });
     const exec = createInlineExecutor({
@@ -259,7 +259,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     const { rt } = createTestRuntime();
     const vfs = new CompositeVFS({ local: rt.storage.vfs });
     vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding', {
-      readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true,
+      readOnly: false, rootPath: '/', consistency: 'ephemeral',
     });
     return createInlineExecutor({
       vfs, memory: rt.memory, craftStore: rt.craftStore,

@@ -231,7 +231,7 @@ export function createCLIRuntime(
   // silent compat-route into /local.
   const vfs = new CompositeVFS({ local: sqliteFs });
   const remoteOnlyPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
   vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
 
@@ -271,7 +271,7 @@ export function createCLIRuntime(
   // and laptop.writeFile that already address the host filesystem directly.
   vfs.mount('pc', {
     vfs: createHostMountVFS(checkpoints),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
     workingDir: process.cwd(),
   });
 
@@ -321,16 +321,16 @@ export function buildCLIHeadRuntime(
   // head's host writes are covered by /undo too. /workspace roots at the cwd
   // (where the task files live); /pc roots at the machine root, as the parent's.
   const checkpoints = parent.checkpoints;
-  const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared', credentialsStayInHost: true };
+  const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared' };
   vfs.mount('workspace', { vfs: createHostMountVFS(checkpoints), policy: livePolicy, workingDir: cwd });
   vfs.mount('pc', {
     vfs: createHostMountVFS(checkpoints),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
     workingDir: cwd,
   });
   // Cloud-only planes stay reserved so a head addressing them gets the honest
   // unavailability the parent gives, not a silent compat-route into /local.
-  const remoteOnlyPolicy: MountPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true };
+  const remoteOnlyPolicy: MountPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
   vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
 

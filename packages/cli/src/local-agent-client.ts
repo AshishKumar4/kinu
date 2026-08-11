@@ -33,7 +33,7 @@ import {
   type CliSessionOptions,
 } from './session.js';
 import { SessionRecorder } from './session-recorder.js';
-import { normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
+import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
 import {
   findForkPivot,
   promptFiles,
@@ -438,8 +438,8 @@ export class LocalAgentClient implements AgentClient {
     return { effort: this.session.setReasoningEffort(effort).effort };
   }
 
-  async listModels(): Promise<AgentModelEntry[]> {
-    return normalizeModelEntries(await this.session.listAvailableModels());
+  async listModels(): Promise<AgentModelMenu> {
+    return normalizeModelMenu(await this.session.listAvailableModels());
   }
 
   private conversationIdForAgentSession(): string {

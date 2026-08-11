@@ -4,6 +4,7 @@ import { formatContextWindow, type AlternateTakeCandidate, type AlternateTakeSet
 import { takeEvidence } from '@proteus/core';
 import type { SlashCommandInfo } from '../slash-commands.js';
 import { filterModels, type AgentModelEntry } from '../model-catalog.js';
+import type { ProviderFailure } from '@proteus/core';
 import type { AgentChangelogView, ForkPoint } from '../agent-client.js';
 import type { DeviceConnectPromptState } from './use-device-connect.js';
 import { clipText } from './format.js';
@@ -62,6 +63,9 @@ export function CommandHintOverlay({ commands, terminal }: CommandHintProps) {
 
 interface ModelPickerProps {
   models: readonly AgentModelEntry[];
+  /** Providers that could not be listed. Shown under the options: their
+   *  models are missing from the list, and saying so beats a silent gap. */
+  failures?: readonly ProviderFailure[];
   currentSpec: string | null;
   terminal: OverlayGeometry;
   loading?: boolean;
@@ -69,7 +73,7 @@ interface ModelPickerProps {
   onSelect: (model: AgentModelEntry) => void;
 }
 
-export function ModelPickerOverlay({ models, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
+export function ModelPickerOverlay({ models, failures, currentSpec, terminal, loading, error, onSelect }: ModelPickerProps) {
   const [filter, setFilter] = useState('');
   const selectRef = useRef<SelectRenderable | null>(null);
   const paletteWidth = boundedPaletteWidth(terminal, 0.52, 56, 84);
@@ -90,7 +94,9 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
       value: model,
     };
   });
-  const paletteHeight = Math.min(Math.max(models.length + 7, 11), Math.max(11, terminal.height - 6), 22);
+  const failureLines = (failures ?? []).map((failure) =>
+    `! ${failure.label ?? failure.provider} unavailable — ${failure.reason}`);
+  const paletteHeight = Math.min(Math.max(models.length + failureLines.length + 7, 11), Math.max(11, terminal.height - 6), 22);
   const position = centeredPosition(terminal, paletteWidth, paletteHeight, 'center');
   const selectedIndex = clamp(filteredModels.findIndex((model) => model.spec === currentSpec), 0, Math.max(0, options.length - 1));
   useEffect(() => {
@@ -134,9 +140,11 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
         <PaletteLine text={error} width={innerWidth} color={tuiColors.red} />
       ) : options.length === 0 ? (
         <PaletteLine
-          text={models.length === 0
-            ? 'No connected model providers. Run proteus provider connect.'
-            : `No models match "${filter.trim()}".`}
+          text={models.length > 0
+            ? `No models match "${filter.trim()}".`
+            : failureLines.length > 0
+              ? 'Every connected provider failed to list — see below.'
+              : 'No connected model providers. Run proteus provider connect.'}
           width={innerWidth}
           color={tuiColors.muted}
         />
@@ -167,6 +175,9 @@ export function ModelPickerOverlay({ models, currentSpec, terminal, loading, err
           }}
         />
       )}
+      {!loading && failureLines.map((line) => (
+        <PaletteLine key={line} text={line} width={innerWidth} color={tuiColors.amber} />
+      ))}
     </PaletteFrame>
   );
 }

@@ -159,7 +159,6 @@ export class SubordinateAgent extends ActorAgent {
         readOnly: false,
         rootPath: '',
         consistency: 'durable',
-        credentialsStayInHost: true,
       },
     });
   }

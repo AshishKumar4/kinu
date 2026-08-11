@@ -41,6 +41,20 @@ export interface ModelMenuEntry {
   contextWindow?: number;
 }
 
+/** A provider the server could not reach while building the menu (revoked
+ *  OAuth grant, unreachable endpoint). Surfaced next to the models so one
+ *  broken provider reads as a notice rather than an empty picker. */
+export interface ProviderFailure {
+  provider: string;
+  label?: string;
+  reason: string;
+}
+
+export interface ModelMenu {
+  models: ModelMenuEntry[];
+  failures: ProviderFailure[];
+}
+
 export interface DeviceFlowStart {
   userCode: string;
   deviceAuthId: string;
@@ -151,10 +165,10 @@ export const setConfig        = (key: string, value: string) =>
 // ── Models + providers ─────────────────────────────────────────────
 // The model menu only changes when a provider is connected/disconnected, so it
 // is cached for the SPA session and invalidated by the provider mutators above.
-let _modelsCache: Promise<ModelMenuEntry[]> | null = null;
-export function listAvailableModels(): Promise<ModelMenuEntry[]> {
+let _modelsCache: Promise<ModelMenu> | null = null;
+export function listAvailableModels(): Promise<ModelMenu> {
   if (!_modelsCache) {
-    _modelsCache = api<ModelMenuEntry[]>('GET', '/models').catch((e) => { _modelsCache = null; throw e; });
+    _modelsCache = api<ModelMenu>('GET', '/models').catch((e) => { _modelsCache = null; throw e; });
   }
   return _modelsCache;
 }

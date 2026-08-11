@@ -433,7 +433,7 @@ describe('composite routing over the mount adapters', () => {
     const composite = new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) });
     composite.mount('workspace', {
       vfs: createParentRpcMountVFS(handle),
-      policy: { readOnly: false, rootPath: '', consistency: 'durable', credentialsStayInHost: true },
+      policy: { readOnly: false, rootPath: '', consistency: 'durable' },
     });
 
     expect(await composite.readdir('/workspace')).toEqual([]);
@@ -472,7 +472,7 @@ describe('composite routing over the mount adapters', () => {
     const sandbox = fakeSandboxHandle();
     composite.mount('sandbox', {
       vfs: createSandboxMountVFS(sandbox.handle),
-      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral', credentialsStayInHost: true },
+      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral' },
       workingDir: '/workspace',
     });
 
@@ -489,7 +489,7 @@ describe('composite routing over the mount adapters', () => {
     const { transport } = fakeDeviceTransport();
     composite.mount('pc', {
       vfs: createDeviceMountVFS(transport, { consentedRoot: () => '/home/me', hasFullFilesystem: async () => false }),
-      policy: { readOnly: false, rootPath: '/', consistency: 'live-shared', credentialsStayInHost: true },
+      policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
       live: () => connected,
     });
 

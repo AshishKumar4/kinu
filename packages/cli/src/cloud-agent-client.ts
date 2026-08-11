@@ -20,7 +20,7 @@ import {
   type CliSessionOptions,
 } from './session.js';
 import { SessionRecorder } from './session-recorder.js';
-import { dedupeModelEntries, normalizeModelEntries, type AgentModelEntry } from './model-catalog.js';
+import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
 import type { AlternateTakeSet, BranchStatusEvent, ChangelogEntry, ChangelogRevertResult, ReasoningEffort, TakePickOutcome } from '@proteus/core';
 import {
   asRecord,
@@ -409,10 +409,14 @@ export class CloudAgentClient implements AgentClient {
     };
   }
 
-  async listModels(): Promise<AgentModelEntry[]> {
-    const rows = normalizeModelEntries(await listCloudAvailableModels(this.origin, this.token));
-    if (rows.length === 0) throw new Error('No cloud models are available.');
-    return dedupeModelEntries(rows);
+  async listModels(): Promise<AgentModelMenu> {
+    const menu = normalizeModelMenu(await listCloudAvailableModels(this.origin, this.token));
+    // Only a menu with nothing in it AND nothing to explain is an error; a
+    // provider that failed is reported to the picker, not thrown at it.
+    if (menu.models.length === 0 && menu.failures.length === 0) {
+      throw new Error('No cloud models are available.');
+    }
+    return menu;
   }
 
   private emit(event: AgentClientEvent): void {

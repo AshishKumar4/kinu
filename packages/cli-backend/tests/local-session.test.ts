@@ -2137,10 +2137,13 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       async fetch(request) {
         const path = new URL(request.url).pathname;
         if (path === '/api/cli/models') {
-          return Response.json([{
-            spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
-            capabilities: ['tools', 'streaming'], contextWindow: 262144,
-          }]);
+          return Response.json({
+            models: [{
+              spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
+              capabilities: ['tools', 'streaming'], contextWindow: 262144,
+            }],
+            failures: [],
+          });
         }
         if (path === '/api/user/ai/v1/chat/completions') {
           const body = await request.json() as { model?: unknown; stream?: unknown };
@@ -2189,7 +2192,7 @@ describe('LocalAgentSession — signed-in cloud proxy turn (zero BYO keys)', () 
       }]);
 
       // /model parity at the session surface: the worker menu's metadata flows.
-      const models = await session.listAvailableModels();
+      const { models } = await session.listAvailableModels();
       const kimi = models.find((m) => m.provider === 'workers-ai' && m.id === '@cf/moonshotai/kimi-k2.6');
       expect(kimi?.contextWindow).toBe(262144);
     } finally {

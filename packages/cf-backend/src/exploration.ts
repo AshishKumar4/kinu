@@ -148,7 +148,6 @@ export class ExplorationAgent extends Agent<Env> {
         readOnly: false,
         rootPath: '',
         consistency: 'durable',
-        credentialsStayInHost: true,
       },
     });
     this._headRt = rt;

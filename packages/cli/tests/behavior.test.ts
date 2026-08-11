@@ -537,7 +537,7 @@ function startEmptyModelMenuOrigin(): { port: number; stop(): void } {
     port: 0,
     hostname: "127.0.0.1",
     fetch(request) {
-      if (new URL(request.url).pathname === "/api/cli/models") return Response.json([]);
+      if (new URL(request.url).pathname === "/api/cli/models") return Response.json({ models: [], failures: [] });
       return new Response("not found", { status: 404 });
     },
   });
@@ -556,11 +556,16 @@ describe("proteus create — an unusable model is named at creation", () => {
         user: { id: "user_123", email: "ashish@example.com" },
       });
 
-      // OPENAI_API_KEY in the ambient environment would supply a working
-      // credential path and correctly suppress the warning.
+      // Any ambient credential path — a BYO key, or the PROTEUS_BASE_URL /
+      // PROTEUS_MODEL direct-endpoint override another test file sets on this
+      // process — would supply a working provider and correctly suppress the
+      // warning. The subprocess starts without them.
       const proc = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
-        env: { OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", OPENROUTER_API_KEY: "" },
+        env: {
+          OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", OPENROUTER_API_KEY: "",
+          PROTEUS_BASE_URL: "", PROTEUS_AUTH: "", PROTEUS_MODEL: "",
+        },
       });
 
       expect(proc.exitCode).toBe(0);
