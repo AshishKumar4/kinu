@@ -1,6 +1,6 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent, type FormEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
@@ -33,12 +33,10 @@ import {
   classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
 } from "@/components/background-event";
-import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
-import type { TimelineKind, TimelineSpan } from "@proteus/core";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -152,7 +150,7 @@ function dataUrlRawBytes(url: string): number {
 function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
   const name = part.filename ?? "file";
   return (
-    <span className="inline-flex items-center gap-1.5 max-w-56 rounded-md border p-border p-elevated pl-1.5 pr-1.5 py-1 text-[11px] p-text-2">
+    <span className="inline-flex items-center gap-1.5 max-w-56 rounded-md border p-border p-fill pl-1.5 pr-1.5 py-1 text-[11px] p-text-2">
       {part.mediaType.startsWith("image/")
         ? <img src={part.url} alt={name} className="size-5 rounded object-cover shrink-0" />
         : <FileIcon size={13} className="p-text-3 shrink-0" />}
@@ -280,7 +278,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono p-elevated px-1 rounded">{provisionErr.runtime}</code> runtime
+              The agent asked for the <code className="font-mono p-fill px-1 rounded">{provisionErr.runtime}</code> runtime
               but it isn't provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
@@ -386,7 +384,7 @@ export function DeviceConsentCard({ consent, onResolve }: {
           <div className="text-xs p-text">
             This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
           </div>
-          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-elevated rounded px-2 py-1">{consent.command || "(command)"}</code>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
             Always allow grants this agent all future local actions on this device until revoked.
           </div>
@@ -830,18 +828,6 @@ function ForkModal({
   );
 }
 
-/** Which work surface a clicked timeline span should reveal. Returns null for
- *  spans with no specific home (the surface stays put; only the selection moves). */
-function surfaceForKind(kind: TimelineKind): SurfaceKind | null {
-  switch (kind) {
-    case "mcts": case "head-split": case "head-merge": case "gepa": return "Reasoning";
-    case "scaffold": case "shadow-eval": case "craft": case "reflection": case "curriculum": case "skills": return "Brain";
-    // Legacy "Workspace"/"Devices" spans predate the merged tab — both live
-    // in Environment now.
-    case "runtime-exec": return "Environment";
-    default: return null;
-  }
-}
 
 /* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
 
@@ -968,18 +954,7 @@ export default function WorkspacePage() {
   const [surface, setSurface] = useState<SurfaceKind>("Brain");
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
-  const [follow, setFollow] = useState(true);
-  const [selectedRef, setSelectedRef] = useState<string | null>(null);
-  // Run Timeline (Column B) is collapsed by default — it's a spine you summon,
-  // not an always-on firehose. (feedback: the live timeline was distracting.)
-  const timelineRef = usePanelRef();
-  const [timelineOpen, setTimelineOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const toggleTimeline = useCallback(() => {
-    const t = timelineRef.current;
-    if (!t) return;
-    if (t.isCollapsed()) t.resize("24%"); else t.collapse();
-  }, [timelineRef]);
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSent = useRef(false);
@@ -1059,16 +1034,6 @@ export default function WorkspacePage() {
     if (n > prevPortCountRef.current) setSurface("Output");
     prevPortCountRef.current = n;
   }, [state.pinnedPorts.length]);
-
-  // A timeline span drives the work surface (Column C): pin the selection and,
-  // when the span maps to a specific surface, switch to it. Turning off Follow
-  // so the spine stops auto-scrolling while the user inspects.
-  const onTimelineSelect = useCallback((span: TimelineSpan) => {
-    setFollow(false);
-    if (span.refId) setSelectedRef(span.refId);
-    const s = surfaceForKind(span.kind);
-    if (s) setSurface(s);
-  }, []);
 
   // Send the creation mission as the opening message — once, deterministically,
   // the moment the socket is connected. The mission rides in via navigation
@@ -1261,7 +1226,7 @@ export default function WorkspacePage() {
         <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
           {(["run", "supervise"] as const).map((a) => (
             <button key={a} onClick={() => setAltitude(a)}
-              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
               {a}
             </button>
           ))}
@@ -1302,9 +1267,14 @@ export default function WorkspacePage() {
                 </div>
               </div>
             )}
-            {/* Header */}
-            <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
-              <div className="flex min-w-0 flex-1 items-center gap-3">
+            {/* Header. Below ~26rem the row cannot hold a title, a model picker
+                and two buttons at once — the title is what loses, and a
+                workspace called "Checkout co…" is the one thing on this bar
+                that has to survive. So the title takes a full row of its own
+                at phone widths and the controls drop beneath it, rather than
+                every element being squeezed until the name is unreadable. */}
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 @[26rem]:py-3.5 border-b p-border">
+              <div className="flex min-w-0 basis-full @[26rem]:basis-0 @[26rem]:flex-1 items-center gap-3">
                 <ConnectionIndicator status={state.connectionStatus} />
                 <InlineWorkspaceTitle title={workspaceTitle} onRename={state.setDisplayName} />
                 {state.isStreaming && (
@@ -1324,16 +1294,8 @@ export default function WorkspacePage() {
                   </Link>
                 )}
               </div>
-              <div className="flex shrink-0 items-center gap-2">
-                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-28 @[30rem]:w-36 @[42rem]:w-44" />
-                <button
-                  onClick={toggleTimeline}
-                  title={timelineOpen ? "Hide run timeline" : "Show run timeline"}
-                  aria-label="Toggle run timeline"
-                  className={`p-1 rounded transition-colors cursor-pointer ${timelineOpen ? "p-accent" : "p-text-3 hover:p-text-2"}`}
-                >
-                  <ClockIcon size={14} />
-                </button>
+              <div className="flex shrink-0 items-center gap-2 ml-auto">
+                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-32 @[30rem]:w-36 @[42rem]:w-44" />
                 {state.messages.length > 0 && (
                   <Button variant="ghost" shape="square" size="sm"
                     onClick={() => setShowClearConfirm(true)}
@@ -1470,26 +1432,7 @@ export default function WorkspacePage() {
 
         <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
 
-        {/* ── Column B — Run Timeline (the spine; collapsed by default) ── */}
-        <Panel panelRef={timelineRef} collapsible collapsedSize={0} defaultSize={0} minSize={15}
-          onResize={(s) => setTimelineOpen(s.asPercentage > 0.5)}>
-          <div className="flex flex-col h-full border-r p-border">
-            <ErrorBoundary label="Timeline">
-              <RunTimeline
-                spans={state.runTimeline}
-                selectedRef={selectedRef}
-                onSelect={onTimelineSelect}
-                follow={follow}
-                onToggleFollow={() => setFollow(f => !f)}
-                onClose={toggleTimeline}
-              />
-            </ErrorBoundary>
-          </div>
-        </Panel>
-
-        <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
-
-        {/* ── Column C — Work Surface ─────────────────────────── */}
+        {/* ── Work Surface ────────────────────────────────────── */}
         <Panel minSize={28} defaultSize={58}>
           <WorkSurface
             surface={surface}

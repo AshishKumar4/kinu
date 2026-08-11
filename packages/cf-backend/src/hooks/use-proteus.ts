@@ -78,6 +78,7 @@ export interface WorkspaceSnapshot {
   tools: ToolDescResult;
   memoryContent: string;
   mcts: MctsRow[];
+  /** Still returned by the server for `proteus inspect`; no UI reads it. */
   timeline: TimelineSpan[];
   executors: ExecutorInfo[];
   executorOutputs: Array<{ name: string; outputs: ExecutorOutput[] }>;
@@ -121,10 +122,7 @@ export function useWorkspaceRpc(agentId: string) {
 
 /**
  * Full agent hook for WorkspacePage — connects to a specific DO instance.
- * Fetches all surface data via @callable RPCs on connect. The unified Run
- * Timeline (getRunTimeline) is the single activity feed — it subsumes the
- * former evolution-events + activity-log streams, so the hook no longer
- * maintains those separately.
+ * Fetches all surface data via @callable RPCs on connect.
  */
 export function useProteus(target?: string | ProteusActorAddress) {
   const workspace = typeof target === "string" ? target : target?.workspace;
@@ -139,9 +137,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
   const [mctsTree, setMctsTree] = useState<MCTSNode | null>(null);
-  // The unified Run Timeline spine — one server-merged, ordered span stream
-  // (getRunTimeline). Single source; no client-side merge of three RPCs.
-  const [runTimeline, setRunTimeline] = useState<TimelineSpan[]>([]);
   const [memoryContent, setMemoryContent] = useState<string>("");
   // Failures keyed by source, so one source recovering never erases another's
   // error, and none of them expire on a timer: an unread failure that quietly
@@ -364,10 +359,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     }
   }, [isStreaming, agent, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const refreshTimeline = useCallback(() => {
-    rpc<TimelineSpan[]>("getRunTimeline", [{ limit: 250 }]).then(setRunTimeline).catch(() => {});
-  }, [rpc]);
-
   // Full surface refresh on a steady 5s cadence. The chat stream already
   // carries the conversation, so streaming only adds a faster (1s) poll of
   // the run timeline for near-real-time spans — not all seven RPCs.
@@ -376,12 +367,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     const interval = setInterval(refreshLiveData, 5000);
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (!isConnected || !isStreaming || isSubordinate) return;
-    const interval = setInterval(refreshTimeline, 1000);
-    return () => clearInterval(interval);
-  }, [isConnected, isStreaming, isSubordinate, refreshTimeline]);
 
   const refreshBackgroundJobs = useCallback(() => {
     rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
@@ -408,8 +393,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
           if (msg.nodes && msg.nodes.length > 0) {
             setMctsTreeFromRows(msg.nodes);
           }
-          // Pull the freshest timeline so the new MCTS spans land promptly.
-          refreshTimeline();
         } else if (msg.type === "device_consent") {
           setPendingConsents((prev) => prev.some((c) => c.consentId === msg.consentId) ? prev
             : [...prev, {
@@ -455,7 +438,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent, refreshTimeline, refreshBackgroundJobs, setMctsTreeFromRows, isSubordinate]);
+  }, [agent, refreshBackgroundJobs, setMctsTreeFromRows, isSubordinate]);
 
   const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
     setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
@@ -471,7 +454,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
   }
 
   function refreshLiveData() {
-    refreshTimeline();
     rpc<MctsRow[]>("getMctsTree", []).then(setMctsTreeFromRows).catch(() => {});
     rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
     // Refresh tools so newly-crafted tools appear without reconnecting.
@@ -499,7 +481,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
         setMemoryContent(snap.memoryContent);
         if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
         setMctsTreeFromRows(snap.mcts);
-        setRunTimeline(snap.timeline);
         setExecutors(snap.executors);
         setLastActiveExecutor(snap.lastActiveExecutor);
         const outputs = new Map<string, ExecutorOutput[]>();
@@ -564,7 +545,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setMemoryContent("");
     setMctsTree(null);
     mctsFingerprint.current = "";
-    setRunTimeline([]);
     setPinnedPorts([]);
     setChatError(null);
     if (!isSubordinate) {
@@ -717,7 +697,6 @@ export function useProteus(target?: string | ProteusActorAddress) {
     memory,
     memoryContent,
     mctsTree,
-    runTimeline,
     sendChat,
     abortChat,
     searchMemory,
@@ -843,7 +822,7 @@ export interface MctsRow {
 }
 
 interface ToolDescResult {
-  builtIn: Array<{ name: string; description: string; exposure: ToolInfo["exposure"] }>;
+  builtIn: Array<{ name: string; summary: string; description: string; exposure: ToolInfo["exposure"] }>;
   crafted: Array<{ name: string; description: string; exposure: ToolInfo["exposure"]; qualityScore?: number; usageCount?: number }>;
 }
 
@@ -852,7 +831,8 @@ interface ToolDescResult {
 function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
   return [
     ...r.builtIn.map((t) => ({ ...t, learned: false, qualityScore: 1, usageCount: 0 })),
-    ...r.crafted.map((t) => ({ ...t, learned: true, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0 })),
+    // A crafted tool's description IS its one line — it has no second register.
+    ...r.crafted.map((t) => ({ ...t, summary: t.description, learned: true, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0 })),
   ];
 }
 

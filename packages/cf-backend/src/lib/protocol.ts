@@ -46,6 +46,14 @@ export interface MCTSNodeDetail extends MCTSNodeSummary {
 
 export interface ToolInfo {
 	name: string;
+	/** The one-line headline — what a list row shows. For a builtin this is the
+	 *  registry's own `summary`; a crafted tool's description is already one
+	 *  line, so it is its own summary. Never derived by splitting
+	 *  `description`: the docstring's shape is the model's contract, not the
+	 *  UI's. */
+	summary: string;
+	/** The full docstring the model sees — summary, when-to-use, doctrine,
+	 *  returns. Shown on demand, never as a list row's body. */
 	description: string;
 	/** Where the tool came from: shipped with the agent, or crafted by it. */
 	learned: boolean;

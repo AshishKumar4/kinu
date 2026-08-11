@@ -8,7 +8,6 @@
  *   /gallery.html?frame=chat     → chat column inventory
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
- *   /gallery.html?frame=timeline → Run Timeline at Column B's real widths
  *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
  *   /gallery.html?frame=markdown → everything MarkdownContent has to render
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
@@ -24,13 +23,12 @@ import type { UIMessage } from "ai";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
-  PaperPlaneRightIcon, PaperclipIcon, ClockIcon, GearSixIcon, TrashIcon, BrainIcon,
+  PaperPlaneRightIcon, PaperclipIcon, GearSixIcon, TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
 import Sidebar from "@/components/Sidebar";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { ModelPicker } from "@/components/ModelPicker";
-import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
@@ -39,8 +37,8 @@ import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
+import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
 import type { Rpc, ToolInfo } from "@/lib/protocol";
-import type { TimelineSpan } from "@proteus/core";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ModelMenuEntry } from "@/lib/user-api";
 
@@ -124,17 +122,6 @@ const MESSAGES: UIMessage[] = [
   }),
 ];
 
-const SPANS: TimelineSpan[] = [
-  { ts: NOW - 340e3, kind: "llm-turn", label: "Turn: fix SAVE20 coupon", detail: "claude-opus-4", elapsedMs: 48000, source: "run", refId: "r1" },
-  { ts: NOW - 330e3, kind: "tool-call", label: "run · curl /api/cart/apply", elapsedMs: 900, source: "run", refId: "r2" },
-  { ts: NOW - 320e3, kind: "runtime-exec", label: "sandbox: bun test packages/checkout", elapsedMs: 14200, source: "run", refId: "r3" },
-  { ts: NOW - 300e3, kind: "mcts", label: "think(mcts): bisect migration", detail: "12 nodes · best 0.82", source: "mcts", refId: "m1" },
-  { ts: NOW - 280e3, kind: "error", label: "provider stream reset", detail: "retried in 1.2s", source: "run", refId: "r4" },
-  { ts: NOW - 275e3, kind: "recovery", label: "turn resumed from step 3", source: "run", refId: "r5" },
-  { ts: NOW - 200e3, kind: "scaffold", label: "scaffold mutation accepted", detail: "+ pre-flight migration check", source: "evolution", refId: "e1" },
-  { ts: NOW - 120e3, kind: "curriculum", label: "curriculum: db-migration drills", source: "evolution", refId: "e2" },
-  { ts: NOW - 60e3, kind: "trigger", label: "webhook: github PR #212", source: "background", refId: "b1" },
-];
 
 const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   if (method.startsWith("list") || method.startsWith("get")) return [] as unknown as T;
@@ -145,8 +132,8 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
 
 function ChatHeader() {
   return (
-    <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
+    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 @[26rem]:py-3.5 border-b p-border">
+      <div className="flex min-w-0 basis-full @[26rem]:basis-0 @[26rem]:flex-1 items-center gap-3">
         <ConnectionIndicator status="connected" />
         <span className="font-medium text-sm p-text truncate">Checkout coupon bug</span>
         <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
@@ -154,9 +141,8 @@ function ChatHeader() {
           <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
         </span>
       </div>
-      <div className="flex shrink-0 items-center gap-2">
-        <ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-28 @[30rem]:w-36 @[42rem]:w-44" />
-        <button className="p-1 rounded transition-colors cursor-pointer p-text-3 hover:p-text-2" aria-label="Toggle run timeline"><ClockIcon size={14} /></button>
+      <div className="flex shrink-0 items-center gap-2 ml-auto">
+        <ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-32 @[30rem]:w-36 @[42rem]:w-44" />
         <Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />
         <span className="p-text-2"><GearSixIcon size={14} /></span>
       </div>
@@ -203,18 +189,15 @@ function Shell() {
           <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
             <span className="text-xs p-text-2 font-medium truncate">Checkout coupon bug</span>
             <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
-              <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-elevated p-text font-medium">run</button>
+              <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-fill p-text font-medium">run</button>
               <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-text-3 hover:p-text-2">supervise</button>
             </div>
           </div>
           <div className="flex-1 flex min-h-0">
-            <div className="@container flex flex-col h-full border-r p-border" style={{ width: "40%" }}>
+            <div className="@container flex flex-col h-full border-r p-border" style={{ width: "42%" }}>
               <ChatHeader />
               <ChatMessages />
               <Composer />
-            </div>
-            <div className="flex flex-col h-full border-r p-border" style={{ width: "22%" }}>
-              <RunTimeline spans={SPANS} selectedRef="m1" onSelect={() => {}} follow onToggleFollow={() => {}} onClose={() => {}} />
             </div>
             <div className="flex-1 min-w-0">
               <WorkSurface
@@ -231,22 +214,6 @@ function Shell() {
   );
 }
 
-/* The timeline at the widths Column B actually gets: the resizable panel's
-   minSize (15% ≈ 216px at 1440) through its comfortable width. */
-function TimelineWidths() {
-  return (
-    <div className="p-bg min-h-screen p-6 flex gap-6 items-start">
-      {[216, 260, 320].map((w) => (
-        <div key={w}>
-          <div className="p-eyebrow mb-2">{w}px</div>
-          <div className="border p-border rounded-[10px] overflow-hidden" style={{ width: w, height: 420 }}>
-            <RunTimeline spans={SPANS} selectedRef="m1" onSelect={() => {}} follow onToggleFollow={() => {}} />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -320,7 +287,6 @@ function All() {
   return (
     <div className="p-bg p-text min-h-screen">
       <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><ChatHeader /><ChatMessages /><Composer /></div></Section>
-      <Section title="Run timeline"><div className="max-w-sm h-96 border p-border rounded-lg overflow-hidden"><RunTimeline spans={SPANS} selectedRef="m1" onSelect={() => {}} follow onToggleFollow={() => {}} /></div></Section>
       <Section title="Controls">{<Controls />}</Section>
     </div>
   );
@@ -562,18 +528,27 @@ function LandingV2() {
 
 /* The Brain surface: the collapsible sections and the native/code-mode
    exposure badge, at the width Column C actually gets. */
+/* The real docstrings, from the registry the orchestrator serves them from.
+   Mocking short ones is how the Tools list shipped as a wall of prose without
+   anyone seeing it: nine builtins carry ~2,400 tokens of contract between
+   them, and a harness that photographs one-liners photographs a surface the
+   app does not have. */
 const BRAIN_TOOLS: ToolInfo[] = [
-  { name: "run", description: "Execute a command on a chosen runtime (workspace, sandbox, a linked device).", learned: false, exposure: "native", qualityScore: 1, usageCount: 0 },
-  { name: "file", description: "Read, write, edit and search files in the workspace.", learned: false, exposure: "native", qualityScore: 1, usageCount: 0 },
-  { name: "memory", description: "Durable recall — notes, facts and searchable history.", learned: false, exposure: "native", qualityScore: 1, usageCount: 0 },
-  { name: "web", description: "Search the web and fetch a page as markdown.", learned: false, exposure: "native", qualityScore: 1, usageCount: 0 },
-  { name: "execute_tools", description: "Run a JavaScript program against every capability namespace.", learned: false, exposure: "native", qualityScore: 1, usageCount: 0 },
-  { name: "bisect_migration", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 },
-  { name: "coupon_replay", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 },
+  ...BUILTIN_TOOLS.map((name) => ({
+    name,
+    summary: BUILTIN_TOOL_SPECS[name].summary,
+    description: BUILTIN_TOOL_DESCRIPTIONS[name],
+    learned: false,
+    exposure: (name === "release" ? "codemode" : "native") as ToolInfo["exposure"],
+    qualityScore: 1,
+    usageCount: 0,
+  })),
+  { name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 },
+  { name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 },
 ];
 
 const BRAIN_STATUS = {
-  id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-fixes", displayName: "Checkout coupon bug",
+  id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
   purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
   scaffoldVersion: 7, searchNodeCount: 12, craftedToolCount: 2, messageCount: 48,
   createdAt: NOW - 7 * 864e5,
@@ -748,7 +723,7 @@ function ReleasesFrame() {
 function BrainFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[520px] border-x p-border min-h-screen p-5">
+      <div className="w-[740px] border-x p-border min-h-screen p-5">
         <BrainSurface
           agentStatus={BRAIN_STATUS} tools={BRAIN_TOOLS} memory={[]}
           memoryContent={"## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n- Percentage coupons carry `kind: null` after Tuesday's migration.\n"}
@@ -767,7 +742,6 @@ async function mount() {
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "palette") node = <Palette />;
   else if (frame === "landing2") node = <LandingV2 />;
-  else if (frame === "timeline") node = <TimelineWidths />;
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;

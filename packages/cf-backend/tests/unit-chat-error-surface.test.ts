@@ -28,7 +28,7 @@ describe('use-proteus chat-error wiring', () => {
   test('clears the error on the next send and on workspace switch; exposes retry + clear + state', () => {
     const send = hook.slice(hook.indexOf('const sendChat = useCallback'), hook.indexOf('const searchMemory'));
     expect(send).toContain('setChatError(null)');
-    const reset = hook.slice(hook.indexOf('setRunTimeline([]);\n    setPinnedPorts([]);'), hook.indexOf('}, [agentId])'));
+    const reset = hook.slice(hook.indexOf('setPinnedPorts([]);'), hook.indexOf('}, [agentId])'));
     expect(reset).toContain('setChatError(null)');
     const returned = hook.slice(hook.indexOf('return {\n    messages'));
     expect(returned).toContain('chatError,');

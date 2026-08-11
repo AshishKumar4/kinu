@@ -25,7 +25,7 @@ const STATUS_TONE: Record<string, string> = {
   current: "p-badge-success",
   pending: "p-badge-warning",
   rolled_back: "p-badge-danger",
-  historical: "p-elevated p-text-3",
+  historical: "p-fill p-text-3",
 };
 
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
@@ -144,9 +144,9 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           <div className="space-y-1">
             {versions.map((v) => (
               <button key={v.version} onClick={() => select(v.version)}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-elevated" : "hover:p-card"}`}>
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "hover:p-card"}`}>
                 <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_TONE[v.status] ?? "p-elevated p-text-3"}`}>{v.status}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_TONE[v.status] ?? "p-fill p-text-3"}`}>{v.status}</span>
                 <span className="text-[11px] p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
                 <span className="text-[10px] p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
               </button>
@@ -179,7 +179,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
                 {previewOut && (
-                  <pre className="text-[11px] font-mono p-elevated border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
+                  <pre className="text-[11px] font-mono p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
                 )}
               </div>
 

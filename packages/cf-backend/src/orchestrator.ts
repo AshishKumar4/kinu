@@ -33,7 +33,7 @@ import {
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_NAMES,
-  BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   argumentDigest,
   updateCraftScores,
   feedbackToQuality,
@@ -2467,6 +2467,10 @@ export class OrchestratorAgent extends ActorAgent {
     const nativeNames = new Set(Object.keys(this.getRawTools()));
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
+      // Both registers, from the one spec: the headline a list row shows and
+      // the docstring the model is given. The UI must never recover one from
+      // the other by splitting text.
+      summary: BUILTIN_TOOL_SPECS[name].summary,
       description: BUILTIN_TOOL_DESCRIPTIONS[name],
       exposure: (nativeNames.has(name) ? "native" : "codemode") as "native" | "codemode",
     }));

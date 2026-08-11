@@ -1,9 +1,8 @@
 /**
- * Work Surface — Column C of the RUN altitude. A thin segmented switcher over
- * the workspace's pinned work surfaces (Output · Brain · Reasoning · Releases ·
- * Tasks · Environment), NOT a row of co-equal debug tabs. The Run Timeline
- * (Column B) drives which surface is active; this owns the switcher chrome +
- * dispatch.
+ * Work Surface — the right column of the RUN altitude. A thin segmented
+ * switcher over the workspace's pinned work surfaces (Output · Brain ·
+ * Reasoning · Releases · Tasks · Environment), NOT a row of co-equal debug
+ * tabs. This owns the switcher chrome + dispatch.
  */
 import { useEffect, useRef } from "react";
 import {
@@ -87,8 +86,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
   const { surface, onSurface } = props;
   const strip = useRef<HTMLDivElement>(null);
 
-  // The Run Timeline drives the active surface, so a tab can be selected
-  // without being clicked — keep it in view when the strip has to scroll.
+  // A surface can be selected without being clicked (a deep link, a restored
+  // tab) — keep the current one in view when the strip has to scroll.
   useEffect(() => {
     strip.current?.querySelector('[aria-current="true"]')
       ?.scrollIntoView({ block: "nearest", inline: "nearest" });

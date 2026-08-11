@@ -39,7 +39,7 @@ export function OutputSurface({ pinnedPorts, executors, lastActiveExecutor, rpc 
       <div className="flex items-center gap-1 px-3 py-1.5 border-b p-border shrink-0">
         {(["preview", "diff"] as const).map((v) => (
           <button key={v} onClick={() => setView(v)}
-            className={`px-2.5 py-1 text-[11px] rounded-md capitalize transition-colors flex items-center gap-1.5 ${view === v ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+            className={`px-2.5 py-1 text-[11px] rounded-md capitalize transition-colors flex items-center gap-1.5 ${view === v ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
             {v === "preview" ? <MonitorIcon size={12} /> : <GitDiffIcon size={12} />}{v}
             {v === "preview" && pinnedPorts.length > 0 && <span className="size-1.5 rounded-full p-dot-success" />}
           </button>
@@ -161,7 +161,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
             <button key={name} onClick={() => setExec(name)}
               className={`px-2 py-0.5 text-[11px] rounded-md transition-colors ${
                 exec === name
-                  ? "p-elevated p-text font-medium"
+                  ? "p-fill p-text font-medium"
                   : name === "workspace"
                     ? "p-text-3 hover:p-text-2 opacity-80"
                     : "p-text-3 hover:p-text-2"

@@ -32,7 +32,7 @@ export function PreviewFrame({ url, label }: {
   }
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-elevated shrink-0">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
         <span className="size-1.5 rounded-full p-dot-success shrink-0" />
         {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
         <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>

@@ -283,7 +283,7 @@ export default function SettingsPage() {
               />
             )}
           </FieldState>
-          <p className="text-[11px] p-text-3">
+          <p className="p-meta p-text-3">
             Changes take effect on the next turn. Provider availability is driven by which credentials you've connected.
           </p>
         </Card>
@@ -380,7 +380,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
 
   return (
     <Card title="Device access" icon={DesktopTowerIcon}>
-      <p className="text-[11px] p-text-3">
+      <p className="p-meta p-text-3">
         How far this workspace's agent may reach on your connected PC (the /pc mount).
         By default it sees only the folder you consented to when connecting.
       </p>
@@ -469,7 +469,7 @@ function WorkspaceBackupCard({
 
   return (
     <Card title="Backup" icon={DownloadSimpleIcon}>
-      <p className="text-[11px] p-text-3">
+      <p className="p-meta p-text-3">
         Download everything this workspace holds — transcripts, memory, files, evolution
         history — as a portable archive. Restore it on any machine with{" "}
         <code className="font-mono">proteus import &lt;file&gt;</code>. Take one before you
@@ -482,8 +482,8 @@ function WorkspaceBackupCard({
         disabled={busy || !workspace}
         className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
       >{busy ? "Exporting…" : "Download archive"}</button>
-      {status && <div className="text-[11px] p-text-2 mt-1">{status}</div>}
-      {err && <div className="text-[11px] p-danger mt-1">Export failed: {err}</div>}
+      {status && <div className="p-meta p-text-2 mt-1">{status}</div>}
+      {err && <div className="p-meta p-danger mt-1">Export failed: {err}</div>}
     </Card>
   );
 }
@@ -551,7 +551,7 @@ function GepaOptimizationCard({
 
   return (
     <Card title="Scaffold self-tuning" icon={SparkleIcon}>
-      <p className="text-[11px] p-text-3">
+      <p className="p-meta p-text-3">
         Offline genetic-Pareto optimisation: runs candidate inference loops against your
         agent's recent tasks, judges each, and proposes an improved scaffold for shadow eval.
         Costs several LLM calls per run.
@@ -562,11 +562,11 @@ function GepaOptimizationCard({
         disabled={running}
         className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50"
       >{running ? 'Optimising…' : 'Run optimisation'}</button>
-      {msg && <div className="text-[11px] p-text-2 mt-1">{msg}</div>}
+      {msg && <div className="p-meta p-text-2 mt-1">{msg}</div>}
       {runs.length > 0 && (
         <div className="mt-2 space-y-1">
           {runs.slice(0, 5).map(r => (
-            <div key={r.runId} className="text-[11px] p-text-3 flex items-center gap-2">
+            <div key={r.runId} className="p-meta p-text-3 flex items-center gap-2">
               <span className={`size-1.5 rounded-full ${r.status === 'completed' ? 'p-dot-success' : r.status === 'running' ? 'p-dot-warning' : 'p-dot-neutral'}`} />
               <span className="font-mono">{r.iterations} iters</span>
               <span>· {r.metricCalls} evals</span>
@@ -626,15 +626,15 @@ function AlwaysActiveSkillsCard({
 
   return (
     <Card title="Always-active skills" icon={KeyIcon}>
-      <p className="text-[11px] p-text-3">
+      <p className="p-meta p-text-3">
         Skills pinned here are activated every turn for this agent. Use to lock-in
         workflow conventions (e.g., <code className="font-mono">audit-implementation</code>) without typing /name.
       </p>
       <div className="flex flex-wrap gap-1.5">
         {names.length === 0
-          ? <span className="text-[11px] p-text-3 italic">(none pinned)</span>
+          ? <span className="p-meta p-text-3 italic">(none pinned)</span>
           : names.map(n => (
-            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded p-card text-[11px] font-mono">
+            <span key={n} className="inline-flex items-center gap-1 px-2 py-0.5 rounded p-card p-meta font-mono">
               {n}
               <button type="button" onClick={() => remove(n)} className="p-text-3 hover:p-text">×</button>
             </span>
@@ -656,7 +656,7 @@ function AlwaysActiveSkillsCard({
           className="px-3 py-1.5 rounded-md text-xs font-medium p-accent-bg p-accent hover:opacity-90 disabled:opacity-50 shrink-0"
         >Pin</button>
       </div>
-      {err && <div className="text-[11px] p-danger mt-1">{err}</div>}
+      {err && <div className="p-meta p-danger mt-1">{err}</div>}
     </Card>
   );
 }
@@ -664,7 +664,7 @@ function AlwaysActiveSkillsCard({
 function NumField({ label, value, step, onChange }: { label: string; value: number; step: number; onChange: (v: number) => void }) {
   return (
     <div className="space-y-1">
-      <label className="text-[11px] p-text-2">{label}</label>
+      <label className="p-meta p-text-2">{label}</label>
       <input
         type="number"
         step={step}

@@ -43,7 +43,7 @@ export function ReasoningSurface({ mctsTree, isStreaming, rpc }: ReasoningSurfac
       <div className="flex items-center gap-1 mb-3 shrink-0">
         {tabs.map((t) => (
           <button key={t.id} onClick={() => setView(t.id)}
-            className={`px-2.5 py-1 text-[11px] rounded-md transition-colors flex items-center gap-1.5 ${view === t.id ? "p-elevated p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+            className={`px-2.5 py-1 text-[11px] rounded-md transition-colors flex items-center gap-1.5 ${view === t.id ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
             <t.icon size={12} />{t.label}
           </button>
         ))}
@@ -303,7 +303,7 @@ function MctsBranchInspector({
 
         {branch.codeUsed && (
           <DetailSection title="Code draft">
-            <pre className="text-[10px] p-text-2 leading-relaxed whitespace-pre-wrap break-words max-h-56 overflow-y-auto rounded-md p-elevated border p-border p-2">
+            <pre className="text-[10px] p-text-2 leading-relaxed whitespace-pre-wrap break-words max-h-56 overflow-y-auto rounded-md p-fill border p-border p-2">
               {branch.codeUsed}
             </pre>
           </DetailSection>
@@ -323,7 +323,7 @@ function MctsBranchInspector({
                 key={p.id}
                 type="button"
                 onClick={() => onOpenNode(p.id)}
-                className={`w-full flex items-start gap-2 rounded-md px-2 py-1 text-left transition-colors ${p.id === branch.id ? "p-elevated" : "hover:p-card"}`}
+                className={`w-full flex items-start gap-2 rounded-md px-2 py-1 text-left transition-colors ${p.id === branch.id ? "p-fill" : "hover:p-card"}`}
               >
                 <span className="text-[9px] p-text-3 font-mono w-5 text-right shrink-0">{i}</span>
                 <div className="min-w-0 flex-1">
@@ -343,7 +343,7 @@ function MctsBranchInspector({
                   key={c.id}
                   type="button"
                   onClick={() => onOpenNode(c.id)}
-                  className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-elevated text-left hover:p-card transition-colors"
+                  className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-fill text-left hover:p-card transition-colors"
                 >
                   <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "p-dot-success" : c.status === "failed" ? "p-dot-danger" : c.status === "pruned" ? "p-dot-neutral" : "p-dot-warning"}`} />
                   <div className="min-w-0 flex-1">
@@ -453,7 +453,7 @@ function HeadListButton({
     <button
       type="button"
       onClick={onSelect}
-      className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-elevated" : "hover:p-card"}`}
+      className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "hover:p-card"}`}
     >
       <span className={`mt-1 size-1.5 rounded-full shrink-0 ${statusDot(h.status)}`} />
       <div className="min-w-0 flex-1">
@@ -546,7 +546,7 @@ function HeadBranchInspector({ selection }: { selection: HeadSelection | null })
           <DetailSection title="Decisions">
             <div className="space-y-1">
               {head.decisions.map((d, i) => (
-                <div key={i} className="rounded-md p-elevated border p-border p-2 text-[10px]">
+                <div key={i} className="rounded-md p-fill border p-border p-2 text-[10px]">
                   <div className="p-text-2">{d.question}</div>
                   <div className="p-accent mt-0.5">→ {d.choice}</div>
                   {d.rationale && <div className="p-text-3 mt-0.5">{d.rationale}</div>}
@@ -646,7 +646,7 @@ function GepaView({ rpc }: { rpc: Rpc }) {
       <div className="space-y-1">
         {runs.map((r) => (
           <button key={r.runId} onClick={() => open(r.runId)}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-elevated" : "hover:p-card"}`}>
+            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "hover:p-card"}`}>
             <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "running" ? "p-dot-warning" : "p-dot-neutral"}`} />
             <span className="text-[11px] p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
             <span className="text-[10px] p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
@@ -673,7 +673,7 @@ function GepaView({ rpc }: { rpc: Rpc }) {
               return (
                 <div key={c.id} className="flex items-center gap-2 text-[10px]">
                   <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
-                  <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
+                  <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
                     <div className={`h-full ${isWinner ? "p-dot-success" : onPareto ? "p-dot-info" : "p-dot-neutral"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
                   </div>
                   <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
@@ -775,7 +775,7 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
                 {r.scaffoldVersion != null && (
                   <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
                 )}
-                <div className="flex-1 h-2 rounded-full p-elevated overflow-hidden" title={`95% CI ${r.interval.lo.toFixed(2)}–${r.interval.hi.toFixed(2)} over ${r.sampleSize} turns`}>
+                <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${r.interval.lo.toFixed(2)}–${r.interval.hi.toFixed(2)} over ${r.sampleSize} turns`}>
                   <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
                 </div>
                 <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
@@ -829,7 +829,7 @@ function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibrati
             title={s.rate.reliable ? undefined : "interval too wide to read as a rate"}>
             <span className="shrink-0 font-mono p-text-3 w-8">v{s.scaffoldVersion ?? "?"}</span>
             <span className="shrink-0 p-text-3 w-12 tabular-nums">n={s.turns}</span>
-            <div className="flex-1 h-2 rounded-full p-elevated relative overflow-hidden">
+            <div className="flex-1 h-2 rounded-full p-fill relative overflow-hidden">
               <div className="absolute inset-y-0 p-dot-info opacity-40" style={{
                 left: `${(s.rate.lowPer100 / scaleMax) * 100}%`,
                 width: `${Math.max(1, ((s.rate.highPer100 - s.rate.lowPer100) / scaleMax) * 100)}%`,

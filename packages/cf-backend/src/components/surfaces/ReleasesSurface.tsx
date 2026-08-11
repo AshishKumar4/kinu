@@ -126,7 +126,7 @@ function SourceBindingForm({ rpc, onSaved }: { rpc: Rpc; onSaved: () => void }) 
 
   return (
     <div className="p-card rounded-lg p-3 space-y-3">
-      <div className="flex items-center gap-1 p-elevated rounded-md p-0.5 w-fit">
+      <div className="flex items-center gap-1 p-fill rounded-md p-0.5 w-fit">
         {(["local", "github"] as const).map((k) => (
           <button key={k} onClick={() => setKind(k)}
             className={`px-2.5 py-1 rounded text-[11px] capitalize ${kind === k ? "p-card p-text" : "p-text-3 hover:p-text-2"}`}>
@@ -212,7 +212,7 @@ function ChangeList({
     <div className="space-y-2">
       {changes.map((change) => (
         <button key={change.id} onClick={() => onSelect(change.id)}
-          className={`w-full text-left rounded-lg p-3 transition-colors border ${selectedId === change.id ? "p-elevated p-border" : "border-transparent hover:p-card"}`}>
+          className={`w-full text-left rounded-lg p-3 transition-colors border ${selectedId === change.id ? "p-fill p-border" : "border-transparent hover:p-card"}`}>
           <div className="flex items-start gap-2">
             <GitDiffIcon size={15} className="p-accent mt-0.5 shrink-0" />
             <div className="min-w-0 flex-1">
@@ -345,7 +345,7 @@ function ChangeDetail({
     <div className="space-y-5">
       <section>
         <div className="flex items-start gap-3">
-          <div className="size-9 rounded-lg flex items-center justify-center p-elevated border p-border shrink-0">
+          <div className="size-9 rounded-lg flex items-center justify-center p-fill border p-border shrink-0">
             <GitDiffIcon size={18} className="p-accent" />
           </div>
           <div className="min-w-0 flex-1">
@@ -392,7 +392,7 @@ function ChangeDetail({
         {change.patch && (
           <div>
             <div className="text-[11px] p-text-3 mb-1">Patch</div>
-            <pre className="rounded-lg border p-border p-elevated p-3 max-h-[360px] overflow-auto text-[10px] font-mono leading-relaxed whitespace-pre-wrap">
+            <pre className="rounded-lg border p-border p-fill p-3 max-h-[360px] overflow-auto text-[10px] font-mono leading-relaxed whitespace-pre-wrap">
               {change.patch}
             </pre>
           </div>

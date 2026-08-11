@@ -148,7 +148,7 @@ function LeafBlock({ block, sources }: { block: ViewLeafBlock; sources: Map<stri
             <table className="w-full text-xs border-collapse">
               <thead>
                 <tr>{block.columns.map((c) => (
-                  <th key={c.field} className="border p-border px-2 py-1 text-left font-medium p-elevated">{c.label}</th>
+                  <th key={c.field} className="border p-border px-2 py-1 text-left font-medium p-fill">{c.label}</th>
                 ))}</tr>
               </thead>
               <tbody>

@@ -137,7 +137,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
           icon={busy ? <Loader size="sm" /> : undefined}>Propose tasks</Button>
       </div>
       <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style) — predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
-      {actionErr && <div className="text-[11px] p-danger mb-2">{actionErr}</div>}
+      {actionErr && <div className="p-meta p-danger mb-2">{actionErr}</div>}
       {tasks === null ? (
         resource.status === "error"
           ? <LoadFailure what="the curriculum" message={resource.message} onRetry={reload} />
@@ -151,15 +151,15 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
                 <div className="flex items-start gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="text-sm p-text mb-0.5">{t.task}</div>
-                    <div className="text-[11px] p-text-3 line-clamp-2">{t.rationale}</div>
+                    <div className="p-meta p-text-3 line-clamp-2">{t.rationale}</div>
                     {t.targetsSkills.length > 0 && (
                       <div className="flex flex-wrap gap-1 mt-1.5">
-                        {t.targetsSkills.map((s) => <span key={s} className="text-[10px] px-1.5 py-0.5 rounded-full p-elevated p-text-3">{s}</span>)}
+                        {t.targetsSkills.map((s) => <span key={s} className="p-meta px-1.5 py-0.5 rounded-full p-fill p-text-3">{s}</span>)}
                       </div>
                     )}
                   </div>
                   <div className="flex flex-col items-end gap-1 shrink-0">
-                    <span className="text-[10px] p-text-3">p≈{(t.predictedSuccess * 100).toFixed(0)}%</span>
+                    <span className="p-meta p-text-3">p≈{(t.predictedSuccess * 100).toFixed(0)}%</span>
                     {t.status !== "pending" && <Badge variant="secondary">{t.status}</Badge>}
                   </div>
                 </div>
@@ -197,8 +197,8 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
         <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
         {runs && <Badge variant="secondary">{runs.length}</Badge>}
         <span className="ml-auto flex items-center gap-2">
-          {totalCached > 0 && <span className="text-[11px] p-success" title="prompt-cache hit rate (cached input / total input)">{fmtPct(hitRate)} cached</span>}
-          {totalTokens > 0 && <span className="text-[11px] p-text-3">{fmtTokens(totalTokens)} tokens</span>}
+          {totalCached > 0 && <span className="p-meta p-success" title="prompt-cache hit rate (cached input / total input)">{fmtPct(hitRate)} cached</span>}
+          {totalTokens > 0 && <span className="p-meta p-text-3">{fmtTokens(totalTokens)} tokens</span>}
         </span>
       </div>
       {runs === null ? (
@@ -212,7 +212,7 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
             {runs.map((r) => (
               <div key={r.runId} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
                 <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "aborted" ? "p-dot-danger" : "p-dot-neutral"}`} />
-                <span className="text-[10px] px-1 rounded p-elevated p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
+                <span className="p-meta px-1 rounded p-fill p-text-3 shrink-0">{r.causedBy ?? "chat"}</span>
                 <span className="p-text-2 truncate flex-1" title={r.userMessage ?? r.runId}>{r.userMessage ?? r.runId}</span>
                 {(r.tokensIn + r.tokensOut) > 0 && <span className="p-text-3 shrink-0 tabular-nums" title="tokens in+out">{fmtTokens(r.tokensIn + r.tokensOut)} tok</span>}
                 <span className="p-text-3 shrink-0 tabular-nums">{new Date(r.startedAt).toLocaleDateString()}</span>
@@ -255,7 +255,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <LightningIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Automations</h2>
         {triggers && <Badge variant="secondary">{active}/{triggers.length} active</Badge>}
-        {nextFire && <span className="text-[11px] p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
+        {nextFire && <span className="p-meta p-text-3 tabular-nums">next {new Date(nextFire).toLocaleString()}</span>}
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
@@ -299,7 +299,7 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
       <span className={`size-1.5 rounded-full shrink-0 ${trigger.state === "active" ? "p-dot-success" : trigger.state === "paused" ? "p-dot-warning" : "p-dot-neutral"}`} />
       <span className="font-medium p-text-2 truncate max-w-40" title={spec.label ?? trigger.id}>{spec.label ?? trigger.id}</span>
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
-      {spec.cron && <code className="p-elevated px-1 rounded p-text-3 shrink-0">{spec.cron}</code>}
+      {spec.cron && <code className="p-fill px-1 rounded p-text-3 shrink-0">{spec.cron}</code>}
       <span className="flex-1" />
       {typeof trigger.fire_count === "number" && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
@@ -353,24 +353,24 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
       </p>
       <div className="space-y-2">
         <div>
-          <div className="text-[10px] p-text-3 mb-1">URL</div>
+          <div className="p-eyebrow mb-1">URL</div>
           <div className="flex items-center gap-2">
-            <code className="text-xs p-elevated px-2 py-1.5 rounded font-mono flex-1 break-all">{url}</code>
+            <code className="text-xs p-fill px-2 py-1.5 rounded font-mono flex-1 break-all">{url}</code>
             <CopyButton value={url} what="the webhook URL" className="p-2 rounded p-card hover:p-card-hover" />
           </div>
         </div>
         {result.secret && (
           <div>
-            <div className="text-[10px] p-text-3 mb-1">Secret <span className="p-danger">(shown once)</span></div>
+            <div className="p-eyebrow mb-1">Secret <span className="p-danger">(shown once)</span></div>
             <div className="flex items-center gap-2">
-              <code className="text-xs p-elevated px-2 py-1.5 rounded font-mono flex-1 break-all">{result.secret}</code>
+              <code className="text-xs p-fill px-2 py-1.5 rounded font-mono flex-1 break-all">{result.secret}</code>
               <CopyButton value={result.secret} what="the secret" className="p-2 rounded p-card hover:p-card-hover" />
             </div>
           </div>
         )}
         <div>
-          <div className="text-[10px] p-text-3 mb-1">Test with curl</div>
-          <pre className="text-[11px] p-elevated p-3 rounded font-mono overflow-x-auto whitespace-pre">{curlSnippet}</pre>
+          <div className="p-eyebrow mb-1">Test with curl</div>
+          <pre className="p-meta p-fill p-3 rounded font-mono overflow-x-auto whitespace-pre">{curlSnippet}</pre>
         </div>
       </div>
     </div>
@@ -460,7 +460,7 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
         </label>
       </div>
       {err && <div className="text-xs p-danger">{err}</div>}
-      <p className="text-[10px] p-text-3 flex items-start gap-1.5">
+      <p className="p-meta p-text-3 flex items-start gap-1.5">
         <WarningIcon size={11} className="mt-0.5 shrink-0" />
         <span>Webhook creation requires a recent login (within 5 minutes). If it fails, you'll be prompted to sign in again.</span>
       </p>

@@ -22,12 +22,23 @@
      scheme" the app is recognised by. Brass at FULL strength stays
      rationed to intent: primary action, active nav, links, focus, live
      work.
-   · Surfaces are a six-step warm ladder. Hierarchy comes from surface
-     steps plus hairlines, never from shadows in dark.
-   · Light is a sibling, not an inversion, and not a bleach: the canvas
-     is a warm desk, panels recede into it and cards lift off it toward
-     paper. A near-white canvas with near-white cards has no figure and
-     no ground, which is exactly what it looked like.
+   · Surfaces are a warm ladder. In DARK, hierarchy comes from surface
+     steps plus hairlines, never from shadows.
+   · LIGHT is not the dark palette warmed and lightened. Two passes did
+     that and both produced the same defect: a monochrome beige field
+     where canvas, rails, panels and cards were one hue separated by a
+     few percent lightness. Light gets its structure the way strong
+     light modes actually get it — near-neutral ground, PAPER cards,
+     real hairlines, real elevation — and brass is rationed to intent
+     rather than being the atmosphere. The planes carry roughly half
+     the chroma they used to; brass is then the only saturated thing on
+     screen, which is what makes it read as an accent at all.
+   · `--c-elevated` and `--c-fill` are one value in dark and two in
+     light, because dark conflates two roles that light cannot. "Raised
+     off the canvas" (composer, dialogs, cards) is PAPER in light;
+     "a plane inside a card" (chips, segments, meter tracks, hover) is
+     a step DOWN from paper. One token served both only because moving
+     up the dark ladder happens to do both at once.
    · Every text token meets WCAG AA (4.5:1+) on every surface it is
      specced for, in both modes — enforced by unit-palette-contrast.
 
@@ -68,8 +79,12 @@ html, body, #root {
   --c-bg:       #1A1613;   /* landing --bg — the canvas   */
   --c-sidebar:  #201A15;   /* landing header tone — panels */
   --c-surface:  #241E18;   /* card   */
-  --c-elevated: #2C251E;   /* raised */
+  --c-elevated: #2C251E;   /* raised off the canvas: composer, dialogs, menus */
   --c-overlay:  #332B23;   /* dialogs */
+  /* A plane INSIDE a card — chip, segment, meter track, row hover. Dark has
+     no use for the distinction (up the ladder reads as both), so it is the
+     same value as `--c-elevated` here and the two only diverge on paper. */
+  --c-fill:     #2C251E;
 
   /* Brass hairlines. The landing draws every rule this way and it is what
      makes the surface read warm rather than merely dark. */
@@ -106,13 +121,19 @@ html, body, #root {
      recessed panel rather than syntax-coloured, and that is deliberate
      here too — see CodeBlock in components/surfaces/shared.tsx. */
   --c-code:     #E8B97A;   /* landing --code */
-  --c-code-bg:  #120F0C;
+  /* A code block is a well, which is what `--c-recessed` already means; the
+     two were the same literal in both modes and drifted apart by hand. */
+  --c-code-bg:  var(--c-recessed);
 
   /* One scrim behind every overlay — dialogs, drawers, sheets. Warm-black so
      it deepens the umber ground instead of greying it. */
   --c-scrim: rgba(10, 8, 5, 0.55);
 
   /* elevation — role-named; dark = black-based, heavier */
+  /* Dark draws no card shadow at all (the rule above): a card is a rung of
+     the ladder plus a hairline. On paper that is not enough, so the token
+     exists and is `none` here. */
+  --shadow-card: none;
   --shadow-overlay: 0 18px 44px -12px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
   --shadow-menu:    0 10px 28px -10px rgba(0, 0, 0, 0.5);
   --shadow-composer: 0 -6px 24px -16px rgba(0, 0, 0, 0.45);
@@ -142,7 +163,7 @@ html, body, #root {
   --color-kumo-overlay: var(--c-overlay);
   --color-kumo-control: var(--c-surface);
   --color-kumo-contrast: var(--c-text);
-  --color-kumo-interact: var(--c-elevated);
+  --color-kumo-interact: var(--c-fill);
   /* `fill` is a chip/track tone (Kumo's Badge, Combobox and Meter), so it has
      to read as a step above whatever it sits on — a solid surface step
      disappears the moment the container is that same step, which is exactly
@@ -201,62 +222,86 @@ html, body, #root {
 }
 
 [data-mode="light"] {
-  /* ── LIGHT — a warm desk, not a bleached one ───────────────────────
-     The previous set ran #f9f8f5 → #fbfaf8 → #fefdfc: three whites
-     within 4% of each other, so the rail, the canvas, the cards and the
-     dialogs were one flat field and the mode read as unfinished.
+  /* ── LIGHT — near-neutral ground, paper cards, brass rationed ──────
+     Three passes of complaint, all the same one: "it's all mostly the
+     same colour and shade on most panels." Both previous attempts
+     answered it by moving the steps of a warm ladder around. That could
+     not work, because the problem was never the spacing of the steps —
+     it was that every plane on screen was the SAME saturated beige, and
+     brass, the accent, was that beige too. An accent cannot be an
+     accent when the whole field is already its hue.
 
-     This ladder has a direction. The canvas is a real tone you can name
-     (warm parchment). Panels and rails sit BELOW it, so chrome recedes
-     exactly as it does in dark. Cards and dialogs rise ABOVE it toward
-     paper white, so the things you read are the things that are
-     lightest. Card-against-canvas is a 1.11 luminance ratio and
-     rail-against-card is 1.21 — visible at a glance, on any monitor. ── */
-  --c-recessed: #E3D9C6;   /* wells, tracks, inset code   */
-  --c-bg:       #F1EADC;   /* the desk — the canvas       */
-  --c-sidebar:  #E9E1D0;   /* panels and rails recede     */
-  --c-surface:  #FAF6EE;   /* cards lift off the desk     */
-  --c-elevated: #FDFAF3;   /* raised */
-  --c-overlay:  #FFFFFC;   /* dialogs — the only paper white */
+     So the planes give up most of their chroma (roughly 42% → 20%
+     saturation) and gain lightness, and the structure comes from where
+     good light modes actually get it:
+
+       ground      a near-neutral warm grey you would call "off-white"
+       chrome      rails and panel headers, a real step BELOW the canvas
+       paper       cards, composer, dialogs — WHITE, the reading surface
+       line        hairlines strong enough to see (1.43:1 on white,
+                   GitHub-strength; the old rule was 1.19:1 and vanished)
+       lift        cards cast a shadow, which dark deliberately forbids
+
+     The measured steps, as luminance ratios:
+       paper : canvas   1.147     canvas : chrome   1.124
+       paper : fill     1.22      canvas : recessed 1.19
+     Every one of those is a step you can see without hunting; the old
+     canvas : chrome was 1.07, which is why the rail and the canvas read
+     as one surface.
+
+     Brass survives verbatim as `--c-accent` — the same object as dark —
+     and is now the only saturated colour in the room. ── */
+  --c-recessed: #E4E0D8;   /* wells, tracks, code             */
+  --c-sidebar:  #E7E2D9;   /* chrome: rails, panel headers    */
+  --c-fill:     #EDE9E1;   /* chips, segments, tracks, hover  */
+  --c-bg:       #F2EFE9;   /* the canvas                      */
+  --c-surface:  #FFFFFF;   /* cards — paper                   */
+  --c-elevated: #FFFFFF;   /* raised — paper, lifted by shadow */
+  --c-overlay:  #FFFFFF;   /* dialogs — paper, lifted further  */
 
   /* Warm-brown ink alpha: borders flip source (brass→ink) but keep the
-     hue family, so a rule looks like the same rule in both modes. */
-  --c-border:        rgba(90, 62, 26, 0.16);
-  --c-border-strong: rgba(90, 62, 26, 0.30);
-  --c-input-border:  rgba(90, 62, 26, 0.24);
+     hue family, so a rule looks like the same rule in both modes. On a
+     near-white ground they have to be a good deal stronger than the
+     brass hairlines dark uses, or the paper edges disappear. */
+  --c-border:        rgba(74, 56, 30, 0.20);
+  --c-border-strong: rgba(74, 56, 30, 0.34);
+  --c-input-border:  rgba(74, 56, 30, 0.26);
 
-  --c-text:     #2A2118;   /* 13.2:1 on bg */
-  --c-text-2:   #5C5044;   /*  6.5:1 */
-  --c-text-3:   #6A5C4D;   /*  5.3:1 on bg, 4.6:1 on recessed */
+  --c-text:     #2A2118;   /* 15.7:1 on paper */
+  --c-text-2:   #5C5044;   /*  7.5:1 */
+  --c-text-3:   #655749;   /*  6.4:1 on paper, 4.9:1 on recessed */
 
   --c-accent:    #E0A458;  /* the same brass object as dark */
-  --c-accent-fg: #8A4E0D;  /* deep bronze ink, 5.5:1 */
+  --c-accent-fg: #8A4E0D;  /* deep bronze ink, 6.6:1 on paper */
   --c-accent-on: #2a1d0c;
   --c-accent-subtle: rgba(224, 164, 88, 0.22);
 
-  --c-success:  #37622E;   /* 5.3:1 */
-  --c-warning:  #7E5205;   /* 5.7:1 */
-  --c-danger:   #9C3A28;   /* 5.8:1 */
-  --c-info:     #2F6289;   /* 5.4:1 */
+  --c-success:  #37622E;
+  --c-warning:  #7E5205;
+  --c-danger:   #9C3A28;
+  --c-info:     #2F6289;
 
   --c-success-tint: rgba(55, 98, 46, 0.11);
   --c-warning-tint: rgba(126, 82, 5, 0.12);
   --c-danger-tint:  rgba(156, 58, 40, 0.11);
   --c-info-tint:    rgba(47, 98, 137, 0.11);
-  --c-neutral-tint: rgba(42, 33, 24, 0.07);
+  --c-neutral-tint: rgba(58, 45, 30, 0.08);
 
-  --c-user-bg:     #F7E8CE;
-  --c-user-border: rgba(138, 78, 13, 0.20);
+  /* The user's own turn is the one plane that stays frankly warm: on a
+     near-neutral field it now reads as brass rather than as more beige. */
+  --c-user-bg:     #FBEDD5;
+  --c-user-border: rgba(138, 78, 13, 0.22);
 
-  --c-code:     #6B3E05;   /* the brass ink, deepened for paper */
-  --c-code-bg:  #E3D9C6;
+  --c-code:     #5E3604;   /* the brass ink, deepened for paper */
 
   /* On paper the scrim reads as ink pulled over the page, not a blackout. */
   --c-scrim: rgba(43, 26, 4, 0.32);
-  /* light shadows: warm ink tint, inset top highlight makes lift read */
-  --shadow-overlay: inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 16px 40px -14px rgba(43, 26, 4, 0.18), 0 2px 8px rgba(43, 26, 4, 0.06);
-  --shadow-menu:    inset 0 1px 0 rgba(255, 255, 255, 0.8), 0 10px 24px -10px rgba(43, 26, 4, 0.16);
-  --shadow-composer: 0 -6px 20px -16px rgba(43, 26, 4, 0.14);
+  /* Light shadows are warm ink. They are the whole reason a white card on a
+     near-white canvas reads as an object, so a card gets one too. */
+  --shadow-card:    0 1px 2px rgba(60, 45, 25, 0.05), 0 2px 6px -2px rgba(60, 45, 25, 0.07);
+  --shadow-overlay: 0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07);
+  --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
+  --shadow-composer: 0 -6px 20px -16px rgba(43, 26, 4, 0.14), 0 1px 2px rgba(60, 45, 25, 0.05);
 
   /* The one Kumo token whose light value is not a re-pointed `--c-*`: on
      paper the drop shadow is warm ink, not black. */
@@ -320,6 +365,7 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-sidebar  { background: var(--c-sidebar); }
 .p-surface  { background: var(--c-surface); }
 .p-elevated { background: var(--c-elevated); }
+.p-fill     { background: var(--c-fill); }
 .p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-overlay); }
 /* For overlays that own their own background (a drawer is a full-height
    panel, not a dialog) but still need the dialog's lift. */
@@ -373,9 +419,10 @@ body { background: var(--c-bg); color: var(--c-text); }
   background: var(--c-surface);
   border: 1px solid var(--c-border);
   border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
   transition: border-color var(--dur-base) ease-out, background-color var(--dur-base) ease-out;
 }
-.p-card-hover:hover { background: var(--c-elevated); }
+.p-card-hover:hover { background: var(--c-fill); }
 
 /* ── Code ──────────────────────────────────────────────────────────
    One warm ink on a recessed ground, exactly as the landing page sets
@@ -534,7 +581,7 @@ body { background: var(--c-bg); color: var(--c-text); }
   letter-spacing: -0.008em;
   transition: background-color var(--dur-base) ease-out, border-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
 }
-.p-btn-quiet:hover { background: var(--c-elevated); border-color: var(--c-border-strong); }
+.p-btn-quiet:hover { background: var(--c-fill); border-color: var(--c-border-strong); }
 .p-btn-quiet:active { transform: scale(0.98); }
 .p-btn-quiet:disabled { opacity: 0.45; cursor: default; transform: none; }
 
@@ -569,9 +616,6 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 
 .p-row-hover:hover { background: var(--c-neutral-tint); }
-
-/* Selected span on the Run Timeline — a brass inset spine, not a flood. */
-.p-span-selected { background: var(--c-elevated); box-shadow: inset 2px 0 0 var(--c-accent); }
 
 /* Streaming label shimmer — live work reads as light moving through text. */
 .p-shimmer {

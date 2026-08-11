@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
+  CaretRightIcon,
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-proteus";
@@ -51,6 +52,55 @@ function ExposureBadge({ exposure }: { exposure: ToolInfo["exposure"] }) {
   );
 }
 
+/**
+ * One tool, as a row rather than an essay.
+ *
+ * A builtin's docstring is the full contract the model is given — summary,
+ * when to use, when not to, doctrine, returns — and nine of them rendered as
+ * flowing paragraphs is the wall this surface had become: every card the same
+ * ink, the same weight, no edge you could find without reading. The row shows
+ * the registry's own one-line summary and opens to the docstring, which is
+ * newline-structured at the source and so is rendered as the lines it is.
+ */
+function ToolCard({ tool }: { tool: ToolInfo }) {
+  const [open, setOpen] = useState(false);
+  // A crafted tool's description IS its summary; there is nothing behind it.
+  const hasDetail = tool.description.trim() !== tool.summary.trim();
+
+  return (
+    <div className="p-card rounded-lg">
+      <button
+        type="button"
+        onClick={() => hasDetail && setOpen(!open)}
+        aria-expanded={hasDetail ? open : undefined}
+        className={`flex w-full flex-col gap-1 px-3 py-2.5 text-left ${hasDetail ? "cursor-pointer" : "cursor-default"}`}
+      >
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          <PackageIcon size={13} className="p-accent shrink-0" />
+          <span className="p-title font-mono p-text">{tool.name}</span>
+          <Badge variant="secondary">{tool.learned ? "Learned" : "Built-in"}</Badge>
+          <ExposureBadge exposure={tool.exposure} />
+          {tool.usageCount > 0 && <span className="p-meta p-text-3 ml-auto">{tool.usageCount} uses</span>}
+          {hasDetail && (
+            <CaretRightIcon
+              size={11}
+              className={`shrink-0 p-text-3 transition-transform duration-150 ${tool.usageCount > 0 ? "" : "ml-auto"} ${open ? "rotate-90" : ""}`}
+            />
+          )}
+        </span>
+        {/* Open REPLACES the headline rather than appending to it: the
+            docstring's first line is the summary, so showing both prints it
+            twice — and recovering "the rest" would mean splitting a string
+            whose shape belongs to the model, not to this component. */}
+        {open
+          ? <span className="p-meta p-text-2 whitespace-pre-line leading-[18px]">{tool.description}</span>
+          : <span className="p-row-text p-text-2">{tool.summary}</span>}
+      </button>
+      {tool.learned && <div className="px-3 pb-2.5"><ScoreBar value={tool.qualityScore} /></div>}
+    </div>
+  );
+}
+
 export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc, onChangelogSeen }: BrainSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
@@ -62,12 +112,19 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
       {as ? (
         <Section id="identity" title="Identity" icon={<FingerprintIcon size={14} className="p-text-2" />}>
           <div className="flex items-center gap-3 mb-4">
-            <div className="size-11 rounded-xl flex items-center justify-center p-elevated border p-border">
+            <div className="size-11 rounded-xl flex items-center justify-center p-fill border p-border">
               <FingerprintIcon size={22} className="p-accent" />
             </div>
-            <div>
-              <div className="font-medium p-text">{as.name}</div>
-              <div className="text-[11px] p-text-3 font-mono">{as.id.slice(0, 20)}…</div>
+            {/* The heading is the agent's NAME as everything else in the app
+                shows it — the mission-derived title the sidebar, the chat
+                header and the tab all carry. `as.name` is the URL slug
+                (`my-personal-for-helping-9935d3`), which is addressing, not
+                identity; it belongs beside the id. */}
+            <div className="min-w-0">
+              <div className="p-title p-text truncate" title={as.displayName}>{as.displayName}</div>
+              <div className="p-meta p-text-3 font-mono truncate" title={`${as.name} · ${as.id}`}>
+                {as.name} · {as.id.slice(0, 12)}…
+              </div>
             </div>
           </div>
           <div className="space-y-0">
@@ -102,19 +159,7 @@ export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, on
         <div className="space-y-2">
           {tools.length === 0 ? (
             <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />
-          ) : tools.map((tool) => (
-            <div key={tool.name} className="p-card rounded-lg p-3">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mb-1">
-                <PackageIcon size={13} className="p-accent" />
-                <span className="text-sm font-medium font-mono p-text">{tool.name}</span>
-                <Badge variant="secondary">{tool.learned ? "Learned" : "Built-in"}</Badge>
-                <ExposureBadge exposure={tool.exposure} />
-                {tool.usageCount > 0 && <span className="text-[10px] p-text-3 ml-auto">{tool.usageCount} uses</span>}
-              </div>
-              <span className="text-xs p-text-2 block leading-relaxed mb-1.5">{tool.description}</span>
-              {tool.learned && <ScoreBar value={tool.qualityScore} className="mt-1" />}
-            </div>
-          ))}
+          ) : tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)}
         </div>
       </Section>
 

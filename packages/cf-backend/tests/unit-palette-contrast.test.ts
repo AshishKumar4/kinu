@@ -22,7 +22,7 @@ const INDEX_CSS = resolve(import.meta.dir, '../src/index.css');
 /** Text roles, and the surfaces each is allowed to sit on. `--c-text-3` is
  *  the dim role: it lands anywhere, including inside dialogs, which is where
  *  it used to fail. */
-const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed'] as const;
+const SURFACES = ['--c-bg', '--c-sidebar', '--c-surface', '--c-elevated', '--c-overlay', '--c-recessed', '--c-fill'] as const;
 const TEXT_ROLES = [
   '--c-text', '--c-text-2', '--c-text-3', '--c-accent-fg',
   '--c-success', '--c-warning', '--c-danger', '--c-info',

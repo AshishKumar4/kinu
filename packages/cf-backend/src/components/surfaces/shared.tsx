@@ -85,7 +85,7 @@ export const MarkdownContent = memo(function MarkdownContent({ content }: { cont
       },
       a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
       table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="w-full text-xs border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-elevated whitespace-nowrap">{children}</th>; },
+      th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
       td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
       // The fence's own <pre> is dropped: CodeBlock supplies one, and nesting
       // them would put a scroll container inside a scroll container.
