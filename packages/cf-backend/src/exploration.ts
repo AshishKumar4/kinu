@@ -39,7 +39,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, parseModelSpec, reasoningEffortOptions, reflectionPrompt } from "@proteus/core";
+import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -334,6 +334,9 @@ export class ExplorationAgent extends Agent<Env> {
       model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
       capture,
+      // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
+      // this identical Worker var. A fork of a turn gets the turn's room.
+      maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
       isAborted: () => this.headAborted,
       abortReason: () => this.headAbortReason,
     });

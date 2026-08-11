@@ -873,7 +873,7 @@ export type {
   HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, HeadScore, MergeStrategy,
-  BudgetSplit, SerializedMessage,
+  SerializedMessage,
 } from './heads/index.js';
 export {
   DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
@@ -886,7 +886,6 @@ export {
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  NOMINAL_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH,
   type HeadInferenceDeps,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,

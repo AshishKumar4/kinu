@@ -18,7 +18,6 @@ interface HeadsStrategyOptions {
   heads: SplitRequest['heads'];
   mergeStrategy?: MergeStrategy;
   maxDepth?: number;
-  maxTokens?: number;
   maxWallClockMs?: number;
   inheritedContext?: SerializedMessage[];
   defaultModel?: string;
@@ -53,11 +52,12 @@ export function createHeadsStrategy(): ExplorationStrategy {
       }
 
       const strategy: MergeStrategy = o.mergeStrategy ?? DEFAULT_MERGE_STRATEGY;
+      // A wall clock exists only if someone asked for one; there is no default
+      // to fall through to.
+      const wallClockMs = o.maxWallClockMs ?? ctx.budget?.wallClockMs;
       const parentBudget: HeadBudget = {
-        ...DEFAULT_HEAD_BUDGET,
         maxDepth: o.maxDepth ?? DEFAULT_HEAD_BUDGET.maxDepth,
-        maxTokens: o.maxTokens ?? DEFAULT_HEAD_BUDGET.maxTokens,
-        maxWallClockMs: o.maxWallClockMs ?? ctx.budget?.wallClockMs ?? DEFAULT_HEAD_BUDGET.maxWallClockMs,
+        ...(wallClockMs === undefined ? {} : { maxWallClockMs: wallClockMs }),
         spawnedAt: Date.now(),
       };
 

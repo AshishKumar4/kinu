@@ -19,7 +19,7 @@ import {
   type WebSearchProvider, type AgentRuntime, type CodemodeProvider,
   type HeadSplitRequest, type HeadSplitResult,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
-  extractJsonObject, reasoningEffortOptions,
+  extractJsonObject, reasoningEffortOptions, resolveMaxSteps,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime.js';
@@ -48,7 +48,8 @@ export interface CLIHeadRuntimeDeps {
   grounding?: HeadGrounding;
 }
 
-/** Per-head abort flag — flipped by SpawnedHead.abort (wall-clock timeout). */
+/** Per-head abort flag — flipped by SpawnedHead.abort (a caller-requested
+ *  deadline, or the parent giving up on the split). */
 interface AbortFlag { aborted: boolean; reason: string | null; }
 
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
@@ -95,6 +96,9 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     });
     return await runHeadInference(input, {
       model: deps.model, tools, capture,
+      // The same envelope the parent session's turn runs to — local-session
+      // reads this identical shell variable. A fork of a turn gets the turn's room.
+      maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
     });

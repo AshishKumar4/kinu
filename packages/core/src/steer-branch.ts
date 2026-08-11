@@ -19,12 +19,11 @@ import type { HeadJournal } from './heads/journal.js';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes.js';
 import { nanoid } from './utils/nanoid.js';
 
-/** A branch is one head answering one redirect — no recursive splits, and a
- *  tighter budget than a full agents fork run. */
+/** A branch is one head answering one redirect: depth 1, so it answers rather
+ *  than splitting further. Like any head it runs until it is done — the settle
+ *  is detached, so a branch that takes its time holds up nothing. */
 export const BRANCH_HEAD_BUDGET = {
   maxDepth: 1,
-  maxTokens: 16_000,
-  maxWallClockMs: 120_000,
 } as const;
 
 export const BRANCH_RATIONALE =
@@ -64,9 +63,9 @@ export interface SteerBranchHandle {
 }
 
 /**
- * Spawn + run the redirect as a single budgeted head. Journaled like any head
- * run (its trace shows up on the Reasoning surface), raced against the branch
- * wall-clock. Throws only when the runtime cannot spawn at all.
+ * Spawn + run the redirect as a single head. Journaled like any head run (its
+ * trace shows up on the Reasoning surface). Throws only when the runtime cannot
+ * spawn at all.
  */
 export async function startBranchHead(
   runtime: HeadRuntime,
@@ -91,11 +90,11 @@ export async function startBranchHead(
   journal.insertSpawn(headInput);
   const spawned = await runtime.spawnHead(headInput);
 
-  const result = raceWithTimeout(spawned, BRANCH_HEAD_BUDGET.maxWallClockMs)
+  const result = raceWithTimeout(spawned, undefined)
     .catch((err): HeadReport => ({
       id: headInput.id,
       status: 'budget_exceeded',
-      summary: 'Branch was aborted before producing an answer (wall-clock budget exceeded).',
+      summary: 'Branch was aborted before producing an answer.',
       evidence: [], decisions: [], artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
       tokenUsage: { input: 0, output: 0, total: 0 },
       wallClockMs: Date.now() - spawnedAt,

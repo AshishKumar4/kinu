@@ -431,9 +431,11 @@ async function runFork(
       // Unset = strategy default (lets stored agent-config overrides apply).
       maxIterations: input.budget,
       // Only set a wall-clock bound when the caller explicitly asks for one.
-      // A blanket 60s default silently killed forks mid-work (each fork's
-      // sub-agent cold-start alone could eat it); leaving it undefined lets
-      // heads fall through to DEFAULT_HEAD_BUDGET (5 min).
+      // Every blanket default here has silently killed forks mid-work (a 60s
+      // one that a fork's sub-agent cold-start alone could eat, then a 5-minute
+      // one that killed a codebase audit). Undefined means the forks run to
+      // completion, like the turn that spawned them; spend is the mission
+      // governor's ledger, declared below.
       wallClockMs: input.wall_clock_ms,
     },
     options,
@@ -495,7 +497,10 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
       description: 'For action=fork: how to combine fork findings. Default synthesize.',
     },
     budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
-    wall_clock_ms: { type: 'integer', minimum: 1000, description: 'For action=fork: wall-clock cap in ms.' },
+    wall_clock_ms: {
+      type: 'integer', minimum: 1000,
+      description: 'For action=fork: abort the forks after this many ms. Omit unless the work is genuinely time-boxed — forks run to completion by default, and a deadline cuts them off mid-work.',
+    },
     options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },
     // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
     // the exploration's model calls and can therefore enforce it; a subordinate

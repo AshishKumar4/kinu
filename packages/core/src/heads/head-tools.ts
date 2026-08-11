@@ -20,8 +20,9 @@
  *      appear on heads.
  *
  * `split_subheads` therefore stays the only way a head starts anything, and it
- * is budget-gated (HeadController derives each child's budget from its parent's;
- * budgetExhausted refuses once depth, tokens or wall-clock run out).
+ * is depth-gated (HeadController derives each child's budget from its parent's;
+ * budgetExhausted refuses once the recursion depth — or a caller-requested
+ * deadline — runs out).
  *
  * The `allowedTools` filter runs LAST over the head's real vocabulary, so a
  * parent fork request naming `run` / `execute_tools` / `web` maps onto the
@@ -122,8 +123,8 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
         },
       }),
       execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
-        // budgetExhausted covers max-depth, tokens and wall-clock in one gate.
-        const exhausted = budgetExhausted(input.budget, capture.tokenUsage.budgetCharged);
+        // Depth, plus a caller-requested deadline if one was set.
+        const exhausted = budgetExhausted(input.budget);
         if (exhausted.exhausted) return `Cannot split: budget exhausted (${exhausted.reason}).`;
         try {
           const result = await deps.split({

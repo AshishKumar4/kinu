@@ -137,7 +137,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
     return {
       id: 'head-1', rootId: 'root-1', parentId: null, depth: 1,
       task: 'investigate', rationale: 'one angle', inheritedContext: [],
-      budget: { maxDepth: 1, maxTokens: 1000, maxWallClockMs: 1000, spawnedAt: 0 },
+      budget: { maxDepth: 1, maxWallClockMs: 1000, spawnedAt: 0 },
       mergeStrategy: 'synthesize',
     };
   }

@@ -40,7 +40,7 @@ function headInput(): HeadInput {
     rationale: 'one angle',
     inheritedContext: [],
     // The child budget HeadController already decremented for this depth.
-    budget: { maxDepth: 1, maxTokens: 1000, maxWallClockMs: 1000, spawnedAt: 0 },
+    budget: { maxDepth: 1, maxWallClockMs: 1000, spawnedAt: 0 },
     mergeStrategy: 'synthesize',
   };
 }

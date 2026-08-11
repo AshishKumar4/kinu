@@ -6,8 +6,9 @@ import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
-  buildHeadSystemPrompt, buildHeadMessages,
+  buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference.js';
+import { DEFAULT_MAX_STEPS } from '../src/config.js';
 import type { HeadInput } from '../src/heads/types.js';
 
 /** A v2 generateText-driving stub. Returns `answer` as one text step + usage;
@@ -34,14 +35,18 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     id: 'h1', rootId: 'r1', parentId: null, depth: 0,
     task: 'analyze the parser', rationale: 'cover the lexer angle',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
-    budget: { maxDepth: 2, maxTokens: 12_000, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
+    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
     ...overrides,
   };
 }
 
-const deps = (model: LanguageModel, over?: Partial<Parameters<typeof runHeadInference>[1]>) => ({
-  model, tools: {}, capture: new HeadCapture(), isAborted: () => false, ...over,
+const deps = (
+  model: LanguageModel,
+  over?: Partial<HeadInferenceDeps>,
+): HeadInferenceDeps => ({
+  model, tools: {}, capture: new HeadCapture(),
+  maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false, ...over,
 });
 
 describe('runHeadInference — report assembly', () => {
@@ -55,7 +60,7 @@ describe('runHeadInference — report assembly', () => {
   });
 
   test('budget already exhausted → status budget_exceeded', async () => {
-    const input = headInput({ budget: { maxDepth: 2, maxTokens: 12_000, maxWallClockMs: 1, spawnedAt: 1 } });
+    const input = headInput({ budget: { maxDepth: 2, maxWallClockMs: 1, spawnedAt: 1 } });
     const report = await runHeadInference(input, deps(fakeHeadModel('partial')));
     expect(report.status).toBe('budget_exceeded');
   });

@@ -71,7 +71,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
     task: 'study the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
-    budget: { maxDepth: 2, maxTokens: 20_000, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
     ...overrides,
   };
@@ -136,7 +136,7 @@ describe('head tool surface — containment', () => {
   test('split_subheads refuses once the depth budget is spent', async () => {
     let splits = 0;
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 0, maxTokens: 20_000, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
       split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
     const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
@@ -145,19 +145,29 @@ describe('head tool surface — containment', () => {
     expect(splits).toBe(0);
   });
 
-  test('split_subheads refuses once the token budget is spent', async () => {
+  test('split_subheads refuses once a caller-requested deadline has passed', async () => {
     let splits = 0;
-    const { tools, capture } = buildSurface({
-      input: headInput({ budget: { maxDepth: 3, maxTokens: 100, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+    const { tools } = buildSurface({
+      input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
       split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
-    // 500 tokens of the head's OWN output — marginal work, so it counts against
-    // the 100-token ceiling. A re-sent 1000-token prompt does not.
-    capture.recordStepUsage(1_000, 500);
     const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
       .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
-    expect(result).toContain('budget exhausted');
+    expect(result).toContain('budget exhausted (wall-clock)');
     expect(splits).toBe(0);
+  });
+
+  test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
+    let splits = 0;
+    const { tools, capture } = buildSurface({
+      input: headInput({ budget: { maxDepth: 3, spawnedAt: Date.now() - 60 * 60_000 } }),
+      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 2 }; },
+    });
+    // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
+    capture.recordStepUsage(2_000_000, 500_000);
+    await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
+      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
+    expect(splits).toBe(1);
   });
 
   test('allowedTools narrows the surface further, never widens it', () => {
@@ -245,7 +255,6 @@ describe('recursive split budget', () => {
       },
       parentBudget: {
         maxDepth: 2,
-        maxTokens: 10_000,
         maxWallClockMs: 60_000,
         spawnedAt: Date.now(),
       },

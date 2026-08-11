@@ -148,7 +148,7 @@ function headInput(): HeadInput {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
     task: 'map the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
-    budget: { maxDepth: 1, maxTokens: 4_000, maxWallClockMs: 30_000, spawnedAt: Date.now() },
+    budget: { maxDepth: 1, maxWallClockMs: 30_000, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
   };
 }

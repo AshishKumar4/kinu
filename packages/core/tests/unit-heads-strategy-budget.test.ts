@@ -1,12 +1,13 @@
-// Regression: the heads strategy must NOT inherit a 60s wall-clock cap.
-// The think tool used to default budget.wallClockMs to 60_000 for every call,
-// which the heads strategy took as the whole-subtree budget and used to kill
-// heads mid-work (tokens=0, "budget_exceeded"). The fix drops that default so
-// the strategy falls through to DEFAULT_HEAD_BUDGET (5 min) unless a caller
-// explicitly asks for a tighter bound.
+// Regression: a fork must not inherit a wall clock nobody asked for.
+// Two rounds of this. First the think tool defaulted budget.wallClockMs to
+// 60_000 for every call, which the heads strategy took as the whole-subtree
+// budget and used to kill heads mid-work (tokens=0, "budget_exceeded"); that
+// default was dropped, leaving a 5-minute one underneath it, which killed a
+// codebase audit the same way. There is now no default underneath at all — a
+// deadline exists only when a caller names one.
 import { describe, test, expect } from 'bun:test';
 import { createHeadsStrategy } from '../src/strategy/heads.js';
-import { DEFAULT_HEAD_BUDGET, type HeadBudget, type MergeResult } from '../src/heads/index.js';
+import type { HeadBudget, MergeResult } from '../src/heads/index.js';
 import type { StrategyContext, StrategyBudget } from '../src/strategy/types.js';
 
 function fakeMergeResult(over?: Partial<MergeResult['costSummary']>): MergeResult {
@@ -40,12 +41,16 @@ function ctxWith(
 }
 
 describe('heads strategy wall-clock budget (#167 regression)', () => {
-  test('falls through to DEFAULT_HEAD_BUDGET (5 min) when no wall-clock is supplied — never 60s', async () => {
+  test('no wall-clock supplied → the fork gets none, not a default', async () => {
     let captured: HeadBudget | null = null;
     await createHeadsStrategy().explore(ctxWith({ maxIterations: 10 }, (b) => { captured = b; }));
-    expect(captured!.maxWallClockMs).toBe(DEFAULT_HEAD_BUDGET.maxWallClockMs);
-    expect(captured!.maxWallClockMs).toBe(300_000);
-    expect(captured!.maxWallClockMs).not.toBe(60_000);
+    expect(captured!.maxWallClockMs).toBeUndefined();
+  });
+
+  test('an entirely absent ctx budget also yields no deadline', async () => {
+    let captured: HeadBudget | null = null;
+    await createHeadsStrategy().explore(ctxWith(undefined, (b) => { captured = b; }));
+    expect(captured!.maxWallClockMs).toBeUndefined();
   });
 
   test('honors an explicit ctx wall-clock budget when one is provided', async () => {

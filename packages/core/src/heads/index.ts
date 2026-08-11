@@ -18,16 +18,12 @@ export type {
   MergeResult,
   HeadScore,
   MergeStrategy,
-  BudgetSplit,
   SerializedMessage,
 } from './types.js';
 
 export {
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
-  NOMINAL_HEAD_STEPS,
-  NOMINAL_STEP_TOKENS,
-  MAX_FORK_WIDTH,
   deriveChildBudget,
   budgetExhausted,
 } from './types.js';
