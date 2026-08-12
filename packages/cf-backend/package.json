@@ -20,6 +20,7 @@
     "@cloudflare/sandbox": "^0.11.0",
     "@cloudflare/think": "^0.15.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
+    "@nimbus-sh/core": "0.1.0",
     "@nimbus-sh/sdk": "0.1.4",
     "@nimbus-sh/worker": "0.1.5",
     "@phosphor-icons/react": "^2.1.10",

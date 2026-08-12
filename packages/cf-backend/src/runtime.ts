@@ -2,7 +2,7 @@
  * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
  *
  * Uses agent-utils for storage (pure DO SQLite — no R2, no @cloudflare/shell):
- *   VFS      → SqliteFS (vfs_files table with chunked storage)
+ *   VFS      → Nimbus over this DO's SQLite (/local), behind CompositeVFS
  *   Memory   → MemoryStore (FTS5-indexed markdown chunks)
  *   CraftStore → CraftStore (FTS5-indexed tool storage)
  *
@@ -41,6 +41,7 @@ import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
 import { createShell } from "@proteus/agent-utils/shell";
+import { createNimbusWorkspace, createWorkspaceShell, nextWorkspaceGeneration } from "./nimbus-workspace.js";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -138,11 +139,14 @@ function userCredentialSourceFor(agent: AgentHost, actor: ActorRuntimeIdentity):
   return stub ? { stub, caller: () => userCallerFor(actor) } : null;
 }
 
-/** Extended runtime that exposes the raw SqliteFS for shell emulation, the
- *  device transport for per-turn laptop-status refreshes, and the Vectorize-
- *  backed vector store for semantic memory. */
+/** Extended runtime that exposes the durable base for the parent-file RPC a
+ *  fork reads through, the device transport for per-turn laptop-status
+ *  refreshes, and the Vectorize-backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
-  sqliteFS: SqliteFS;
+  /** `/local` itself — what `parentAgent()` serves to a subordinate's /parent
+   *  mount. It is the Nimbus filesystem, so a fork sees the same bytes its
+   *  parent's shell does. */
+  localVfs: CoreVFS;
   /** Storage.vfs, typed — the mount-table data surface (listMounts) for the
    *  file-manager UI and cross-environment copy. */
   compositeVfs: CompositeVFS;
@@ -173,12 +177,34 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const sql = boundSql(agent);
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
-  // SqliteFS from agent-utils — pure DO SQLite, no R2
-  const sqliteFS = new SqliteFS(sql);
-  sqliteFS.init();
+  // The pre-Nimbus base, kept only to copy out of: agents created before this
+  // hold their files in SqliteFS's tables, which Nimbus does not read.
+  const legacyFS = new SqliteFS(sql);
+  legacyFS.init();
 
-  // MemoryStore from agent-utils — FTS5-indexed search
-  const memoryStore = new MemoryStore(sqliteFS, sql);
+  // The durable base is Nimbus, over this Durable Object's OWN SQLite — a real
+  // filesystem with a real shell, not a second DO (see nimbus-workspace.ts).
+  // The generation counter must never repeat for this database, or a dead
+  // process keeps live write authority; DO storage is what makes it durable.
+  const nimbus = createNimbusWorkspace({
+    sql: agent.ctx.storage.sql,
+    transactions: agent.ctx,
+    generation: nextWorkspaceGeneration(agent.ctx.storage.sql),
+    migrateFrom: legacyFS,
+  });
+
+  // Storage.vfs is the CompositeVFS mount table; /local is the Nimbus
+  // filesystem. Dynamic mounts (/sandbox, /nimbus, /pc) attach below once
+  // their handles exist — they stay OUTSIDE Nimbus because its mount seam is
+  // synchronous and each of them is an async round trip (nimbus-workspace.ts).
+  const compositeVfs = new CompositeVFS({ local: nimbus.vfs });
+  const vfs: CoreVFS = compositeVfs;
+
+  // MemoryStore from agent-utils — FTS5-indexed search. Over the COMPOSITE, so
+  // `memory/MEMORY.md` is the same file the agent reads with the `file` tool
+  // and greps in the shell. Pointing it at a store of its own would rebuild
+  // the split shell-fs.ts was written to close: one namespace, two planes.
+  const memoryStore = new MemoryStore(shellFsOverVfs(compositeVfs), sql);
   memoryStore.ensureSchema();
 
   // Vectorize-backed semantic memory, scoped to this workspace's namespace.
@@ -196,12 +222,6 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // CraftStore from agent-utils — FTS5-indexed tool storage
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
-
-  // Storage.vfs is the CompositeVFS mount table; /local is SqliteFS directly
-  // (it implements the core VFS interface — a superset of methods). Dynamic
-  // mounts (/sandbox, /nimbus, /pc) attach below once their handles exist.
-  const compositeVfs = new CompositeVFS({ local: sqliteFS });
-  const vfs: CoreVFS = compositeVfs;
 
   // Adapt MemoryStore to core's Memory interface (writes sync to vectorStore)
   const memory = adaptMemory(memoryStore, vectorStore, memoryConfig);
@@ -225,13 +245,17 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // store the memory backfill above already opened, so a setShellApprovalMode
   // RPC takes effect on the very next command with no toolset rebuild needed.
   const approvalPolicy: ShellApprovalPolicy = { mode: () => memoryConfig.getShellApprovalMode() };
-  // The emulated shell runs over the COMPOSITE, not the raw SqliteFS: `run` and
-  // `workspace.exec` then address the same paths `workspace.readFile` and the
-  // `file` tool do, every mount included (see vfs/shell-fs.ts). Still gated —
-  // withApprovalGatedShell wraps the Shell object, so what createShell is handed
-  // is transparent to the approval seam.
+  // The workspace shell: Nimbus over the durable base, the emulated shell for
+  // commands that reach across mounts Nimbus cannot hold (nimbus-workspace.ts).
+  // Both planes share /local's bytes, so a file written by one is read by the
+  // other. Still gated — withApprovalGatedShell wraps the Shell object, so what
+  // it is handed is transparent to the approval seam.
   const shell = withApprovalGatedShell(
-    createShell(shellFsOverVfs(compositeVfs), { cwd: compositeVfs.cwd }),
+    createWorkspaceShell({
+      base: nimbus.shell,
+      crossMount: createShell(shellFsOverVfs(compositeVfs), { cwd: compositeVfs.cwd }),
+      mountNames: () => compositeVfs.listMounts().map((mount) => mount.name),
+    }),
     approvalPolicy,
   );
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
@@ -371,7 +395,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
     abortBranch: createFacetAborter(agent),
     executionRouter,
     shell,
-    sqliteFS,
+    localVfs: nimbus.vfs,
     compositeVfs,
     deviceTransport,
     vectorStore,

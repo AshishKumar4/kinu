@@ -164,12 +164,14 @@ function renderToolsSection(surface: PromptSurface): string {
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   switch (exec.name) {
       // What the `workspace` SHELL is differs by backend, and the difference
-      // is the one an agent gets wrong: hosted, it is an emulator over the
-      // file plane with no binaries at all; locally, it is the real machine.
+      // is the one an agent gets wrong. Hosted, it is a real POSIX shell over
+      // the agent's durable filesystem — but one with no NATIVE binaries, so
+      // the line has to say both halves: what it can now do, and the exact
+      // boundary (an interpreter or a toolchain) that still needs an executor.
       case 'workspace':
         return backend === 'cli-local'
           ? '- **workspace.*** / `runtime: "workspace"`: the machine the CLI is running on, at the directory it was invoked in — a real shell with real binaries. Its file ops address the file plane (/local durable state, /pc the machine).'
-          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable state, plus an EMULATED shell over the workspace file plane — cat/ls/grep/find/sed/stat/wc/pwd across every mount, and no real programs. Real commands run in the runtimes above.';
+          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable filesystem, with a real POSIX shell over it — pipes, redirection, variables, loops, `cd`, and the usual coreutils (grep/sed/awk/sort/find/tar/diff/xargs/curl...). No NATIVE binaries live here: node, python, git, package managers and builds have no executable to run and belong in the runtimes above.';
       case 'nimbus':
         return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
       case 'sandbox':

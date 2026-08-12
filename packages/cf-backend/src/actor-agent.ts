@@ -1368,7 +1368,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
     try {
-      const content = await this.rt.sqliteFS.readFile(path);
+      const content = await this.rt.localVfs.readFile(path);
       return { ok: true, value: typeof content === 'string' ? new TextEncoder().encode(content) : content };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
@@ -1377,8 +1377,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
     try {
-      if (input.kind === 'file') await this.rt.sqliteFS.writeFile(input.path, input.data);
-      else await this.rt.sqliteFS.mkdir(input.path, { recursive: input.recursive });
+      if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
+      else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
       return { ok: true, value: null };
     } catch (error) {
       return this.workspaceFileFailure(input.path, error);
@@ -1387,7 +1387,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
     try {
-      return { ok: true, value: await this.rt.sqliteFS.readdir(path) };
+      return { ok: true, value: await this.rt.localVfs.readdir(path) };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
     }
@@ -1395,7 +1395,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
     try {
-      return { ok: true, value: await this.rt.sqliteFS.stat(path) };
+      return { ok: true, value: await this.rt.localVfs.stat(path) };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
     }
@@ -1403,7 +1403,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
     try {
-      await this.rt.sqliteFS.unlink(path);
+      await this.rt.localVfs.unlink(path);
       return { ok: true, value: null };
     } catch (error) {
       return this.workspaceFileFailure(path, error);

@@ -126,13 +126,20 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
     id: { toString: () => 'facet-id' },
     storage: {
       sql: {
+        // Iterable as well as `toArray`-able: workerd's SqlStorage.exec returns
+        // a cursor, and code that spreads one is exercising the real contract.
         exec: (query: string, ...values: unknown[]) => {
           const statement = db.prepare(query);
-          if (/^\s*(SELECT|PRAGMA)/i.test(query)) return { toArray: () => statement.all(...(values as never[])) };
-          statement.run(...(values as never[]));
-          return { toArray: () => [] };
+          const rows = /^\s*(SELECT|WITH|PRAGMA)/i.test(query)
+            ? (statement.all(...(values as never[])) as Array<Record<string, unknown>>)
+            : ((statement.run(...(values as never[])), []) as Array<Record<string, unknown>>);
+          return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
         },
       },
+      // A real one, not a callback passthrough: the durable filesystem's
+      // atomicity rests on this, and a fake would turn every atomic write
+      // into a torn one that still reports success.
+      transactionSync: <T>(callback: () => T): T => db.transaction(callback)(),
     },
   };
   const env = {
