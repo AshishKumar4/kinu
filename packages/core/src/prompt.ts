@@ -291,28 +291,43 @@ function renderAgentStateSection(surface: PromptSurface): string {
     const lines = ['## Delegation'];
     if (actions.length > 0) {
       lines.push(
-        'Delegation is one tool — `agents` — and one question: how long does the helper need to live? Multi-part work gets a rung.'
+        'Delegation is one tool — `agents` — and one question: how long does the helper need to live?'
         // The zeroth rung is not an agent at all: flat map-reduce sub-calls.
         // Weight-ordered, it sits between doing it yourself and forking, and
         // it renders only where the llm provider is actually wired.
         + (surface.rlmAvailable
           ? ' The cheapest helper is not an agent: for bulk text that needs no tools, slice it and `llm.query` each slice inside execute_tools — reach for the ladder only when the work needs tool loops.'
           : ''),
-        // The turn-cumulative clamp is mechanical, so say so: a model that
-        // knows WHY the ninth heavy read came back short reaches for a rung
-        // instead of re-running the command (context-budget.ts).
-        'Tool output is budgeted per turn, not just per call: the first heavy reads come back whole, and once a turn has pulled in a lot of output the rest arrive as a head plus a workspace path — read that as the signal to hand the bulk to a helper.',
+        // The turn-cumulative clamp explained itself here, thousands of tokens
+        // before any result could trip it. It says so in its own marker now
+        // (tools/clamp.ts), at the trip, where the fact is actionable — and
+        // costs nothing on the turns that never reach the floor.
         '- Do it yourself — a single short coherent change.',
       );
     }
     if (has('fork')) {
-      lines.push('- Ephemeral fork (action=fork) — copies of you that run their own tool loops in parallel and merge back this turn.');
+      // The rung said what a fork IS and never what work calls for one. The
+      // schema's Breadth/Doubt triggers are selection doctrine and stay there;
+      // what belongs here is the SHAPE test, because deciding the work has
+      // parts is upstream of picking a tool. Compressed to a clause rather
+      // than restated: turn-steering already says this mechanically, but only
+      // at 25 steps, which is after the shape was already chosen wrong.
+      lines.push('- Ephemeral fork (action=fork) — copies of you that run their own tool loops in parallel and merge back this turn. Fork when the work already has 2+ independent angles, or when one step is uncertain enough to be worth two attempts at once.');
     }
     if (has('staff')) {
       lines.push('- Persistent subordinate (action=staff) — a helper that outlives this turn and stays in your roster.');
     }
     if (has('fork')) {
-      lines.push('Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary. For live information, loop `web` search then fetch.');
+      lines.push(
+        // Both settles are specified in the `agents` schema; what is missing
+        // there is the SHAPE each one is for, which is the same judgement the
+        // rung above asks for. Per-fork `model` is named as a case and never a
+        // default: panel quality tracks the AVERAGE member (Self-MoA, arXiv
+        // 2502.00674), so the caveat rides the parameter in agents-tool.ts,
+        // where it is read at the moment the field is being filled.
+        "Merging (the default) keeps every fork's piece — work that splits into parts you want all of; settle=mcts keeps one — rival attempts at the same thing, scored by executing what each proposes, losers discarded. An mcts branch proposes code rather than running its own tool loop; the proposal is what runs. A fork can take its own `model` — how you put a different vendor on a genuinely open question.",
+        'Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary.',
+      );
     }
     // The rungs are also a codemode namespace, so a multi-step plan is code
     // rather than a tool-call-at-a-time grind. Gated on the same actions the
@@ -324,16 +339,23 @@ function renderAgentStateSection(surface: PromptSurface): string {
       );
     }
     if (has('staff')) {
+      // The loop is the prompt-only half: an ORDER of operations no schema
+      // field can hold. The roster/re-engage/dismiss half that followed it was
+      // DELEGATION_RUNGS.staff said a second time, so it went where the rungs
+      // themselves went.
       lines.push(
-        'Run the coordination loop: staff the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you. A finished subordinate stays in your roster with its context — re-engage it with ask/send; dismiss only when its role is permanently over.',
+        'Run the coordination loop: staff the needed roles → ask each an independent workstream → integrate their reports as they arrive as events that wake you.',
         "Subordinates share this workspace's files and sandbox.",
       );
     }
-    if (has('reply')) {
-      lines.push("The same ask/send reach the owner's OTHER workspace agents by name (a peer ask waits for the reply, send does not); staff scope=workspace creates a specialist workspace; reply answers an agent message event via its event_id.");
-    }
+    // Peer addressing is DELEGATION_CONVERSE, which the `agents` docstring
+    // already composes from the same deps that decide these actions exist
+    // (renderAgentsToolDescription) — every clause of the line that stood here
+    // was a paraphrase of it.
     if (hasTool(tools, 'report')) {
-      lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` sends it progress/completed/blocked updates at meaningful milestones. Your turn-end answer to an assigned task is relayed automatically.');
+      // The frame only. When to report and what turn-end relays are the
+      // `report` schema's whenToUse/whenNotToUse, verbatim.
+      lines.push('You are a subordinate agent of this workspace: the workspace is your world, the orchestrator assigns your work, and `report` carries progress back to it.');
     }
     parts.push(lines.join('\n'));
   }

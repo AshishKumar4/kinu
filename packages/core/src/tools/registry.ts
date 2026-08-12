@@ -249,7 +249,12 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
-    example: "agents({action:'staff', role:'reviewer — auth changes', mission:'Review every auth diff here and report the risks.'})",
+    // The fork call, because it is the one shape here a model gets wrong: the
+    // trajectory data has `agents` called with an invented `fork_specs` for
+    // `forks`, and the nested {task, rationale} objects are the only argument
+    // shape in the whole surface that a name alone does not give away. staff's
+    // arguments are flat and its `role` property carries its own example.
+    example: "agents({action:'fork', task:'Why staging 502s under load', forks:[{task:'Read the gateway logs', rationale:'where the failure shows'}, {task:'Diff the last deploy', rationale:'timing points at the release'}]})",
   },
   memory: memoryToolSpec(true),
   web: {

@@ -66,6 +66,14 @@ export async function clampToolResult(
   const headLen = Math.floor(maxChars * HEAD_FRACTION);
   const tailLen = maxChars - headLen;
   const omitted = text.length - headLen - tailLen;
+  // Why this result came back shorter than the last one. The system prompt
+  // used to explain the turn-cumulative cap in its Delegation section, ~3,000
+  // tokens before anything could trip it; the fact is only actionable at the
+  // trip, and it costs nothing on the turns that never get here.
+  const tightened = maxChars < configured;
+  const reason = tightened
+    ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a fork rather than pulling more of it in here.'
+    : '';
   // The advertised remedy must hold on every backend: the run tool's
   // "workspace" runtime is the VFS shell on CF but the HOST shell locally
   // (where this offload file does not exist), so the marker only promises
@@ -74,8 +82,8 @@ export async function clampToolResult(
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
       'read or filter it with workspace.readFile inside execute_tools ' +
-      '(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]'
-    : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]`;
+      `(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]${reason}`
+    : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
   const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
   if (opts.budget) {
     opts.budget.admit(clamped.length);
@@ -83,7 +91,7 @@ export async function clampToolResult(
       producer: opts.producer ?? 'execute_tools',
       omitted,
       referenced: savedPath !== null,
-      tightened: maxChars < configured,
+      tightened,
     });
   }
   return clamped;

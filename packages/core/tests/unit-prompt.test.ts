@@ -43,8 +43,10 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toContain('`think`');
     expect(prompt).not.toContain('`team`');
     expect(prompt).not.toContain('`peers`');
-    // The live-info loop and the forks' durable artifact trail survive.
-    expect(prompt).toMatch(/loop `web` search then fetch/);
+    // The forks' durable artifact trail survives. (The search-then-fetch loop
+    // that used to ride this line is `web`'s own whenToUse, restated here in a
+    // section about delegation and ungated on `web` actually being present.)
+    expect(prompt).not.toMatch(/loop `web` search then fetch/);
     expect(prompt).toMatch(/split depth 3/);
     expect(prompt).toContain('shared/findings/');
     expect(prompt).toMatch(/NOT stateless between turns/);
@@ -152,10 +154,12 @@ describe('buildSystemPromptSync', () => {
     expect(DELEGATION_RUNGS.staff).toMatch(/reports and STAYS/);
     expect(DELEGATION_RUNGS.staff).toMatch(/dismiss only a subordinate whose role is permanently over/);
     expect(DELEGATION_RUNGS.staff).not.toMatch(/retire it when done/);
+    expect(DELEGATION_RUNGS.staff).not.toMatch(/cheap to create and dismiss/);
+    // The prompt no longer says it a second time: the roster/re-engage/dismiss
+    // sentence that stood in the Delegation section was this rung paraphrased,
+    // and the rungs live in the schema every family reads.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('A finished subordinate stays in your roster with its context');
-    expect(prompt).not.toContain('cheap to create and dismiss');
+    expect(buildSystemPromptSync(rt)).not.toContain('A finished subordinate');
   });
 
   test('the settle doctrine leads with what mcts does, and states its limit honestly after', () => {
@@ -197,6 +201,64 @@ describe('buildSystemPromptSync', () => {
     // trigger is additionally mechanised — turn-steering's repeated_failure
     // states it at the step where the decision is still open.
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain('Doubt: your first attempt failed');
+  });
+
+  test('the prompt teaches the SHAPE of work that calls for a fork, not just what a fork is', () => {
+    // The rung was a definition: "copies of you that run their own tool loops
+    // in parallel". A definition answers "what is this" and never "is my work
+    // this". The schema owns the selection triggers and keeps them; what the
+    // prompt adds is the shape test, because whether the work HAS parts is
+    // decided before any tool is picked. turn-steering states the same thing
+    // mechanically, but only at 25 steps — after the shape was chosen wrong.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Fork when the work already has 2\+ independent angles/);
+    expect(prompt).toMatch(/uncertain enough to be worth two attempts at once/);
+    // A compressed pointer, never the schema's paragraph a second time.
+    expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
+  });
+
+  test('the prompt contrasts the two settles by the shape of work each one is for', () => {
+    // `settle=mcts` was fully specified in the schema and named nowhere in the
+    // prompt, so the choice between settles read as a parameter detail rather
+    // than as the shape judgement it is. One sentence, at the altitude where
+    // the work is being shaped: independent pieces you want all of vs rival
+    // attempts at one thing, with the honest limit attached.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Merging \(the default\) keeps every fork's piece/);
+    expect(prompt).toMatch(/settle=mcts keeps one — rival attempts at the same thing/);
+    expect(prompt).toMatch(/scored by executing what each proposes, losers discarded/);
+    // The limit is stated, so a model does not reach for mcts when the rivals
+    // need their own tool loops.
+    expect(prompt).toMatch(/proposes code rather than running its own tool loop/);
+  });
+
+  test('per-fork models are discoverable, and named as a case rather than a default', () => {
+    // `agents fork` takes a per-fork `model` (heterogeneous fleets — see
+    // heads/types.ts SplitRequest) and nothing told the model what varying it
+    // was FOR. The prompt names the capability at shape time; the Self-MoA
+    // caveat (arXiv 2502.00674 — panel quality tracks the AVERAGE member, so
+    // diversity for its own sake costs) rides the parameter description in
+    // agents-tool.ts, where it is read while the field is being filled.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/A fork can take its own `model`/);
+    expect(prompt).toMatch(/a different vendor on a genuinely open question/);
+    // Never phrased as something to do by default.
+    expect(prompt).not.toMatch(/vary the models|diversify|always use different models/i);
+  });
+
+  test('the agents example shows the nested forks array shape', () => {
+    // The one argument shape on this surface a name does not give away, and
+    // the one the trajectory data shows invented wrong (`fork_specs` for
+    // `forks`). staff's arguments are flat and its `role` property carries its
+    // own example, so the spec's single example slot goes to fork.
+    const { rt } = createTestRuntime();
+    const example = BUILTIN_TOOL_SPECS.agents.example;
+    expect(example).toContain("action:'fork'");
+    expect(example).toMatch(/forks:\[\{task:.*rationale:.*\}, \{task:.*rationale:.*\}\]/);
+    expect(buildSystemPromptSync(rt)).toContain(example);
   });
 
   test('tool when-to-use doctrine is schema-only: descriptions carry it, prompt prose does not', () => {
@@ -694,6 +756,10 @@ describe('buildSystemPromptSync', () => {
       // `experience` line. The prompt teaches tool use by showing a real
       // argument shape rather than by describing one — deliberate, and the
       // only place the specs' `example` field is rendered.
+      // 2026-08-11: the `agents` example became the fork call (+92 chars, the
+      // nested forks array is longer than staff's flat role/mission). It sits
+      // close to this ceiling on purpose — the next example that grows should
+      // be a reviewed decision, which is what this gate is for.
       'Tools available this turn': 2100,
       // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
       // /pc file plane; exec stays target-native) — deliberate (2026-07).
@@ -715,7 +781,15 @@ describe('buildSystemPromptSync', () => {
       // and were kept here only so a bare tool-name index (kimi) would still
       // get the decision — a rationale that never held, since schemas are
       // family-neutral. The index is gone and so is the duplication.
-      'Delegation': 2250,
+      // 2026-08-11: LOWERED 2250 → 1870. The section now teaches three things
+      // it did not (the shape that calls for a fork, which settle each shape
+      // wants, that a fork can carry its own model) and is 270 chars SMALLER,
+      // because four passages left: the turn-budget explanation moved into the
+      // clamp's own marker (tools/clamp.ts) where it fires at the trip; the
+      // peer-addressing line was DELEGATION_CONVERSE paraphrased; the roster/
+      // dismiss tail was DELEGATION_RUNGS.staff paraphrased; the report line
+      // was the `report` schema's whenToUse/whenNotToUse paraphrased.
+      'Delegation': 1870,
       'Background work': 260,
       // 2026-08: new section. Two of five benchmark failures were a solved
       // problem with a fumbled deliverable, and the prompt had no doctrine
@@ -765,7 +839,7 @@ describe('buildSystemPromptSync', () => {
       expect(prompt).toMatch(/## Delegation/);
       expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
       expect(prompt).toMatch(/- Persistent subordinate \(action=staff\) — /);
-      expect(prompt).toMatch(/loop `web` search then fetch/);
+      expect(prompt).toMatch(/settle=mcts keeps one/);
     }
   });
 });

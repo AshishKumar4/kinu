@@ -489,7 +489,16 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
         properties: {
           task: { type: 'string', description: 'What this fork explores. Be concrete.' },
           rationale: { type: 'string', description: 'Why this angle matters.' },
-          model: { type: 'string', description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit." },
+          // The field said how to set it and never what setting it is FOR, so
+          // a first-class capability read as a knob. The caveat belongs on the
+          // parameter rather than in the prompt: mixed panels track their
+          // AVERAGE member, not their spread (Self-MoA, arXiv 2502.00674), so
+          // a weaker model added for variety measurably subtracts — which is
+          // exactly the mistake "put different models on it" invites.
+          model: {
+            type: 'string',
+            description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit this agent's. Set it to put a different vendor on a genuinely open question — a panel is only as good as its average member, so a weaker model chosen for variety costs more than it buys.",
+          },
           allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this fork may invoke.' },
         },
       },
@@ -501,10 +510,14 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
         description: 'For action=fork: how forks are settled. Default merge — the forks\' findings merge back into this turn. mcts scores competing approaches against each other by execution instead.',
       },
     } : {}),
+    // Three distinct behaviours whose names alone do not give them away, and
+    // whose semantics lived only in buildMergePrompt (heads/controller.ts) —
+    // instructions addressed to the merge model, not to the caller choosing
+    // between them. Same three behaviours, stated for the audience that picks.
     merge_strategy: {
       type: 'string',
       enum: ['synthesize', 'best_of', 'consensus'],
-      description: 'For action=fork: how to combine fork findings. Default synthesize.',
+      description: 'For action=fork: how the merge reads the forks. Default synthesize — one narrative, disagreements reconciled in favour of the stronger evidence. best_of takes the strongest fork whole. consensus reports what the forks agreed on and hands back each disagreement as an open question, which is what you want when the split itself is the answer you need.',
     },
     budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
     wall_clock_ms: {
