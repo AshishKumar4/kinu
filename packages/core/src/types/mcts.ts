@@ -81,6 +81,21 @@ export interface MCTSConfig {
   /** Near-tie gap for Alternate Takes capture at convergence. */
   takesEpsilon?: number;
   signal?: AbortSignal;
+  /**
+   * The mission ledger this search charges, when it runs under one.
+   *
+   * A branch resolves its own model in another process, so its rollout spend is
+   * invisible to the governed `rt.llm` the fork seam wraps: it arrives with the
+   * result instead, and the engine debits it between expansions. The engine is
+   * also the only place a refusal can be HANDLED — a branch that refused its own
+   * call would come back empty, score 0 and backpropagate that 0 up the
+   * persisted tree, so the stop has to be "do not open the next expansion",
+   * which only the loop can decide.
+   *
+   * Absent is the default and then nothing is asked: no port call, no query, no
+   * refusal.
+   */
+  mission?: import('../mission-budget.js').MissionScope;
   /** Called as the search progresses — phase transitions, branch failures and
    *  iteration completion. Use for real-time UI updates. */
   onProgress?: (event: MCTSProgressEvent) => void;

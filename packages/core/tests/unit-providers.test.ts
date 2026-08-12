@@ -1,4 +1,5 @@
 import { describe, test, expect } from 'bun:test';
+import { asFetchFunction } from '../src/providers/fetch-shim.js';
 import {
   parseModelSpec,
   createProviderRegistry,
@@ -181,7 +182,7 @@ describe('OpenAI-compat provider', () => {
     const models = await provider.listModels({
       env: {},
       ...createTestAuth(store),
-      async fetch(input, init) {
+      fetch: asFetchFunction(async (input, init) => {
         expect(String(input)).toBe('http://127.0.0.1:4111/v1/models');
         expect(new Headers(init?.headers).get('authorization')).toBe('Bearer local');
         return Response.json({
@@ -192,7 +193,7 @@ describe('OpenAI-compat provider', () => {
             { name: 'missing-id' },
           ],
         });
-      },
+      }),
     });
     expect(models).toEqual([
       { id: 'model-a', label: 'Model A', contextWindow: 131072 },
@@ -209,7 +210,7 @@ describe('OpenAI-compat provider', () => {
     const models = await provider.listModels({
       env: {},
       ...createTestAuth(store),
-      fetch: async () => new Response('not found', { status: 404 }),
+      fetch: asFetchFunction(async () => new Response('not found', { status: 404 })),
     });
     expect(models).toEqual([]);
   });

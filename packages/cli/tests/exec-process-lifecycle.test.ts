@@ -97,7 +97,7 @@ function modelThatRuns(command: string): { port: number; stop(): void } {
       ].join(""), { headers: { "content-type": "text/event-stream" } });
     },
   });
-  return { port: server.port, stop: () => server.stop(true) };
+  return { port: server.port!, stop: () => server.stop(true) };
 }
 
 function newHome(): string {

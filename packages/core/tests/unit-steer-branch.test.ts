@@ -244,7 +244,7 @@ describe('settlePendingBranches — the drain both backends run at turn end', ()
         task: spec.task,
         inheritedContext: [{ id: 'c1', role: 'user', content: 'original ask', createdAt: 1 }],
       });
-      branches.push({ id: handle.branchId, task: spec.task, handle: Promise.resolve(handle) });
+      branches.push({ id: handle.id, task: spec.task, handle: Promise.resolve(handle) });
     }
 
     settlePendingBranches(
@@ -284,7 +284,7 @@ describe('headPhaseRunEvent — one row shape for both backends', () => {
     expect(headPhaseRunEvent({
       kind: 'merge',
       rootId: 'run-7',
-      cost: { headCount: 3, headsWithFindings: 1, totalTokens: 900 },
+      cost: { headCount: 3, headsWithFindings: 1, totalTokens: 900, totalWallClockMs: 0, maxDepth: 0 },
       mergedNarrative: 'one lead held up',
       fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
     })).toEqual({

@@ -11,6 +11,7 @@ import { Database } from 'bun:sqlite';
 import { assembleTurnMessages } from '../src/orchestrator/turn-context.js';
 import { ExtensionHost } from '../src/extension.js';
 import { createMemoryVFS } from './helpers.js';
+import type { MediaModality } from '../src/prompting/attachment-sanitizer.js';
 
 const HISTORY: ModelMessage[] = [
   { role: 'user', content: 'hello' },
@@ -35,7 +36,7 @@ describe('assembleTurnMessages', () => {
     const extensions = new ExtensionHost().register({
       name: 'test.probe',
       onTurnStart: () => { order.push('turn-start'); },
-      transformContext: (ctx) => {
+      transformContext: async (ctx) => {
         order.push('transform');
         transformSaw = ctx.messages;
         return undefined;
@@ -55,7 +56,7 @@ describe('assembleTurnMessages', () => {
     const compacted: ModelMessage[] = [{ role: 'user', content: 'summary' }];
     const extensions = new ExtensionHost().register({
       name: 'test.compact',
-      transformContext: () => compacted,
+      transformContext: async () => compacted,
     });
     const out = await assembleTurnMessages({
       ...base(),
@@ -76,19 +77,19 @@ describe('assembleTurnMessages', () => {
   });
 
   test('the transform receives sessionKey, window, trigger, and the measured token signal', async () => {
-    let seen: { sessionKey: string; contextWindow: number; trigger: string; providerReportedTokens?: number } | null = null;
+    const seen: Array<{ sessionKey: string; contextWindow: number; trigger: string; providerReportedTokens?: number }> = [];
     const extensions = new ExtensionHost().register({
       name: 'test.ctx',
-      transformContext: (ctx) => {
-        seen = {
+      transformContext: async (ctx) => {
+        seen.push({
           sessionKey: ctx.sessionKey, contextWindow: ctx.contextWindow, trigger: ctx.trigger,
           ...(ctx.providerReportedTokens !== undefined ? { providerReportedTokens: ctx.providerReportedTokens } : {}),
-        };
+        });
         return undefined;
       },
     });
     await assembleTurnMessages({ ...base(), extensions, providerReportedTokens: 1234, trigger: 'force' });
-    expect(seen).toEqual({ sessionKey: 'k', contextWindow: 200_000, trigger: 'force', providerReportedTokens: 1234 });
+    expect(seen[0]).toEqual({ sessionKey: 'k', contextWindow: 200_000, trigger: 'force', providerReportedTokens: 1234 });
   });
 
   test('attachment sanitization preserves message count and feeds the transform sanitized parts', async () => {
@@ -101,13 +102,15 @@ describe('assembleTurnMessages', () => {
     let transformSaw: readonly ModelMessage[] = [];
     const extensions = new ExtensionHost().register({
       name: 'test.sanitize-order',
-      transformContext: (ctx) => { transformSaw = ctx.messages; return undefined; },
+      transformContext: async (ctx) => { transformSaw = ctx.messages; return undefined; },
     });
     const out = await assembleTurnMessages({
       ...base(),
       history: withFile,
       extensions,
-      attachments: { accepts: new Set(['text']), vfs: createMemoryVFS(new Database(':memory:')) },
+      // MediaModality excludes 'text' — an empty set is a model that accepts no
+      // attachments at all, which is what strips the PDF below.
+      attachments: { accepts: new Set<MediaModality>(), vfs: createMemoryVFS(new Database(':memory:')) },
     });
     expect(out.length).toBe(1);
     // The transform saw the sanitized message, not the raw PDF part.

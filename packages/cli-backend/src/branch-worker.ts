@@ -21,9 +21,12 @@ import {
   explorePrompt,
   extractCodeBlock,
   formatInheritedContext,
+  missionCallUsage,
   parseModelSpec,
   reasoningEffortOptions,
   reflectionPrompt,
+  type BranchExploration,
+  type BranchReflection,
   type CraftedTool,
   type LLMProviderConfig,
 } from '@proteus/core';
@@ -92,7 +95,7 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
           siblings,
         });
         const { model, providerOptions } = resolveLowEffortModel();
-        const { text } = await generateText({
+        const { text, usage } = await generateText({
           model,
           system,
           messages: [{ role: 'user' as const, content: user }],
@@ -102,7 +105,10 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         const codeUsed = extractCodeBlock(trimmed);
         // Persist code_used so reflect + the parent's trace inspection see it.
         db.run('INSERT INTO traces (step, text, code_used) VALUES (?, ?, ?)', [1, trimmed, codeUsed]);
-        result = { text: trimmed, codeUsed };
+        // The spend travels back with the proposal: this process resolves its
+        // own model, so the parent's mission ledger cannot see the call any
+        // other way (mcts/engine.ts debits it).
+        result = { text: trimmed, codeUsed, usage: missionCallUsage(usage) } satisfies BranchExploration;
         break;
       }
       case 'reflect': {
@@ -113,12 +119,12 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         const traces = db.query('SELECT text FROM traces ORDER BY step').all() as Array<{ text: string }>;
         const attempt = traces.map(t => t.text).join('\n');
         const { model, providerOptions } = resolveLowEffortModel();
-        const { text } = await generateText({
+        const { text, usage } = await generateText({
           model,
           messages: [{ role: 'user' as const, content: reflectionPrompt(task, attempt) }],
           ...(providerOptions ? { providerOptions } : {}),
         });
-        result = text.trim();
+        result = { text: text.trim(), usage: missionCallUsage(usage) } satisfies BranchReflection;
         break;
       }
       default:

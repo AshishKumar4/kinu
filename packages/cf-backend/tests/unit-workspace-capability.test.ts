@@ -58,7 +58,7 @@ describe('capability token mint', () => {
 
     // The superseded token is dead; only one identity row per workspace exists.
     await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: first.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
-    expect(db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get<{ n: number }>()!.n).toBe(1);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get() as { n: number } | null)!.n).toBe(1);
     db.close();
   });
 

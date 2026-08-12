@@ -184,7 +184,7 @@ describe('a head forks its parent workspace', () => {
 
     // The container the parent agent works in — `proteus-${workspaceName}` in
     // runtime.ts — and emphatically not `proteus-head-1`.
-    expect(requestedSandboxId).toBe('proteus-proteus-main');
+    expect(requestedSandboxId as string | null).toBe('proteus-proteus-main');
   });
 
   test('/local stays this head\'s own private scratch', async () => {

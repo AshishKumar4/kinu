@@ -31,7 +31,7 @@ const TOKEN_HASH = 'a'.repeat(64);
 // the gate must fail loudly rather than dial out.
 const realFetch = globalThis.fetch;
 beforeAll(() => {
-  globalThis.fetch = (async () => { throw new Error('network disabled in tests'); }) as typeof fetch;
+  globalThis.fetch = (async () => { throw new Error('network disabled in tests'); }) as unknown as typeof fetch;
 });
 afterAll(() => { globalThis.fetch = realFetch; });
 
@@ -119,7 +119,7 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'release', name: 'updateReleaseChange', run: (u, c) => u.updateReleaseChange(c, 'pc_1', { plan: 'x' }) },
   { capability: 'release', name: 'transitionReleaseChange', run: (u, c) => u.transitionReleaseChange(c, 'pc_1', 'planning') },
   { capability: 'release', name: 'recordReleaseCheck', run: (u, c) => u.recordReleaseCheck(c, 'pc_1', { name: 'test', status: 'passed' }) },
-  { capability: 'release', name: 'requestReleaseApproval', run: (u, c) => u.requestReleaseApproval(c, 'pc_1', 'deploy') },
+  { capability: 'release', name: 'requestReleaseApproval', run: (u, c) => u.requestReleaseApproval(c, 'pc_1', 'deploy_production') },
   { capability: 'release', name: 'decideReleaseApproval', run: (u, c) => u.decideReleaseApproval(c, 'ap_1', 'approved', USER_ID) },
   { capability: 'release', name: 'recordReleaseDeployment', run: (u, c) => u.recordReleaseDeployment(c, 'pc_1', { environment: 'production' }) },
   { capability: 'release', name: 'getReleaseBoard', run: (u, c) => u.getReleaseBoard(c, WORKSPACE) },

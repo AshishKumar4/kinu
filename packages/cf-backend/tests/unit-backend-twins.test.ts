@@ -51,38 +51,54 @@ import { resolve } from 'node:path';
 
 const REPO = resolve(import.meta.dir, '../../..');
 
-/** The measured twin inventory at seeding time. Shrink by hoisting. */
+/**
+ * The measured twin inventory at seeding time. Shrink by hoisting.
+ *
+ * Every entry below was re-verified against BOTH class bodies, one at a time,
+ * and every one of them holds: none is a pair of bodies that would move to core
+ * unmodified. The reason is written next to each, because an inventory whose
+ * entries carry no reason is a list of TODOs rather than a record of decisions.
+ * Grouped by that reason rather than alphabetically — the file-checkpoint four
+ * share one.
+ */
 const KNOWN_TWINS: readonly string[] = [
-  // The file-checkpoint quartet (checkpointStatus, listFileCheckpoints,
-  // planFileRestore, restoreFileCheckpoint): two transports to two DIFFERENT
-  // stores — a device tunnel to the user's machine on cf, a local git engine
-  // on the CLI — not two implementations of one. Their shared vocabulary
+  // The file-checkpoint quartet: two transports to two DIFFERENT stores — a
+  // device tunnel to the user's machine on cf, a local git engine on the CLI —
+  // not two implementations of one. Their shared vocabulary
   // (FileCheckpointEntry, FileRestorePlan, CheckpointAvailability) is already
-  // core, which is why neither body carries logic. Not expected to shrink.
+  // core, which is why neither body carries logic; what does not move is cf's
+  // owner check, its device-RPC method names and its not-connected mapping,
+  // which is exactly the platform dependency. Not expected to shrink.
   'checkpointStatus',
+  'listFileCheckpoints',
+  'planFileRestore',
+  'restoreFileCheckpoint',
   // Genuinely different resolutions: cf normalizes the stored spec through its
   // provider registry (an unset model resolving to "" was the 41%-of-Kimi
   // context-window bug); the CLI's resolver has already normalized by the time
-  // the spec is cached. Same answer, two legitimate routes to it.
+  // the spec is cached. Same answer, two legitimate routes to it — the two
+  // backends cache at different points of the same normalization pipeline.
   'effectiveModelSpec',
   // Both build core's default key-less provider, but from different platform
-  // material: cf's owned model services vs node fetch + the local auth store.
+  // material: cf's owned model services (env + the owner's auth) vs node fetch
+  // + the local auth store. Only the memoisation is common, and memoisation is
+  // not a module.
   'getWebSearchProvider',
-  'listFileCheckpoints',
   // Both already read the one core EventLog.query; what differs after it is a
   // projection into the web wire shape, which only cf has. A core symbol here
-  // would be a passthrough. Not expected to shrink.
+  // would be a passthrough, and `.query` is too generic a name for the
+  // delegation check to prove anything with. Not expected to shrink.
   'listRecentEvents',
-  'planFileRestore',
   // One shaper, two sources — the divergence is real: cf digests its durable
   // assistant_messages rows (inheritedContextFromRows), the CLI reads live
   // history (inheritedContextFromHistory). Both are core; SHARED_TRANSPORTS
   // names a single symbol, so this cannot be recorded there honestly.
   'readInheritedContext',
-  'restoreFileCheckpoint',
   // The seam itself, not duplication: each backend describes the inference
   // surface a candidate scaffold runs on (its ToolSet, its history, its
-  // default loop). This entry is not expected to shrink.
+  // default loop). Its four ports are already SHARED_TRANSPORTS entries; what
+  // is left here is the struct that packs them. This entry is not expected to
+  // shrink.
   'scaffoldControl',
 ];
 
@@ -294,6 +310,14 @@ describe('backend twin methods', () => {
   test('every declared transport really delegates to its core symbol', () => {
     // Without this, SHARED_TRANSPORTS would be a way to assert duplication
     // away. Both sides must actually reach the named core implementation.
+    //
+    // Scope caveat, measured rather than assumed: this searches the whole class
+    // body, not the named method's, so it proves the class reaches the core
+    // symbol somewhere. Narrowing it to the member body needs a real member
+    // extractor — three regex attempts at one were each defeated by a different
+    // TypeScript signature shape (an object parameter, a single-line body, a
+    // generic return type containing an object literal), and a stricter gate
+    // whose extractor silently mis-parses is worse than an honest coarse one.
     const unproven = Object.entries(SHARED_TRANSPORTS)
       .filter(([, symbol]) =>
         !delegatesTo(cliBody, symbol) || !cfBodies.some((b) => delegatesTo(b, symbol)))

@@ -36,6 +36,8 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
     cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
     getReplayEvals: async (limit) => { calls.push(`replay:${limit ?? 'all'}`); return [{ id: "rpl-1", loss: 0.25 }]; },
     armCompactNow: () => { calls.push("compactNow"); },
+    jobResult: async (id) => { calls.push(`jobResult:${id}`); return null; },
+    listBackgroundJobs: async (limit) => { calls.push(`jobs:${limit ?? 'all'}`); return []; },
     ...over,
   };
 }

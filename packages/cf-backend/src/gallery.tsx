@@ -13,12 +13,14 @@
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
  *   /gallery.html?frame=viewfail → the same View when its spec stops validating
  *   /gallery.html?frame=releases → the Releases board with a pending approval
+ *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
+ *   /gallery.html?frame=settings → the per-agent Settings page
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
@@ -37,8 +39,9 @@ import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
+import { SupervisePage } from "@/pages/SupervisePage";
 import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
-import type { Rpc, ToolInfo } from "@/lib/protocol";
+import type { BackgroundJob, Rpc, ToolInfo } from "@/lib/protocol";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ModelMenuEntry } from "@/lib/user-api";
 
@@ -57,6 +60,21 @@ const STUB: Record<string, unknown> = {
   // made `menu.models.length` throw and HomePage rendered as a blank canvas,
   // so the one page a signed-in user lands on was never actually looked at.
   "/api/user/models": { models: MODEL_STUBS(), failures: [] },
+  // Settings' Device access card reads both, and a 404 photographs its failure
+  // state instead of the consent-scope control that card exists for.
+  "/api/user/devices": [
+    {
+      id: "dev_1", label: "ashish-mbp", os: "darwin", hostname: "ashish-mbp.local",
+      connected: true, createdAt: NOW - 40 * 864e5, lastSeenAt: NOW - 90e3,
+      expiresAt: NOW + 50 * 864e5,
+    },
+  ],
+  "/api/user/devices/consents": [
+    {
+      agentName: "checkout-fixes", deviceId: "dev_1", policy: "remembered",
+      scope: "consented_folder", lastMethod: "exec", lastSummary: "bun test packages/core",
+    },
+  ],
 };
 
 function MODEL_STUBS(): ModelMenuEntry[] {
@@ -79,6 +97,101 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
   }
   return realFetch(input as RequestInfo, init);
 }) as typeof window.fetch;
+
+
+/* ── Agent socket stub ──────────────────────────────────────────── */
+
+/**
+ * The Agents-SDK RPC transport, answered in-page.
+ *
+ * SettingsPage gates its whole body on a live agent connection, so with no
+ * worker the only photographable thing was its spinner. This is the same idea
+ * as the `/api/user` fetch stub above, one layer down: open the socket, answer
+ * `{type:"rpc"}` frames from a table, and the real page renders against mock
+ * data. Sockets that are not an agent connection (vite's HMR channel) fall
+ * through to the real WebSocket untouched.
+ */
+const AGENT_RPC: Record<string, unknown> = {
+  getWorkspaceSnapshot: {
+    status: {
+      id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
+      displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
+      soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
+      createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 12,
+      craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null,
+    },
+    tools: { tools: [], crafted: [] },
+    memoryContent: "",
+    mcts: [], timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
+  },
+  getStoredModelSpec: "anthropic/claude-opus-4",
+  getShellApprovalMode: "strict",
+  getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, maxDepth: 5, branchBudget: 3 },
+  getEvolutionChangelog: { entries: [], unseen: 0 },
+};
+
+class GalleryAgentSocket extends EventTarget {
+  static readonly CONNECTING = 0;
+  static readonly OPEN = 1;
+  static readonly CLOSING = 2;
+  static readonly CLOSED = 3;
+  readonly CONNECTING = 0;
+  readonly OPEN = 1;
+  readonly CLOSING = 2;
+  readonly CLOSED = 3;
+  readyState = 0;
+  binaryType = "blob";
+  bufferedAmount = 0;
+  extensions = "";
+  protocol = "";
+  onopen: ((ev: Event) => void) | null = null;
+  onclose: ((ev: CloseEvent) => void) | null = null;
+  onerror: ((ev: Event) => void) | null = null;
+  onmessage: ((ev: MessageEvent) => void) | null = null;
+
+  constructor(readonly url: string) {
+    super();
+    queueMicrotask(() => {
+      this.readyState = this.OPEN;
+      const open = new Event("open");
+      this.onopen?.(open);
+      this.dispatchEvent(open);
+    });
+  }
+
+  send(raw: string): void {
+    let frame: { type?: string; id?: string; method?: string };
+    try { frame = JSON.parse(raw) as typeof frame; } catch { return; }
+    if (frame.type !== "rpc" || !frame.method) return;
+    const method = frame.method;
+    const result = method in AGENT_RPC
+      ? AGENT_RPC[method]
+      : method.startsWith("list") || method.startsWith("get") ? [] : {};
+    queueMicrotask(() => {
+      const message = new MessageEvent("message", {
+        data: JSON.stringify({ type: "rpc", id: frame.id, success: true, result }),
+      });
+      this.onmessage?.(message);
+      this.dispatchEvent(message);
+    });
+  }
+
+  close(): void {
+    this.readyState = this.CLOSED;
+    const close = new CloseEvent("close", { code: 1000, wasClean: true });
+    this.onclose?.(close);
+    this.dispatchEvent(close);
+  }
+}
+
+const RealWebSocket = window.WebSocket;
+window.WebSocket = new Proxy(RealWebSocket, {
+  construct(target, args: [string, (string | string[])?]) {
+    return String(args[0]).includes("/agents/")
+      ? (new GalleryAgentSocket(String(args[0])) as unknown as WebSocket)
+      : Reflect.construct(target, args) as WebSocket;
+  },
+});
 
 /* ── Mock chat data ─────────────────────────────────────────────── */
 
@@ -720,6 +833,82 @@ function ReleasesFrame() {
   );
 }
 
+
+/* ── Supervise ──────────────────────────────────────────────────── */
+
+// The SUPERVISE altitude — the agent over time. Every block is fed so the type
+// roles that carry it (`.p-meta` on the timestamps, the skill pills, the token
+// counts) are actually on screen; an empty board photographs its empty states
+// and tells you nothing about the scale it renders real rows at.
+const SUPERVISE_TASKS = [
+  {
+    id: "cur_1", task: "Learn the checkout coupon schema well enough to fix the kind:null regression",
+    rationale: "Three of the last five failures traced back to the same migration.",
+    predictedSuccess: 0.72, targetsSkills: ["sql", "regression-triage"],
+    proposedAt: NOW - 2 * 36e5, status: "pending",
+  },
+  {
+    id: "cur_2", task: "Write a smoke check for the email-triage webhook",
+    rationale: "The trigger has fired 41 times and nothing asserts its shape.",
+    predictedSuccess: 0.44, targetsSkills: ["testing"],
+    proposedAt: NOW - 9 * 36e5, status: "accepted",
+  },
+];
+
+const SUPERVISE_RUNS = [
+  {
+    runId: "run_9c1", startedAt: NOW - 45 * 60e3, causedBy: "chat",
+    userMessage: "Why does the percentage coupon drop off at checkout?",
+    status: "completed", tokensIn: 184_320, tokensOut: 9_140, tokensCached: 121_400, eventCount: 62,
+  },
+  {
+    runId: "run_9b7", startedAt: NOW - 6 * 36e5, causedBy: "timer",
+    userMessage: null, status: "completed",
+    tokensIn: 42_100, tokensOut: 1_880, tokensCached: 0, eventCount: 18,
+  },
+];
+
+const SUPERVISE_TRIGGERS = [
+  {
+    id: "trg_wh1", kind: "webhook", state: "active", created_at: NOW - 12 * 864e5,
+    spec: { path: "/hooks/deploy-failed" }, rate_limit_per_min: 30, fire_count: 41,
+    last_fire_at: NOW - 3 * 36e5, next_fire_at: null,
+  },
+  {
+    id: "trg_tm1", kind: "timer_cron", state: "active", created_at: NOW - 30 * 864e5,
+    spec: { cron: "0 9 * * 1" }, fire_count: 4,
+    last_fire_at: NOW - 3 * 864e5, next_fire_at: NOW + 4 * 864e5,
+  },
+];
+
+const SUPERVISE_JOBS: BackgroundJob[] = [
+  {
+    id: "bgjob-71ae4c02", kind: "heads", label: "Audit the CLI surface", status: "running",
+    result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
+  },
+  {
+    id: "bgjob-70bd19f7", kind: "mcts", label: "Pick a migration-backfill approach",
+    status: "completed", result: "Settled on the backfill-on-read approach", error: null,
+    createdAt: NOW - 50 * 60e3, settledAt: NOW - 41 * 60e3,
+  },
+];
+
+const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listCurriculumTasks") return { tasks: SUPERVISE_TASKS } as unknown as T;
+  if (method === "getRunSummaries") return SUPERVISE_RUNS as unknown as T;
+  if (method === "listTriggers") return { triggers: SUPERVISE_TRIGGERS } as unknown as T;
+  if (method === "listBackgroundJobs") return SUPERVISE_JOBS as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+function SuperviseFrame() {
+  return (
+    <div className="p-bg p-text min-h-screen">
+      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} onOpenTasks={() => {}} />
+    </div>
+  );
+}
+
 function BrainFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -738,6 +927,7 @@ const frame = new URLSearchParams(location.search).get("frame");
 
 async function mount() {
   let node: React.ReactNode;
+  let entries = ["/"];
   if (frame === "shell") node = <Shell />;
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "palette") node = <Palette />;
@@ -750,12 +940,27 @@ async function mount() {
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
+  else if (frame === "supervise") node = <SuperviseFrame />;
+  else if (frame === "settings") {
+    const { default: SettingsPage } = await import("@/pages/SettingsPage");
+    // Routed, not bare: the page reads `agentId` off the route, and every
+    // back-link and breadcrumb it renders is built from it.
+    entries = ["/workspace/checkout-fixes/settings"];
+    node = (
+      <Routes>
+        <Route
+          path="/workspace/:agentId/settings"
+          element={<div className="min-h-screen p-bg p-text"><SettingsPage /></div>}
+        />
+      </Routes>
+    );
+  }
   else if (frame === "home") {
     const { default: HomePage } = await import("@/pages/HomePage");
     node = <div className="h-screen p-bg p-text"><HomePage /></div>;
   } else node = <All />;
   createRoot(document.getElementById("root")!).render(
-    <StrictMode><MemoryRouter>{node}</MemoryRouter></StrictMode>,
+    <StrictMode><MemoryRouter initialEntries={entries}>{node}</MemoryRouter></StrictMode>,
   );
 }
 void mount();

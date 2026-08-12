@@ -62,6 +62,11 @@ export function createMCTSStrategy(): ExplorationStrategy {
         takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
         signal: ctx.signal,
         ...(o.search ? { search: o.search } : {}),
+        // Branch rollouts resolve their own model in another process, so the
+        // governed `ctx.rt.llm` never sees them; the engine debits each rollout
+        // from the report that comes back with it and stops opening expansions
+        // once the ledger is spent.
+        ...(ctx.mission ? { mission: ctx.mission } : {}),
       });
       // The winner's trajectory is the agent-readable answer.
       const text = result.trajectory.map(m => `${m.role}: ${m.content}`).join('\n');
@@ -69,7 +74,13 @@ export function createMCTSStrategy(): ExplorationStrategy {
         strategy: 'mcts',
         best: { text, payload: { winnerId: result.winnerId }, score: result.winnerValue, source: result.winnerId },
         all: [{ text, payload: result, score: result.winnerValue, source: result.winnerId }],
-        cost: { durationMs: Date.now() - t0, iterations: budget },
+        cost: {
+          durationMs: Date.now() - t0,
+          iterations: budget,
+          // Every rollout was debited as it returned (mcts/engine.ts), so the
+          // fork seam must record the spawn and nothing else.
+          ...(ctx.mission ? { selfMetered: true } : {}),
+        },
         trace: `MCTS converged=${result.converged} winnerValue=${result.winnerValue.toFixed(3)}`,
       };
     },

@@ -5,6 +5,8 @@
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
 // serialized (reactor / job wake), broadcast fans out, end() flushes.
 import { describe, test, expect } from 'bun:test';
+import { createTestSql, toolExecute } from '@proteus/test-utils';
+import { MissionGovernor } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
 import type { LLMProviderConfig } from '@proteus/core';
@@ -17,6 +19,24 @@ import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, serializeContentForHeads, type LocalAgentSessionOpts, type SessionEvent } from '../src/local-session.js';
 import { cloudProxyBaseURL, createLocalModelResolver, type LocalModelResolver } from '../src/model-resolver.js';
 import { createNodeExecuteToolFactory } from '../src/execute-tools-factory.js';
+
+/** The resolver members these tests do not exercise — spelled out once so a
+ *  fake satisfies the whole seam rather than the slice under test. */
+const resolverRest = {
+  judgeCandidates: async () => [],
+  fastModelCandidates: () => [],
+  getAuth: async () => null,
+};
+
+/** Likewise for the agent.* host behind the Node execute fallback. */
+const agentSelfRest = {
+  proposeScaffold: async () => ({ ok: true }),
+  listScaffoldVersions: async () => [],
+  getReplayEvals: async () => [],
+  budget: new MissionGovernor({ storage: createTestSql() }),
+  armCompactNow: () => {},
+};
+
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -824,11 +844,12 @@ describe('LocalAgentSession — context window', () => {
       normalizeSpecSync: (spec) => spec?.trim() || 'openai-compatible/house-model',
       resolveModel: () => model,
       listProviders: async () => [],
-      listModels: async () => [],
+      listModels: async () => ({ models: [], failures: [] }),
       modelInfo: async () => ({
         id: 'house-model', label: 'house', capabilities: ['tools', 'streaming'],
         ...(contextWindow !== undefined ? { contextWindow } : {}),
       }),
+      ...resolverRest,
     };
   }
 
@@ -876,8 +897,9 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       normalizeSpecSync: (spec) => spec?.trim() || 'local/a',
       resolveModel: (spec) => fakeModel(spec === 'local/b' ? 'from b' : 'from a'),
       listProviders: async () => [],
-      listModels: async () => [],
+      listModels: async () => ({ models: [], failures: [] }),
       modelInfo: async () => null,
+      ...resolverRest,
     };
     const { session, events } = setupWithResolver(resolver);
 
@@ -901,16 +923,17 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       doStream: (options: unknown) => unknown;
     };
     const stream = model.doStream.bind(model);
-    model.doStream = async (options: { providerOptions?: Record<string, Record<string, unknown>> }) => {
-      providerOptions = options.providerOptions;
+    model.doStream = async (options: unknown) => {
+      providerOptions = (options as { providerOptions?: Record<string, Record<string, unknown>> }).providerOptions;
       return stream(options);
     };
     const resolver: LocalModelResolver = {
       normalizeSpecSync: () => 'openai/gpt-5.5',
       resolveModel: () => model as unknown as LanguageModel,
       listProviders: async () => [],
-      listModels: async () => [],
+      listModels: async () => ({ models: [], failures: [] }),
       modelInfo: async () => null,
+      ...resolverRest,
     };
     const { session } = setupWithResolver(resolver);
 
@@ -1050,28 +1073,29 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   });
 
   test('Node execute fallback exposes the local agent.schedule namespace', async () => {
-    let received: { atMs?: number; label?: string } | null = null;
+    const received: Array<{ atMs?: number; label?: string }> = [];
     const executeTool = createNodeExecuteToolFactory({
       extraProviders: [createAgentSelfProvider({
         proposeCurriculumTasks: async () => [],
         listCurriculumTasks: async () => [],
         setCurriculumTaskStatus: async () => ({ ok: true }),
         createTimerTrigger: (opts) => {
-          received = { atMs: opts.atMs, label: opts.label };
+          received.push({ atMs: opts.atMs, label: opts.label });
           return { id: 'trg-local', kind: opts.cron ? 'timer_cron' : 'timer_oneshot', nextFireAt: opts.atMs ?? 123 };
         },
         cancelTrigger: async () => ({ ok: true }),
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
+        ...agentSelfRest,
       })],
     })({ craftedTools: () => ({}), providers: [], loader: {} });
 
-    const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
+    const result = await toolExecute<{ code: string }, unknown>(executeTool)({
       code: "return await agent.schedule({ atMs: Date.now() + 60000, label: 'local wake' });",
     });
     expect(result).toMatchObject({ result: { id: 'trg-local', kind: 'timer_oneshot' } });
-    expect(received?.label).toBe('local wake');
-    expect(received?.atMs).toBeGreaterThan(Date.now());
+    expect(received[0]?.label).toBe('local wake');
+    expect(received[0]?.atMs).toBeGreaterThan(Date.now());
   });
 
   test('Node execute fallback exposes agent.compactNow, arming the ladder for the next turn', async () => {
@@ -1085,11 +1109,12 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
         cancelTrigger: async () => ({ ok: true }),
         jobResult: async () => null,
         listBackgroundJobs: async () => [],
+        ...agentSelfRest,
         armCompactNow: () => { arms++; },
       })],
     })({ craftedTools: () => ({}), providers: [], loader: {} });
 
-    const result = await (executeTool as { execute: (args: { code: string }) => Promise<unknown> }).execute({
+    const result = await toolExecute<{ code: string }, unknown>(executeTool)({
       code: 'return await agent.compactNow();',
     });
     expect(result).toMatchObject({ result: { armed: true, appliesAt: 'next-turn-assembly' } });
@@ -1806,7 +1831,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
       name: 'local_helper', description: 'a locally crafted helper',
-      code: 'async () => 1', scope: 'local',
+      code: 'async () => 1', params: null, scope: 'local',
     });
     rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                    VALUES ('editor', '"helix"', 0.8, 'sleep_time_compute', ${Date.now()})`;
@@ -1827,7 +1852,7 @@ describe('LocalAgentSession — Evolution Changelog parity', () => {
   test('revert by id retires the crafted tool and forgets the fact for real', async () => {
     const { rt, session } = setup('quiet');
     rt.craftStore.create({
-      name: 'doomed_tool', description: 'soon retired', code: 'async () => 2', scope: 'local',
+      name: 'doomed_tool', description: 'soon retired', code: 'async () => 2', params: null, scope: 'local',
     });
     rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                    VALUES ('stale', '"value"', 1.0, NULL, ${Date.now()})`;
@@ -2321,7 +2346,7 @@ describe('agents.* codemode namespace — node sandbox', () => {
       extraProviders: [createAgentsCodemodeProvider(() => deps)],
     })({ craftedTools: () => ({}), providers: [], loader: {} });
     return (code: string, options?: unknown) =>
-      (tool as { execute: (a: { code: string }, o?: unknown) => Promise<unknown> }).execute({ code }, options);
+      toolExecute<{ code: string }, unknown>(tool)({ code }, options);
   }
 
   /** A scripted exploration strategy: records what the fork asked for and

@@ -77,7 +77,7 @@ describe('run reads', () => {
     initRunEventTables(makeExecRaw(db));
     const events = new RunEventRecorder(sql);
 
-    events.emit('r1', { type: 'run_start', caused_by: 'timer', userMessage: 'do the thing' });
+    events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'timer', userMessage: 'do the thing' });
     events.emit('r1', { type: 'turn_end', turnIndex: 0, tokenUsage: { input: 10, output: 4, cached: 2 } });
     events.emit('r1', { type: 'turn_end', turnIndex: 1, tokenUsage: { input: 5, output: 1 } });
     events.emit('r1', { type: 'run_end', reason: 'completed' });
@@ -119,8 +119,8 @@ describe('run timeline', () => {
 
     // The run events stamp themselves with the wall clock; the other sources
     // carry their own, so they are placed after it to pin the ordering.
-    events.emit('r1', { type: 'run_start', caused_by: 'chat' });
-    events.emit('r1', { type: 'text_delta', delta: 'noise' });
+    events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
+    events.emit('r1', { type: 'text_delta', text: 'noise' });
     const base = Date.now() + 1000;
     sql`INSERT INTO evolution_events (id, type, message, data, created_at)
       VALUES ('e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;

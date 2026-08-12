@@ -67,11 +67,11 @@ describe("CLI sessions", () => {
     const events: AgentClientEvent[] = [
       { type: "turn-start", kind: "user", text: "go" },
       { type: "text-delta", delta: "first text " },
-      { type: "tool-call", toolName: "read_file", args: { path: "a.ts" } },
-      { type: "tool-result", toolName: "read_file", result: "contents" },
+      { type: "tool-call", toolName: "read_file", toolCallId: "tc-1", args: { path: "a.ts" } },
+      { type: "tool-result", toolName: "read_file", toolCallId: "tc-1", result: "contents", success: true },
       { type: "text-delta", delta: "second text " },
-      { type: "tool-call", toolName: "write_file", args: { path: "b.ts" } },
-      { type: "tool-result", toolName: "write_file", result: "ok" },
+      { type: "tool-call", toolName: "write_file", toolCallId: "tc-2", args: { path: "b.ts" } },
+      { type: "tool-result", toolName: "write_file", toolCallId: "tc-2", result: "ok", success: true },
       { type: "text-delta", delta: "third text" },
       { type: "turn-end", turn: { text: turnText, toolCalls: [], steps: 2, durationMs: 1, hadError: false } },
     ];
@@ -99,8 +99,8 @@ describe("CLI sessions", () => {
     // The backend synthesized text without streaming deltas (ended on a tool).
     for (const event of [
       { type: "turn-start", kind: "user", text: "go" },
-      { type: "tool-call", toolName: "search", args: {} },
-      { type: "tool-result", toolName: "search", result: "hit" },
+      { type: "tool-call", toolName: "search", toolCallId: "tc-1", args: {} },
+      { type: "tool-result", toolName: "search", toolCallId: "tc-1", result: "hit", success: true },
       { type: "turn-end", turn: { text: "synthesized answer", toolCalls: [], steps: 1, durationMs: 1, hadError: false } },
     ] satisfies AgentClientEvent[]) recorder.record(session, event);
 

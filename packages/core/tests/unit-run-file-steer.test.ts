@@ -11,7 +11,8 @@ import { describe, test, expect } from 'bun:test';
 import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/run-file-steer.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime, Shell } from '../src/types/agent-runtime.js';
+import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import type { Shell } from '../src/types/primitives.js';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 

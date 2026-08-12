@@ -22,6 +22,13 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { SubordinateHandoff } from '@proteus/core';
+
+/** The admission facts every handoff carries back to the sender. */
+const codemodeHandoff: SubordinateHandoff = {
+  eventId: 'evt-1', delivery: 'starts_now',
+  phase: { busy: false, lastActivityAt: null, workingOn: null },
+};
 import {
   FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
   type AgentsToolDeps, type HeadInput, type HeadReport, type StrategyContext,
@@ -77,9 +84,9 @@ function fullDeps(): AgentsToolDeps {
     team: {
       list: async () => [],
       spawn: async () => ({ name: 'n', displayName: 'N' }),
-      assign: async () => ({ ok: true, name: 'n' }),
+      assign: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       status: async () => ({}),
-      message: async () => ({ ok: true, name: 'n' }),
+      message: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       dismiss: async () => ({ ok: true, name: 'n', historyKept: true }),
     },
     peers: {

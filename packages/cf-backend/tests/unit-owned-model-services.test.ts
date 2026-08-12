@@ -6,6 +6,14 @@ import { createMockFetch } from '@proteus/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices } from '../src/owned-model-services.ts';
+import type { LanguageModel } from 'ai';
+
+/** `LanguageModel` is `string | LanguageModelV3`; a resolver hands back the
+ *  object half, and these tests read its provider/model ids. */
+function resolved(model: LanguageModel): Exclude<LanguageModel, string> {
+  if (typeof model === 'string') throw new Error(`expected a resolved model, got the spec "${model}"`);
+  return model;
+}
 
 interface FakeUserDO {
   getAuthHeaders(caller: unknown, key: string): Promise<Record<string, string> | null>;
@@ -82,7 +90,7 @@ describe('OwnedModelServices', () => {
       'workers-ai', 'my-gateway', 'ai-gateway', 'codex', 'openai',
       'anthropic', 'openrouter', 'openai-compat',
     ]);
-    const model = services.resolveModel();
+    const model = resolved(services.resolveModel());
     expect(model.provider).toBe('ai-gateway.chat');
     expect(model.modelId).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
   });
@@ -93,10 +101,11 @@ describe('OwnedModelServices', () => {
       agentName: () => 'research-head',
       appTitle: 'Proteus (exploration)',
       ownerRequired: false,
+      getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
     });
 
-    const model = services.resolveModel('openrouter/anthropic/claude-sonnet-4');
+    const model = resolved(services.resolveModel('openrouter/anthropic/claude-sonnet-4'));
     expect(model.provider).toBe('openrouter.chat');
     expect(model.modelId).toBe('anthropic/claude-sonnet-4');
     expect(services.affinityKey).toBe('proteus-research-head');
@@ -117,6 +126,7 @@ describe('OwnedModelServices', () => {
       agentName: () => agentName,
       appTitle,
       ownerRequired: true,
+      getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => 'owner-1',
     });
 
@@ -150,6 +160,7 @@ describe('OwnedModelServices', () => {
       agentName: () => 'head',
       appTitle: 'Proteus (exploration)',
       ownerRequired: false,
+      getUserCaller: async () => ({ workspaceToken: 'wt' }),
       getOwnerUserId: () => owner,
     });
     const web = services.getWebSearchProvider();

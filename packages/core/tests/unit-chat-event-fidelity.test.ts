@@ -4,7 +4,8 @@
 // telemetry read 0 on the CLI path). These tests pin both fidelities through
 // the public runChat interface.
 import { describe, test, expect } from 'bun:test';
-import { tool, type LanguageModelV2StreamPart } from 'ai';
+import { tool } from 'ai';
+import type { ModelStreamPart } from '@proteus/test-utils';
 import { z } from 'zod';
 import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension } from '../src/index.ts';
 
@@ -15,7 +16,7 @@ const USAGE = { inputTokens: 3, outputTokens: 2, totalTokens: 5 };
  *  assert what the ChatEvent seam surfaces. */
 function toolThenTextModel(opts: {
   toolName: string;
-  firstFinish?: Partial<LanguageModelV2StreamPart & { type: 'finish' }>;
+  firstFinish?: Partial<ModelStreamPart & { type: 'finish' }>;
 }) {
   let step = 0;
   const model = {
@@ -26,15 +27,15 @@ function toolThenTextModel(opts: {
     doStream: async () => {
       step += 1;
       const stream = step === 1
-        ? new ReadableStream<LanguageModelV2StreamPart>({
+        ? new ReadableStream<ModelStreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: 'tc1', toolName: opts.toolName, input: '{}' });
-              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE, ...opts.firstFinish } as LanguageModelV2StreamPart);
+              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE, ...opts.firstFinish } as ModelStreamPart);
               c.close();
             },
           })
-        : new ReadableStream<LanguageModelV2StreamPart>({
+        : new ReadableStream<ModelStreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'text-start', id: 't1' });
@@ -77,7 +78,7 @@ describe('ChatEvent tool success/error fidelity', () => {
       boom: tool({
         description: 'always fails',
         inputSchema: z.object({}),
-        execute: async () => { throw new Error('kaboom'); },
+        execute: async (): Promise<string> => { throw new Error('kaboom'); },
       }),
     };
 
@@ -159,7 +160,7 @@ describe('ChatEvent tool-result completeness', () => {
       boom: tool({
         description: 'fails verbosely',
         inputSchema: z.object({}),
-        execute: async () => { throw new Error(`${preamble}kaboom`); },
+        execute: async (): Promise<string> => { throw new Error(`${preamble}kaboom`); },
       }),
     };
     const events = await collect(model, tools, new ExtensionHost().register(ext));
@@ -176,7 +177,7 @@ describe('ChatEvent cached-token fidelity', () => {
       firstFinish: {
         usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 12 },
         providerMetadata: { anthropic: { cacheReadInputTokens: 3 } },
-      } as Partial<LanguageModelV2StreamPart & { type: 'finish' }>,
+      } as Partial<ModelStreamPart & { type: 'finish' }>,
     });
     const tools = {
       ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),

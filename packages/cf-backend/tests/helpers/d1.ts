@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -12,12 +12,12 @@ export function makeD1(db: Database, onQuery?: (query: string) => void): D1Datab
           return {
             async run() {
               onQuery?.(query);
-              db.prepare(query).run(...bindings);
+              db.prepare(query).run(...(bindings as SQLQueryBindings[]));
               return { success: true };
             },
             async first<T>() {
               onQuery?.(query);
-              return (db.prepare(query).get(...bindings) ?? null) as T | null;
+              return (db.prepare(query).get(...(bindings as SQLQueryBindings[])) ?? null) as T | null;
             },
           };
         },

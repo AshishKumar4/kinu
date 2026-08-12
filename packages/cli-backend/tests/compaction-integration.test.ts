@@ -204,7 +204,7 @@ describe('default compaction over the real storage plane', () => {
     expect(plannedJson).not.toContain('output-0 ');
 
     // The reference message cites the transcript path the plan persisted.
-    const snapshot = state.plans.load(SESSION);
+    const snapshot = await state.plans.load(SESSION);
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
     expect(snapshot.transcriptRelativePath.startsWith('/local/.proteus/compaction/')).toBe(true);
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);

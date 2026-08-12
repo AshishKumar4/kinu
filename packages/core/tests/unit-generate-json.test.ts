@@ -13,8 +13,11 @@ function modelReturning(text: string, capture?: (options: { maxOutputTokens?: nu
       capture?.(options);
       return {
         content: [{ type: "text", text }],
-        finishReason: "stop",
-        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
+        finishReason: { unified: "stop" as const, raw: undefined },
+        usage: {
+          inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+          outputTokens: { total: 1, text: 1, reasoning: undefined },
+        },
         warnings: [],
       };
     },

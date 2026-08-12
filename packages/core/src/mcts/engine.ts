@@ -6,8 +6,9 @@
  * Formal spec: MCTS/StorageIsolation.lean — init_isolated, transition_preserves_isolation
  */
 
-import type { AgentRuntime } from '../types/agent-runtime.js';
+import type { AgentRuntime, BranchUsage } from '../types/agent-runtime.js';
 import type { MCTSConfig, MCTSPhase, MCTSProgressEvent, SearchNode } from '../types/mcts.js';
+import type { MissionScope } from '../mission-budget.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
 import { DEFAULT_CONFIG } from '../config.js';
@@ -100,6 +101,7 @@ export async function runMCTS(
   }
 
   const report = (event: MCTSProgressEvent): void => config.onProgress?.(event);
+  const { outOfBudget, charge } = missionMeter(config.mission);
 
   return rt.schedule.fiber<ConvergenceResult>('mcts', async (ctx) => {
     // The durable search store is the resume source of truth when injected; the
@@ -108,6 +110,11 @@ export async function runMCTS(
 
     while (phase.budget > 0) {
       throwIfAborted(config.signal);
+      // The mission ledger gates the EXPANSION, not the branch: a branch that
+      // refused its own call would return empty, score 0, and backpropagate
+      // that 0 up the persisted tree. Stopping here settles the tree on what it
+      // actually explored instead.
+      if (await outOfBudget()) break;
       // Depth cap lives in selection (WP-A4): a maxed-out argmax no longer
       // aborts the search — selection skips depth-capped nodes and the budget
       // keeps flowing to the shallower frontier. Break only when nothing is
@@ -169,6 +176,9 @@ export async function runMCTS(
           });
           return { text: '', codeUsed: null };
         });
+        // Charged per rollout, from the provider's own report, so the ledger is
+        // current when the next expansion's guard reads it.
+        for (const exploration of explorations) await charge(exploration.usage);
 
         // RECORD nodes
         const childNodeIds: string[] = [];
@@ -255,7 +265,10 @@ export async function runMCTS(
             iteration, remainingBudget: phase.budget, branches: reflecting,
           });
         }
-        for (let i = 0; i < N_BRANCHES; i++) {
+        // A reflection is another model call on the far side, so the rollouts
+        // just debited above can be what takes the budget away from it.
+        const mayReflect = !(await outOfBudget());
+        for (let i = 0; mayReflect && i < N_BRANCHES; i++) {
           const score = scores[i] ?? 0;
           if (score >= reflectionThreshold) continue;
           const handle = branchHandles[i];
@@ -263,9 +276,15 @@ export async function runMCTS(
           // A reflection is an optional memory side-effect on an already-scored
           // branch. Its model call fails the same way exploration does (that is
           // what allSettled above tolerates), so letting it throw would discard
-          // a search whose branches are already recorded and backpropagated.
+          // a search whose branches are already recorded and backpropagated —
+          // and a malformed resolve is the same untrusted input a malformed
+          // exploration is, so it yields no lesson rather than a TypeError.
           const reflection = await handle.generateReflection(task).then(
-            text => text.trim(),
+            async (result) => {
+              if (typeof result?.text !== 'string') return '';
+              await charge(result.usage);
+              return result.text.trim();
+            },
             (err: unknown) => {
               report({
                 type: 'branch-failed', stage: 'reflect', iteration,
@@ -333,6 +352,33 @@ export async function runMCTS(
       throw err;
     }
   });
+}
+
+/**
+ * The two questions the loop asks its mission ledger, or the pair of no-ops it
+ * asks when there is no ledger.
+ *
+ * The no-op half is the half that matters: an undeclared search is handed no
+ * scope, so `outOfBudget` is a constant `false` and `charge` returns without
+ * ever reaching a port. Nothing queries, nothing writes, and MCTS behaves
+ * exactly as it did before a governor existed.
+ */
+function missionMeter(mission: MissionScope | undefined): {
+  outOfBudget: () => Promise<boolean>;
+  charge: (usage: BranchUsage | undefined) => Promise<void>;
+} {
+  if (!mission) {
+    return { outOfBudget: async () => false, charge: async () => {} };
+  }
+  return {
+    outOfBudget: async () => (await mission.port.guard('model_call', mission.labels)) !== null,
+    charge: async (usage) => {
+      if (!usage) return;
+      await mission.port.debit(usage.input + usage.output, {
+        labels: mission.labels, calls: 1, usage,
+      });
+    },
+  };
 }
 
 function reasonText(reason: unknown): string {

@@ -3,7 +3,7 @@
  * These satisfy the core primitive interfaces for testing.
  */
 
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import type {
   SqlExecutor,
   SqlValue,
@@ -40,8 +40,8 @@ export function makeSql(db: Database): SqlExecutor {
     const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare(query);
-    if (isRead) return stmt.all(...(bound as SqlValue[])) as T[];
-    stmt.run(...(bound as SqlValue[]));
+    if (isRead) return stmt.all(...(bound as SQLQueryBindings[])) as T[];
+    stmt.run(...(bound as SQLQueryBindings[]));
     return [];
   } as SqlExecutor;
   return sql;
@@ -263,7 +263,7 @@ export function createTestRuntime(opts?: {
 
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'explored approach A', codeUsed: null }),
-    generateReflection: async () => 'reflection: approach was suboptimal',
+    generateReflection: async () => ({ text: 'reflection: approach was suboptimal' }),
   };
 
   const rt: AgentRuntime = {

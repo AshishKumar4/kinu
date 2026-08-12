@@ -10,9 +10,12 @@ export interface StreamingBufferController {
   dispose(): void;
 }
 
+/** Structural rather than `typeof setTimeout`: this module schedules a
+ *  callback and cancels it, and the platform globals it runs against differ in
+ *  the extras they hang off those names. */
 export interface StreamingBufferTimers {
-  setTimeout: typeof setTimeout;
-  clearTimeout: typeof clearTimeout;
+  setTimeout(callback: () => void, ms: number): TimeoutHandle;
+  clearTimeout(handle: TimeoutHandle): void;
 }
 
 export function createStreamingBufferController(

@@ -64,6 +64,28 @@ export interface MissionCallUsage {
   cached?: number;
 }
 
+/** The usage shape `ai` reports on a step or a result. */
+interface ProviderUsageReport {
+  inputTokens?: number;
+  outputTokens?: number;
+  cachedInputTokens?: number;
+}
+
+/**
+ * A provider's usage report as the ledger charges it, or undefined when the
+ * provider reported none — a caller that cannot measure a call meters nothing
+ * rather than debiting a guess.
+ */
+export function missionCallUsage(usage: ProviderUsageReport | undefined): MissionCallUsage | undefined {
+  if (!usage) return undefined;
+  const cached = usage.cachedInputTokens ?? 0;
+  return {
+    input: usage.inputTokens ?? 0,
+    output: usage.outputTokens ?? 0,
+    ...(cached > 0 ? { cached } : {}),
+  };
+}
+
 /** Where a label's USD figure came from. */
 export interface MissionSpendProvenance {
   /** Tokens priced at the blended fallback rather than catalog rates. */

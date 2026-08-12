@@ -55,7 +55,7 @@ function buildComponents(
 
   const mockBranch: BranchHandle = {
     explore: async () => ({ text: 'exploration result', codeUsed: null }),
-    generateReflection: async () => 'no reflection available',
+    generateReflection: async () => ({ text: 'no reflection available' }),
   };
 
   return buildRuntime({

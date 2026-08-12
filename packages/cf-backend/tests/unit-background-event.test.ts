@@ -49,7 +49,7 @@ function event(over: Partial<ProteusEvent>): ProteusEvent {
     trust: 'untrusted',
     consumed_by_turn: null,
     ...over,
-  } as ProteusEvent;
+  } as unknown as ProteusEvent;
 }
 
 describe('drained event parsing', () => {
@@ -72,7 +72,10 @@ describe('drained event parsing', () => {
       event({ id: 'a' }),
       event({
         id: 'b', ingress: 'email_inbound', variant: 'email',
-        payload: { from: 'ops@example.com', subject: 'Deploy failed', body_text: 'exit 1' },
+        payload: {
+          from: 'ops@example.com', to: 'agent@example.com', subject: 'Deploy failed',
+          body_text: 'exit 1', message_id: null, in_reply_to: null, references: null, attachments: [],
+        },
       }),
     ])!;
     const parsed = parseDrainedEvents(batch.text);
@@ -86,7 +89,10 @@ describe('drained event parsing', () => {
   test('a peer ask is flagged as awaiting a reply, and the hint stays out of the brief', () => {
     const batch = buildDrainBatch([event({
       id: 'p1', ingress: 'peer_async', variant: 'peer_agent',
-      payload: { from_agent_name: 'atlas', topic: 'schema', body: 'which shape?', reply_expected: true },
+      payload: {
+        from_agent_name: 'atlas', from_user_id: 'u1', topic: 'schema', body: 'which shape?',
+        sender_event_id: 'out-1', reply_expected: true,
+      },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
     expect(parsed!.replyExpected).toBe(true);
@@ -110,11 +116,14 @@ describe('drained event parsing', () => {
 
   test('a multi-line brief keeps its continuation lines', () => {
     const batch = buildDrainBatch([event({
-      id: 's1', ingress: 'subordinate', variant: 'subordinate_task',
-      payload: { kind: 'audit', body: 'check the CLI', inherited_context: 'Context line one.\nContext line two.' },
+      id: 's1', ingress: 'subordinate', variant: 'subordinate_task' as const,
+      payload: {
+        from_workspace: 'atlas', kind: 'task' as const, body: 'check the CLI',
+        inherited_context: 'Context line one.\nContext line two.',
+      },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
-    expect(parsed!.brief).toBe('Context line one.\nContext line two.\n\naudit: check the CLI');
+    expect(parsed!.brief).toBe('Context line one.\nContext line two.\n\ntask: check the CLI');
   });
 
   test('text that is not a drain listing yields nothing to fabricate a card from', () => {

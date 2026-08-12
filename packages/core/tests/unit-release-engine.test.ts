@@ -8,7 +8,8 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { toolExecute } from '@proteus/test-utils';
 import {
   ReleaseEngine,
   buildBuiltinTools,
@@ -74,9 +75,9 @@ function makeStore(): ReleaseStore {
     exec(query: string, ...bindings: unknown[]) {
       const stmt = db.prepare(query);
       if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...bindings) as Array<Record<string, unknown>> };
+        return { toArray: () => stmt.all(...(bindings as SQLQueryBindings[])) as Array<Record<string, unknown>> };
       }
-      stmt.run(...bindings);
+      stmt.run(...(bindings as SQLQueryBindings[]));
       return { toArray: () => [] };
     },
   };
@@ -810,8 +811,8 @@ describe('release tool with an engine wired', () => {
       craftedToolExecute: () => async () => undefined,
       releases: deps,
     });
-    const tool = tools.release as { execute: ToolExecute };
-    return { s, execute: (args) => tool.execute(args) };
+    const execute = toolExecute<Record<string, unknown>, unknown>(tools.release);
+    return { s, execute: (args) => execute(args) };
   }
 
   test('refuses manual transitions into engine-owned states; ordinary transitions pass through', async () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { withRateLimitRetry } from '../src/providers/rate-limit-retry.ts';
+import { asFetchFunction } from '../src/providers/fetch-shim.js';
 
 function retryHarness(
   responses: Response[],
@@ -9,7 +10,7 @@ function retryHarness(
   let calls = 0;
   const waits: number[] = [];
   const warnings: string[] = [];
-  const fetchImpl = (async () => responses[Math.min(calls++, responses.length - 1)]) as typeof fetch;
+  const fetchImpl = asFetchFunction(async () => responses[Math.min(calls++, responses.length - 1)]!);
   const wrapped = withRateLimitRetry(fetchImpl, {
     now: () => nowMs,
     random: () => 0.5,

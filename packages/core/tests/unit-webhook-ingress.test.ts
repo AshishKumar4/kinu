@@ -180,7 +180,7 @@ describe('webhook ingress refuses everything else', () => {
   test('bearer: absent, malformed, wrong, and unstored secrets are all 401', async () => {
     const h = hub();
     const trigger_id = h.register({ label: 'ci', auth_mode: 'bearer', secret: 'shhh' });
-    const rejected = (reason: string) => ({ status: 'rejected', http_status: 401, reason });
+    const rejected = (reason: string) => ({ status: 'rejected' as const, http_status: 401, reason });
 
     expect(await h.deliver({ trigger_id })).toEqual(rejected('missing bearer'));
     expect(await h.deliver({ trigger_id, bearer_header: 'shhh' })).toEqual(rejected('missing bearer'));
@@ -201,7 +201,7 @@ describe('webhook ingress refuses everything else', () => {
     const trigger_id = h.register({ label: 'ci', auth_mode: 'hmac', secret: 'k' });
     const body_text = '{"n":41}';
     const sign = (ts: number) => hmacSha256Hex('k', `${ts}.${body_text}`);
-    const rejected = (reason: string) => ({ status: 'rejected', http_status: 401, reason });
+    const rejected = (reason: string) => ({ status: 'rejected' as const, http_status: 401, reason });
 
     expect(await h.deliver({ trigger_id, body_text, hmac_timestamp: String(NOW) }))
       .toEqual(rejected('missing hmac headers'));

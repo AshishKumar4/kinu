@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { readWebhookBodyText } from '../src/events/body.js';
 import {
   initWebhookRateLimitTables,
@@ -13,10 +13,10 @@ function sqlFor(db: Database): SqlExec {
     exec(query: string, ...bindings: unknown[]) {
       const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
       if (isRead) {
-        const rows = db.query(query).all(...bindings) as Array<Record<string, unknown>>;
+        const rows = db.query(query).all(...(bindings as SQLQueryBindings[])) as Array<Record<string, unknown>>;
         return { toArray: () => rows };
       }
-      db.query(query).run(...bindings);
+      db.query(query).run(...(bindings as SQLQueryBindings[]));
       return { toArray: () => [] };
     },
   };

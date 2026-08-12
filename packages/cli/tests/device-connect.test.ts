@@ -31,7 +31,7 @@ function startStubCloud(opts: { devices?: () => unknown[]; daemonScript?: string
   const hits = { register: 0, list: 0, daemonScript: 0 };
   const server = Bun.serve({
     port: 0,
-    fetch(req) {
+    fetch(req: Request): Response {
       const url = new URL(req.url);
       if (url.pathname === '/api/cli/devices' && req.method === 'POST') {
         hits.register += 1;

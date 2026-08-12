@@ -10,7 +10,7 @@
 // These pin both: the thrown message carries the provider's words, and the
 // turn does not write the payload to the console behind our back.
 import { describe, test, expect, spyOn } from 'bun:test';
-import type { LanguageModelV2StreamPart } from 'ai';
+import type { ModelStreamPart } from '@proteus/test-utils';
 import { describeProviderError, runChat } from '../src/index.ts';
 
 /** OpenAI-shaped in-band stream failure: 200 OK, then an error object. */
@@ -21,10 +21,10 @@ function inBandErrorModel(error: unknown) {
     modelId: 'fake-model',
     supportedUrls: {},
     doStream: async () => ({
-      stream: new ReadableStream<LanguageModelV2StreamPart>({
+      stream: new ReadableStream<ModelStreamPart>({
         start(c) {
           c.enqueue({ type: 'stream-start', warnings: [] });
-          c.enqueue({ type: 'error', error } as LanguageModelV2StreamPart);
+          c.enqueue({ type: 'error', error } as ModelStreamPart);
           c.close();
         },
       }),

@@ -61,7 +61,7 @@ describe('toCraftedToolSource', () => {
   });
 
   test('params and scope are deliberately not carried into the executor shape', () => {
-    const source = toCraftedToolSource(tool({ params: { type: 'object' }, scope: 'global' }));
+    const source = toCraftedToolSource(tool({ params: { type: 'object' }, scope: 'shared' }));
     expect(Object.keys(source!).sort()).toEqual(['code', 'description', 'name']);
   });
 });

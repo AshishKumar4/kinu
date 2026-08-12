@@ -1,4 +1,13 @@
 import { describe, expect, test } from 'bun:test';
+import type { LanguageModel } from 'ai';
+import { asFetchFunction } from '@proteus/core';
+
+/** `LanguageModel` is `string | LanguageModelV3`; a provider hands back the
+ *  object half, and this suite drives its `doStream` directly. */
+function resolvedModel(model: LanguageModel): Exclude<LanguageModel, string> {
+  if (typeof model === 'string') throw new Error(`expected a resolved model, got the spec "${model}"`);
+  return model;
+}
 import { Database } from 'bun:sqlite';
 import { generateText, streamText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
@@ -219,7 +228,7 @@ describe('claude-cli provider — abort', () => {
       return { hangUntilAbort: true };
     });
     const provider = createClaudeCliProvider({ spawn: fake.spawn });
-    const model = provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false });
+    const model = resolvedModel(provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false }));
     const controller = new AbortController();
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
@@ -365,7 +374,7 @@ describe('claude-cli provider — tool loop composition', () => {
     const resolver = createLocalModelResolver({
       llm: openaiLlm,
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
       claudeCli: { spawn },
     });
 

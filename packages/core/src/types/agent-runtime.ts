@@ -15,6 +15,7 @@ import type {
   Shell,
 } from './primitives.js';
 import type { CraftedTool, CraftScoreEntry } from './craft.js';
+import type { MissionCallUsage } from '../mission-budget.js';
 import type { ExecutionRouter } from '../execution/types.js';
 import type { FileCheckpoints } from '../checkpoints/types.js';
 
@@ -27,6 +28,34 @@ export interface CraftStore {
   list(): CraftedTool[];
   search(query: string, limit?: number): CraftedTool[];
   getAll(): CraftedTool[];
+}
+
+/**
+ * What one branch call cost, as the provider that served it reported.
+ *
+ * A branch runs where the mission ledger is not: its own facet on cf, its own
+ * child process on the CLI, each resolving its own model. Nothing the fork seam
+ * wrapped around `rt.llm` sees these calls, so the spend has to travel back
+ * with the result — the engine debits it at the seam that already interposes
+ * between every rollout (mcts/engine.ts).
+ *
+ * Optional because a backend that cannot report usage meters nothing rather
+ * than guessing, and because a branch is a single call either way: the engine
+ * still refuses to open the next expansion once the ledger is spent.
+ */
+export type BranchUsage = MissionCallUsage;
+
+/** One rollout: the proposal, the code it offered, and what it cost. */
+export interface BranchExploration {
+  text: string;
+  codeUsed: string | null;
+  usage?: BranchUsage;
+}
+
+/** One failure post-mortem, and what it cost. */
+export interface BranchReflection {
+  text: string;
+  usage?: BranchUsage;
 }
 
 /**
@@ -43,8 +72,8 @@ export interface BranchHandle {
      *  branches explore in parallel and never see a sibling's output). Optional
      *  so backends/tests that don't enforce diversity still satisfy the type. */
     siblings?: readonly string[],
-  ): Promise<{ text: string; codeUsed: string | null }>;
-  generateReflection(task: string): Promise<string>;
+  ): Promise<BranchExploration>;
+  generateReflection(task: string): Promise<BranchReflection>;
 }
 
 /** Factory for creating isolated branch agents — injected by the backend */

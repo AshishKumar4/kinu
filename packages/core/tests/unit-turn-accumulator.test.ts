@@ -2,6 +2,7 @@
 // (re-arch P2). Verifies the logic the DO used to own inline is preserved.
 import { describe, test, expect } from 'bun:test';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
+import type { StepUsage } from '../src/events/types.js';
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
@@ -127,7 +128,7 @@ describe('TurnAccumulator', () => {
   });
 
   test('the step event carries the provider\'s own usage, cache read included', () => {
-    const events: Array<{ usage?: { input: number; cached: number; output: number; reasoning: number } }> = [];
+    const events: Array<{ usage?: StepUsage }> = [];
     const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
     a.recordStep({
       usage: { inputTokens: 900, outputTokens: 40, cachedInputTokens: 0, reasoningTokens: 12 },

@@ -75,7 +75,7 @@ describe('archive lineage + branch-from-archived round-trip', () => {
     expect(byVersion.get(v1.version!)!.status).toBe('rolled_back');
     expect(byVersion.get(v1.version!)!.losses).toBe(1);
     expect(byVersion.get(v1.version!)!.winRate).toBe(0);
-    expect(byVersion.get(v2.version!)!.parentVersion).toBe(v1.version);
+    expect(byVersion.get(v2.version!)!.parentVersion).toBe(v1.version!);
     expect(byVersion.get(v2.version!)!.status).toBe('pending');
     expect(byVersion.get(0)!.parentVersion).toBeNull();
 

@@ -35,8 +35,11 @@ export interface ProbeOutcome {
 
 export interface ProbeDeps {
   origin: string;
-  /** Injected so the probes are testable without a network. */
-  fetch: typeof fetch;
+  /** Injected so the probes are testable without a network. Structural rather
+   *  than `typeof fetch`: this module sends a URL and reads a Response, and
+   *  the global it is bound to differs between the worker runtime and the
+   *  test runner. */
+  fetch(input: string, init?: RequestInit): Promise<Response>;
 }
 
 const TIMEOUT_MS = 10_000;

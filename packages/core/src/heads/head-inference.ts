@@ -18,7 +18,7 @@ import {
   budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
-import type { MissionBudgetRefusal, MissionScope } from '../mission-budget.js';
+import { missionCallUsage, type MissionBudgetRefusal, type MissionScope } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
 import { HeadFileChanges } from './file-changes.js';
@@ -373,21 +373,14 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       messages: buildHeadMessages(input),
       tools: deps.tools,
       onStepFinish: async (step) => {
-        const u = (step as {
-          usage?: { inputTokens?: number; outputTokens?: number; cachedInputTokens?: number };
-        }).usage;
-        if (!u) return;
-        const inTok = u.inputTokens ?? 0;
-        const outTok = u.outputTokens ?? 0;
-        capture.recordStepUsage(inTok, outTok);
+        const usage = missionCallUsage(step.usage);
+        if (!usage) return;
+        capture.recordStepUsage(usage.input, usage.output);
         // Charged per step, from the provider's own report, so the ledger is
         // current when the guard below reads it — rather than one lump debit
         // after the whole fork has already been paid for.
-        const cached = u.cachedInputTokens ?? 0;
-        await mission?.port.debit(inTok + outTok, {
-          labels: mission.labels,
-          calls: 1,
-          usage: { input: inTok, output: outTok, ...(cached > 0 ? { cached } : {}) },
+        await mission?.port.debit(usage.input + usage.output, {
+          labels: mission.labels, calls: 1, usage,
         });
       },
       stopWhen: async ({ steps }) => {

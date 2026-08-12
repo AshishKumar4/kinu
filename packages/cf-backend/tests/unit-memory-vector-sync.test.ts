@@ -12,6 +12,7 @@ import {
   type Embedder, type VectorizeIndex, type VectorStore, type VectorMemoryChunk,
 } from '@proteus/core';
 import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
+import type { SqlExecutor } from '@proteus/core';
 
 function createSql() {
   const db = new Database(':memory:');
@@ -22,7 +23,7 @@ function createSql() {
     if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(bound as never[])) as T[];
     stmt.run(...(bound as never[]));
     return [];
-  }) as never;
+  }) as SqlExecutor;
 }
 
 function createStore() {

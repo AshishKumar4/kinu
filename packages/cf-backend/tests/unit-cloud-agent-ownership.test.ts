@@ -1,5 +1,6 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
+import { asFetchFunction } from '@proteus/core';
 import { testOwner } from './helpers/user-do.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -72,7 +73,7 @@ describe('cloud agent ownership safety', () => {
         get() { return orchestrator; },
       }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
       const entry = await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         purpose: 'Build a hello world app in react',
@@ -94,6 +95,7 @@ describe('cloud agent ownership safety', () => {
         env,
         USER_ID,
         userDO as unknown as DurableObjectStub<UserDO>,
+        await testOwner(),
         {},
         { waitUntil: (promise) => background.push(promise) },
       );
@@ -156,7 +158,7 @@ describe('cloud agent ownership safety', () => {
         get() { return orchestrator; },
       }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
       await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         name: 'jarvis',
@@ -206,7 +208,7 @@ describe('cloud agent ownership safety', () => {
       UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
       OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
       await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         name: 'jarvis',
@@ -230,7 +232,6 @@ describe('cloud agent ownership safety', () => {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
       async listCredentials() { return []; },
-      async ensureWorkspaceCapability() {},
       async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
         calls.push(`register:${name}`);
         return {
@@ -255,7 +256,7 @@ describe('cloud agent ownership safety', () => {
       OrchestratorAgent: { idFromName: (n: string) => n, get: () => orchestrator }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
 
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response('{}', { status: 503 });
+    globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
       await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
         name: 'jarvis',

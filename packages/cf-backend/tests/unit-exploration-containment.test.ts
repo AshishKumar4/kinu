@@ -8,7 +8,7 @@
 // These assertions run against buildHeadToolSet's real output rather than the
 // text of exploration.ts, so they keep holding when the surface is refactored
 // and they catch a tool that appears through a dependency instead of a literal.
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,8 +32,8 @@ function makeSql(db: Database): SqlExecutor {
   return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {
     const query = strings.reduce((sql, part, index) => sql + part + (index < values.length ? '?' : ''), '');
     const statement = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...values) as T[];
-    statement.run(...values);
+    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...(values as SQLQueryBindings[])) as T[];
+    statement.run(...(values as SQLQueryBindings[]));
     return [];
   } as SqlExecutor;
 }
@@ -62,8 +62,8 @@ const mergeOutput: MergeOutput = {
 };
 
 const noopWebSearch: WebSearchProvider = {
-  search: async (query) => ({ query, results: [], source: 'test' }),
-  fetch: async (url) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
+  search: async (query: string) => ({ query, results: [], source: 'test' }),
+  fetch: async (url: string) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
 } as unknown as WebSearchProvider;
 
 function headInput(overrides?: Partial<HeadInput>): HeadInput {

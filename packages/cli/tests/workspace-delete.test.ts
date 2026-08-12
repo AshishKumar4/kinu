@@ -13,17 +13,17 @@ afterEach(() => {
 
 describe('proteus workspace delete', () => {
   test('deletes with the stored session token and prunes the cloud config entry', async () => {
-    let seen: { path: string; method: string; authorization: string | null } | null = null;
+    const seen: Array<{ path: string; method: string; authorization: string | null }> = [];
     const server = Bun.serve({
       hostname: '127.0.0.1',
       port: 0,
       fetch(request) {
         const url = new URL(request.url);
-        seen = {
+        seen.push({
           path: url.pathname,
           method: request.method,
           authorization: request.headers.get('authorization'),
-        };
+        });
         return Response.json({ ok: true });
       },
     });
@@ -49,7 +49,7 @@ describe('proteus workspace delete', () => {
       expect(exitCode).toBe(0);
       expect(stderr).toBe('');
       expect(stdout).toContain('Deleted cloud workspace web-agent');
-      expect(seen).toEqual({
+      expect(seen[0]).toEqual({
         path: '/api/cli/workspaces/web-agent',
         method: 'DELETE',
         authorization: 'Bearer ptc_stored_session',

@@ -156,7 +156,7 @@ describe('CLI control routes', () => {
 
     const deleted = await handleCliRequest(cliRequest('/api/cli/workspaces/%6Aarvis', { method: 'DELETE' }), env);
     expect(deleted?.status).toBe(200);
-    expect(await deleted?.json()).toEqual({ ok: true });
+    expect(await deleted?.json<{ ok: boolean }>()).toEqual({ ok: true });
     expect(calls).toContain(`workspace:remove:jarvis:${USER_ID}`);
 
     const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
@@ -170,7 +170,7 @@ describe('CLI control routes', () => {
     const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
     expect(ticket?.headers.get('cache-control')).toBe('no-store');
-    expect(await ticket?.json()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
+    expect(await ticket?.json<{ ticket: string; expiresAt: number }>()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
     expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
 
     const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown/connect-ticket', { method: 'POST' }), env);

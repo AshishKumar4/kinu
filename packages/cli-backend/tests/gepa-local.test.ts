@@ -89,7 +89,7 @@ async function setup(judge: () => Promise<string>) {
     llm: DUMMY_LLM,
   });
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
-  seedSoul(rt.storage.sql, { name: 'gepa-local', purpose: 'prove the pass runs locally' });
+  seedSoul(rt.storage.sql, { name: 'gepa-local', mission: 'prove the pass runs locally' });
   await bootstrapScaffold(rt);
 
   // The judge is core's `LLM` primitive on this backend; every score comes back

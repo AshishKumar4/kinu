@@ -69,7 +69,7 @@ function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () 
   const running = (jobs ?? []).filter((j) => j.status === "running").length;
   return (
     <section>
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Background tasks</h2>
         {running > 0 && <Badge variant="secondary">{running} running</Badge>}
@@ -129,7 +129,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
 
   return (
     <section>
-      <div className="flex items-center gap-2 mb-3">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <GraduationCapIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Curriculum</h2>
         {tasks && <Badge variant="secondary">{tasks.length}</Badge>}
@@ -191,12 +191,12 @@ function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
   // One definition of a cache hit, shared with the Activity surface.
   const hitRate = cacheHitRate({ input: totalIn, cached: totalCached });
   return (
-    <section>
-      <div className="flex items-center gap-2 mb-3">
+    <section className="min-w-0">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Run history &amp; budget</h2>
         {runs && <Badge variant="secondary">{runs.length}</Badge>}
-        <span className="ml-auto flex items-center gap-2">
+        <span className="ml-auto flex flex-wrap items-center gap-2">
           {totalCached > 0 && <span className="p-meta p-success" title="prompt-cache hit rate (cached input / total input)">{fmtPct(hitRate)} cached</span>}
           {totalTokens > 0 && <span className="p-meta p-text-3">{fmtTokens(totalTokens)} tokens</span>}
         </span>
@@ -250,8 +250,8 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
     .filter((ts): ts is number => typeof ts === "number" && ts > Date.now())
     .sort((a, b) => a - b)[0];
   return (
-    <section>
-      <div className="flex items-center gap-2 mb-3">
+    <section className="min-w-0">
+      <div className="flex flex-wrap items-center gap-2 mb-3">
         <LightningIcon size={16} className="p-accent" />
         <h2 className="text-sm font-semibold p-text">Automations</h2>
         {triggers && <Badge variant="secondary">{active}/{triggers.length} active</Badge>}

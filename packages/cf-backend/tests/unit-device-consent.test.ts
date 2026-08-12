@@ -109,7 +109,7 @@ describe('device consent-tier routes (the full_filesystem grant path)', () => {
 
     const list = await call('/devices/consents', 'GET');
     expect(list?.status).toBe(200);
-    expect(await list?.json()).toEqual([
+    expect(await list?.json<unknown[]>()).toEqual([
       expect.objectContaining({ agentName: 'jarvis', deviceId: 'dev-1', scope: 'full_filesystem' }),
     ]);
   });

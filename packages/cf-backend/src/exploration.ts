@@ -39,7 +39,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
+import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, missionCallUsage, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -59,6 +59,8 @@ import {
   HeadJournal,
   MergeOutputSchema,
   type MergeOutput,
+  type BranchExploration,
+  type BranchReflection,
   HeadCapture,
   runHeadInference,
   type MissionScope,
@@ -266,7 +268,7 @@ export class ExplorationAgent extends Agent<Env> {
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
     siblings: readonly string[] = [],
-  ): Promise<{ text: string; codeUsed: string | null }> {
+  ): Promise<BranchExploration> {
     const { model, providerOptions } = this.resolveLowEffortModel();
     const { system, user } = explorePrompt({
       context: formatInheritedContext(priorHistory),
@@ -274,7 +276,7 @@ export class ExplorationAgent extends Agent<Env> {
       siblings,
     });
 
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model,
       system,
       messages: [{ role: "user" as const, content: user }],
@@ -284,14 +286,14 @@ export class ExplorationAgent extends Agent<Env> {
     const trimmed = text.trim();
     const codeUsed = extractCodeBlock(trimmed);
     this.sql`INSERT INTO traces (step, text, code_used) VALUES (1, ${trimmed}, ${codeUsed})`;
-    return { text: trimmed, codeUsed };
+    return { text: trimmed, codeUsed, usage: missionCallUsage(usage) };
   }
 
   @callable()
-  async generateReflection(task: string): Promise<string> {
+  async generateReflection(task: string): Promise<BranchReflection> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
     const { model, providerOptions } = this.resolveLowEffortModel();
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model,
       messages: [{
         role: "user" as const,
@@ -299,7 +301,7 @@ export class ExplorationAgent extends Agent<Env> {
       }],
       ...(providerOptions ? { providerOptions } : {}),
     });
-    return text.trim();
+    return { text: text.trim(), usage: missionCallUsage(usage) };
   }
 
   // ── Head mode @callables  ───────────────────────────────────

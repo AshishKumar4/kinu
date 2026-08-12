@@ -17,6 +17,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { tool, jsonSchema } from 'ai';
 import { createTestRuntime } from './helpers.js';
 import {
@@ -95,7 +96,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('with all conditional deps: full canonical surface present', () => {
     const { rt } = createTestRuntime();
     const stubFacts = {
-      upsert: () => {}, recall: () => null, forget: () => {},
+      upsert: () => 'created' as const, recall: () => null, forget: () => {},
       recentTopK: () => [], all: () => [],
     };
     const stubSkillsDeps = {
@@ -142,6 +143,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
         id: 'pca-test',
         changeId: 'pc-test',
         approvalType: 'apply' as const,
+        argumentDigest: 'digest',
         decision: 'pending' as const,
         approvedBy: null,
         note: null,
@@ -162,12 +164,16 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
       fetch: async (url: string) => ({ url, retrievedAt: new Date().toISOString(), markdown: '' }),
     };
+    const stubHandoff = {
+      eventId: 'evt-1', delivery: 'starts_now' as const,
+      phase: { busy: false, lastActivityAt: null, workingOn: null },
+    };
     const stubTeam = {
       list: async () => [],
       spawn: async () => ({ name: 's', displayName: 'S' }),
-      assign: async () => ({ ok: true as const, name: 's' }),
+      assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       status: async () => ({}),
-      message: async () => ({ ok: true as const, name: 's' }),
+      message: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       dismiss: async () => ({ ok: true as const, name: 's', historyKept: false }),
     };
     const stubPeers = {
@@ -220,9 +226,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('memory action=save appends to MEMORY.md', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const memoryTool = t.memory as {
-      execute: (args: { action: 'save' | 'search'; content?: string; query?: string }) => Promise<string>;
-    };
+    const memoryTool = { execute: toolExecute<{ action: 'save' | 'search'; content?: string; query?: string }, string>(t.memory) };
 
     const result = await memoryTool.execute({ action: 'save', content: 'Remember: Python prefers snake_case' });
     expect(result).toContain('saved');
@@ -238,9 +242,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     await rt.memory.write('memory/test.md', 'This is about machine learning');
     await rt.memory.index('memory/test.md');
 
-    const memoryTool = t.memory as {
-      execute: (args: { action: 'save' | 'search'; content?: string; query?: string }) => Promise<string>;
-    };
+    const memoryTool = { execute: toolExecute<{ action: 'save' | 'search'; content?: string; query?: string }, string>(t.memory) };
     const result = await memoryTool.execute({ action: 'search', query: 'machine learning' });
     expect(typeof result).toBe('string');
   });
@@ -262,7 +264,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       createExecuteTool: nodeExecFactory as never, codemodeLoader: { __test: true } as unknown,
       facts,
     });
-    const memory = t.memory as { execute: (a: Record<string, unknown>) => Promise<Record<string, unknown>> };
+    const memory = { execute: toolExecute<Record<string, unknown>, Record<string, unknown>>(t.memory) };
 
     expect(await memory.execute({ action: 'remember', key: 'user.tz', value: 'UTC', confidence: 0.9 }))
       .toEqual({ ok: true, key: 'user.tz' });
@@ -295,7 +297,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('without a facts store the keyed-fact actions are not on the schema', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const schema = (t.memory as { inputSchema: { jsonSchema: { properties: { action: { enum: string[] } } } } })
+    const schema = (t.memory as unknown as { inputSchema: { jsonSchema: { properties: { action: { enum: string[] } } } } })
       .inputSchema.jsonSchema;
     expect(schema.properties.action.enum).toEqual(['save', 'search', 'sessions']);
     // ...and the docstring does not advertise what the runtime cannot do.
@@ -308,7 +310,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // providing a real shell dependency.
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = t.run as { execute: (args: { command: string }) => Promise<string> };
+    const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'echo hi' });
     expect(typeof result).toBe('string');
     expect(result).toContain('Error');
@@ -321,7 +323,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // `{error:'runtime_not_provisioned', runtime, message}`.
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = t.run as { execute: (args: { command: string; runtime?: string }) => Promise<string> };
+    const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
       const result = await tool.execute({ command: 'echo hi', runtime });
       const parsed = JSON.parse(result) as { error: string; runtime: string; message: string };
@@ -338,7 +340,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // reach. The actionable path is asking the user.
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = t.run as { execute: (args: { command: string }) => Promise<string> };
+    const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'sudo whoami' });
     expect(result).toContain('Requires user approval (mode=strict)');
     expect(result).toContain('Ask the user');
@@ -348,7 +350,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('execute_tools exposes workspace and codemode globals', async () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const tool = t.execute_tools as { execute: (args: { code: string }) => Promise<{ result: unknown }> };
+    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
     const result = await tool.execute({
       code: "return typeof workspace + ',' + typeof codemode;",
     });
@@ -367,7 +369,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     });
 
     const t = tools(rt);
-    const tool = t.execute_tools as { execute: (a: { code: string }) => Promise<{ result: unknown }> };
+    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
     const result = await tool.execute({ code: 'return await codemode.double(21);' });
     expect(result.result).toBe(42);
   });
@@ -385,7 +387,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('weak', 0.01, ${Date.now()})`;
 
     const t = tools(rt);
-    const tool = t.execute_tools as { execute: (a: { code: string }) => Promise<{ result: unknown }> };
+    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
     const result = await tool.execute({ code: 'return typeof codemode.weak;' });
     expect(result.result).toBe('undefined');
   });

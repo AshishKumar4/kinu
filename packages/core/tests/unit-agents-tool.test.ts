@@ -20,7 +20,7 @@ import {
   FORK_STRATEGY_ID, PEER_REPLY_TOPIC,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
   type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
-  type SubordinateDelivery, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinateHandoff, type SubordinatePhase,
 } from '../src/index.ts';
 
 interface Call { action: string; input: unknown }
@@ -351,7 +351,7 @@ describe('agents tool — subordinate actions', () => {
     const t = agentsTool({ team: deps });
 
     const result = await t.execute({ action: 'ask', agent: 'researcher', message: 'Survey auth' }) as {
-      event_id: string; delivery: string; subordinate_phase: { busy: boolean; workingOn: string | null }; note: string;
+      event_id: string; delivery: string; subordinate_phase: SubordinatePhase; note: string;
     };
 
     expect(result.event_id).toBe('evt-steering_live_turn');

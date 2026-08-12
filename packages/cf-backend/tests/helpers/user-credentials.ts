@@ -19,6 +19,7 @@ export interface CredentialSummaryDouble {
 
 export interface CredentialStoreDouble {
   getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null>;
+  hasCredential?(key: string): Promise<boolean>;
   listCredentials(): Promise<CredentialSummaryDouble[]>;
   getCredentialBaseURL(key: string): Promise<string | null>;
 }

@@ -48,7 +48,7 @@ import { createAgentProviderRegistry, type UserCredentialSource } from "./provid
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
-import { agentAffinityKey, explorePrompt, extractCodeBlock, formatInheritedContext, reflectionPrompt } from "@proteus/core";
+import { agentAffinityKey, explorePrompt, extractCodeBlock, formatInheritedContext, missionCallUsage, reflectionPrompt } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,
@@ -733,7 +733,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
         ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
-      return { text, codeUsed: extractCodeBlock(text) };
+      return { text, codeUsed: extractCodeBlock(text), usage: missionCallUsage(result.usage) };
     },
     // No trace table on this path — the reflection is about the task alone,
     // and the shared prompt drops the attempt heading rather than showing an
@@ -744,7 +744,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
         messages: [{ role: "user" as const, content: reflectionPrompt(task, '') }],
         ...effortFor('reflection'),
       });
-      return result.text.trim();
+      return { text: result.text.trim(), usage: missionCallUsage(result.usage) };
     },
   };
 }

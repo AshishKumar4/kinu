@@ -3,6 +3,7 @@ import { generateText } from 'ai';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import { cloudProxyBaseURL, createLocalModelResolver, createLocalProviderLLM } from '../src/model-resolver.js';
+import { asFetchFunction } from '@proteus/core';
 
 describe('createLocalModelResolver', () => {
   test('local LLM has no default output cap but honors an explicitly configured cap', async () => {
@@ -45,7 +46,7 @@ describe('createLocalModelResolver', () => {
         model: '@cf/moonshotai/kimi-k2.6',
       },
       credentials: {},
-      fetch: async () => Response.json({
+      fetch: asFetchFunction(async () => Response.json({
         'cloudflare-workers-ai': {
           models: {
             '@cf/moonshotai/kimi-k2.6': {
@@ -57,7 +58,7 @@ describe('createLocalModelResolver', () => {
             },
           },
         },
-      }),
+      })),
     });
 
     expect(resolver.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
@@ -83,7 +84,7 @@ describe('createLocalModelResolver', () => {
         model: '@cf/zai-org/glm-5.2',
       },
       credentials: {},
-      fetch: async () => Response.json({
+      fetch: asFetchFunction(async () => Response.json({
         'cloudflare-workers-ai': {
           models: {
             '@cf/zai-org/glm-5.2': {
@@ -95,7 +96,7 @@ describe('createLocalModelResolver', () => {
             },
           },
         },
-      }),
+      })),
     });
 
     // The attachment sanitizer's capability source: a text-only model reports
@@ -122,7 +123,7 @@ describe('createLocalModelResolver', () => {
           groq: { baseURL: 'https://api.groq.com/openai/v1', apiKey: 'gsk' },
         },
       },
-      fetch: async () => new Response(JSON.stringify({ data: [] })),
+      fetch: asFetchFunction(async () => new Response(JSON.stringify({ data: [] }))),
     });
 
     expect(resolver.normalizeSpecSync('openai/gpt-5')).toBe('openai/gpt-5');
@@ -143,7 +144,7 @@ describe('createLocalModelResolver', () => {
         model: 'claude-sonnet-4-5',
       },
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
     });
 
     expect(resolver.normalizeSpecSync(null)).toBe('anthropic/claude-sonnet-4-5');
@@ -160,7 +161,7 @@ describe('createLocalModelResolver', () => {
         model: 'gpt-4o-mini',
       },
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
     });
 
     expect(resolver.normalizeSpecSync(null)).toBe('openai/gpt-4o-mini');
@@ -330,7 +331,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
     const resolver = createLocalModelResolver({
       llm: openaiLlm,
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
       claudeCli: { probe: async () => ({ binary: true, loggedIn: true }) },
     });
 
@@ -347,7 +348,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
     const resolver = createLocalModelResolver({
       llm: openaiLlm,
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
       claudeCli: { probe: async () => ({ binary: false, loggedIn: false }) },
     });
     const providers = await resolver.listProviders();
@@ -360,7 +361,7 @@ describe('createLocalModelResolver — claude subscription provider', () => {
     const resolver = createLocalModelResolver({
       llm: openaiLlm,
       credentials: {},
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
       claudeCli: { probe: async () => ({ binary: true, loggedIn: false }) },
     });
     const providers = await resolver.listProviders();
@@ -380,7 +381,7 @@ describe('createLocalModelResolver — signed out', () => {
         model: 'gpt-4o-mini',
       },
       credentials: { openaiApiKey: 'sk-openai' },
-      fetch: async () => new Response('{}'),
+      fetch: asFetchFunction(async () => new Response('{}')),
     });
 
     const providers = await resolver.listProviders();

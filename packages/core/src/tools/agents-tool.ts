@@ -448,10 +448,10 @@ async function runFork(
   try {
     const result = await strat.explore(ctx);
     // The spawn always records. The TOKENS record here only when the strategy
-    // could not charge them itself — an MCTS rollout runs where the ledger is
-    // not reachable, so its total is seen only at this seam. A heads fork
-    // debits every step as it makes it, which is what lets an exhausted budget
-    // stop it mid-flight; charging its total again here would double-count it.
+    // could not charge them itself. Both parallel strategies now do: a heads
+    // fork debits every step as it makes it, and MCTS debits every rollout as
+    // it returns — which is what lets an exhausted budget stop either one
+    // mid-flight. Charging their totals again here would double-count them.
     mission?.governor.debit(result.cost.selfMetered ? 0 : result.cost.tokens ?? 0, {
       labels: mission.labels,
       spawns: 1,

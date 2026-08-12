@@ -39,9 +39,10 @@ describe('scaffoldEventsToUIStream', () => {
     expect(chunks[2]).toMatchObject({ type: 'text-delta', delta: 'Hello ' });
     expect(chunks[3]).toMatchObject({ type: 'text-delta', delta: 'world' });
     // text-start / text-delta / text-end share one id.
-    const id = (chunks[1] as { id: string }).id;
-    expect((chunks[2] as { id: string }).id).toBe(id);
-    expect((chunks[4] as { id: string }).id).toBe(id);
+    const id = chunks[1]?.id;
+    expect(id).toBeString();
+    expect(chunks[2]?.id).toBe(id);
+    expect(chunks[4]?.id).toBe(id);
   });
 
   test('ui_chunk events pass through verbatim, inner start/finish stripped', async () => {

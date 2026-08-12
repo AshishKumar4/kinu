@@ -11,6 +11,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
@@ -89,10 +90,8 @@ describe('Phase B — Node crafted-tool executor', () => {
       createExecuteTool: createNodeExecFactory() as never,
     });
 
-    const execTool = tools.execute_tools as {
-      execute: (a: { code: string }) => Promise<{ result: unknown; error?: string }>;
-    };
-    const res = await execTool.execute({
+    const execTool = toolExecute<{ code: string }, { result: unknown; error?: string }>(tools.execute_tools);
+    const res = await execTool({
       code: 'return await codemode.double(21);',
     });
     expect(res.error).toBeUndefined();
@@ -118,11 +117,9 @@ describe('Phase B — Node crafted-tool executor', () => {
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecFactory() as never,
     });
-    const execTool = tools.execute_tools as {
-      execute: (a: { code: string }) => Promise<{ result: unknown; error?: string }>;
-    };
+    const execTool = toolExecute<{ code: string }, { result: unknown; error?: string }>(tools.execute_tools);
 
-    const res = await execTool.execute({ code: 'return await codemode.exploder();' });
+    const res = await execTool({ code: 'return await codemode.exploder();' });
     // The model is told WHICH of its own tools broke, and the in-episode
     // fitness signal reads the same stamp to score that artifact and no other.
     expect(res.error).toContain(craftFailureMarker('exploder'));
@@ -144,9 +141,9 @@ describe('Phase B — Node crafted-tool executor', () => {
       craftedToolExecute: createNodeCraftedExecute(),
       createExecuteTool: createNodeExecFactory() as never,
     });
-    const res = await (tools.execute_tools as {
-      execute: (a: { code: string }) => Promise<{ result: unknown; error?: string }>;
-    }).execute({ code: 'return await codemode.quiet();' });
+    const res = await toolExecute<{ code: string }, { result: unknown; error?: string }>(tools.execute_tools)(
+      { code: 'return await codemode.quiet();' },
+    );
     expect(res.error).toBeUndefined();
     expect(res.result).toBe('ok');
   });

@@ -52,7 +52,7 @@ function site(broken: Partial<Record<string, () => Response>> = {}): typeof fetc
       default:
         return new Response('not found', { status: 404 });
     }
-  }) as typeof fetch;
+  }) as unknown as typeof fetch;
 }
 
 /** The SPA fallback answering for a missing asset — the actual outage. */
@@ -120,7 +120,7 @@ describe('synthetic probes', () => {
   test('an origin that does not answer is a failure, not an exception', async () => {
     const outcomes = await runSyntheticProbes({
       origin: 'https://proteus.test',
-      fetch: (async () => { throw new Error('connection refused'); }) as typeof fetch,
+      fetch: (async () => { throw new Error('connection refused'); }) as unknown as typeof fetch,
     });
     expect(outcomes.every((o) => !o.ok)).toBe(true);
     expect(outcome(outcomes, 'health').detail).toContain('connection refused');

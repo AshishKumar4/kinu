@@ -42,7 +42,7 @@ describe('Workers AI credential refresh', () => {
         expires_in: 3600,
         scope: 'user-details.read ai.write offline_access',
       }), { headers: { 'content-type': 'application/json' } });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     try {
       const next = await refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -76,7 +76,7 @@ describe('Workers AI credential refresh', () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       error: 'invalid_grant',
       error_description: 'The provided authorization grant is invalid',
-    }), { status: 400, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    }), { status: 400, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
     try {
       const attempt = refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -116,7 +116,7 @@ describe('Workers AI credential refresh', () => {
           });
         }
         return chatCompletionResponse();
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     const result = await generateText({

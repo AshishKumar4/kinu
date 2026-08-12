@@ -66,7 +66,7 @@ function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } =
     },
     generateReflection: async (task: string) => {
       calls.push({ method: 'generateReflection', args: [task] });
-      return 'went wrong';
+      return { text: 'went wrong' };
     },
   };
   const host = {
@@ -168,7 +168,7 @@ describe('exploration-facet spawn seam', () => {
     // Siblings are always sent, so the facet's diversity directive is not
     // left to an RPC-side default.
     expect(calls[2]?.args).toEqual([[{ role: 'user', content: 'hi' }], [], []]);
-    expect(await branch.generateReflection('the task')).toBe('went wrong');
+    expect(await branch.generateReflection('the task')).toEqual({ text: 'went wrong' });
   });
 
   test('an unclaimed workspace spawns a branch without seeding an owner', async () => {

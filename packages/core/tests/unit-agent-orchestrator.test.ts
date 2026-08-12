@@ -335,7 +335,7 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     // the user's card exists from the moment the batch was DELIVERED, saying
     // the agent has not read it yet and carrying the mid-turn rendering — then
     // the step that took the batch in moves that same card to shown.
-    const cardId = (broadcasts[0] as { id: string }).id;
+    const cardId = broadcasts[0]?.id;
     expect(broadcasts).toEqual([
       {
         type: 'signal_card', id: cardId, state: 'pending',

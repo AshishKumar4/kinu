@@ -32,7 +32,7 @@ const ROOTS = [
   'packages/cli-backend/src/local-session.ts',
   'packages/cli-backend/src/open.ts',
   'packages/cli/src/agent-create.ts',
-] as const;
+];
 
 const SCHEMA_MODULE = 'packages/core/src/identity/workspace-schema.ts';
 
@@ -76,11 +76,11 @@ describe('workspace schema is the only path', () => {
   });
 
   test.each(ROOTS)('%s calls initWorkspaceSchema', (root) => {
-    expect(callableSource(read(root))).toContain('initWorkspaceSchema(');
+    expect(callableSource(read(String(root)))).toContain('initWorkspaceSchema(');
   });
 
   test.each(ROOTS)('%s calls no initializer the entry point owns', (root) => {
-    const source = callableSource(read(root));
+    const source = callableSource(read(String(root)));
     const skipped = owned.filter((name) => new RegExp(`\\b${name}\\s*\\(`).test(source));
     expect(skipped).toEqual([]);
   });

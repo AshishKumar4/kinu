@@ -444,7 +444,7 @@ describe('timer ingress', () => {
 
     expect(t.fire(timer.nextFireAt!)).toEqual({ fired: 1 });
     expect(t.fired()).toEqual([{
-      trigger_id: timer.id, scheduled_fire_at: timer.nextFireAt, label: 'sweep',
+      trigger_id: timer.id, scheduled_fire_at: timer.nextFireAt!, label: 'sweep',
       user_payload: undefined, mission_label: undefined,
     }]);
     const row = t.registry.get(timer.id)!;

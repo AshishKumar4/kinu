@@ -267,7 +267,7 @@ describe('access token management routes (session tokens only)', () => {
     const { env, calls } = setupEnv();
     const list = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens'), env);
     expect(list?.status).toBe(200);
-    expect(await list?.json()).toEqual({
+    expect(await list?.json<{ tokens: unknown[] }>()).toEqual({
       tokens: [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }],
     });
 

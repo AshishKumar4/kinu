@@ -17,6 +17,12 @@ import {
   type AgentsToolDeps, type ExplorationStrategy, type StrategyContext,
 } from '../src/index.js';
 import { composePrepareStep } from '../src/prompting/prepare-step.js';
+import type { SubordinateHandoff } from '../src/index.js';
+
+/** The admission facts every handoff carries back to the sender. */
+function handoff(): SubordinateHandoff {
+  return { eventId: 'evt-1', delivery: 'starts_now', phase: { busy: false, lastActivityAt: null, workingOn: null } };
+}
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
 import { buildDrainBatch } from '../src/events/hub/drain.js';
 import type { ProteusEvent } from '../src/events/hub/types.js';
@@ -93,9 +99,9 @@ function forkableDeps(opts: {
     team: {
       list: async () => [],
       spawn: async (input) => { spawns.push(`staff:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
-      assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name }; },
+      assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       status: async () => ({}),
-      message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name }; },
+      message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
     },
     ...(opts.budget ? { budget: opts.budget } : {}),

@@ -11,7 +11,8 @@
 //    per-turn tail message, never captured by the ledger's append gate.
 //  - fnv1a64 (the telemetry + fingerprint hash) changes only on real events.
 import { describe, test, expect } from 'bun:test';
-import { tool, type LanguageModelV2StreamPart, type ModelMessage } from 'ai';
+import { tool, type ModelMessage } from 'ai';
+import type { ModelStreamPart } from '@proteus/test-utils';
 import { z } from 'zod';
 import {
   buildSystemPromptSync,
@@ -738,7 +739,7 @@ function threeStepToolModel() {
       prompts.push(options.prompt);
       const n = step++;
       const stream = n < 2
-        ? new ReadableStream<LanguageModelV2StreamPart>({
+        ? new ReadableStream<ModelStreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: `tc${n}`, toolName: 'ping', input: '{}' });
@@ -746,7 +747,7 @@ function threeStepToolModel() {
               c.close();
             },
           })
-        : new ReadableStream<LanguageModelV2StreamPart>({
+        : new ReadableStream<ModelStreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'text-start', id: 't1' });
