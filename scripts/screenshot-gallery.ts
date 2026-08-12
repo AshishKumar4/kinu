@@ -66,6 +66,17 @@ async function shoot(
   const url = `http://127.0.0.1:${PORT}/gallery.html?frame=${frame}`;
   await page.evaluateOnNewDocument((m: string) => {
     localStorage.setItem('theme', m);
+    // The mocks date themselves off the clock ("9:07 PM", "Active 2h ago"), so
+    // two runs minutes apart differ in text that has nothing to do with the
+    // change under review, and a before/after diff of the gallery is unreadable
+    // noise. Pinning the clock makes a frame a pure function of the code.
+    const FIXED = 1_770_000_000_000;
+    globalThis.Date = new Proxy(Date, {
+      construct: (target, args, newTarget) =>
+        Reflect.construct(target, args.length === 0 ? [FIXED] : args, newTarget),
+      get: (target, prop, receiver) =>
+        prop === 'now' ? () => FIXED : Reflect.get(target, prop, receiver),
+    });
   }, mode);
   const failures: string[] = [];
   page.on('pageerror', (err) => failures.push(String(err)));

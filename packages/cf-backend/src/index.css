@@ -310,13 +310,20 @@ html, body, #root {
 
 body { background: var(--c-bg); color: var(--c-text); }
 
-/* ── Scrollbars — calm at rest, visible on interaction ─────────────── */
-* { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-*:hover, *:focus-within { scrollbar-color: var(--c-border-strong) transparent; }
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
-*:hover::-webkit-scrollbar-thumb { background: var(--c-border-strong); }
+/* ── Scrollbars — calm at rest, visible on interaction ───────────────
+   Layered, and it has to be: unlayered, `*` outranks every layer no matter
+   how specific the selector beside it, so `.p-tabstrip { scrollbar-width:
+   none }` in `@layer components` lost to `* { scrollbar-width: thin }` and
+   the tab strip grew the scrollbar it explicitly asks not to have. `base` is
+   where a default for every element belongs. */
+@layer base {
+  * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  *:hover, *:focus-within { scrollbar-color: var(--c-border-strong) transparent; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+  *:hover::-webkit-scrollbar-thumb { background: var(--c-border-strong); }
+}
 
 /* ════════════════════════════════════════════════════════════════════
    Everything below is `@layer components`, which places it BELOW
@@ -448,24 +455,43 @@ body { background: var(--c-bg); color: var(--c-text); }
 }
 /* The mechanism, shared by the code block and wide tables: `min-width: 0` is
    what lets a track inside a flex/grid column be narrower than its content,
-   and without it the content simply pushes the column open instead. */
+   and without it the content simply pushes the column open instead.
+
+   Naming only ONE axis is not enough: the other stays `visible`, which
+   computes to `auto` the moment its partner is not — so a track a single
+   pixel taller than its box grows a vertical scrollbar for content it does
+   not have. Every horizontal scroller here says both axes out loud. */
 .p-scroll-x {
   min-width: 0;
   overflow-x: auto;
+  overflow-y: hidden;
   overscroll-behavior-x: contain;
 }
 
 /* …plus the affordance, so a clipped line looks scrollable rather than
-   broken. Same trick as the tab strip: the solid covers travel with the
-   content (`local`) and hide the fixed shadows (`scroll`) at each end, so a
-   shadow shows only while there is more code that way. */
-.p-code-scroll {
+   broken. One recipe for every horizontal scroller — the code block and both
+   tab strips: solid covers travel with the content (`local`) and hide a
+   hairline pinned to each end (`scroll`), so an edge is ruled only while
+   there is more content that way. `--scroll-ground` is the surface the
+   scroller sits on, which is what the covers are painted in.
+
+   The mark is a hairline because the umber ground gives a soft one nothing to
+   resolve against. This was a radial shadow, and `farthest-side` over a
+   `100%`-tall box made it an ellipse: a brass smear that faded down the block
+   as well as across it, reading as banding on the near-black code well rather
+   than as an edge. The covers were fades rather than solids too, so they
+   could never fully hide it — the left edge stayed smeared with nothing to
+   scroll back to. A hairline in the colour the rest of the language already
+   divides with is either there or it is not. */
+.p-code-scroll, .p-tabstrip {
   background:
-    linear-gradient(90deg, var(--c-code-bg), transparent) 0 0 / 16px 100% no-repeat local,
-    linear-gradient(270deg, var(--c-code-bg), transparent) 100% 0 / 16px 100% no-repeat local,
-    radial-gradient(farthest-side at 0 50%, var(--c-border-strong), transparent) 0 0 / 10px 100% no-repeat scroll,
-    radial-gradient(farthest-side at 100% 50%, var(--c-border-strong), transparent) 100% 0 / 10px 100% no-repeat scroll;
+    linear-gradient(var(--scroll-ground), var(--scroll-ground)) 0 0 / 12px 100% no-repeat local,
+    linear-gradient(var(--scroll-ground), var(--scroll-ground)) 100% 0 / 12px 100% no-repeat local,
+    linear-gradient(var(--c-border-strong), var(--c-border-strong)) 0 0 / 1px 100% no-repeat scroll,
+    linear-gradient(var(--c-border-strong), var(--c-border-strong)) 100% 0 / 1px 100% no-repeat scroll;
 }
+.p-code-scroll { --scroll-ground: var(--c-code-bg); }
+
 /* Inline code sits IN a sentence: it takes the warm ink and a whisper of
    ground, never a border, and it wraps rather than pushing the column. */
 .p-code-inline {
@@ -512,19 +538,19 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-tab-active:hover { color: var(--c-accent-fg); }
 
 /* Tab strip — scrolls when its column is narrower than the set of surfaces,
-   rather than clipping a label. The scrollbar is suppressed (a 6px classic
-   scrollbar would change the strip's height and shift the underline); the
-   edge shading is the affordance, and it appears only while there is more to
-   scroll to: the solid covers scroll with the content (`local`) and hide the
-   fixed shadows (`scroll`) once an end is reached. */
+   rather than clipping a label. It carries the scroll-edge affordance above;
+   the scrollbar is suppressed, because a 6px classic scrollbar would change
+   the strip's height and shift the underline.
+
+   Vertically it must not scroll at all: a tab overhangs the strip by the
+   pixel its `-mb-px` pulls back, which is layout the tab grammar depends on
+   but is not content, and left to compute as `auto` that pixel is enough for
+   a vertical scrollbar to appear beside a single row of tabs. */
 .p-tabstrip {
+  --scroll-ground: var(--c-bg);
   overflow-x: auto;
+  overflow-y: hidden;
   scrollbar-width: none;
-  background:
-    linear-gradient(var(--c-bg), var(--c-bg)) 0 0 / 12px 100% no-repeat local,
-    linear-gradient(var(--c-bg), var(--c-bg)) 100% 0 / 12px 100% no-repeat local,
-    radial-gradient(farthest-side at 0 50%, var(--c-border), transparent) 0 0 / 8px 100% no-repeat scroll,
-    radial-gradient(farthest-side at 100% 50%, var(--c-border), transparent) 100% 0 / 8px 100% no-repeat scroll;
 }
 .p-tabstrip::-webkit-scrollbar { display: none; }
 
