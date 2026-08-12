@@ -463,6 +463,23 @@ function asRecord(v: unknown): Record<string, unknown> {
   return isRecord(v) ? v : { value: v };
 }
 
+/** Human-readable elapsed duration ("45s", "12m", "3h 4m", "2d 1h") — the
+ *  unit an operator reads at a glance, not raw milliseconds or a timestamp
+ *  they have to subtract themselves. Negative/NaN inputs (a clock skew, a
+ *  malformed row) render as "0s" rather than a confusing negative duration. */
+function formatElapsed(ms: number): string {
+  const totalSec = Math.max(0, Math.floor((Number.isFinite(ms) ? ms : 0) / 1000));
+  if (totalSec < 60) return `${totalSec}s`;
+  const totalMin = Math.floor(totalSec / 60);
+  if (totalMin < 60) return `${totalMin}m`;
+  const totalHours = Math.floor(totalMin / 60);
+  const remMin = totalMin % 60;
+  if (totalHours < 24) return remMin > 0 ? `${totalHours}h ${remMin}m` : `${totalHours}h`;
+  const days = Math.floor(totalHours / 24);
+  const remHours = totalHours % 24;
+  return remHours > 0 ? `${days}d ${remHours}h` : `${days}d`;
+}
+
 function parsePositiveInt(value: string, label: string): number {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed < 1) throw new Error(`${label} must be a positive integer`);
@@ -495,7 +512,9 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
   if (summary.headRuns.length > 0) {
     console.log(`\n${ACCENT('Head/fork runs')} (${summary.headRuns.length}, newest first)`);
     for (const h of summary.headRuns.slice(0, 5)) {
-      console.log(`  ${DIM(new Date(h.spawnedAt).toLocaleString())} ${ACCENT(h.rootId.slice(0, 8))} ${h.status} — ${h.heads.length} head(s): ${DIM(h.task.slice(0, 60))}`);
+      const done = h.heads.filter((head) => head.status !== 'running').length;
+      const progressTag = h.status === 'running' ? ` (${done}/${h.heads.length} settled)` : '';
+      console.log(`  ${DIM(new Date(h.spawnedAt).toLocaleString())} ${ACCENT(h.rootId.slice(0, 8))} ${h.status} — ${h.heads.length} head(s)${progressTag}: ${DIM(h.task.slice(0, 60))}`);
     }
   }
 
@@ -503,7 +522,18 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
     console.log(`\n${ACCENT('MCTS searches')} (${summary.mctsSearches.length}, newest first)`);
     for (const s of summary.mctsSearches.slice(0, 5)) {
       const depthTag = s.nodeCount <= 1 ? WARN('single node, no depth') : `${s.nodeCount} nodes, depth ${s.maxDepth}`;
-      console.log(`  ${DIM(new Date(s.updatedAt).toLocaleString())} ${ACCENT(s.rootId.slice(0, 8))} ${s.status} iter=${s.iteration}/${s.budget} — ${depthTag}`);
+      // `s.budget` is REMAINING budget (mcts/search-store.ts checkpoints it down
+      // every iteration) — iteration + budget is the search's true total, an
+      // invariant held by construction (mcts/engine.ts increments one and
+      // decrements the other together). Showing iter=N/budget as a fraction
+      // reads as an overrun (34/26) when it is really "34 of 60 done, 26 left".
+      const total = s.iteration + s.budget;
+      // `updatedAt` is written by the SAME per-iteration checkpoint — the one
+      // heartbeat this backend actually has. For a still-running search this
+      // is the direct answer to "is it hung or working": fresh means it
+      // checkpointed recently; stale means nothing has landed in a while.
+      const heartbeat = s.status === 'running' ? ` — checkpointed ${formatElapsed(Date.now() - s.updatedAt)} ago` : '';
+      console.log(`  ${DIM(new Date(s.updatedAt).toLocaleString())} ${ACCENT(s.rootId.slice(0, 8))} ${s.status} iter=${s.iteration}/${total} (${s.budget} left) — ${depthTag}${heartbeat}`);
     }
     if (summary.mctsSearches.length > 1) {
       const [latest, previous] = summary.mctsSearches;
@@ -514,7 +544,15 @@ function printHumanSummary(name: string, mode: string, summary: DebugSummary, ou
   if (summary.backgroundJobs.length > 0) {
     console.log(`\n${ACCENT('Background jobs')} (${summary.backgroundJobs.length})`);
     for (const j of summary.backgroundJobs.slice(0, 10)) {
-      console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${j.error ? ERR(` — ${j.error}`) : ''}`);
+      const labelTag = j.label ? ` — ${DIM(j.label)}` : '';
+      // Running jobs carry no heartbeat of their own (background_jobs has only
+      // created_at/settled_at) — this is the honest answer to "how long has
+      // this actually been running", computed rather than left for the
+      // operator to do the timestamp math that hid the 12-hour job.
+      const durationTag = j.status === 'running'
+        ? WARN(` — running ${formatElapsed(Date.now() - j.createdAt)}`)
+        : j.settledAt ? ` — took ${formatElapsed(j.settledAt - j.createdAt)}` : '';
+      console.log(`  ${DIM(new Date(j.createdAt ?? 0).toLocaleString())} ${ACCENT(j.id.slice(0, 8))} ${j.kind} ${j.status}${durationTag}${labelTag}${j.error ? ERR(` — ${j.error}`) : ''}`);
     }
   }
 

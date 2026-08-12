@@ -95,6 +95,14 @@ function seedInvestigationWorkspace(dbPath: string): void {
   db.exec(`INSERT INTO head_runs (root_id, rationale, spawned_at) VALUES ('head-new', 'second attempt', 9000)`);
   db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
     VALUES ('head-new', NULL, 'head-new', 0, 'investigate', 'second attempt', 'completed', 9000, 'synthesize')`);
+  // A THIRD, real split with two actual child heads (id != root_id, unlike
+  // the synthetic self-referencing rows above) — one settled, one still
+  // running — the shape the new "N/M settled" progress readout is for.
+  db.exec(`INSERT INTO head_runs (root_id, rationale, spawned_at) VALUES ('head-live', 'third attempt', 12000)`);
+  db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES ('head-live-a', NULL, 'head-live', 0, 'investigate A', 'branch a', 'completed', 12000, 'synthesize')`);
+  db.exec(`INSERT INTO head_journal (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
+    VALUES ('head-live-b', NULL, 'head-live', 0, 'investigate B', 'branch b', 'running', 12100, 'synthesize')`);
 
   // ── MCTS: the OLDER search's root sorts FIRST (lower created_at, same
   // depth 0) — exactly what the unscoped client buildTree() would return,
@@ -110,13 +118,21 @@ function seedInvestigationWorkspace(dbPath: string): void {
   const mcts = new MctsSearchStore(sql);
   mcts.begin({ rootId: 'search-old', task: 'investigate', rootMsgId: 'm1', config: { budget: 1, branches: 1 }, budget: 1, now: 1000 });
   mcts.converge('search-old', 0, 1500);
-  mcts.begin({ rootId: 'search-new', task: 'investigate', rootMsgId: 'm2', config: { budget: 5, branches: 3 }, budget: 5, now: 5000 });
-  mcts.checkpoint('search-new', 0, 3, 5, 5300);
+  // budget=10, checkpointed at iteration=6/budget-remaining=4 — the SAME
+  // invariant mcts/engine.ts holds by construction (iteration + remaining
+  // budget == the original total), and the exact shape that used to render
+  // as the misleading "iter=6/4" fraction (looks like an overrun) instead of
+  // "iter=6/10 (4 left)".
+  mcts.begin({ rootId: 'search-new', task: 'investigate', rootMsgId: 'm2', config: { budget: 10, branches: 3 }, budget: 10, now: 5000 });
+  mcts.checkpoint('search-new', 0, 6, 4, 5300);
 
-  // ── Background jobs: the job the run above detached and got polled. ──
+  // ── Background jobs: the job the run above detached and got polled, PLUS
+  // one still running — the exact shape a 12-hour-old job with no visible
+  // progress needs a duration/heartbeat readout for. ──
   const jobs = new BackgroundJobStore(sql);
   jobs.create({ id: 'job-1', kind: 'agents', label: 'fork(settle=mcts)', input: `token=${SECRET_PROTEUS_TOKEN}`, now: 5050 });
-  jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5400);
+  jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
+  jobs.create({ id: 'job-2', kind: 'agents', input: '{}', now: 5060 });
 
   db.close();
 }
@@ -149,9 +165,24 @@ describe('proteus debug — local backend', () => {
     // Human summary surfaces the exact four-symptom signal.
     expect(r.stdout).toContain('Runs (2)');
     expect(r.stdout).toContain('polled job 1x after backgrounding');
-    expect(r.stdout).toContain('Head/fork runs (2');
+    expect(r.stdout).toContain('Head/fork runs (3');
+    expect(r.stdout).toContain('(1/2 settled)'); // head-live: one head done, one still running
     expect(r.stdout).toContain('MCTS searches (2');
     expect(r.stdout).toContain('latest vs previous: 3 vs 1 nodes, depth 2 vs 0');
+    // The overrun-audit fix (2026-08-12): iteration + remaining budget is the
+    // search's true total (10), not a fraction that can look exceeded — the
+    // exact "iter=34/26 looks like an overrun" shape from production.
+    expect(r.stdout).toContain('iter=6/10 (4 left)');
+    expect(r.stdout).not.toContain('iter=6/4'); // the old, misleading fraction must be gone
+    expect(r.stdout).toMatch(/checkpointed \d+d(?: \d+h)? ago/); // running search: the one real heartbeat
+    expect(r.stdout).toContain('iter=0/1 (1 left)'); // search-old: converged, never checkpointed past begin()
+    // Background jobs: a settled job's real duration (deterministic — both
+    // timestamps are fixture data, not wall-clock) and its descriptive label,
+    // plus a still-running job's duration made explicit rather than left for
+    // the operator to compute from a bare created_at timestamp.
+    expect(r.stdout).toContain('took 2m');
+    expect(r.stdout).toContain('fork(settle=mcts)');
+    expect(r.stdout).toMatch(/job-2 agents running — running \d+d(?: \d+h)?/);
     expect(r.stdout).not.toContain(SECRET_TOKEN);
     expect(r.stdout).not.toContain(SECRET_PROTEUS_TOKEN);
 
@@ -167,10 +198,10 @@ describe('proteus debug — local backend', () => {
     const counts = new Map<string, number>();
     for (const rec of records) counts.set(rec.t, (counts.get(rec.t) ?? 0) + 1);
     expect(counts.get('run')).toBe(2);
-    expect(counts.get('head_run')).toBe(2);
+    expect(counts.get('head_run')).toBe(3);
     expect(counts.get('mcts_search_run')).toBe(2);
     expect(counts.get('mcts_node')).toBe(4);
-    expect(counts.get('background_job')).toBe(1);
+    expect(counts.get('background_job')).toBe(2);
     expect(counts.get('end')).toBe(1);
     // Full per-run event fidelity — the richest source, verbatim.
     const runEvents = records.filter((r2) => r2.t === 'run_event') as unknown as Array<{ runId: string; type: string }>;

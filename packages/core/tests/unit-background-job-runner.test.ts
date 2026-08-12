@@ -122,6 +122,23 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(notified).toEqual([{ id, status: 'failed' }]);
   });
 
+  // The observability audit (2026-08-12): a 12-hour job showed "running" with
+  // no way to tell whether it was hung or working. Start/refuse/cancel/resume
+  // already reached logActivity; settle/fail — the terminal answer — did not.
+  test('both settle and fail reach logActivity, not just start/cancel/resume', async () => {
+    const { runner, settled, logs } = setup();
+    const ok = runner.create('think', {}, new AbortController());
+    runner.detach(ok, 'think', Promise.resolve('answer'));
+    const bad = runner.create('run', {}, new AbortController());
+    runner.detach(bad, 'run', Promise.reject(new Error('boom')));
+    await settled();
+
+    const okLog = logs.find((l) => l.e === 'bg_job_settled' && l.d?.startsWith(ok));
+    expect(okLog?.d).toBe(`${ok} completed`);
+    const badLog = logs.find((l) => l.e === 'bg_job_settled' && l.d?.startsWith(bad));
+    expect(badLog?.d).toBe(`${bad} failed — boom`);
+  });
+
   test('a skipped wake publishes a self-trusted retry event for the standard drain', async () => {
     const { runner, store, eventLog, setStatus, logs, settled, drainSchedules } = setup();
     setStatus('skipped');
@@ -192,6 +209,41 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     expect(store.get(id)?.error).toBe('storage unavailable');
     expect(notified).toEqual([{ id, status: 'failed' }]);
     expect(stashes.at(-1)).toEqual({ phase: 'settled', jobId: id, kind: 'think' });
+  });
+});
+
+describe('BackgroundJobRunner.create — descriptive labels', () => {
+  // `BackgroundJob.label` existed but the real runtime never populated it —
+  // every running job showed as a bare "agents running" with no clue what it
+  // was actually doing. Same audit as the logActivity fix above.
+  test('an agents fork gets a settle-mode + task label', () => {
+    const { runner, store } = setup();
+    const id = runner.create('agents', { action: 'fork', task: 'investigate the flaky test', settle: 'mcts' }, new AbortController());
+    expect(store.get(id)?.label).toBe('fork(settle=mcts): investigate the flaky test');
+  });
+
+  test('an agents fork with no settle defaults the label to merge', () => {
+    const { runner, store } = setup();
+    const id = runner.create('agents', { action: 'fork', task: 'split the work' }, new AbortController());
+    expect(store.get(id)?.label).toBe('fork(settle=merge): split the work');
+  });
+
+  test('a run call labels the runtime + command', () => {
+    const { runner, store } = setup();
+    const id = runner.create('run', { runtime: 'sandbox', command: 'npm test' }, new AbortController());
+    expect(store.get(id)?.label).toBe('sandbox: npm test');
+  });
+
+  test('an execute_tools call labels the code snippet', () => {
+    const { runner, store } = setup();
+    const id = runner.create('execute_tools', { code: '  const x = await workspace.readFile("/a");\n  return x;' }, new AbortController());
+    expect(store.get(id)?.label).toBe('const x = await workspace.readFile("/a");\n  return x;');
+  });
+
+  test('an unrecognized shape gets no label rather than a guess', () => {
+    const { runner, store } = setup();
+    const id = runner.create('agents', { action: 'staff', agent: 'x' }, new AbortController());
+    expect(store.get(id)?.label).toBeNull();
   });
 });
 

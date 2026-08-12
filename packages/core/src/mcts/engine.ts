@@ -322,6 +322,16 @@ export async function runMCTS(
         // Durable, epoch-fenced checkpoint: an eviction after this can re-enter and
         // continue from the remaining budget against the persisted tree (B6).
         search?.checkpoint(rootId, searchEpoch, phase.iteration, phase.budget, Date.now());
+        // The checkpoint above IS this search's one real heartbeat (mirrored
+        // into a queryable row a debug read can already show), but nothing
+        // reached Workers Logs/`wrangler tail` per iteration — a durably
+        // checkpointed search running for hours produced no visible sign of
+        // life at all. Gated on `search` (only durably-checkpointed runs,
+        // matching the checkpoint call itself) so the fiber-snapshot-only /
+        // test path stays silent.
+        if (search) {
+          console.log(`[proteus] mcts checkpoint rootId=${rootId} iteration=${phase.iteration}/${phase.iteration + phase.budget} remaining=${phase.budget}`);
+        }
 
         report({
           type: 'iteration-complete',

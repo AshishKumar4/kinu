@@ -26,6 +26,7 @@ export {
   isSandboxTransientError,
 } from './sandbox.js';
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor.js';
+export { explainNativeToolReferenceError } from './sandbox-errors.js';
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,
