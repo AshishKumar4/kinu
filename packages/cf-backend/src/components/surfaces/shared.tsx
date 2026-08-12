@@ -11,7 +11,7 @@ import { MAX_LINES_PER_FILE, type DiffLine } from "@proteus/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
- *  scaffold-version diff (Brain) and the workspace change-set (Output).
+ *  scaffold-version diff (Self) and the workspace change-set (Output).
  *  `truncated` marks a body the parser bounded, so a partial hunk never reads
  *  as the whole file. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
@@ -119,7 +119,7 @@ export const EMPTY_HINTS: Record<string, string> = {
  * A titled, collapsible section — the one header grammar the work surfaces
  * use, so the six that hand-rolled `<section><div flex gap-2>…` stay aligned.
  *
- * The Brain surface stacks identity, changelog, scaffold lineage, tools,
+ * The Self surface stacks identity, changelog, scaffold lineage, tools,
  * memory and the world model into one scroll; being able to fold the ones you
  * are not reading is what makes it usable at length. Which sections a person
  * keeps folded is a property of that person's workspace, not of the agent, so

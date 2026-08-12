@@ -48,7 +48,9 @@ import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
-  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
+  releaseToolActions, releaseToolSpec,
+  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS,
+  type MemoryToolAction, type ReleaseToolAction,
 } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
 import { createFileToolSteer } from './run-file-steer.js';
@@ -73,6 +75,7 @@ import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skil
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import {
   isEngineOwnedTransitionTarget,
+  RELEASE_STATUSES,
   type ReleaseApproval,
   type ReleaseCheck,
   type ReleaseEngine,
@@ -869,25 +872,18 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   }
 
   // ── 10. release — governed product/UI self-customization lane ───────
+  // The action surface gates on the execution engine, the same dep the runtime
+  // gates on: with an engine, apply/run_checks/preview/deploy/rollback earn
+  // their results and the record_* twins are refused; without one, the record_*
+  // actions are the only way the ledger learns what the agent ran. See the
+  // release doctrine block in tools/registry.ts.
   if (deps.releases) {
     const releases = deps.releases;
+    const hasEngine = !!releases.engine;
     tools.release = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.release,
+      description: renderToolSchemaDescription(releaseToolSpec(hasEngine)),
       inputSchema: jsonSchema<{
-        action:
-          | 'board'
-          | 'bind_source'
-          | 'create'
-          | 'update'
-          | 'transition'
-          | 'record_check'
-          | 'request_approval'
-          | 'record_deployment'
-          | 'apply'
-          | 'run_checks'
-          | 'preview'
-          | 'deploy'
-          | 'rollback';
+        action: ReleaseToolAction;
         binding?: {
           kind?: 'local' | 'github';
           label?: string;
@@ -922,13 +918,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         properties: {
           action: {
             type: 'string',
-            enum: [
-              'board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment',
-              'apply', 'run_checks', 'preview', 'deploy', 'rollback',
-            ],
-            description:
-              'apply/run_checks/preview/deploy/rollback DRIVE the change for real in the sandbox ' +
-              '(patch applied + committed, checks = real exit codes, preview = live URL, deploy/rollback verified).',
+            enum: [...releaseToolActions(hasEngine)],
+            ...(hasEngine
+              ? {
+                description:
+                  'apply/run_checks/preview/deploy/rollback DRIVE the change for real in the sandbox ' +
+                  '(patch applied + committed, checks = real exit codes, preview = live URL, deploy/rollback verified).',
+              }
+              : {}),
           },
           binding: {
             type: 'object',
@@ -951,40 +948,52 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           previewUrl: { type: 'string' },
           status: {
             type: 'string',
-            enum: ['draft', 'planning', 'patching', 'validating', 'preview_ready', 'awaiting_approval', 'applying', 'deployed', 'rejected', 'rolled_back', 'failed'],
+            // With an engine, the states it earns are refused as manual
+            // transitions — so they are not offered. One source: the lifecycle
+            // decides which those are, here and at execute time both.
+            enum: RELEASE_STATUSES.filter((s) => !hasEngine || !isEngineOwnedTransitionTarget(s)),
           },
-          check: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              status: { type: 'string', enum: ['pending', 'running', 'passed', 'failed', 'skipped'] },
-              stdout: { type: 'string' },
-              stderr: { type: 'string' },
-              durationMs: { type: 'number' },
+          ...(hasEngine ? {} : {
+            check: {
+              type: 'object',
+              properties: {
+                name: { type: 'string' },
+                status: { type: 'string', enum: ['pending', 'running', 'passed', 'failed', 'skipped'] },
+                stdout: { type: 'string' },
+                stderr: { type: 'string' },
+                durationMs: { type: 'number' },
+              },
             },
-          },
+          }),
           approvalType: { type: 'string', enum: ['apply', 'deploy_staging', 'deploy_production', 'rollback'] },
           deployment: {
             type: 'object',
             properties: {
               environment: { type: 'string', enum: ['local', 'staging', 'production'] },
-              workerVersionId: { type: 'string' },
-              deploymentId: { type: 'string' },
-              rollbackTarget: { type: 'string' },
-              command: { type: 'string', description: 'Deploy (or rollback-redeploy) command run in the working copy, e.g. "bunx wrangler deploy". Defaults to the binding deployTarget when that reads like a command.' },
+              ...(hasEngine
+                ? {
+                  command: { type: 'string', description: 'Deploy (or rollback-redeploy) command run in the working copy, e.g. "bunx wrangler deploy". Defaults to the binding deployTarget when that reads like a command.' },
+                }
+                : {
+                  workerVersionId: { type: 'string' },
+                  deploymentId: { type: 'string' },
+                  rollbackTarget: { type: 'string' },
+                }),
             },
           },
-          checks: {
-            type: 'array',
-            description: 'For action=run_checks: build/test/lint commands run in the working copy; pass/fail comes from real exit codes.',
-            items: {
-              type: 'object',
-              properties: { name: { type: 'string' }, command: { type: 'string' } },
-              required: ['name', 'command'],
+          ...(hasEngine ? {
+            checks: {
+              type: 'array',
+              description: 'For action=run_checks: build/test/lint commands run in the working copy; pass/fail comes from real exit codes.',
+              items: {
+                type: 'object',
+                properties: { name: { type: 'string' }, command: { type: 'string' } },
+                required: ['name', 'command'],
+              },
             },
-          },
-          port: { type: 'number', description: 'For action=preview: the port your server listens on inside the sandbox.' },
-          startCommand: { type: 'string', description: 'For action=preview: optional server start command run in the working copy before exposing the port.' },
+            port: { type: 'number', description: 'For action=preview: the port your server listens on inside the sandbox.' },
+            startCommand: { type: 'string', description: 'For action=preview: optional server start command run in the working copy before exposing the port.' },
+          } : {}),
         },
         required: ['action'],
       }),

@@ -170,8 +170,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
-  // Evolution Changelog unseen count — badges the Brain tab from any surface;
-  // viewing the digest (BrainSurface) marks seen server-side and zeroes it.
+  // Evolution Changelog unseen count — badges the Self tab from any surface;
+  // viewing the digest (SelfSurface) marks seen server-side and zeroes it.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
@@ -462,7 +462,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     refreshBackgroundJobs();
     refreshExposedPorts();
     rpc<AgentViewSummary[]>("listAgentViews", []).then(setAgentViews).catch(() => {});
-    // Unseen self-changes for the Brain-tab badge.
+    // Unseen self-changes for the Self-tab badge.
     rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
       .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
     // Re-hydrate any consent cards still pending after a reload.
@@ -718,8 +718,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,
-    /** Unseen Evolution Changelog entries (Brain-tab badge) + the local clear
-     *  (BrainSurface marks seen server-side, then calls this). */
+    /** Unseen Evolution Changelog entries (Self-tab badge) + the local clear
+     *  (SelfSurface marks seen server-side, then calls this). */
     changelogUnseen,
     clearChangelogUnseen: () => setChangelogUnseen(0),
     /** Steer-as-Branch chips (running → settled/error) + the dismiss. */

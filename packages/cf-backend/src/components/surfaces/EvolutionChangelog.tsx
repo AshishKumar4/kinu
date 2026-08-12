@@ -1,5 +1,5 @@
 /**
- * Evolution Changelog — the "what I changed about myself" digest (Brain).
+ * Evolution Changelog — the "what I changed about myself" digest (Self).
  * The transparency surface behind the autonomy-ON defaults: every self-change
  * (scaffold promotion, crafted tool, learned fact, GEPA pass, replay loss,
  * outcome grades) renders as a card with its evidence number and per-line

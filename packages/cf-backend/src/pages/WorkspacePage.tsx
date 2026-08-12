@@ -951,7 +951,7 @@ export default function WorkspacePage() {
   const [altitude, setAltitude] = useState<"run" | "supervise">(
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
-  const [surface, setSurface] = useState<SurfaceKind>("Brain");
+  const [surface, setSurface] = useState<SurfaceKind>("Self");
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);

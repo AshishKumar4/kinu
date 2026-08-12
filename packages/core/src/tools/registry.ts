@@ -155,6 +155,66 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
   };
 }
 
+// ── Release doctrine (single source) ────────────────────────────────────────
+// The release lane has two halves and no actor has both. Where an execution
+// engine drives the working copy, apply/run_checks/preview/deploy/rollback earn
+// their results from real command output, and the ledger's record_* twins are
+// refused as assertions of what was never run. Where no engine is wired, the
+// agent runs the commands itself and the record_* actions are the only way the
+// ledger learns what happened. Advertising the union made every actor read the
+// other half's schema and be refused by it, so the surface gates on the same
+// dep the runtime does — the `memoryToolSpec(hasFacts)` pattern.
+
+/** The governance ledger — wherever the release lane exists at all. */
+export const RELEASE_LEDGER_ACTIONS = [
+  'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
+] as const;
+
+/** Results asserted rather than earned. Only without an execution engine. */
+export const RELEASE_RECORD_ACTIONS = ['record_check', 'record_deployment'] as const;
+
+/** Results driven for real in the working copy. Only with an engine. */
+export const RELEASE_ENGINE_ACTIONS = ['apply', 'run_checks', 'preview', 'deploy', 'rollback'] as const;
+
+export type ReleaseToolAction =
+  | (typeof RELEASE_LEDGER_ACTIONS)[number]
+  | (typeof RELEASE_RECORD_ACTIONS)[number]
+  | (typeof RELEASE_ENGINE_ACTIONS)[number];
+
+/** The actions a runtime with (or without) an execution engine exposes. */
+export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolAction[] {
+  return hasEngine
+    ? [...RELEASE_LEDGER_ACTIONS, ...RELEASE_ENGINE_ACTIONS]
+    : [...RELEASE_LEDGER_ACTIONS, ...RELEASE_RECORD_ACTIONS];
+}
+
+/**
+ * The release spec for a runtime that does (or does not) drive the working
+ * copy itself. `BUILTIN_TOOL_SPECS.release` is the engine surface — the
+ * representative full lane — and buildBuiltinTools renders the ledger-only one
+ * where no engine is wired.
+ */
+export function releaseToolSpec(hasEngine: boolean): BuiltinToolSpec {
+  return {
+    name: 'release',
+    summary: hasEngine
+      ? 'Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.'
+      : 'Governed release ledger over a bound source repo — plan a change, store its patch, take owner approval, and record the checks and deployments you ran yourself.',
+    whenToUse:
+      'Use when the user asks Proteus to change its own app, UI, prompts, or deployment. '
+      + (hasEngine
+        ? 'Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.'
+        : 'Flow: bind_source → create → update (store the unified diff) → transition → record_check → request_approval → record_deployment; this backend has no execution engine, so run the commands yourself with `run` in the working copy and record what they returned.'),
+    whenNotToUse: 'Not for ordinary project work, and not for adding a workspace dashboard — that is workspace.createView, which needs no deploy.',
+    result: hasEngine
+      ? 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.'
+      : 'Returns the board/ledger records: the change, its stored patch, and the checks, approvals and deployments recorded against it.',
+    example: hasEngine
+      ? "release({action:'run_checks', changeId:'chg_4f2'})"
+      : "release({action:'record_check', changeId:'chg_4f2', check:{name:'tests', status:'passed'}})",
+  };
+}
+
 /**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
  * what the UI shows in the Tools tab.
@@ -284,14 +344,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
   },
-  release: {
-    name: 'release',
-    summary: 'Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.',
-    whenToUse: 'Use when the user asks Proteus to change its own app, UI, prompts, or deployment. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
-    whenNotToUse: 'Not for ordinary project work, and not for adding a workspace dashboard — that is workspace.createView, which needs no deploy.',
-    result: 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.',
-    example: "release({action:'run_checks', changeId:'chg_4f2'})",
-  },
+  release: releaseToolSpec(true),
 };
 
 /** Render a spec into the JSON-schema tool docstring. Providers weight the

@@ -722,7 +722,7 @@ export abstract class ActorAgent extends Think<Env> {
       ...(liveOpts ? { replayLiveTurn: () => streamText(liveOpts).toUIMessageStream() } : {}),
     }).then((result) => {
       // What a DO does with the verdict: a note in the durable event log, so
-      // the Reasoning surface shows the comparison happened.
+      // the Exploration surface shows the comparison happened.
       if (!result) return;
       if (!result.skipped && result.evaluation && this._currentRunId) {
         try {

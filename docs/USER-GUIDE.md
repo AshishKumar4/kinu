@@ -135,9 +135,12 @@ proteus jobs jarvis       # background jobs, and cancel them
 ```
 
 The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
-has the same information as six work surfaces — Output, Brain, Reasoning,
-Releases, Tasks, Environment — plus the Evolution Changelog, where you approve or
-revert the changes the agent proposes to itself.
+has the same information, split across work surfaces named for what you go there
+to find out: **Output** (what it produced), **Self** (what it is — identity,
+memory, what it has learned, what it has changed about itself), **Exploration**
+(where it tried more than one thing), **Releases** (what it shipped),
+**Environment** (where it works), plus the Evolution Changelog, where you approve
+or revert the changes the agent proposes to itself.
 
 Proteus can add work surfaces of its own. Ask it for a dashboard and it publishes
 a **view**: a tab, after the six, marked with a sparkle and labelled *written by

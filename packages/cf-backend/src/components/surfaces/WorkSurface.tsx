@@ -1,8 +1,14 @@
 /**
  * Work Surface — the right column of the RUN altitude. A thin segmented
- * switcher over the workspace's pinned work surfaces (Output · Brain ·
- * Reasoning · Releases · Tasks · Environment), NOT a row of co-equal debug
+ * switcher over the workspace's pinned work surfaces (Output · Self ·
+ * Exploration · Releases · Tasks · Environment), NOT a row of co-equal debug
  * tabs. This owns the switcher chrome + dispatch.
+ *
+ * The naming rule for anything added here: a label names what the reader goes
+ * there to find out, never the machinery that produces it. "Self" is what the
+ * agent IS — identity, memory, learned tools, scaffold, its own changelog —
+ * and "Exploration" is where it tried more than one thing. Neither was named
+ * for the component behind it, and neither should be.
  */
 import { useEffect, useRef } from "react";
 import {
@@ -16,15 +22,15 @@ import type { ExecutorInfo } from "@/lib/executors";
 import type { ToolInfo, MemoryEntry, MCTSNode, BackgroundJob, Rpc } from "@/lib/protocol";
 import type { AgentViewSummary } from "@proteus/core";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
-import { BrainSurface } from "./BrainSurface";
-import { ReasoningSurface } from "./ReasoningSurface";
+import { SelfSurface } from "./SelfSurface";
+import { ExplorationSurface } from "./ExplorationSurface";
 import { TasksSurface } from "./TasksSurface";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { AgentViewSurface } from "./AgentViewSurface";
 
-export const SURFACES = ["Output", "Brain", "Reasoning", "Releases", "Tasks", "Environment"] as const;
+export const SURFACES = ["Output", "Self", "Exploration", "Releases", "Tasks", "Environment"] as const;
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
@@ -41,8 +47,8 @@ export const agentViewSlug = (surface: SurfaceKind): string | null =>
 
 const SURFACE_ICON: Record<(typeof SURFACES)[number], React.ComponentType<{ size?: number }>> = {
   Output: MonitorIcon,
-  Brain: BrainIcon,
-  Reasoning: TreeStructureIcon,
+  Self: BrainIcon,
+  Exploration: TreeStructureIcon,
   Releases: GitDiffIcon,
   Tasks: ClockIcon,
   Environment: StackIcon,
@@ -53,13 +59,13 @@ export interface WorkSurfaceProps {
   onSurface: (s: SurfaceKind) => void;
   // Output
   pinnedPorts: PinnedPort[];
-  // Brain
+  // Self
   agentStatus: AgentStatus | null;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
-  // Reasoning
+  // Exploration
   mctsTree: MCTSNode | null;
   /** A turn is in flight — the live surfaces revalidate while it is. */
   isStreaming: boolean;
@@ -72,8 +78,8 @@ export interface WorkSurfaceProps {
   backgroundJobs: BackgroundJob[];
   runningTaskCount?: number;
   onRefreshTasks: () => void;
-  // Evolution Changelog: unseen self-changes badge the Brain tab; viewing
-  // the digest (inside Brain) zeroes it.
+  // Evolution Changelog: unseen self-changes badge the Self tab; viewing
+  // the digest (inside Self) zeroes it.
   changelogUnseen?: number;
   onChangelogSeen?: () => void;
   /** Dashboards Proteus published for this workspace. Appended after the host
@@ -110,9 +116,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
             // Live-port badge lights Output ONLY — one home per signal.
             const badge = s === "Output" ? props.pinnedPorts.length
               : s === "Tasks" ? (props.runningTaskCount ?? 0)
-              : s === "Brain" ? (props.changelogUnseen ?? 0) : 0;
+              : s === "Self" ? (props.changelogUnseen ?? 0) : 0;
             const badgeTone = s === "Tasks" ? "p-badge-warning"
-              : s === "Brain" ? "p-accent-subtle p-accent"
+              : s === "Self" ? "p-accent-subtle p-accent"
               : "p-badge-success";
             return (
               <button key={s} onClick={() => onSurface(s)} title={s} aria-current={surface === s ? "true" : undefined}
@@ -157,15 +163,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className="flex-1 overflow-y-auto p-5 min-h-0">
         <ErrorBoundary key={surface} label={surface}>
           {surface === "Output" && <OutputSurface pinnedPorts={props.pinnedPorts} executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} />}
-          {surface === "Brain" && (
-            <BrainSurface
+          {surface === "Self" && (
+            <SelfSurface
               agentStatus={props.agentStatus} tools={props.tools}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} rpc={props.rpc}
               onChangelogSeen={props.onChangelogSeen}
             />
           )}
-          {surface === "Reasoning" && <ReasoningSurface mctsTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
+          {surface === "Exploration" && <ExplorationSurface mctsTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
           {surface === "Releases" && <ReleasesSurface rpc={props.rpc} />}
           {surface === "Tasks" && <TasksSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshTasks} rpc={props.rpc} />}
           {surface === "Environment" && (

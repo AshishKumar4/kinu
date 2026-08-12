@@ -2019,7 +2019,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +
-   *  the Pareto-front membership — drives the Reasoning surface's Pareto
+   *  the Pareto-front membership — drives the Exploration surface's Pareto
    *  scatter + ancestry tree. Maps are flattened to plain objects for RPC. */
   @callable()
   async getGepaRun(runId: string): Promise<{
@@ -2071,7 +2071,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Recent branching-head runs (think strategy=heads): each split grouped by
    *  root_id with its heads (incl. the ordered per-head step trace) + the merged
-   *  synthesis — drives the Reasoning surface's Branches strip. */
+   *  synthesis — drives the Exploration surface's Branches strip. */
   @callable()
   async getHeadRuns(limit: number = 20): Promise<HeadRunView[]> {
     try { return this.headJournal.listRuns(limit); } catch { return []; }
@@ -2126,7 +2126,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The agent's world model — keyed agent_facts, most-recent first — for the
-   *  Brain surface. Wraps FactsStore (otherwise consumed only internally for
+   *  Self surface. Wraps FactsStore (otherwise consumed only internally for
    *  prompt injection). */
   @callable()
   async getFacts(limit: number = 100): Promise<Array<{

@@ -64,7 +64,7 @@ export interface SteerBranchHandle {
 
 /**
  * Spawn + run the redirect as a single head. Journaled like any head run (its
- * trace shows up on the Reasoning surface). Throws only when the runtime cannot
+ * trace shows up on the Exploration surface). Throws only when the runtime cannot
  * spawn at all.
  */
 export async function startBranchHead(

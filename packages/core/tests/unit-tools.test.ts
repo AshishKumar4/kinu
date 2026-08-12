@@ -304,6 +304,66 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect((t.memory as { description: string }).description).not.toContain('remember');
   });
 
+  // The release lane has two halves and no actor has both: an engine EARNS
+  // apply/run_checks/preview/deploy/rollback from real command output and
+  // refuses the record_* twins as assertions; without one the record_* actions
+  // are the only way the ledger learns what the agent ran itself. The schema
+  // gates on the same dep the runtime does, so neither actor reads the other's.
+  const releaseLedgerDeps = {
+    board: async () => ({}), bindSource: async () => ({}), create: async () => ({}),
+    update: async () => ({}), transition: async () => ({}), recordCheck: async () => ({}),
+    requestApproval: async () => ({}), recordDeployment: async () => ({}),
+  };
+  const releaseSchema = (releases: unknown) => {
+    const { rt } = createTestRuntime();
+    const t = buildBuiltinTools({
+      rt, craftedToolExecute: nodeCraftedExecute,
+      createExecuteTool: nodeExecFactory as never, codemodeLoader: { __test: true } as unknown,
+      releases: releases as never,
+    });
+    const release = t.release as unknown as {
+      description: string;
+      inputSchema: { jsonSchema: { properties: Record<string, { enum?: string[] }> } };
+    };
+    return { description: release.description, properties: release.inputSchema.jsonSchema.properties };
+  };
+
+  test('with an execution engine the release surface offers only what execution earns', () => {
+    const { description, properties } = releaseSchema({
+      ...releaseLedgerDeps,
+      engine: {
+        apply: async () => ({}), runChecks: async () => ({}), preview: async () => ({}),
+        deploy: async () => ({}), rollback: async () => ({}),
+      },
+    });
+    expect(properties.action!.enum).toEqual([
+      'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
+      'apply', 'run_checks', 'preview', 'deploy', 'rollback',
+    ]);
+    // The states the engine earns are refused as manual transitions, so they
+    // are not offered as ones either.
+    expect(properties.status!.enum).toEqual(['draft', 'planning', 'patching', 'awaiting_approval', 'rejected', 'failed']);
+    // The asserted-check input belongs to the ledger-only half.
+    expect(properties.check).toBeUndefined();
+    expect(description).toBe(BUILTIN_TOOL_DESCRIPTIONS.release);
+  });
+
+  test('without an execution engine the release surface is the ledger, and says so', () => {
+    const { description, properties } = releaseSchema(releaseLedgerDeps);
+    expect(properties.action!.enum).toEqual([
+      'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
+      'record_check', 'record_deployment',
+    ]);
+    // Every status is reachable here: nothing else is going to earn one.
+    expect(properties.status!.enum).toContain('deployed');
+    expect(properties.check).toBeDefined();
+    // ...and the driven-execution inputs are absent, as is their doctrine.
+    expect(properties.checks).toBeUndefined();
+    expect(properties.port).toBeUndefined();
+    expect(properties.startCommand).toBeUndefined();
+    expect(description).not.toContain('run_checks');
+  });
+
   test('run in workspace mode falls back gracefully when no shell provided', async () => {
     // Test runtime has no rt.shell — `run` must return an error string rather
     // than throwing. This lets test harnesses exercise the tool shape without

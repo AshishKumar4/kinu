@@ -1,5 +1,5 @@
 /**
- * Branches-view revalidation policy — the pure half of the Reasoning surface's
+ * Branches-view revalidation policy — the pure half of the Exploration surface's
  * head-run list.
  *
  * Nothing pushes the head journal to the client: it is written row by row as

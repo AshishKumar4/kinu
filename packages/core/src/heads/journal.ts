@@ -169,7 +169,7 @@ export class HeadJournal {
               ${Date.now()}, ${strategy})`;
   }
 
-  /** Recent runs for the Reasoning surface, grouped by root_id. Grouping is
+  /** Recent runs for the Exploration surface, grouped by root_id. Grouping is
    *  driven by head_journal (always present) so top-level splits — whose
    *  synthetic root has no head row and whose heads all have parent_id NULL —
    *  collapse into ONE run instead of N empty roots. head_runs supplies the

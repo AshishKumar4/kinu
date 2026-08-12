@@ -34,7 +34,7 @@ import { ModelPicker } from "@/components/ModelPicker";
 import { WorkSurface } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
-import { BrainSurface } from "@/components/surfaces/BrainSurface";
+import { SelfSurface } from "@/components/surfaces/SelfSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
@@ -639,7 +639,7 @@ function LandingV2() {
   );
 }
 
-/* The Brain surface: the collapsible sections and the native/code-mode
+/* The Self surface: the collapsible sections and the native/code-mode
    exposure badge, at the width Column C actually gets. */
 /* The real docstrings, from the registry the orchestrator serves them from.
    Mocking short ones is how the Tools list shipped as a wall of prose without
@@ -909,11 +909,11 @@ function SuperviseFrame() {
   );
 }
 
-function BrainFrame() {
+function SelfFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[740px] border-x p-border min-h-screen p-5">
-        <BrainSurface
+        <SelfSurface
           agentStatus={BRAIN_STATUS} tools={BRAIN_TOOLS} memory={[]}
           memoryContent={"## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n- Percentage coupons carry `kind: null` after Tuesday's migration.\n"}
           onSearchMemory={() => {}} rpc={stubRpc}
@@ -935,7 +935,7 @@ async function mount() {
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
-  else if (frame === "panels") node = <BrainFrame />;
+  else if (frame === "panels") node = <SelfFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;

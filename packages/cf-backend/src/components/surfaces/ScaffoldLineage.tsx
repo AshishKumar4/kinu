@@ -1,5 +1,5 @@
 /**
- * Scaffold lineage — the moat surface (inside Brain). The agent rewrites its
+ * Scaffold lineage — the moat surface (inside Self). The agent rewrites its
  * own inference loop; this makes that legible + tryable: a git-style version
  * lineage, the line diff of what changed, the shadow-eval per-trial verdict
  * grid that drives promotion, and Preview-live / Promote / Rollback actions.

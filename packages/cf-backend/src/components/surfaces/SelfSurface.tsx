@@ -1,7 +1,10 @@
 /**
- * Brain surface — the agent's durable self: identity, learned tools (CraftStore),
- * and long-term memory. The scaffold version-lineage + shadow-eval verdict +
- * promote/rollback (the moat) and agent_facts are layered in by the Brain phase.
+ * Self surface — the agent's durable self: identity, learned tools (CraftStore),
+ * and long-term memory, plus the scaffold version-lineage + shadow-eval verdict
+ * + promote/rollback (the moat) and agent_facts.
+ *
+ * Everything the agent IS, as opposed to what it did (Output), how it searched
+ * (Exploration), or where it works (Environment).
  */
 import { useState, useEffect } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
@@ -18,7 +21,7 @@ import { EvolutionChangelog } from "./EvolutionChangelog";
 
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
-export interface BrainSurfaceProps {
+export interface SelfSurfaceProps {
   agentStatus: AgentStatus | null;
   tools: ToolInfo[];
   memory: MemoryEntry[];
@@ -101,7 +104,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   );
 }
 
-export function BrainSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc, onChangelogSeen }: BrainSurfaceProps) {
+export function SelfSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc, onChangelogSeen }: SelfSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
   useEffect(() => { rpc<Fact[]>("getFacts", [100]).then(setFacts).catch(() => {}); }, [rpc]);

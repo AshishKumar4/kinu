@@ -1,8 +1,12 @@
 /**
- * Reasoning surface — the agent's search & exploration, across the three real
- * strategies it can run: MCTS (the d3 tree + node inspector), branching Heads
- * (think strategy=heads → getHeadRuns), and GEPA offline optimisation (Pareto
- * front + ancestry → getGepaRuns / getGepaRun). All bound to wired backends.
+ * Exploration surface — where the agent tried more than one thing, across the
+ * three real strategies it can run: MCTS (the d3 tree + node inspector),
+ * branching Heads (think strategy=heads → getHeadRuns), and GEPA offline
+ * optimisation (Pareto front + ancestry → getGepaRuns / getGepaRun). All bound
+ * to wired backends.
+ *
+ * NOT the chat's thinking text — that streams inline as reasoning blocks in the
+ * transcript, which is why this surface does not wear that word.
  */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
@@ -22,14 +26,14 @@ import { branchesRevalidateMs } from "./head-runs";
 
 type SubView = "mcts" | "branches" | "gepa" | "quality";
 
-export interface ReasoningSurfaceProps {
+export interface ExplorationSurfaceProps {
   mctsTree: MCTSNode | null;
   /** A turn is in flight — new head runs and steps land while it is. */
   isStreaming: boolean;
   rpc: Rpc;
 }
 
-export function ReasoningSurface({ mctsTree, isStreaming, rpc }: ReasoningSurfaceProps) {
+export function ExplorationSurface({ mctsTree, isStreaming, rpc }: ExplorationSurfaceProps) {
   const { agentId } = useParams();
   const [view, setView] = useState<SubView>("mcts");
   const tabs: Array<{ id: SubView; label: string; icon: React.ComponentType<{ size?: number }> }> = [

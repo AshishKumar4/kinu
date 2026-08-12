@@ -52,8 +52,8 @@ export type ViewDataSource = (typeof VIEW_DATA_SOURCES)[number];
  */
 export const RESERVED_VIEW_TITLES: readonly string[] = [
   'output',
-  'brain',
-  'reasoning',
+  'self',
+  'exploration',
   'releases',
   'tasks',
   'environment',
