@@ -39,7 +39,7 @@ graph TB
     end
 
     Orch["orchestrator (default agent)<br/>the workspace's voice"] --> WS
-    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>parent's files mounted at /workspace over RPC"] -.->|report events| Orch
+    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>parent's files mounted at /parent over RPC"] -.->|report events| Orch
     Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>bare per-head scratch VFS"] -.->|findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
@@ -118,7 +118,9 @@ worker-held parent stub can create one.
 A subordinate is a *durable* teammate, not a one-shot call. It has its own
 SQLite, runs the full turn loop, keeps its own evolution engine and history, and
 survives hibernation. It sees the workspace's files through
-`createParentRpcMountVFS`, mounted at `/workspace` with `consistency: 'durable'`
+`createParentRpcMountVFS`, mounted at `/parent` (not `/workspace` — that name is
+already the `run` tool's `runtime: "workspace"`, the subordinate's own emulated
+scratch shell) with `consistency: 'durable'`
 and `credentialsStayInHost: true`; the five parent-side methods it calls
 (`readWorkspaceFile`, `writeWorkspaceFile`, `listWorkspaceFiles`,
 `statWorkspaceFile`, `deleteWorkspaceFile`) deliberately carry no `@callable`,

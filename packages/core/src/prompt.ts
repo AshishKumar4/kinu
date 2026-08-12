@@ -164,7 +164,7 @@ function renderToolsSection(surface: PromptSurface): string {
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   switch (exec.name) {
       case 'workspace':
-        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state; the user\'s PC and a full Linux sandbox are the other runtimes below.';
+        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state. It starts EMPTY and stays that way — it is never a repository checkout or a view onto any real machine, and it runs no real binaries; the user\'s PC and a full Linux sandbox are the other runtimes below, and are where real code actually lives.';
       case 'nimbus':
         return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
       case 'sandbox':

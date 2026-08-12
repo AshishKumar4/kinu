@@ -428,27 +428,31 @@ class MemoryParentRpcHandle implements ParentRpcFileHandle {
 }
 
 describe('composite routing over the mount adapters', () => {
-  test("the /workspace RPC mount round-trips the parent file plane", async () => {
+  test("the /parent RPC mount round-trips the parent file plane", async () => {
+    // Named /parent, not /workspace: the `run` tool's `runtime: "workspace"`
+    // already names the caller's own emulated scratch shell (see exploration.ts
+    // and cli-backend/runtime.ts's buildCLIHeadRuntime for the production sites
+    // this mirrors).
     const handle = new MemoryParentRpcHandle();
     const composite = new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) });
-    composite.mount('workspace', {
+    composite.mount('parent', {
       vfs: createParentRpcMountVFS(handle),
       policy: { readOnly: false, rootPath: '', consistency: 'durable' },
     });
 
-    expect(await composite.readdir('/workspace')).toEqual([]);
+    expect(await composite.readdir('/parent')).toEqual([]);
     expect(handle.calls.at(-1)).toEqual({ method: 'list', path: '' });
-    await composite.mkdir('/workspace/src', { recursive: true });
-    await composite.writeFile('/workspace/src/index.ts', 'export const shared = true;');
-    expect(await composite.readFile('/workspace/src/index.ts', { encoding: 'utf8' })).toBe('export const shared = true;');
-    expect(await composite.readdir('/workspace/src')).toEqual(['index.ts']);
-    expect(await composite.stat('/workspace/src/index.ts')).toEqual({ size: 27, mtimeMs: 1, isDir: false });
-    await composite.unlink('/workspace/src/index.ts');
-    expect(await composite.exists('/workspace/src/index.ts')).toBe(false);
+    await composite.mkdir('/parent/src', { recursive: true });
+    await composite.writeFile('/parent/src/index.ts', 'export const shared = true;');
+    expect(await composite.readFile('/parent/src/index.ts', { encoding: 'utf8' })).toBe('export const shared = true;');
+    expect(await composite.readdir('/parent/src')).toEqual(['index.ts']);
+    expect(await composite.stat('/parent/src/index.ts')).toEqual({ size: 27, mtimeMs: 1, isDir: false });
+    await composite.unlink('/parent/src/index.ts');
+    expect(await composite.exists('/parent/src/index.ts')).toBe(false);
 
     expect(handle.calls).toContainEqual({ method: 'write', path: 'src' });
     expect(handle.calls).toContainEqual({ method: 'write', path: 'src/index.ts' });
-    expect(handle.calls.every(({ path }) => !path.startsWith('/workspace'))).toBe(true);
+    expect(handle.calls.every(({ path }) => !path.startsWith('/parent'))).toBe(true);
   });
 
   test('the parent RPC mount preserves binary bytes and typed errors', async () => {

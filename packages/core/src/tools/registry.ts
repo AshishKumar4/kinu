@@ -264,8 +264,16 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     // cores, so `make -j$(nproc)` forked 32 compilers into 2GB. The live
     // execution-status block carries the measured cpus/mem when the runtime
     // declares them; this is the sentence that tells the model to use them.
+    //
+    // The other recurring error this doctrine exists to stop: a fork given
+    // `run` and no `execute_tools` never sees the workspace-namespace warning
+    // that lives on execute_tools's own doctrine, so it hits the same trap —
+    // `runtime: 'workspace'` reads as a real machine because the label says
+    // so, then a real-machine path against it comes back empty or ENOENT and
+    // gets misread as "nothing is here" instead of "wrong runtime."
     doctrine:
-      'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them.',
+      'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them. '
+      + '`runtime: "workspace"` is Proteus\'s own internal virtual filesystem, emulated with a small fixed command set — it never contains a repository checkout or any real machine\'s files, and running programs there fails outright. A path that looks like it belongs to a real machine or container (e.g. `/workspace/...`) resolves against whichever runtime actually owns it, not this one — pick that runtime explicitly.',
     result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
     example: "run({runtime:'sandbox', command:'npm test'})",
   },

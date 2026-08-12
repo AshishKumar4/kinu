@@ -57,7 +57,7 @@ async function execPipeline(vfs: VFS, pipeline: ParsedPipeline, stdin?: string, 
 			const args = cmd.argv.slice(1);
 
 			if (PROGRAM_COMMANDS.has(name)) {
-				return { stdout: "", stderr: `sh: cannot execute programs. Use sandbox_exec for: ${name}`, exitCode: 127 };
+				return { stdout: "", stderr: `sh: ${name}: cannot execute programs — this is Proteus's own internal scratch filesystem, not a real machine. Use the run tool against a real runtime (this turn's Execution environments list which ones are available) to run ${name}.`, exitCode: 127 };
 			}
 			if (SHELL_BUILTINS.has(name)) {
 				return { stdout: "", stderr: `sh: ${name}: stateless shell — specify full paths`, exitCode: 1 };
@@ -66,7 +66,7 @@ async function execPipeline(vfs: VFS, pipeline: ParsedPipeline, stdin?: string, 
 			const fn = COMMANDS[name];
 			if (!fn) {
 				const supported = Object.keys(COMMANDS).join(", ");
-				return { stdout: "", stderr: `sh: command not found: ${name}. Supported: ${supported}`, exitCode: 127 };
+				return { stdout: "", stderr: `sh: ${name}: command not found. This is Proteus's own internal virtual filesystem — an emulated scratch shell with a small fixed command set, never a repository checkout or a real machine, and it runs no real binaries. Commands available here: ${supported}. For a real shell, use the run tool against one of this turn's other available runtimes.`, exitCode: 127 };
 			}
 
 			data = await fn(vfs, args, data);

@@ -137,7 +137,10 @@ export class SubordinateAgent extends ActorAgent {
       stat: (path) => parent.statWorkspaceFile(path),
       delete: (path) => parent.deleteWorkspaceFile(path),
     };
-    this.rt.compositeVfs.mount('workspace', {
+    // Named `/parent`, not `/workspace` — the `run` tool's `runtime: "workspace"`
+    // already names this subordinate's OWN emulated scratch shell (see
+    // exploration.ts's headRuntime() for the same choice on the head side).
+    this.rt.compositeVfs.mount('parent', {
       vfs: createParentRpcMountVFS(handle),
       policy: {
         readOnly: false,

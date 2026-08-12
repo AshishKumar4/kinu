@@ -169,7 +169,7 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   if (hasHeadTool(tools, 'execute_tools')) {
     lines.push(
       '- execute_tools runs JavaScript against the SAME resources your parent agent has. `workspace.*` file ops address a mount table: '
-      + '`/workspace/…` is the parent agent\'s durable workspace (start here — the code and data you were spawned to study usually live there), '
+      + '`/parent/…` is the parent agent\'s durable workspace (start here — the code and data you were spawned to study usually live there), '
       + '`/sandbox/…` and `/nimbus/…` are live windows into its containers, `/pc/…` is the user\'s machine, and `/local/…` is YOUR private scratch. '
       + 'Mounts are the FILE plane only: run commands through the environment\'s own namespace (`sandbox.*`, `nimbus.*`, `laptop.*`), which takes '
       + 'that environment\'s NATIVE paths, not mount paths. `web.*` and `llm.query` are also in scope.',
@@ -177,8 +177,9 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   }
   if (hasHeadTool(tools, 'run')) {
     lines.push(
-      '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments; '
-      + 'the default `workspace` runtime is only YOUR private scratch shell.',
+      '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments. '
+      + 'The `workspace` runtime is a DIFFERENT thing from the `/parent` mount above — it is only YOUR OWN empty scratch shell, never the parent\'s files, '
+      + 'and it runs no real binaries; a `/parent/…` or `/sandbox/…` path means nothing there.',
     );
   }
   if (hasHeadTool(tools, 'file')) {

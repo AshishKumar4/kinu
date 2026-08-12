@@ -2,7 +2,7 @@
 // the parent runtime: the parent's real host executor + files, a private durable
 // scratch. These tests drive a full HeadController split → run → merge cycle with
 // a prompt-aware fake model, assert the head's real tool surface, and prove the
-// runtime-level fork capability (real /workspace files + real `run laptop` exec)
+// runtime-level fork capability (real /parent files + real `run laptop` exec)
 // that the caffe fork lacked — all without a network LLM.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
@@ -208,9 +208,9 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       parentRuntime: parent, cwd: dir, agentId: 'h', agentName: 'head-h',
     });
 
-    // Real workspace files are visible through the /workspace mount — the exact
+    // Real workspace files are visible through the /parent mount — the exact
     // thing the old :memory:-backed fork could not see.
-    const seen = await rt.storage.vfs.readFile('/workspace/hello.txt', { encoding: 'utf8' });
+    const seen = await rt.storage.vfs.readFile('/parent/hello.txt', { encoding: 'utf8' });
     expect(seen).toBe('from the real workspace');
 
     // Real commands run through the parent's shared laptop executor.
@@ -337,7 +337,7 @@ describe("a local head's scratch is a real store, private to it, and swept when 
 });
 
 /**
- * A head model that writes its own file into the SHARED /workspace, waits until
+ * A head model that writes its own file into the SHARED /parent, waits until
  * every sibling has done the same, and then extends it. The barrier is the whole
  * point: at the moment either head extends its file, BOTH heads' files exist on
  * the shared plane, so a design that answered "what did this head change?" by
@@ -360,7 +360,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       stepsByHead.set(marker, step);
       const write = (content: string) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
-        input: JSON.stringify({ action: 'write', path: `/workspace/${marker}.ts`, content }),
+        input: JSON.stringify({ action: 'write', path: `/parent/${marker}.ts`, content }),
       }], 'tool-calls');
       if (step === 1) return write('one\n');
       if (step === 2) { await arrive(); return write('one\ntwo\nthree\n'); }
@@ -390,10 +390,10 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
     // Each head reports exactly its own file, at its NET line count (two writes
     // to that path, one entry, three lines).
     expect(alpha.fileChanges).toEqual([
-      { path: '/workspace/alpha.ts', status: 'added', added: 3, removed: 0 },
+      { path: '/parent/alpha.ts', status: 'added', added: 3, removed: 0 },
     ]);
     expect(beta.fileChanges).toEqual([
-      { path: '/workspace/beta.ts', status: 'added', added: 3, removed: 0 },
+      { path: '/parent/beta.ts', status: 'added', added: 3, removed: 0 },
     ]);
   });
 

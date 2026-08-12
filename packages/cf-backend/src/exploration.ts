@@ -121,8 +121,12 @@ export class ExplorationAgent extends Agent<Env> {
    * I ride" at all.
    *
    * Storage stays this facet's own, so `/local` is a private scratch siblings
-   * can't see; the parent's durable workspace files arrive as the `/workspace`
-   * mount over the same parent RPC handle subordinates use.
+   * can't see; the parent's durable workspace files arrive as the `/parent`
+   * mount over the same parent RPC handle subordinates use. Named `/parent`,
+   * not `/workspace`: the `run` tool's `runtime: "workspace"` already names
+   * this facet's OWN emulated scratch shell, and a head that typed a `/workspace`
+   * path into `run` (reading the mount doctrine, not the runtime enum) got
+   * silent ENOENT against that unrelated empty shell — see head-inference.ts.
    */
   private _headRt: CFRuntime | null = null;
   private headRuntime(): CFRuntime {
@@ -144,7 +148,7 @@ export class ExplorationAgent extends Agent<Env> {
       stat: (path) => parent.statWorkspaceFile(path),
       delete: (path) => parent.deleteWorkspaceFile(path),
     };
-    rt.compositeVfs.mount('workspace', {
+    rt.compositeVfs.mount('parent', {
       vfs: createParentRpcMountVFS(handle),
       policy: {
         readOnly: false,

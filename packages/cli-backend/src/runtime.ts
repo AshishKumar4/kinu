@@ -320,12 +320,18 @@ export function createCLIRuntime(
  *
  * A head is the parent's execution surface with a PRIVATE durable scratch — the
  * local mirror of the cf head (own facet storage, parent exec planes, parent
- * files at /workspace). It shares the parent's REAL host executor (the `laptop`
+ * files at /parent). It shares the parent's REAL host executor (the `laptop`
  * provider → `run laptop` and codemode `laptop.*`), the parent's llm/executor/
- * schedule, and the parent's shadow-git checkpoints. Its /workspace and /pc
+ * schedule, and the parent's shadow-git checkpoints. Its /parent and /pc
  * mounts are windows onto the real host — the cwd the CLI was invoked in and the
  * machine root — so a head can read the code it was spawned to study and run
  * commands against it, exactly what the doctrine promises a fork.
+ *
+ * /parent, not /workspace: `run`'s `runtime: "workspace"` already names the
+ * PRIVATE emulated scratch shell below, and a head reading the mount doctrine
+ * then typing that runtime name expecting the parent's files would get its own
+ * empty shell instead (this is the same collision the cf head's headRuntime()
+ * fixes — see exploration.ts).
  *
  * What is PRIVATE (a scratch overlay, not an empty world): the head's own
  * SqliteFS `/local`, its Memory + CraftStore, and the emulated `workspace` shell
@@ -356,13 +362,13 @@ export function buildCLIHeadRuntime(
   const vfs = new CompositeVFS({ local: sqliteFs });
   if (opts.writeObserver) vfs.observeWrites(opts.writeObserver);
 
-  // /workspace and /pc are windows onto the REAL host — the same planes the
+  // /parent and /pc are windows onto the REAL host — the same planes the
   // parent reaches — snapshotting into the parent's shadow-git checkpoints so a
-  // head's host writes are covered by /undo too. /workspace roots at the cwd
+  // head's host writes are covered by /undo too. /parent roots at the cwd
   // (where the task files live); /pc roots at the machine root, as the parent's.
   const checkpoints = parent.checkpoints;
   const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared' };
-  vfs.mount('workspace', { vfs: createHostMountVFS(checkpoints), policy: livePolicy, workingDir: cwd });
+  vfs.mount('parent', { vfs: createHostMountVFS(checkpoints), policy: livePolicy, workingDir: cwd });
   vfs.mount('pc', {
     vfs: createHostMountVFS(checkpoints),
     policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },

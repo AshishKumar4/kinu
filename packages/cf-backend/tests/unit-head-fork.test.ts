@@ -9,8 +9,14 @@
  *
  * A head now builds a CF runtime keyed to the PARENT workspace (same container,
  * same Nimbus session, same device consent) with the parent's durable files
- * mounted at /workspace. An MCTS branch, seeded without a parent workspace by
- * spawnBranchFacet, still cannot build one at all.
+ * mounted at /parent — not /workspace, which the `run` tool's `runtime:
+ * "workspace"` already names (this facet's own empty scratch shell). The two
+ * sharing a name was a live footgun: a head reading the mount doctrine and
+ * then typing `run({runtime: 'workspace', command: 'find /workspace/...'})`
+ * lands in its own empty shell, not the parent's files, and a bare ENOENT
+ * there reads exactly like "the repo isn't here." An MCTS branch, seeded
+ * without a parent workspace by spawnBranchFacet, still cannot build one at
+ * all.
  */
 
 import { describe, expect, mock, test } from 'bun:test';
@@ -155,23 +161,23 @@ function headInput(): HeadInput {
 }
 
 describe('a head forks its parent workspace', () => {
-  test('the parent workspace files are readable at /workspace', async () => {
+  test('the parent workspace files are readable at /parent', async () => {
     const { facet, parent } = makeFacet({ 'repo/README.md': '# cloned project' });
     await facet.setSharedParent('proteus-main');
 
     const rt = facet.headRuntime();
-    const content = await rt.storage.vfs.readFile('/workspace/repo/README.md', { encoding: 'utf8' });
+    const content = await rt.storage.vfs.readFile('/parent/repo/README.md', { encoding: 'utf8' });
 
     expect(content).toBe('# cloned project');
     expect(parent.calls.map((c) => c.method)).toContain('readWorkspaceFile');
-    expect(rt.compositeVfs.listMounts().map((m) => m.name)).toContain('workspace');
+    expect(rt.compositeVfs.listMounts().map((m) => m.name)).toContain('parent');
   });
 
   test('the parent workspace directory listing reaches the head', async () => {
     const { facet } = makeFacet({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
     await facet.setSharedParent('proteus-main');
 
-    const names = await facet.headRuntime().storage.vfs.readdir('/workspace/repo');
+    const names = await facet.headRuntime().storage.vfs.readdir('/parent/repo');
     expect(names.sort()).toEqual(['package.json', 'src']);
   });
 
@@ -207,11 +213,11 @@ describe('a head forks its parent workspace', () => {
     facet.buildHeadTools(headInput(), capture);
     const rt = facet.headRuntime();
 
-    await rt.storage.vfs.writeFile('/workspace/repo/parser.ts', 'one\ntwo\nthree\n');
+    await rt.storage.vfs.writeFile('/parent/repo/parser.ts', 'one\ntwo\nthree\n');
     await rt.storage.vfs.writeFile('/local/notes.md', 'my own thinking\n');
 
     expect(capture.files.snapshot()).toEqual([
-      { path: '/workspace/repo/parser.ts', status: 'changed', added: 1, removed: 0 },
+      { path: '/parent/repo/parser.ts', status: 'changed', added: 1, removed: 0 },
     ]);
   });
 
