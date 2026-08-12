@@ -13,6 +13,9 @@
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
  *   /gallery.html?frame=viewfail → the same View when its spec stops validating
  *   /gallery.html?frame=releases → the Releases board with a pending approval
+ *   /gallery.html?frame=tasks    → the agent's own task list, in Column C's chrome
+ *   /gallery.html?frame=tasksempty → the same column before the agent has written one
+ *   /gallery.html?frame=jobs     → background jobs (what the Tasks tab used to show)
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
  *
@@ -317,7 +320,7 @@ function Shell() {
                 surface="Output" onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={[]} runningTaskCount={2} onRefreshTasks={() => {}} changelogUnseen={3} rpc={stubRpc}
+                backgroundJobs={[]} runningJobCount={2} onRefreshJobs={() => {}} changelogUnseen={3} rpc={stubRpc}
               />
             </div>
           </div>
@@ -750,7 +753,7 @@ function ViewsFrame() {
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshTasks={() => {}}
+          backgroundJobs={[]} onRefreshJobs={() => {}}
           rpc={viewRpc}
         />
       </div>
@@ -834,6 +837,116 @@ function ReleasesFrame() {
 }
 
 
+/* ── Tasks + Jobs ───────────────────────────────────────────────── */
+
+// The agent's own task list, at the shape it actually reaches: a plan several
+// steps long, one item active, one task broken into subtasks, and a finished
+// task folded away behind the second section. Photographed inside Column C's
+// chrome so the split the rename created — Tasks beside Jobs — is in frame.
+const AGENT_TASKS = [
+  {
+    id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
+    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, subtasks: [],
+  },
+  {
+    id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
+    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5,
+    subtasks: [
+      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5 },
+      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5 },
+      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5 },
+    ],
+  },
+  {
+    id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
+    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, subtasks: [],
+  },
+  {
+    id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
+    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, subtasks: [],
+  },
+];
+
+const tasksRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") return AGENT_TASKS as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+function TasksFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="Tasks" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={[]} runningJobCount={2} onRefreshJobs={() => {}}
+          rpc={tasksRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** The same column with nothing written yet — the state a fresh workspace
+ *  opens on, which is the one an empty-state has to earn its copy in. */
+function TasksEmptyFrame() {
+  const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
+    (method === "listAgentTasks" ? ([] as unknown as T) : stubRpc<T>(method, args));
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="Tasks" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={[]} onRefreshJobs={() => {}}
+          rpc={emptyRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** What the Tasks tab used to show, under the name it should always have had.
+ *  Both lifecycle halves are in frame: one job still running (cancel), two
+ *  settled (retry / dismiss). */
+const BACKGROUND_JOBS = [
+  {
+    id: "bgjob-7c1e4a92", kind: "think_heads", label: "explore three coupon-lookup fixes",
+    status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
+  },
+  {
+    id: "bgjob-2f8b1d04", kind: "execute_tools", label: "bun test packages/core",
+    status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
+    createdAt: NOW - 42e5, settledAt: NOW - 33e5,
+  },
+  {
+    id: "bgjob-9d3c6e11", kind: "run", label: "wrangler deploy --dry-run",
+    status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+    createdAt: NOW - 61e5, settledAt: NOW - 58e5,
+  },
+];
+
+function JobsFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="Jobs" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={BACKGROUND_JOBS} runningJobCount={1} onRefreshJobs={() => {}}
+          rpc={tasksRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
 /* ── Supervise ──────────────────────────────────────────────────── */
 
 // The SUPERVISE altitude — the agent over time. Every block is fed so the type
@@ -904,7 +1017,7 @@ const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
 function SuperviseFrame() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} onOpenTasks={() => {}} />
+      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} onOpenJobs={() => {}} />
     </div>
   );
 }
@@ -940,6 +1053,9 @@ async function mount() {
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
+  else if (frame === "tasks") node = <TasksFrame />;
+  else if (frame === "tasksempty") node = <TasksEmptyFrame />;
+  else if (frame === "jobs") node = <JobsFrame />;
   else if (frame === "supervise") node = <SuperviseFrame />;
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");

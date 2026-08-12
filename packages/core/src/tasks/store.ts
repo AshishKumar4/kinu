@@ -1,0 +1,204 @@
+// The agent's own task list — what it has decided to do, and how far along it
+// is. Written by the `tasks` tool and by nothing else; read by the tool, by the
+// live dynamic-context block, and by the Tasks surface.
+//
+// Deliberately NOT a workflow engine. There are no dependencies, priorities,
+// due dates or assignees, and nesting stops at one level: an item is either a
+// task or a subtask of a task. Anything deeper is a plan the agent should be
+// writing down as prose, not a shape this table should learn to hold.
+//
+// Ids are `t1`, `t2`, … — minted from a per-workspace sequence, short enough
+// that the model refers to them in prose ("t4 is blocked on t2") and stable for
+// the life of the workspace, which is what makes them referable at all.
+
+import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+
+export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
+export type TaskStatus = (typeof TASK_STATUSES)[number];
+
+const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
+
+export interface AgentTask {
+  id: string;
+  /** The parent task's id, or null for a top-level task. */
+  parentId: string | null;
+  title: string;
+  status: TaskStatus;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/** One top-level task with the subtasks written under it. */
+export interface AgentTaskTree extends AgentTask {
+  subtasks: AgentTask[];
+}
+
+interface Row {
+  id: string; parent_id: string | null; title: string; status: string;
+  created_at: number; updated_at: number;
+}
+
+function toTask(r: Row): AgentTask {
+  return {
+    id: r.id,
+    parentId: r.parent_id,
+    title: r.title,
+    status: (TASK_STATUSES as readonly string[]).includes(r.status) ? r.status as TaskStatus : 'open',
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+  };
+}
+
+export function initTaskListTable(execRaw: RawSqlExec): void {
+  execRaw(`CREATE TABLE IF NOT EXISTS agent_tasks (
+    id         TEXT PRIMARY KEY,
+    seq        INTEGER NOT NULL,
+    parent_id  TEXT,
+    title      TEXT NOT NULL,
+    status     TEXT NOT NULL DEFAULT 'open',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_agent_tasks_status ON agent_tasks(status)`);
+}
+
+/** What `add` refused, and why — the model gets the reason, never a silent drop. */
+export interface TaskAddRejection {
+  readonly title: string;
+  readonly reason: string;
+}
+
+export interface TaskAddResult {
+  readonly added: AgentTask[];
+  readonly rejected: TaskAddRejection[];
+}
+
+/** A title long enough to be a real step, short enough to stay one line in the
+ *  live context block. Titles arrive from the model, so the bound is enforced
+ *  here rather than trusted. */
+export const MAX_TASK_TITLE_CHARS = 200;
+
+export class TaskListStore {
+  constructor(private readonly sql: SqlExecutor) {}
+
+  /**
+   * Append titles to the list, optionally as subtasks of `parentId`.
+   *
+   * Batched because a plan is written at once: the alternative is one tool call
+   * per step, which costs a model round trip per line of a list it already has
+   * in mind.
+   */
+  add(titles: readonly string[], parentId: string | null, now: number): TaskAddResult {
+    const parent = parentId === null ? null : this.get(parentId);
+    if (parentId !== null && !parent) {
+      return { added: [], rejected: titles.map((title) => ({ title, reason: `no task ${parentId}` })) };
+    }
+    // One level, on purpose: a subtask of a subtask is a tree, and a tree is
+    // the workflow engine this list refuses to become.
+    if (parent && parent.parentId !== null) {
+      return {
+        added: [],
+        rejected: titles.map((title) => ({
+          title,
+          reason: `${parent.id} is itself a subtask — subtasks nest one level only`,
+        })),
+      };
+    }
+
+    const added: AgentTask[] = [];
+    const rejected: TaskAddRejection[] = [];
+    let seq = this.nextSeq();
+    for (const raw of titles) {
+      const title = raw.trim();
+      if (title.length === 0) {
+        rejected.push({ title: raw, reason: 'empty title' });
+        continue;
+      }
+      if (title.length > MAX_TASK_TITLE_CHARS) {
+        rejected.push({ title, reason: `title over ${MAX_TASK_TITLE_CHARS} characters` });
+        continue;
+      }
+      const id = `t${seq}`;
+      this.sql`INSERT INTO agent_tasks (id, seq, parent_id, title, status, created_at, updated_at)
+        VALUES (${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${now})`;
+      added.push({ id, parentId, title, status: 'open', createdAt: now, updatedAt: now });
+      seq++;
+    }
+    return { added, rejected };
+  }
+
+  /** Set an item's status. Null when there is no such id. */
+  setStatus(id: string, status: TaskStatus, now: number): AgentTask | null {
+    if (!this.get(id)) return null;
+    this.sql`UPDATE agent_tasks SET status=${status}, updated_at=${now} WHERE id=${id}`;
+    return this.get(id);
+  }
+
+  get(id: string): AgentTask | null {
+    const rows = this.sql<Row>`SELECT id, parent_id, title, status, created_at, updated_at
+      FROM agent_tasks WHERE id=${id} LIMIT 1`;
+    return rows[0] ? toTask(rows[0]) : null;
+  }
+
+  /** How many of a task's subtasks are still open or active — the one thing an
+   *  agent closing a parent cannot see from the parent row. */
+  countOpenSubtasks(id: string): number {
+    const rows = this.sql<{ n: number }>`
+      SELECT COUNT(*) AS n FROM agent_tasks WHERE parent_id=${id} AND status IN ('open', 'active')`;
+    return rows[0]?.n ?? 0;
+  }
+
+  /** The whole list in write order, parents each carrying their subtasks. */
+  list(limit = 200): AgentTaskTree[] {
+    return nest(this.rows(limit));
+  }
+
+  /** Only the items still to be done, in write order — the live-context roster.
+   *  A parent is included when it or any of its subtasks is still open, so a
+   *  subtask never renders orphaned from the task it belongs to. */
+  listOpen(limit = 200): AgentTaskTree[] {
+    const trees = nest(this.rows(limit));
+    const open: AgentTaskTree[] = [];
+    for (const tree of trees) {
+      const subtasks = tree.subtasks.filter((t) => OPEN_STATUSES.has(t.status));
+      if (OPEN_STATUSES.has(tree.status) || subtasks.length > 0) open.push({ ...tree, subtasks });
+    }
+    return open;
+  }
+
+  /** How many items the list holds in total — what a capped read elided. */
+  count(): number {
+    const rows = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM agent_tasks`;
+    return rows[0]?.n ?? 0;
+  }
+
+  private rows(limit: number): AgentTask[] {
+    return this.sql<Row>`SELECT id, parent_id, title, status, created_at, updated_at
+      FROM agent_tasks ORDER BY seq ASC LIMIT ${limit}`.map(toTask);
+  }
+
+  private nextSeq(): number {
+    const rows = this.sql<{ n: number | null }>`SELECT MAX(seq) AS n FROM agent_tasks`;
+    return (rows[0]?.n ?? 0) + 1;
+  }
+}
+
+/** Group a flat write-ordered list into parents carrying their subtasks: a task
+ *  goes under its parent when that parent is in this window, and stands on its
+ *  own when it is not. One pass — a parent is always written before its
+ *  subtasks, so it is always already in the map by the time they arrive. */
+function nest(tasks: readonly AgentTask[]): AgentTaskTree[] {
+  const seen = new Map<string, AgentTaskTree>();
+  const order: AgentTaskTree[] = [];
+  for (const task of tasks) {
+    const parent = task.parentId === null ? undefined : seen.get(task.parentId);
+    if (parent) {
+      parent.subtasks.push(task);
+      continue;
+    }
+    const tree: AgentTaskTree = { ...task, subtasks: [] };
+    seen.set(task.id, tree);
+    order.push(tree);
+  }
+  return order;
+}

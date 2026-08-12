@@ -800,7 +800,11 @@ describe('buildSystemPromptSync', () => {
       // nested forks array is longer than staff's flat role/mission). It sits
       // close to this ceiling on purpose — the next example that grows should
       // be a reviewed decision, which is what this gate is for.
-      'Tools available this turn': 2100,
+      // 2026-08-12: RAISED 2100 → 2350 for the `tasks` line. The index costs
+      // one summary + one example per tool (237 chars here, measured 2081 →
+      // 2318); the tool's own when-to-use doctrine is schema-only, as every
+      // other tool's is, so none of it lands in this section.
+      'Tools available this turn': 2350,
       // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
       // /pc file plane; exec stays target-native) — deliberate (2026-07).
       'Execution environments': 2450,

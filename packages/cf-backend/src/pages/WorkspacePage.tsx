@@ -447,7 +447,7 @@ function ShownCaption({ state }: { state: CardState }) {
   );
 }
 
-/** A background task returning into the conversation — rendered as a centered
+/** A background job returning into the conversation — rendered as a centered
  *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
   const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
@@ -1018,11 +1018,11 @@ export default function WorkspacePage() {
   // roster reflects status for workspaces visited this session.
   useEffect(() => {
     if (!agentId) return;
-    const running = state.isStreaming || state.runningTaskCount > 0;
+    const running = state.isStreaming || state.runningJobCount > 0;
     window.dispatchEvent(new CustomEvent("proteus:workspace-activity", {
       detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
     }));
-  }, [agentId, state.isStreaming, state.runningTaskCount, state.changelogUnseen]);
+  }, [agentId, state.isStreaming, state.runningJobCount, state.changelogUnseen]);
 
   // Auto-switch the work surface to the live Preview the moment a new sandbox
   // port is exposed — the running app becomes the centre of attention.
@@ -1236,7 +1236,7 @@ export default function WorkspacePage() {
       {altitude === "supervise" ? (
         <div className="flex-1 min-h-0">
           <ErrorBoundary label="Supervise">
-            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} onOpenTasks={() => { setAltitude("run"); setSurface("Tasks"); }} />
+            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} onOpenJobs={() => { setAltitude("run"); setSurface("Jobs"); }} />
           </ErrorBoundary>
         </div>
       ) : (
@@ -1450,8 +1450,8 @@ export default function WorkspacePage() {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
-            runningTaskCount={state.runningTaskCount}
-            onRefreshTasks={state.refreshBackgroundJobs}
+            runningJobCount={state.runningJobCount}
+            onRefreshJobs={state.refreshBackgroundJobs}
             changelogUnseen={state.changelogUnseen}
             onChangelogSeen={state.clearChangelogUnseen}
             agentViews={state.agentViews}

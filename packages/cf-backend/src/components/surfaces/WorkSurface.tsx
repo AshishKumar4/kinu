@@ -1,19 +1,20 @@
 /**
  * Work Surface — the right column of the RUN altitude. A thin segmented
  * switcher over the workspace's pinned work surfaces (Output · Self ·
- * Exploration · Releases · Tasks · Environment), NOT a row of co-equal debug
- * tabs. This owns the switcher chrome + dispatch.
+ * Exploration · Releases · Tasks · Jobs · Environment), NOT a row of co-equal
+ * debug tabs. This owns the switcher chrome + dispatch.
  *
  * The naming rule for anything added here: a label names what the reader goes
  * there to find out, never the machinery that produces it. "Self" is what the
  * agent IS — identity, memory, learned tools, scaffold, its own changelog —
  * and "Exploration" is where it tried more than one thing. Neither was named
- * for the component behind it, and neither should be.
+ * for the component behind it, and neither should be. "Tasks" is the agent's
+ * own plan; "Jobs" is detached work it is waiting on.
  */
 import { useEffect, useRef } from "react";
 import {
   MonitorIcon, BrainIcon, TreeStructureIcon, ClockIcon, GitDiffIcon, StackIcon, GaugeIcon,
-  SparkleIcon,
+  ListChecksIcon, SparkleIcon,
 } from "@phosphor-icons/react";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { tabCls } from "@/components/ui/form";
@@ -25,12 +26,13 @@ import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { SelfSurface } from "./SelfSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
 import { TasksSurface } from "./TasksSurface";
+import { JobsSurface } from "./JobsSurface";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { AgentViewSurface } from "./AgentViewSurface";
 
-export const SURFACES = ["Output", "Self", "Exploration", "Releases", "Tasks", "Environment"] as const;
+export const SURFACES = ["Output", "Self", "Exploration", "Releases", "Tasks", "Jobs", "Environment"] as const;
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
@@ -50,7 +52,8 @@ const SURFACE_ICON: Record<(typeof SURFACES)[number], React.ComponentType<{ size
   Self: BrainIcon,
   Exploration: TreeStructureIcon,
   Releases: GitDiffIcon,
-  Tasks: ClockIcon,
+  Tasks: ListChecksIcon,
+  Jobs: ClockIcon,
   Environment: StackIcon,
 };
 
@@ -74,10 +77,10 @@ export interface WorkSurfaceProps {
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
-  // Background tasks (Tasks surface) + live running count for its tab badge.
+  // Background jobs (Jobs surface) + live running count for its tab badge.
   backgroundJobs: BackgroundJob[];
-  runningTaskCount?: number;
-  onRefreshTasks: () => void;
+  runningJobCount?: number;
+  onRefreshJobs: () => void;
   // Evolution Changelog: unseen self-changes badge the Self tab; viewing
   // the digest (inside Self) zeroes it.
   changelogUnseen?: number;
@@ -106,7 +109,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
           append its own, the strip overflows and an `ml-auto` button scrolls
           away with everything else. */}
       <div className="border-b p-border shrink-0 flex items-stretch">
-        {/* Six labelled surfaces need ~600px. Below that the switcher condenses
+        {/* The labelled surfaces need ~600px. Below that the switcher condenses
             to icons and only the current surface keeps its word, so the row
             stays one thin line instead of clipping a label; the strip still
             scrolls as the last resort. */}
@@ -115,9 +118,9 @@ export function WorkSurface(props: WorkSurfaceProps) {
             const Icon = SURFACE_ICON[s];
             // Live-port badge lights Output ONLY — one home per signal.
             const badge = s === "Output" ? props.pinnedPorts.length
-              : s === "Tasks" ? (props.runningTaskCount ?? 0)
+              : s === "Jobs" ? (props.runningJobCount ?? 0)
               : s === "Self" ? (props.changelogUnseen ?? 0) : 0;
-            const badgeTone = s === "Tasks" ? "p-badge-warning"
+            const badgeTone = s === "Jobs" ? "p-badge-warning"
               : s === "Self" ? "p-accent-subtle p-accent"
               : "p-badge-success";
             return (
@@ -173,7 +176,8 @@ export function WorkSurface(props: WorkSurfaceProps) {
           )}
           {surface === "Exploration" && <ExplorationSurface mctsTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
           {surface === "Releases" && <ReleasesSurface rpc={props.rpc} />}
-          {surface === "Tasks" && <TasksSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshTasks} rpc={props.rpc} />}
+          {surface === "Tasks" && <TasksSurface rpc={props.rpc} />}
+          {surface === "Jobs" && <JobsSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshJobs} rpc={props.rpc} />}
           {surface === "Environment" && (
             <EnvironmentSurface
               rpc={props.rpc}

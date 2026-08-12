@@ -90,6 +90,7 @@ import {
   buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
+  TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob,
   MctsSearchStore,
   // EventsHub primitives (spec §1)
@@ -986,6 +987,14 @@ export abstract class ActorAgent extends Think<Env> {
   protected get jobs(): BackgroundJobStore {
     if (!this._jobs) this._jobs = new BackgroundJobStore(this.boundSql);
     return this._jobs;
+  }
+
+  // The agent's own task list — written by the `tasks` tool, read here for the
+  // live context block and by the Tasks surface.
+  private _taskList: TaskListStore | null = null;
+  protected get taskList(): TaskListStore {
+    if (!this._taskList) this._taskList = new TaskListStore(this.boundSql);
+    return this._taskList;
   }
 
   // Durable MCTS search checkpoints — the resume record a fork(settle=mcts)
@@ -2056,6 +2065,7 @@ export abstract class ActorAgent extends Think<Env> {
       memoryTail: this._turnMemoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
+      openTasks: this.taskList.listOpen(),
       liveHeadRuns: this.headJournal.listLive(),
       missingCapabilities: this._mcpUnavailable,
     });

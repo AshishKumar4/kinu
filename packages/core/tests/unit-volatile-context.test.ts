@@ -222,11 +222,11 @@ describe('renderDynamicContextBlock', () => {
 });
 
 describe('the dynamic block carries every genuinely-live plane', () => {
-  const task = (i: number) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` });
+  const job = (i: number) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` });
 
   test('running work, delegates and parked approvals each render as their own roster', () => {
     const text = renderDynamicContextBlock({
-      tasks: [task(1)],
+      jobs: [job(1)],
       delegates: [
         { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
         { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: null },
@@ -240,9 +240,33 @@ describe('the dynamic block carries every genuinely-live plane', () => {
     expect(text).toContain('- device consent: laptop: git push origin main');
   });
 
+  test('the task list renders subtasks under their task, with status at a glance', () => {
+    const text = renderDynamicContextBlock({
+      tasks: [
+        { id: 't1', title: 'Patch the gateway', status: 'active', parentId: null },
+        { id: 't2', title: 'Find the timeout', status: 'done', parentId: 't1' },
+        { id: 't3', title: 'Add a regression test', status: 'open', parentId: null },
+      ],
+    })!;
+    expect(text).toContain('- t1 [active] Patch the gateway');
+    expect(text).toContain('  - t2 [done] Find the timeout');
+    expect(text).toContain('- t3 [open] Add a regression test');
+  });
+
+  test('the task list is capped by ROW, so a long plan cannot crowd out the block', () => {
+    const text = renderDynamicContextBlock({
+      tasks: Array.from({ length: 20 }, (_, i) => ({
+        id: `t${i + 1}`, title: `step ${i + 1}`, status: 'open', parentId: null,
+      })),
+    })!;
+    expect(text).toContain('- t15 [open] step 15');
+    expect(text).not.toContain('- t16 [open] step 16');
+    expect(text).toContain('- …and 5 more, not shown');
+  });
+
   test('each roster is capped, and what was dropped is counted honestly', () => {
     const text = renderDynamicContextBlock({
-      tasks: Array.from({ length: 12 }, (_, i) => task(i)),
+      jobs: Array.from({ length: 12 }, (_, i) => job(i)),
     })!;
     expect(text).toContain('- job-0 (think_heads)');
     expect(text).toContain('- job-7 (think_heads)');
@@ -252,14 +276,14 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 
   test('long free text from a store is clipped to one line', () => {
     const text = renderDynamicContextBlock({
-      tasks: [{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }],
+      jobs: [{ id: 'job-1', kind: 'run', label: `${'x'.repeat(400)}\nsecond line` }],
     })!;
     expect(text).toContain('…');
     expect(text.split('\n').every((line) => line.length < 200)).toBe(true);
   });
 
   test('empty rosters say nothing at all', () => {
-    expect(renderDynamicContextBlock({ tasks: [], delegates: [], approvals: [] })).toBeNull();
+    expect(renderDynamicContextBlock({ jobs: [], tasks: [], delegates: [], approvals: [] })).toBeNull();
   });
 
   test('the fingerprint digests the body: same state ⇒ same tag, changed state ⇒ changed tag', () => {
@@ -278,6 +302,10 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
     memoryTail: undefined,
     executors: [] as PromptExecutorInfo[],
     runningJobs: [] as Array<{ id: string; kind: string; label: string | null }>,
+    openTasks: [] as Array<{
+      id: string; title: string; status: string;
+      subtasks: Array<{ id: string; title: string; status: string }>;
+    }>,
     liveHeadRuns: [] as Array<{ rootId: string; rationale: string; running: number; total: number }>,
     missingCapabilities: [] as Array<{ source: string; reason: string }>,
   };
@@ -289,13 +317,21 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
       memoryTail: 'lesson: read the error',
       executors: [idleSandbox],
       runningJobs: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }],
+      openTasks: [{
+        id: 't1', title: 'ship it', status: 'active',
+        subtasks: [{ id: 't2', title: 'write it', status: 'open' }],
+      }],
       liveHeadRuns: [{ rootId: 'run-7', rationale: 'two ways in', running: 2, total: 3 }],
       missingCapabilities: [{ source: 'linear', reason: 'startup timeout' }],
     });
     expect(ctx.factsBlock).toBe('- deploys = wrangler');
     expect(ctx.memoryTail).toBe('lesson: read the error');
     expect(ctx.executors).toEqual([idleSandbox]);
-    expect(ctx.tasks).toEqual([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]);
+    expect(ctx.jobs).toEqual([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]);
+    expect(ctx.tasks).toEqual([
+      { id: 't1', title: 'ship it', status: 'active', parentId: null },
+      { id: 't2', title: 'write it', status: 'open', parentId: 't1' },
+    ]);
     expect(ctx.delegates).toEqual([
       { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: 'two ways in' },
     ]);
@@ -809,7 +845,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
         ledger,
         snapshot: () => (step++ === 0
           ? { factsBlock: '- k = v' }
-          : { factsBlock: '- k = v', tasks: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }] }),
+          : { factsBlock: '- k = v', jobs: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }] }),
       },
       tools: PING,
       // Anthropic markers: the rolling tail breakpoints are what make the

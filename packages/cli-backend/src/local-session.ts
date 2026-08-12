@@ -33,7 +33,7 @@ import type {
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, JobNotResumable,
+  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
@@ -277,6 +277,9 @@ export class LocalAgentSession implements BackendHost {
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
   private readonly jobs: BackgroundJobStore;
+  /** The agent's own task list — the `tasks` tool writes it, the live context
+   *  block reads it. */
+  private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
   /** Durable MCTS search checkpoint — what makes an interrupted think(mcts)
    *  resumable instead of losing its whole budget. runMCTS creates the table
@@ -412,6 +415,7 @@ export class LocalAgentSession implements BackendHost {
     // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
     // this session as the BackendHost (enqueueTurn wakes the agent).
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
+    this.taskList = new TaskListStore(this.rt.storage.sql);
     this.headJournal = new HeadJournal(this.rt.storage.sql);
     this.mctsSearchStore = new MctsSearchStore(this.rt.storage.sql);
     this.config = createAgentConfigStore(this.rt.storage.sql);
@@ -1944,6 +1948,7 @@ export class LocalAgentSession implements BackendHost {
       memoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
+      openTasks: this.taskList.listOpen(),
       liveHeadRuns: this.headJournal.listLive(),
       missingCapabilities: this.mcpUnavailable,
     });

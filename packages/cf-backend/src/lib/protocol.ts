@@ -113,8 +113,8 @@ export interface SubordinateActivityEvent {
  *  wrapper, so call sites read `rpc<Foo>("getFoo", [])` cast-free. */
 export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
 
-/** A background task (auto-detached >30s tool call). Mirrors core BackgroundJob;
- *  surfaced by listBackgroundJobs for the Tasks surface + chat event cards. */
+/** A background job (auto-detached >30s tool call). Mirrors core BackgroundJob;
+ *  surfaced by listBackgroundJobs for the Jobs surface + chat event cards. */
 export interface BackgroundJob {
 	id: string;
 	kind: string;

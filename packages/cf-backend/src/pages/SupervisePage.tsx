@@ -43,11 +43,11 @@ interface TriggerRow {
 export interface SupervisePageProps {
   rpc: Rpc;
   onRunTask: (task: string) => void;
-  /** Cross-link into the RUN altitude's Tasks surface to manage a job. */
-  onOpenTasks: () => void;
+  /** Cross-link into the RUN altitude's Jobs surface to manage a job. */
+  onOpenJobs: () => void;
 }
 
-export function SupervisePage({ rpc, onRunTask, onOpenTasks }: SupervisePageProps) {
+export function SupervisePage({ rpc, onRunTask, onOpenJobs }: SupervisePageProps) {
   return (
     <div className="h-full overflow-y-auto px-6 py-5 lg:px-10 max-w-5xl mx-auto space-y-8">
       <CurriculumBlock rpc={rpc} onRunTask={onRunTask} />
@@ -55,14 +55,14 @@ export function SupervisePage({ rpc, onRunTask, onOpenTasks }: SupervisePageProp
         <RunHistoryBlock rpc={rpc} />
         <AutomationsBlock rpc={rpc} />
       </div>
-      <BackgroundTasksBlock rpc={rpc} onOpenTasks={onOpenTasks} />
+      <BackgroundJobsBlock rpc={rpc} onOpenJobs={onOpenJobs} />
     </div>
   );
 }
 
-/* ── Background tasks — supervise-level digest, cross-linking to RUN ─ */
+/* ── Background jobs — supervise-level digest, cross-linking to RUN ─ */
 
-function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () => void }) {
+function BackgroundJobsBlock({ rpc, onOpenJobs }: { rpc: Rpc; onOpenJobs: () => void }) {
   const load = useCallback(() => rpc<BackgroundJob[]>("listBackgroundJobs", [20]), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const jobs = lastValue(resource);
@@ -71,17 +71,17 @@ function BackgroundTasksBlock({ rpc, onOpenTasks }: { rpc: Rpc; onOpenTasks: () 
     <section>
       <div className="flex flex-wrap items-center gap-2 mb-3">
         <ClockIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Background tasks</h2>
+        <h2 className="text-sm font-semibold p-text">Background jobs</h2>
         {running > 0 && <Badge variant="secondary">{running} running</Badge>}
         <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={onOpenTasks}>Manage in Tasks →</Button>
+        <Button size="sm" variant="ghost" onClick={onOpenJobs}>Manage in Jobs →</Button>
       </div>
       {jobs === null ? (
         resource.status === "error"
-          ? <LoadFailure what="background tasks" message={resource.message} onRetry={reload} />
+          ? <LoadFailure what="background jobs" message={resource.message} onRetry={reload} />
           : <div className="flex justify-center py-6"><Loader size="sm" /></div>
         )
-        : jobs.length === 0 ? <p className="text-xs p-text-3">No background tasks — long tool calls (&gt;30s) detach here.</p>
+        : jobs.length === 0 ? <p className="text-xs p-text-3">No background jobs — long tool calls (&gt;30s) detach here.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {jobs.slice(0, 6).map((j) => (

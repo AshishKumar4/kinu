@@ -68,7 +68,7 @@ import {
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
   effortFor,
-  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA run lineage (the pass itself is core's evolution control plane)
@@ -1121,6 +1121,15 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return clearBackgroundJobs(this.jobs);
+  }
+
+  /** The agent's own task list, for the Tasks surface. Read-only on purpose:
+   *  the agent maintains this list from the `tasks` tool and re-reads it in
+   *  its live context, so a second writer would swap its plan underneath it
+   *  with nothing to say so. Changing what it is doing goes through chat. */
+  @callable()
+  async listAgentTasks(): Promise<AgentTaskTree[]> {
+    return this.taskList.list();
   }
 
   @callable()

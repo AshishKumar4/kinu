@@ -56,6 +56,7 @@ export const RESERVED_VIEW_TITLES: readonly string[] = [
   'exploration',
   'releases',
   'tasks',
+  'jobs',
   'environment',
   'activity',
   'changelog',

@@ -16,6 +16,7 @@ export const BUILTIN_TOOLS = [
   'skills',
   'agents',
   'memory',
+  'tasks',
   'web',
   'report',
   'release',
@@ -117,6 +118,20 @@ export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'sessions'] as const;
 
 /** Present only where a FactsStore is wired. */
 export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
+
+// ── Task-list doctrine (single source) ──────────────────────────────────────
+// `tasks` is its own tool rather than three more actions on `memory` because
+// the two answer different questions. `memory` is what the agent will want to
+// look up in some later turn — its own docstring rules out "temporary task
+// progress" in as many words. A task list is the opposite: live plan state
+// for the work in front of it, read back every step from the dynamic-context
+// block, closed out as the work lands, and shown to the owner on its own
+// surface. Folding it in would make `memory`'s one-sentence summary untrue and
+// put four more properties on the schema the model reads for every durable-
+// state decision.
+
+export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list'] as const;
+export type TasksToolAction = (typeof TASKS_TOOL_ACTIONS)[number];
 
 export type MemoryToolAction =
   | (typeof MEMORY_NOTE_ACTIONS)[number]
@@ -324,6 +339,26 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     example: "agents({action:'fork', task:'Why staging 502s under load', forks:[{task:'Read the gateway logs', rationale:'where the failure shows'}, {task:'Diff the last deploy', rationale:'timing points at the release'}]})",
   },
   memory: memoryToolSpec(true),
+  tasks: {
+    name: 'tasks',
+    summary: 'Your own task list for the work in front of you — write down the steps, mark one active, close it when it lands.',
+    whenToUse:
+      'Use whenever the work ahead is more than a step or two, and at the moment you learn a step has parts: '
+      + 'add writes several titles in one call, so one call records the whole plan; pass parent to file them under a task you already wrote. '
+      + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed. '
+      + 'list reads the whole list back, closed items included.',
+    // A standing fact about where the list is READ, which is what makes
+    // keeping it current worth the call.
+    doctrine:
+      'Your open items are re-rendered into your live context at every step, so this list is what you read back after a long tool call, a background job settles, or the user interrupts with something else.',
+    whenNotToUse:
+      'Do not use it for a single-step request, and keep findings, lessons and decisions in `memory` — this list holds what is still to be done, not what you learned doing it.',
+    result:
+      'add returns the new ids in order, with any title it refused and why. '
+      + 'update returns the item at its new status, and says how many of its subtasks are still open when you close a parent. '
+      + 'list returns every item, each task carrying its subtasks.',
+    example: "tasks({action:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
+  },
   web: {
     name: 'web',
     summary: 'Live web access — search for ranked results, fetch one URL as clean markdown.',

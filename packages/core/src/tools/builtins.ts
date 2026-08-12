@@ -30,12 +30,15 @@
  *                       wired), the typed keyed world model (remember / recall
  *                       / forget, gated on deps.facts) and past session
  *                       transcripts (sessions).
- *   7. web            — live web access: search / fetch. Gated on
+ *   7. tasks          — the agent's own task list: add / update / list over
+ *                       one workspace table. Unconditional; every runtime has
+ *                       rt.storage.sql.
+ *   8. web            — live web access: search / fetch. Gated on
  *                       deps.webSearch.
- *   8. report         — the subordinate's progress spine back to its parent
+ *   9. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
- *   9. release — governed product/UI self-customization lane.
+ *  10. release        — governed product/UI self-customization lane.
  *                       Gated on deps.releases.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
@@ -49,9 +52,10 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
   releaseToolActions, releaseToolSpec,
-  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS,
-  type MemoryToolAction, type ReleaseToolAction,
+  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, TASKS_TOOL_ACTIONS,
+  type MemoryToolAction, type ReleaseToolAction, type TasksToolAction,
 } from './registry.js';
+import { TaskListStore, TASK_STATUSES, type TaskStatus } from '../tasks/store.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
 import { createFileToolSteer } from './run-file-steer.js';
 import { createFileTool } from './file-tool.js';
@@ -385,6 +389,16 @@ interface WebToolInput {
   query?: string;
   limit?: number;
   url?: string;
+}
+
+/** The task-list tool's one input shape. `titles` writes, `id` + `status`
+ *  moves, and `list` needs neither. */
+interface TasksToolInput {
+  action: TasksToolAction;
+  titles?: string[];
+  parent?: string;
+  id?: string;
+  status?: TaskStatus;
 }
 
 export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
@@ -788,7 +802,88 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     },
   });
 
-  // ── 7. web — live web research (search / fetch) ───────────────────────────
+  // ── 7. tasks — the agent's own task list ──────────────────────────────────
+  // Unconditional, like `file` and `memory`: it needs one SQL handle and every
+  // runtime has one. The store is constructed here rather than injected for
+  // the same reason SessionSearchStore is — it holds no state of its own.
+  const taskList = new TaskListStore(rt.storage.sql);
+  const runTasksAction = (args: TasksToolInput): unknown => {
+    const now = Date.now();
+    switch (args.action) {
+      case 'add': {
+        const titles = Array.isArray(args.titles) ? args.titles.filter((t) => typeof t === 'string') : [];
+        if (titles.length === 0) return { error: 'tasks.add requires `titles` — one or more task titles' };
+        const { added, rejected } = taskList.add(titles, args.parent ?? null, now);
+        return {
+          added: added.map((task) => ({ id: task.id, title: task.title, parent: task.parentId })),
+          ...(rejected.length > 0 ? { rejected } : {}),
+        };
+      }
+      case 'update': {
+        if (!args.id) return { error: 'tasks.update requires `id`' };
+        if (!args.status || !(TASK_STATUSES as readonly string[]).includes(args.status)) {
+          return { error: `tasks.update requires \`status\` — one of ${TASK_STATUSES.join(', ')}` };
+        }
+        const task = taskList.setStatus(args.id, args.status, now);
+        if (!task) return { error: `no task ${args.id}` };
+        // The one thing closing a parent hides: work filed under it that is
+        // still open. Said at the moment the model would otherwise move on.
+        const openSubtasks = args.status === 'done' ? taskList.countOpenSubtasks(task.id) : 0;
+        return {
+          id: task.id, title: task.title, status: task.status,
+          ...(openSubtasks > 0 ? { open_subtasks: openSubtasks } : {}),
+        };
+      }
+      case 'list': {
+        const tasks = taskList.list();
+        const shown = tasks.reduce((n, task) => n + 1 + task.subtasks.length, 0);
+        const total = taskList.count();
+        return {
+          tasks: tasks.map((task) => ({
+            id: task.id, title: task.title, status: task.status,
+            ...(task.subtasks.length > 0
+              ? { subtasks: task.subtasks.map((sub) => ({ id: sub.id, title: sub.title, status: sub.status })) }
+              : {}),
+          })),
+          ...(total > shown ? { not_shown: total - shown } : {}),
+        };
+      }
+      default:
+        return { error: `unknown tasks action '${String(args.action)}'` };
+    }
+  };
+  tools.tasks = tool({
+    description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
+    inputSchema: jsonSchema<TasksToolInput>({
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: [...TASKS_TOOL_ACTIONS],
+          description: 'add tasks, update one task\'s status, or list the whole task list',
+        },
+        titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'For action=add: one title per task, in the order you plan to do them. Write the whole plan in one call.',
+        },
+        parent: {
+          type: 'string',
+          description: 'For action=add: the id of the task these are subtasks of (e.g. "t2"). Omit for top-level tasks. Subtasks nest one level only.',
+        },
+        id: { type: 'string', description: 'For action=update: the task id, as `add` or `list` returned it (e.g. "t3").' },
+        status: {
+          type: 'string',
+          enum: [...TASK_STATUSES],
+          description: 'For action=update: active when you start the item, done when it is finished, dropped when it is no longer needed, open to reopen it.',
+        },
+      },
+      required: ['action'],
+    }),
+    execute: async (args: TasksToolInput) => runTasksAction(args),
+  });
+
+  // ── 8. web — live web research (search / fetch) ───────────────────────────
   // One capability used as a pair: search discovers ranked results, fetch
   // retrieves one URL as clean markdown, and the doctrine is to loop them.
   // Both work key-less (DuckDuckGo + Markdown-for-Agents); a stored `tavily`
@@ -843,7 +938,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 9. report — subordinate → parent progress spine ────────────────────────
+  // ── 9. report — subordinate → parent progress spine ───────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = tool({

@@ -138,12 +138,13 @@ The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.c
 has the same information, split across work surfaces named for what you go there
 to find out: **Output** (what it produced), **Self** (what it is — identity,
 memory, what it has learned, what it has changed about itself), **Exploration**
-(where it tried more than one thing), **Releases** (what it shipped),
-**Environment** (where it works), plus the Evolution Changelog, where you approve
-or revert the changes the agent proposes to itself.
+(where it tried more than one thing), **Releases** (what it shipped), **Tasks**
+(the agent's own to-do list, as it keeps it), **Jobs** (detached work it is
+waiting on), **Environment** (where it works), plus the Evolution Changelog,
+where you approve or revert the changes the agent proposes to itself.
 
 Proteus can add work surfaces of its own. Ask it for a dashboard and it publishes
-a **view**: a tab, after the six, marked with a sparkle and labelled *written by
+a **view**: a tab, after the seven, marked with a sparkle and labelled *written by
 Proteus*. A view is data, not code — it reads workspace state you can already see
 and draws it with the same components everything else uses, so it can show you
 numbers but can never ask you for anything. "View source" shows exactly what it

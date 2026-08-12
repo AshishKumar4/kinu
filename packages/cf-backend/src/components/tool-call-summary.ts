@@ -147,6 +147,21 @@ function summarizePeers(input: Record<string, unknown>): string {
   }
 }
 
+/** The task list — an add reads by what it wrote, an update by which item it
+ *  moved and where to. */
+function summarizeTasks(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  if (action === "add") {
+    const titles = Array.isArray(input.titles) ? input.titles.filter((t) => typeof t === "string") : [];
+    const parent = str(input, "parent");
+    const head = titles.length > 1 ? `add ${titles.length} tasks` : "add";
+    const target = parent ? `${head} under ${parent}` : head;
+    return titles.length === 1 ? actionOn(target, undefined, titles[0] as string) : target;
+  }
+  if (action === "update") return actionOn(action, str(input, "id"), str(input, "status"));
+  return action;
+}
+
 function summarizeRelease(input: Record<string, unknown>): string {
   const action = str(input, "action");
   const changeId = str(input, "changeId").slice(0, 8);
@@ -195,6 +210,7 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   agents: summarizeAgents,
   memory: summarizeMemory,
+  tasks: summarizeTasks,
   web: summarizeWeb,
   // think/team/peers were unified into `agents`, fact into `memory`,
   // web_search/web_fetch into `web`, `experience` became an owner-driven
@@ -275,6 +291,10 @@ const FILE_VERBS: Record<string, string> = {
   delete: "Deleted", list: "Listed", search: "Searched", move: "Moved", copy: "Copied",
 };
 
+const TASK_VERBS: Record<string, string> = {
+  add: "Planned the work", update: "Updated the task list", list: "Read the task list",
+};
+
 const MEMORY_VERBS: Record<string, string> = {
   save: "Saved to memory", search: "Searched memory", get: "Recalled",
   set: "Recorded a fact", delete: "Forgot", list: "Listed memory",
@@ -318,6 +338,7 @@ const DESCRIBERS: Record<string, (input: Record<string, unknown>) => string> = {
   },
   agents: describeAgents,
   memory: (input) => MEMORY_VERBS[str(input, "action")] ?? "",
+  tasks: (input) => TASK_VERBS[str(input, "action")] ?? "",
   web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",

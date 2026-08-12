@@ -8,7 +8,7 @@ Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@proteus/core/tools`. The registry and descriptions
 live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
-and `memory` are unconditional; every other tool is registered when — and only
+`memory` and `tasks` are unconditional; every other tool is registered when — and only
 when — the backend wires its deps. That gating is structural rather than
 flagged, and it is how a subordinate gets `report` and never gets the `staff`
 action of `agents`.
@@ -23,7 +23,7 @@ action of `agents`.
 | `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
 | `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
-| `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
+| `tasks` | The agent's own task list — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
 | `release` | Governed release pipeline over a bound source repo — patch, check, preview, owner approval, deploy, rollback |
@@ -391,7 +391,16 @@ actions rather than three tools, the rest of filesystem work folds into the
 `execute_tools` codemode sandbox rather than living as a dozen flat
 per-operation tools, and delegation folds into `agents` rather than one tool per
 delegation shape. The whole schema surface the model sees is the 10 names plus
-their docstrings — 9,777 characters of description text
-(`BUILTIN_TOOL_DESCRIPTIONS`), ~2.4k tokens at the chars/4 estimate — and that
+their docstrings — 10,201 characters of description text
+(`BUILTIN_TOOL_DESCRIPTIONS`), ~2.6k tokens at the chars/4 estimate — and that
 stays flat as the CraftStore grows, because crafted tools live inside the
 sandbox namespace instead of the top-level schema.
+
+`tasks` is the one place that argument was re-opened and answered the other way.
+It could have been three more actions on `memory`, and it is not, because
+`memory` answers "what will I want to look up later" — its own docstring rules
+out temporary task progress — while a task list answers "what is still in front
+of me": live plan state, re-read every step out of the dynamic-context block and
+closed out as the work lands. Folding it in would have made `memory`'s summary
+untrue and put four more properties on the schema the model reads for every
+durable-state decision.

@@ -88,6 +88,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     skills: EVERYWHERE,
     agents: EVERYWHERE,
     memory: EVERYWHERE,
+    tasks: EVERYWHERE,
     web: EVERYWHERE,
     report: {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
@@ -188,6 +189,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── durable state ──
     agent_facts: EVERYWHERE,
     agent_config: EVERYWHERE,
+    // The agent's own task list. A subordinate keeps its own rather than
+    // writing into its parent's: it is given its own assignment, and one plan
+    // per actor is what makes the list mean anything.
+    agent_tasks: EVERYWHERE,
     background_jobs: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,

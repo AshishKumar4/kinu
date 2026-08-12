@@ -8,7 +8,7 @@
  *           memory/* VFS rows + memory_chunks, crafted_tools, agent_config
  *   Reset:  search_nodes, scaffold_versions, task_history, craft_scores,
  *           fibers, evolution_events, executor_output, activity_log,
- *           scaffold/* VFS rows
+ *           agent_tasks, scaffold/* VFS rows
  *   Rewrite: workspace_identity (new id/name/created_at)
  *   Insert: fork_lineage (single row)
  *

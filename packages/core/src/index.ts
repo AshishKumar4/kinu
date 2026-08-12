@@ -508,6 +508,7 @@ export {
   type DynamicApproval,
   type DynamicContext,
   type DynamicDelegate,
+  type DynamicJob,
   type DynamicTask,
   type MissingCapability,
   type TurnLocalContext,
@@ -920,6 +921,14 @@ export {
   type BackgroundPolicy, type DetachOutcome, type SessionSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
 } from './jobs/index.js';
+
+// The agent's own task list — what the `tasks` tool writes and the Tasks
+// surface reads.
+export {
+  TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
+  type AgentTask, type AgentTaskTree, type TaskStatus,
+  type TaskAddResult, type TaskAddRejection,
+} from './tasks/store.js';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {

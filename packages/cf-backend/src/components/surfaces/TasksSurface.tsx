@@ -1,125 +1,149 @@
 /**
- * Tasks surface — inspect & manage background tasks (auto-detached >30s tool
- * calls: think-heads, long execute_tools / run). Lists every job with its
- * status + result/error, and the operator controls the user asked for:
- * hard-cancel a running job, retry / dismiss a settled one, clear all settled.
+ * Tasks surface — the agent's own task list, as the agent keeps it.
  *
- * Self-contained: owns its fetch + a light poll (running jobs progress) +
- * the lifecycle RPCs. The Supervise altitude cross-links here.
+ * Read-only, deliberately. The list is the agent's plan: it writes it with the
+ * `tasks` tool and re-reads its open half out of the live context block at
+ * every step, so an owner edit here would swap the plan underneath a running
+ * turn with nothing to tell it so. Changing what the agent is doing already
+ * has a channel — say so in chat — and one writer is what keeps this list and
+ * the agent's own view of it the same list.
+ *
+ * Background jobs used to live in this tab; they are their own surface now
+ * (JobsSurface), because a detached tool call with a jobId and a result was
+ * never a to-do item.
  */
-import { useState, useCallback } from "react";
-import { Button, Badge } from "@cloudflare/kumo";
+import { useCallback } from "react";
+import { Badge } from "@cloudflare/kumo";
 import {
-  ClockIcon, XCircleIcon, ArrowClockwiseIcon, TrashIcon, CheckCircleIcon,
-  WarningCircleIcon, ProhibitIcon, SpinnerGapIcon,
+  ListChecksIcon, CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon,
 } from "@phosphor-icons/react";
-import type { Rpc, BackgroundJob } from "@/lib/protocol";
-import { EmptyState } from "./shared";
+import type { AgentTask, AgentTaskTree, TaskStatus } from "@proteus/core";
+import { LoadFailure } from "@/components/ui/LoadFailure";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import type { Rpc } from "@/lib/protocol";
+import { EmptyState, Section } from "./shared";
 
-function timeAgo(ts: number): string {
-  const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
+const STATUS_META: Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string }> = {
+  open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open" },
+  active: { icon: CircleIcon, tone: "p-accent", label: "Active" },
+  done: { icon: CheckCircleIcon, tone: "p-success", label: "Done" },
+  dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped" },
+};
+
+/** Settled items stay legible but stop competing with the work in hand. */
+function isSettled(status: TaskStatus): boolean {
+  return status === "done" || status === "dropped";
 }
 
-function statusMeta(status: BackgroundJob["status"]) {
-  switch (status) {
-    case "running": return { icon: SpinnerGapIcon, tone: "p-warning", spin: true, label: "Running" };
-    case "completed": return { icon: CheckCircleIcon, tone: "p-success", spin: false, label: "Completed" };
-    case "failed": return { icon: WarningCircleIcon, tone: "p-danger", spin: false, label: "Failed" };
-    case "cancelled": return { icon: ProhibitIcon, tone: "p-text-3", spin: false, label: "Cancelled" };
-  }
+function TaskRow({ task, depth }: { task: AgentTask; depth: number }) {
+  const meta = STATUS_META[task.status];
+  const Icon = meta.icon;
+  return (
+    <div
+      className={`flex items-start gap-2 py-1 ${depth > 0 ? "ml-4 pl-3 border-l p-border" : ""}`}
+      title={meta.label}
+    >
+      <Icon
+        size={13}
+        weight={task.status === "active" ? "fill" : task.status === "done" ? "fill" : "regular"}
+        className={`${meta.tone} shrink-0 mt-0.5`}
+      />
+      <code className="text-[10px] p-text-3 shrink-0 mt-[3px] w-7">{task.id}</code>
+      <span
+        className={`text-xs min-w-0 break-words ${
+          isSettled(task.status) ? "p-text-3 line-through" : task.status === "active" ? "p-text font-medium" : "p-text-2"
+        }`}
+      >
+        {task.title}
+      </span>
+    </div>
+  );
+}
+
+function TaskTree({ task }: { task: AgentTaskTree }) {
+  return (
+    <div className="p-card rounded-lg px-3 py-2">
+      <TaskRow task={task} depth={0} />
+      {task.subtasks.map((sub) => <TaskRow key={sub.id} task={sub} depth={1} />)}
+    </div>
+  );
 }
 
 export interface TasksSurfaceProps {
-  jobs: BackgroundJob[];
-  /** Re-fetch after a mutation; the hook also polls on its own cadence. */
-  onRefresh: () => void;
   rpc: Rpc;
 }
 
-export function TasksSurface({ jobs, onRefresh, rpc }: TasksSurfaceProps) {
-  const [busyId, setBusyId] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
+export function TasksSurface({ rpc }: TasksSurfaceProps) {
+  const load = useCallback(() => rpc<AgentTaskTree[]>("listAgentTasks", []), [rpc]);
+  // The agent writes this list mid-turn and the server never pushes it, so the
+  // view revalidates while anything is still open and stands down once
+  // everything has settled.
+  const revalidate = useCallback((tasks: AgentTaskTree[] | null) => {
+    const open = (tasks ?? []).some((t) => !isSettled(t.status) || t.subtasks.some((s) => !isSettled(s.status)));
+    return open ? 4000 : null;
+  }, []);
+  const { resource, reload } = useAsyncResource(load, revalidate);
+  const tasks = lastValue(resource);
 
-  const act = useCallback(async (id: string, method: string) => {
-    setBusyId(id);
-    setErr(null);
-    try { await rpc(method, [id]); onRefresh(); }
-    catch (e) { setErr(`${method.replace("BackgroundJob", "")} failed: ${(e as Error).message}`); }
-    finally { setBusyId(null); }
-  }, [rpc, onRefresh]);
+  if (resource.status === "error" && tasks === null) {
+    return <LoadFailure what="the task list" message={resource.message} onRetry={reload} />;
+  }
+  if (tasks === null) return <div className="text-xs p-text-3">Loading…</div>;
 
-  const clearSettled = useCallback(async () => {
-    setErr(null);
-    try { await rpc("clearBackgroundJobs", []); onRefresh(); }
-    catch (e) { setErr(`clear failed: ${(e as Error).message}`); }
-  }, [rpc, onRefresh]);
-
-  if (jobs.length === 0) {
-    return <EmptyState icon={<ClockIcon size={28} />} title="No background tasks"
-      hint="When a tool call runs longer than 30s (parallel thinking, long commands), it detaches here and the agent is woken with the result. You can cancel, retry, or dismiss them." />;
+  if (tasks.length === 0) {
+    return (
+      <EmptyState
+        icon={<ListChecksIcon size={28} />}
+        title="No tasks yet"
+        hint="When the agent takes on work with more than a step or two, it writes the steps down here and marks them off as it goes."
+      />
+    );
   }
 
-  const running = jobs.filter((j) => j.status === "running").length;
-  const settled = jobs.length - running;
+  const rows = tasks.flatMap((task) => [task, ...task.subtasks]);
+  const remaining = rows.filter((task) => !isSettled(task.status));
+  const active = remaining.filter((task) => task.status === "active");
+  // A dropped item is not work outstanding and was not work done, so it is out
+  // of the denominator entirely — counting it would report a plan as bigger
+  // than the agent ever committed to.
+  const counted = rows.filter((task) => task.status !== "dropped").length;
+  const closed = tasks.filter((task) =>
+    isSettled(task.status) && task.subtasks.every((sub) => isSettled(sub.status)));
+  const open = tasks.filter((task) => !closed.includes(task));
 
   return (
-    <div className="space-y-3 animate-fade-in">
+    <div className="space-y-4 animate-fade-in">
       <div className="flex items-center gap-2">
-        <span className="text-xs p-text-2 font-medium">{jobs.length} task{jobs.length === 1 ? "" : "s"}</span>
-        {running > 0 && <Badge variant="secondary">{running} running</Badge>}
+        <span className="text-xs p-text-2 font-medium">
+          {remaining.length} of {counted} still to do
+        </span>
+        {active.length > 0 && <Badge variant="secondary">{active.length} active</Badge>}
         <div className="flex-1" />
-        {settled > 0 && (
-          <Button size="sm" variant="ghost" onClick={clearSettled}>
-            <TrashIcon size={13} /><span className="ml-1">Clear settled</span>
-          </Button>
+        {resource.status === "error" && (
+          <span className="text-[10px] p-text-3" title={resource.message}>last refresh failed</span>
         )}
       </div>
 
-      {err && <div className="text-xs p-danger p-card rounded-lg px-3 py-2">{err}</div>}
+      {open.length > 0 && (
+        // No badge: these cards are on screen and countable. The fold below
+        // hides its contents, which is what a count is worth reading there.
+        <Section id="tasks-open" title="Still to do" icon={<ListChecksIcon size={13} className="p-text-2" />}>
+          <div className="space-y-2">
+            {open.map((task) => <TaskTree key={task.id} task={task} />)}
+          </div>
+        </Section>
+      )}
 
-      <div className="space-y-2">
-        {jobs.map((j) => {
-          const m = statusMeta(j.status);
-          const Icon = m.icon;
-          const detail = j.status === "completed" ? j.result : j.error;
-          const isBusy = busyId === j.id;
-          return (
-            <div key={j.id} className="p-card rounded-lg p-3">
-              <div className="flex items-start gap-2">
-                <Icon size={15} className={`${m.tone} shrink-0 mt-0.5 ${m.spin ? "animate-spin" : ""}`} weight={j.status === "running" ? "bold" : "fill"} />
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-medium p-text">{j.kind}</span>
-                    <code className="text-[10px] p-text-3">{j.id.replace(/^bgjob-/, "").slice(0, 8)}</code>
-                  </div>
-                  <div className="text-[10px] p-text-3">{m.label} · started {timeAgo(j.createdAt)}{j.settledAt ? ` · settled ${timeAgo(j.settledAt)}` : ""}</div>
-                  {detail && <div className="text-[10px] p-text-2 mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono">{detail}</div>}
-                </div>
-                <div className="flex items-center gap-1 shrink-0">
-                  {j.status === "running" ? (
-                    <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => act(j.id, "cancelBackgroundJob")} title="Hard-cancel — aborts the underlying work">
-                      <XCircleIcon size={13} /><span className="ml-1">Cancel</span>
-                    </Button>
-                  ) : (
-                    <>
-                      <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => act(j.id, "retryBackgroundJob")} title="Re-run with the same input">
-                        <ArrowClockwiseIcon size={13} />
-                      </Button>
-                      <Button size="sm" variant="ghost" disabled={isBusy} onClick={() => act(j.id, "dismissBackgroundJob")} title="Dismiss">
-                        <TrashIcon size={13} />
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+      {closed.length > 0 && (
+        // "Closed" rather than "Finished": a dropped task ended up here too,
+        // and it was never finished.
+        <Section id="tasks-closed" title="Closed" icon={<CheckCircleIcon size={13} className="p-text-2" />}
+          badge={<Badge variant="secondary">{closed.length}</Badge>} defaultOpen={false}>
+          <div className="space-y-2">
+            {closed.map((task) => <TaskTree key={task.id} task={task} />)}
+          </div>
+        </Section>
+      )}
     </div>
   );
 }

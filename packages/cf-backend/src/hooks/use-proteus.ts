@@ -160,7 +160,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // ports never provisions a sandbox: getExposedPorts returns [] server-side
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
-  // Background tasks (auto-detached >30s tool calls) — single source for the
+  // Background jobs (auto-detached >30s tool calls) — single source for the
   // Tasks surface + the Tasks-tab running badge (visible on any surface).
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
   // Dashboards Proteus published for this workspace — the agent-authored tabs
@@ -709,9 +709,9 @@ export function useProteus(target?: string | ProteusActorAddress) {
     executeInExecutor,
     /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
     pinnedPorts,
-    /** Background tasks + a live running count for the Tasks-tab badge. */
+    /** Background jobs + a live running count for the Jobs-tab badge. */
     backgroundJobs,
-    runningTaskCount: backgroundJobs.filter((j) => j.status === "running").length,
+    runningJobCount: backgroundJobs.filter((j) => j.status === "running").length,
     refreshBackgroundJobs,
     /** Agent-authored dashboards, as tabs. */
     agentViews,
