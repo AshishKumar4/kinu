@@ -37,7 +37,25 @@ export interface ForkDepsWiring {
     /** Resolved per call (cf: throws until the agent has an owner). */
     controller: () => HeadController;
     inheritedContext: () => SerializedMessage[];
-    onPhase: (event: SplitPhaseEvent) => void;
+    /**
+     * A FACTORY, resolved fresh at dispatch time (defaultOptions runs once
+     * per fork call, before any detach decision) rather than a plain
+     * function — so the backend can capture whatever run-scope is valid AT
+     * DISPATCH into the returned closure.
+     *
+     * This matters because a fork now detaches the instant its spawn is
+     * confirmed (the interactive surface's spawn-on-start policy): the
+     * CALLING turn can close its own run — nulling the backend's live
+     * "current run" pointer — well before the detached exploration reaches
+     * its 'split' phase, and always before it reaches 'merge' (which only
+     * fires once the whole exploration is done). A plain `onPhase` read the
+     * pointer fresh at EACH phase, so 'merge' silently landed nowhere once
+     * the pointer had moved on — the fork's cost and result vanished from the
+     * durable run-event ledger for every detached fork, not just slow ones.
+     * Binding the run id once, at dispatch, makes every phase of ONE fork
+     * call land on the SAME run regardless of how long it takes to settle.
+     */
+    onPhase: () => (event: SplitPhaseEvent) => void;
     onComplete: (merge: MergeResult, task: string) => void;
   };
 }
@@ -56,7 +74,7 @@ export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
       heads: {
         controller: wiring.heads.controller(),
         inheritedContext: wiring.heads.inheritedContext(),
-        onPhase: wiring.heads.onPhase,
+        onPhase: wiring.heads.onPhase(),
         onComplete: wiring.heads.onComplete,
       },
     }),

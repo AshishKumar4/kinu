@@ -916,7 +916,8 @@ export {
 
 // Background-job system — auto-background long tool calls + wake-on-completion.
 export {
-  BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
+  BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
+  isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type SessionSurface,

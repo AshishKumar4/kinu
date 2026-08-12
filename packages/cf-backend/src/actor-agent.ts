@@ -1073,7 +1073,11 @@ export abstract class ActorAgent extends Think<Env> {
         heads: {
           controller: () => this.getHeadController(),
           inheritedContext: () => this.readInheritedContext(),
-          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+          // Captured at dispatch, once per fork call — see emitHeadPhase.
+          onPhase: () => {
+            const runId = this._currentRunId;
+            return (event: SplitPhaseEvent) => this.emitHeadPhase(event, runId);
+          },
           onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
         },
       }),
@@ -1625,11 +1629,21 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Stream head_split / head_merge into the durable event log so SSE
-   *  subscribers + MCP `list_run_events` see the split lifecycle. */
-  private emitHeadPhase(event: SplitPhaseEvent): void {
+   *  subscribers + MCP `list_run_events` see the split lifecycle.
+   *
+   *  `runId` is captured at fork DISPATCH (getAgentsToolDeps' onPhase
+   *  factory), not read live off `_currentRunId`: a fork on the interactive
+   *  surface now detaches the instant it spawns, so the calling turn's own
+   *  run can close — and `_currentRunId` moves on to whatever turn runs next
+   *  — before 'split' fires and always before 'merge' does (it only fires once
+   *  the whole exploration finishes). Reading live would misattribute a late
+   *  phase to an unrelated later turn instead of dropping it silently, which
+   *  is worse. Passing '' (a closed run) is deliberate and distinct from
+   *  omitting it. */
+  private emitHeadPhase(event: SplitPhaseEvent, runId: string): void {
     try {
-      if (!this._currentRunId) return;
-      this.eventRecorder.emit(this._currentRunId, headPhaseRunEvent(event));
+      if (!runId) return;
+      this.eventRecorder.emit(runId, headPhaseRunEvent(event));
     } catch (err) {
       console.warn('[proteus] event emit failed at head onPhase:', err);
     }

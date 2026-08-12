@@ -811,7 +811,12 @@ describe('buildSystemPromptSync', () => {
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
-      'Code execution and learned capabilities': 1600,
+      // 2026-08-12: +4 chars. Defect-B fix: the agent.jobResult bullet used to
+      // read as a generic "read status and results" call; it now says a
+      // settled job is what it reads, and that the wake already named the id
+      // — the same "you don't need to check, you'll be told" doctrine as the
+      // Background work section, stated where this tool is introduced.
+      'Code execution and learned capabilities': 1610,
       // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
       // ONE lifetime-keyed ladder.
       // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
@@ -844,7 +849,15 @@ describe('buildSystemPromptSync', () => {
       // rung's own 2+-angles trigger, and `workspace.createTool`'s output,
       // which the Code-execution section already describes.
       'Delegation': 2250,
-      'Background work': 260,
+      // 2026-08-12: RAISED 260 → 680. Defect-B fix (background polling): the
+      // section used to say only "stop the turn; the backend will wake you" —
+      // one clause the owner's bench evidence shows the model reads as
+      // optional and routes around (agent.jobResult polled in a loop despite
+      // that exact promise already being there). It now says the work KEEPS
+      // RUNNING unwatched (so starting it again is visibly wrong, not just
+      // wasteful), and states the wake's TWO landing shapes (mid-turn / fresh
+      // turn) so "you are woken" reads as a mechanism rather than a hope.
+      'Background work': 680,
       // 2026-08: new section. Two of five benchmark failures were a solved
       // problem with a fumbled deliverable, and the prompt had no doctrine
       // that would have caught either. 2026-08: −1 framing sentence, which the

@@ -80,7 +80,7 @@ export const DELEGATION_RUNGS = {
   fork:
     'Fork (action=fork) on two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
     'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to fork. ' +
-    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, may auto-background. ' +
+    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ' +
     // The payoff-before-limitation ORDER is deliberate and preserved: opening
     // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus. What
     // changed is precision — "scored against each other by execution" flat
@@ -328,7 +328,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse:
       'Do not delegate a single short coherent change you can simply do directly, or forks that would race on the same mutable resource. Caution: every subordinate or peer message wakes that agent for a full turn, so send purposeful work.',
     result:
-      'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/dismiss return roster state. '
+      'fork produces the merged (or mcts-scored) answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
     // The fork call, because it is the one shape here a model gets wrong: the

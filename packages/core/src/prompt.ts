@@ -271,7 +271,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
       '- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.',
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder. Add `budget_usd`/`budget_tokens` when the owner names a spending limit — the host then caps that whole run cumulatively; `agent.budget()` reads what is left.',
-      '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
+      '- `agent.jobResult(jobId)` reads a settled background job\'s full result — the wake that announces a job settled names the id to read; `agent.backgroundJobs(limit?)` lists recent jobs.',
       '- `agent.compactNow()` folds the conversation at a phase boundary instead of waiting for the token trigger: the finished range is archived verbatim and stays listed in the checkpoint\'s Compaction Archive manifest, so you can still read it back.',
     ].join('\n'));
   }
@@ -387,7 +387,8 @@ function renderAgentStateSection(surface: PromptSurface): string {
   if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
     parts.push([
       '## Background work',
-      'Long fork, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
+      'Work moves to the background two ways: a fork backgrounds the moment it spawns on a live session, and a long `execute_tools` or `run` call backgrounds once it outruns the surface threshold. Either way the call returns `{ background: true, jobId }` and the work KEEPS RUNNING unwatched — never start the same work again; the running copy will land its effects.',
+      'A background job needs nothing from you while it runs, and you are woken with its full result when it settles — mid-turn if you are still working, as a fresh turn if you are idle. Finish whatever other work you have, then end your turn; the wake is how the result arrives.',
     ].join('\n'));
   }
 

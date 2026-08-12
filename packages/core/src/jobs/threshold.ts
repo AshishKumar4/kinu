@@ -19,6 +19,13 @@ export interface BackgroundPolicy {
   readonly detachAfterMs: number;
   /** How long teardown waits on work that has not settled before leaving it. */
   readonly settleGraceMs: number;
+  /** Whether SPAWN-shaped work (a fork — a process whose completion arrives as
+   *  an event, not a result this turn is waiting on) detaches the moment the
+   *  spawn is confirmed started, instead of riding `detachAfterMs`. True only
+   *  where a session outlives the turn to receive the wake; on a one-shot
+   *  surface the turn is the only consumer the result will ever have, so a
+   *  fork there is result-shaped like everything else. */
+  readonly detachSpawnOnStart: boolean;
 }
 
 /**
@@ -27,7 +34,10 @@ export interface BackgroundPolicy {
  * `interactive` — a human is watching the stream, so a tool call that outlives
  * their patience must hand back a handle fast; the wake turn arrives in the
  * same live session, and teardown can afford to wait a while for in-flight work
- * because the session was going to stay open anyway.
+ * because the session was going to stay open anyway. A fork detaches the
+ * moment it is confirmed started rather than after the threshold: its duration
+ * is not unknown — it is long by construction — so the threshold wait could
+ * only ever be dead air in the chat.
  *
  * `one-shot` — nobody is waiting on a fast turn, and the process exits after the
  * answer. Here a detach is expensive, not cheap: it truncates the turn, forces a
@@ -42,8 +52,8 @@ export interface BackgroundPolicy {
  * of pure idle tail in the same run.
  */
 export const BACKGROUND_POLICY: Readonly<Record<SessionSurface, BackgroundPolicy>> = {
-  interactive: { detachAfterMs: 30_000, settleGraceMs: 300_000 },
-  'one-shot': { detachAfterMs: 300_000, settleGraceMs: 120_000 },
+  interactive: { detachAfterMs: 30_000, settleGraceMs: 300_000, detachSpawnOnStart: true },
+  'one-shot': { detachAfterMs: 300_000, settleGraceMs: 120_000, detachSpawnOnStart: false },
 };
 
 /** Returned to the model when a tool call is moved to the background. */
@@ -136,8 +146,72 @@ export async function withBackgroundThreshold<T>(
     jobId: outcome.jobId,
     kind,
     message:
-      `The "${kind}" task is taking longer than ${Math.round(thresholdMs / 1000)}s, so it is now ` +
-      `running in the background. You will be woken with the result when it completes ` +
-      `(jobId=${outcome.jobId}). End your turn now; do not wait.`,
+      `The "${kind}" call outran the ${Math.round(thresholdMs / 1000)}s foreground threshold, so it ` +
+      `is now background job ${outcome.jobId} — still running, NOT cancelled: its effects will land, ` +
+      `and you will be woken with the full result when it settles. Until that wake arrives the job has ` +
+      `no result to read, so do not check on it and do not start the same work again (a second copy ` +
+      `would race this one). Do other work if you have any; otherwise end your turn.`,
   };
+}
+
+/**
+ * withSpawnDetach — the spawn-shaped sibling of {@link withBackgroundThreshold}.
+ *
+ * The threshold race is a heuristic for tools whose duration is UNKNOWN: wait a
+ * bit, and detach only work that proved slow. A fork is not unknown — it spawns
+ * a process that is long by construction, and its completion arrives as a wake
+ * event, not as a result this turn is blocked on. So it does not ride the
+ * timer: the tool announces the moment its spawn is validated and in flight
+ * (the {@link SPAWN_STARTED_OPTION} callback), and the call detaches right
+ * then. Work that settles WITHOUT announcing — a validation error, an action
+ * the spawn gate does not cover — returns inline exactly as before.
+ */
+export async function withSpawnDetach<T>(
+  kind: string,
+  exec: (spawnStarted: () => void) => Promise<T>,
+  deps: Pick<ThresholdDeps, 'onThreshold'>,
+): Promise<T | BackgroundHandle | BackgroundRefusal> {
+  const SPAWNED = Symbol('spawned');
+  let announce!: () => void;
+  const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
+  const promise = exec(announce);
+  // Wrap with both handlers so the abandoned branch never throws unhandled.
+  const settled = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
+  const winner = await Promise.race([settled, started]);
+
+  if (winner !== SPAWNED) {
+    if ('error' in winner) throw winner.error;
+    return winner.value;
+  }
+
+  const outcome = deps.onThreshold(kind, promise);
+  if (!outcome.detached) {
+    return { background: false, kind, message: outcome.reason };
+  }
+  return {
+    background: true,
+    jobId: outcome.jobId,
+    kind,
+    message:
+      `Spawned. The "${kind}" spawn is running as background job ${outcome.jobId} — spawned work ` +
+      `never blocks your turn, and it needs nothing from you while it runs. You will be woken with ` +
+      `the settled result when it completes; until that wake the job has no result to read, so do ` +
+      `not check on it and do not spawn the same work again. Do other work if you have any; ` +
+      `otherwise end your turn.`,
+  };
+}
+
+/** Options-bag key the background wrapper sets on spawn-shaped tool calls: a
+ *  callback the tool invokes once its spawn is validated and in flight, which
+ *  is the moment {@link withSpawnDetach} detaches. Absent on inline surfaces
+ *  (codemode `agents.*`, resume re-drives, the raw eval toolset), where the
+ *  same tool simply runs to completion. */
+export const SPAWN_STARTED_OPTION = 'proteusSpawnStarted';
+
+/** The spawn announcement out of a tool-call options bag, if the background
+ *  wrapper armed one. */
+export function readSpawnStarted(toolOptions: unknown): (() => void) | undefined {
+  if (typeof toolOptions !== 'object' || toolOptions === null) return undefined;
+  const fn = (toolOptions as Record<string, unknown>)[SPAWN_STARTED_OPTION];
+  return typeof fn === 'function' ? (fn as () => void) : undefined;
 }

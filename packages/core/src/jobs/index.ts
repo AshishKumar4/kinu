@@ -8,8 +8,11 @@ export {
 } from './store.js';
 export {
   withBackgroundThreshold,
+  withSpawnDetach,
   isBackgroundHandle,
   BACKGROUND_POLICY,
+  SPAWN_STARTED_OPTION,
+  readSpawnStarted,
   type BackgroundHandle,
   type BackgroundRefusal,
   type BackgroundPolicy,

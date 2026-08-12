@@ -1226,11 +1226,16 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Append to the durable run-event log, scoped to the in-flight run. Never
-   *  throws: losing a history row must not fail a turn. */
-  private recordRunEvent(input: RunEventInput): void {
-    if (!this.currentRunId) return;
-    try { this.eventRecorder.emit(this.currentRunId, input); }
+  /** Append to the durable run-event log. Scoped to the in-flight run by
+   *  default (`runId` omitted); a caller that captured its OWN run id at
+   *  dispatch time (a detached fork's phase events — see emitHeadPhase) passes
+   *  it explicitly so a later phase still lands correctly once the calling
+   *  turn has moved on. Never throws: losing a history row must not fail a
+   *  turn. */
+  private recordRunEvent(input: RunEventInput, runId?: string | null): void {
+    const id = runId !== undefined ? runId : this.currentRunId;
+    if (!id) return;
+    try { this.eventRecorder.emit(id, input); }
     catch (err) { console.warn('[proteus] run event emit failed:', err); }
   }
 
@@ -1990,7 +1995,11 @@ export class LocalAgentSession implements BackendHost {
       heads: {
         controller: () => this.headController,
         inheritedContext: () => this.readInheritedContext(),
-        onPhase: (e: SplitPhaseEvent) => this.emitHeadPhase(e),
+        // Captured at dispatch, once per fork call — see emitHeadPhase.
+        onPhase: () => {
+          const runId = this.currentRunId;
+          return (e: SplitPhaseEvent) => this.emitHeadPhase(e, runId);
+        },
         onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
       },
     });
@@ -2019,9 +2028,17 @@ export class LocalAgentSession implements BackendHost {
    *  trajectories by hand. The recorder streams every row it writes as a
    *  `run-event`, so recording IS the fan-out; broadcasting a second copy put
    *  the split through `proteus exec --json` twice and reached no other
-   *  reader — no CLI surface consumes a head phase as a broadcast. */
-  private emitHeadPhase(event: SplitPhaseEvent): void {
-    this.recordRunEvent(headPhaseRunEvent(event));
+   *  reader — no CLI surface consumes a head phase as a broadcast.
+   *
+   *  `runId` is the run captured at fork DISPATCH (buildAgentsForkDeps'
+   *  onPhase factory), not read live: a fork on the interactive surface now
+   *  detaches the instant it spawns, so the calling turn can close ITS run —
+   *  nulling `this.currentRunId` — before 'split' fires and always before
+   *  'merge' does. Passing null explicitly (a closed run) is deliberate and
+   *  distinct from omitting it (fall back to whatever is live) — see
+   *  recordRunEvent. */
+  private emitHeadPhase(event: SplitPhaseEvent, runId: string | null): void {
+    this.recordRunEvent(headPhaseRunEvent(event), runId);
   }
 
   /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO

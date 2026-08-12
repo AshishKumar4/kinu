@@ -1,7 +1,10 @@
 // BackgroundJobStore + withBackgroundThreshold — the #173 background/async core.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY } from '../src/jobs/index.js';
+import {
+  BackgroundJobStore, initBackgroundJobsTable, withBackgroundThreshold, withSpawnDetach,
+  isBackgroundHandle, serializeJobResult, BACKGROUND_POLICY, readSpawnStarted, SPAWN_STARTED_OPTION,
+} from '../src/jobs/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 function newStore() {
@@ -197,5 +200,95 @@ describe('withBackgroundThreshold', () => {
       onThreshold: () => { throw new Error('should not detach'); },
     });
     expect(out).toBe('inline');
+  });
+});
+
+describe('withSpawnDetach — defect A: spawn-shaped work detaches on start, never on a timer', () => {
+  test('a fork whose spawn is confirmed detaches immediately, well under the 30s interactive threshold — the exploration itself takes far longer and never blocks the caller', async () => {
+    const started = performance.now();
+    const detached: Array<Promise<unknown>> = [];
+    const out = await withSpawnDetach('agents', async (spawnStarted) => {
+      // The spawn is validated fast; the actual exploration is what's slow.
+      // Structured so the announce fires promptly, well inside a real 30s
+      // interactive threshold, and the exploration itself runs long after.
+      spawnStarted();
+      await delay(80);
+      return 'merged fork answer';
+    }, {
+      onThreshold: (_kind, p) => { detached.push(p); return { detached: true, jobId: 'job-fork-1' }; },
+    });
+    const elapsedMs = performance.now() - started;
+
+    expect(isBackgroundHandle(out)).toBe(true);
+    if (isBackgroundHandle(out)) {
+      expect(out.jobId).toBe('job-fork-1');
+      expect(out.kind).toBe('agents');
+      // The old behaviour rode the fixed 30s interactive threshold; the fix
+      // detaches the instant the spawn confirms — no dead-air wait in chat.
+      expect(elapsedMs).toBeLessThan(1000);
+    }
+    // The detached promise is the SAME live exploration and still resolves.
+    await expect(detached[0]).resolves.toBe('merged fork answer');
+  });
+
+  test('a call that settles WITHOUT ever announcing a spawn returns inline — a validation error never detaches', async () => {
+    let crossings = 0;
+    const out = await withSpawnDetach('agents', async () => 'fast validation error', {
+      onThreshold: () => { crossings++; return { detached: true, jobId: 'unused' }; },
+    });
+    expect(out).toBe('fast validation error');
+    expect(crossings).toBe(0);
+  });
+
+  test('a rejection before the spawn announces propagates inline, not as a background failure', async () => {
+    await expect(withSpawnDetach('agents', async () => { throw new Error('bad fork input'); }, {
+      onThreshold: () => { throw new Error('should not detach'); },
+    })).rejects.toThrow('bad fork input');
+  });
+
+  test('a refused detach (concurrency cap) returns the refusal, not a handle', async () => {
+    const out = await withSpawnDetach('agents', async (spawnStarted) => {
+      spawnStarted();
+      await delay(50);
+      return 'never read';
+    }, {
+      onThreshold: () => ({ detached: false, reason: 'too many jobs already running' }),
+    });
+    expect(isBackgroundHandle(out)).toBe(false);
+    expect(out).toEqual({ background: false, kind: 'agents', message: 'too many jobs already running' });
+  });
+
+  test('the detach message promises a wake and tells the model not to poll or re-spawn', async () => {
+    const out = await withSpawnDetach('agents', async (spawnStarted) => {
+      spawnStarted();
+      await delay(20);
+      return 'x';
+    }, {
+      onThreshold: () => ({ detached: true, jobId: 'job-9' }),
+    });
+    expect(isBackgroundHandle(out)).toBe(true);
+    if (isBackgroundHandle(out)) {
+      expect(out.message).toContain('job-9');
+      expect(out.message).toMatch(/woken/i);
+      expect(out.message).toMatch(/do not (check|spawn)/i);
+    }
+  });
+});
+
+describe('readSpawnStarted — the announce callback the background wrapper arms', () => {
+  test('reads the callback off the options bag when present', () => {
+    let fired = false;
+    const announce = () => { fired = true; };
+    const fn = readSpawnStarted({ [SPAWN_STARTED_OPTION]: announce });
+    expect(fn).toBe(announce);
+    fn?.();
+    expect(fired).toBe(true);
+  });
+
+  test('is undefined on an inline surface that armed nothing — codemode, resume, eval', () => {
+    expect(readSpawnStarted(undefined)).toBeUndefined();
+    expect(readSpawnStarted({})).toBeUndefined();
+    expect(readSpawnStarted({ toolCallId: 'call-1', messages: [] })).toBeUndefined();
+    expect(readSpawnStarted(null)).toBeUndefined();
   });
 });

@@ -93,7 +93,7 @@ export interface BackgroundJobRunnerDeps {
 function refusalMessage(kind: string, running: readonly BackgroundJob[]): string {
   const roster = running.map((j) => `${j.id} (${j.kind})`).join(', ');
   return (
-    `The "${kind}" call ran past the background threshold, but this workspace already has ` +
+    `The "${kind}" call needed to move to the background, but this workspace already has ` +
     `${running.length} background job(s) running — the maximum — so it was CANCELLED instead of ` +
     `being detached. Nothing was left running from this call. Already in flight: ${roster}. ` +
     `Wait for those to finish (you are woken as each one settles, and agent.jobResult('<id>') ` +
