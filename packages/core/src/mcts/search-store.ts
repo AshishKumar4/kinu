@@ -16,8 +16,10 @@ import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { MCTSConfig } from '../types/mcts.js';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,
- *  minus the live handles (AbortSignal, callbacks, the store itself). */
-export type PersistedMCTSConfig = Omit<MCTSConfig, 'signal' | 'onProgress' | 'search'>;
+ *  minus the live handles (AbortSignal, callbacks, the store itself, and the
+ *  mission port, which is a live object whose JSON round-trip would come back
+ *  as an empty stub and silently un-govern a resumed search). */
+export type PersistedMCTSConfig = Omit<MCTSConfig, 'signal' | 'onProgress' | 'search' | 'mission'>;
 
 /** A resumable (interrupted) search: enough to continue the loop from checkpoint. */
 export interface ResumableSearch {
@@ -42,7 +44,7 @@ interface Row {
 
 /** Strip the live, non-serializable fields off an MCTSConfig for persistence. */
 export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
-  const { signal: _signal, onProgress: _onProgress, search: _search, ...rest } = config;
+  const { signal: _signal, onProgress: _onProgress, search: _search, mission: _mission, ...rest } = config;
   return rest;
 }
 

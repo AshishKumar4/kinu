@@ -43,9 +43,9 @@ declare global {
     BACKUP_BUCKET?: R2Bucket;
     AI_GATEWAY_URL: string;
     AI_GATEWAY_AUTH: string;
-    /** Hostname used by Proteus to build authenticated path-style preview URLs.
-     *  No per-agent subdomain or wildcard TLS/DNS is required. */
-    PREVIEW_HOSTNAME: string;
+    /** Zone sandbox previews are served under, one hostname per exposed port
+     *  (`<port>-<sandbox>-<token>.<suffix>`). Empty disables previews. */
+    PREVIEW_HOST_SUFFIX: string;
     /** Static asset binding — required for SPA fallback when the Worker
      *  runs first on every route (see `run_worker_first` in wrangler). */
     ASSETS: Fetcher;
@@ -57,6 +57,17 @@ declare global {
     GITHUB_OAUTH_CLIENT_ID?: string;
     GITHUB_OAUTH_CLIENT_SECRET?: string;
     GITHUB_OAUTH_SCOPES?: string;
+    /** The Worker's root secret for the user plane. A Wrangler secret, never a
+     *  var. It seals the credential store (`user_credentials.value`) and, under
+     *  a separate label, derives the owner capability every privileged UserDO
+     *  call presents — so WITHOUT IT THE WORKER CANNOT SERVE A SIGNED-IN USER
+     *  AT ALL: no sign-in, no CLI, no credentials. Public routes still answer.
+     *  Generate with `openssl rand -base64 32`. */
+    CREDENTIAL_ENCRYPTION_KEY?: string;
+    /** Retired credential encryption keys, comma-separated, used for reading
+     *  only. Populate during a rotation and drop once every UserDO has been
+     *  touched — see user/credential-envelope.ts. */
+    CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
     /** Cloudflare account OAuth client settings. Client secret must be a Wrangler secret. */
     CLOUDFLARE_OAUTH_CLIENT_ID?: string;
     CLOUDFLARE_OAUTH_CLIENT_SECRET?: string;

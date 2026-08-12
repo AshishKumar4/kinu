@@ -18,10 +18,15 @@ import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
-  diversityDirective,
+  explorePrompt,
+  extractCodeBlock,
   formatInheritedContext,
+  missionCallUsage,
   parseModelSpec,
   reasoningEffortOptions,
+  reflectionPrompt,
+  type BranchExploration,
+  type BranchReflection,
   type CraftedTool,
   type LLMProviderConfig,
 } from '@proteus/core';
@@ -64,16 +69,13 @@ db.exec(`CREATE TABLE IF NOT EXISTS traces (
 )`);
 
 // Load crafted tools from the parent DB if available
-let craftedToolHints = '';
+let craftedTools: CraftedTool[] = [];
 let parentDb: Database | null = null;
 try {
   const parentDbPath = process.env.PROTEUS_PARENT_DB;
   if (parentDbPath) {
     parentDb = new Database(parentDbPath, { readonly: true });
-    const tools = parentDb.query('SELECT name, description FROM crafted_tools').all() as CraftedTool[];
-    if (tools.length > 0) {
-      craftedToolHints = '\nKnown patterns:\n' + tools.map(t => `- ${t.name}: ${t.description}`).join('\n');
-    }
+    craftedTools = parentDb.query('SELECT name, description FROM crafted_tools').all() as CraftedTool[];
   }
 } catch {}
 
@@ -87,24 +89,26 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
           tools: unknown[];
           siblings?: readonly string[];
         };
-        const context = formatInheritedContext(history);
-        // Mirror cf-backend/src/exploration.ts: ask for a ```js implementation
-        // when applicable so the branch is execution-groundable (the grounded
-        // evaluator runs extracted code) — not prose-only.
+        const { system, user } = explorePrompt({
+          context: formatInheritedContext(history),
+          craftedTools,
+          siblings,
+        });
         const { model, providerOptions } = resolveLowEffortModel();
-        const { text } = await generateText({
+        const { text, usage } = await generateText({
           model,
-          system: 'You are an expert agent exploring one approach to solve a task.' + craftedToolHints +
-            '\n\nIf your approach involves code, include it in a ```js code block.',
-          messages: [{ role: 'user' as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
+          system,
+          messages: [{ role: 'user' as const, content: user }],
           ...(providerOptions ? { providerOptions } : {}),
         });
         const trimmed = text.trim();
-        const codeMatch = trimmed.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
-        const codeUsed = codeMatch?.[1]?.trim() ?? null;
+        const codeUsed = extractCodeBlock(trimmed);
         // Persist code_used so reflect + the parent's trace inspection see it.
         db.run('INSERT INTO traces (step, text, code_used) VALUES (?, ?, ?)', [1, trimmed, codeUsed]);
-        result = { text: trimmed, codeUsed };
+        // The spend travels back with the proposal: this process resolves its
+        // own model, so the parent's mission ledger cannot see the call any
+        // other way (mcts/engine.ts debits it).
+        result = { text: trimmed, codeUsed, usage: missionCallUsage(usage) } satisfies BranchExploration;
         break;
       }
       case 'reflect': {
@@ -115,12 +119,12 @@ process.on('message', async (msg: { method: string; args: unknown }) => {
         const traces = db.query('SELECT text FROM traces ORDER BY step').all() as Array<{ text: string }>;
         const attempt = traces.map(t => t.text).join('\n');
         const { model, providerOptions } = resolveLowEffortModel();
-        const { text } = await generateText({
+        const { text, usage } = await generateText({
           model,
-          messages: [{ role: 'user' as const, content: `Task: ${task}\nAttempt: ${attempt}\n\nWhat specifically went wrong? One sentence.` }],
+          messages: [{ role: 'user' as const, content: reflectionPrompt(task, attempt) }],
           ...(providerOptions ? { providerOptions } : {}),
         });
-        result = text.trim();
+        result = { text: text.trim(), usage: missionCallUsage(usage) } satisfies BranchReflection;
         break;
       }
       default:

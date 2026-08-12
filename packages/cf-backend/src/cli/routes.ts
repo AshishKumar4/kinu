@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import { ORCHESTRATOR_AGENT_SLUG, timingSafeEqual } from '@proteus/core';
 import type { AuthIdentity } from '../auth/session.js';
 import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
@@ -6,7 +6,7 @@ import {
   CLI_SOURCE_TARBALL_PATH, CLI_SOURCE_TARBALL_SHA256_PATH, CLI_VERSION_PATH, fetchDeployedAsset,
 } from '../lib/deployed-assets.js';
 import { err, escapeHtml, json, safeJson } from '../lib/http.js';
-import { randomToken, timingSafeEqual } from '../lib/crypto.js';
+import { randomToken } from '../lib/crypto.js';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import {
   CliAuthCodeError, RateLimitError, approveCliAuth, authenticateCliToken,
@@ -18,7 +18,8 @@ import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
 import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
-import { OWNER_SESSION } from '../user/workspace-capability.js';
+import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy.js';
+import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability.js';
 
 export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -50,16 +51,22 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return approveFromBrowser(request, env);
   }
 
-  // The signed-in AI proxy is CLI-bearer-authenticated (never browser
-  // cookies), so its gate lives here even though the path is /api/user/…:
-  // session tokens pass, scoped access tokens need ai.proxy.
-  if (url.pathname.startsWith(`${USER_AI_PROXY_PREFIX}/`)) {
+  // The signed-in AI proxies are CLI-bearer-authenticated (never browser
+  // cookies), so their gate lives here even though the path is /api/user/…:
+  // session tokens pass, scoped access tokens need ai.proxy. Both the
+  // Cloudflare-pinned proxy and the general provider proxy spend the owner's
+  // inference credentials, so they share one scope.
+  const aiProxy = url.pathname.startsWith(`${USER_AI_PROXY_PREFIX}/`);
+  const providerProxy = url.pathname.startsWith(`${USER_AI_PROXY_FORWARD_PREFIX}/`);
+  if (aiProxy || providerProxy) {
     const cli = await authenticateCli(request, env);
     if (cli instanceof Response) return cli;
     if (cli.kind === 'access' && !tokenAllows(cli, 'ai.proxy')) {
       return err(403, 'This access token does not have the ai.proxy scope.');
     }
-    return handleUserAIProxyRequest(request, env, cli);
+    return aiProxy
+      ? handleUserAIProxyRequest(request, env, cli)
+      : handleUserProviderProxyRequest(request, env, cli);
   }
 
   if (!url.pathname.startsWith('/api/cli')) return null;
@@ -117,26 +124,26 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/logout' && method === 'POST') {
-    await cli.userDO.revokeCliTokenHash(OWNER_SESSION, cli.tokenHash);
+    await cli.userDO.revokeCliTokenHash(await ownerCaller(env), cli.tokenHash);
     return json({ ok: true });
   }
 
   // ── CI access tokens — interactive-session-only management surface ──
   if (path === '/tokens' && method === 'GET') {
-    return json({ tokens: await cli.userDO.listAccessTokens(OWNER_SESSION) });
+    return json({ tokens: await cli.userDO.listAccessTokens(await ownerCaller(env)) });
   }
 
   if (path === '/tokens' && method === 'POST') {
     // Minting a long-lived credential is step-up gated exactly like webhook
     // creation: the session token itself must come from a fresh `proteus auth`.
-    if (!isFreshAuthTime(await sessionTokenMintedAt(cli))) {
+    if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `proteus auth` again — minting access tokens needs a sign-in within the last 5 minutes');
     }
     const body = await safeJson<{ name?: string; scopes?: string[] }>(request);
     if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
       return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
     }
-    const minted = await cli.userDO.mintAccessToken(OWNER_SESSION, cli.userId, body.name, body.scopes);
+    const minted = await cli.userDO.mintAccessToken(await ownerCaller(env), cli.userId, body.name, body.scopes);
     if (!minted.ok) return err(400, minted.error);
     return json({
       token: minted.token,
@@ -149,17 +156,17 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const tokenRevokeMatch = path.match(/^\/tokens\/([^/]+)$/);
   if (tokenRevokeMatch && method === 'DELETE') {
     const ref = decodeURIComponent(tokenRevokeMatch[1]);
-    const result = await cli.userDO.revokeAccessToken(OWNER_SESSION, ref);
+    const result = await cli.userDO.revokeAccessToken(await ownerCaller(env), ref);
     if (!result.revoked) return err(404, `No active access token matched "${ref}".`);
     return json({ ok: true });
   }
 
   if (path === '/workspaces' && method === 'GET') {
-    return json(await cli.userDO.listWorkspaces(OWNER_SESSION));
+    return json(await cli.userDO.listWorkspaces(await ownerCaller(env)));
   }
 
   if (path === '/models' && method === 'GET') {
-    return json(await listAvailableModels(env, cli.userId, OWNER_SESSION));
+    return json(await listAvailableModels(env, cli.userId, await ownerCaller(env)));
   }
 
   if (path === '/workspaces' && method === 'POST') {
@@ -170,8 +177,8 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (workspaceMatch && method === 'DELETE') {
     try {
       const name = decodeURIComponent(workspaceMatch[1]);
-      if (!(await cli.userDO.hasWorkspace(OWNER_SESSION, name))) return err(404, `Agent ${name} not found.`);
-      await cli.userDO.removeWorkspace(OWNER_SESSION, name, cli.userId);
+      if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
+      await cli.userDO.removeWorkspace(await ownerCaller(env), name, cli.userId);
       return json({ ok: true });
     } catch (e) {
       return err(400, e instanceof Error ? e.message : String(e));
@@ -181,8 +188,8 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const connectTicketMatch = path.match(/^\/workspaces\/([^/]+)\/connect-ticket$/);
   if (connectTicketMatch && method === 'POST') {
     const name = decodeURIComponent(connectTicketMatch[1]);
-    if (!(await cli.userDO.hasWorkspace(OWNER_SESSION, name))) return err(404, `Agent ${name} not found.`);
-    const issued = await cli.userDO.issueCliAgentConnectTicket(OWNER_SESSION, {
+    if (!(await cli.userDO.hasWorkspace(await ownerCaller(env), name))) return err(404, `Agent ${name} not found.`);
+    const issued = await cli.userDO.issueCliAgentConnectTicket(await ownerCaller(env), {
       userId: cli.userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName: name,
@@ -202,7 +209,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     // Webhook creation is step-up gated on every path. The CLI's
     // interactive-auth timestamp is its token mint time (minting requires
     // a live browser approval), so a fresh `proteus auth` satisfies it.
-    if (!isFreshAuthTime(await sessionTokenMintedAt(cli))) {
+    if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
       return err(401, 'step-up auth required: run `proteus auth` again — webhook creation needs a sign-in within the last 5 minutes');
     }
     const body = await safeJson<{
@@ -227,12 +234,36 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   }
 
   if (path === '/devices' && method === 'GET') {
-    return json(await cli.userDO.listDevices(OWNER_SESSION));
+    return json(await cli.userDO.listDevices(await ownerCaller(env)));
   }
   if (path === '/devices' && method === 'POST') {
     const body = await safeJson<{ label?: string }>(request);
-    const { deviceId, token } = await cli.userDO.registerDevice(OWNER_SESSION, body?.label);
+    const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label);
     return json({ deviceId, token, userId: cli.userId, origin: url.origin }, { status: 201 });
+  }
+
+  // Provider credentials. Interactive sessions only (the default-deny gate
+  // above stops `pta_` tokens): a CI token that could write a provider key
+  // could also swap the account's inference credentials. Reading back a
+  // secret is not offered here for the same reason it is not offered in the
+  // browser — once submitted, a secret is not viewable again.
+  if (path === '/credentials' && method === 'GET') {
+    return json(await cli.userDO.listCredentials(await ownerCaller(env)));
+  }
+  const cliCredMatch = path.match(/^\/credentials\/([^/]+)$/);
+  if (cliCredMatch) {
+    const key = decodeURIComponent(cliCredMatch[1]);
+    if (method === 'POST') {
+      const body = await safeJson<unknown>(request);
+      try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
+      catch (e) { return err(400, (e as Error).message); }
+      return json({ ok: true }, { status: 201 });
+    }
+    if (method === 'DELETE') {
+      try { await cli.userDO.deleteCredential(await ownerCaller(env), key); }
+      catch (e) { return err(400, (e as Error).message); }
+      return json({ ok: true });
+    }
   }
 
   return err(404, `No such CLI route: ${method} ${path}`);
@@ -288,9 +319,9 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
 /** The CLI's interactive-auth timestamp: the session token's mint time
  *  (minting requires a live browser approval). Step-up gated routes compare
  *  it against the fresh-auth window; access tokens never qualify. */
-async function sessionTokenMintedAt(cli: CliTokenIdentity): Promise<number | null> {
+async function sessionTokenMintedAt(env: Env, cli: CliTokenIdentity): Promise<number | null> {
   if (cli.kind !== 'session') return null;
-  const tokens = await cli.userDO.listCliTokens(OWNER_SESSION);
+  const tokens = await cli.userDO.listCliTokens(await ownerCaller(env));
   return tokens.find((t) => t.tokenHash === cli.tokenHash)?.createdAt ?? null;
 }
 
@@ -331,8 +362,15 @@ function clientKey(request: Request): string {
 }
 
 async function authenticateCli(request: Request, env: Env): Promise<CliTokenIdentity | Response> {
-  const result = await authenticateCliToken(request, env);
-  return result.ok ? result.identity : err(401, result.error);
+  try {
+    const result = await authenticateCliToken(request, env);
+    return result.ok ? result.identity : err(401, result.error);
+  } catch (e) {
+    // A deployment with no root secret cannot authorize anything for the
+    // owner. Say that, rather than surfacing it as an unexplained 500.
+    if (e instanceof OwnerCapabilityUnavailableError) return err(503, e.message);
+    throw e;
+  }
 }
 
 async function renderBrowserApproval(request: Request, env: Env): Promise<Response> {
@@ -1040,7 +1078,7 @@ function html(title: string, body: string, status = 200, init: ResponseInit = {}
     ...init,
     status,
     headers: {
-      'content-type': 'text/html; charset=utf-8',
+      ...publicHtmlHeaders(),
       ...(init.headers as Record<string, string> | undefined),
     },
   });

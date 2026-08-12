@@ -42,7 +42,7 @@ describe('Workers AI credential refresh', () => {
         expires_in: 3600,
         scope: 'user-details.read ai.write offline_access',
       }), { headers: { 'content-type': 'application/json' } });
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
     try {
       const next = await refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -76,7 +76,7 @@ describe('Workers AI credential refresh', () => {
     globalThis.fetch = (async () => new Response(JSON.stringify({
       error: 'invalid_grant',
       error_description: 'The provided authorization grant is invalid',
-    }), { status: 400, headers: { 'content-type': 'application/json' } })) as typeof fetch;
+    }), { status: 400, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
     try {
       const attempt = refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -116,7 +116,7 @@ describe('Workers AI credential refresh', () => {
           });
         }
         return chatCompletionResponse();
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     const result = await generateText({
@@ -158,7 +158,7 @@ describe('Workers AI credential refresh', () => {
     expect(userDO).toContain('opts?.forceRefresh || isCloudflareCredentialExpiring(cred)');
     // …persisted back to storage so the next caller gets the rotated tokens…
     expect(userDO).toContain('refreshCloudflareCredential(this.env, current)');
-    expect(userDO).toMatch(/UPDATE user_credentials SET value = \?, updated_at = \? WHERE key = \?`,\s*\n\s*JSON\.stringify\(next\), Date\.now\(\), CLOUDFLARE_OAUTH_CRED_KEY/);
+    expect(userDO).toContain('await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, next);');
     // …and the base-URL gate treats expired-but-refreshable as usable.
     expect(userDO).toContain('if (!isCloudflareCredentialUsable(cred)) return null;');
     // A terminal invalid_grant strips the dead refresh token so the

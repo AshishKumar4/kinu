@@ -4,10 +4,78 @@ import {
   tokensToCredential,
 } from '@proteus/core';
 import { checkClaudeAvailability, checkOpenCodeAvailability, createOpenCodeProvider } from '@proteus/cli-backend';
-import { loadConfigFile, saveConfigFile, type ProteusConfig } from '../config.js';
+import { setCloudCredential } from '../cloud-api.js';
+import { loadConfigFile, resolveCloudSession, saveConfigFile, setDefaultModel, updateConfigFile, type ProteusConfig } from '../config.js';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { ask, askSecret, canPrompt, confirm } from '../prompt.js';
 import { authCommand, openBrowser } from './auth.js';
+
+/**
+ * Where a provider secret is written.
+ *
+ * Signed in, the answer is the Proteus account: sealed at rest there, reachable
+ * from every machine through the provider proxy, and no second copy of the same
+ * secret sitting in a config file on this disk. A local key remains an explicit
+ * choice (`--local`) for working offline or against an endpoint only this
+ * machine can see, and is still what happens when there is no account to
+ * store it in.
+ *
+ * Returns where it landed so the caller can say so.
+ */
+export async function storeProviderSecret(opts: {
+  local: boolean;
+  credKey: string;
+  credential: unknown;
+  /** Applied when the secret stays on this machine. */
+  storeLocally: () => void;
+  /** Removes this provider's local entry — run after a successful account
+   *  write, because a local key WINS at resolution time and an older one left
+   *  behind would quietly be the key that gets spent. */
+  clearLocally: () => void;
+  /** Set as the default model either way — a pointer, not a secret. */
+  model: string;
+  /** An endpoint the proxy could never reach (loopback, plain http) forces the
+   *  local answer whatever the account could hold — otherwise the key would be
+   *  stored somewhere it can never be used from. */
+  reachableOnlyLocally?: boolean;
+}): Promise<'account' | 'local'> {
+  const cloud = opts.local || opts.reachableOnlyLocally ? null : resolveCloudSession();
+  if (!cloud) {
+    opts.storeLocally();
+    return 'local';
+  }
+  try {
+    await setCloudCredential(cloud.origin, cloud.token, opts.credKey, opts.credential);
+  } catch (err) {
+    // Deliberately not falling back to disk: the user asked for account
+    // storage, and writing the secret somewhere they did not choose is the
+    // surprise this whole change exists to remove. Say what happened and what
+    // to do about it, and leave nothing behind.
+    throw new Error(
+      `Your Proteus account did not accept the key (${err instanceof Error ? err.message : String(err)}). `
+      + 'Nothing was saved. Try again, or re-run with --local to keep the key on this machine.',
+    );
+  }
+  opts.clearLocally();
+  setDefaultModel(opts.model);
+  return 'account';
+}
+
+/** Whether the Proteus Worker could reach this endpoint at all: https, and not
+ *  a loopback or link-local host. */
+function reachableFromTheInternet(baseURL: string): boolean {
+  let url: URL;
+  try { url = new URL(baseURL); } catch { return false; }
+  if (url.protocol !== 'https:') return false;
+  return !/^(localhost|127\.|0\.0\.0\.0|\[?::1\]?|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2\d|3[01])\.)/.test(url.hostname);
+}
+
+function reportStored(where: 'account' | 'local', label: string, model: string): void {
+  console.log(where === 'account'
+    ? `${OK('✓')} Connected ${label} to your Proteus account — no key stored on this machine.`
+    : `${OK('✓')} Saved ${label} credentials to this machine.`);
+  console.log(DIM(`Default model: ${model}`));
+}
 
 export async function setupCommand(opts: {
   origin?: string;
@@ -17,6 +85,8 @@ export async function setupCommand(opts: {
   skipCloud?: boolean;
   localModel?: boolean;
   accountOnly?: boolean;
+  /** Keep the provider secret on this machine instead of the account. */
+  local?: boolean;
 }): Promise<void> {
   console.log('');
   console.log(ACCENT('Proteus setup'));
@@ -100,33 +170,54 @@ export async function setupCommand(opts: {
   if (provider === 'openai') {
     const key = await askSecret('OpenAI API key');
     const model = opts.model ?? await ask('Default model', next.model?.startsWith('openai/') ? next.model.slice('openai/'.length) : 'gpt-4o-mini');
-    saveConfigFile(withProvider(next, {
-      model: `openai/${model}`,
-      providers: { ...(next.providers ?? {}), openai: { apiKey: key } },
-    }));
-    console.log(`${OK('✓')} Saved OpenAI credentials`);
+    const spec = `openai/${model}`;
+    reportStored(await storeProviderSecret({
+      local: opts.local ?? false,
+      credKey: 'openai.bearer',
+      credential: { kind: 'bearer', token: key },
+      storeLocally: () => saveConfigFile(withProvider(next, {
+        model: spec,
+        providers: { ...(next.providers ?? {}), openai: { apiKey: key } },
+      })),
+      clearLocally: () => updateConfigFile((config) => { delete config.providers?.openai; }),
+      model: spec,
+    }), 'OpenAI', spec);
     return;
   }
 
   if (provider === 'openrouter') {
     const key = await askSecret('OpenRouter API key');
     const model = opts.model ?? await ask('Default model', next.model?.startsWith('openrouter/') ? next.model.slice('openrouter/'.length) : 'openai/gpt-4o-mini');
-    saveConfigFile(withProvider(next, {
-      model: `openrouter/${model}`,
-      providers: { ...(next.providers ?? {}), openrouter: { apiKey: key } },
-    }));
-    console.log(`${OK('✓')} Saved OpenRouter credentials`);
+    const spec = `openrouter/${model}`;
+    reportStored(await storeProviderSecret({
+      local: opts.local ?? false,
+      credKey: 'openrouter.bearer',
+      credential: { kind: 'bearer', token: key },
+      storeLocally: () => saveConfigFile(withProvider(next, {
+        model: spec,
+        providers: { ...(next.providers ?? {}), openrouter: { apiKey: key } },
+      })),
+      clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
+      model: spec,
+    }), 'OpenRouter', spec);
     return;
   }
 
   if (provider === 'anthropic') {
     const key = await askSecret('Anthropic API key');
     const model = opts.model ?? await ask('Default model', next.model?.startsWith('anthropic/') ? next.model.slice('anthropic/'.length) : 'claude-sonnet-4-5');
-    saveConfigFile(withProvider(next, {
-      model: `anthropic/${model}`,
-      providers: { ...(next.providers ?? {}), anthropic: { apiKey: key } },
-    }));
-    console.log(`${OK('✓')} Saved Anthropic credentials`);
+    const spec = `anthropic/${model}`;
+    reportStored(await storeProviderSecret({
+      local: opts.local ?? false,
+      credKey: 'anthropic.bearer',
+      credential: { kind: 'bearer', token: key },
+      storeLocally: () => saveConfigFile(withProvider(next, {
+        model: spec,
+        providers: { ...(next.providers ?? {}), anthropic: { apiKey: key } },
+      })),
+      clearLocally: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
+      model: spec,
+    }), 'Anthropic', spec);
     return;
   }
 
@@ -134,17 +225,28 @@ export async function setupCommand(opts: {
     const baseURL = await ask('Base URL', 'http://localhost:11434/v1');
     const apiKey = await askSecret('API key (use any non-empty value for local servers)', 'local');
     const model = opts.model ?? await ask('Default model', 'gpt-oss:20b');
-    saveConfigFile(withProvider(next, {
-      model: `openai-compat/${model}`,
-      providers: {
-        ...(next.providers ?? {}),
-        openaiCompat: {
-          ...(next.providers?.openaiCompat ?? {}),
-          default: { baseURL, apiKey },
+    const spec = `openai-compat/${model}`;
+    reportStored(await storeProviderSecret({
+      local: opts.local ?? false,
+      credKey: 'openai-compat.default',
+      credential: { kind: 'openai-compat', baseURL, apiKey },
+      storeLocally: () => saveConfigFile(withProvider(next, {
+        model: spec,
+        providers: {
+          ...(next.providers ?? {}),
+          openaiCompat: {
+            ...(next.providers?.openaiCompat ?? {}),
+            default: { baseURL, apiKey },
+          },
         },
-      },
-    }));
-    console.log(`${OK('✓')} Saved OpenAI-compatible endpoint`);
+      })),
+      clearLocally: () => updateConfigFile((config) => { delete config.providers?.openaiCompat?.default; }),
+      model: spec,
+      // The usual openai-compat endpoint is Ollama or vLLM on this machine.
+      // The proxy sends to https only and could not reach a loopback address
+      // from a Worker anyway, so that key belongs here.
+      reachableOnlyLocally: !reachableFromTheInternet(baseURL),
+    }), 'the OpenAI-compatible endpoint', spec);
     return;
   }
 

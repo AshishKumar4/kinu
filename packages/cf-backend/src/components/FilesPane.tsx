@@ -16,7 +16,8 @@ import {
   WarningIcon, UploadSimpleIcon,
 } from "@phosphor-icons/react";
 import { useParams } from "react-router";
-import type { DirEntry, Rpc } from "@/lib/protocol";
+import type { Rpc } from "@/lib/protocol";
+import type { DirEntry } from "@proteus/core";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
 
@@ -202,7 +203,7 @@ function FileViewer({ name, state, loading, onBack }: {
           <ArrowLeftIcon size={12} />
         </button>
         <span className="text-xs font-mono p-text-2 truncate">{name}</span>
-        {state?.truncated && <span className="text-[10px] px-1 rounded p-elevated p-text-3 ml-auto shrink-0">truncated</span>}
+        {state?.truncated && <span className="text-[10px] px-1 rounded p-fill p-text-3 ml-auto shrink-0">truncated</span>}
       </div>
       <div className="flex-1 overflow-auto">
         {loading ? <div className="p-text-3 text-xs px-3 py-3">Loading…</div>

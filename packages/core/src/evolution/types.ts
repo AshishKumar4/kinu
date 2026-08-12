@@ -25,6 +25,18 @@ export interface CompletedTurn {
   assistantResponse: string;
   /** Structured tool calls from AI SDK (result.toolCalls + result.toolResults) */
   toolCalls: ToolCallRecord[];
+  /**
+   * The CRAFTED tools this turn actually called, as the in-episode craft clock
+   * observed them (orchestrator/craft-cycle.ts).
+   *
+   * Not derivable from `toolCalls`: a crafted tool is codemode-only and never
+   * appears as a native tool name, so "a call whose name is not built in" —
+   * which is what this used to be inferred from — matches MCP and extension
+   * tools and nothing else. Empty means observed and none (a run with
+   * evolution off observes nothing, since a craft score is evolution state);
+   * absent only on a turn persisted before this field existed.
+   */
+  craftedToolsUsed?: readonly string[];
   /** Total number of agentic steps (from AI SDK maxSteps) */
   steps: number;
   durationMs: number;

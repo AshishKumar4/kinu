@@ -1,9 +1,13 @@
 /**
- * Unit tests: sibling diversity at MCTS expansion (DO-NOW #1).
+ * Unit tests: sibling diversity at MCTS expansion (DO-NOW #1), and the branch
+ * prompt every substrate shares — a facet, a local subprocess and the inline
+ * fallback are only comparable if they were asked the same question.
  */
 
 import { describe, test, expect } from 'bun:test';
 import { diversityAngle, siblingAngles, diversityDirective } from '../src/mcts/diversity.js';
+import { explorePrompt, reflectionPrompt, extractCodeBlock } from '../src/mcts/explore-prompt.js';
+import { EVIDENCE_BUDGETS } from '../src/prompts/evidence-window.js';
 
 describe('diversity angles', () => {
   test('single branch gets no siblings and an empty directive', () => {
@@ -31,5 +35,81 @@ describe('diversity angles', () => {
     const directive = diversityDirective(['the simplest possible solution']);
     expect(directive).toContain('the simplest possible solution');
     expect(directive).toMatch(/DISTINCT/);
+  });
+});
+
+describe('explorePrompt — the one question every substrate asks', () => {
+  const base = { context: 'user: fix the parser', craftedTools: [], siblings: [] };
+
+  test('asks for a fenced js block, which is what makes a branch groundable', () => {
+    // The grounded evaluator scores a branch by EXECUTING its code. It only
+    // has code to run because the prompt asked for a fence, so this is a
+    // correctness property of the prompt, not a style choice.
+    const { system } = explorePrompt(base);
+    expect(system).toContain('```js code block');
+  });
+
+  test('crafted tools ride as prior art; none means no empty heading', () => {
+    expect(explorePrompt(base).system).not.toContain('Known patterns');
+    const withTools = explorePrompt({
+      ...base,
+      craftedTools: [{ name: 'parse_log', description: 'split a log into records' }],
+    });
+    expect(withTools.system).toContain('Known patterns');
+    expect(withTools.system).toContain('- parse_log: split a log into records');
+  });
+
+  test('the sibling diversity directive rides the user message', () => {
+    const solo = explorePrompt(base);
+    const withSiblings = explorePrompt({ ...base, siblings: ['the simplest possible solution'] });
+    expect(solo.user).not.toContain('DISTINCT');
+    expect(withSiblings.user).toContain('the simplest possible solution');
+    expect(withSiblings.user).toContain(diversityDirective(['the simplest possible solution']));
+  });
+
+  test('the parent context is carried verbatim', () => {
+    expect(explorePrompt(base).user).toContain('user: fix the parser');
+  });
+});
+
+describe('reflectionPrompt', () => {
+  test('names the attempt it is reflecting on', () => {
+    const prompt = reflectionPrompt('fix the parser', 'tried a regex, it looped');
+    expect(prompt).toContain('Task: fix the parser');
+    expect(prompt).toContain('Attempt: tried a regex, it looped');
+    expect(prompt).toContain('One sentence.');
+  });
+
+  test('a substrate with no trace table gets no empty Attempt heading', () => {
+    const prompt = reflectionPrompt('fix the parser', '');
+    expect(prompt).not.toContain('Attempt:');
+    expect(prompt).toContain('Task: fix the parser');
+  });
+
+  test('a long attempt is bounded at both ends, not truncated to its opening', () => {
+    // A reflection is about how the attempt ENDED; a head-only clamp would
+    // hide the failure it is being asked to explain.
+    const attempt = `START${'x'.repeat(EVIDENCE_BUDGETS.reflection * 2)}FAILED HERE`;
+    const prompt = reflectionPrompt('t', attempt);
+    expect(prompt).toContain('START');
+    expect(prompt).toContain('FAILED HERE');
+    expect(prompt.length).toBeLessThan(attempt.length);
+  });
+});
+
+describe('extractCodeBlock', () => {
+  test('pulls the fenced implementation out of a branch answer', () => {
+    expect(extractCodeBlock('Here is my approach:\n```js\nconst a = 1;\n```\nDone'))
+      .toBe('const a = 1;');
+  });
+
+  test('accepts every fence language a branch may answer in', () => {
+    for (const lang of ['js', 'javascript', 'typescript', 'ts', '']) {
+      expect(extractCodeBlock('```' + lang + '\nconst a = 1;\n```')).toBe('const a = 1;');
+    }
+  });
+
+  test('a prose-only answer has no code, not an empty string', () => {
+    expect(extractCodeBlock('I would rewrite the tokenizer by hand.')).toBeNull();
   });
 });

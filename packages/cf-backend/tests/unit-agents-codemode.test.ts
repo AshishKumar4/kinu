@@ -22,6 +22,13 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import type { SubordinateHandoff } from '@proteus/core';
+
+/** The admission facts every handoff carries back to the sender. */
+const codemodeHandoff: SubordinateHandoff = {
+  eventId: 'evt-1', delivery: 'starts_now',
+  phase: { busy: false, lastActivityAt: null, workingOn: null },
+};
 import {
   FORK_STRATEGY_ID, createAgentsCodemodeProvider, createStrategyRegistry,
   type AgentsToolDeps, type HeadInput, type HeadReport, type StrategyContext,
@@ -77,9 +84,9 @@ function fullDeps(): AgentsToolDeps {
     team: {
       list: async () => [],
       spawn: async () => ({ name: 'n', displayName: 'N' }),
-      assign: async () => ({ ok: true, name: 'n' }),
+      assign: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       status: async () => ({}),
-      message: async () => ({ ok: true, name: 'n' }),
+      message: async () => ({ ok: true as const, name: 'n', ...codemodeHandoff }),
       dismiss: async () => ({ ok: true, name: 'n', historyKept: true }),
     },
     peers: {
@@ -129,7 +136,7 @@ describe('agents.* in the cf codemode tool', () => {
 describe('agents.fork called back from an in-flight sandbox call', () => {
   const headReport: HeadReport = {
     id: 'head-1', status: 'completed', summary: 'done', evidence: [], decisions: [],
-    artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
+    artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
     tokenUsage: { input: 1, output: 1, total: 2 }, wallClockMs: 1,
   };
 
@@ -137,7 +144,7 @@ describe('agents.fork called back from an in-flight sandbox call', () => {
     return {
       id: 'head-1', rootId: 'root-1', parentId: null, depth: 1,
       task: 'investigate', rationale: 'one angle', inheritedContext: [],
-      budget: { maxDepth: 1, maxTokens: 1000, maxWallClockMs: 1000, spawnedAt: 0 },
+      budget: { maxDepth: 1, maxWallClockMs: 1000, spawnedAt: 0 },
       mergeStrategy: 'synthesize',
     };
   }

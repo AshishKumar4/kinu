@@ -12,7 +12,8 @@ import { createNimbusExecutor } from '../src/execution/nimbus.js';
 import { createDeviceTunnelExecutor } from '../src/execution/device-tunnel-executor.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
-import type { AgentRuntime, Shell } from '../src/types/agent-runtime.js';
+import type { AgentRuntime } from '../src/types/agent-runtime.js';
+import type { Shell } from '../src/types/primitives.js';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
@@ -93,7 +94,17 @@ describe('the surfaces the model reads', () => {
 
   test('a remote container exec reports failures with the `Error` prefix the harness detects', async () => {
     const nimbus = createNimbusExecutor({
-      box: { exec: async () => ({ ...PYTEST, success: false }) },
+      box: {
+        ready: async () => {},
+        exec: async () => ({ ...PYTEST, command: 'pytest', success: false }),
+        files: {
+          read: async () => null,
+          write: async () => {},
+          list: async () => [],
+          exists: async () => false,
+          delete: async () => {},
+        },
+      },
     });
     const out = String(await nimbus.tools.exec!.execute('pytest'));
     expect(out).toStartWith('Error (exit 1)');

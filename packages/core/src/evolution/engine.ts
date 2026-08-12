@@ -81,11 +81,6 @@ import {
 // Re-exported here for back-compat: the mapping predates the outcomes module.
 export { feedbackToQuality };
 
-/**
- * Built-in tool names — crafted-tool scoring ignores these.
- * Sourced from the canonical registry so CF and CLI share one truth.
- */
-import { BUILTIN_TOOL_NAMES as BUILT_IN_TOOL_NAMES } from '../tools/registry.js';
 import { modifyScaffold } from '../scaffold/modify.js';
 import { SCAFFOLD_HOST_TYPES } from '../scaffold/executor.js';
 import { SCAFFOLD_FORBIDDEN_DESCRIPTION } from '../scaffold/safety-patterns.js';
@@ -392,10 +387,12 @@ export class EvolutionEngine {
 
     if (quality === null) return; // programmatic + clean: nothing to learn from
 
-    // Craft EMA — real-outcome observations on the crafted tools this turn used.
-    const craftedToolNames = turn.toolCalls
-      .map(tc => tc.name)
-      .filter(name => !BUILT_IN_TOOL_NAMES.has(name));
+    // Craft EMA — real-outcome observations on the crafted tools this turn used,
+    // as the in-episode craft clock observed them. It used to be every tool name
+    // that was not built in, which is a set crafted tools are never IN — they
+    // are codemode-only — so the EMA was written against MCP and extension
+    // tools and nothing else.
+    const craftedToolNames = turn.craftedToolsUsed ?? [];
     if (craftedToolNames.length > 0) {
       try {
         updateCraftScores(this.rt.storage.sql, craftedToolNames, quality);

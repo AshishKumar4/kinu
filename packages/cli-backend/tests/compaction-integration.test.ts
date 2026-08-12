@@ -28,17 +28,17 @@ import type { LanguageModel, ModelMessage } from 'ai';
 import {
   DynamicContextLedger,
   ExtensionHost,
+  initWorkspaceSchema,
   runChat,
 } from '@proteus/core';
 import {
   createCompactionExtension,
   createCompactionStateStore,
   createVfsTranscriptStore,
-  initCompactionStateTable,
   type CompactionOutcomeEvent,
   type Logger,
 } from '@proteus/compaction';
-import { createCLIRuntime } from '../src/runtime.js';
+import { createCLIRuntime, makeWorkspaceSchemaSql } from '../src/runtime.js';
 
 const SESSION = 'proteus-itest:default';
 const silentLogger: Logger = { info() {}, debug() {}, warn() {}, error() {} };
@@ -122,7 +122,7 @@ describe('default compaction over the real storage plane', () => {
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
 
-    initCompactionStateTable(rt.storage.execRaw);
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const state = createCompactionStateStore(rt.storage.sql);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];
@@ -204,7 +204,7 @@ describe('default compaction over the real storage plane', () => {
     expect(plannedJson).not.toContain('output-0 ');
 
     // The reference message cites the transcript path the plan persisted.
-    const snapshot = state.plans.load(SESSION);
+    const snapshot = await state.plans.load(SESSION);
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
     expect(snapshot.transcriptRelativePath.startsWith('/local/.proteus/compaction/')).toBe(true);
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);
@@ -291,7 +291,7 @@ describe('default compaction over the real storage plane', () => {
       dbPath: `/tmp/proteus-rung-itest-${Math.floor(performance.now())}.db`,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
-    initCompactionStateTable(rt.storage.execRaw);
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const state = createCompactionStateStore(rt.storage.sql);
     const ledger = new DynamicContextLedger();
     const outcomes: CompactionOutcomeEvent[] = [];

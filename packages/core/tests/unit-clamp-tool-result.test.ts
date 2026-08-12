@@ -3,7 +3,9 @@
 // workspace VFS first — the marker carries the path and the file round-trips
 // through the real file surface, so nothing is irrecoverable.
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { createShell } from '@proteus/agent-utils/shell';
+import { SqliteFS } from '@proteus/agent-utils';
 import {
   clampToolResult,
   clampSerializedToolResult,
@@ -14,7 +16,7 @@ import {
 } from '../src/tools/clamp.js';
 import { TurnContextBudget } from '../src/context-budget.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime } from './helpers.js';
+import { createTestRuntime, makeSql } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { ToolSet } from 'ai';
 
@@ -90,14 +92,14 @@ describe('clampSerializedToolResult', () => {
     } as unknown as ToolSet[string];
     const wrapped = withClampedToolResult(entry, { vfs: rt.storage.vfs });
     expect((wrapped as { description?: string }).description).toBe('desc');
-    const out = await (wrapped as { execute: () => Promise<unknown> }).execute();
+    const out = await toolExecute(wrapped)({});
     expect(String(out)).toContain('chars omitted');
   });
 });
 
 describe('run tool result budget (behavior through the public tool surface)', () => {
   test('a huge stdout is clamped and the full output is readable back via the file surface', async () => {
-    const { rt } = createTestRuntime();
+    const { rt, db } = createTestRuntime();
     const original = 'BEGIN UNIQUE-MIDDLE-MARKER-' + 'log line\n'.repeat(80_000) + ' FINAL-ERROR-LINE';
     const fakeShellExec = async (command: string) => {
       // First call: the huge command output. Filtered reads of the marker
@@ -105,7 +107,10 @@ describe('run tool result budget (behavior through the public tool surface)', ()
       if (command.startsWith('grep ')) return realShell.exec(command);
       return { stdout: original, stderr: '', exitCode: 0 };
     };
-    const realShell = createShell(rt.storage.vfs);
+    // The shell takes the concrete filesystem, exactly as both backends build
+    // it — `rt.storage.vfs` is the narrowed agent-facing view, which has no
+    // directory surface for the shell to walk.
+    const realShell = createShell(new SqliteFS(makeSql(db)));
     const rtWithShell = { ...rt, shell: { exec: fakeShellExec } } as AgentRuntime;
     const tools = buildBuiltinTools({ rt: rtWithShell });
     const run = tools.run as unknown as RunTool;
@@ -183,6 +188,26 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     expect(restored as string).toEndWith('-END');
   });
 
+  test('the tightened result says WHY it tightened, and an ordinary clamp does not', async () => {
+    // The system prompt used to carry this as doctrine in its Delegation
+    // section, thousands of tokens before any result could trip it — where a
+    // measured 0% of trials acted on it. The fact is only actionable at the
+    // trip, so the marker states it there, and costs nothing on the turns
+    // (most turns) that never reach the floor.
+    const budget = new TurnContextBudget();
+    const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
+
+    const first = await run.execute({ command: 'big-0' });
+    expect(first).toContain('output truncated');
+    expect(first).not.toContain('the cap tightened');
+
+    for (let i = 1; i < 4; i++) await run.execute({ command: `big-${i}` });
+    const tightened = await run.execute({ command: 'big-last' });
+    expect(tightened).toContain('This turn has already admitted enough tool output that the cap tightened');
+    // And it names the lever, at the moment the signal is real.
+    expect(tightened).toContain('hand the bulk to a fork');
+  });
+
   test('a fresh turn starts at full fidelity again', async () => {
     const budget = new TurnContextBudget();
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
@@ -222,7 +247,7 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
     expect(Object.keys(wrapped)).toEqual(['mcp_srv_a', 'mcp_srv_b']);
 
     for (const key of Object.keys(wrapped)) {
-      const out = await (wrapped[key] as unknown as { execute: () => Promise<unknown> }).execute();
+      const out = await toolExecute(wrapped[key])({});
       expect(String(out)).toContain('chars omitted');
     }
     expect(budget.snapshot().trips).toEqual({ external_tool: 2 });

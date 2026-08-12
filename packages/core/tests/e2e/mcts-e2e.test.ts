@@ -50,10 +50,10 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
         return { text, codeUsed: null };
       },
       async generateReflection(task) {
-        return branchLLM.complete(
+        return { text: await branchLLM.complete(
           `The approach to "${task}" didn't work well. ` +
           `In one sentence, what specifically went wrong and why?`,
-        );
+        ) };
       },
     };
   }

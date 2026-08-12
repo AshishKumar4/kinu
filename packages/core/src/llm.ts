@@ -123,7 +123,7 @@ export interface LLMUsage {
  *  average over English prose and code; the true ratio is model-specific and
  *  the seam cannot see it. Only ever used to ESTIMATE, and every caller says
  *  so where it prints. */
-const CHARS_PER_TOKEN = 4;
+export const CHARS_PER_TOKEN = 4;
 
 /** Rough blended USD per 1k tokens. A deliberately conservative mid-range
  *  blend (≈ $3 / 1M tokens) so anything sized with it errs toward

@@ -13,6 +13,7 @@ import {
   DELEGATION_RUNGS,
   modelSupportsTools,
   promptModeForTurnEvent,
+  splitPromptSections,
 } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
 
@@ -28,8 +29,7 @@ describe('buildSystemPromptSync', () => {
     // The duplicate-sounding-tools gap: think/team/peers were three delegation
     // surfaces, so the model saw `team` and never considered forking. ONE tool
     // (`agents`) now asks one question — how long does the helper need to live
-    // — with both rung triggers rendered from the registry's DELEGATION_RUNGS
-    // (single source).
+    // — indexed here and specified in the tool schema.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/## Delegation/);
@@ -37,14 +37,16 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/how long does the helper need to live/);
     // The two rungs, plus "do it yourself" as the zero rung.
     expect(prompt).toMatch(/- Do it yourself — a single short coherent change\./);
-    expect(prompt).toMatch(/- Ephemeral fork — Fork \(action=fork\)/);
-    expect(prompt).toMatch(/- Persistent subordinate — Staff a subordinate \(action=staff\)/);
+    expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
+    expect(prompt).toMatch(/- Persistent subordinate \(action=staff\) — /);
     // The old split surface is gone entirely.
     expect(prompt).not.toContain('`think`');
     expect(prompt).not.toContain('`team`');
     expect(prompt).not.toContain('`peers`');
-    // The live-info loop and the forks' durable artifact trail survive.
-    expect(prompt).toMatch(/loop `web` search then fetch/);
+    // The forks' durable artifact trail survives. (The search-then-fetch loop
+    // that used to ride this line is `web`'s own whenToUse, restated here in a
+    // section about delegation and ungated on `web` actually being present.)
+    expect(prompt).not.toMatch(/loop `web` search then fetch/);
     expect(prompt).toMatch(/split depth 3/);
     expect(prompt).toContain('shared/findings/');
     expect(prompt).toMatch(/NOT stateless between turns/);
@@ -53,17 +55,19 @@ describe('buildSystemPromptSync', () => {
   test('mcts is a settle policy inside the fork rung, never a third rung', () => {
     // Preservation contract: mcts stays fully named and reachable in the
     // doctrine the model reads — but as how forks are SETTLED, not as a
-    // co-equal delegation choice.
+    // co-equal delegation choice. That doctrine is selection doctrine, so it
+    // lives in the schema every family reads, not in the prompt index.
+    const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
+    expect(agents).toMatch(/set settle=mcts/);
+    expect(agents).toMatch(/runs and passes outranks every branch whose code failed/);
+    // It is never introduced as a ladder rung of its own, in either surface.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/set settle=mcts/);
-    expect(prompt).toMatch(/scored against each other by execution/);
-    // It is never introduced as a ladder rung of its own.
     expect(prompt).not.toMatch(/^- .*\bmcts\b.*\) — /m);
-    // The mcts settle text lives inside the fork bullet, after it starts.
-    const forkRung = prompt.indexOf('- Ephemeral fork — ');
+    // The mcts settle text lives inside the fork rung, after it starts.
+    const forkRung = agents.indexOf('Fork (action=fork)');
     expect(forkRung).toBeGreaterThan(-1);
-    expect(prompt.indexOf('set settle=mcts')).toBeGreaterThan(forkRung);
+    expect(agents.indexOf('set settle=mcts')).toBeGreaterThan(forkRung);
   });
 
   test('each rung renders only for the agents actions the backend wires', () => {
@@ -73,10 +77,9 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
     expect(both).toContain('## Delegation');
-    expect(both).toMatch(/- Ephemeral fork — /);
-    expect(both).toMatch(/- Persistent subordinate — /);
+    expect(both).toMatch(/- Ephemeral fork \(action=fork\) — /);
+    expect(both).toMatch(/- Persistent subordinate \(action=staff\) — /);
     expect(both).toMatch(/staff the needed roles.*ask each an independent workstream.*integrate/i);
-    expect(both.indexOf('delegation ladder')).toBeLessThan(both.indexOf('## Tools available this turn'));
 
     // A subordinate / CLI session gets fork but never staff: one rung, no
     // staffing loop, no peer converse.
@@ -86,12 +89,10 @@ describe('buildSystemPromptSync', () => {
       registeredExecutors: [],
     });
     expect(forkOnly).toContain('## Delegation');
-    expect(forkOnly).toMatch(/- Ephemeral fork — /);
+    expect(forkOnly).toMatch(/- Ephemeral fork \(action=fork\) — /);
     expect(forkOnly).not.toMatch(/- Persistent subordinate/);
     expect(forkOnly).not.toContain('staff the needed roles');
     expect(forkOnly).not.toContain('OTHER workspace agents');
-    // The ladder pointer is not staff-gated — one rung is still a ladder.
-    expect(forkOnly).toContain('delegation ladder');
   });
 
   test('the in-sandbox rungs are advertised only where both halves exist', () => {
@@ -131,17 +132,19 @@ describe('buildSystemPromptSync', () => {
       .toBeLessThan(BUILTIN_TOOL_DESCRIPTIONS.agents.indexOf('full turn'));
   });
 
-  test('the ladder is single-sourced: both rungs render the registry constants verbatim', () => {
-    // The prompt renders DELEGATION_RUNGS verbatim for BOTH rungs — no
-    // parallel hardcoded delegation doctrine. Editing registry.ts is the only
-    // place that changes what the model is told about forks vs subordinates.
+  test('the rungs are specified once, in the schema — the prompt only indexes them', () => {
+    // The rung triggers used to render verbatim in BOTH surfaces, on the
+    // rationale that a bare tool-name index (kimi) would otherwise leave the
+    // model with no ladder. That rationale was void — schema descriptions are
+    // family-neutral, so every family already received them — and it cost 418
+    // tokens of byte-identical text in every request. The schema is the one
+    // place they are stated; the prompt names the rungs and nothing more.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain(DELEGATION_RUNGS.fork);
-    expect(prompt).toContain(DELEGATION_RUNGS.staff);
-    // And the schema description carries the same doctrine (also single-sourced).
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.fork);
     expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain(DELEGATION_RUNGS.staff);
+    expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
+    expect(prompt).not.toContain(DELEGATION_RUNGS.staff);
   });
 
   test('completion never evicts: the staff rung teaches that finished subordinates STAY', () => {
@@ -151,10 +154,12 @@ describe('buildSystemPromptSync', () => {
     expect(DELEGATION_RUNGS.staff).toMatch(/reports and STAYS/);
     expect(DELEGATION_RUNGS.staff).toMatch(/dismiss only a subordinate whose role is permanently over/);
     expect(DELEGATION_RUNGS.staff).not.toMatch(/retire it when done/);
+    expect(DELEGATION_RUNGS.staff).not.toMatch(/cheap to create and dismiss/);
+    // The prompt no longer says it a second time: the roster/re-engage/dismiss
+    // sentence that stood in the Delegation section was this rung paraphrased,
+    // and the rungs live in the schema every family reads.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('A finished subordinate stays in your roster with its context');
-    expect(prompt).not.toContain('cheap to create and dismiss');
+    expect(buildSystemPromptSync(rt)).not.toContain('A finished subordinate');
   });
 
   test('the settle doctrine leads with what mcts does, and states its limit honestly after', () => {
@@ -166,15 +171,22 @@ describe('buildSystemPromptSync', () => {
     // uses). It now leads with the payoff and names the shape it fits, with
     // the limitation stated plainly at the end rather than as a gate.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).toMatch(/scored against each other by execution/);
     expect(agents).toMatch(/rival scripts that must produce a specific artifact/);
-    expect(agents).toMatch(/proposed code IS executed to earn its score/);
     expect(agents).toMatch(/propose text\/code rather than running your own tool loop/);
+    // 2026-08-11: the ranking claim is now stated the way the scorer actually
+    // works. "scored against each other by execution" read as pure execution
+    // scoring; mcts/evaluation.ts uses execution to pick the score BAND (pass
+    // [0.60,1.00] vs fail [0.05,0.30]) and a judge ensemble to place the
+    // branch inside it. What survives verbatim is the consequence that band
+    // ordering guarantees, which is the part a caller decides on.
+    expect(agents).toMatch(/runs and passes outranks every branch whose code failed/);
+    expect(agents).not.toMatch(/proposed code IS executed to earn its score/);
     // The deterrent framing is gone: no "only", no "genuinely unclear".
     expect(agents).not.toMatch(/set settle=mcts only/);
     expect(agents).not.toMatch(/genuinely unclear/);
-    // Payoff before limitation, in that order.
-    expect(agents.indexOf('IS executed to earn its score'))
+    // Payoff before limitation, in that order — the ordering this test was
+    // written for, unchanged.
+    expect(agents.indexOf('outranks every branch whose code failed'))
       .toBeLessThan(agents.indexOf('rather than running your own tool loop'));
   });
 
@@ -191,13 +203,102 @@ describe('buildSystemPromptSync', () => {
     expect(DELEGATION_RUNGS.fork).toMatch(/Doubt: your first attempt failed/);
     expect(DELEGATION_RUNGS.fork).toMatch(/you cannot check your own output/);
     expect(DELEGATION_RUNGS.fork).toMatch(/being unsure is itself a reason to fork/);
+    // Both triggers reach the model through the schema, which every family
+    // reads for selection. The prompt's second copy is gone, and the doubt
+    // trigger is additionally mechanised — turn-steering's repeated_failure
+    // states it at the step where the decision is still open.
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toContain('Doubt: your first attempt failed');
+  });
 
+  test('the prompt teaches the SHAPE of work that calls for a fork, not just what a fork is', () => {
+    // The rung was a definition: "copies of you that run their own tool loops
+    // in parallel". A definition answers "what is this" and never "is my work
+    // this". The schema owns the selection triggers and keeps them; what the
+    // prompt adds is the shape test, because whether the work HAS parts is
+    // decided before any tool is picked. turn-steering states the same thing
+    // mechanically, but only at 25 steps — after the shape was chosen wrong.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('Doubt: your first attempt failed');
-    // The ladder pointer at the top of the prompt routes on doubt too, so the
-    // model meets the uncertainty trigger before it reads the rungs.
-    expect(prompt).toMatch(/when you are unsure which approach is right, pick a rung of the delegation ladder/);
+    expect(prompt).toMatch(/Fork when the work already has 2\+ independent angles/);
+    expect(prompt).toMatch(/uncertain enough to be worth two attempts at once/);
+    // A compressed pointer, never the schema's paragraph a second time.
+    expect(prompt).not.toContain(DELEGATION_RUNGS.fork);
+  });
+
+  test('the prompt contrasts the two settles by the shape of work each one is for', () => {
+    // `settle=mcts` was fully specified in the schema and named nowhere in the
+    // prompt, so the choice between settles read as a parameter detail rather
+    // than as the shape judgement it is. One sentence, at the altitude where
+    // the work is being shaped: independent pieces you want all of vs rival
+    // attempts at one thing, with the honest limit attached.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/Merging \(the default\) keeps every fork's piece/);
+    expect(prompt).toMatch(/settle=mcts keeps one instead, for rival attempts at a single thing/);
+    // The limit is stated, so a model does not reach for mcts when the rivals
+    // need their own tool loops.
+    expect(prompt).toMatch(/propose code rather than running their own tool loops/);
+  });
+
+  test('the prompt describes what mcts DOES, matching the engine rather than tree search in general', () => {
+    // A trigger alone did not move it: settle=mcts was used once in 89 trials.
+    // Each clause below is checked against the engine, because an impressive
+    // inaccurate description is worse than none — every one of these is a
+    // place the runtime does something a reader of "MCTS" would not assume.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    // The call shape differs from merge: strategy/mcts.ts runs on ctx.task and
+    // never reads `forks`, so hand-authored rivals would be dead arguments.
+    expect(prompt).toMatch(/you give it the task and it writes the competing approaches itself/);
+    // mcts/diversity.ts assigns each branch a fixed angle and tells it what
+    // its siblings drew — divergence by construction, not by temperature.
+    expect(prompt).toMatch(/each on a different angle so they do not converge/);
+    // The engine's budget loop: UCT select, backpropagate, prune, re-expand.
+    expect(prompt).toMatch(/over several rounds that drop the weak ones and expand what scored well/);
+    // The band, stated as the ordering it guarantees (mcts/evaluation.ts).
+    expect(prompt).toMatch(/a proposal whose code runs and passes places above every proposal whose code failed/);
+    expect(prompt).toMatch(/prose that produced no code places below both once a rival produced some/);
+    expect(prompt).toMatch(/the judge only orders proposals inside the band execution already fixed/);
+    // And never the overstatement it replaced.
+    expect(prompt).not.toMatch(/scored by executing what each proposes/);
+  });
+
+  test('the prompt says forks cannot see each other, which is why a fork task must stand alone', () => {
+    // heads/controller.ts spawns every head concurrently with the SAME
+    // inherited context and no channel between them, so a plan where one fork
+    // consumes another's finding silently gets nothing. `whenNotToUse` already
+    // forbids forks that RACE on a mutable resource; this is the other half —
+    // the visibility fact that makes dependent fork tasks a mistake.
+    const { rt } = createTestRuntime();
+    expect(buildSystemPromptSync(rt))
+      .toMatch(/Forks cannot see each other's work and meet only at the merge/);
+  });
+
+  test('per-fork models are discoverable, and named as a case rather than a default', () => {
+    // `agents fork` takes a per-fork `model` (heterogeneous fleets — see
+    // heads/types.ts SplitRequest) and nothing told the model what varying it
+    // was FOR. The prompt names the capability at shape time; the Self-MoA
+    // caveat (arXiv 2502.00674 — panel quality tracks the AVERAGE member, so
+    // diversity for its own sake costs) rides the parameter description in
+    // agents-tool.ts, where it is read while the field is being filled.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    expect(prompt).toMatch(/A fork can take its own `model`/);
+    expect(prompt).toMatch(/a different vendor on a genuinely open question/);
+    // Never phrased as something to do by default.
+    expect(prompt).not.toMatch(/vary the models|diversify|always use different models/i);
+  });
+
+  test('the agents example shows the nested forks array shape', () => {
+    // The one argument shape on this surface a name does not give away, and
+    // the one the trajectory data shows invented wrong (`fork_specs` for
+    // `forks`). staff's arguments are flat and its `role` property carries its
+    // own example, so the spec's single example slot goes to fork.
+    const { rt } = createTestRuntime();
+    const example = BUILTIN_TOOL_SPECS.agents.example;
+    expect(example).toContain("action:'fork'");
+    expect(example).toMatch(/forks:\[\{task:.*rationale:.*\}, \{task:.*rationale:.*\}\]/);
+    expect(buildSystemPromptSync(rt)).toContain(example);
   });
 
   test('tool when-to-use doctrine is schema-only: descriptions carry it, prompt prose does not', () => {
@@ -211,44 +312,46 @@ describe('buildSystemPromptSync', () => {
       expect(description).toContain(`Use when: ${spec.whenToUse}`);
       expect(description).toContain(`Avoid when: ${spec.whenNotToUse}`);
       expect(description).toContain(`Returns: ${spec.result}`);
-      // Prompt prose carries ONLY the summary — no duplicated doctrine. The
-      // SOLE exception is the delegation tool, `agents`: its whenToUse IS the
-      // ladder the prompt deliberately renders from the same registry
-      // constants (single source), so those triggers appear in both surfaces
-      // by design — and must, since a bare tool-name index (kimi family)
-      // would otherwise leave the model with no ladder at all.
-      if (name !== 'agents') expect(prompt).not.toContain(spec.whenToUse);
+      // Prompt prose carries ONLY the summary — no duplicated doctrine, for
+      // any tool. `agents` used to be exempt: the prompt rendered its rungs
+      // verbatim too, on a rationale (the kimi bare index) that was both void
+      // and since deleted.
+      expect(prompt).not.toContain(spec.whenToUse);
       expect(prompt).not.toContain(spec.whenNotToUse);
+      if (spec.doctrine) expect(prompt).not.toContain(spec.doctrine);
     }
     // The `Use when:` / `Avoid when:` schema prefixes never leak into prose.
     expect(prompt).not.toContain('Use when:');
     expect(prompt).not.toContain('Avoid when:');
   });
 
-  test('kimi-family models get a bare tool name index; other families get summaries', () => {
+  test('the tool index is one rendering for every model family', () => {
+    // The kimi branch stripped the index to bare names on a Moonshot claim
+    // ("prompt prose about tool usage interferes with autonomous selection")
+    // that is retired, K2.5-scoped, and unverifiable at any live source — and
+    // that could not have worked anyway, since tool schemas are family-neutral
+    // and kimi received every byte of the doctrine the strip was protecting it
+    // from. Live K3 guidance argues against DUPLICATION, for everyone, which
+    // is what the schema-only doctrine rule already does.
     const { rt } = createTestRuntime();
     const opts = {
       availableTools: ['run', 'memory'] as const,
       externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
       registeredExecutors: [] as string[],
     };
-    const kimi = buildSystemPromptSync(rt, { ...opts, model: { id: '@cf/moonshotai/kimi-k2.6' } });
-    const anthropic = buildSystemPromptSync(rt, { ...opts, model: { id: 'anthropic/claude-sonnet-4.5' } });
+    const section = (id: string) => {
+      const prompt = buildSystemPromptSync(rt, { ...opts, model: { id } });
+      const start = prompt.indexOf('## Tools available this turn');
+      return prompt.slice(start, prompt.indexOf('\n## ', start + 1));
+    };
+    const kimi = section('@cf/moonshotai/kimi-k2.6');
+    expect(kimi).toEqual(section('anthropic/claude-sonnet-4.5'));
+    expect(kimi).toEqual(section('codex/gpt-5.5'));
 
-    // Kimi (Moonshot guidance): names only — no per-tool prose, schema carries it.
-    expect(kimi).toContain('\n- run\n');
-    expect(kimi).toContain('\n- memory');
-    expect(kimi).toContain('\n- tool_docs_search');
-    expect(kimi).not.toContain('**run**');
-    expect(kimi).not.toContain(BUILTIN_TOOL_SPECS.run.summary);
-    expect(kimi).not.toContain('Search docs.');
-    // The guard line is family-independent.
+    expect(kimi).toContain(`- **run** — ${BUILTIN_TOOL_SPECS.run.summary}`);
+    expect(kimi).toContain(`- **memory** — ${BUILTIN_TOOL_SPECS.memory.summary}`);
+    expect(kimi).toContain('**tool_docs_search** (MCP) — Search docs.');
     expect(kimi).toContain('Call the tools listed here');
-
-    // Anthropic/OpenAI families: one summary line per tool.
-    expect(anthropic).toContain(`- **run** — ${BUILTIN_TOOL_SPECS.run.summary}`);
-    expect(anthropic).toContain(`- **memory** — ${BUILTIN_TOOL_SPECS.memory.summary}`);
-    expect(anthropic).toContain('**tool_docs_search** (MCP) — Search docs.');
   });
 
   test('memory sessions scroll contract is schema-only', () => {
@@ -265,8 +368,11 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('workspace.createTool');
     expect(prompt).toContain('workspace.listTools()');
     expect(prompt).toMatch(/next execute_tools call/);            // freshness, not "when injected"
-    expect(prompt).toMatch(/failures are recorded as lessons/i);  // close the lesson loop
     expect(prompt).toContain('agent.proposeCurriculum');
+    // The lesson loop is a standing fact about what is IN the memory store,
+    // not a usage rule, so it rides the memory spec's doctrine field — the one
+    // line of `## Memory and facts` the memory schema did not already carry.
+    expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toMatch(/failures are recorded as lessons/i);
   });
 
   test('honors soulOverride', () => {
@@ -315,14 +421,34 @@ describe('buildSystemPromptSync', () => {
     // the agent_facts world model + the `memory` prose tool, both real.
     expect(prompt).not.toMatch(/set_context|search_context|load_context/);
     expect(prompt).not.toMatch(/Session context blocks/);
-    expect(prompt).toContain('Memory and facts');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.memory).toContain('past session transcripts');
   });
 
-  test('teaches transcript recall: search past sessions before re-deriving context', () => {
+  test('durable-state doctrine is schema-only: no `## Memory and facts` section', () => {
+    // The section restated the memory schema's own whenToUse in five bullets —
+    // keyed facts for precise lookup, save/search for prose, sessions before
+    // re-deriving, update a stale key in place. Two phrasings of one rule cost
+    // the adherence budget twice and invite a reconciliation cost on GPT-5.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toContain('action="sessions"');
-    expect(prompt).toMatch(/past session transcripts before re-deriving/);
+    expect(prompt).not.toContain('## Memory and facts');
+    const memory = BUILTIN_TOOL_DESCRIPTIONS.memory;
+    expect(memory).toMatch(/remember\/recall\/forget name state you look up precisely/);
+    expect(memory).toMatch(/update a stale key rather than adding a contradictory second fact/);
+    expect(memory).toMatch(/sessions reads what past sessions said, before re-deriving/);
+  });
+
+  test('the release flow is stated once, in the schema, plus the mode overlay', () => {
+    // It used to be stated three times: the schema whenToUse, a standalone
+    // `## Proteus release changes` section, and the release mode
+    // overlay. The overlay stays — it is mode-gated and adds the approval
+    // constraint — and the standalone section is gone.
+    const { rt } = createTestRuntime();
+    expect(buildSystemPromptSync(rt)).not.toContain('## Proteus release changes');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.release)
+      .toMatch(/bind_source → create → update .* → apply → run_checks → preview → request_approval → deploy/);
+    expect(buildSystemPromptSync(rt, { mode: 'release' }))
+      .toContain('Never deploy Proteus release changes without an explicit approval record');
   });
 
   test('renders executor section when registeredExecutors supplied', () => {
@@ -337,6 +463,26 @@ describe('buildSystemPromptSync', () => {
     // With ≥2 executors, warn they're disjoint filesystems (the documented
     // "wrote in the sandbox, read an empty workspace" confusion).
     expect(prompt).toMatch(/separate filesystems/i);
+  });
+
+  test('the disjoint-filesystem warning is a fact about the backend, not the executor count', () => {
+    // It was rendered on `executors.length > 1` alone, and on cli-local that
+    // was false: cli-backend/runtime.ts hands createInlineExecutor and the
+    // laptop executor the SAME createHostShell(process.cwd()), so a command in
+    // either sees the same files. A model that believed the line would copy
+    // files between two views of one directory.
+    const { rt } = createTestRuntime();
+    const executors = [
+      { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
+      { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
+    ];
+    const local = buildSystemPromptSync(rt, { backend: 'cli-local', executors });
+    expect(local).not.toMatch(/separate filesystems/i);
+    expect(local).toContain('execute on the same machine and see the same files');
+
+    const cf = buildSystemPromptSync(rt, { backend: 'cf', executors });
+    expect(cf).toMatch(/separate filesystems/i);
+    expect(cf).not.toContain('the same machine and see the same files');
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -474,7 +620,11 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toContain('## Verification');
-    expect(prompt).toMatch(/The artifact is the evidence — read it/);
+    // The generic "check your work before calling it done" framing is gone:
+    // the CompletionGate is that instruction as a mechanism, and a generic
+    // re-check line is what Anthropic's Opus 5 guidance says to delete.
+    expect(prompt).not.toMatch(/The artifact is the evidence — read it/);
+    expect(prompt).not.toMatch(/Before you call work done/);
     // The transposition test: check the artifact's literal shape, not the plan.
     expect(prompt).toMatch(/Re-read the artifact itself/);
     expect(prompt).toMatch(/column order, direction, units, filenames/);
@@ -586,7 +736,7 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt)).not.toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'background_resume' })).toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'cron' })).toContain('Scheduled wake mode');
-    expect(buildSystemPromptSync(rt, { mode: 'product_change' })).toContain('Never deploy Proteus product changes');
+    expect(buildSystemPromptSync(rt, { mode: 'release' })).toContain('Never deploy Proteus release changes');
   });
 
   test('turn-mode classification is one shared rule for both backends', () => {
@@ -633,10 +783,11 @@ describe('buildSystemPromptSync', () => {
     // sizes — raise one ONLY alongside an intentional content change.
     const BUDGETS: Record<string, number> = {
       'Runtime context': 160,
-      // Static pointer to the load-bearing delegation ladder (2026-07). 2026-08:
-      // the standalone verify line moved out to its own Verification section
-      // and the ladder pointer picked up the uncertainty trigger — net smaller.
-      'Operating guidance': 640,
+      // 2026-08: the ladder pointer is gone. It restated the Delegation
+      // section's own opening forty lines above it, and both of its triggers
+      // are mechanised — turn-steering states them at the step where the
+      // decision is still open, which is the version that measurably converts.
+      'Operating guidance': 460,
       // +2 summary lines for the team/peers split + the subordinate report
       // tool (2026-07, Subordinates A2). Real actors advertise a
       // deps-filtered subset; this representative surface carries all three.
@@ -645,38 +796,56 @@ describe('buildSystemPromptSync', () => {
       // `experience` line. The prompt teaches tool use by showing a real
       // argument shape rather than by describing one — deliberate, and the
       // only place the specs' `example` field is rendered.
+      // 2026-08-11: the `agents` example became the fork call (+92 chars, the
+      // nested forks array is longer than staff's flat role/mission). It sits
+      // close to this ceiling on purpose — the next example that grows should
+      // be a reviewed decision, which is what this gate is for.
       'Tools available this turn': 2100,
       // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
       // /pc file plane; exec stays target-native) — deliberate (2026-07).
       'Execution environments': 2450,
       'Persistence': 700,
-      'Memory and facts': 560,
-      // 2026-08: +1 clause on the schedule line for the mission budget. The
-      // opt-in cap is only reachable if the model knows the argument exists,
-      // and the detail (transitivity, nesting, refusal shape) stays in the
-      // `agent.*` types block the sandbox reads rather than here.
-      'Code execution and learned capabilities': 1640,
+      // 2026-08: −1 line. `execute_tools runs JavaScript against the active
+      // executor/codemode namespaces` was the tool's own summary, restated.
+      'Code execution and learned capabilities': 1600,
       // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
-      // ONE lifetime-keyed ladder. It carries both rung triggers verbatim from
-      // the registry, so a bare tool-name index (kimi) still gets the whole
-      // decision — deliberate, and the load-bearing fix for "the agent never
-      // reached for think".
+      // ONE lifetime-keyed ladder.
       // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
       // clamp tightens mechanically, and a model told WHY reaches for a rung
       // instead of re-running the command (core/src/context-budget.ts).
       // 2026-08: +1 line for `agents.*` in codemode — the rung ladder is also
       // a sandbox namespace, which is what makes a crafted tool a workflow,
       // and it carries the in-sandbox fork's non-resumable cost.
-      // 2026-08: +1 sentence giving the fork rung its DOUBT trigger, and the
-      // settle sentence reordered to lead with what mcts does. Both target a
-      // measured 0/10 usage of every lift lever on a benchmark corpus.
-      'Delegation': 3500,
+      // 2026-08: the rungs became a two-line INDEX. Their triggers were
+      // byte-identical to the `agents` schema whenToUse (418 tok per request)
+      // and were kept here only so a bare tool-name index (kimi) would still
+      // get the decision — a rationale that never held, since schemas are
+      // family-neutral. The index is gone and so is the duplication.
+      // 2026-08-11: LOWERED 2250 → 1870. The section now teaches three things
+      // it did not (the shape that calls for a fork, which settle each shape
+      // wants, that a fork can carry its own model) and is 270 chars SMALLER,
+      // because four passages left: the turn-budget explanation moved into the
+      // clamp's own marker (tools/clamp.ts) where it fires at the trip; the
+      // peer-addressing line was DELEGATION_CONVERSE paraphrased; the roster/
+      // dismiss tail was DELEGATION_RUNGS.staff paraphrased; the report line
+      // was the `report` schema's whenToUse/whenNotToUse paraphrased.
+      // 2026-08-11: RAISED 1870 → 2250 (back to its pre-2026-08-11 ceiling).
+      // A trigger alone did not move settle=mcts — 1 use in 89 trials — so the
+      // section now states the MECHANISM: that mcts writes its own rival
+      // approaches from the task (the call shape differs from merge), that it
+      // varies their angles, that it runs rounds, and that execution fixes the
+      // score band the judge then orders within. Plus the fork-visibility fact
+      // that makes dependent fork tasks a mistake. Paid for in part by two
+      // duplicates this pass created: the merge clause's restatement of the
+      // rung's own 2+-angles trigger, and `workspace.createTool`'s output,
+      // which the Code-execution section already describes.
+      'Delegation': 2250,
       'Background work': 260,
       // 2026-08: new section. Two of five benchmark failures were a solved
       // problem with a fumbled deliverable, and the prompt had no doctrine
-      // that would have caught either.
-      'Verification': 800,
-      'Proteus product changes': 290,
+      // that would have caught either. 2026-08: −1 framing sentence, which the
+      // CompletionGate says mechanically and Opus 5 guidance says to delete.
+      'Verification': 620,
       'Output format': 180,
     };
     const { rt } = createTestRuntime();
@@ -686,11 +855,7 @@ describe('buildSystemPromptSync', () => {
       currentDate: '2026-06-11',
       model: { id: 'anthropic/claude-sonnet-4.5' },
     });
-    const sections = new Map<string, number>();
-    for (const block of prompt.split(/\n(?=## )/)) {
-      const title = block.split('\n', 1)[0].replace(/^## /, '');
-      sections.set(title, block.length);
-    }
+    const sections = new Map(splitPromptSections(prompt).map((s) => [s.title, s.chars]));
     const problems: string[] = [];
     for (const [title, budget] of Object.entries(BUDGETS)) {
       const size = sections.get(title);
@@ -708,24 +873,23 @@ describe('buildSystemPromptSync', () => {
     // single-shot stays registered for eval harnesses but is pure overhead for
     // a chat model, so it is never advertised.
     const { rt } = createTestRuntime();
-    const prompt = buildSystemPromptSync(rt);
-    expect(prompt).toMatch(/settle=mcts/);
-    expect(prompt).not.toMatch(/single-shot/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).toMatch(/settle=mcts/);
+    expect(BUILTIN_TOOL_DESCRIPTIONS.agents).not.toMatch(/single-shot/);
+    expect(buildSystemPromptSync(rt)).not.toMatch(/single-shot/);
   });
 
   test('the ladder renders identically for BOTH a Kimi and a non-Kimi agent', () => {
-    // Kimi gets a bare tool-name index with no per-tool prose, so anything
-    // carried only by the schema is invisible to it. The Delegation section is
-    // workflow doctrine in the agent-state block, not the per-tool index, so
-    // both rungs and the mcts scoring policy reach every family.
+    // Every family now reads one prompt and one set of schemas. The Delegation
+    // section is workflow doctrine in the agent-state block, so its
+    // prompt-only lines reach every family, and the rung triggers reach them
+    // through the family-neutral schema.
     const { rt } = createTestRuntime();
     for (const id of ['@cf/moonshotai/kimi-k2.6', 'anthropic/claude-sonnet-4.5']) {
       const prompt = buildSystemPromptSync(rt, { model: { id } });
       expect(prompt).toMatch(/## Delegation/);
-      expect(prompt).toMatch(/- Ephemeral fork — Fork \(action=fork\)/);
-      expect(prompt).toMatch(/- Persistent subordinate — Staff a subordinate \(action=staff\)/);
-      expect(prompt).toMatch(/set settle=mcts/);
-      expect(prompt).toMatch(/loop `web` search then fetch/);
+      expect(prompt).toMatch(/- Ephemeral fork \(action=fork\) — /);
+      expect(prompt).toMatch(/- Persistent subordinate \(action=staff\) — /);
+      expect(prompt).toMatch(/settle=mcts keeps one/);
     }
   });
 });

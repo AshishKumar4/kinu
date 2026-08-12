@@ -39,8 +39,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { diversityDirective, formatInheritedContext, parseModelSpec, reasoningEffortOptions } from "@proteus/core";
-import { generateJson } from "./lib/generate-json.js";
+import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, missionCallUsage, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -60,8 +59,11 @@ import {
   HeadJournal,
   MergeOutputSchema,
   type MergeOutput,
+  type BranchExploration,
+  type BranchReflection,
   HeadCapture,
   runHeadInference,
+  type MissionScope,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services.js";
 import { spawnHeadFacet } from "./facet-spawn.js";
@@ -266,41 +268,40 @@ export class ExplorationAgent extends Agent<Env> {
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
     siblings: readonly string[] = [],
-  ): Promise<{ text: string; codeUsed: string | null }> {
+  ): Promise<BranchExploration> {
     const { model, providerOptions } = this.resolveLowEffortModel();
-    const context = formatInheritedContext(priorHistory);
-    const toolHints = craftedTools.length > 0
-      ? `\nKnown patterns:\n${craftedTools.map(t => `- ${t.name}: ${t.description}`).join("\n")}`
-      : "";
+    const { system, user } = explorePrompt({
+      context: formatInheritedContext(priorHistory),
+      craftedTools,
+      siblings,
+    });
 
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model,
-      system: "You are an expert agent exploring one approach to solve a task." + toolHints +
-        "\n\nIf your approach involves code, include it in a ```js code block.",
-      messages: [{ role: "user" as const, content: `Prior context:\n${context}\n\nPropose ONE specific concrete approach. Include a code implementation if applicable.${diversityDirective(siblings)}` }],
+      system,
+      messages: [{ role: "user" as const, content: user }],
       ...(providerOptions ? { providerOptions } : {}),
     });
 
     const trimmed = text.trim();
-    const codeMatch = trimmed.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
-    const codeUsed = codeMatch?.[1]?.trim() ?? null;
+    const codeUsed = extractCodeBlock(trimmed);
     this.sql`INSERT INTO traces (step, text, code_used) VALUES (1, ${trimmed}, ${codeUsed})`;
-    return { text: trimmed, codeUsed };
+    return { text: trimmed, codeUsed, usage: missionCallUsage(usage) };
   }
 
   @callable()
-  async generateReflection(task: string): Promise<string> {
+  async generateReflection(task: string): Promise<BranchReflection> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
     const { model, providerOptions } = this.resolveLowEffortModel();
-    const { text } = await generateText({
+    const { text, usage } = await generateText({
       model,
       messages: [{
         role: "user" as const,
-        content: `Task: ${task}\nAttempt: ${traces.map(t => t.text).join("\n")}\n\nWhat specifically went wrong? One sentence.`,
+        content: reflectionPrompt(task, traces.map(t => t.text).join("\n")),
       }],
       ...(providerOptions ? { providerOptions } : {}),
     });
-    return text.trim();
+    return { text: text.trim(), usage: missionCallUsage(usage) };
   }
 
   // ── Head mode @callables  ───────────────────────────────────
@@ -332,19 +333,54 @@ export class ExplorationAgent extends Agent<Env> {
     // The loop + report assembly live in core (runHeadInference); the Facet
     // supplies its model + the forked tool surface. Abort is driven by
     // abortHead() flipping this.headAborted.
+    const mission = this.missionScope(input);
     return runHeadInference(input, {
       model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
       capture,
+      // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
+      // this identical Worker var. A fork of a turn gets the turn's room.
+      maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
       isAborted: () => this.headAborted,
       abortReason: () => this.headAbortReason,
+      ...(mission ? { mission } : {}),
     });
+  }
+
+  /**
+   * The mission ledger this head charges, or null when it charges none.
+   *
+   * The ledger lives on the parent workspace — a facet has its own storage and
+   * resolves its own model, so nothing the parent wrapped around `rt.llm`
+   * reaches these calls. The port is therefore an RPC back to the actor that
+   * declared the budget: guard before each step, debit after it.
+   *
+   * Null for a head with no labels, which is every head of an ordinary
+   * unbudgeted run: no stub is taken, no RPC is issued, and the parent's
+   * mission table is never opened.
+   */
+  private missionScope(input: HeadInput): MissionScope | null {
+    const labels = input.missionLabels ?? [];
+    if (labels.length === 0) return null;
+    const parent = this.getSharedParentStub();
+    if (!parent) return null;
+    return {
+      labels,
+      port: {
+        guard: (seam, scope) => parent.missionGuard(seam, scope),
+        debit: (tokens, opts) => parent.missionDebit(tokens, opts),
+      },
+    };
   }
 
   // ── Head-mode tool builders ─────────────────────────────────────
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture) {
     const rt = this.headRuntime();
+    // Attribute this head's file writes to this head. The plane is this facet's
+    // own, so a sibling head writing the same file at the same moment lands in
+    // ITS capture and never in this one.
+    rt.compositeVfs.observeWrites(capture.files);
     return buildHeadToolSet({
       input,
       capture,
@@ -410,6 +446,9 @@ export class ExplorationAgent extends Agent<Env> {
       request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
       parentBudget,
       model: parentInput.model,
+      // A subtree charges the same mission its root does — otherwise a head
+      // escapes its budget simply by splitting again.
+      ...(parentInput.missionLabels?.length ? { missionLabels: parentInput.missionLabels } : {}),
     });
 
     return {

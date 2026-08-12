@@ -11,15 +11,14 @@ import type { ComponentType } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockCounterClockwiseIcon, GitBranchIcon, PackageIcon, BrainIcon,
-  SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon,
+  SparkleIcon, TimerIcon, ChecksIcon, CheckIcon, XIcon, GitDiffIcon, SquaresFourIcon,
   CaretDownIcon, CaretRightIcon,
 } from "@phosphor-icons/react";
-import type { ChangelogEntry, ChangelogEntryKind } from "@proteus/core";
+import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines } from "./shared";
-import type { DiffLine } from "@/lib/diff";
+import { DiffLines, Section } from "./shared";
 
 interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
@@ -27,6 +26,7 @@ interface ScaffoldDiff { version: number; previousVersion: number | null; added:
 const KIND_ICON: Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>> = {
   scaffold: GitBranchIcon,
   tool: PackageIcon,
+  view: SquaresFourIcon,
   fact: BrainIcon,
   gepa: SparkleIcon,
   replay: TimerIcon,
@@ -147,13 +147,9 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
   };
 
   return (
-    <section>
-      <div className="flex items-center gap-2 mb-2.5">
-        <ClockCounterClockwiseIcon size={14} className="p-text-2" />
-        <span className="text-sm font-medium p-text">Changelog</span>
-        {view && view.entries.length > 0 && <Badge variant="secondary">{view.entries.length}</Badge>}
-      </div>
-
+    <Section id="changelog" title="Changelog"
+      icon={<ClockCounterClockwiseIcon size={14} className="p-text-2" />}
+      badge={view && view.entries.length > 0 ? <Badge variant="secondary">{view.entries.length}</Badge> : undefined}>
       {/* The section always renders. Returning null on a failed read made the
           agent's self-change record indistinguishable from a build that never
           had one — on the very surface that justifies autonomy-ON defaults. */}
@@ -244,6 +240,6 @@ export function EvolutionChangelog({ rpc, onSeen }: EvolutionChangelogProps) {
           })}
         </div>
       )}
-    </section>
+    </Section>
   );
 }

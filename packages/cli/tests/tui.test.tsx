@@ -108,7 +108,7 @@ describe('CLI TUI layout', () => {
   test('model picker forwards arrow and enter keys from its filter input', async () => {
     const { renderer, mockInput, renderOnce, captureCharFrame } = await createTestRenderer({ width: 80, height: 24, useThread: false, maxFps: Number.POSITIVE_INFINITY });
     const root = createRoot(renderer);
-    let selected: AgentModelEntry | null = null;
+    const selected: AgentModelEntry[] = [];
     try {
       root.render(
         <box style={{ width: '100%', height: '100%' }}>
@@ -116,7 +116,7 @@ describe('CLI TUI layout', () => {
             models={MODELS}
             currentSpec={MODELS[0]!.spec}
             terminal={{ width: 80, height: 24 }}
-            onSelect={(model) => { selected = model; }}
+            onSelect={(model) => { selected.push(model); }}
           />
         </box>,
       );
@@ -128,7 +128,7 @@ describe('CLI TUI layout', () => {
 
       mockInput.pressEnter();
       await renderSettled(renderOnce);
-      expect(selected?.spec).toBe(MODELS[1]!.spec);
+      expect(selected[0]?.spec).toBe(MODELS[1]!.spec);
     } finally {
       root.render(<box />);
       renderer.destroy();
@@ -549,14 +549,12 @@ function lineContaining(frame: string, text: string) {
 const MODELS: AgentModelEntry[] = [
   {
     provider: 'workers-ai',
-    id: '@cf/moonshotai/kimi-k2.6',
     label: 'Kimi K2.6',
     spec: 'workers-ai/@cf/moonshotai/kimi-k2.6',
     capabilities: ['tools', 'streaming'],
   },
   {
     provider: 'workers-ai',
-    id: '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     label: 'Llama 3.3 70B',
     spec: 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
     capabilities: ['streaming'],

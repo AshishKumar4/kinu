@@ -11,6 +11,7 @@ export type {
   TurnSteeringRecord,
   TurnSteeringTrigger,
   CraftCycleRecord,
+  StepUsage,
 } from './types.js';
 
 export {
@@ -19,3 +20,11 @@ export {
   type RunEventListener,
   type RunEventQuery,
 } from './recorder.js';
+
+export {
+  cacheHitRate,
+  summarizeSteps,
+  CACHE_HIT_EMA_ALPHA,
+  type CacheHitStats,
+  type StepTelemetry,
+} from './step-stats.js';

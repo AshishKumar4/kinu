@@ -242,8 +242,10 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));`.trim();
   log('  exposing port 8080');
   const exposeResult = await rpcCall(ws, 'exposeSandboxPort', [8080, 'hello'], 30_000) as { url?: string };
   log(`  expose URL: ${exposeResult.url}`);
-  if (!exposeResult.url || !exposeResult.url.includes('/_preview/')) {
-    fail(4, 'expose did not return a /_preview/ URL'); ws.close(); return false;
+  // `<port>-<sandbox>-<token>.<suffix>` — the preview hostname the SDK mints.
+  const previewHost = /^https:\/\/\d{4,5}-[a-z0-9][a-z0-9-]*-[a-z0-9_]+\./i;
+  if (!exposeResult.url || !previewHost.test(exposeResult.url)) {
+    fail(4, `expose did not return a preview URL: ${exposeResult.url}`); ws.close(); return false;
   }
   // Verify the URL is actually serving the app
   const body = await fetch(exposeResult.url).then(r => r.text()).catch(() => '');
@@ -259,7 +261,7 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));`.trim();
     const tabBadge = /Executors\s+\d+/.test(text) || !!document.querySelector('button [class*="emerald"]');
     // Look for an iframe with the preview URL
     const iframes = Array.from(document.querySelectorAll('iframe')).map(f => (f as HTMLIFrameElement).src);
-    const iframeMatch = iframes.some(s => typeof s === 'string' && s.includes('/_preview/'));
+    const iframeMatch = iframes.some(s => typeof s === 'string' && s.startsWith(url));
     return { tabBadge, iframes, iframeMatch, expected: url };
   }, exposeResult.url);
   log(`  UI check: tab-badge=${uiCheck.tabBadge} iframe-match=${uiCheck.iframeMatch} iframes=${JSON.stringify(uiCheck.iframes)}`);
@@ -273,10 +275,10 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));`.trim();
     await new Promise(r => setTimeout(r, 6000));
     await page.screenshot({ path: `${OUT_DIR}/t4-02-executors-tab.png`, fullPage: true });
   }
-  const finalCheck = await page.evaluate(() => {
+  const finalCheck = await page.evaluate((url) => {
     const iframes = Array.from(document.querySelectorAll('iframe')).map(f => (f as HTMLIFrameElement).src);
-    return { iframes, found: iframes.some(s => typeof s === 'string' && s.includes('/_preview/')) };
-  });
+    return { iframes, found: iframes.some(s => typeof s === 'string' && s.startsWith(url)) };
+  }, exposeResult.url);
   log(`  final iframe check: found=${finalCheck.found} iframes=${JSON.stringify(finalCheck.iframes)}`);
   const ok = helloOk && finalCheck.found;
   ok ? pass(4, 'preview iframe visible in UI + body returns Hello World')

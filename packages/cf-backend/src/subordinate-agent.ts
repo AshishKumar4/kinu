@@ -2,32 +2,19 @@ import { callable, type AgentContext } from 'agents';
 import { SUBORDINATE_RPC_SURFACE, sealRpcSurface } from './rpc-surface.js';
 import { convertToModelMessages } from 'ai';
 import type { ChatResponseResult } from '@cloudflare/think';
-import { initCompactionStateTable } from '@proteus/compaction';
 import {
   EvolutionEngine,
   bootstrapScaffold,
   createParentRpcMountVFS,
-  initAllTables,
-  initBackgroundJobsTable,
-  initCraftScoreTables,
-  initCurriculumTable,
-  initEventsHubTables,
-  initFactsTable,
-  initGepaTables,
-  initHeadsTables,
-  initImportedExperienceTable,
-  initMctsSearchTable,
-  initRunEventTables,
-  initScaffoldTables,
-  initSearchTables,
-  initShadowTables,
-  initTurnOutcomeTables,
+  initWorkspaceSchema,
   seedSoul,
   snapshotCompletedTurn,
   type CompletedTurn,
   type ParentRpcFileHandle,
   type SubordinateHandoff,
   type SubordinateReportStatus,
+  // Read models — the same control-plane implementations the orchestrator uses.
+  cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome,
 } from '@proteus/core';
 import {
   ActorAgent,
@@ -120,33 +107,14 @@ export class SubordinateAgent extends ActorAgent {
 
   private ensureSchema(): void {
     if (this._schemaReady) return;
-    const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
-    initAllTables(execRaw);
-    initSearchTables(execRaw);
-    initScaffoldTables(execRaw);
-    initCraftScoreTables(execRaw);
-    initTurnOutcomeTables(execRaw, this.boundSql);
-    initEventsHubTables(this.ctx.storage.sql);
-    initHeadsTables(execRaw);
-    initShadowTables(execRaw);
-    initRunEventTables(execRaw);
-    initFactsTable(execRaw);
-    initCurriculumTable(execRaw);
-    initGepaTables(execRaw);
-    initBackgroundJobsTable(execRaw);
-    // Durable MCTS search checkpoints. The fork substrate — including
-    // settle=mcts — is universal across actor profiles (getAgentsToolDeps on
-    // the base class), so the checkpoint table must exist here exactly as it
-    // does on the orchestrator; only the orchestrator had it.
-    initMctsSearchTable(execRaw);
-    // Experience-import staging ledger — read by the shared EvolutionEngine's
-    // settleImports on every root, not only where the `experience` tool is.
-    initImportedExperienceTable(execRaw);
-    initCompactionStateTable(execRaw);
-    execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
-      key TEXT PRIMARY KEY,
-      value TEXT NOT NULL
-    )`);
+    // Every table a workspace has, on any backend — one list, in core.
+    initWorkspaceSchema({
+      execRaw: (ddl: string) => this.ctx.storage.sql.exec(ddl),
+      sql: this.boundSql,
+      exec: this.ctx.storage.sql,
+    });
+    // The one plane this root alone carries: its own identity row, seeded by
+    // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
     this._schemaReady = true;
   }
@@ -283,44 +251,27 @@ export class SubordinateAgent extends ActorAgent {
   @callable()
   async getStoredModelSpec(): Promise<{ spec: string | null }> {
     this.ensureSchema();
-    return { spec: this.getStoredModelId() };
+    return getStoredModelSpec(this.config);
   }
 
   @callable()
   async setModel(spec: string): Promise<{ ok: true; spec: string }> {
     this.ensureSchema();
-    try {
-      const normalized = this.providerRegistry().normalizeSpecSync(spec);
-      this.config.setModel(normalized);
-      this.invalidateModelCaches();
-      return { ok: true, spec: normalized };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw new Error(`setModel(${spec}) failed: ${message}`);
-    }
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => this.invalidateModelCaches(),
+    }, spec);
   }
 
   @callable()
-  async cancelCurrentWork(): Promise<{ ok: true; cancelledJobs: string[]; abortedTools: number }> {
+  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
     this.ensureSchema();
-    const cancelledJobs = this.jobRunner.cancelRunning();
-    let abortedTools = 0;
-    for (const controller of [...this._activeToolControllers]) {
-      if (!controller.signal.aborted) {
-        try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
-        abortedTools++;
-      }
-      this._activeToolControllers.delete(controller);
-    }
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'work_cancelled',
-        cancelledJobs,
-        abortedTools,
-        timestamp: Date.now(),
-      }));
-    } catch { /* no connected clients */ }
-    return { ok: true, cancelledJobs, abortedTools };
+    return cancelCurrentWork({
+      jobRunner: this.jobRunner,
+      activeToolControllers: this._activeToolControllers,
+      broadcast: (payload) => this.broadcast(payload),
+    });
   }
 
   private async sendReport(

@@ -9,11 +9,12 @@
  */
 import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import { GitBranchIcon, ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines } from "./shared";
+import { DiffLines, Section } from "./shared";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
@@ -24,7 +25,7 @@ const STATUS_TONE: Record<string, string> = {
   current: "p-badge-success",
   pending: "p-badge-warning",
   rolled_back: "p-badge-danger",
-  historical: "p-elevated p-text-3",
+  historical: "p-fill p-text-3",
 };
 
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
@@ -128,13 +129,9 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const isPending = selectedV?.status === "pending";
 
   return (
-    <section>
-      <div className="flex items-center gap-2 mb-2.5">
-        <GitBranchIcon size={14} className="p-text-2" />
-        <span className="text-sm font-medium p-text">Scaffold evolution</span>
-        <Badge variant="secondary">v{currentVersion}</Badge>
-      </div>
-
+    <Section id="scaffold" title="Scaffold evolution" defaultOpen={false}
+      icon={<GitBranchIcon size={14} className="p-text-2" />}
+      badge={<Badge variant="secondary">v{currentVersion}</Badge>}>
       {lineage.status === "error" && versions.length === 0 ? (
         <LoadFailure what="the scaffold lineage" message={lineage.message} onRetry={reload} />
       ) : lineage.status === "loading" ? (
@@ -147,9 +144,9 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           <div className="space-y-1">
             {versions.map((v) => (
               <button key={v.version} onClick={() => select(v.version)}
-                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-elevated" : "hover:p-card"}`}>
+                className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "hover:p-card"}`}>
                 <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_TONE[v.status] ?? "p-elevated p-text-3"}`}>{v.status}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_TONE[v.status] ?? "p-fill p-text-3"}`}>{v.status}</span>
                 <span className="text-[11px] p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
                 <span className="text-[10px] p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
               </button>
@@ -182,17 +179,17 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
                   </Button>
                 </div>
                 {previewOut && (
-                  <pre className="text-[11px] font-mono p-elevated border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
+                  <pre className="text-[11px] font-mono p-fill border p-border rounded-md p-2.5 max-h-40 overflow-auto whitespace-pre-wrap p-text-2">{previewOut}</pre>
                 )}
               </div>
 
               {/* Promote / Rollback — only meaningful while this version is pending */}
               {isPending && (
                 <div className="flex items-center gap-2">
-                  <Button size="sm" variant="primary" disabled={!!busy} onClick={() => decide("promote")}
-                    icon={busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}>
+                  <button className={`p-btn ${btnSmCls}`} disabled={!!busy} onClick={() => decide("promote")}>
+                    {busy === "promote" ? <Loader size="sm" /> : <CheckCircleIcon size={13} />}
                     Promote v{selected}
-                  </Button>
+                  </button>
                   <Button size="sm" variant="ghost" disabled={!!busy} onClick={() => decide("rollback")}
                     icon={busy === "rollback" ? <Loader size="sm" /> : <ArrowUUpLeftIcon size={13} />}>
                     Roll back
@@ -204,6 +201,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           )}
         </div>
       )}
-    </section>
+    </Section>
   );
 }

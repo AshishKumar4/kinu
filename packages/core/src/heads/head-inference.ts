@@ -15,11 +15,13 @@ import { generateText, tool, jsonSchema, type ToolSet, type LanguageModel } from
 import {
   type HeadInput, type HeadReport, type HeadId,
   type Evidence, type Decision, type ArtifactRef,
-  budgetExhausted, NOMINAL_STEP_TOKENS,
+  budgetExhausted,
 } from './types.js';
 import type { ToolCallRecord } from '../evolution/types.js';
+import { missionCallUsage, type MissionBudgetRefusal, type MissionScope } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
+import { HeadFileChanges } from './file-changes.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /**
@@ -35,33 +37,18 @@ export class HeadCapture {
   readonly artifacts: ArtifactRef[] = [];
   readonly toolCalls: ToolCallRecord[] = [];
   readonly childHeadIds: HeadId[] = [];
-  /** `input`/`output` are gross provider spend (what the cost ledger debits);
-   *  `budgetCharged` is the marginal spend the head's budget meters. See
-   *  recordStepUsage for why those must be two different numbers. */
-  readonly tokenUsage = { input: 0, output: 0, budgetCharged: 0 };
-  /** Largest prompt this head has been sent so far; null until its first step. */
-  private promptTokens: number | null = null;
+  /** What this head changed on the shared file planes. The backend installs it
+   *  on the head's own CompositeVFS (`observeWrites`) when it builds the head's
+   *  runtime; unwired, it simply stays empty. */
+  readonly files = new HeadFileChanges();
+  /** Gross provider spend — what the report carries and the mission budget
+   *  governor debits. Nothing meters a head against a private ceiling, so this
+   *  is the only token figure there is. */
+  readonly tokenUsage = { input: 0, output: 0 };
 
-  /**
-   * Fold one step's provider usage in.
-   *
-   * A head re-sends its entire accumulated prompt on every step, so charging
-   * `inputTokens` per step bills the same prefix again and again: a head spawned
-   * from a long parent turn burns its whole ceiling in one to three steps and
-   * returns having produced nothing. The budget therefore meters only what the
-   * head ADDS — its own output plus the GROWTH of its prompt, i.e. the tool
-   * output it pulled in. The inherited context it was handed is a fixed entry
-   * cost set by the parent, not work the head chose to do, so it is not charged
-   * either; that is what keeps a head's working room independent of how long its
-   * parent has been running. Gross spend stays bounded by the step cap, the
-   * wall-clock, and the mission governor, which debits the real numbers.
-   */
   recordStepUsage(inputTokens: number, outputTokens: number): void {
     this.tokenUsage.input += inputTokens;
     this.tokenUsage.output += outputTokens;
-    const growth = this.promptTokens === null ? 0 : Math.max(0, inputTokens - this.promptTokens);
-    this.tokenUsage.budgetCharged += outputTokens + growth;
-    this.promptTokens = Math.max(this.promptTokens ?? 0, inputTokens);
   }
 
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
@@ -234,7 +221,9 @@ export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: rea
     ``,
     ...renderHeadToolConventions(input, availableToolNames),
     ``,
-    `Budget: depth ${input.budget.maxDepth}, ${input.budget.maxTokens} tokens, ${input.budget.maxWallClockMs}ms wall-clock.`,
+    input.budget.maxWallClockMs === undefined
+      ? `Take the time the task needs — there is no time or token limit on this run. You may split ${input.budget.maxDepth} more level(s) deep.`
+      : `Deadline: ${input.budget.maxWallClockMs}ms wall-clock (the caller asked for one). You may split ${input.budget.maxDepth} more level(s) deep.`,
   ].join('\n');
 }
 
@@ -271,6 +260,42 @@ function incompleteHeadSummary(
     + (recorded ? `What it recorded before stopping: ${recorded}` : 'It produced no findings.');
 }
 
+/**
+ * The report of a head the mission governor stopped.
+ *
+ * Deliberately the same shape as any other incomplete head — its findings, its
+ * status, and no mid-flight speculation dressed up as a conclusion — with the
+ * refusal's own words as the reason, so the parent's merge can say which budget
+ * ran out rather than reporting an unexplained short run.
+ */
+function exhaustedMissionReport(
+  input: HeadInput,
+  capture: HeadCapture,
+  refusal: MissionBudgetRefusal,
+  wallClockMs: number,
+  steps: Parameters<typeof extractHeadSteps>[0] = [],
+): HeadReport {
+  return {
+    id: input.id,
+    status: 'budget_exceeded',
+    summary: incompleteHeadSummary(input, 'budget_exceeded', capture, refusal.note),
+    evidence: [...capture.evidence],
+    decisions: [...capture.decisions],
+    artifactRefs: [...capture.artifacts],
+    fileChanges: capture.files.snapshot(),
+    childHeadIds: [...capture.childHeadIds],
+    toolCalls: [...capture.toolCalls],
+    steps: extractHeadSteps(steps),
+    tokenUsage: {
+      input: capture.tokenUsage.input,
+      output: capture.tokenUsage.output,
+      total: capture.tokenUsage.input + capture.tokenUsage.output,
+    },
+    wallClockMs,
+    errorMessage: refusal.note,
+  };
+}
+
 export interface HeadInferenceDeps {
   /** The LanguageModel this head reasons with (per-head model override applied upstream). */
   model: LanguageModel;
@@ -280,63 +305,100 @@ export interface HeadInferenceDeps {
   tools: ToolSet;
   /** Shared findings accumulator — the tools mutate this same instance. */
   capture: HeadCapture;
+  /**
+   * The step envelope of the turn this head forked, supplied by the backend
+   * because only the backend can read the host setting (`PROTEUS_MAX_STEPS`;
+   * core owns the parser, see resolveMaxSteps). A head is its parent running on
+   * the same workspace, so it gets its parent's envelope — not a smaller one
+   * derived from a private token pool.
+   */
+  maxSteps: number;
   /** Polled in stopWhen + read for the final status. */
   isAborted: () => boolean;
   /** Abort reason, surfaced in errorMessage. */
   abortReason?: () => string | null;
+  /**
+   * The mission ledger this head charges, when it runs under one.
+   *
+   * The head's own envelope has no token dimension on purpose — a fork gets its
+   * parent's room — so this is the ONLY thing that can stop a head for spending
+   * too much, and it stops it only where a budget was declared. Omitted is the
+   * default and the loop then never asks: an undeclared run must not touch the
+   * table.
+   *
+   * The backend builds it from {@link HeadInput.missionLabels}: in-process over
+   * the governor itself, out-of-process over an RPC to whoever holds the ledger.
+   */
+  mission?: MissionScope;
 }
 
 /**
  * Run one head's inference loop and assemble its HeadReport. A multi-step
- * generateText run that stops on abort, the derived step cap, or budget
- * exhaustion; the final text (last text-bearing step) becomes the summary, with
- * a recorded-findings fallback. Never throws — failures become an `errored`
- * report (the controller treats a thrown run() as budget_exceeded anyway).
+ * generateText run that stops on abort, on the parent turn's step envelope, or
+ * on a caller-requested deadline; the final text (last text-bearing step)
+ * becomes the summary, with a recorded-findings fallback. Never throws —
+ * failures become an `errored` report (the controller treats a thrown run() as
+ * budget_exceeded anyway).
  */
 export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps): Promise<HeadReport> {
-  const { capture } = deps;
+  const { capture, maxSteps, mission } = deps;
   const startedAt = Date.now();
-  // Runaway guard, not a working limit: it exists for the loops the marginal
-  // token meter cannot see (steps that add ~no prompt growth and ~no output),
-  // so it is sized at twice the budget's nominal step estimate — genuine work
-  // is ended by the token pool or the wall clock, and when this guard itself
-  // fires the report says so instead of presenting the head as finished.
-  const maxSteps = Math.max(1, 2 * Math.floor(input.budget.maxTokens / NOMINAL_STEP_TOKENS));
 
-  // Gross spend — what the report carries and the cost ledger debits. The budget
-  // gate below reads `budgetCharged` instead (see HeadCapture.recordStepUsage).
   const usageTotal = () => ({
     input: capture.tokenUsage.input,
     output: capture.tokenUsage.output,
     total: capture.tokenUsage.input + capture.tokenUsage.output,
   });
 
+  // The mission refusal that stopped this head, if one did. Held so the report
+  // says which budget ran out rather than reporting a bare stop.
+  let refusal: MissionBudgetRefusal | null = null;
+  /** Ask the ledger for room. Never called for an unbudgeted run: `mission` is
+   *  built only from a non-empty label set, so there is nothing to ask. */
+  const outOfBudget = async (): Promise<boolean> => {
+    if (!mission || refusal) return refusal !== null;
+    refusal = await mission.port.guard('model_call', mission.labels);
+    return refusal !== null;
+  };
+
   try {
+    // Before the first call as well as between steps: a head spawned into an
+    // already-spent mission must not get one free inference out of it.
+    if (await outOfBudget()) {
+      return exhaustedMissionReport(input, capture, refusal!, Date.now() - startedAt);
+    }
     const result = await generateText({
       model: deps.model,
       system: buildHeadSystemPrompt(input, Object.keys(deps.tools)),
       messages: buildHeadMessages(input),
       tools: deps.tools,
-      // Accumulate usage as each step finishes — fires before stopWhen is
-      // evaluated — so the token ceiling can gate the run mid-flight rather
-      // than only being noticed once the whole loop is done (THINKING-AUDIT §4 #7).
-      onStepFinish: (step) => {
-        const u = (step as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
-        if (u) capture.recordStepUsage(u.inputTokens ?? 0, u.outputTokens ?? 0);
+      onStepFinish: async (step) => {
+        const usage = missionCallUsage(step.usage);
+        if (!usage) return;
+        capture.recordStepUsage(usage.input, usage.output);
+        // Charged per step, from the provider's own report, so the ledger is
+        // current when the guard below reads it — rather than one lump debit
+        // after the whole fork has already been paid for.
+        await mission?.port.debit(usage.input + usage.output, {
+          labels: mission.labels, calls: 1, usage,
+        });
       },
-      stopWhen: ({ steps }) => {
+      stopWhen: async ({ steps }) => {
         if (deps.isAborted()) return true;
         if (steps.length >= maxSteps) return true;
-        if (budgetExhausted(input.budget, capture.tokenUsage.budgetCharged).exhausted) return true;
-        return false;
+        if (budgetExhausted(input.budget).exhausted) return true;
+        return outOfBudget();
       },
     });
 
-    const budgetGate = budgetExhausted(input.budget, capture.tokenUsage.budgetCharged);
-    // A run that used every step without the model ever choosing to stop was
-    // ended by the guard mid-flight — reporting it 'completed' would hand the
+    if (refusal) {
+      return exhaustedMissionReport(input, capture, refusal, Date.now() - startedAt, result.steps);
+    }
+    const budgetGate = budgetExhausted(input.budget);
+    // A run that used the whole step envelope without the model ever choosing to
+    // stop was cut off mid-flight — reporting it 'completed' would hand the
     // parent a mid-flight thought as a finished answer, the exact fabrication
-    // incompleteHeadSummary exists to prevent on the token/wall-clock paths.
+    // incompleteHeadSummary exists to prevent.
     const ranOutOfSteps = result.steps.length >= maxSteps && result.finishReason !== 'stop';
     const status: HeadReport['status'] = deps.isAborted()
       ? 'aborted'
@@ -344,7 +406,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     const stopReason = deps.abortReason?.()
       ?? (budgetGate.exhausted
         ? `${budgetGate.reason} budget exhausted`
-        : ranOutOfSteps ? `step guard tripped at ${maxSteps} steps without a finish` : null);
+        : ranOutOfSteps ? `reached the turn step envelope (${maxSteps} steps) without finishing` : null);
     const summary = status === 'completed'
       ? (extractFinalText(result)
         || synthesizeHeadSummary({ decisions: capture.decisions, evidence: capture.evidence, toolCalls: capture.toolCalls })
@@ -356,6 +418,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       evidence: [...capture.evidence],
       decisions: [...capture.decisions],
       artifactRefs: [...capture.artifacts],
+      fileChanges: capture.files.snapshot(),
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
       steps: extractHeadSteps(result.steps),
@@ -370,6 +433,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       evidence: [...capture.evidence],
       decisions: [...capture.decisions],
       artifactRefs: [...capture.artifacts],
+      fileChanges: capture.files.snapshot(),
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
       steps: [],

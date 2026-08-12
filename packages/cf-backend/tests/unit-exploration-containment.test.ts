@@ -8,7 +8,7 @@
 // These assertions run against buildHeadToolSet's real output rather than the
 // text of exploration.ts, so they keep holding when the surface is refactored
 // and they catch a tool that appears through a dependency instead of a literal.
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -32,8 +32,8 @@ function makeSql(db: Database): SqlExecutor {
   return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {
     const query = strings.reduce((sql, part, index) => sql + part + (index < values.length ? '?' : ''), '');
     const statement = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...values) as T[];
-    statement.run(...values);
+    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...(values as SQLQueryBindings[])) as T[];
+    statement.run(...(values as SQLQueryBindings[]));
     return [];
   } as SqlExecutor;
 }
@@ -46,6 +46,7 @@ function report(id: string): HeadReport {
     evidence: [],
     decisions: [],
     artifactRefs: [],
+    fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
     steps: [],
@@ -62,8 +63,8 @@ const mergeOutput: MergeOutput = {
 };
 
 const noopWebSearch: WebSearchProvider = {
-  search: async (query) => ({ query, results: [], source: 'test' }),
-  fetch: async (url) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
+  search: async (query: string) => ({ query, results: [], source: 'test' }),
+  fetch: async (url: string) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
 } as unknown as WebSearchProvider;
 
 function headInput(overrides?: Partial<HeadInput>): HeadInput {
@@ -71,7 +72,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
     task: 'study the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
-    budget: { maxDepth: 2, maxTokens: 20_000, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+    budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
     ...overrides,
   };
@@ -100,9 +101,9 @@ function buildSurface(opts?: {
 }
 
 describe('head tool surface — containment', () => {
-  test('a head has no think / team / peers / report / product_change tool', () => {
+  test('a head has no think / team / peers / report / release tool', () => {
     const { tools } = buildSurface();
-    for (const forbidden of ['think', 'team', 'peers', 'report', 'product_change']) {
+    for (const forbidden of ['think', 'team', 'peers', 'report', 'release']) {
       expect(Object.keys(tools)).not.toContain(forbidden);
     }
   });
@@ -136,7 +137,7 @@ describe('head tool surface — containment', () => {
   test('split_subheads refuses once the depth budget is spent', async () => {
     let splits = 0;
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 0, maxTokens: 20_000, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+      input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
       split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
     const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
@@ -145,19 +146,29 @@ describe('head tool surface — containment', () => {
     expect(splits).toBe(0);
   });
 
-  test('split_subheads refuses once the token budget is spent', async () => {
+  test('split_subheads refuses once a caller-requested deadline has passed', async () => {
     let splits = 0;
-    const { tools, capture } = buildSurface({
-      input: headInput({ budget: { maxDepth: 3, maxTokens: 100, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+    const { tools } = buildSurface({
+      input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
       split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
-    // 500 tokens of the head's OWN output — marginal work, so it counts against
-    // the 100-token ceiling. A re-sent 1000-token prompt does not.
-    capture.recordStepUsage(1_000, 500);
     const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
       .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
-    expect(result).toContain('budget exhausted');
+    expect(result).toContain('budget exhausted (wall-clock)');
     expect(splits).toBe(0);
+  });
+
+  test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
+    let splits = 0;
+    const { tools, capture } = buildSurface({
+      input: headInput({ budget: { maxDepth: 3, spawnedAt: Date.now() - 60 * 60_000 } }),
+      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 2 }; },
+    });
+    // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
+    capture.recordStepUsage(2_000_000, 500_000);
+    await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
+      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
+    expect(splits).toBe(1);
   });
 
   test('allowedTools narrows the surface further, never widens it', () => {
@@ -245,7 +256,6 @@ describe('recursive split budget', () => {
       },
       parentBudget: {
         maxDepth: 2,
-        maxTokens: 10_000,
         maxWallClockMs: 60_000,
         spawnedAt: Date.now(),
       },
@@ -254,5 +264,49 @@ describe('recursive split budget', () => {
     expect(spawned).toHaveLength(2);
     expect(spawned.map((input) => input.budget.maxDepth)).toEqual([1, 1]);
     expect(spawned.map((input) => input.depth)).toEqual([1, 1]);
+  });
+});
+
+describe('the mission ledger crosses the facet boundary', () => {
+  // A head runs as its own Durable Object with its own storage, resolving its
+  // own model — so the governed `LLM` the fork seam wraps around the PARENT's
+  // runtime never sees a call the head makes. Head execution caps were removed
+  // outright (no wall clock, no token pool, no step guard), which makes the
+  // mission budget the only remaining bound, and it reaches the head only over
+  // an RPC to the actor that holds the ledger. That RPC cannot be exercised in
+  // this runner, so the wiring is asserted at the source, like the branch
+  // isolation above.
+  const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
+  const actor = readFileSync(join(import.meta.dir, '..', 'src', 'actor-agent.ts'), 'utf8');
+  const surface = readFileSync(join(import.meta.dir, '..', 'src', 'rpc-surface.ts'), 'utf8');
+
+  test('a head with no labels takes no stub and issues no RPC', () => {
+    const scope = exploration.slice(
+      exploration.indexOf('private missionScope('),
+      exploration.indexOf('// ── Head-mode tool builders'),
+    );
+    // The empty-label return comes BEFORE the parent stub is resolved, so an
+    // unbudgeted head never even addresses the ledger.
+    expect(scope.indexOf('labels.length === 0')).toBeLessThan(scope.indexOf('getSharedParentStub'));
+    expect(scope).toContain('return null');
+  });
+
+  test('the head guards and debits over the parent, not over its own storage', () => {
+    expect(exploration).toContain('parent.missionGuard(seam, scope)');
+    expect(exploration).toContain('parent.missionDebit(tokens, opts)');
+  });
+
+  test('a subtree charges the mission its root does', () => {
+    // Otherwise a head escapes its budget simply by splitting again.
+    expect(exploration).toContain('missionLabels: parentInput.missionLabels');
+  });
+
+  test('the two ledger RPCs are cross-DO only, never public transport', () => {
+    const guard = actor.slice(actor.indexOf('async missionGuard('), actor.indexOf('async missionDebit('));
+    expect(guard).not.toContain('@callable');
+    expect(actor).not.toContain("@callable()\n  async missionDebit(");
+    // Reachable on a stub — and nowhere else — because the seal is an allowlist.
+    expect(surface).toContain("'missionGuard'");
+    expect(surface).toContain("'missionDebit'");
   });
 });

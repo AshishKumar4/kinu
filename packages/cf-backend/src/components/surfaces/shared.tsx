@@ -1,14 +1,13 @@
 /**
  * Shared presentational primitives used by both the chat column and the work
  * surfaces — kept in one place so there is a single source of truth (DRY) for
- * markdown rendering, code blocks, preview-URL detection, and empty states.
+ * markdown rendering, code blocks, and empty states.
  */
-import { memo } from "react";
-import { Code } from "@cloudflare/kumo/components/code";
-import { CopyIcon } from "@phosphor-icons/react";
+import { memo, useState } from "react";
+import { CaretRightIcon, CopyIcon } from "@phosphor-icons/react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { MAX_LINES_PER_FILE, type DiffLine } from "@/lib/diff";
+import { MAX_LINES_PER_FILE, type DiffLine } from "@proteus/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
@@ -32,22 +31,36 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
   );
 }
 
+/**
+ * A fenced code block.
+ *
+ * Kumo's `<Code>` is its deprecated no-highlight component: it renders a
+ * transparent, unpadded `w-auto` slab and nothing else, so every long line
+ * escaped its container and was clipped by the wrapper's `overflow-hidden`.
+ * Kumo's replacement (`CodeHighlighted`) hardcodes `github-light`/`vesper`
+ * with no way to pass a theme, which would put GitHub's blues and purples on
+ * a warm umber ground. So the block owns its own surface, in the same terms
+ * the landing page sets its install command: one warm ink, a recessed
+ * ground, a hairline, and a header welded to the body.
+ *
+ * `min-w-0` on the scroller is load-bearing — inside the flex column the
+ * chat is built from, a track without it takes its content's width and
+ * overflows the column instead of scrolling.
+ */
 export function CodeBlock({ children, className }: { children: React.ReactNode; className?: string }) {
   const { status, copy } = useCopy();
   const code = String(children).replace(/\n$/, "");
   const lang = className?.replace(/^language-/, "") ?? "";
   return (
-    <div className="relative group my-2">
-      <div className="flex items-center justify-between px-3 py-1 rounded-t-lg p-elevated border border-b-0 p-border text-[10px] p-text-3">
-        <span>{lang || "code"}</span>
-        <button onClick={() => copy(code)}
-          className={`flex items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
+    <div className="p-code my-2 rounded-lg overflow-hidden">
+      <div className="p-code-head flex items-center justify-between gap-2 px-3 py-1 text-[10px]">
+        <span className="truncate font-mono">{lang || "code"}</span>
+        <button onClick={() => copy(code)} type="button"
+          className={`flex shrink-0 cursor-pointer items-center gap-1 transition-colors ${status === "failed" ? "p-danger" : "hover:p-text"}`}>
           <CopyIcon size={12} />{copyLabel(status)}
         </button>
       </div>
-      <div className="rounded-b-lg border border-t-0 p-border overflow-hidden">
-        <Code code={code} lang={(lang || "text") as React.ComponentProps<typeof Code>["lang"]} />
-      </div>
+      <pre className="p-scroll-x p-code-scroll m-0 px-3 py-2.5 text-[12.5px] leading-[1.55]"><code>{code}</code></pre>
     </div>
   );
 }
@@ -57,43 +70,29 @@ export function CodeBlock({ children, className }: { children: React.ReactNode; 
 export const MarkdownContent = memo(function MarkdownContent({ content }: { content: string }) {
   return (
     <Markdown remarkPlugins={[remarkGfm]} components={{
+      // A fence with no language gets no className, which is also what real
+      // inline code gets — so ``` blocks used to come out as an inline pill
+      // wrapping across lines. The block/inline question is answered by the
+      // node's position (react-markdown puts a fence inside a <pre>), which
+      // `pre` below unwraps, so the check here is on the content itself: a
+      // fence is the thing that spans lines.
       code({ className, children, ...props }) {
-        if (!className) return <code className="p-elevated px-1.5 py-0.5 rounded text-xs font-mono" {...props}>{children}</code>;
+        const text = String(children ?? "");
+        if (!className && !text.includes("\n")) {
+          return <code className="p-code-inline" {...props}>{children}</code>;
+        }
         return <CodeBlock className={className}>{children}</CodeBlock>;
       },
       a({ href, children }) { return <a href={href} target="_blank" rel="noopener noreferrer" className="p-accent hover:underline">{children}</a>; },
-      table({ children }) { return <div className="overflow-x-auto my-2"><table className="w-full text-xs border-collapse">{children}</table></div>; },
-      th({ children }) { return <th className="border p-border px-2 py-1 text-left font-medium p-elevated">{children}</th>; },
-      td({ children }) { return <td className="border p-border px-2 py-1">{children}</td>; },
+      table({ children }) { return <div className="p-scroll-x my-2 rounded-lg border p-border"><table className="w-full text-xs border-collapse">{children}</table></div>; },
+      th({ children }) { return <th className="border-b p-border px-2.5 py-1.5 text-left font-medium p-fill whitespace-nowrap">{children}</th>; },
+      td({ children }) { return <td className="border-b p-border px-2.5 py-1.5 align-top">{children}</td>; },
+      // The fence's own <pre> is dropped: CodeBlock supplies one, and nesting
+      // them would put a scroll container inside a scroll container.
       pre({ children }) { return <>{children}</>; },
     }}>{content}</Markdown>
   );
 });
-
-/**
- * Detect a Proteus path-style preview URL anywhere inside a tool result. Tool
- * outputs are usually strings (e.g. `https://.../_preview/8080/.../`) but can
- * also be objects with a `url` field (exposeSandboxPort returns `{url}`).
- */
-export function extractPreviewUrl(output: unknown): string | null {
-  const re = /https:\/\/[^\s"']+\/_preview\/\d+\/[^/\s"']+\/[a-z0-9_]+\/?[^\s"']*/i;
-  if (typeof output === "string") {
-    const m = output.match(re);
-    return m ? m[0] : null;
-  }
-  if (output && typeof output === "object") {
-    const url = (output as { url?: unknown }).url;
-    if (typeof url === "string") {
-      const m = url.match(re);
-      return m ? m[0] : null;
-    }
-    try {
-      const m = JSON.stringify(output).match(re);
-      return m ? m[0] : null;
-    } catch { return null; }
-  }
-  return null;
-}
 
 export function EmptyState({ icon, title, hint, children }: {
   icon: React.ReactNode; title: string; hint?: React.ReactNode; children?: React.ReactNode;
@@ -115,3 +114,60 @@ export const EMPTY_HINTS: Record<string, string> = {
   mcts: "Exploration trees appear when the agent uses think(strategy:'mcts') to investigate subproblems.",
   preview: "When the agent exposes a port (sandbox.exposePort), the running app appears here as a live preview.",
 };
+
+/**
+ * A titled, collapsible section — the one header grammar the work surfaces
+ * use, so the six that hand-rolled `<section><div flex gap-2>…` stay aligned.
+ *
+ * The Brain surface stacks identity, changelog, scaffold lineage, tools,
+ * memory and the world model into one scroll; being able to fold the ones you
+ * are not reading is what makes it usable at length. Which sections a person
+ * keeps folded is a property of that person's workspace, not of the agent, so
+ * it lives in localStorage beside the theme choice rather than in agent state.
+ *
+ * `id` is that persistence key and must be stable across renames of `title`.
+ */
+export function Section({ id, title, icon, badge, defaultOpen = true, children }: {
+  id: string;
+  title: string;
+  icon: React.ReactNode;
+  badge?: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+}) {
+  const key = `proteus.section.${id}`;
+  // Read once on mount and write only on toggle: an effect that mirrored state
+  // would stamp every default into storage on first paint, which then looks
+  // like a choice the user made and freezes the defaults forever.
+  const [open, setOpen] = useState(() => {
+    const stored = localStorage.getItem(key);
+    return stored === null ? defaultOpen : stored === "1";
+  });
+
+  const toggle = () => {
+    setOpen((prev) => {
+      localStorage.setItem(key, prev ? "0" : "1");
+      return !prev;
+    });
+  };
+
+  return (
+    <section>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="group/section flex w-full items-center gap-2 rounded-md py-1 text-left cursor-pointer p-row-hover transition-colors"
+      >
+        <CaretRightIcon
+          size={12}
+          className={`shrink-0 p-text-3 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
+        />
+        {icon}
+        <span className="text-sm font-medium p-text">{title}</span>
+        {badge}
+      </button>
+      {open && <div className="mt-2.5">{children}</div>}
+    </section>
+  );
+}

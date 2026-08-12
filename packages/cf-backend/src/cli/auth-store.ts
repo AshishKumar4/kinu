@@ -2,7 +2,7 @@ import type { AuthIdentity } from '../auth/session.js';
 import type { UserDO } from '../user/user-do.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { parseAccessTokenUserId, type AccessTokenScope } from './access-token-store.js';
-import { OWNER_SESSION } from '../user/workspace-capability.js';
+import { ownerCaller, type OwnerCapabilityEnv } from '../user/workspace-capability.js';
 
 /** Thrown when a CLI auth rate limit trips — routes map this (and only
  *  this) to HTTP 429; every other failure is a real error. */
@@ -65,7 +65,7 @@ type CliAuthRow = {
   approved_at: number | null;
 };
 
-type CliAuthEnv = {
+type CliAuthEnv = OwnerCapabilityEnv & {
   AUTH_DB: D1Database;
   UserDO: DurableObjectNamespace<UserDO>;
 };
@@ -112,7 +112,7 @@ export function parseCliTokenUserId(token: string): string | null {
  *  OAuth; the CLI token is their per-user credential). */
 export async function authenticateCliToken(
   request: Request,
-  env: Pick<CliAuthEnv, 'UserDO'>,
+  env: Pick<CliAuthEnv, 'UserDO' | 'CREDENTIAL_ENCRYPTION_KEY'>,
 ): Promise<CliTokenAuth> {
   const token = readBearer(request);
   if (!token) return { ok: false, error: 'Missing Authorization: Bearer <token>' };
@@ -122,8 +122,8 @@ export async function authenticateCliToken(
   if (!userId) return { ok: false, error: 'Malformed CLI token' };
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
   const verified = sessionUserId
-    ? await userDO.verifyCliToken(OWNER_SESSION, token)
-    : await userDO.verifyAccessToken(OWNER_SESSION, token);
+    ? await userDO.verifyCliToken(await ownerCaller(env), token)
+    : await userDO.verifyAccessToken(await ownerCaller(env), token);
   if (!verified.ok || !verified.user || !verified.tokenHash) {
     return { ok: false, error: verified.error ?? 'Invalid CLI token' };
   }
@@ -248,7 +248,7 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
   }
 
   const userDO = env.UserDO.get(env.UserDO.idFromName(consumed.user_id)) as DurableObjectStub<UserDO>;
-  const minted = await userDO.mintCliToken(OWNER_SESSION, consumed.user_id, consumed.device_name);
+  const minted = await userDO.mintCliToken(await ownerCaller(env), consumed.user_id, consumed.device_name);
   const tokenExpiresAt = new Date(minted.expiresAt).toISOString();
   await session.prepare(
     `UPDATE cli_auth_requests
@@ -301,7 +301,7 @@ export async function approveCliAuth(
   }
 
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId)) as DurableObjectStub<UserDO>;
-  await userDO.ensureProfile(OWNER_SESSION, identity.email);
+  await userDO.ensureProfile(await ownerCaller(env), identity.email);
   await session.prepare(
     `UPDATE cli_auth_requests
         SET status = 'approved', user_id = ?, user_email = ?, approved_at = ?

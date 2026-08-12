@@ -18,6 +18,7 @@ import { useEffect, useState, useCallback, useRef, type FormEvent } from "react"
 import { Link, NavLink, useMatch, useNavigate } from "react-router-dom";
 import { BrainIcon, PlusIcon, GearIcon, GithubLogoIcon, TrashIcon, SignOutIcon, CaretRightIcon, PencilSimpleIcon, CheckIcon, XIcon, SunIcon, MoonIcon } from "@phosphor-icons/react";
 import { Button } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import { listWorkspaces, removeWorkspace, getProfile, type WorkspaceEntry, type UserProfile } from "../lib/user-api";
 import { useWorkspaceRpc } from "../hooks/use-proteus";
 import { useTheme, toggleTheme } from "../hooks/use-theme";
@@ -209,7 +210,7 @@ export default function Sidebar() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 px-3 py-2 rounded-lg p-card hover:p-card-hover transition-colors text-sm cursor-pointer"
+          className="flex items-center gap-2 px-3 py-2 p-btn-quiet p-row-text cursor-pointer"
         >
           <PlusIcon size={14} />
           <span>New workspace</span>
@@ -218,7 +219,7 @@ export default function Sidebar() {
 
       {/* Workspace list */}
       <div className="flex-1 overflow-y-auto px-2 pt-2 pb-3">
-        <div className="text-[10px] font-medium p-text-3 uppercase tracking-wider px-2 pb-1">Workspaces</div>
+        <div className="p-eyebrow px-2 pb-1.5">Workspaces</div>
         {workspaces.length === 0 && !listError && (
           <div className="px-2 py-3 text-xs p-text-3">No workspaces yet. Click "New workspace" to start.</div>
         )}
@@ -249,13 +250,13 @@ export default function Sidebar() {
                     <NavLink
                       to={`/workspace/${a.name}`}
                       className={({ isActive }) =>
-                        `flex min-w-0 flex-col pl-2 pr-12 py-1.5 rounded-md ${
-                          isActive ? 'p-card' : 'hover:p-card-hover p-text'
+                        `flex min-w-0 flex-col pl-2.5 pr-12 py-1.5 rounded-lg transition-colors ${
+                          isActive ? 'p-nav-active' : 'p-row-hover p-text-2 hover:p-text'
                         }`
                       }
                     >
-                      <span className="truncate text-sm font-medium">{a.displayName}</span>
-                      {lastActive && <span className="truncate text-[10px] p-text-3 font-normal">{lastActive}</span>}
+                      <span className="truncate p-row-text font-medium">{a.displayName}</span>
+                      {lastActive && <span className="truncate p-meta p-text-3 font-normal">{lastActive}</span>}
                     </NavLink>
                     {live && (live.running || live.unseenChangelog > 0) && (
                       <span className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-1 transition-opacity group-hover:opacity-0">
@@ -309,7 +310,7 @@ export default function Sidebar() {
           </button>
         </div>
         {showUserMenu && (
-          <div className="absolute bottom-full left-2 right-2 mb-1 p-card rounded-lg p-1.5 shadow-lg border p-border">
+          <div className="absolute bottom-full left-2 right-2 mb-1 p-card rounded-lg p-1.5 p-shadow-menu border p-border">
             <Link to="/user/settings" onClick={() => setShowUserMenu(false)}
               className="flex items-center gap-2 px-2 py-1.5 text-sm rounded hover:p-card-hover">
               <GearIcon size={14} />
@@ -337,9 +338,9 @@ export default function Sidebar() {
           busy={deleteBusy}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Cancel</Button>
-            <Button size="sm" variant="primary" onClick={confirmDelete} disabled={deleteBusy}>
+            <button className={`p-btn-danger ${btnSmCls}`} onClick={confirmDelete} disabled={deleteBusy}>
               {deleteBusy ? "Removing…" : "Remove"}
-            </Button>
+            </button>
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">

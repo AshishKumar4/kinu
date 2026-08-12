@@ -4,6 +4,7 @@
 // upgrade path used to pass a WebSocket as a DO-RPC argument, which workerd
 // cannot serialize, so the tunnel 500'd on every connect.
 import { describe, expect, test } from 'bun:test';
+import { createTestUserDO, testOwner, type TestUserDO } from './helpers/user-do.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -159,8 +160,61 @@ describe('/pc/connect upgrade wiring', () => {
     const userDO = read('src/user/user-do.ts');
     expect(userDO).toContain('DEVICE_CONNECT_PATH,'); // imported from @proteus/core — the single wire-path home
     expect(userDO).toContain('if (url.pathname === DEVICE_CONNECT_PATH) return this.acceptDeviceSocket(request, url)');
-    expect(userDO).toContain('await this.verifyDeviceConnectTicket(OWNER_SESSION, ticket)');
+    expect(userDO).toContain('await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket)');
     expect(userDO).toContain('return super.fetch(request)');
     expect(userDO).not.toContain('attachDeviceSocket');
+  });
+});
+
+describe('device tokens expire on idleness', () => {
+  const day = 24 * 60 * 60 * 1000;
+
+  function ageDevice(harness: TestUserDO, deviceId: string, expiresAt: number | null): void {
+    harness.db.prepare('UPDATE user_devices SET expires_at = ? WHERE id = ?').run(expiresAt, deviceId);
+  }
+
+  function storedExpiry(harness: TestUserDO, deviceId: string): number | null {
+    const row = harness.db.prepare('SELECT expires_at AS e FROM user_devices WHERE id = ?').get(deviceId) as { e: number | null };
+    return row.e;
+  }
+
+  test('a freshly linked device carries a window, and using it pushes the window out', async () => {
+    const harness = createTestUserDO();
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    expect(storedExpiry(harness, deviceId)).toBeGreaterThan(Date.now());
+
+    ageDevice(harness, deviceId, Date.now() + day);
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
+    expect(storedExpiry(harness, deviceId)!).toBeGreaterThan(Date.now() + 100 * day);
+    harness.close();
+  });
+
+  test('a device that stopped connecting is refused and cannot mint a ticket', async () => {
+    const harness = createTestUserDO();
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    ageDevice(harness, deviceId, Date.now() - day);
+
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: false });
+    expect(await harness.userDO.issueDeviceConnectTicket(await testOwner(), token)).toEqual({ ok: false });
+    harness.close();
+  });
+
+  test('a link made before the window existed is stamped on next use, not locked out', async () => {
+    const harness = createTestUserDO();
+    const { deviceId, token } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    ageDevice(harness, deviceId, null);
+
+    expect(await harness.userDO.verifyDeviceToken(await testOwner(), token)).toEqual({ ok: true, deviceId });
+    expect(storedExpiry(harness, deviceId)).toBeGreaterThan(Date.now());
+    harness.close();
+  });
+
+  test('the listing reports the window so the owner can see a link about to lapse', async () => {
+    const harness = createTestUserDO();
+    const { deviceId } = await harness.userDO.registerDevice(await testOwner(), 'laptop');
+    ageDevice(harness, deviceId, 12345);
+    expect(await harness.userDO.listDevices(await testOwner()))
+      .toMatchObject([{ id: deviceId, expiresAt: 12345 }]);
+    harness.close();
   });
 });

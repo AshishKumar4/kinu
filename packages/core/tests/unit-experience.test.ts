@@ -118,6 +118,7 @@ async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | '
     userMessage: 'please deploy the thing',
     assistantResponse: 'deployed',
     toolCalls: [],
+    feedback: null,
     steps: 1,
     durationMs: 10,
     hadError: false,
@@ -409,7 +410,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     await beta.engine.reviewTurn({
       turnId: 'turn-1', sessionId: 'default',
       userMessage: 'have a look at the deploy config please',
-      assistantResponse: 'looked', toolCalls: [], steps: 1, durationMs: 10, hadError: false,
+      assistantResponse: 'looked', toolCalls: [], feedback: null, steps: 1, durationMs: 10, hadError: false,
     }, null);
 
     const rows = await importedRows(beta);

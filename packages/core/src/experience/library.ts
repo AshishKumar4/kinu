@@ -2,7 +2,7 @@
  * The owner's experience library — one shared knowledge base per user, living
  * beside the owner's other user-level state.
  *
- * Portable by construction (the `ProductChangeSqlStore` pattern): core owns the
+ * Portable by construction (the `ReleaseSqlStore` pattern): core owns the
  * schema and the queries, the backend supplies an exec seam and the capability
  * gate around it. The library is deliberately OWNER-SCOPED — there is no
  * cross-owner path here and no grant concept to get wrong; reach into it is

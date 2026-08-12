@@ -91,7 +91,7 @@ function syntheticIdentity(): Identity {
 function emptyBranchHandle(): BranchHandle {
   return {
     explore: async () => ({ text: '', codeUsed: null }),
-    generateReflection: async () => '',
+    generateReflection: async () => ({ text: '' }),
   };
 }
 

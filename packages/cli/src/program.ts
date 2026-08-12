@@ -30,7 +30,7 @@ import {
   headsCommand,
   mctsCommand,
   memoryCommand,
-  productCommand,
+  releaseCommand,
   stateCommand,
   stopCommand,
   timelineCommand,
@@ -76,6 +76,7 @@ export function buildProgram(): Command {
     .option('--provider <name>', 'Provider: codex, openai, openrouter, anthropic, openai-compatible, skip')
     .option('--model <id>', 'Default model for the selected provider')
     .option('--local-model', 'Configure credentials for local-only agents')
+    .option('--local', 'Keep the provider key on this machine instead of your Proteus account')
     .option('-y, --yes', 'Accept recommended setup choices where possible')
     .option('--skip-cloud', 'Skip account sign-in')
     .addOption(new Option('--account-only', 'Only complete Proteus account sign-in').hideHelp())
@@ -88,6 +89,7 @@ export function buildProgram(): Command {
     .description('List, connect, or disconnect model and account providers')
     .option('--origin <url>', 'Proteus app origin')
     .option('--model <id>', 'Default model for the selected provider')
+    .option('--local', 'Keep the provider key on this machine instead of your Proteus account')
     .action(wrapAction(providersCommand));
 
   program
@@ -381,7 +383,11 @@ export function buildProgram(): Command {
   program
     .command('gepa <name> [runId]')
     .helpGroup(INSPECT)
-    .description('Inspect GEPA optimization runs')
+    .description('Inspect GEPA optimization runs, or run a pass with --run')
+    .option('--run', 'Run one optimisation pass over the scaffold')
+    .option('--iterations <n>', 'Reflection iterations (--run)')
+    .option('--eval-size <n>', 'Labeled turns to draw the split from (--run)')
+    .option('--metric-calls <n>', 'Metric-call ceiling (--run)')
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(gepaCommand));
@@ -409,19 +415,19 @@ export function buildProgram(): Command {
     .action(wrapAction(labelCommand));
 
   program
-    .command('product <name>')
+    .command('release <name>')
     .helpGroup(INSPECT)
-    .description('Inspect product self-customization state')
+    .description('Inspect the governed release lane: sources, changes, checks, approvals, deployments')
     .option('--limit <n>', 'Change limit')
     .option('--json', 'Print raw JSON')
-    .action(wrapAction(productCommand));
+    .action(wrapAction(releaseCommand));
 
   // ── This computer ──────────────────────────────────────────────
 
   program
     .command('connect')
     .helpGroup(THIS_COMPUTER)
-    .description('Link this computer as the desktop execution daemon')
+    .description('Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days)')
     .option('--label <name>', 'Device label')
     .action(wrapAction((opts: { label?: string }) => desktopCommand('connect', opts)));
 

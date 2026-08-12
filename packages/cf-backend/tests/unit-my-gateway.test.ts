@@ -70,7 +70,7 @@ describe('my-gateway request shape', () => {
           model: (JSON.parse(String(init?.body)) as { model: unknown }).model,
         });
         return chatCompletionResponse('openai/gpt-4.1');
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     const result = await generateText({
@@ -100,7 +100,7 @@ describe('my-gateway request shape', () => {
           });
         }
         return chatCompletionResponse('anthropic/claude-sonnet-4-5');
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     const result = await generateText({
@@ -183,7 +183,7 @@ describe('my-gateway model discovery', () => {
         });
       }
       throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    }) as unknown as typeof fetch;
   }
 
   test('lists models for the gateway BYOK providers, ids prefixed with the wire author', async () => {
@@ -228,7 +228,7 @@ describe('my-gateway model discovery', () => {
         return new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), {
           status: 403, headers: { 'content-type': 'application/json' },
         });
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
     expect(await reg.registry.get('my-gateway')!.listModels(reg.deps)).toEqual([]);
   });
@@ -241,7 +241,7 @@ describe('my-gateway error mapping', () => {
       userDO: gatewayStub({ gatewayId: 'my-gw' }),
       fetch: (async () => new Response(JSON.stringify(body), {
         status, headers: { 'content-type': 'application/json' },
-      })) as typeof fetch,
+      })) as unknown as typeof fetch,
     });
     try {
       await generateText({ model: reg.resolveModel('my-gateway/minimax/m3'), prompt: 'ping' });
@@ -281,7 +281,7 @@ describe('my-gateway registry precedence', () => {
       fetch: (async (input: RequestInfo | URL) => {
         wire.push(String(input));
         return chatCompletionResponse('@cf/moonshotai/kimi-k2.6');
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
     // `workers-ai/...` resolves through the bespoke workers-ai provider —
     // same /ai/v1 endpoint, no my-gateway involvement.
@@ -314,7 +314,7 @@ describe('Cloudflare AI Gateway discovery helpers', () => {
           { id: 'bad id with spaces' },
         ],
       }), { headers: { 'content-type': 'application/json' } });
-    }) as typeof fetch);
+    }) as unknown as typeof fetch);
     expect(gateways).toEqual([
       { id: 'default', authenticated: false, createdAt: '2026-01-01T00:00:00Z' },
       { id: 'prod-gw', authenticated: true, createdAt: null },
@@ -325,7 +325,7 @@ describe('Cloudflare AI Gateway discovery helpers', () => {
     await expect(fetchCloudflareAIGateways('abc123abc123abc1', 'old-scope-token', (async () =>
       new Response(JSON.stringify({ success: false, errors: [{ code: 10000, message: 'Authentication error' }] }), {
         status: 403, headers: { 'content-type': 'application/json' },
-      })) as typeof fetch)).rejects.toThrow(/Reconnect Cloudflare/);
+      })) as unknown as typeof fetch)).rejects.toThrow(/Reconnect Cloudflare/);
   });
 });
 
@@ -344,8 +344,8 @@ describe('UserDO gateway selection wiring', () => {
 
   test('login-time discovery auto-selects a sole gateway', () => {
     // setCredential(cloudflare.oauth) triggers discovery…
-    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(OWNER_SESSION);');
+    expect(userDO).toContain('if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));');
     // …and listAIGateways persists the only gateway as the selection.
-    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(OWNER_SESSION, gateways\[0\]\.id\);/);
+    expect(userDO).toMatch(/if \(!selectedId && gateways\.length === 1\) \{\s*\n\s*await this\.selectAIGateway\(await ownerCaller\(this\.env\), gateways\[0\]\.id\);/);
   });
 });

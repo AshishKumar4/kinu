@@ -10,8 +10,25 @@
  */
 
 import type { ContextBudgetSnapshot } from '../context-budget.js';
+import type { ContextComposition } from '../context-meter.js';
 import type { FileEditSnapshot } from '../tools/file-ledger.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
+import type { HeadFileChangeSet } from '../heads/types.js';
+
+/**
+ * What the provider said one request cost. Every field is reported by the API,
+ * never inferred — `cached` is the cache-read subset of `input`, and `usd` is
+ * present only when the model carried a models.dev catalog rate at the time of
+ * the call. An absent `usd` means unpriced, never free.
+ */
+export interface StepUsage {
+  readonly input: number;
+  readonly cached: number;
+  readonly output: number;
+  readonly reasoning: number;
+  readonly usd?: number;
+  readonly modelId?: string;
+}
 
 export type RunEventType =
   | 'run_start'
@@ -58,14 +75,31 @@ export type RunEvent =
   | (RunEventBase & { type: 'text_delta'; text: string })
   | (RunEventBase & { type: 'tool_call_start'; name: string; args: Record<string, unknown>; toolCallId: string })
   | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: unknown; error?: string; durationMs?: number })
-  | (RunEventBase & { type: 'step_finish'; stepIndex: number; reason?: string })
+  /** One model request completed. `usage` is the provider's own report of that
+   *  request — the authority on what it cost. `context` is what the request
+   *  was locally measured to be made of; the two do not reconcile exactly and
+   *  are carried side by side so a reader can see the gap. Both are absent
+   *  when the step produced no such report. */
+  | (RunEventBase & {
+      type: 'step_finish';
+      stepIndex: number;
+      reason?: string;
+      usage?: StepUsage;
+      context?: ContextComposition;
+    })
   | (RunEventBase & { type: 'head_split'; rootId: string; headIds: string[]; rationale: string })
   /** A split settled. `headsWithFindings` vs `headCount` is how many forks came
-   *  back with something against how many returned empty, and `totalTokens` is
-   *  what the whole split cost — so the productivity of delegation is a query
-   *  over the ledger instead of a hand-read of trajectories. */
+   *  back with something against how many returned empty, `totalTokens` is what
+   *  the whole split cost, and `fileChanges` is what it changed — so the
+   *  productivity of delegation is a query over the ledger instead of a
+   *  hand-read of trajectories. */
   | (RunEventBase & { type: 'head_merge'; rootId: string; headCount: number;
-      headsWithFindings: number; totalTokens: number; mergedNarrative: string })
+      headsWithFindings: number; totalTokens: number; mergedNarrative: string;
+      /** Which files each head created, changed or deleted, with line counts —
+       *  so "what did that delegation actually do to the workspace" is a query
+       *  over the ledger rather than a re-read of the narrative. Heads that
+       *  changed nothing are absent. */
+      fileChanges: HeadFileChangeSet[] })
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })

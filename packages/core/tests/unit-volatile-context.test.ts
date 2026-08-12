@@ -11,7 +11,8 @@
 //    per-turn tail message, never captured by the ledger's append gate.
 //  - fnv1a64 (the telemetry + fingerprint hash) changes only on real events.
 import { describe, test, expect } from 'bun:test';
-import { tool, type LanguageModelV2StreamPart, type ModelMessage } from 'ai';
+import { tool, type ModelMessage } from 'ai';
+import type { ModelStreamPart } from '@proteus/test-utils';
 import { z } from 'zod';
 import {
   buildSystemPromptSync,
@@ -22,6 +23,8 @@ import {
   turnLocalContextMessage,
   executorAvailabilityLabel,
   fnv1a64,
+  agentDynamicContext,
+  observeSystemPromptHash,
   renderActiveSkillsSection,
   DYNAMIC_CONTEXT_HEADER,
   TURN_CONTEXT_HEADER,
@@ -266,6 +269,72 @@ describe('the dynamic block carries every genuinely-live plane', () => {
     const c = renderDynamicContextBlock({ factsBlock: '- k = w' })!;
     expect(fingerprintOf(a)).toBe(fingerprintOf(b));
     expect(fingerprintOf(a)).not.toBe(fingerprintOf(c));
+  });
+});
+
+describe('agentDynamicContext (the one plane set both backends assemble)', () => {
+  const sources = {
+    factsBlock: undefined,
+    memoryTail: undefined,
+    executors: [] as PromptExecutorInfo[],
+    runningJobs: [] as Array<{ id: string; kind: string; label: string | null }>,
+    liveHeadRuns: [] as Array<{ rootId: string; rationale: string; running: number; total: number }>,
+    missingCapabilities: [] as Array<{ source: string; reason: string }>,
+  };
+
+  test('every live plane the backends read reaches the block', () => {
+    const ctx = agentDynamicContext({
+      ...sources,
+      factsBlock: '- deploys = wrangler',
+      memoryTail: 'lesson: read the error',
+      executors: [idleSandbox],
+      runningJobs: [{ id: 'job-1', kind: 'think_heads', label: 'explore' }],
+      liveHeadRuns: [{ rootId: 'run-7', rationale: 'two ways in', running: 2, total: 3 }],
+      missingCapabilities: [{ source: 'linear', reason: 'startup timeout' }],
+    });
+    expect(ctx.factsBlock).toBe('- deploys = wrangler');
+    expect(ctx.memoryTail).toBe('lesson: read the error');
+    expect(ctx.executors).toEqual([idleSandbox]);
+    expect(ctx.tasks).toEqual([{ id: 'job-1', kind: 'think_heads', label: 'explore' }]);
+    expect(ctx.delegates).toEqual([
+      { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: 'two ways in' },
+    ]);
+    expect(ctx.missingCapabilities).toEqual([{ source: 'linear', reason: 'startup timeout' }]);
+  });
+
+  test('an absent plane is omitted, not rendered empty', () => {
+    // The distinction is load-bearing: renderDynamicContextBlock returns null
+    // for a block with nothing in it, and an empty-but-present roster would
+    // put "(none)" headings in front of the model every step.
+    const ctx = agentDynamicContext(sources);
+    expect('factsBlock' in ctx).toBe(false);
+    expect('memoryTail' in ctx).toBe(false);
+    expect('missingCapabilities' in ctx).toBe(false);
+    expect(renderDynamicContextBlock(ctx)).toBeNull();
+  });
+
+  test('nothing in the block is clock-derived: the same state fingerprints identically', () => {
+    const a = agentDynamicContext({ ...sources, factsBlock: '- k = v' });
+    const b = agentDynamicContext({ ...sources, factsBlock: '- k = v' });
+    expect(renderDynamicContextBlock(a)).toBe(renderDynamicContextBlock(b));
+  });
+});
+
+describe('observeSystemPromptHash', () => {
+  test('the opening turn has nothing to compare against', () => {
+    expect(observeSystemPromptHash(null, 'system').status).toBe('first');
+  });
+
+  test('an unchanged prefix reads stable; a changed one reads changed', () => {
+    const first = observeSystemPromptHash(null, 'system');
+    expect(observeSystemPromptHash(first.hash, 'system')).toEqual({ hash: first.hash, status: 'stable' });
+    const changed = observeSystemPromptHash(first.hash, 'system + a new skill');
+    expect(changed.status).toBe('changed');
+    expect(changed.hash).not.toBe(first.hash);
+  });
+
+  test('the digest is the shared fingerprint, so both backends report the same number', () => {
+    expect(observeSystemPromptHash(null, 'system').hash).toBe(fnv1a64('system'));
   });
 });
 
@@ -670,7 +739,7 @@ function threeStepToolModel() {
       prompts.push(options.prompt);
       const n = step++;
       const stream = n < 2
-        ? new ReadableStream<LanguageModelV2StreamPart>({
+        ? new ReadableStream<ModelStreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: `tc${n}`, toolName: 'ping', input: '{}' });
@@ -678,7 +747,7 @@ function threeStepToolModel() {
               c.close();
             },
           })
-        : new ReadableStream<LanguageModelV2StreamPart>({
+        : new ReadableStream<ModelStreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'text-start', id: 't1' });

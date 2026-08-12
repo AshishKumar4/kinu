@@ -29,10 +29,10 @@ describe('checkpointSubject', () => {
     expect(checkpointSubject(null, 'pre-restore')).toBe('turn=- session=- pre-restore');
   });
 
-  test('a missing turn or session degrades to its own placeholder', () => {
-    expect(checkpointSubject({ turnId: 't1', sessionId: null }, 'r'))
+  test('a blank turn or session degrades to its own placeholder', () => {
+    expect(checkpointSubject({ turnId: 't1', sessionId: '' }, 'r'))
       .toBe('turn=t1 session=- r');
-    expect(checkpointSubject({ turnId: null, sessionId: 's1' }, 'r'))
+    expect(checkpointSubject({ turnId: '   ', sessionId: 's1' }, 'r'))
       .toBe('turn=- session=s1 r');
   });
 
@@ -112,7 +112,7 @@ describe('store-format constants pinned by the pc-agent daemon mirror', () => {
 
   test('excludes cover the generated trees a snapshot must never capture', () => {
     // .git/ in particular: snapshotting it into a bare store recurses the repo.
-    for (const entry of ['.git/', 'node_modules/', 'dist/', '.venv/', '*.log']) {
+    for (const entry of ['.git/', 'node_modules/', 'dist/', '.venv/', '*.log'] as const) {
       expect(CHECKPOINT_EXCLUDES).toContain(entry);
     }
     expect(new Set(CHECKPOINT_EXCLUDES).size).toBe(CHECKPOINT_EXCLUDES.length);

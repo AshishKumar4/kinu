@@ -162,15 +162,15 @@ describe('withBackgroundThreshold', () => {
   });
 
   test('slow work returns a BackgroundHandle + detaches the live promise', async () => {
-    let detachedPromise: Promise<unknown> | null = null;
+    const detached: Array<Promise<unknown>> = [];
     const out = await withBackgroundThreshold('heads', async () => { await delay(80); return 'slow-result'; }, {
       thresholdMs: 20,
-      onThreshold: (_kind, p) => { detachedPromise = p; return { detached: true, jobId: 'job-7' }; },
+      onThreshold: (_kind, p) => { detached.push(p); return { detached: true, jobId: 'job-7' }; },
     });
     expect(isBackgroundHandle(out)).toBe(true);
     if (isBackgroundHandle(out)) { expect(out.jobId).toBe('job-7'); expect(out.kind).toBe('heads'); }
     // The detached promise is the SAME live work and still resolves.
-    await expect(detachedPromise).resolves.toBe('slow-result');
+    await expect(detached[0]).resolves.toBe('slow-result');
   });
 
   test('a refused detach returns the refusal to the model, not a handle', async () => {

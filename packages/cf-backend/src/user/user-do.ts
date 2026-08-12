@@ -17,10 +17,10 @@
  * on `requireTier` before doing anything else. That is the whole attenuation
  * boundary: it lives where the secrets are, so no workspace-DO code path,
  * crafted tool, or forgotten tool gate can route around it. Worker routes act
- * for the owner whose identity the edge verified and pass `OWNER_SESSION`;
- * agents pass their workspace capability token and get whatever their tier
- * allows. Methods the DO calls on itself pass `OWNER_SESSION` because their
- * public entry point was already gated.
+ * for the owner whose identity the edge verified and present the owner
+ * capability; agents present their workspace capability token and get whatever
+ * their tier allows. Methods the DO calls on itself present it too, because
+ * their public entry point was already gated.
  */
 import { Agent, type AgentContext } from "agents";
 import { USER_DO_RPC_SURFACE, sealRpcSurface } from "../rpc-surface.js";
@@ -46,21 +46,21 @@ import {
   ORCHESTRATOR_AGENT_SLUG,
   nanoid,
   createExperienceLibrary,
-  createProductChangeStore,
-  productChangeSqlFromExec,
+  createReleaseStore,
+  releaseSqlFromExec,
   type Credential,
   type ExperienceEntry,
   type ExperienceKind,
   type PublishableCandidate,
-  type ProductChangeBoard,
-  type ProductChangeApproval,
-  type ProductChangeCheck,
-  type ProductChangeDetail,
-  type ProductChangeRequest,
-  type ProductChangeStatus,
-  type ProductDeploymentRecord,
-  type ProductSourceBinding,
-  type ProductSourceBindingInput,
+  type ReleaseBoard,
+  type ReleaseApproval,
+  type ReleaseCheck,
+  type ReleaseDetail,
+  type ReleaseChange,
+  type ReleaseStatus,
+  type ReleaseDeployment,
+  type ReleaseSource,
+  type ReleaseSourceInput,
   CODEX_CRED_KEY,
   createCodexOAuthClient,
   decodeCodexAccountId,
@@ -71,8 +71,8 @@ import {
 } from '@proteus/core';
 import { initUserTables } from './schema.js';
 import {
-  OWNER_SESSION,
   mintWorkspaceCapability,
+  ownerCaller,
   requireTier,
   revokeWorkspaceCapability,
   workspaceCapabilityHash,
@@ -83,6 +83,7 @@ import {
 import { DeviceSocketHub, deviceIdFromSocket } from './device-hub.js';
 import { credentialToHeaders, accessTokenExpiring, isModelInferenceCredentialKey } from './credential-headers.js';
 import { validateCredential, validateCredentialKey, validateWorkspaceName } from './validate.js';
+import { createCredentialCipher, type CredentialCipher } from './credential-envelope.js';
 import { randomToken, sha256Hex } from '../lib/crypto.js';
 import { resolveWorkspaceTitle } from '../lib/agent-naming.js';
 import {
@@ -90,7 +91,7 @@ import {
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
   type DeviceConsentScope, type DeviceConsentDecision,
-} from './device-consent.js';
+} from '@proteus/core';
 import {
   validateMcpServerInput, parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,
@@ -113,6 +114,12 @@ import {
 } from '../lib/cloudflare-oauth.js';
 
 const CLI_TOKEN_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
+/** How long a device token survives without being used. Renewal is automatic
+ *  and needs no client support: every successful verification pushes the
+ *  window out again (see `verifyDeviceToken`), so this is an idle timeout —
+ *  a machine that stops connecting for this long must be re-linked with
+ *  `proteus connect`, and one that keeps connecting never is. */
+const DEVICE_TOKEN_IDLE_TTL_MS = 180 * 24 * 60 * 60 * 1000; // 180 days
 const DEVICE_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_CONNECT_TICKET_TTL_MS = 60 * 1000;
 const CLI_AGENT_WEBSOCKET_CAPABILITY = 'agent.websocket' as const;
@@ -257,7 +264,7 @@ export class UserDO extends Agent<Env> {
    *  the check lives here, next to the secrets, rather than in any caller. */
   private requireTier(caller: UserCaller, capability: WorkspaceCapability): Promise<ResolvedCaller> {
     this.ensureInit();
-    return requireTier(this.ctx.storage.sql, caller, capability);
+    return requireTier(this.ctx.storage.sql, this.env, caller, capability);
   }
 
   /** Provisioning in flight, per workspace. A Durable Object serializes nothing
@@ -334,9 +341,9 @@ export class UserDO extends Agent<Env> {
     return { provisioned: names.length - failed.length };
   }
 
-  private productChanges() {
+  private releases() {
     this.ensureInit();
-    return createProductChangeStore(productChangeSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
+    return createReleaseStore(releaseSqlFromExec(this.ctx.storage.sql), { validateAgentName: validateWorkspaceName });
   }
 
   // ── Profile ────────────────────────────────────────────────────────
@@ -529,7 +536,7 @@ export class UserDO extends Agent<Env> {
     const now = Date.now();
     if (row.expires_at <= now) return { ok: false, error: 'expired token' };
     this.sqlx(`UPDATE user_cli_tokens SET last_used_at = ? WHERE token_hash = ?`, now, tokenHash);
-    const profile = await this.getProfile(OWNER_SESSION);
+    const profile = await this.getProfile(await ownerCaller(this.env));
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
       ok: true,
@@ -575,7 +582,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'auth_tokens');
     const verified = await verifyAccessTokenRow(this.ctx.storage.sql, token);
     if (!verified.ok) return { ok: false, error: verified.error };
-    const profile = await this.getProfile(OWNER_SESSION);
+    const profile = await this.getProfile(await ownerCaller(this.env));
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
       ok: true,
@@ -677,7 +684,7 @@ export class UserDO extends Agent<Env> {
     if (!this.workspaceRegistered(expected.agentName)) return { ok: false, error: 'agent not found' };
     const bearerScopes = this.cliBearerScopes(row.cli_token_hash, now);
     if (!bearerScopes) return { ok: false, error: 'invalid CLI token' };
-    const profile = await this.getProfile(OWNER_SESSION);
+    const profile = await this.getProfile(await ownerCaller(this.env));
     if (!profile) return { ok: false, error: 'profile missing' };
     return {
       ok: true,
@@ -731,7 +738,7 @@ export class UserDO extends Agent<Env> {
       return new Response('Expected WebSocket', { status: 426 });
     }
     const ticket = url.searchParams.get('ticket');
-    const verified = ticket ? await this.verifyDeviceConnectTicket(OWNER_SESSION, ticket) : { ok: false as const };
+    const verified = ticket ? await this.verifyDeviceConnectTicket(await ownerCaller(this.env), ticket) : { ok: false as const };
     if (!verified.ok || !verified.deviceId) return new Response('unauthorized', { status: 401 });
 
     const pair = new WebSocketPair();
@@ -783,29 +790,38 @@ export class UserDO extends Agent<Env> {
     const deviceId = `dev-${nanoid(10)}`;
     const token = `pdt_${randomToken(32)}`;
     const tokenHash = await sha256Hex(token);
+    const now = Date.now();
     this.sqlx(
-      `INSERT INTO user_devices (id, token_hash, label, created_at) VALUES (?, ?, ?, ?)`,
-      deviceId, tokenHash, (label && label.trim()) || 'My device', Date.now(),
+      `INSERT INTO user_devices (id, token_hash, label, created_at, expires_at) VALUES (?, ?, ?, ?, ?)`,
+      deviceId, tokenHash, (label && label.trim()) || 'My device', now, now + DEVICE_TOKEN_IDLE_TTL_MS,
     );
     return { deviceId, token };
   }
 
-  /** Verify a presented device token against the stored hash. */
+  /** Verify a presented device token against the stored hash, and renew its
+   *  idle window. A device that has gone `DEVICE_TOKEN_IDLE_TTL_MS` without a
+   *  successful verification is refused and must be re-linked; rows written
+   *  before the column existed carry a null window and get stamped here rather
+   *  than being locked out. */
   async verifyDeviceToken(caller: UserCaller, token: string): Promise<{ ok: boolean; deviceId?: string }> {
     await this.requireTier(caller, 'device.manage');
     if (!/^pdt_[A-Za-z0-9_-]{32,}$/.test(token)) return { ok: false };
     const tokenHash = await sha256Hex(token);
-    const row = this.sqlx<{ id: string }>(
-      `SELECT id FROM user_devices WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`, tokenHash,
+    const row = this.sqlx<{ id: string; expires_at: number | null }>(
+      `SELECT id, expires_at FROM user_devices WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`, tokenHash,
     )[0];
-    return row ? { ok: true, deviceId: row.id } : { ok: false };
+    if (!row) return { ok: false };
+    const now = Date.now();
+    if (row.expires_at !== null && row.expires_at <= now) return { ok: false };
+    this.sqlx(`UPDATE user_devices SET expires_at = ? WHERE id = ?`, now + DEVICE_TOKEN_IDLE_TTL_MS, row.id);
+    return { ok: true, deviceId: row.id };
   }
 
   /** Exchange the daemon's local long-lived token for a one-minute WebSocket
    *  ticket. The ticket is scoped to this UserDO and can be consumed once. */
   async issueDeviceConnectTicket(caller: UserCaller, token: string): Promise<{ ok: boolean; ticket?: string; expiresAt?: number }> {
     await this.requireTier(caller, 'device.manage');
-    const verified = await this.verifyDeviceToken(OWNER_SESSION, token);
+    const verified = await this.verifyDeviceToken(await ownerCaller(this.env), token);
     if (!verified.ok || !verified.deviceId) return { ok: false };
     const now = Date.now();
     this.sqlx(`DELETE FROM device_connect_tickets WHERE expires_at <= ? OR used_at IS NOT NULL`, now);
@@ -1026,18 +1042,18 @@ export class UserDO extends Agent<Env> {
    *  hibernatable-socket tags). */
   async listDevices(caller: UserCaller): Promise<Array<{
     id: string; label: string; os: string | null; hostname: string | null;
-    connected: boolean; createdAt: number; lastSeenAt: number | null;
+    connected: boolean; createdAt: number; lastSeenAt: number | null; expiresAt: number | null;
   }>> {
     await this.requireTier(caller, 'device.manage');
     return this.sqlx<{
       id: string; label: string; os: string | null; hostname: string | null;
-      created_at: number; last_seen_at: number | null;
-    }>(`SELECT id, label, os, hostname, created_at, last_seen_at FROM user_devices
+      created_at: number; last_seen_at: number | null; expires_at: number | null;
+    }>(`SELECT id, label, os, hostname, created_at, last_seen_at, expires_at FROM user_devices
         WHERE revoked_at IS NULL ORDER BY created_at DESC`)
       .map((r) => ({
         id: r.id, label: r.label, os: r.os, hostname: r.hostname,
         connected: this._devices.isConnected(r.id),
-        createdAt: r.created_at, lastSeenAt: r.last_seen_at,
+        createdAt: r.created_at, lastSeenAt: r.last_seen_at, expiresAt: r.expires_at,
       }));
   }
 
@@ -1049,75 +1065,75 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  // ── Product changes ─────────────────────────────────────────────────
+  // ── Releases ─────────────────────────────────────────────────
 
-  async upsertProductSourceBinding(caller: UserCaller, input: ProductSourceBindingInput & { id?: string }): Promise<ProductSourceBinding> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().upsertSourceBinding(input);
+  async upsertReleaseSource(caller: UserCaller, input: ReleaseSourceInput & { id?: string }): Promise<ReleaseSource> {
+    await this.requireTier(caller, 'release');
+    return this.releases().upsertSourceBinding(input);
   }
 
-  async createProductChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ProductChangeRequest> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().createChange(agentName, input);
+  async createReleaseChange(caller: UserCaller, agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ReleaseChange> {
+    await this.requireTier(caller, 'release');
+    return this.releases().createChange(agentName, input);
   }
 
-  async updateProductChange(
+  async updateReleaseChange(
     caller: UserCaller,
     changeId: string,
     patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null },
-  ): Promise<ProductChangeRequest> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().updateChange(changeId, patch);
+  ): Promise<ReleaseChange> {
+    await this.requireTier(caller, 'release');
+    return this.releases().updateChange(changeId, patch);
   }
 
-  async transitionProductChange(caller: UserCaller, changeId: string, to: ProductChangeStatus): Promise<ProductChangeRequest> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().transitionChange(changeId, to);
+  async transitionReleaseChange(caller: UserCaller, changeId: string, to: ReleaseStatus): Promise<ReleaseChange> {
+    await this.requireTier(caller, 'release');
+    return this.releases().transitionChange(changeId, to);
   }
 
-  async recordProductChangeCheck(
+  async recordReleaseCheck(
     caller: UserCaller,
     changeId: string,
-    input: { name: string; status: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
-  ): Promise<ProductChangeCheck> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().recordCheck(changeId, input);
+    input: { name: string; status: ReleaseCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null },
+  ): Promise<ReleaseCheck> {
+    await this.requireTier(caller, 'release');
+    return this.releases().recordCheck(changeId, input);
   }
 
-  async requestProductChangeApproval(caller: UserCaller, changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().requestApproval(changeId, approvalType);
+  async requestReleaseApproval(caller: UserCaller, changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval> {
+    await this.requireTier(caller, 'release');
+    return this.releases().requestApproval(changeId, approvalType);
   }
 
-  async decideProductChangeApproval(
+  async decideReleaseApproval(
     caller: UserCaller,
     approvalId: string,
     decision: 'approved' | 'rejected',
     approvedBy: string,
     note?: string | null,
-  ): Promise<ProductChangeApproval> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().decideApproval(approvalId, decision, approvedBy, note);
+  ): Promise<ReleaseApproval> {
+    await this.requireTier(caller, 'release');
+    return this.releases().decideApproval(approvalId, decision, approvedBy, note);
   }
 
-  async recordProductDeployment(
+  async recordReleaseDeployment(
     caller: UserCaller,
     changeId: string,
-    input: { environment: ProductDeploymentRecord['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
-  ): Promise<ProductDeploymentRecord> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().recordDeployment(changeId, input);
+    input: { environment: ReleaseDeployment['environment']; workerVersionId?: string | null; deploymentId?: string | null; rollbackTarget?: string | null },
+  ): Promise<ReleaseDeployment> {
+    await this.requireTier(caller, 'release');
+    return this.releases().recordDeployment(changeId, input);
   }
 
-  async getProductChangeBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ProductChangeBoard> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().board(agentName, limit);
+  async getReleaseBoard(caller: UserCaller, agentName?: string, limit = 20): Promise<ReleaseBoard> {
+    await this.requireTier(caller, 'release');
+    return this.releases().board(agentName, limit);
   }
 
   /** Full ledger view of one change — the execution engine's read surface. */
-  async getProductChangeDetail(caller: UserCaller, changeId: string): Promise<ProductChangeDetail> {
-    await this.requireTier(caller, 'product_change');
-    return this.productChanges().detail(changeId);
+  async getReleaseDetail(caller: UserCaller, changeId: string): Promise<ReleaseDetail> {
+    await this.requireTier(caller, 'release');
+    return this.releases().detail(changeId);
   }
 
   // ── Experience library (cross-workspace transfer) ───────────────────
@@ -1198,16 +1214,11 @@ export class UserDO extends Agent<Env> {
     if (key === CODEX_CRED_KEY && cred.kind === 'oauth' && !cred.refreshToken) {
       throw new Error('codex.oauth requires an OAuth refresh token.');
     }
-    const now = Date.now();
-    this.sqlx(
-      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value, updated_at = excluded.updated_at`,
-      key, cred.kind, JSON.stringify(cred), now, now,
-    );
+    await this.writeCredential(key, cred);
     // Cloudflare login just landed → discover the account's AI Gateways now
     // (single-gateway auto-select lives in listAIGateways), so my-gateway
     // works without a settings visit. listAIGateways never throws.
-    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(OWNER_SESSION);
+    if (key === CLOUDFLARE_OAUTH_CRED_KEY) await this.listAIGateways(await ownerCaller(this.env));
   }
 
   async deleteCredential(caller: UserCaller, key: string): Promise<void> {
@@ -1216,11 +1227,141 @@ export class UserDO extends Agent<Env> {
     this.sqlx(`DELETE FROM user_credentials WHERE key = ?`, key);
   }
 
+  // ── Credentials at rest ─────────────────────────────────────────────
+  // Every read and write of `user_credentials.value` goes through this pair.
+  // The value is sealed by credential-envelope.ts, so the two functions below
+  // are the only places plaintext secret material exists in this class.
+
+  private _credentialsRewrapped: Promise<void> | null = null;
+
+  private cipher(): Promise<CredentialCipher> {
+    return createCredentialCipher(this.env);
+  }
+
+  /** What a sealed value is bound to. The Durable Object's own id is in there
+   *  so a ciphertext lifted into a different user's store does not open, and
+   *  the credential key so it cannot be moved between rows within one. */
+  private credentialAad(key: string): string {
+    return `${this.ctx.id.toString()}:${key}`;
+  }
+
   /** Internal read of the raw credential. */
-  private getCredentialRow(key: string): Credential | null {
+  private async readCredential(key: string): Promise<Credential | null> {
+    await this.rewrapCredentials();
     const row = this.sqlx<{ value: string }>(`SELECT value FROM user_credentials WHERE key = ?`, key)[0];
     if (!row) return null;
-    try { return JSON.parse(row.value) as Credential; } catch { return null; }
+    let plaintext: string;
+    try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
+    catch (err) {
+      console.warn(`[user-do] credential ${key} is unreadable:`, (err as Error).message);
+      return null;
+    }
+    // Parsed outside the catch above on purpose: a JSON error message quotes
+    // the input it choked on, and that input is the decrypted secret.
+    try { return JSON.parse(plaintext) as Credential; }
+    catch {
+      console.warn(`[user-do] credential ${key} did not decode as JSON`);
+      return null;
+    }
+  }
+
+  /** Internal write of a credential, sealed under the current key. Preserves
+   *  `created_at` on update, exactly as the previous upsert did. */
+  private async writeCredential(key: string, cred: Credential): Promise<void> {
+    await this.rewrapCredentials();
+    const now = Date.now();
+    this.sqlx(
+      `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value, updated_at = excluded.updated_at`,
+      key, cred.kind, await (await this.cipher()).seal(this.credentialAad(key), JSON.stringify(cred)), now, now,
+    );
+  }
+
+  /**
+   * Seal every stored credential under the CURRENT key. Runs once per DO
+   * instance, on the first credential access.
+   *
+   * One mechanism covers two migrations, because they are the same operation:
+   * a row written before encryption existed, and a row still sealed under a
+   * retired key after a rotation. The marker in `user_schema_meta` is the key
+   * id the whole store is known to be sealed under, so the pass is skipped
+   * entirely once it matches.
+   *
+   * A row that cannot be opened is left alone and the pass continues. Failing
+   * the pass would take every provider down over one damaged row; leaving it
+   * means that ONE credential reports its own failure when it is used, which
+   * is the isolation the rest of the provider layer already has.
+   */
+  private rewrapCredentials(): Promise<void> {
+    this._credentialsRewrapped ??= (async () => {
+      const cipher = await this.cipher();
+      const marker = this.sqlx<{ value: string }>(
+        `SELECT value FROM user_schema_meta WHERE key = ?`, UserDO.CREDENTIAL_ENVELOPE_MARKER,
+      )[0];
+      if (marker?.value === cipher.keyId) return;
+      let clean = true;
+      for (const row of this.sqlx<{ key: string; value: string }>(`SELECT key, value FROM user_credentials`)) {
+        const aad = this.credentialAad(row.key);
+        try {
+          this.sqlx(
+            `UPDATE user_credentials SET value = ? WHERE key = ?`,
+            await cipher.seal(aad, await cipher.open(aad, row.value)), row.key,
+          );
+        } catch (err) {
+          clean = false;
+          console.warn(`[user-do] credential ${row.key} could not be re-sealed:`, (err as Error).message);
+        }
+      }
+      for (const row of this.sqlx<{ id: string; headers: string }>(
+        `SELECT id, headers FROM user_mcp_servers WHERE headers IS NOT NULL`,
+      )) {
+        const aad = this.mcpHeadersAad(row.id);
+        try {
+          this.sqlx(
+            `UPDATE user_mcp_servers SET headers = ? WHERE id = ?`,
+            await cipher.seal(aad, await cipher.open(aad, row.headers)), row.id,
+          );
+        } catch (err) {
+          clean = false;
+          console.warn(`[user-do] MCP headers for ${row.id} could not be re-sealed:`, (err as Error).message);
+        }
+      }
+      // The marker claims the WHOLE store is sealed under this key, and the
+      // documented rotation drops the retired key on the strength of that
+      // claim. A pass that left a row behind must not make it.
+      if (!clean) return;
+      this.sqlx(
+        `INSERT INTO user_schema_meta (key, value) VALUES (?, ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+        UserDO.CREDENTIAL_ENVELOPE_MARKER, cipher.keyId,
+      );
+    })();
+    return this._credentialsRewrapped;
+  }
+
+  private static readonly CREDENTIAL_ENVELOPE_MARKER = 'credential_envelope_key_id';
+
+  /** MCP `headers` hold bearer tokens for self-hosted servers — the same class
+   *  of secret as `user_credentials`, so they are sealed the same way. AAD is
+   *  the server id, so a header blob cannot be replayed against a different
+   *  server. Null passes through: most servers have no custom headers. */
+  private mcpHeadersAad(serverId: string): string {
+    return `${this.ctx.id.toString()}:mcp:${serverId}`;
+  }
+
+  private async sealMcpHeaders(serverId: string, headers: string | null): Promise<string | null> {
+    await this.rewrapCredentials();
+    return headers === null ? null : (await this.cipher()).seal(this.mcpHeadersAad(serverId), headers);
+  }
+
+  private async openMcpHeaders(serverId: string, stored: string | null): Promise<string | null> {
+    await this.rewrapCredentials();
+    if (stored === null) return null;
+    try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
+    catch (err) {
+      console.warn(`[user-do] MCP headers for ${serverId} are unreadable:`, (err as Error).message);
+      return null;
+    }
   }
 
   /** Expose the baseURL for openai-compat credentials. The orchestrator's
@@ -1233,7 +1374,7 @@ export class UserDO extends Agent<Env> {
     // The my-gateway view rides the same account-scoped /ai/v1 endpoint as
     // Workers AI — only the cf-aig-gateway-id header differs.
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
-    const cred = this.getCredentialRow(storedKey);
+    const cred = await this.readCredential(storedKey);
     if (cred?.kind === 'openai-compat') return cred.baseURL;
     if (storedKey === CLOUDFLARE_OAUTH_CRED_KEY && cred?.kind === 'oauth') {
       if (!isCloudflareCredentialUsable(cred)) return null;
@@ -1252,7 +1393,7 @@ export class UserDO extends Agent<Env> {
     // bearer + refresh path, but cf-aig-gateway-id names the user's own
     // selected gateway (null until one is selected — that gates my-gateway).
     const storedKey = key === CLOUDFLARE_AI_GATEWAY_CRED_KEY ? CLOUDFLARE_OAUTH_CRED_KEY : key;
-    const stored = this.getCredentialRow(storedKey);
+    const stored = await this.readCredential(storedKey);
     if (!stored) return null;
     // Explicitly-typed non-null so the conditional refresh-reassignment below
     // doesn't re-widen back to `Credential | null`.
@@ -1312,7 +1453,7 @@ export class UserDO extends Agent<Env> {
   /** Fresh (refreshed-if-expiring) access token + account id for management
    *  API calls. Null when no usable Cloudflare credential is stored. */
   private async cloudflareAPICredential(): Promise<{ accessToken: string; accountId: string } | null> {
-    const stored = this.getCredentialRow(CLOUDFLARE_OAUTH_CRED_KEY);
+    const stored = await this.readCredential(CLOUDFLARE_OAUTH_CRED_KEY);
     if (stored?.kind !== 'oauth' || !isCloudflareCredentialUsable(stored)) return null;
     let cred = stored;
     if (isCloudflareCredentialExpiring(cred)) {
@@ -1340,7 +1481,7 @@ export class UserDO extends Agent<Env> {
     try {
       const gateways = await fetchCloudflareAIGateways(api.accountId, api.accessToken);
       if (!selectedId && gateways.length === 1) {
-        await this.selectAIGateway(OWNER_SESSION, gateways[0].id);
+        await this.selectAIGateway(await ownerCaller(this.env), gateways[0].id);
         selectedId = gateways[0].id;
       }
       return { connected: true, selectedId, gateways, error: null };
@@ -1356,7 +1497,7 @@ export class UserDO extends Agent<Env> {
       return;
     }
     if (!isCloudflareAIGatewayId(gatewayId)) throw new Error('Invalid AI Gateway id.');
-    await this.setConfig(OWNER_SESSION, UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
+    await this.setConfig(await ownerCaller(this.env), UserDO.AI_GATEWAY_CONFIG_KEY, gatewayId);
   }
 
   /** Returns the rotated credential, `'revoked'` when Cloudflare rejected
@@ -1368,19 +1509,13 @@ export class UserDO extends Agent<Env> {
   private async refreshCloudflareInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | 'revoked' | null> {
     try {
       const next = await refreshCloudflareCredential(this.env, current);
-      this.sqlx(
-        `UPDATE user_credentials SET value = ?, updated_at = ? WHERE key = ?`,
-        JSON.stringify(next), Date.now(), CLOUDFLARE_OAUTH_CRED_KEY,
-      );
+      await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, next);
       return next as Credential & { kind: 'oauth' };
     } catch (err) {
       if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
         console.warn('[user-do] cloudflare refresh token revoked; reconnect required:', err.message);
         const { refreshToken: _dead, ...rest } = current;
-        this.sqlx(
-          `UPDATE user_credentials SET value = ?, updated_at = ? WHERE key = ?`,
-          JSON.stringify(rest), Date.now(), CLOUDFLARE_OAUTH_CRED_KEY,
-        );
+        await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest);
         return 'revoked';
       }
       console.warn('[user-do] cloudflare refresh failed; keeping current credential:', (err as Error).message);
@@ -1399,11 +1534,7 @@ export class UserDO extends Agent<Env> {
         expiresAt: fresh.expiresAt,
         metadata: current.metadata,
       };
-      // Persist with refreshed tokens. Keep created_at by ON CONFLICT.
-      this.sqlx(
-        `UPDATE user_credentials SET value = ?, updated_at = ? WHERE key = ?`,
-        JSON.stringify(next), Date.now(), CODEX_CRED_KEY,
-      );
+      await this.writeCredential(CODEX_CRED_KEY, next);
       return next as Credential & { kind: 'oauth' };
     } catch (err) {
       console.warn('[user-do] codex refresh failed; keeping current credential:', (err as Error).message);
@@ -1439,12 +1570,7 @@ export class UserDO extends Agent<Env> {
       if (!tokens) return { connected: false }; // still pending
       const accountId = decodeCodexAccountId(tokens.accessToken);
       const cred = tokensToCredential(tokens, accountId ? { accountId } : undefined);
-      const now = Date.now();
-      this.sqlx(
-        `INSERT INTO user_credentials (key, kind, value, created_at, updated_at) VALUES (?, ?, ?, ?, ?)
-         ON CONFLICT(key) DO UPDATE SET kind = excluded.kind, value = excluded.value, updated_at = excluded.updated_at`,
-        CODEX_CRED_KEY, cred.kind, JSON.stringify(cred), now, now,
-      );
+      await this.writeCredential(CODEX_CRED_KEY, cred);
       this.sqlx(`DELETE FROM codex_device_flow`);
       return { connected: true, accountId: accountId ?? undefined };
     } catch (err) {
@@ -1460,7 +1586,7 @@ export class UserDO extends Agent<Env> {
 
   async getCodexStatus(caller: UserCaller): Promise<CodexStatus> {
     await this.requireTier(caller, 'codex_auth');
-    const cred = this.getCredentialRow(CODEX_CRED_KEY);
+    const cred = await this.readCredential(CODEX_CRED_KEY);
     const flow = this.sqlx<{ user_code: string; portal_url: string; poll_interval: number }>(
       `SELECT user_code, portal_url, poll_interval FROM codex_device_flow WHERE id = 1`,
     )[0];
@@ -1617,7 +1743,7 @@ export class UserDO extends Agent<Env> {
          (id, name, server_url, transport, headers, allowed_tools, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
       id, cfg.name, cfg.serverUrl, cfg.transport ?? 'auto',
-      headersJson, allowedJson, now, now,
+      await this.sealMcpHeaders(id, headersJson), allowedJson, now, now,
     );
     this._userMcpUpdatedAt = now;
 
@@ -1722,7 +1848,7 @@ export class UserDO extends Agent<Env> {
         typeof p.headers === 'object' && !Array.isArray(p.headers)
         && Object.values(p.headers as Record<string, unknown>).every((v) => typeof v === 'string')
       ) {
-        sets.push('headers = ?'); args.push(JSON.stringify(p.headers));
+        sets.push('headers = ?'); args.push(await this.sealMcpHeaders(id, JSON.stringify(p.headers)));
       } else {
         throw new Error('headers must be Record<string,string> or null.');
       }
@@ -1758,7 +1884,7 @@ export class UserDO extends Agent<Env> {
     try { await mgr.removeServer(id); }
     catch (err) { console.warn('[user-do] reregister removeServer:', (err as Error).message); }
 
-    const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(row.headers)) ?? {};
+    const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(await this.openMcpHeaders(id, row.headers))) ?? {};
     let authProvider: AgentMcpOAuthProvider | undefined;
     if (callbackUrl) {
       authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'proteus-user-mcp', callbackUrl);

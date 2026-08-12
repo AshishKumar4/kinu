@@ -22,8 +22,8 @@ describe('buildDrainBatch', () => {
 
   test('excludes self_emit and internal events (anti-self-wake loop)', () => {
     const events = [
-      evt('a', { ingress: 'self_emit', variant: 'internal', payload: { note: 'x' } }),
-      evt('b', { variant: 'internal', ingress: 'sandbox_cb', payload: { note: 'y' } }),
+      evt('a', { ingress: 'self_emit', variant: 'internal', payload: { kind: 'note', data: 'x' } }),
+      evt('b', { variant: 'internal', ingress: 'sandbox_cb', payload: { kind: 'note', data: 'y' } }),
     ];
     expect(buildDrainBatch(events)).toBeNull();
   });
@@ -31,7 +31,7 @@ describe('buildDrainBatch', () => {
   test('batches external events with their ids and a turn-driving message', () => {
     const events = [
       evt('wh1', { variant: 'webhook', ingress: 'webhook_hmac' }),
-      evt('tm1', { variant: 'timer', ingress: 'timer_alarm', payload: { label: 'daily' } }),
+      evt('tm1', { variant: 'timer', ingress: 'timer_alarm', payload: { trigger_id: 'trg-daily', scheduled_fire_at: 0, label: 'daily' } }),
     ];
     const batch = buildDrainBatch(events)!;
     expect(batch).not.toBeNull();
@@ -54,7 +54,7 @@ describe('buildDrainBatch', () => {
   test('mixes external + self → only external drains', () => {
     const events = [
       evt('ext', { variant: 'webhook', ingress: 'webhook_hmac' }),
-      evt('self', { ingress: 'self_emit', variant: 'internal', payload: { note: 'z' } }),
+      evt('self', { ingress: 'self_emit', variant: 'internal', payload: { kind: 'note', data: 'z' } }),
     ];
     const batch = buildDrainBatch(events)!;
     expect(batch.ids).toEqual(['ext']);

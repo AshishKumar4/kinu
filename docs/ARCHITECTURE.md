@@ -61,7 +61,7 @@ graph TB
     A["Agent&lt;Env&gt; — agents SDK"]
     T["Think — @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
-    O["OrchestratorAgent<br/>deps: team · peers · productChanges"]
+    O["OrchestratorAgent<br/>deps: team · peers · releases"]
     S["SubordinateAgent<br/>deps: report"]
     E["ExplorationAgent<br/>hand-built head tools only"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
@@ -82,9 +82,9 @@ hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`
 (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 
 **Tool gating is structural, not flagged.** `DEPS_GATED_TOOLS` is
-`['team', 'peers', 'report', 'product_change']`, and `actorActiveTools()` filters
+`['team', 'peers', 'report', 'release']`, and `actorActiveTools()` filters
 the active set by which deps the profile actually wired. The orchestrator wires
-`team`, `peers`, and `productChanges`; a subordinate wires only `report`. That
+`team`, `peers`, and `releases`; a subordinate wires only `report`. That
 is the whole mechanism — a subordinate cannot staff subordinates of its own
 because there is no `team` tool in its ToolSet to call.
 
@@ -292,11 +292,15 @@ Five ingress paths publish into the log:
 
 | Source | Path | Wakes via |
 |---|---|---|
-| Email | `events/ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
-| Webhook | `events/routes.ts` → `acceptWebhookDelivery` | per-trigger HMAC / Bearer / mTLS |
-| Peer | `events/ingress/peer.ts` (`peer_outbox` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
-| Subordinate | `subordinate-support.ts` `admitSubordinateTask` / `admitSubordinateReport` | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
-| Timer | `orchestrator.ts` `alarm()` + `core/src/events/hub/triggers.ts` | `ingress: 'timer_alarm'` (cron / one-shot) |
+| Email | `core/src/events/ingress/email.ts` (+ `server.ts` `email()`) | `ingress: 'email_inbound'` |
+| Webhook | `core/src/events/ingress/webhook.ts` (+ `cf` `events/routes.ts`) | per-trigger HMAC / Bearer / mTLS |
+| Peer | `core/src/events/ingress/peer.ts` (`peer_outbox` → `PeerHub`) | `ingress: 'peer_async'` (cross-workspace) |
+| Subordinate | `core/src/events/ingress/subordinate.ts` (+ `subordinates/support.ts` admission) | `ingress: 'subordinate'` (variants `subordinate_task`, `subordinate_report`) |
+| Timer | `core/src/events/ingress/triggers.ts`, driven by each backend's clock | `ingress: 'timer_alarm'` (cron / one-shot) |
+
+The gates are core's — auth, replay window, rate limit, trust, admission — and
+each backend supplies only the transport in front of one: the Worker's HTTP and
+`email()` routes and the DO alarm on cf, the process timer locally.
 
 The full `IngressKind` union in `core/src/events/hub/types.ts` is wider than
 this — it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
@@ -320,10 +324,19 @@ it. A second in-SQL check covers server membership + `allowed_tools`.
 Every secret a user owns lives in one `UserDO`, and every privileged method on
 it takes a `UserCaller` first and gates on `requireTier`
 (`cf-backend/src/user/workspace-capability.ts`). Worker routes act for the owner
-whose identity the edge verified and pass `OWNER_SESSION`; a workspace presents
-the per-workspace secret minted for it at claim time and stored hashed, and the
-UserDO looks its tier up live in `workspace_tiers`. The token is identity, not
-capability, so re-tainting a workspace is a single row update.
+whose identity the edge verified and present the owner capability —
+`ownerCaller(env)`, an HMAC of the Worker's own secret, so owner authority is
+something the deployment holds rather than a string any module can type. A
+workspace presents the per-workspace secret minted for it at claim time and
+stored hashed, and the UserDO looks its tier up live in `workspace_tiers`. The
+token is identity, not capability, so re-tainting a workspace is a single row
+update.
+
+Neither kind is an attestation of who is calling: Cloudflare gives a Durable
+Object no way to learn that, so a sibling DO sharing `env` can derive the owner
+capability too. What the boundary buys is that the tool surface — the part an
+injected prompt can steer — reaches the UserDO only through code presenting a
+workspace token, and is attenuated by tier whichever tool gate someone forgets.
 
 Today every workspace is registered `full` — the whole user surface, exactly as
 before. The `shared` tier is what a workspace shared with a second human will

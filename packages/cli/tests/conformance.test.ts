@@ -70,7 +70,7 @@ function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
 
 function staticResolver(model: LanguageModel): LocalModelResolver {
   return {
-    normalizeSpecSync: (spec) => spec?.trim() || 'conformance/conformance-model',
+    normalizeSpecSync: (spec: string | null | undefined) => spec?.trim() || 'conformance/conformance-model',
     resolveModel: () => model,
     listProviders: async () => [],
     listModels: async () => [],

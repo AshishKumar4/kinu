@@ -14,7 +14,7 @@ Proteus has two real agent backends:
 
 - Cloud agents: `OrchestratorAgent` Durable Objects on Cloudflare, built on
   Think / Agents SDK chat, storage, callable RPC, tools, background jobs,
-  memory, MCTS, product changes, device consent, and execution providers.
+  memory, MCTS, release changes, device consent, and execution providers.
 - Local agents: `LocalAgentSession` plus local SQLite/runtime adapters.
 
 The current CLI cloud path is not clean enough. It can run a local model loop,

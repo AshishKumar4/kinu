@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { asFetchFunction } from '@proteus/core';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { cloudflareTokenJsonToResponse, cloudflareUserResultToProfile } from '../src/auth/routes.js';
@@ -110,13 +111,13 @@ describe('auth and desktop security invariants', () => {
 
   test('Cloudflare OAuth token attachment stores an account-backed Workers AI credential', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input: RequestInfo | URL) => {
+    globalThis.fetch = asFetchFunction(async (input) => {
       expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
       return new Response(JSON.stringify({
         success: true,
         result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
-    };
+    });
     try {
       const credential = await cloudflareTokenToCredential({
         access_token: 'cf-access',
@@ -136,13 +137,13 @@ describe('auth and desktop security invariants', () => {
 
   test('Cloudflare OAuth token attachment accepts access-token-only responses', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async (input: RequestInfo | URL) => {
+    globalThis.fetch = asFetchFunction(async (input) => {
       expect(String(input)).toBe('https://api.cloudflare.com/client/v4/accounts');
       return new Response(JSON.stringify({
         success: true,
         result: [{ id: 'abc123abc123abc123abc123abc123ab', name: 'User Account' }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
-    };
+    });
     try {
       const credential = await cloudflareTokenToCredential({
         access_token: 'cf-access',
@@ -164,10 +165,10 @@ describe('auth and desktop security invariants', () => {
     // Cloudflare account gets an identity and the "connect Workers AI" notice,
     // not a 400 that locks them out of the product.
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => new Response(
+    globalThis.fetch = asFetchFunction(async () => new Response(
       JSON.stringify({ success: true, result: [] }),
       { status: 200, headers: { 'content-type': 'application/json' } },
-    );
+    ));
     try {
       const credential = await cloudflareTokenToCredential({
         access_token: 'cf-access',
@@ -389,13 +390,13 @@ describe('auth and desktop security invariants', () => {
   test('CLI model menu uses CLI bearer auth rather than browser-only user routes', () => {
     const cliRoutes = source('src/cli/routes.ts');
     expect(cliRoutes).toContain("path === '/models' && method === 'GET'");
-    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId, OWNER_SESSION)');
+    expect(cliRoutes).toContain('listAvailableModels(env, cli.userId, await ownerCaller(env))');
   });
 
   test('web agent creation requires an available model and stores the selected initial model', () => {
     const routes = source('src/user/routes.ts');
     const createAgent = source('src/user/workspace-create.ts');
-    expect(routes).toContain('listAvailableModels(env, identity.userId, OWNER_SESSION)');
+    expect(routes).toContain('listAvailableModels(env, identity.userId, await ownerCaller(env))');
     expect(createAgent).toContain('Cloudflare Workers AI is not connected');
     expect(createAgent).toContain('pickInitialModel');
     expect(createAgent).toContain('await orchestrator.setModel(model)');

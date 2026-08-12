@@ -199,7 +199,7 @@ export default function UserSettingsPage() {
               clearable
               placeholder="(use system default)"
             />
-            <p className="text-[11px] p-text-3">
+            <p className="p-meta p-text-3">
               New workspaces pick this up at creation. Existing workspaces keep their own choice (change per-workspace under "Workspace settings").
             </p>
           </div>
@@ -215,6 +215,16 @@ export default function UserSettingsPage() {
  *  account state on the user-do device hub, not a per-run concern). The
  *  daemon opens one outbound WebSocket; no inbound ports, runs as your user,
  *  never root. Per-agent file-access tiers live in each workspace's settings. */
+/** Device links renew themselves on every connect, so the only ones worth
+ *  mentioning are the ones close enough to lapsing that the owner may need to
+ *  go and start the daemon. Anything further out would be noise. */
+const DEVICE_LAPSE_NOTICE_MS = 14 * 24 * 60 * 60 * 1000;
+
+function lapsingDevices(devices: UserDevice[] | null): UserDevice[] {
+  const soon = Date.now() + DEVICE_LAPSE_NOTICE_MS;
+  return (devices ?? []).filter((d) => d.expiresAt !== null && d.expiresAt <= soon);
+}
+
 function DevicesCard() {
   const [devices, setDevices] = useState<UserDevice[] | null>(null);
   const [install, setInstall] = useState<string | null>(null);
@@ -281,8 +291,14 @@ function DevicesCard() {
           </div>
         )}
         {devices && devices.length > 0 && !devices.some((d) => d.connected) && (
-          <p className="text-[11px] p-text-3">
-            Offline device? Restart the daemon on that machine with <code className="font-mono p-elevated px-1 rounded">proteus connect</code>.
+          <p className="p-meta p-text-3">
+            Offline device? Restart the daemon on that machine with <code className="font-mono p-fill px-1 rounded">proteus connect</code>.
+          </p>
+        )}
+        {lapsingDevices(devices).length > 0 && (
+          <p className="p-meta p-text-3">
+            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon
+            — connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
           </p>
         )}
 
@@ -297,7 +313,7 @@ function DevicesCard() {
         ) : (
           <div className="space-y-2">
             <p className="text-xs p-text-2">Paste this on the machine you want to connect. It installs the CLI, signs in, and starts the local daemon:</p>
-            <div className="rounded-md p-elevated border p-border p-3 font-mono text-[11px] p-text break-all select-all leading-relaxed">
+            <div className="rounded-md p-fill border p-border p-3 font-mono p-meta p-text break-all select-all leading-relaxed">
               {install}
             </div>
             <div className="flex items-center gap-2 text-xs">
@@ -307,13 +323,13 @@ function DevicesCard() {
               ><CopyIcon size={11} />{copyLabel(copyStatus)}</button>
               <button onClick={() => setInstall(null)} className="p-text-3 hover:p-text">Done</button>
             </div>
-            <p className="text-[11px] p-text-3 mt-1 flex items-center gap-1.5">
+            <p className="p-meta p-text-3 mt-1 flex items-center gap-1.5">
               <WarningIcon size={11} /> Device secrets are written locally by <code className="font-mono">proteus connect</code>; they are not shown in this command.
             </p>
           </div>
         )}
 
-        <p className="text-[11px] p-text-3">
+        <p className="p-meta p-text-3">
           Each workspace's file-access tier on a device (consented folder vs full filesystem) is set
           in that workspace's settings.
         </p>
@@ -326,8 +342,8 @@ function CommandCopy({ label, command }: { label: string; command: string }) {
   const { status, copy } = useCopy();
   return (
     <div className="flex items-center gap-2 rounded-md border p-border p-2">
-      <div className="w-14 shrink-0 text-[11px] p-text-3">{label}</div>
-      <code className="font-mono text-[11px] p-text flex-1 truncate">{command}</code>
+      <div className="w-14 shrink-0 p-meta p-text-3">{label}</div>
+      <code className="font-mono p-meta p-text flex-1 truncate">{command}</code>
       <button
         onClick={() => copy(command)}
         className={`px-2 py-1 rounded p-card hover:p-card-hover flex items-center gap-1 text-xs ${status === "failed" ? "p-danger" : "p-text-2"}`}
@@ -366,7 +382,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
   }
   if (status.gateways.length === 0) {
     return (
-      <p className="text-[11px] p-text-3">
+      <p className="p-meta p-text-3">
         No AI Gateway found in your Cloudflare account. Create one under AI &gt; AI Gateway in the
         Cloudflare dashboard to use your own provider keys (BYOK) or Unified Billing credits here.
       </p>
@@ -393,7 +409,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
           ))}
         </select>
       )}
-      <p className="text-[11px] p-text-3">
+      <p className="p-meta p-text-3">
         Third-party models (spec <code className="p-card px-1">my-gateway/&lt;provider&gt;/&lt;model&gt;</code>) route
         through this gateway using its stored provider keys or your Unified Billing credits.
       </p>
@@ -487,7 +503,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
             title="Open portal"
           ><ArrowSquareOutIcon size={14} /></a>
         </div>
-        <p className="text-[11px] p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for you to authorize…</p>
+        <p className="p-meta p-text-3 flex items-center gap-2"><Loader size="sm" /> Waiting for you to authorize…</p>
         {error && <p className="text-xs p-danger">{error}</p>}
       </div>
     );
@@ -594,7 +610,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       {/* Connect any catalog provider */}
       <div className="space-y-2">
         <div className="text-xs font-medium">Connect a provider</div>
-        <p className="text-[11px] p-text-3">
+        <p className="p-meta p-text-3">
           Paste an API key for any of the {catalog.length} supported providers — every agent you own can use its models.
         </p>
         <Combobox
@@ -621,7 +637,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         </Combobox>
         {selected && (
           <div className="space-y-2">
-            <p className="text-[11px] p-text-3">
+            <p className="p-meta p-text-3">
               {selected.envVar && <>Usually stored as <code className="p-card px-1">{selected.envVar}</code>. </>}
               {selected.doc && (
                 <a href={selected.doc} target="_blank" rel="noopener noreferrer" className="p-accent underline">
@@ -650,7 +666,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       {/* OpenAI-compat slot */}
       <div className="pt-3 border-t p-border space-y-2">
         <div className="text-xs font-medium">OpenAI-compatible (Groq, Together, …)</div>
-        <p className="text-[11px] p-text-3">Each named entry stores baseURL + apiKey. Use model spec <code className="p-card px-1">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</p>
+        <p className="p-meta p-text-3">Each named entry stores baseURL + apiKey. Use model spec <code className="p-card px-1">openai-compat:&lt;name&gt;/&lt;modelId&gt;</code>.</p>
         <div className="grid grid-cols-3 gap-2">
           <input
             value={compatName}

@@ -256,16 +256,16 @@ function buildAdapter(stub: FakeUserDOStub, callerAgentName: string, serverId: s
 
 describe('orchestrator MCP tool adapter', () => {
   test('threads the caller workspace name + (serverId, name, args) to the stub', async () => {
-    let captured: { caller: string; id: string; name: string; args: unknown } | null = null;
+    const captured: Array<{ caller: string; id: string; name: string; args: unknown }> = [];
     const stub: FakeUserDOStub = {
       async userMcp_callTool(caller, id, name, args) {
-        captured = { caller, id, name, args };
+        captured.push({ caller, id, name, args });
         return { content: [{ type: 'text', text: 'ok' }] };
       },
     };
     const adapter = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
     const result = await (adapter.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' });
-    expect(captured).toEqual({ caller: 'my-workspace', id: 'srv1', name: 'echo', args: { x: 'hi' } });
+    expect(captured[0]).toEqual({ caller: 'my-workspace', id: 'srv1', name: 'echo', args: { x: 'hi' } });
     expect(result).toEqual({ content: [{ type: 'text', text: 'ok' }] });
   });
 

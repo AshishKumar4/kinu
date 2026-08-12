@@ -7,6 +7,7 @@
  */
 import { useCallback, useEffect, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import { ArrowLeftIcon, ArrowRightIcon, GitBranchIcon, CheckCircleIcon, WarningCircleIcon, XIcon } from "@phosphor-icons/react";
 import type { AlternateTakeSet, TakePickOutcome } from "@proteus/core";
 import { takeEvidence } from "@proteus/core";
@@ -93,9 +94,9 @@ function TakesComparison({ set, onPick, onClose }: {
       maxWidthClass="max-w-xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Keep current</Button>
-        <Button size="sm" variant="primary" onClick={useTake} disabled={busy || isCurrent}>
+        <button className={`p-btn ${btnSmCls}`} onClick={useTake} disabled={busy || isCurrent}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Recording…</span></> : isCurrent ? "Current answer" : "Use this take"}
-        </Button>
+        </button>
       </>}
     >
       <p className="text-xs p-text-3 leading-relaxed">

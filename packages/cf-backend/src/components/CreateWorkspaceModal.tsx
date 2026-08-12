@@ -9,6 +9,7 @@
  */
 import { useCallback, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import { PlusIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
@@ -36,9 +37,9 @@ export function CreateWorkspaceModal({ onClose }: CreateWorkspaceModalProps) {
       maxWidthClass="max-w-2xl"
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={busy}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={submit} disabled={busy || !mission.trim() || hasModels === false}>
+        <button className={`p-btn ${btnSmCls}`} onClick={submit} disabled={busy || !mission.trim() || hasModels === false}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Creating…</span></> : "Create workspace"}
-        </Button>
+        </button>
       </>}
     >
       {hasModels === false && (

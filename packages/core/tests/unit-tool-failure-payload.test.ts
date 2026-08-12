@@ -26,7 +26,8 @@ import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Shell } from '../src/types/agent-runtime.js';
+import type {  } from '../src/types/agent-runtime.js';
+import type { Shell } from '../src/types/primitives.js';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 

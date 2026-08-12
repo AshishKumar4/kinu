@@ -131,7 +131,7 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
       userDO: fakeUserDOStub(),
       fetch: (async () => sseResponse(
         sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]'),
-      )) as typeof fetch,
+      )) as unknown as typeof fetch,
       workersAI: { sessionAffinity: 'proteus-jarvis' },
     });
     const result = streamText({

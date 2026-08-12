@@ -7,6 +7,7 @@ import {
   rewriteOpenCodeResponsesBody,
 } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
+import type { LanguageModel } from 'ai';
 
 // ─── Helpers: fake spawn + fake fetch ────────────────────────────────────────
 
@@ -253,7 +254,8 @@ describe('OpenCode provider', () => {
       hasCredential: async () => false,
     });
     expect(model).toBeDefined();
-    expect(model.modelId).toBe('openai/gpt-5.6-sol');
+    expect(typeof model).not.toBe('string');
+    expect((model as Exclude<LanguageModel, string>).modelId).toBe('openai/gpt-5.6-sol');
   });
 
   test('reasoning models use the Responses API route', async () => {

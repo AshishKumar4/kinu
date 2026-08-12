@@ -6,7 +6,7 @@
  * ActorAgent (actor-agent.ts); this class is the workspace-facing actor on
  * top of it: owner claim + schema, the @callable RPC surface, evolution /
  * scaffold / GEPA / alternate-takes flows, onChatResponse sequencing, peer
- * teams, email + webhook ingress, product changes, and fork.
+ * teams, email + webhook ingress, release changes, and fork.
  *
  * Tool factory, system prompt, and crafted-tool injection all live in
  * @proteus/core so the CLI surface shares them verbatim.
@@ -14,75 +14,67 @@
 
 import { callable, type AgentContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
-import { initCompactionStateTable } from "@proteus/compaction";
 import { getSandbox } from "@cloudflare/sandbox";
-import { streamText, generateText, stepCountIs, convertToModelMessages } from "ai";
-import * as v from "valibot";
+import { generateText, convertToModelMessages } from "ai";
 import type {
-  TimelineSpan,
-  DirEntry,
+  ActivitySnapshot,
   WorkspaceAgent,
   SubordinateActivityEvent,
 } from "./lib/protocol.js";
 import { buildWorkspaceAgents, teamPeers } from "./lib/workspace-roster.js";
-import { runEventToSpan, classifyEvolutionType, safeJsonParse } from "./lib/timeline.js";
-import { nextAlarmTime, nextCronFire } from "./lib/cron.js";
-import { generateJson } from "./lib/generate-json.js";
-import { diffLines, computeWorkspaceDiff, parseGitDiff, type DiffLine, type FileDiff } from "./lib/diff.js";
-import { toCompositePath, sortDirEntries, writeExecutorFileOp, type ExecutorWriteResult } from "./lib/files.js";
+import { nextAlarmTime } from "./lib/cron.js";
 import type { ChatResponseResult } from "@cloudflare/think";
 import {
   EvolutionEngine,
+  readActivityLog,
+  summarizeSteps,
   bootstrapScaffold,
-  initAllTables, initSearchTables, initScaffoldTables, initCraftScoreTables,
+  initWorkspaceSchema,
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
-  BUILTIN_TOOL_NAMES,
-  BUILTIN_TOOL_DESCRIPTIONS,
+  BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
   argumentDigest,
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
-  migrateWorkspaceStorage,
   // Fork feature
-  forkWorkspaceStorage, readForkLineage,
+  forkWorkspace, writeForkSnapshot, readForkLineage,
+  type ForkTransport, type ForkSnapshot,
   // Workspace archive — the owner's portable copy of this workspace's storage
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
-  nanoid, initHeadsTables, type HeadRunView,
+  nanoid, type HeadRunView,
   // Canonical memory-note write primitive
   appendMemoryNote,
+  // Agent-authored views — core owns the spec, the ledger and the validation.
+  listViews, readView, type AgentViewSummary, type ReadViewResult,
   // Scaffold loop closure (scaffold-driven inference + shadow rollout)
-  runScaffold, scaffoldEventText, modifyScaffold, SCAFFOLD_TURN_TIMEOUT_MS, type ScaffoldRunResult,
-  initShadowTables, getPendingScaffold, decidePromotion, applyPromotionDecision,
-  listScaffoldArchive,
-  readScaffoldVersion, readShadowVerdict, type ShadowVerdict, DEFAULT_SHADOW_CONFIG,
-  // Durable run-event log
-  initRunEventTables,
-  // R3 outcome ledger (schema + take_pick CHECK rebuild) — eager in ensureSchema
-  initTurnOutcomeTables,
+  type ScaffoldRunResult,
+  // The scaffold evolution control plane (core owns the drivers; this actor
+  // supplies the surface they run against).
+  applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  runScaffoldOnce,
+  type GepaOptimizationResult, type ScaffoldDecisionResult,
+  type ScaffoldVersionView, type ShadowStatus,
+  getPendingScaffold,
+  readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
   type RunEvent, type RunEventQuery,
   // agent_facts world model
-  initFactsTable, DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
+  DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
   // Voyager curriculum + Absolute Zero learnability proposer
-  initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
+  listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
-  effortFor, initBackgroundJobsTable, initMctsSearchTable, initImportedExperienceTable,
+  effortFor,
   type BackgroundJob, TriggerRegistry, ReplyChannelStore,
-  isReasoningEffort, type ReasoningEffort,
-  initEventsHubTables,
+  type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
-  // GEPA offline optimisation (scaffold + crafted-tool)
-  runScaffoldGepa,
-  initGepaTables, startGepaRun, finishGepaRun, makePersistingHook, listGepaRuns,
-  loadGepaCandidates,
-  type EvalInstance, type MetricOutcome, type GepaRunSummary,
-  // Turn-outcome signal + replay-eval loss curve (audit R3)
-  buildOutcomeEvalSplit, describeSplitDegeneracy, listReplayEvals,
-  clampGepaEvalBudget, type ScoreInterval,
-  type OutcomeEvalExpectation, type ReplayEvalSummary,
+  // GEPA run lineage (the pass itself is core's evolution control plane)
+  listGepaRuns, loadGepaCandidates, type GepaRunSummary,
+  // Replay-eval loss curve (audit R3)
+  listReplayEvals, type ReplayEvalSummary,
   // K_align — the correction-rate trend over the same outcome ledger
   alignmentConvergence, type AlignmentConvergence,
   calibrationReport, sampleForLabeling, ingestOutcomeLabels, DEFAULT_LABEL_BUDGET,
@@ -91,28 +83,27 @@ import {
   ensembleReport, runEnsemble, createCompletionLLM,
   type EnsembleReport, type EnsembleRunResult,
   // Evolution Changelog — the self-change digest + revert dispatch
-  buildChangelog, countUnseenChangelog, revertChangelogEntryById,
+  revertChangelogEntryById,
   type ChangelogEntry, type ChangelogRevertResult,
   // Alternate Takes — near-tied convergence candidates + the pick signal
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, listAlternateTakeSets, latestAlternateTakeSet,
-  recordTakePick, buildTakeContinuationPrompt, getCurrentScaffoldVersion,
   type AlternateTakeSet, type TakePickOutcome,
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
-  initAlternateTakesTable, startBranchHead, settlePendingBranch, newBranchId,
+  initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type ProductChangeApproval, type ProductChangeStatus,
-  type ProductChangeToolDeps, type ProductSourceBindingInput,
+  type ReleaseApproval, type ReleaseStatus,
+  type ReleaseToolDeps, type ReleaseSourceInput,
   runExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,
-  // Product-change execution engine — the driver beneath the governance ledger
-  ProductChangeEngine, createSandboxProductChangeExec,
+  // Release execution engine — the driver beneath the governance ledger
+  ReleaseEngine, createSandboxReleaseExec,
   type TeamToolDeps, type SubordinateReportStatus, type SubordinateRosterEntry,
   // Peer-agent teams (the agents tool's team deps contract)
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
-  readSoul, SOUL_PATH, summarizeSoul, writeSoul,
+  readSoul, summarizeSoul, writeSoul,
   // Automatic workspace titling (first turn + legacy slug heal)
   applyWorkspaceTitle, isPlaceholderWorkspaceTitle, parseWorkspaceIdentityOutput,
   WORKSPACE_IDENTITY_SYSTEM_PROMPT, workspaceIdentityPrompt,
@@ -122,13 +113,39 @@ import {
   // Shared turn lifecycle
   snapshotCompletedTurn,
   spillEventContent,
-  EVIDENCE_BUDGETS, evidenceWindow,
   type DynamicApproval,
   type MissingCapability,
   type DynamicContext,
   type DynamicDelegate,
+  // Ingress — core owns the gates; this actor owns the transports in front
+  // of them (the DO alarm, the Worker's webhook + email routes, cross-DO RPC).
+  acceptWebhookDelivery, registerDurableWebhook, createWebhookSecretStore,
+  initWebhookRateLimitTables,
+  type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
+  createTimerTrigger, cancelTrigger, listTriggers, fireDueTriggers,
+  EmailInbox, planOwnerNotification, readEmailAllowlist, setEmailAllowlist,
+  type EmailAdmission, type IncomingEmail, type OwnerNotification,
+  receiveSubordinateEvent,
+  PeerHub, type PeerMessage, type ReceiveResult,
+  // ── Read models: the folds a surface asks for, one implementation each ──
+  getAgentStatus, getChatHistory, getToolList, type ChatHistoryEntry,
+  getRunTimeline, type TimelineSpan,
+  getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
+  getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
+  type ExecutorDiffResult, type WorkspaceDiffResult,
+  diffLines, type DiffLine,
+  getExecutorFiles, readExecutorFile, writeExecutorFileOp,
+  type DirEntry, type ExecutorWriteResult,
+  cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
+  jobResult, listBackgroundJobs, retryBackgroundJob,
+  type CancelWorkOutcome, type RetryOutcome,
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
+  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+  type EvolutionConfigView, type MctsConfigView,
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from "@proteus/core";
-import { ActorAgent, uiMessageText, type ActorToolDeps } from "./actor-agent.js";
+import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
@@ -139,20 +156,14 @@ import {
   parentAdmitsSubordinateReport,
   type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
+  createAgentSelfProvider,
+  DeviceConsentRegistry,
+  type DeviceConsentAnswer, type DeviceConsentDecision,
+  type DeviceConsentRequest, type PendingDeviceConsent,
 } from "@proteus/core";
 import type { CodemodeProvider } from "@proteus/core";
-import { timingSafeEqual } from "./lib/crypto.js";
-import { createAgentSelfProvider } from "./agent-self.js";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
-import type { DeviceConsentDecision } from "./user/device-consent.js";
-import { PeerHub, type PeerMessage, type ReceiveResult } from "./events/ingress/peer.js";
-import {
-  initWebhookRateLimitTables,
-  normalizeWebhookRateLimitPerMin,
-  tryConsumeWebhookRateLimit,
-} from "./events/webhook-rate-limit.js";
-import { acceptInboundEmail, inboundEmailDropNotice } from "./events/ingress/email.js";
-import { agentEmailAddress, normalizeEmailAddress } from "./email/inbound.js";
+import { agentEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
 } from "./email/outbound.js";
@@ -171,119 +182,22 @@ const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick';
  *  so dispatching the row can only replay dead work. */
 const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
 
-// Inbound-email budget per agent (all senders combined). Email is a wake
-// channel, not a data plane — mail beyond this is dropped at the gate. The
-// drop is announced to the agent (noteEmailRateDrop): a reply storm or a list
-// subscription otherwise makes it silently deaf while it believes it has seen
-// its inbox.
-const EMAIL_INBOUND_RATE_PER_MIN = 30;
+// The Activity surface's retained sample. Bounded because `run_events` and
+// `activity_log` are append-only: 400 steps is deep enough for a p95 that
+// means something and shallow enough to stay one cheap indexed read.
+const ACTIVITY_STEP_WINDOW = 400;
+const ACTIVITY_LOG_WINDOW = 200;
+
+/** A caller-supplied row limit, clamped to [1, max]. */
+function clampLimit(requested: number | undefined, max: number): number {
+  if (!Number.isFinite(requested)) return max;
+  return Math.min(Math.max(Math.floor(requested as number), 1), max);
+}
 
 function executorOutputIsError(output: string): boolean {
   const text = output.trim();
   if (!text) return false;
   return /^(error\b|exit\b|exec error:|read error:|write error:|list error:|delete error:|expose error:|unexpose error:|listports error:|runtime error:)/i.test(text);
-}
-
-// ── Fork payload types ────────────────────────────────────────────
-// The source DO assembles this and sends it to the fork DO's rawCopyFromFork.
-// Everything is JSON-serializable (strings, numbers, null, base64 if ever
-// needed for binary VFS content — currently all VFS memory is text).
-
-interface ForkPayload {
-  forkName: string;
-  lineage: {
-    forkOriginAgentId: string;
-    forkOriginAgentName: string;
-    forkOriginMessageId: string;
-    forkOriginCreatedAt: number;
-    forkedAt: number;
-  };
-  messages: Array<{
-    id: string; session_id: string; parent_id: string | null;
-    role: string; content: string; created_at: number;
-  }>;
-  conversationHistory: Array<{
-    session_id: string; role: string; message: string; created_at: number;
-  }>;
-  vfsFiles: Array<{
-    path: string; chunk_index: number; parent_path: string;
-    data: unknown; is_dir: number; size: number; mtime: number;
-  }>;
-  memoryChunks: Array<{
-    id: string; path: string; start_line: number; end_line: number;
-    hash: string; text: string; updated_at: number;
-  }>;
-  craftedTools: Array<{
-    name: string; description: string; params: string | null; code: string;
-    scope: string; created_at: number; updated_at: number;
-  }>;
-  agentConfig: Array<{ key: string; value: string }>;
-  // Think/Session-owned message rows — the table the chat UI actually reads
-  // from. Carried as raw strings (datetime). Includes the time-cutoff at
-  // snapshot time; the shim answers the same query with a no-op filter so
-  // the helper's time-based SELECT still works across DO boundaries.
-  assistantMessages: Array<{
-    id: string; session_id: string; parent_id: string | null;
-    role: string; content: string; created_at: string;
-  }>;
-}
-
-/**
- * Build an ephemeral SqlExecutor that answers the queries forkWorkspaceStorage
- * makes against the source DB, using the serialized payload as the source
- * of truth. Only the exact SELECT shapes that forkWorkspaceStorage issues are
- * supported — this is a minimal shim, not a general SQL engine.
- */
-function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
-  const rawSql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown[] =
-    (strings, ...values) => {
-      const query = strings.join("?").replace(/\s+/g, " ").trim();
-      // Route the small known set of read queries the helper issues.
-      if (query.startsWith("SELECT created_at FROM messages WHERE id =")) {
-        const wantedId = values[0] as string;
-        const hit = payload.messages.find(m => m.id === wantedId);
-        return hit ? [{ created_at: hit.created_at }] : [];
-      }
-      if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM messages")) {
-        const cutoff = values[0] as number;
-        return payload.messages
-          .filter(m => m.created_at <= cutoff && m.session_id === "default")
-          .sort((a, b) => a.created_at - b.created_at);
-      }
-      if (query.startsWith("SELECT session_id, role, message, created_at FROM conversation_history")) {
-        const cutoff = values[0] as number;
-        return payload.conversationHistory
-          .filter(c => c.created_at <= cutoff && c.session_id === "default");
-      }
-      if (query.startsWith("SELECT path, chunk_index, parent_path, data, is_dir, size, mtime FROM vfs_files")) {
-        return payload.vfsFiles;
-      }
-      if (query.startsWith("SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks")) {
-        return payload.memoryChunks;
-      }
-      if (query.startsWith("SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools")) {
-        return payload.craftedTools;
-      }
-      if (query.startsWith("SELECT key, value FROM agent_config")) {
-        return payload.agentConfig;
-      }
-      if (query.startsWith("SELECT id, name FROM workspace_identity")) {
-        return [{ id: payload.lineage.forkOriginAgentId, name: payload.lineage.forkOriginAgentName }];
-      }
-      // Think-Session messages: the source DO already time-filtered the
-      // snapshot, so the payload contains exactly the rows to copy. We
-      // accept any SELECT against assistant_messages that mentions the
-      // same columns and return all rows (the time-filter was already
-      // applied during snapshot).
-      if (query.startsWith("SELECT id, session_id, parent_id, role, content, created_at FROM assistant_messages")) {
-        return payload.assistantMessages;
-      }
-      return [];
-    };
-  // SqlExecutor uses a generic-bound tagged-template signature; the shim
-  // is single-return-type. Cast to SqlExecutor (not `never`) so callers
-  // get proper template-tag typing without unsafe widening.
-  return rawSql as unknown as SqlExecutor;
 }
 
 export class OrchestratorAgent extends ActorAgent {
@@ -358,17 +272,11 @@ export class OrchestratorAgent extends ActorAgent {
       phase: entry.status,
       task: entry.currentTask,
     }));
-    const approvals: DynamicApproval[] = [...this._pendingConsents.entries()]
-      .map(([consentId, pending]) => ({
-        id: consentId,
-        kind: 'device consent',
-        detail: `${pending.deviceLabel}: ${pending.command}`,
-      }));
-    const deafInbox = inboundEmailDropNotice(EMAIL_INBOUND_RATE_PER_MIN, this._emailDropWindow, Date.now());
+    const deafInbox = this.emailInbox.dropNotice(Date.now());
     return {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
-      approvals,
+      approvals: this._consents.approvals(),
       ...(deafInbox ? { missingCapabilities: [...(base.missingCapabilities ?? []), deafInbox] } : {}),
     };
   }
@@ -800,41 +708,41 @@ export class OrchestratorAgent extends ActorAgent {
     return runExperienceAction(deps, input);
   }
 
-  private getProductChangeToolDeps(): ProductChangeToolDeps | undefined {
+  private getReleaseToolDeps(): ReleaseToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
     return {
-      board: async () => { const { stub, caller } = await hub(); return stub.getProductChangeBoard(caller, this.name, 20); },
-      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertProductSourceBinding(caller, input); },
-      create: async (input) => { const { stub, caller } = await hub(); return stub.createProductChange(caller, this.name, input); },
-      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
-      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, status); },
-      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
-      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestProductChangeApproval(caller, changeId, approvalType); },
-      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
-      engine: this.getProductChangeEngine(),
+      board: async () => { const { stub, caller } = await hub(); return stub.getReleaseBoard(caller, this.name, 20); },
+      bindSource: async (input) => { const { stub, caller } = await hub(); return stub.upsertReleaseSource(caller, input); },
+      create: async (input) => { const { stub, caller } = await hub(); return stub.createReleaseChange(caller, this.name, input); },
+      update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
+      transition: async (changeId, status) => { const { stub, caller } = await hub(); return stub.transitionReleaseChange(caller, changeId, status); },
+      recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseCheck(caller, changeId, input); },
+      requestApproval: async (changeId, approvalType) => { const { stub, caller } = await hub(); return stub.requestReleaseApproval(caller, changeId, approvalType); },
+      recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseDeployment(caller, changeId, input); },
+      engine: this.getReleaseEngine(),
     };
   }
 
-  private _productChangeEngine: ProductChangeEngine | null = null;
-  /** The execution engine beneath the product-change ledger: apply/checks in
+  private _releaseEngine: ReleaseEngine | null = null;
+  /** The execution engine beneath the release ledger: apply/checks in
    *  the agent's sandbox container (raw exit codes), preview through the
    *  path-style preview proxy, deploy/rollback verified against real command
    *  output. Ledger writes go through the owner's UserDO so the engine's
    *  results land on the same governed board the UI reads. */
-  private getProductChangeEngine(): ProductChangeEngine {
-    if (this._productChangeEngine) return this._productChangeEngine;
+  private getReleaseEngine(): ReleaseEngine {
+    if (this._releaseEngine) return this._releaseEngine;
     const handle = this.rt.sandboxHandle;
     const provider = this.rt.executionRouter?.getProvider('sandbox');
     const hub = () => this.userHub();
-    this._productChangeEngine = new ProductChangeEngine({
-      exec: handle && provider ? createSandboxProductChangeExec(handle, provider) : null,
+    this._releaseEngine = new ReleaseEngine({
+      exec: handle && provider ? createSandboxReleaseExec(handle, provider) : null,
       ledger: {
-        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getProductChangeDetail(caller, changeId); },
-        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateProductChange(caller, changeId, patch); },
-        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionProductChange(caller, changeId, to); },
-        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductChangeCheck(caller, changeId, input); },
-        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordProductDeployment(caller, changeId, input); },
+        detail: async (changeId) => { const { stub, caller } = await hub(); return stub.getReleaseDetail(caller, changeId); },
+        update: async (changeId, patch) => { const { stub, caller } = await hub(); return stub.updateReleaseChange(caller, changeId, patch); },
+        transition: async (changeId, to) => { const { stub, caller } = await hub(); return stub.transitionReleaseChange(caller, changeId, to); },
+        recordCheck: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseCheck(caller, changeId, input); },
+        recordDeployment: async (changeId, input) => { const { stub, caller } = await hub(); return stub.recordReleaseDeployment(caller, changeId, input); },
       },
       // A stored `github` credential (POST /api/user/credentials/github with a
       // bearer PAT) authorizes clone/push for github source bindings; absent →
@@ -845,16 +753,16 @@ export class OrchestratorAgent extends ActorAgent {
         return headers?.Authorization ?? null;
       },
     });
-    return this._productChangeEngine;
+    return this._releaseEngine;
   }
 
   /** The actor profile (ActorAgent): the orchestrator wires the full
    *  user-facing tool surface — cross-workspace peers, cross-workspace
-   *  experience transfer, and the product-change lane. */
+   *  experience transfer, and the release lane. */
   protected actorToolDeps(): ActorToolDeps {
     return {
       team: this.getTeamToolDeps(),
-      productChanges: this.getProductChangeToolDeps(),
+      releases: this.getReleaseToolDeps(),
       peers: this.getPeersToolDeps(),
     };
   }
@@ -1012,9 +920,12 @@ export class OrchestratorAgent extends ActorAgent {
           turnId: msgId, sessionId: 'default', startedAt: this.acc.startedAt,
         });
       } catch { /* no takes table yet — the first MCTS run creates it */ }
-      const craftNames = this.acc.toolCalls
-        .map(tc => tc.name)
-        .filter(name => !BUILTIN_TOOL_NAMES.has(name));
+      // The crafted tools this turn called, as the in-episode craft clock saw
+      // them. Not "every tool name that is not built in": a crafted tool is
+      // codemode-only and never appears as a tool-call name, so that filter
+      // only ever matched MCP and extension tools — and the thumbs re-score
+      // below reads this row to write craft_scores.
+      const craftNames = this.acc.craftedToolsUsed();
       if (craftNames.length > 0) {
         this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
                  VALUES (${msgId}, ${JSON.stringify(craftNames)}, ${Date.now()})
@@ -1174,165 +1085,109 @@ export class OrchestratorAgent extends ActorAgent {
 
   // ── Background jobs (#173) — auto-detach >30s tool calls, wake on completion ──
   // Lifecycle (detach → settle → wake + cancel + recover) lives in the core
-  // BackgroundJobRunner (this.jobRunner); the @callable control plane below is
-  // the cf adapter over it + the BackgroundJobStore.
+  // BackgroundJobRunner (this.jobRunner) and the control plane above it in core
+  // read-models; what follows is the @callable transport for that plane.
 
   /** Read a background job's result (the synthesis turn calls this). */
   async jobResult(jobId: string): Promise<BackgroundJob | null> {
-    try { return this.jobs.get(jobId); } catch { return null; }
+    return jobResult(this.jobs, jobId);
   }
 
-  /** List recent background jobs (newest first). */
   @callable()
   async listBackgroundJobs(limit: number = 20): Promise<BackgroundJob[]> {
-    try { return this.jobs.list(limit); } catch { return []; }
+    return listBackgroundJobs(this.jobs, limit);
   }
 
-  /** Hard-cancel a running background job: abort the underlying work (its merged
-   *  AbortSignal) and mark it cancelled. The detach fiber sees 'cancelled' and
-   *  won't relabel the abort rejection or wake the agent. */
   @callable()
   async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    return { ok: this.jobRunner.cancel(jobId) };
+    return cancelBackgroundJob(this.jobRunner, jobId);
   }
 
-  /** Re-run a settled job's tool with its original input as a fresh background
-   *  job. Detaches immediately (the work already proved slow). */
   @callable()
-  async retryBackgroundJob(jobId: string): Promise<{ ok: boolean; jobId?: string; error?: string }> {
-    const job = this.jobs.get(jobId);
-    if (!job) return { ok: false, error: 'job not found' };
-    if (job.status === 'running') return { ok: false, error: 'job still running' };
-    const inputJson = this.jobs.getInput(jobId);
-    if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
-    const tool = this.getRawTools()[job.kind];
-    if (!tool || typeof tool.execute !== 'function') return { ok: false, error: `tool "${job.kind}" unavailable` };
-    let input: unknown;
-    try { input = JSON.parse(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
-    const controller = new AbortController();
-    const newId = this.jobRunner.create(job.kind, input, controller);
-    this.logActivity('bg_job_retry', `${jobId} → ${newId}`);
-    const promise = Promise.resolve(
-      (tool.execute as (i: unknown, o: unknown) => unknown)(input, { abortSignal: controller.signal, toolCallId: newId, messages: [] }),
-    );
-    this.jobRunner.detach(newId, job.kind, promise);
-    return { ok: true, jobId: newId };
+  async retryBackgroundJob(jobId: string): Promise<RetryOutcome> {
+    return retryBackgroundJob({
+      jobs: this.jobs,
+      jobRunner: this.jobRunner,
+      rawTools: () => this.getRawTools(),
+      logActivity: (event, detail) => this.logActivity(event, detail),
+    }, jobId);
   }
 
-  /** Remove a settled job from the registry (UI dismiss). */
   @callable()
   async dismissBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
-    try { this.jobs.dismiss(jobId); return { ok: true }; } catch { return { ok: false }; }
+    return dismissBackgroundJob(this.jobs, jobId);
   }
 
-  /** Clear all settled jobs (keep running ones). */
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
-    try { this.jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
+    return clearBackgroundJobs(this.jobs);
   }
 
-  /** Stop visible work: abort foreground tool calls and cancel detached jobs. */
   @callable()
-  async cancelCurrentWork(): Promise<{ ok: boolean; cancelledJobs: string[]; abortedTools: number }> {
-    const cancelledJobs = this.jobRunner.cancelRunning();
-    let abortedTools = 0;
-    for (const controller of [...this._activeToolControllers]) {
-      if (!controller.signal.aborted) {
-        try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
-        abortedTools++;
-      }
-      this._activeToolControllers.delete(controller);
-    }
-    this._inFlight = false;
-    this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'work_cancelled',
-        cancelledJobs,
-        abortedTools,
-        timestamp: Date.now(),
-      }));
-    } catch { /* nop */ }
-    return { ok: true, cancelledJobs, abortedTools };
+  async cancelCurrentWork(): Promise<CancelWorkOutcome> {
+    return cancelCurrentWork({
+      jobRunner: this.jobRunner,
+      activeToolControllers: this._activeToolControllers,
+      broadcast: (payload) => this.broadcast(payload),
+      onCancelled: ({ cancelledJobs, abortedTools }) => {
+        this._inFlight = false;
+        this.logActivity('work_cancelled', `${abortedTools} foreground, ${cancelledJobs.length} background`);
+      },
+    });
   }
 
-  // ── Device consent (P2) — ask-once-then-remember ─────────────────────
+  // ── Device consent — ask-once-then-remember ──────────────────────────
   // The UserDO (device hub) calls awaitDeviceConsent when this agent touches a
-  // device with no remembered policy. We raise a card in the chat (broadcast +
-  // listPendingConsents for reload) and await the user's decision via the
-  // resolveDeviceConsent RPC. "Always" is persisted on the hub, not here.
-  private readonly _pendingConsents = new Map<string, {
-    resolve: (d: DeviceConsentDecision) => void;
-    deviceLabel: string; method: string; command: string; scope: string; createdAt: number;
-  }>();
+  // device with no remembered policy. The registry is core's; what a Durable
+  // Object contributes is fanning the prompt out to connected sockets and the
+  // activity line. "Always" is persisted on the hub, not here.
+  private readonly _consents = new DeviceConsentRegistry({
+    newId: () => `cons-${nanoid(10)}`,
+    // The wire shapes stay written out here rather than behind a helper: the
+    // broadcast-wiring gate reads `broadcast({ type: … })` off the source, and
+    // a channel it cannot see is a channel it cannot prove has a consumer.
+    announce: (notice) => {
+      if (notice.kind === 'raised') {
+        const { consent } = notice;
+        this.logActivity('device_consent_requested', `${consent.deviceLabel}: ${consent.command.slice(0, 80)}`);
+        try {
+          this.broadcast(JSON.stringify({
+            type: 'device_consent',
+            consentId: consent.consentId,
+            deviceId: consent.deviceId,
+            deviceLabel: consent.deviceLabel,
+            method: consent.method,
+            command: consent.command,
+            scope: consent.scope,
+          }));
+        } catch { /* no connected clients */ }
+        return;
+      }
+      try {
+        this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId: notice.consentId }));
+      } catch { /* no connected clients */ }
+    },
+  });
 
   /** Called by the UserDO over a DO-to-DO RPC. Resolves when the user decides,
-   *  or as `timeout` after 5 minutes so a device call never hangs forever.
-   *  `timeout` is deliberately NOT `deny`: an unanswered prompt means the owner
-   *  was away, and telling the agent it was refused turns that into a
+   *  or as `timeout` after the registry's window so a device call never hangs
+   *  forever. `timeout` is deliberately NOT `deny`: an unanswered prompt means
+   *  the owner was away, and telling the agent it was refused turns that into a
    *  permanent, self-imposed capability loss. */
-  async awaitDeviceConsent(req: {
-    deviceId: string;
-    deviceLabel: string;
-    method: string;
-    command: string;
-    scope: string;
-  }): Promise<DeviceConsentDecision> {
-    const consentId = `cons-${nanoid(10)}`;
-    this.logActivity('device_consent_requested', `${req.deviceLabel}: ${req.command.slice(0, 80)}`);
-    try {
-      this.broadcast(JSON.stringify({
-        type: 'device_consent', consentId, deviceId: req.deviceId,
-        deviceLabel: req.deviceLabel, method: req.method, command: req.command, scope: req.scope,
-      }));
-    } catch { /* nop */ }
-    return new Promise<DeviceConsentDecision>((resolve) => {
-      const timer = setTimeout(() => {
-        if (this._pendingConsents.delete(consentId)) {
-          try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
-          resolve('timeout');
-        }
-      }, 5 * 60_000);
-      this._pendingConsents.set(consentId, {
-        resolve: (d) => { clearTimeout(timer); resolve(d); },
-        deviceLabel: req.deviceLabel,
-        method: req.method,
-        command: req.command,
-        scope: req.scope,
-        createdAt: Date.now(),
-      });
-    });
+  async awaitDeviceConsent(req: DeviceConsentRequest): Promise<DeviceConsentDecision> {
+    return this._consents.request(req);
   }
 
   /** The chat UI calls this when the user clicks a consent card button. */
   @callable()
-  async resolveDeviceConsent(consentId: string, decision: 'once' | 'always' | 'deny'): Promise<{ ok: boolean }> {
-    const p = this._pendingConsents.get(consentId);
-    if (!p) return { ok: false };
-    this._pendingConsents.delete(consentId);
-    try { this.broadcast(JSON.stringify({ type: 'device_consent_resolved', consentId })); } catch { /* nop */ }
-    p.resolve(decision === 'always' || decision === 'deny' ? decision : 'once');
-    return { ok: true };
+  async resolveDeviceConsent(consentId: string, decision: DeviceConsentAnswer): Promise<{ ok: boolean }> {
+    return { ok: this._consents.resolve(consentId, decision) };
   }
 
   /** Pending consent requests — so the chat re-renders cards after a reload. */
   @callable()
-  async listPendingConsents(): Promise<Array<{
-    consentId: string;
-    deviceLabel: string;
-    method: string;
-    command: string;
-    scope: string;
-    createdAt: number;
-  }>> {
-    return [...this._pendingConsents.entries()].map(([consentId, p]) => ({
-      consentId,
-      deviceLabel: p.deviceLabel,
-      method: p.method,
-      command: p.command,
-      scope: p.scope,
-      createdAt: p.createdAt,
-    }));
+  async listPendingConsents(): Promise<PendingDeviceConsent[]> {
+    return this._consents.list();
   }
 
   // ── DO initialization ──────────────────────────────────────────
@@ -1352,87 +1207,17 @@ export class OrchestratorAgent extends ActorAgent {
     if (this._schemaReady) return;
     const execRaw = (ddl: string) => this.ctx.storage.sql.exec(ddl);
 
-    // Migrate old schemas that conflict with agent-utils implementations.
-    try {
-      // vfs_files: old schema lacked chunk_index. SqliteFS needs it.
-      const vfsCols = this.sql<{ name: string }>`PRAGMA table_info(vfs_files)`;
-      if (vfsCols.length > 0 && !vfsCols.some(c => c.name === "chunk_index")) {
-        execRaw("DROP TABLE vfs_files");
-        console.log("[proteus] Migrated vfs_files to chunked schema");
-      }
-      // memory_chunks: old schema had 3 columns (id INTEGER, path, content).
-      // MemoryStore needs 7 columns (id TEXT, path, start_line, end_line, hash, text, updated_at).
-      const mcCols = this.sql<{ name: string }>`PRAGMA table_info(memory_chunks)`;
-      if (mcCols.length > 0 && !mcCols.some(c => c.name === "start_line")) {
-        execRaw("DROP TABLE IF EXISTS memory_chunks");
-        execRaw("DROP TABLE IF EXISTS memory_chunks_fts");
-        console.log("[proteus] Migrated memory_chunks to FTS5 schema");
-      }
-      // search_nodes: add code_used / root_id columns if missing.
-      const snCols = this.sql<{ name: string }>`PRAGMA table_info(search_nodes)`;
-      if (snCols.length > 0 && !snCols.some(c => c.name === "code_used")) {
-        execRaw("ALTER TABLE search_nodes ADD COLUMN code_used TEXT");
-        console.log("[proteus] Added code_used column to search_nodes");
-      }
-      if (snCols.length > 0 && !snCols.some(c => c.name === "root_id")) {
-        execRaw("ALTER TABLE search_nodes ADD COLUMN root_id TEXT");
-        console.log("[proteus] Added root_id column to search_nodes");
-      }
-    } catch { /* tables don't exist yet — fine */ }
+    // Every table a workspace has, on any backend — one list, in core.
+    initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
 
-    initAllTables(execRaw);
-    // Pre-current-schema storage (legacy identity table, agent_soul, TEXT-bound
-    // SOUL.md rows) — repaired here so every read path stays a pure read.
-    migrateWorkspaceStorage(this.boundSql);
-    initSearchTables(execRaw);
-    initScaffoldTables(execRaw);
-    initCraftScoreTables(execRaw);
-    // R3 outcome ledger (+ its take_pick CHECK-widening rebuild). MUST run
-    // here, not only in the lazy EvolutionEngine constructor: a freshly-woken
-    // DO can serve pickAlternateTake → recordTurnOutcome before any turn
-    // constructs the engine, and the legacy CHECK would reject the insert.
-    initTurnOutcomeTables(execRaw, this.boundSql);
-    // EventsHub tables: agent_log + reply_channels + triggers + peer_outbox
-    // + partial indexes + views. Spec: docs/ARCHITECTURE.md — "Events and ingress".
-    initEventsHubTables(this.ctx.storage.sql);
+    // ── planes this root alone carries (declared per-root in
+    //    core/conformance/manifest.ts, observed against sqlite_master) ──
     initWebhookRateLimitTables(this.ctx.storage.sql);
-    // Branching-heads journal (head_journal, head_evidence, head_merge_results)
-    initHeadsTables(execRaw);
-    // Scaffold shadow-mode tables (scaffold_evaluations + status col)
-    initShadowTables(execRaw);
-    // Durable run-event log (run_events table)
-    initRunEventTables(execRaw);
-    // agent_facts world model (keyed JSON facts w/ confidence + recency)
-    initFactsTable(execRaw);
-    // Voyager curriculum proposed-tasks queue (UI + autonomous loop consume).
-    initCurriculumTable(execRaw);
-    // GEPA offline-optimisation run + candidate history (gepa_runs, gepa_candidates,
-    // gepa_pareto_membership). Populated by runScaffoldGepaOptimization.
-    initGepaTables(execRaw);
+    this.subordinateRoster.ensureSchema();
+
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
     // cumulative change-set. Captured lazily / re-markable via resetWorkspaceBaseline.
     execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (path TEXT PRIMARY KEY, content TEXT)`);
-
-    // Background-job registry — work auto-detached past the 30s threshold.
-    initBackgroundJobsTable(execRaw);
-    // Durable MCTS search checkpoints — an evicted fork(settle=mcts) resumes from here.
-    initMctsSearchTable(execRaw);
-    // Experience-import staging ledger. The `experience` tool is wired on this
-    // actor (actorToolDeps), and its import action SELECTs this table with no
-    // guard — it must exist wherever the tool does. It was created on the CLI
-    // but never here: the import action hard-errored in production
-    // ("no such table: imported_experience").
-    initImportedExperienceTable(execRaw);
-
-    // Compaction: the replayable plan snapshot + the measured prompt-token
-    // trigger signal, one row per session (@proteus/compaction stores).
-    initCompactionStateTable(execRaw);
-
-    this.subordinateRoster.ensureSchema();
-
-    execRaw(`CREATE TABLE IF NOT EXISTS agent_config (
-      key TEXT PRIMARY KEY, value TEXT NOT NULL
-    )`);
 
     // Per-turn user feedback (thumbs up/down). The chat UI's thumbs button
     // writes here via setTurnFeedback, which re-scores the crafted tools used
@@ -1544,42 +1329,11 @@ export class OrchestratorAgent extends ActorAgent {
   async _proteusTimerTick(): Promise<void> {
     const now = Date.now();
     try {
-      const due = this.triggerRegistry.due(now);
-      for (const trigger of due) {
-        const spec = trigger.spec as {
-          label?: string; payload?: unknown; cron?: string; mission_label?: string;
-        };
-        const scheduled_fire_at = trigger.next_fire_at ?? now;
-
-        this.eventLog.publish({
-          descriptor: {
-            ingress: 'timer_alarm',
-            variant: 'timer',
-            payload: {
-              trigger_id: trigger.id,
-              scheduled_fire_at,
-              label: spec.label,
-              user_payload: spec.payload,
-              mission_label: spec.mission_label,
-            },
-            trigger_creator_trust: trigger.creator_trust,
-          },
-          now,
-        });
-
-        if (trigger.kind === 'timer_cron') {
-          const next = spec.cron ? nextCronFire(spec.cron, now) : null;
-          this.triggerRegistry.markFired(trigger.id, now, next);
-        } else {
-          this.triggerRegistry.markFired(trigger.id, now, null);
-          this.triggerRegistry.revoke(trigger.id, now);
-        }
-      }
-
       // Wake the agent to act on the freshly-published timer events (and any
       // other pending events) — an autonomous turn, debounced so events
       // arriving alongside the alarm coalesce into it.
-      if (due.length > 0) this.orch.scheduleDrain();
+      const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
+      if (fired > 0) this.orch.scheduleDrain();
     } catch (err) {
       console.error('[proteus] alarm handler failed:', (err as Error).message);
     }
@@ -1632,139 +1386,63 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable()
-  async getProductChangeBoard(limit: number = 20) {
+  async getReleaseBoard(limit: number = 20) {
     const { stub, caller } = await this.userHub();
-    return stub.getProductChangeBoard(caller, this.name, limit);
+    return stub.getReleaseBoard(caller, this.name, limit);
   }
 
   @callable()
-  async upsertProductSourceBinding(input: ProductSourceBindingInput & { id?: string }) {
+  async upsertReleaseSource(input: ReleaseSourceInput & { id?: string }) {
     const { stub, caller } = await this.userHub();
-    return stub.upsertProductSourceBinding(caller, input);
+    return stub.upsertReleaseSource(caller, input);
   }
 
   @callable()
-  async createProductChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
+  async createReleaseChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
     const { stub, caller } = await this.userHub();
-    return stub.createProductChange(caller, this.name, input);
+    return stub.createReleaseChange(caller, this.name, input);
   }
 
-  async transitionProductChange(changeId: string, status: ProductChangeStatus) {
+  async transitionReleaseChange(changeId: string, status: ReleaseStatus) {
     const { stub, caller } = await this.userHub();
-    return stub.transitionProductChange(caller, changeId, status);
-  }
-
-  @callable()
-  async requestProductChangeApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']) {
-    const { stub, caller } = await this.userHub();
-    return stub.requestProductChangeApproval(caller, changeId, approvalType);
+    return stub.transitionReleaseChange(caller, changeId, status);
   }
 
   @callable()
-  async decideProductChangeApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
+  async requestReleaseApproval(changeId: string, approvalType: ReleaseApproval['approvalType']) {
     const { stub, caller } = await this.userHub();
-    const decided = await stub.decideProductChangeApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
+    return stub.requestReleaseApproval(caller, changeId, approvalType);
+  }
+
+  @callable()
+  async decideReleaseApproval(approvalId: string, decision: 'approved' | 'rejected', note?: string | null) {
+    const { stub, caller } = await this.userHub();
+    const decided = await stub.decideReleaseApproval(caller, approvalId, decision, this.getOwnerUserId() ?? this.name, note);
     if (decision === 'rejected') {
-      try { await stub.transitionProductChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
+      try { await stub.transitionReleaseChange(caller, decided.changeId, 'rejected'); } catch { /* already terminal or stale */ }
     }
     return decided;
   }
 
   async getAgentStatus() {
-    try {
-      const soul = readSoul(this.boundSql) ?? "";
-      const purpose = summarizeSoul(soul);
-      const identity = this.sql<{ id: string; name: string; created_at: number }>`
-        SELECT id, name, created_at FROM workspace_identity LIMIT 1`;
-      const scaffoldVersion = this.sql<{ v: number }>`
-        SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`;
-      const searchNodes = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
-      const craftedTools = this.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
-      // Message count reflects the persisted `messages` table, which is the
-      // authoritative turn history used for fork cut-points. For non-fork
-      // agents this table is populated by onChatResponse's mirror; for forks
-      // it's populated by forkWorkspaceStorage's copy. Falling back to the
-      // in-memory AIChatAgent array keeps behavior sane before the first
-      // turn has been mirrored.
-      const tableCount = this.sql<{ c: number }>`
-        SELECT COUNT(*) as c FROM messages WHERE session_id = 'default'
-      `;
-      const messageCount = tableCount[0]?.c ?? this.messages.length;
-      // Fork lineage — null for non-forked agents.
-      const forkLineage = readForkLineage(this.boundSql);
-      return {
-        id: identity[0]?.id ?? this.ctx.id.toString(),
-        name: identity[0]?.name ?? this.name,
-        displayName: this.getDisplayName(),
-        purpose,
-        soul,
-        createdAt: identity[0]?.created_at ?? 0,
-        scaffoldVersion: scaffoldVersion[0]?.v ?? 0,
-        searchNodeCount: searchNodes[0]?.c ?? 0,
-        craftedToolCount: craftedTools[0]?.c ?? 0,
-        messageCount,
-        model: this.getStoredModelId(),
-        reasoningEffort: this.config.getReasoningEffort(),
-        forkLineage,
-      };
-    } catch {
-      return { id: this.ctx.id.toString(), name: this.name, displayName: this.name, purpose: "", soul: "", createdAt: 0,
-        scaffoldVersion: 0, searchNodeCount: 0, craftedToolCount: 0, messageCount: 0,
-        model: this.getStoredModelId(),
-        reasoningEffort: this.config.getReasoningEffort(),
-        forkLineage: null };
-    }
+    return getAgentStatus({
+      sql: this.boundSql,
+      config: this.config,
+      fallbackId: this.ctx.id.toString(),
+      name: this.name,
+      displayName: this.getDisplayName(),
+      // Before the first turn has been mirrored into `messages`, the in-memory
+      // AIChatAgent array is the only count there is.
+      fallbackMessageCount: this.messages.length,
+    });
   }
 
-  async getChatHistory(limit = 100): Promise<Array<{ id: string; role: 'user' | 'assistant' | 'system'; content: string; createdAt: string | number }>> {
-    const bounded = Math.max(1, Math.min(200, Math.floor(limit)));
-    try {
-      const rows = this.sql<{ id: string; role: string; content: string; created_at: string }>`
-        SELECT id, role, content, created_at
-        FROM (
-          SELECT id, role, content, created_at
-          FROM assistant_messages
-          WHERE role IN ('user', 'assistant', 'system')
-          ORDER BY created_at DESC
-          LIMIT ${bounded}
-        ) sub
-        ORDER BY created_at ASC
-      `;
-      return rows.flatMap((row) => {
-        const role = normalizeUiRole(row.role);
-        if (!role) return [];
-        return [{ id: row.id, role, content: uiMessageText(row.content), createdAt: row.created_at }];
-      });
-    } catch {
-      const rows = this.sql<{ id: string; role: string; content: string; created_at: number }>`
-        SELECT id, role, content, created_at
-        FROM messages
-        WHERE session_id = ${'default'} AND role IN ('user', 'assistant', 'system')
-        ORDER BY created_at ASC
-        LIMIT ${bounded}
-      `;
-      return rows.flatMap((row) => {
-        const role = normalizeUiRole(row.role);
-        if (!role) return [];
-        return [{ id: row.id, role, content: row.content, createdAt: row.created_at }];
-      });
-    }
+  async getChatHistory(limit = 100): Promise<ChatHistoryEntry[]> {
+    return getChatHistory(this.boundSql, limit);
   }
 
   async getToolList() {
-    const crafted = this.rt.craftStore.list().map(t => {
-      const scoreRow = this.sql<{ score: number; uses: number }>`
-        SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;
-      return {
-        name: t.name, description: t.description, scope: t.scope,
-        qualityScore: scoreRow[0]?.score ?? 0.5,
-        usageCount: scoreRow[0]?.uses ?? 0,
-      };
-    });
-    return {
-      builtIn: [...BUILTIN_TOOLS],
-      crafted,
-    };
+    return getToolList(this.boundSql, this.rt.craftStore);
   }
 
   @callable() async getMctsTree() {
@@ -1838,20 +1516,13 @@ export class OrchestratorAgent extends ActorAgent {
   async getEvolutionChangelog(opts?: { limit?: number }): Promise<{
     entries: ChangelogEntry[]; unseenCount: number; seenAt: number;
   }> {
-    const seenAt = this.config.getChangelogSeenAt();
-    return {
-      entries: buildChangelog(this.boundSql, { limit: opts?.limit ?? 50 }),
-      unseenCount: countUnseenChangelog(this.boundSql, seenAt),
-      seenAt,
-    };
+    return getEvolutionChangelog(this.config, this.boundSql, opts?.limit);
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
   @callable()
   async markChangelogSeen(): Promise<{ ok: true; seenAt: number }> {
-    const seenAt = Date.now();
-    this.config.setChangelogSeenAt(seenAt);
-    return { ok: true, seenAt };
+    return markChangelogSeen(this.config);
   }
 
   /** Revert one changelog entry through the REAL machinery (scaffold
@@ -1936,15 +1607,11 @@ export class OrchestratorAgent extends ActorAgent {
   /** Settle every branch launched during the just-finished turn (detached —
    *  the shared core settle persists the takes set + broadcasts progress). */
   private settlePendingBranches(turnId: string | null, liveText: string): void {
-    if (this._pendingBranches.length === 0) return;
-    const deps = {
+    settlePendingBranches({
       sql: this.boundSql,
       sessionId: 'default',
       broadcast: (event: BranchStatusEvent) => this.broadcastBranchStatus(event),
-    };
-    for (const entry of this._pendingBranches.splice(0)) {
-      void settlePendingBranch(deps, entry, turnId, liveText);
-    }
+    }, this._pendingBranches, turnId, liveText);
   }
 
   /** Record the user's pick between the explored takes — the explicit
@@ -1954,30 +1621,10 @@ export class OrchestratorAgent extends ActorAgent {
    *  seam (same machinery as the reactor / background-job wake). */
   @callable()
   async pickAlternateTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
-    if (typeof takeId !== 'string' || !takeId || typeof nodeId !== 'string' || !nodeId) {
-      throw new Error('pickAlternateTake requires takeId and nodeId');
-    }
-    const record = recordTakePick(this.boundSql, {
-      takeId, nodeId,
-      scaffoldVersion: getCurrentScaffoldVersion(this.boundSql),
-    });
-    try {
-      await this.engine.applyTakePick(record.set.turnId, record.outcome);
-    } catch (err) {
-      console.warn('[proteus] applyTakePick lesson corroboration failed:', err instanceof Error ? err.message : err);
-    }
-    let continuationQueued = false;
-    if (record.changedAnswer) {
-      const result = await this.orch.signals.deliver({
-        kind: 'take_pick',
-        text: buildTakeContinuationPrompt(record.set, record.chosen),
-      });
-      // Delivered either way — riding the live turn's next step is the same
-      // continuation, just sooner than a turn of its own.
-      continuationQueued = result !== 'undelivered';
-    }
-    this.logActivity('take_pick', `${record.outcome} (${nodeId})`);
-    return { ...record, continuationQueued };
+    const outcome = await pickAlternateTake(
+      { sql: this.boundSql, engine: this.engine, signals: this.orch.signals }, takeId, nodeId);
+    this.logActivity('take_pick', `${outcome.outcome} (${nodeId})`);
+    return outcome;
   }
 
   /**
@@ -1990,63 +1637,12 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async getRunTimeline(opts?: { runId?: string; limit?: number }): Promise<TimelineSpan[]> {
-    const limit = opts?.limit ?? 200;
-    const recent = (() => {
-      try { return this.sql<{ run_id: string }>`SELECT run_id FROM run_events ORDER BY ts DESC LIMIT 1`[0]?.run_id; }
-      catch { return undefined; }
-    })();
-    const runId = opts?.runId || this._currentRunId || recent;
-    const spans: TimelineSpan[] = [];
-
-    // 1) Durable per-run events for the focused run (skip noisy text_delta).
-    if (runId) {
-      try {
-        for (const e of this.eventRecorder.read(runId, { limit })) {
-          if (e.type === 'text_delta') continue;
-          spans.push(runEventToSpan(e));
-        }
-      } catch { /* run_events may not exist yet */ }
-    }
-    // 2) Agent-level evolution events — PRESERVE the `data` payload.
-    try {
-      const rows = this.sql<{ id: string; type: string; message: string; data: string | null; created_at: number }>`
-        SELECT id, type, message, data, created_at FROM evolution_events ORDER BY created_at DESC LIMIT ${limit}`;
-      for (const r of rows) {
-        spans.push({
-          ts: r.created_at, kind: classifyEvolutionType(r.type), label: r.message || r.type,
-          data: r.data ? safeJsonParse(r.data) : undefined,
-          source: 'evolution', refId: r.id, rawType: r.type,
-        });
-      }
-    } catch { /* table may not exist */ }
-    // 3) MCTS search nodes.
-    try {
-      const nodes = this.sql<{ id: string; action: string; value: number; status: string; created_at: number }>`
-        SELECT id, action, value, status, created_at FROM search_nodes ORDER BY created_at DESC LIMIT ${limit}`;
-      for (const n of nodes) {
-        spans.push({
-          ts: n.created_at, kind: 'mcts', label: n.action || `node ${n.id.slice(0, 8)}`,
-          detail: `value ${Number(n.value).toFixed(2)} · ${n.status}`,
-          source: 'mcts', refId: n.id,
-        });
-      }
-    } catch { /* table may not exist */ }
-    // 4) Background jobs — auto-detached >30s tool calls, as first-class spans
-    // (the run that "ended" because work moved to the background must say so).
-    try {
-      for (const j of this.jobs.list(limit)) {
-        const detail = j.status === 'running' ? 'running in background'
-          : j.error ? `${j.status}: ${j.error}` : j.status;
-        spans.push({
-          ts: j.createdAt, kind: 'background',
-          label: `Background ${j.kind}`, detail,
-          source: 'background', refId: j.id, rawType: j.status,
-        });
-      }
-    } catch { /* table may not exist */ }
-
-    spans.sort((a, b) => a.ts - b.ts);
-    return spans.slice(-limit);
+    return getRunTimeline({
+      sql: this.boundSql,
+      events: this.eventRecorder,
+      jobs: this.jobs,
+      currentRunId: this._currentRunId,
+    }, opts);
   }
 
   // ── Scaffold loop closure — RPCs for manual exercise + shadow rollout ──
@@ -2064,19 +1660,7 @@ export class OrchestratorAgent extends ActorAgent {
     task: string,
     opts?: { useShadowOverride?: boolean; timeoutMs?: number },
   ): Promise<ScaffoldRunResult> {
-    const pending = opts?.useShadowOverride ? getPendingScaffold(this.boundSql) : null;
-    const codeOverride = pending
-      ? (await readScaffoldVersion(this.rt, pending.version)) ?? undefined
-      : undefined;
-    return runScaffold({
-      rt: this.rt, task,
-      emit: () => undefined, // RPC mode — events captured in result.events
-      llmStream: this.makeScaffoldLLMStream(),
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      scaffoldCodeOverride: codeOverride,
-      timeoutMs: opts?.timeoutMs,
-    });
+    return runScaffoldOnce(this.scaffoldControl, task, opts);
   }
 
   /**
@@ -2084,35 +1668,16 @@ export class OrchestratorAgent extends ActorAgent {
    * its own agentic loop from inside execute_tools. Routes through the
    * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
    * status='pending' and is scored by the sampled shadow eval + promotion
-   * gate (runShadowEvalSampled) like any other proposal — no new safety
+   * gate (core runTurnShadowEval) like any other proposal — no new safety
    * surface.
    */
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {
-    const result = await modifyScaffold(
-      this.rt, rationale, code,
-      baseVersion !== undefined ? { baseVersion } : undefined,
-    );
-    if (result.ok) {
-      try {
-        this.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
-          VALUES (${nanoid()}, 'scaffold_proposed',
-                  ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
-                  ${null}, ${Date.now()})`;
-      } catch { /* evolution_events may not exist yet */ }
-    }
-    return result;
+    return proposeScaffold(this.scaffoldControl, rationale, code, baseVersion);
   }
 
   /** Return the current shadow-rollout status: pending version, win counts, decision. */
-  async getShadowStatus() {
-    const pending = getPendingScaffold(this.boundSql);
-    if (!pending) {
-      const versions = this.sql<{ version: number; status: string; rationale: string; written_at: number }>`
-        SELECT version, status, rationale, written_at FROM scaffold_versions ORDER BY version DESC LIMIT 10`;
-      return { hasPending: false as const, versions };
-    }
-    const decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG);
-    return { hasPending: true as const, pending, decision, config: DEFAULT_SHADOW_CONFIG };
+  async getShadowStatus(): Promise<ShadowStatus> {
+    return getShadowStatus(this.boundSql);
   }
 
   /**
@@ -2123,33 +1688,24 @@ export class OrchestratorAgent extends ActorAgent {
    * `mode='promote'` / `mode='rollback'` forces the corresponding action.
    */
   @callable()
-  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback') {
-    const pending = getPendingScaffold(this.boundSql);
-    if (!pending) return { ok: false, error: 'no pending scaffold' };
-    let decision: 'promote' | 'rollback' | 'continue';
-    if (mode === 'auto') {
-      decision = decidePromotion(pending, DEFAULT_SHADOW_CONFIG).decision;
-      if (decision === 'continue') return { ok: false, error: 'inconclusive; need more trials' };
-    } else {
-      decision = mode;
-    }
-    const fromVersion = pending.version - (decision === 'promote' ? 1 : 0);
-    const result = await applyPromotionDecision(this.rt, pending, decision);
-    // Emit the promotion/rollback into the durable event log so SSE
-    // subscribers + MCP `list_run_events` see the decision in-band. Uses the
-    // action ACTUALLY applied — the misevolution recheck can convert a
-    // requested promote into a rollback (result.vetoReason says why).
+  async applyScaffoldDecision(mode: 'auto' | 'promote' | 'rollback'): Promise<ScaffoldDecisionResult> {
+    const result = await applyScaffoldDecision(this.scaffoldControl, mode);
+    if (!result.ok) return result;
+    // Emit the decision into the durable event log so SSE subscribers + MCP
+    // `list_run_events` see it in-band. Uses the action ACTUALLY applied — the
+    // misevolution recheck can convert a requested promote into a rollback
+    // (result.vetoReason says why).
     try {
       const runId = this._currentRunId || `scaffold-${nanoid()}`;
       this.eventRecorder.emit(runId, {
         type: result.action === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-        fromVersion,
+        fromVersion: result.fromVersion,
         toVersion: result.newCurrentVersion,
       });
     } catch (err) {
       console.warn('[proteus] event emit failed at applyScaffoldDecision:', err);
     }
-    return { ok: true, ...result };
+    return result;
   }
 
   /**
@@ -2198,19 +1754,7 @@ export class OrchestratorAgent extends ActorAgent {
     task: string,
     opts?: { timeoutMs?: number },
   ): Promise<ScaffoldRunResult> {
-    const codeOverride = (await readScaffoldVersion(this.rt, version)) ?? undefined;
-    if (codeOverride === undefined) {
-      throw new Error(`previewScaffoldLive: no scaffold code found for v${version}`);
-    }
-    return runScaffold({
-      rt: this.rt, task,
-      emit: () => undefined,
-      llmStream: this.makeScaffoldLLMStream(),
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      scaffoldCodeOverride: codeOverride,
-      timeoutMs: opts?.timeoutMs,
-    });
+    return previewScaffoldLive(this.scaffoldControl, version, task, opts);
   }
 
   /**
@@ -2225,21 +1769,18 @@ export class OrchestratorAgent extends ActorAgent {
    *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
    */
   @callable()
-  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: string }> {
-    if (mode !== 'strict' && mode !== 'allow_all' && mode !== 'deny_all') {
-      throw new Error(`invalid mode: ${mode}`);
-    }
-    this.config.setShellApprovalMode(mode);
-    // Force a tool cache rebuild on next getTools().
-    this._cachedTools = null;
-    this._cachedToolsKey = '';
-    return { ok: true, mode };
+  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: ShellApprovalMode }> {
+    return setShellApprovalMode({
+      config: this.config,
+      // Force a tool cache rebuild on the next getTools().
+      onChanged: () => { this._cachedTools = null; this._cachedToolsKey = ''; },
+    }, mode);
   }
 
   /** Current shell-approval mode (strict | allow_all | deny_all). */
   @callable()
-  async getShellApprovalMode(): Promise<{ mode: 'strict' | 'allow_all' | 'deny_all' }> {
-    return { mode: this.config.getShellApprovalMode() };
+  async getShellApprovalMode(): Promise<{ mode: ShellApprovalMode }> {
+    return getShellApprovalMode(this.config);
   }
 
   /**
@@ -2250,18 +1791,13 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async setAlwaysActiveSkills(names: string[]): Promise<{ ok: true; names: string[] }> {
-    if (!Array.isArray(names)) throw new Error('names must be a string array');
-    for (const n of names) {
-      if (typeof n !== 'string') throw new Error('names must contain only strings');
-    }
-    this.config.setAlwaysActiveSkills(names);
-    return { ok: true, names: this.config.getAlwaysActiveSkills() };
+    return setAlwaysActiveSkills(this.config, names);
   }
 
   /** Current pinned always-active skill names. Empty array means none. */
   @callable()
   async getAlwaysActiveSkills(): Promise<{ names: string[] }> {
-    return { names: this.config.getAlwaysActiveSkills() };
+    return getAlwaysActiveSkills(this.config);
   }
 
   // ── File checkpoints (device shadow-git) ─────────────────────────────
@@ -2383,187 +1919,24 @@ export class OrchestratorAgent extends ActorAgent {
    *  core's listScaffoldArchive; keys stay snake_case here because this RPC's
    *  wire shape predates the archive (ScaffoldLineage.tsx reads written_at). */
   @callable()
-  async listScaffoldVersions(limit: number = 20) {
-    return listScaffoldArchive(this.boundSql, limit).map((e) => ({
-      version: e.version,
-      written_at: e.writtenAt,
-      rationale: e.rationale,
-      status: e.status,
-      parent_version: e.parentVersion,
-      trials: e.trials,
-      wins: e.wins,
-      losses: e.losses,
-      ties: e.ties,
-      win_rate: e.winRate,
-    }));
+  async listScaffoldVersions(limit: number = 20): Promise<ScaffoldVersionView[]> {
+    return listScaffoldVersions(this.boundSql, limit);
   }
 
   // ── GEPA offline scaffold optimisation ─────────────────────────
 
   /**
-   * Run a GEPA (Genetic-Pareto) optimisation pass over the agent's scaffold.
-   * Offline + batch: draws a budgeted, DISJOINT train/val split from the
-   * turn-outcome ledger (older corrected/frustrated turns = the train set
-   * reflection must fix; the newest failures held out + accepted turns = the
-   * val set the winner is selected on), runs the current scaffold +
-   * reflection-mutated candidates against them, scores each with an
-   * outcome-aware judge, and — if a strictly-better candidate is found —
-   * hands the winner to modifyScaffold so it enters the normal shadow-eval →
-   * promote pipeline. Persisted to gepa_runs/gepa_candidates so the UI can
-   * show lineage.
-   *
-   * Cost-bounded: the instance budget comes from agent_config
-   * gepa_eval_budget (DEFAULT_GEPA_EVAL_BUDGET) unless opts.evalSize
-   * overrides it; each metric call runs a full scaffold + a judge call.
-   * Scores come back as intervals — with a val set this size, a winner inside
-   * the seed's interval is not evidence of anything.
+   * Run a GEPA (Genetic-Pareto) optimisation pass over this agent's scaffold.
+   * The pass itself is core's — see `runScaffoldGepaOptimization` in
+   * evolution/control.ts for what it does and what it costs.
    */
   @callable()
   async runScaffoldGepaOptimization(opts?: {
     maxIterations?: number;
     evalSize?: number;
     maxMetricCalls?: number;
-  }): Promise<{
-    ok: boolean;
-    error?: string;
-    runId?: string;
-    proposed?: boolean;
-    pendingVersion?: number | null;
-    skipReason?: string;
-    bestScore?: ScoreInterval;
-    seedScore?: ScoreInterval;
-    iterations?: number;
-    /** What the winner was selected on: failures it never trained on plus
-     *  accepted regression guards. */
-    selection?: { heldOutNegatives: number; guards: number };
-    /** Present when the split could not support an out-of-sample selection —
-     *  the result is exploratory, not evidence. */
-    selectionWarning?: string;
-  }> {
-    const evalSize = clampGepaEvalBudget(opts?.evalSize ?? this.config.getGepaEvalBudget());
-
-    // 1. Train/val split from outcome-labeled turns (turn_outcomes ledger).
-    const split = buildOutcomeEvalSplit(this.boundSql, evalSize);
-    const { train: trainSet, val: evalSet } = split;
-    // Without a failure to optimise toward there is nothing to select on but
-    // judge noise over already-accepted turns — and an empty train set would
-    // hand the eval set straight back to reflection as its minibatch source.
-    if (split.degeneracy === 'no_labeled_turns' || split.degeneracy === 'no_negatives') {
-      return { ok: false, error: describeSplitDegeneracy(split.degeneracy) };
-    }
-    const budget = {
-      maxIterations: Math.max(1, Math.min(opts?.maxIterations ?? 4, 20)),
-      // Seed scoring (|val|) + one minibatch and one full scoring per
-      // iteration; the default covers the default 4 iterations over a
-      // default-budget split with headroom.
-      maxMetricCalls: Math.max(10, Math.min(opts?.maxMetricCalls ?? 120, 400)),
-      // The paper's 3 — reflection reads three failures per proposal. The
-      // engine caps it at the (now disjoint) train set when fewer exist.
-      minibatchSize: 3,
-    };
-
-    const model = this.getModel();
-
-    // 2. Metric: run the candidate scaffold against the task, then judge
-    // against the recorded outcome — accepted turns are regression checks
-    // against the response the user approved; corrected/frustrated turns are
-    // scored on whether the candidate already addresses the user's correction.
-    //
-    // The candidate RUNS on the chat model (it is this agent's own loop being
-    // measured) but is SCORED by the review model — the same cross-family
-    // judge selection the shadow eval and MCTS use. GEPA is the largest judge
-    // consumer in the system; letting the chat model grade its own candidates
-    // is exactly the self-enhancement bias (arXiv:2306.05685) the rest of the
-    // repo already routes around.
-    const metric = async (
-      candidate: string, instance: EvalInstance<string, OutcomeEvalExpectation>,
-    ): Promise<MetricOutcome> => {
-      let output: string;
-      try {
-        output = await this.runScaffoldCaptureText(instance.input, candidate);
-      } catch (err) {
-        return { score: 0, feedback: `scaffold execution failed: ${(err as Error).message}` };
-      }
-      const exp = instance.expected;
-      const criterion = exp && exp.outcome === 'accepted'
-        ? `The reference response below was ACCEPTED by the user. Score 1.0 when the new response ` +
-          `is at least as good, 0.0 when it regresses.\n\nReference response:\n${evidenceWindow(exp.recordedResponse, EVIDENCE_BUDGETS.replayReferenceResponse)}`
-        : `The agent's previous response to this task FAILED — the user had to correct it. Score 1.0 when ` +
-          `the new response already addresses the correction, 0.0 when it repeats the failure.\n\n` +
-          `Previous (failed) response:\n${evidenceWindow(exp?.recordedResponse ?? '', EVIDENCE_BUDGETS.replayFailedResponse)}\n\n` +
-          `User's correction:\n${evidenceWindow(exp?.followup ?? '(not recorded)', EVIDENCE_BUDGETS.replayCorrection)}`;
-      try {
-        const obj = await generateJson({
-          model: await this.getModelForReview(),
-          schema: v.object({
-            score: v.pipe(v.number(), v.minValue(0), v.maxValue(1)),
-            feedback: v.pipe(v.string(), v.minLength(1)),
-          }),
-          prompt:
-            `Score this agent response on a 0..1 scale and give one sentence of specific, ` +
-            `actionable feedback on how the agent's behaviour could improve.\n\n` +
-            `Task:\n${instance.input}\n\nNew response:\n${evidenceWindow(output, EVIDENCE_BUDGETS.replayFreshResponse)}\n\n` +
-            `${criterion}\n\n` +
-            `JSON shape: {"score": <number 0..1>, "feedback": "<one sentence>"}.`,
-          providerOptions: effortFor('judge').providerOptions,
-        });
-        return { score: obj.score, feedback: obj.feedback };
-      } catch (err) {
-        return { score: 0.5, feedback: `judge unavailable: ${(err as Error).message}` };
-      }
-    };
-
-    // 3. Reflection LM — rewrites the scaffold from the failure feedback.
-    const reflectionLm = async (prompt: string): Promise<string> => {
-      const { text } = await generateText({ model, prompt, ...effortFor('scaffold_mutation') });
-      return text;
-    };
-
-    // 4. Run GEPA, persisting every candidate + Pareto snapshot.
-    const runId = startGepaRun(this.boundSql, { target: 'scaffold', budget });
-    const persisted = new Set<string>();
-    let result;
-    try {
-      result = await runScaffoldGepa({
-        rt: this.rt,
-        evalSet,
-        trainSet,
-        metric,
-        reflectionLm,
-        budget,
-        onIteration: makePersistingHook({ sql: this.boundSql, runId, evalSet, persisted }),
-      });
-    } catch (err) {
-      finishGepaRun(this.boundSql, {
-        runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
-      });
-      return { ok: false, error: (err as Error).message, runId };
-    }
-
-    finishGepaRun(this.boundSql, {
-      runId,
-      status: 'completed',
-      stopReason: result.gepa.stopReason,
-      winnerId: result.gepa.winner.id,
-      metricCalls: result.gepa.metricCallsUsed,
-      iterations: result.gepa.iterationsRun,
-    });
-
-    return {
-      ok: true,
-      runId,
-      proposed: result.proposed,
-      pendingVersion: result.pendingVersion,
-      skipReason: result.skipReason,
-      bestScore: result.winnerScore,
-      seedScore: result.seedScore,
-      iterations: result.gepa.iterationsRun,
-      selection: {
-        heldOutNegatives: split.heldOutNegatives,
-        guards: evalSet.length - split.heldOutNegatives,
-      },
-      ...(split.degeneracy ? { selectionWarning: describeSplitDegeneracy(split.degeneracy) } : {}),
-    };
+  }): Promise<GepaOptimizationResult> {
+    return runScaffoldGepaOptimization(this.scaffoldControl, opts);
   }
 
   /** List recent GEPA optimisation runs for the UI. */
@@ -2673,101 +2046,27 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /**
-   * Read the current workspace text files (path → content) for diffing. Skips
-   * directories, binary files (NUL byte), and anything over 256 KB; caps at 400
-   * files. Backs the Output cumulative change-set.
-   */
-  private async readWorkspaceFiles(): Promise<Record<string, string>> {
-    const out: Record<string, string> = {};
-    let paths: string[];
-    try {
-      paths = this.sql<{ path: string }>`
-        SELECT DISTINCT path FROM vfs_files WHERE is_dir = 0 AND path != '' LIMIT 400`.map((r) => r.path);
-    } catch { return out; }
-    for (const path of paths) {
-      try {
-        const stat = await this.rt.storage.vfs.stat(path);
-        if (stat && stat.size > 256 * 1024) continue;
-        const content = await this.rt.storage.vfs.readFile(path, { encoding: 'utf8' });
-        const text = typeof content === 'string' ? content : new TextDecoder().decode(content);
-        if (text.includes(String.fromCharCode(0))) continue; // binary (NUL byte = binary)
-        out[path] = text;
-      } catch { /* unreadable — skip */ }
-    }
-    return out;
-  }
-
-  /**
    * The cumulative workspace change-set since the baseline — what the agent has
    * created/changed/deleted, for review on the Output surface. The baseline is
    * captured lazily on first call (returns empty + baselineJustCaptured) and
    * re-markable via resetWorkspaceBaseline ("mark reviewed").
    */
-  async getWorkspaceDiff(): Promise<{ files: FileDiff[]; baselineJustCaptured: boolean }> {
-    const current = await this.readWorkspaceFiles();
-    let baselineRows: Array<{ path: string; content: string }> = [];
-    try {
-      baselineRows = this.sql<{ path: string; content: string }>`SELECT path, content FROM vfs_baseline`;
-    } catch { baselineRows = []; }
-    if (baselineRows.length === 0) {
-      // No baseline yet → capture the current state as the baseline.
-      this.captureWorkspaceBaseline(current);
-      return { files: [], baselineJustCaptured: true };
-    }
-    const baseline: Record<string, string> = {};
-    for (const r of baselineRows) baseline[r.path] = r.content;
-    return { files: computeWorkspaceDiff(baseline, current), baselineJustCaptured: false };
+  async getWorkspaceDiff(): Promise<WorkspaceDiffResult> {
+    return getWorkspaceDiff(this.rt);
   }
 
-  /**
-   * General per-executor change-set. The agent VFS ("workspace") has no shell,
-   * so it uses the snapshot baseline (computeWorkspaceDiff). Shell executors
-   * (sandbox/laptop/nimbus) use a real `git diff` of /workspace — the only way
-   * to capture changes the agent made inside a container (feedback: the diff
-   * didn't reflect sandbox repo changes). `git add -A -N` first so newly-created
-   * (untracked) files show as additions; it stages intent-to-add only (no
-   * content), respects .gitignore, and is cleared by the agent's next commit.
-   */
+  /** General per-executor change-set: the VFS snapshot baseline for the agent
+   *  workspace, a real `git diff` of /workspace for shell executors. */
   @callable()
-  async getExecutorDiff(executorId: string): Promise<{
-    files: FileDiff[]; mode: 'git' | 'vfs-baseline';
-    baselineJustCaptured?: boolean; notGitRepo?: boolean; error?: string;
-  }> {
-    if (executorId === 'workspace') {
-      const r = await this.getWorkspaceDiff();
-      return { files: r.files, mode: 'vfs-baseline', baselineJustCaptured: r.baselineJustCaptured };
-    }
-    const provider = this.rt.executionRouter?.getProvider(executorId);
-    if (!provider) return { files: [], mode: 'git', error: `Executor "${executorId}" not found` };
-    const execTool = provider.tools.exec;
-    if (!execTool) return { files: [], mode: 'git', error: `Executor "${executorId}" has no exec tool` };
-    const root = '/workspace';
-    try {
-      const isRepo = String(await execTool.execute(`git -C ${root} rev-parse --is-inside-work-tree 2>/dev/null || echo no`));
-      if (!isRepo.includes('true')) return { files: [], mode: 'git', notGitRepo: true };
-      const raw = String(await execTool.execute(`git -C ${root} add -A -N >/dev/null 2>&1; git -C ${root} --no-pager diff`));
-      return { files: parseGitDiff(raw), mode: 'git' };
-    } catch (err) {
-      return { files: [], mode: 'git', error: err instanceof Error ? err.message : String(err) };
-    }
+  async getExecutorDiff(executorId: string): Promise<ExecutorDiffResult> {
+    return getExecutorDiff(this.rt, executorId);
   }
 
   /** Mark the current workspace as the new baseline ("reviewed" — the diff
    *  resets to empty and accrues from here). */
   @callable()
   async resetWorkspaceBaseline(): Promise<{ ok: true; files: number }> {
-    const current = await this.readWorkspaceFiles();
-    this.captureWorkspaceBaseline(current);
-    return { ok: true, files: Object.keys(current).length };
-  }
-
-  private captureWorkspaceBaseline(files: Record<string, string>): void {
-    try {
-      this.sql`DELETE FROM vfs_baseline`;
-      for (const [path, content] of Object.entries(files)) {
-        this.sql`INSERT OR REPLACE INTO vfs_baseline (path, content) VALUES (${path}, ${content})`;
-      }
-    } catch { /* table may not exist on very first start */ }
+    return resetWorkspaceBaseline(this.rt);
   }
 
   /** Recent branching-head runs (think strategy=heads): each split grouped by
@@ -2844,29 +2143,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  produced. With candidateCode it is the GEPA metric's rollout; without,
    *  it rolls the LIVE scaffold — the replay-eval harness's current-config
    *  runner. */
-  private async runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
-    let text = '';
-    const result = await runScaffold({
-      rt: this.rt,
-      task,
-      scaffoldCodeOverride: candidateCode,
-      emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
-      llmStream: this.makeScaffoldLLMStream(),
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      defaultInference: () => streamText({
-        model: this.getModel(),
-        messages: [{ role: 'user', content: task }],
-        tools: this.getRawTools(),
-        stopWhen: stepCountIs(this.maxSteps),
-        ...effortFor('scaffold_mutation'),
-      }).toUIMessageStream(),
-      // The live turn budget, not a smaller one: this run IS the candidate's
-      // score, and a candidate cut off early scores as a bad candidate.
-      timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
-    });
-    if (!result.ok && result.error) throw new Error(result.error);
-    return text;
+  private runScaffoldCaptureText(task: string, candidateCode?: string): Promise<string> {
+    return runScaffoldCaptureText(this.scaffoldControl, task, candidateCode);
   }
 
   // ── Durable run-event log — read endpoints + run listing ──
@@ -2877,12 +2155,12 @@ export class OrchestratorAgent extends ActorAgent {
    * after it.
    */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
-    return this.eventRecorder.read(runId, opts ?? {});
+    return getRunEvents(this.eventRecorder, runId, opts);
   }
 
   /** List the agent's recent runs with their latest timestamp + event count. */
-  async listRuns(limit: number = 50): Promise<Array<{ runId: string; lastTs: string; eventCount: number }>> {
-    return this.eventRecorder.listRuns(limit);
+  async listRuns(limit: number = 50): Promise<RunListEntry[]> {
+    return listRuns(this.eventRecorder, limit);
   }
 
   /**
@@ -2892,31 +2170,43 @@ export class OrchestratorAgent extends ActorAgent {
    * tokenUsage out of the durable event log.
    */
   @callable()
-  async getRunSummaries(limit: number = 30): Promise<Array<{
-    runId: string; startedAt: number; causedBy: string | null; userMessage: string | null;
-    status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number;
-  }>> {
-    return this.eventRecorder.listRuns(limit).map((run) => {
-      let tokensIn = 0, tokensOut = 0, tokensCached = 0;
-      let causedBy: string | null = null, userMessage: string | null = null, status: string | null = null;
-      let startedAt = Date.parse(run.lastTs) || Date.now();
-      try {
-        for (const e of this.eventRecorder.read(run.runId, { limit: 1000 })) {
-          if (e.type === 'run_start') {
-            causedBy = e.caused_by ?? 'chat';
-            userMessage = e.userMessage ?? null;
-            startedAt = Date.parse(e.timestamp) || startedAt;
-          } else if (e.type === 'turn_end' && e.tokenUsage) {
-            tokensIn += e.tokenUsage.input;
-            tokensOut += e.tokenUsage.output;
-            tokensCached += e.tokenUsage.cached ?? 0;
-          } else if (e.type === 'run_end') {
-            status = e.reason ?? null;
-          }
+  async getRunSummaries(limit: number = 30): Promise<RunSummary[]> {
+    return getRunSummaries(this.eventRecorder, limit);
+  }
+
+  /**
+   * The Activity surface: what the newest request cost, what it was made of,
+   * and how the recent ones have behaved.
+   *
+   * The retained sample is the run-event log itself — `step_finish` rows are
+   * durable and indexed by type, so the percentile has a real window without a
+   * second store. `steps` bounds it, and the bound is reported back on the
+   * result so the reader can see what the numbers are over.
+   */
+  @callable()
+  async getActivitySnapshot(opts?: { steps?: number; logs?: number }): Promise<ActivitySnapshot> {
+    const windowLimit = clampLimit(opts?.steps, ACTIVITY_STEP_WINDOW);
+    const logLimit = clampLimit(opts?.logs, ACTIVITY_LOG_WINDOW);
+    const events = this.eventRecorder.readRecentByType('step_finish', windowLimit);
+    const steps = events.flatMap((e) => (e.type === 'step_finish' && e.usage ? [e] : []));
+    const newest = steps[steps.length - 1];
+    return {
+      latest: newest?.usage
+        ? {
+          at: Date.parse(newest.timestamp) || Date.now(),
+          runId: newest.runId,
+          stepIndex: newest.stepIndex,
+          usage: newest.usage,
+          context: newest.context ?? null,
         }
-      } catch { /* run events unreadable — return the bare summary */ }
-      return { runId: run.runId, startedAt, causedBy, userMessage, status, tokensIn, tokensOut, tokensCached, eventCount: run.eventCount };
-    });
+        : null,
+      // Null rather than a default: a share-of-window shown against a guessed
+      // window would be a made-up percentage.
+      contextWindow: this.sessionContextWindow() || null,
+      telemetry: summarizeSteps(steps.map((e) => e.usage!), { windowLimit }),
+      budgets: this.budget.snapshot(),
+      log: readActivityLog(this.boundSql, logLimit),
+    };
   }
 
   // ── MCP server bridge — small RPCs the MCP handler needs ──
@@ -2989,12 +2279,44 @@ export class OrchestratorAgent extends ActorAgent {
     catch { return ""; }
   }
 
+  // ── Agent-authored views ───────────────────────────────────────
+  // Two reads and nothing else. Publishing is `workspace.createView` inside
+  // execute_tools; reverting is the Evolution Changelog, which is host chrome.
+  // Neither of those belongs on a surface the rendered view can reach.
+
+  /** The tabs to draw. Titles are agent-authored, so the UI marks them. */
+  @callable() async listAgentViews(): Promise<AgentViewSummary[]> {
+    try { return listViews(this.boundSql); }
+    catch { return []; }
+  }
+
+  /** The spec for one tab. Re-validated in core against the live file, so a
+   *  spec edited on disk after it was published fails here rather than in the
+   *  browser. */
+  @callable() async getAgentView(slug: string): Promise<ReadViewResult> {
+    return readView({ vfs: this.rt.storage.vfs, sql: this.boundSql }, String(slug));
+  }
+
   @callable() async getToolDescriptions() {
     // Descriptions sourced from @proteus/core/tools/registry — single truth.
     // Fixes F1 (tools.* → codemode.*) by virtue of the canonical source.
+
+    // How a capability is REACHED, derived rather than declared: a tool is
+    // native exactly when it is a key of the ToolSet the turn hands the model.
+    // Anything else is reachable only from inside an execute_tools program.
+    // Crafted tools are never ToolSet entries — buildCraftedToolSetFromExecute
+    // routes them through createExecuteTool's providers — so they come out
+    // codemode without a literal saying so, and a builtin that moves behind
+    // codemode flips here on its own.
+    const nativeNames = new Set(Object.keys(this.getRawTools()));
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
+      // Both registers, from the one spec: the headline a list row shows and
+      // the docstring the model is given. The UI must never recover one from
+      // the other by splitting text.
+      summary: BUILTIN_TOOL_SPECS[name].summary,
       description: BUILTIN_TOOL_DESCRIPTIONS[name],
+      exposure: (nativeNames.has(name) ? "native" : "codemode") as "native" | "codemode",
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
@@ -3004,6 +2326,7 @@ export class OrchestratorAgent extends ActorAgent {
         name: t.name,
         description: t.description || "Crafted tool",
         isLearned: true,
+        exposure: (nativeNames.has(t.name) ? "native" : "codemode") as "native" | "codemode",
         qualityScore: scoreRow[0]?.score ?? 0.5,
         usageCount: scoreRow[0]?.uses ?? 0,
       };
@@ -3149,64 +2472,23 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** Typed directory listing for the file manager — read straight off the
-   *  CompositeVFS for every executor (accurate types + sizes), workspace paths
-   *  as-is and remote executors through their mount prefix. */
+   *  CompositeVFS for every executor (accurate types + sizes). */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
-    const dir = toCompositePath(executorId, path || '/');
-    if (dir === null) return { error: `Executor "${executorId}" not found` };
-    try {
-      const names = await this.rt.storage.vfs.readdir(dir);
-      const entries: DirEntry[] = [];
-      for (const name of names) {
-        const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
-        // Entries of the composite root are mounts — directories by
-        // construction, even when the environment behind one can't answer
-        // a stat right now.
-        let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
-        let size: number | undefined;
-        try { const s = await this.rt.storage.vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } } catch { /* unstattable — keep the default */ }
-        entries.push({ name, type, size });
-      }
-      return { entries: sortDirEntries(entries) };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
+    return getExecutorFiles(this.rt.storage.vfs, executorId, path);
   }
 
-  /** Read a single file's text content for the file-manager viewer — off the
-   *  CompositeVFS for every executor (structured bytes, not tool strings). Caps
-   *  size and refuses binary (NUL byte). */
+  /** Read a single file's text content for the file-manager viewer. */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
-    if (!path) return { error: 'path required' };
-    const target = toCompositePath(executorId, path);
-    if (target === null) return { error: `Executor "${executorId}" not found` };
-    const MAX = 512 * 1024;
-    try {
-      const stat = await this.rt.storage.vfs.stat(target);
-      if (stat?.isDir) return { error: 'path is a directory' };
-      const raw = await this.rt.storage.vfs.readFile(target, { encoding: 'utf8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-      if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
-      if (text.length > MAX) return { content: text.slice(0, MAX), truncated: true };
-      return { content: text };
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
+    return readExecutorFile(this.rt.storage.vfs, executorId, path);
   }
 
-  /** Upload one file into an executor (file-manager drop/Upload) — binary-
-   *  safe through the CompositeVFS for every executor (env-native paths map
-   *  through the executor's mount prefix).
+  /** Upload one file into an executor (file-manager drop/Upload).
    *
    *  Reached over HTTP (files-routes.ts), not over the chat WebSocket: an RPC
    *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
    *  ordinary files died at the socket as an opaque connection failure. */
   async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
-    try {
-      return await writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
-    } catch (err) {
-      return { error: err instanceof Error ? err.message : String(err) };
-    }
+    return writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
   }
 
   /**
@@ -3246,45 +2528,29 @@ export class OrchestratorAgent extends ActorAgent {
    *  preselect; the full available-models list comes from /api/user/models
    *  (UserDO) so connections are user-scoped. */
   @callable() async getStoredModelSpec(): Promise<{ spec: string | null }> {
-    return { spec: this.getStoredModelId() };
+    return getStoredModelSpec(this.config);
   }
 
   @callable() async setModel(spec: string) {
-    try {
-      const reg = this.providerRegistry();
-      // Validate before storing — surfaces unknown-provider / invalid-spec
-      // errors at config time, not on the next chat turn.
-      const normalized = reg.normalizeSpecSync(spec);
-      this.config.setModel(normalized);
-      this.invalidateModelCaches();
-      console.log(`[orchestrator] setModel: ${spec} → ${normalized}`);
-      return { ok: true, spec: normalized };
-    } catch (err) {
-      const msg = (err as Error).message ?? String(err);
-      console.error(`[orchestrator] setModel(${spec}) failed:`, msg);
-      throw new Error(`setModel(${spec}) failed: ${msg}`);
-    }
+    return setModel({
+      config: this.config,
+      normalize: (s) => this.providerRegistry().normalizeSpecSync(s),
+      onChanged: () => this.invalidateModelCaches(),
+    }, spec);
   }
 
   @callable() async getReasoningEffort(): Promise<{ effort: ReasoningEffort | null }> {
-    return { effort: this.config.getReasoningEffort() };
+    return getReasoningEffort(this.config);
   }
 
   @callable() async setReasoningEffort(effort: unknown): Promise<{ ok: true; effort: ReasoningEffort }> {
-    if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
-    this.config.setReasoningEffort(effort);
-    return { ok: true, effort };
+    return setReasoningEffort(this.config, effort);
   }
 
   // ── Voyager curriculum: propose / list / accept next tasks ─────────
 
   @callable() async proposeCurriculumTasks(count?: number) {
-    const proposals = await proposeNextTasks({
-      rt: this.rt,
-      judge: this.rt.llm,
-      count: count ?? 5,
-    });
-    return { proposals };
+    return { proposals: await proposeCurriculumTasks(this.rt, count) };
   }
 
   @callable() async listCurriculumTasks(status?: 'pending' | 'accepted' | 'rejected' | 'completed') {
@@ -3310,59 +2576,20 @@ export class OrchestratorAgent extends ActorAgent {
     return { soul: text, purpose: summarizeSoul(text) };
   }
 
-  @callable() async getMctsConfig() {
-    // Effective values: stored overrides over the engine defaults — exactly
-    // what the think-tool path and lifetime evolution will run with.
-    const o = this.config.getMctsOverrides();
-    const d = DEFAULT_CONFIG.mcts;
-    return {
-      explorationConstant: o.explorationWeight ?? d.explorationWeight,
-      maxIterations: o.budget ?? d.budget,
-      maxDepth: o.maxDepth ?? d.maxDepth,
-      branchBudget: o.branches ?? d.branches,
-    };
+  @callable() async getMctsConfig(): Promise<MctsConfigView> {
+    return getMctsConfig(this.config);
   }
 
-  @callable() async setMctsConfig(config: {
-    explorationConstant?: number; maxIterations?: number;
-    maxDepth?: number; branchBudget?: number;
-  }) {
-    this.config.setMctsOverrides({
-      explorationWeight: config.explorationConstant,
-      budget: config.maxIterations,
-      maxDepth: config.maxDepth,
-      branches: config.branchBudget,
-    });
-    return config;
+  @callable() async setMctsConfig(config: Partial<MctsConfigView>) {
+    return setMctsConfig(this.config, config);
   }
 
-  /** The self-evolution knobs: who judges the agent, whether a proven scaffold
-   *  promotes itself, and how much each loop is allowed to spend. */
-  @callable() async getEvolutionConfig() {
-    return {
-      reviewModel: this.config.getReviewModel(),
-      autoPromoteScaffold: this.config.getAutoPromoteScaffold(),
-      gepaEvalBudget: this.config.getGepaEvalBudget(),
-      shadowSampleRate: this.config.getShadowSampleRate(),
-      scaffoldExploreShare: this.config.getScaffoldExploreShare(),
-    };
+  @callable() async getEvolutionConfig(): Promise<EvolutionConfigView> {
+    return getEvolutionConfig(this.config);
   }
 
-  /** Set any subset of the evolution knobs. Returns the effective config, so a
-   *  caller sees what a clamped value actually became. */
-  @callable() async setEvolutionConfig(config: {
-    reviewModel?: string | null;
-    autoPromoteScaffold?: boolean;
-    gepaEvalBudget?: number;
-    shadowSampleRate?: number;
-    scaffoldExploreShare?: number;
-  }) {
-    if (config.reviewModel !== undefined) this.config.setReviewModel(config.reviewModel);
-    if (config.autoPromoteScaffold !== undefined) this.config.setAutoPromoteScaffold(config.autoPromoteScaffold);
-    if (config.gepaEvalBudget !== undefined) this.config.setGepaEvalBudget(config.gepaEvalBudget);
-    if (config.shadowSampleRate !== undefined) this.config.setShadowSampleRate(config.shadowSampleRate);
-    if (config.scaffoldExploreShare !== undefined) this.config.setScaffoldExploreShare(config.scaffoldExploreShare);
-    return this.getEvolutionConfig();
+  @callable() async setEvolutionConfig(config: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
+    return setEvolutionConfig(this.config, config);
   }
 
   /**
@@ -3394,6 +2621,10 @@ export class OrchestratorAgent extends ActorAgent {
    *     memory copied, agent_config copied (display_name overwritten)
    *   - search tree, evolution events, scaffold, craft_scores RESET
    *
+   * The driver is core's (identity/fork-driver.ts); what a Durable Object
+   * contributes is the transport below — addressing a workspace that does not
+   * exist yet — plus the web route the UI navigates to.
+   *
    * See docs/WORKSPACES.md for the full spec.
    */
   @callable()
@@ -3401,175 +2632,80 @@ export class OrchestratorAgent extends ActorAgent {
     untilMessageId: string,
     opts?: { name?: string },
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
-    // 1. Busy check — reject during an in-flight turn.
-    if (this._inFlight) {
-      throw new Error("agent busy, retry when current turn finishes");
-    }
+    const fork = await forkWorkspace({
+      sql: this.boundSql,
+      sourceName: this.name,
+      busy: () => this._inFlight,
+      transport: this.forkTransport,
+    }, untilMessageId, opts);
+    return {
+      id: fork.workspaceId,
+      name: fork.name,
+      url: `/workspace/${fork.name}`,
+      forkPointMs: fork.forkPointMs,
+    };
+  }
 
-    // 2. Resolve the fork point here (early) so we can reject with a useful
-    //    error before paying the cost of spinning up a new DO.
-    const hit = this.sql<{ created_at: number }>`
-      SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
-    `;
-    if (hit.length === 0) {
-      throw new Error(`fork point not found: message id "${untilMessageId}"`);
-    }
-
-    // 3. Generate / validate the fork's name.
-    const requestedName = opts?.name?.trim();
-    const forkName = requestedName && requestedName.length > 0
-      ? requestedName
-      : `${this.name}-fork-${nanoid(6)}`;
-    if (!/^[A-Za-z0-9_-]+$/.test(forkName)) {
-      throw new Error(`invalid agent name: "${forkName}" — allowed: A-Z, a-z, 0-9, _ and -`);
-    }
-
-    // 4. Validate name uniqueness by checking if a DO at that name already
-    //    has identity data. Fresh DOs return an empty workspace_identity query.
-    const env = this.env as unknown as {
+  /** Reaching a workspace that does not exist yet: a Durable Object addressed
+   *  by name, and the raw-copy RPC that carries the snapshot to it. */
+  private get forkTransport(): ForkTransport {
+    const ns = (this.env as unknown as {
       OrchestratorAgent: {
         idFromName(name: string): DurableObjectId;
         get(id: DurableObjectId): DurableObjectStub<OrchestratorAgent>;
       };
-    };
-    const forkStubForPrecheck = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
-    let existingIdentity: { id: string; name: string } | null = null;
-    try {
-      // A bare getAgentStatus call on a fresh DO may create workspace_identity,
-      // but it does not seed SOUL.md. Existing agents have either chat history
-      // or a SOUL.md file written by the creation path.
-      const status = await (forkStubForPrecheck as unknown as { getAgentStatus(): Promise<{ messageCount: number; soul: string; name: string }> }).getAgentStatus();
-      if (status.messageCount > 0 || status.soul.length > 0) {
-        existingIdentity = { id: "", name: status.name };
-      }
-    } catch {
-      // If the pre-check RPC fails for transient reasons, let the copy path
-      // surface the error. Don't block on a brittle signal.
-    }
-    if (existingIdentity && requestedName) {
-      throw new Error(`agent name already exists: "${forkName}"`);
-    }
-
-    // 5. Build the snapshot payload.
-    const payload = this.buildForkPayload(untilMessageId, forkName);
-
-    // 6. Send it to the fork DO via the rawCopyFromFork RPC.
-    const forkStub = env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(forkName));
-    const copyResult = await (forkStub as unknown as {
-      rawCopyFromFork(p: ForkPayload): Promise<{ ok: true; agentId: string }>;
-    }).rawCopyFromFork(payload);
-
+    }).OrchestratorAgent;
+    const stubFor = (name: string) => ns.get(ns.idFromName(name));
     return {
-      id: copyResult.agentId,
-      name: forkName,
-      url: `/workspace/${forkName}`,
-      forkPointMs: hit[0]!.created_at,
+      async occupied(name) {
+        try {
+          // A bare getAgentStatus on a fresh DO may create workspace_identity,
+          // but it does not seed SOUL.md. An agent that exists has either chat
+          // history or a SOUL.md written by the creation path.
+          const status = await (stubFor(name) as unknown as {
+            getAgentStatus(): Promise<{ messageCount: number; soul: string }>;
+          }).getAgentStatus();
+          return status.messageCount > 0 || status.soul.length > 0;
+        } catch {
+          // A transient RPC failure must not block a fork — the copy below
+          // surfaces anything real.
+          return false;
+        }
+      },
+      async deliver(name, snapshot) {
+        // The name rides along: a DO reached by cross-DO stub has not been
+        // routed through the agent router, so it cannot read its own name.
+        const result = await (stubFor(name) as unknown as {
+          rawCopyFromFork(n: string, s: ForkSnapshot): Promise<{ ok: true; agentId: string }>;
+        }).rawCopyFromFork(name, snapshot);
+        return { workspaceId: result.agentId };
+      },
     };
   }
 
   /**
-   * Receive a fork payload from a source agent. INTERNAL — called only by
-   * the source DO's forkAgent RPC via cross-DO stub. NOT @callable: cross-DO
-   * stub RPC never needed the decorator, and this is a raw storage write that
-   * must never be reachable over the public agents WS/HTTP transport.
+   * Receive a fork snapshot from a source agent. INTERNAL — called only by the
+   * source DO's fork transport via cross-DO stub. NOT @callable: cross-DO stub
+   * RPC never needed the decorator, and this is a raw storage write that must
+   * never be reachable over the public agents WS/HTTP transport.
    */
-  async rawCopyFromFork(payload: ForkPayload): Promise<{ ok: true; agentId: string }> {
+  async rawCopyFromFork(forkName: string, snapshot: ForkSnapshot): Promise<{ ok: true; agentId: string }> {
     // Apply the FULL schema before copying rows. onStart runs on first access,
     // but this RPC can be invoked before it completes — ensureSchema creates
-    // every table (not just initAllTables') so forkWorkspaceStorage's copy of
-    // events-hub/heads/shadow/etc. rows never hits a missing table.
+    // every table so the copy's events-hub/heads/shadow/etc. rows never hit a
+    // missing table.
     this.ensureSchema();
 
-    // Build an ephemeral SqlExecutor over the source's row payload. We don't
-    // have cross-DO SQL queries — the payload IS the materialized source view.
-    const srcSql = buildSqlFromPayload(payload);
-
-    // Copy atomically. `this.boundSql` is a stable closure over `this.sql`
-    // that preserves the `this`-binding the Agent base class needs.
+    // Atomic. `this.boundSql` is a stable closure over `this.sql` that
+    // preserves the `this`-binding the Agent base class needs.
     this.ctx.storage.transactionSync(() => {
-      forkWorkspaceStorage(srcSql, this.boundSql, {
-        untilMessageId: payload.lineage.forkOriginMessageId,
-        targetWorkspaceId: this.ctx.id.toString(),
-        targetWorkspaceName: payload.forkName,
-        now: payload.lineage.forkedAt,
+      writeForkSnapshot(this.boundSql, snapshot, {
+        workspaceId: this.ctx.id.toString(),
+        workspaceName: forkName,
       });
     });
 
     return { ok: true, agentId: this.ctx.id.toString() };
-  }
-
-  /**
-   * Snapshot every row the fork helper will need into a JSON-serializable
-   * payload. Runs inside the source DO where `this.sql` has direct SQL access.
-   */
-  private buildForkPayload(untilMessageId: string, forkName: string): ForkPayload {
-    const identity = this.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
-    const hit = this.sql<{ created_at: number }>`
-      SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
-    `;
-    const forkPointMs = hit[0]!.created_at;
-    const messages = this.sql<ForkPayload["messages"][number]>`
-      SELECT id, session_id, parent_id, role, content, created_at
-      FROM messages
-      WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-      ORDER BY created_at ASC
-    `;
-    const conv = this.sql<ForkPayload["conversationHistory"][number]>`
-      SELECT session_id, role, message, created_at
-      FROM conversation_history
-      WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-      ORDER BY id ASC
-    `;
-    const vfs = this.sql<ForkPayload["vfsFiles"][number]>`
-      SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
-      FROM vfs_files WHERE path = ${SOUL_PATH} OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
-    `;
-    let memChunks: ForkPayload["memoryChunks"] = [];
-    try {
-      memChunks = this.sql<ForkPayload["memoryChunks"][number]>`
-        SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
-      `;
-    } catch { /* table may not exist yet */ }
-    const tools = this.sql<ForkPayload["craftedTools"][number]>`
-      SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
-    `;
-    let agentConfig: ForkPayload["agentConfig"] = [];
-    try {
-      agentConfig = this.sql<ForkPayload["agentConfig"][number]>`SELECT key, value FROM agent_config`;
-    } catch { /* agent_config may not exist yet */ }
-
-    // Snapshot Think's Session-owned messages up to the cut point. The chat
-    // UI hydrates from assistant_messages (via session.getHistory()'s
-    // recursive CTE), so we must carry these or the fork's chat pane shows
-    // the empty state. Time comparison uses strftime to turn the datetime
-    // column into a unix-ms for comparison with our forkPointMs.
-    let amsgs: ForkPayload["assistantMessages"] = [];
-    try {
-      amsgs = this.sql<ForkPayload["assistantMessages"][number]>`
-        SELECT id, session_id, parent_id, role, content, created_at
-        FROM assistant_messages
-        WHERE strftime('%s', created_at) * 1000 <= ${forkPointMs}
-        ORDER BY created_at ASC
-      `;
-    } catch { /* assistant_messages created lazily by Session — may not exist */ }
-
-    return {
-      forkName,
-      lineage: {
-        forkOriginAgentId: identity[0]?.id ?? this.ctx.id.toString(),
-        forkOriginAgentName: identity[0]?.name ?? this.name,
-        forkOriginMessageId: untilMessageId,
-        forkOriginCreatedAt: forkPointMs,
-        forkedAt: Date.now(),
-      },
-      messages,
-      conversationHistory: conv,
-      vfsFiles: vfs,
-      memoryChunks: memChunks,
-      craftedTools: tools,
-      agentConfig,
-      assistantMessages: amsgs,
-    };
   }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
@@ -3578,22 +2714,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  for the Supervise Automations block. */
   @callable()
   async listTriggers() {
-    return {
-      triggers: this.triggerRegistry.list().map((t) => ({
-        id: t.id,
-        kind: t.kind,
-        spec: t.spec,
-        creator_trust: t.creator_trust,
-        state: t.state,
-        created_at: t.created_at,
-        paused_at: t.paused_at,
-        revoked_at: t.revoked_at,
-        rate_limit_per_min: t.rate_limit_per_min,
-        next_fire_at: t.next_fire_at,
-        last_fire_at: t.last_fire_at,
-        fire_count: t.fire_count,
-      })),
-    };
+    return listTriggers(this.triggerRegistry);
   }
 
   /** Create a durable webhook trigger. Returns the public URL.
@@ -3610,41 +2731,13 @@ export class OrchestratorAgent extends ActorAgent {
     accepted_content_type?: string;
     rate_limit_per_min?: number;
   }) {
-    const rateLimit = normalizeWebhookRateLimitPerMin(opts.rate_limit_per_min);
-    // Secret stored opaquely; lookup later by trigger id.
-    const secret_id = `webhook_secret_${Math.random().toString(36).slice(2, 12)}`;
-    const id = this.triggerRegistry.register({
-      kind: 'webhook_durable',
-      spec: {
-        label: opts.label,
-        auth_mode: opts.auth_mode,
-        secret_id,
-        accepted_content_type: opts.accepted_content_type ?? 'application/json',
-      },
-      creator_trust: 'owner',
-      rate_limit_per_min: rateLimit,
-    }, Date.now());
-
-    // Store the secret in the per-agent webhook_secrets table (kept
-    // separate from the trigger row so it's never returned by listTriggers).
-    this.ctx.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS webhook_secrets (
-        secret_id TEXT PRIMARY KEY,
-        trigger_id TEXT NOT NULL,
-        secret TEXT NOT NULL,
-        created_at INTEGER NOT NULL
-      )`);
-    if (opts.secret) {
-      this.ctx.storage.sql.exec(
-        `INSERT INTO webhook_secrets (secret_id, trigger_id, secret, created_at) VALUES (?, ?, ?, ?)`,
-        secret_id, id, opts.secret, Date.now(),
-      );
-    }
-
+    const now = Date.now();
+    const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
+    if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
     return {
-      trigger_id: id,
-      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(id)}`,
-      auth_mode: opts.auth_mode,
+      trigger_id: webhook.trigger_id,
+      url: `/api/workspaces/${encodeURIComponent(this.name)}/webhook/${encodeURIComponent(webhook.trigger_id)}`,
+      auth_mode: webhook.auth_mode,
       // For HMAC/bearer modes, the operator needs the secret once to give
       // to the external system; we return it inline now and never again.
       secret: opts.secret ?? null,
@@ -3653,18 +2746,11 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Cancel a trigger (revoke). Idempotent. */
   async cancelTrigger(trigger_id: string) {
-    const changed = this.triggerRegistry.revoke(trigger_id, Date.now());
-    return { ok: true, changed };
+    return cancelTrigger(this.triggerRegistry, trigger_id, Date.now());
   }
 
-  /**
-   * Register a timer trigger — `timer_cron` (recurring, from a cron expr) or
-   * `timer_oneshot` (a single future fire at `atMs`). Shared by the agent's
-   * `agent.schedule` tool and the auto-GEPA scheduler, so trigger creation has
-   * one home (not inlined SQL). When it fires, alarm() publishes a timer event
-   * and the reactor wakes the agent. `trust` defaults to 'authenticated' so
-   * agent-created schedules are distinguishable from operator ones.
-   */
+  /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
+   *  scheduler's one way to create one. */
   createTimerTrigger(opts: {
     cron?: string;
     atMs?: number;
@@ -3673,19 +2759,8 @@ export class OrchestratorAgent extends ActorAgent {
     trust?: 'authenticated' | 'owner';
     /** The mission budget every turn this schedule wakes spends against. */
     missionLabel?: string;
-	  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
-	    const now = Date.now();
-	    const kind: 'timer_cron' | 'timer_oneshot' = opts.cron ? 'timer_cron' : 'timer_oneshot';
-	    const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
-	    if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
-	    if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
-	    const id = this.triggerRegistry.register({
-	      kind,
-	      spec: { cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel },
-      creator_trust: opts.trust ?? 'authenticated',
-      next_fire_at: nextFireAt ?? undefined,
-    }, now);
-    return { id, kind, nextFireAt };
+  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
+    return createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
   /**
@@ -3725,174 +2800,24 @@ export class OrchestratorAgent extends ActorAgent {
    *  RPC is invoked by the top-level webhook route (`handleHubRequest`) so
    *  the publish + dedupe + reply channel open run atomically in the agent's
    *  storage context. */
-  async acceptWebhookDelivery(opts: {
-    trigger_id: string;
-    method: string;
-    headers: Record<string, string>;
-    body_text: string;
-    cf_mtls_verified: boolean;
-    delivery_id: string | null;
-    hmac_signature: string | null;
-    hmac_timestamp: string | null;
-    bearer_header: string | null;
-    content_type: string | null;
-    now: number;
-  }): Promise<{
-    status: 'admitted' | 'rejected';
-    http_status?: number;
-    reason?: string;
-    event_id?: string;
-    admitted?: boolean;
-  }> {
-    // Validate trigger.
-    const trigger = this.triggerRegistry.get(opts.trigger_id);
-    if (!trigger) return { status: 'rejected', http_status: 404, reason: 'trigger not found' };
-    if (trigger.state !== 'active') {
-      return { status: 'rejected', http_status: 503, reason: `trigger ${trigger.state}` };
-    }
-    if (trigger.kind !== 'webhook_durable' && trigger.kind !== 'webhook_ephemeral') {
-      return { status: 'rejected', http_status: 400, reason: 'not a webhook trigger' };
-    }
-
-    const spec = trigger.spec as {
-      accepted_content_type?: string;
-      auth_mode: 'hmac' | 'bearer' | 'mtls';
-      secret_id?: string;
-    };
-
-    // Content-type pin.
-    const receivedCT = opts.content_type?.split(';')[0].trim() ?? '';
-    if (spec.accepted_content_type && spec.accepted_content_type !== receivedCT) {
-      return { status: 'rejected', http_status: 415, reason: `expected ${spec.accepted_content_type}` };
-    }
-
-    // Auth.
-    let ingress: 'webhook_hmac' | 'webhook_bearer' | 'webhook_mtls';
-    if (spec.auth_mode === 'hmac') {
-      if (!spec.secret_id) return { status: 'rejected', http_status: 401, reason: 'no hmac secret configured' };
-      const secret = (await this.getWebhookSecret(opts.trigger_id)).secret;
-      if (!secret) return { status: 'rejected', http_status: 401, reason: 'secret revoked' };
-      if (!opts.hmac_signature || !opts.hmac_timestamp) {
-        return { status: 'rejected', http_status: 401, reason: 'missing hmac headers' };
-      }
-      const ts = parseInt(opts.hmac_timestamp, 10);
-      if (!Number.isFinite(ts) || Math.abs(opts.now - ts) > 5 * 60 * 1000) {
-        return { status: 'rejected', http_status: 401, reason: 'timestamp out of window' };
-      }
-      const expected = await this.computeHmacSha256(secret, `${ts}.${opts.body_text}`);
-      if (!timingSafeEqual(expected, opts.hmac_signature)) {
-        return { status: 'rejected', http_status: 401, reason: 'signature mismatch' };
-      }
-      ingress = 'webhook_hmac';
-    } else if (spec.auth_mode === 'bearer') {
-      if (!spec.secret_id) return { status: 'rejected', http_status: 401, reason: 'no bearer secret' };
-      const stored = (await this.getWebhookSecret(opts.trigger_id)).secret;
-      if (!stored) return { status: 'rejected', http_status: 401, reason: 'secret revoked' };
-      if (!opts.bearer_header || !opts.bearer_header.startsWith('Bearer ')) {
-        return { status: 'rejected', http_status: 401, reason: 'missing bearer' };
-      }
-      const presented = opts.bearer_header.slice('Bearer '.length).trim();
-      if (!timingSafeEqual(stored, presented)) {
-        return { status: 'rejected', http_status: 401, reason: 'bearer mismatch' };
-      }
-      ingress = 'webhook_bearer';
-    } else {
-      if (!opts.cf_mtls_verified) {
-        return { status: 'rejected', http_status: 401, reason: 'client cert not verified' };
-      }
-      ingress = 'webhook_mtls';
-    }
-
-    const rate = tryConsumeWebhookRateLimit(this.ctx.storage.sql, opts.trigger_id, trigger.rate_limit_per_min, opts.now);
-    if (!rate.allowed) {
-      return {
-        status: 'rejected',
-        http_status: 429,
-        reason: `rate limit exceeded (${rate.limit}/min)`,
-      };
-    }
-
-    // Parse body.
-    let parsedBody: unknown;
-    try {
-      parsedBody = receivedCT.includes('json') ? JSON.parse(opts.body_text) : opts.body_text;
-    } catch { parsedBody = opts.body_text; }
-
-    const delivery_id = opts.delivery_id ?? `${opts.now}-${Math.random().toString(36).slice(2, 10)}`;
-
-	    // Open a reply channel for the event system. HTTP delivery itself returns
-	    // 202 immediately; a future held-response path can wait on this channel
-	    // without changing the durable event shape.
-    const reply_channel_id = this.replyChannels.open({
-      event_id: 'pending',
-      kind: 'http_pending',
-      holder_addr: `delivery:${delivery_id}`,
-      payload_policy: 'redact',
-      ttl_ms_override: 30_000,
-    }, opts.now);
-
-    // A delivery larger than the brief budget is spilled to this agent's own
-    // file plane first, so the woken turn gets a readable path alongside the
-    // brief instead of an unreachable — and, for JSON, syntactically broken —
-    // fragment of the thing that woke it. After the auth + rate gates, so a
-    // rejected delivery never writes a file.
-    const bodySerialized = JSON.stringify(parsedBody) ?? String(parsedBody);
-    const bodyPath = await spillEventContent(this.rt.storage.vfs, bodySerialized);
-
-    // Publish.
-    const { id, admitted } = this.eventLog.publish({
-      descriptor: {
-        ingress,
-        variant: 'webhook',
-        payload: {
-          webhook_id: opts.trigger_id,
-          http_method: opts.method,
-          http_headers: opts.headers,
-          body: parsedBody,
-          delivery_id,
-          ...(bodyPath ? { body_path: bodyPath } : {}),
-        },
-        auth_outcome: 'verified',
-        webhook_id: opts.trigger_id,
-      },
-      now: opts.now,
-      reply_channel: reply_channel_id ? { id: reply_channel_id, kind: 'http_pending' } : undefined,
-    });
-
-    // Wake the agent to act on the new webhook event — an autonomous turn,
-    // debounced so a delivery burst drains as ONE turn. Only when newly
-    // admitted (a duplicate is already bound or in flight).
-    if (admitted) this.orch.scheduleDrain();
-
-    return { status: 'admitted', event_id: id, admitted };
+  async acceptWebhookDelivery(opts: WebhookDelivery): Promise<WebhookDeliveryResult> {
+    return acceptWebhookDelivery({
+      triggers: this.triggerRegistry,
+      log: this.eventLog,
+      replies: this.replyChannels,
+      vfs: this.rt.storage.vfs,
+      secrets: this.webhookSecrets,
+      sql: this.ctx.storage.sql,
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, opts);
   }
 
-  private async computeHmacSha256(secret: string, message: string): Promise<string> {
-    const key = await crypto.subtle.importKey(
-      'raw',
-      new TextEncoder().encode(secret),
-      { name: 'HMAC', hash: 'SHA-256' },
-      false,
-      ['sign'],
-    );
-    const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
-    return Array.from(new Uint8Array(sig)).map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  /** Look up a webhook secret by trigger id. Used by the webhook ingress at
-   *  request time. Returns null if the trigger has no secret or doesn't exist.
-   *  Deliberately NOT @callable: secret material must never be readable over
-   *  the browser websocket. */
-  async getWebhookSecret(trigger_id: string): Promise<{ secret: string | null }> {
-    try {
-      const rows = this.ctx.storage.sql.exec(
-        `SELECT secret FROM webhook_secrets WHERE trigger_id = ? ORDER BY created_at DESC LIMIT 1`,
-        trigger_id,
-      ).toArray() as Array<{ secret: string }>;
-      return { secret: rows[0]?.secret ?? null };
-    } catch {
-      return { secret: null };
-    }
+  private _webhookSecrets: WebhookSecretStore | null = null;
+  /** This workspace's webhook secrets. Deliberately not reachable over RPC:
+   *  secret material must never be readable over the browser websocket. */
+  private get webhookSecrets(): WebhookSecretStore {
+    this._webhookSecrets ??= createWebhookSecretStore(this.ctx.storage.sql);
+    return this._webhookSecrets;
   }
 
   /** Peer-agent ingress: a sender agent's DO delivers one outbox message via
@@ -3937,50 +2862,17 @@ export class OrchestratorAgent extends ActorAgent {
     origin: SubordinateReportOrigin;
   }): Promise<{ id: string; admitted: boolean }> {
     this.ensureSchema();
-    const subordinate = this.subordinateRoster.get(input.fromSubordinate);
-    if (!subordinate || subordinate.status === 'dismissed') {
-      throw new Error(`unknown subordinate "${input.fromSubordinate}"`);
-    }
-    // Before the spill: a relay this workspace is not the audience for must not
-    // leave a file behind on its file plane either. No event exists, so no id.
-    if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate })) {
-      return { id: '', admitted: false };
-    }
-    const receivedAt = Date.now();
-    // A report longer than the brief budget is spilled to this workspace's own
-    // file plane first, so the drained turn gets a readable path alongside the
-    // brief's head instead of an unreachable tail. Before the transaction: the
-    // VFS write is async, admission is not.
-    const content = normalizeReportContent(input.content);
-    const contentPath = await spillEventContent(this.rt.storage.vfs, content);
-    const result = this.ctx.storage.transactionSync(() => {
-      const published = admitSubordinateReport(this.eventLog, {
-        fromSubordinate: input.fromSubordinate,
-        status: input.status,
-        content,
-        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
-        ...(contentPath ? { contentPath } : {}),
-        now: receivedAt,
-      });
-      if (published.admitted) {
-        this.subordinateRoster.applyReport(input.fromSubordinate, input.status);
-      }
-      return published;
-    });
-    if (result.admitted) {
-      this.broadcastSubordinatesChanged();
-      this.broadcastSubordinateEvent({
-        id: result.id,
-        kind: 'report',
-        subordinate: input.fromSubordinate,
-        status: input.status,
-        content: input.content,
-        ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
-        timestamp: receivedAt,
-      });
-      this.orch.scheduleDrain();
-    }
-    return result;
+    return receiveSubordinateEvent({
+      log: this.eventLog,
+      roster: this.subordinateRoster,
+      vfs: this.rt.storage.vfs,
+      transaction: (body) => this.ctx.storage.transactionSync(body),
+      announce: (report) => {
+        this.broadcastSubordinatesChanged();
+        this.broadcastSubordinateEvent({ ...report, kind: 'report' });
+      },
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    }, input, Date.now());
   }
 
   // ── Mission Inbox: email ingress + owner notifications ─────────
@@ -3993,15 +2885,21 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
-  /** Union of active email_route allowlists (normally zero or one trigger). */
-  private emailAllowlist(): string[] {
-    try {
-      return this.triggerRegistry.list({ kind: 'email_route', state: 'active' })
-        .flatMap((t) => {
-          const allow = (t.spec as { allow?: unknown }).allow;
-          return Array.isArray(allow) ? allow.filter((a): a is string => typeof a === 'string') : [];
-        });
-    } catch { return []; }
+  private _emailInbox: EmailInbox | null = null;
+  /** This workspace's inbox: the trust gate, the shared inbound rate window,
+   *  and the deafness notice the agent reads while that window is refusing
+   *  mail. Held across the activation, like the in-memory window it owns. */
+  private get emailInbox(): EmailInbox {
+    this._emailInbox ??= new EmailInbox({
+      log: this.eventLog,
+      replies: this.replyChannels,
+      triggers: this.triggerRegistry,
+      vfs: () => this.rt.storage.vfs,
+      sql: this.ctx.storage.sql,
+      ownerEmail: () => this.getOwnerEmail(),
+      onAdmitted: () => { this.orch.scheduleDrain(); },
+    });
+    return this._emailInbox;
   }
 
   /** Run an inbound email through the hub from within the agent DO — the
@@ -4009,87 +2907,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  parses MIME + resolves the agent; the trust gate (owner email /
    *  email_route allowlist), publish, and thread reply channel run here
    *  atomically. Unauthorized senders never produce an event row. */
-  async acceptEmailDelivery(opts: {
-    from: string;
-    to: string;
-    subject: string;
-    body_text: string;
-    message_id: string | null;
-    in_reply_to: string | null;
-    references: string | null;
-    attachments: Array<{ filename: string; content_type: string; size: number }>;
-    now: number;
-  }): Promise<{ admitted: boolean; duplicate?: boolean; event_id?: string; reason?: string }> {
-    const ownerEmail = await this.getOwnerEmail();
-    if (!ownerEmail) return { admitted: false, reason: 'agent owner email unknown' };
-    let rateDrop: { limit: number; resetAt: number } | null = null;
-    const result = await acceptInboundEmail({
-      log: this.eventLog,
-      replies: this.replyChannels,
-      owner_email: ownerEmail,
-      allowlist: this.emailAllowlist(),
-      vfs: this.rt.storage.vfs,
-      tryConsumeRateLimit: (now) => {
-        const decision = tryConsumeWebhookRateLimit(
-          this.ctx.storage.sql, 'email:inbound', EMAIL_INBOUND_RATE_PER_MIN, now,
-        );
-        if (!decision.allowed) rateDrop = { limit: decision.limit, resetAt: decision.resetAt };
-        return decision.allowed;
-      },
-    }, opts);
-    if (!result.admitted) {
-      if (rateDrop) this.noteEmailRateDrop(rateDrop, opts.now);
-      return { admitted: false, reason: result.reason };
-    }
-    // Wake the agent for a turn, debounced — only on fresh admission (a
-    // duplicate delivery is already bound or in flight).
-    if (!result.duplicate) this.orch.scheduleDrain();
-    return { admitted: true, duplicate: result.duplicate, event_id: result.event_id };
-  }
-
-  /** The rate-limit window whose drops have already been announced, and how
-   *  many this window has dropped. In memory: an eviction re-announcing once is
-   *  harmless, and a storm must not write a row per message. */
-  private _emailDropWindow = 0;
-  private _emailDropCount = 0;
-
-  /**
-   * Tell the agent its inbox gate is dropping mail.
-   *
-   * A rate-limited delivery leaves no trace the agent can read: the sender gets
-   * nothing, the log gets nothing, and the agent goes on believing it has seen
-   * its inbox. One internal event per rate-limit window turns "I may be deaf
-   * right now" into a fact it can act on — say so, ask the sender to resend,
-   * check back after the window — without a row per dropped message.
-   */
-  private noteEmailRateDrop(drop: { limit: number; resetAt: number }, now: number): void {
-    if (drop.resetAt !== this._emailDropWindow) {
-      this._emailDropWindow = drop.resetAt;
-      this._emailDropCount = 0;
-    }
-    this._emailDropCount += 1;
-    if (this._emailDropCount > 1) return;
-    try {
-      this.eventLog.publish({
-        descriptor: {
-          ingress: 'self_emit',
-          variant: 'internal',
-          emitting_head_trust: 'self',
-          payload: {
-            kind: 'email_inbound_rate_limited',
-            // Audit detail for the operator's event log. It never reaches the
-            // model through the brief (an internal payload's bytes are not
-            // rendered); what the model reads is the live inbox line in the
-            // turn's dynamic context, which also expires with the window.
-            data: { limitPerMin: drop.limit, windowResetsAt: new Date(drop.resetAt).toISOString() },
-          },
-        },
-        now,
-      });
-      this.orch.scheduleDrain();
-    } catch (err) {
-      console.warn('[proteus] email rate-drop notice failed:', (err as Error).message);
-    }
+  async acceptEmailDelivery(opts: IncomingEmail): Promise<EmailAdmission> {
+    return this.emailInbox.accept(opts);
   }
 
   /** The agent's email surface for the operator UI / routes. */
@@ -4097,7 +2916,7 @@ export class OrchestratorAgent extends ActorAgent {
     const domain = this.env.EMAIL_DOMAIN;
     return {
       address: domain ? agentEmailAddress(this.name, domain) : null,
-      allowlist: this.emailAllowlist(),
+      allowlist: readEmailAllowlist(this.triggerRegistry),
       notifications: this.config.getEmailNotificationsEnabled(),
     };
   }
@@ -4108,19 +2927,7 @@ export class OrchestratorAgent extends ActorAgent {
    *  an empty list just revokes it. Reached only through the owner-
    *  authenticated + step-up route. */
   async setEmailAllowlist(allow: string[]): Promise<{ allowlist: string[] }> {
-    const cleaned = [...new Set(
-      allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
-    )];
-    const now = Date.now();
-    for (const t of this.triggerRegistry.list({ kind: 'email_route' })) {
-      if (t.state !== 'revoked') this.triggerRegistry.revoke(t.id, now);
-    }
-    if (cleaned.length > 0) {
-      this.triggerRegistry.register({
-        kind: 'email_route', spec: { allow: cleaned }, creator_trust: 'owner',
-      }, now);
-    }
-    return { allowlist: cleaned };
+    return setEmailAllowlist(this.triggerRegistry, allow, Date.now());
   }
 
   /** Toggle owner-email notifications (changelog digests, job completions). */
@@ -4134,14 +2941,16 @@ export class OrchestratorAgent extends ActorAgent {
    *  Also skipped while an operator socket is live — the owner sees the
    *  card in-app; email is the away channel, not a duplicate feed. */
   private emailOwnerNotification(subject: string, text: string): void {
+    let notification: OwnerNotification | null;
     try {
-      if (!this.config.getEmailNotificationsEnabled()) return;
-      if (this.ctx.getWebSockets().length > 0) return;
+      notification = planOwnerNotification({
+        enabled: this.config.getEmailNotificationsEnabled(),
+        operatorConnected: this.ctx.getWebSockets().length > 0,
+        subject,
+        text,
+      });
     } catch { return; }
-    // Idempotency key = content hash: a retry of the same notification dedupes,
-    // while two genuinely distinct notifications (different job/status/digest)
-    // key apart and both send.
-    const key = argumentDigest({ subject, text });
+    if (!notification) return;
     void (async () => {
       await sendOwnerEmail({
         email: this.env.EMAIL,
@@ -4150,7 +2959,7 @@ export class OrchestratorAgent extends ActorAgent {
         agentDisplayName: this.safeDisplayName(),
         ownerEmail: await this.getOwnerEmail(),
         outbox: this.emailOutbox,
-      }, { subject, text, key });
+      }, notification);
     })().catch((err) => console.warn('[proteus-email] notification failed:', err));
   }
 
@@ -4196,8 +3005,4 @@ function parseArchiveCursor(value: unknown): ArchiveCursor | null {
   if (after !== null && !Number.isSafeInteger(after)) return null;
   if (!Number.isSafeInteger(rows) || (rows as number) < 0) return null;
   return { table, after: after as number | null, rows: rows as number };
-}
-
-function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
-  return role === 'user' || role === 'assistant' || role === 'system' ? role : null;
 }

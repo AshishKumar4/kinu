@@ -4,17 +4,17 @@ import { createStreamingBufferController } from '../src/tui/streaming-buffer.js'
 describe('TUI streaming buffer', () => {
   test('coalesces token deltas before flushing to React state', () => {
     const updates: Array<string | null> = [];
-    let scheduled: (() => void) | null = null;
+    const scheduled: Array<() => void> = [];
     const buffer = createStreamingBufferController(
       (value) => updates.push(value),
       50,
       {
         setTimeout(callback) {
-          scheduled = callback as () => void;
+          scheduled.push(callback);
           return 1 as unknown as ReturnType<typeof setTimeout>;
         },
         clearTimeout() {
-          scheduled = null;
+          scheduled.length = 0;
         },
       },
     );
@@ -24,8 +24,8 @@ describe('TUI streaming buffer', () => {
     buffer.append('lo');
 
     expect(updates).toEqual([null]);
-    expect(scheduled).not.toBeNull();
-    scheduled?.();
+    expect(scheduled).toHaveLength(1);
+    scheduled[0]?.();
     expect(updates).toEqual([null, 'hello']);
 
     buffer.append(' world');

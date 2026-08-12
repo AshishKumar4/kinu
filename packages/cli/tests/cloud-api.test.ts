@@ -6,19 +6,19 @@ import { callAgentRpc } from '../src/cloud-api.js';
 
 describe('callAgentRpc', () => {
   test('posts {method, args} to the generic rpc endpoint and unwraps {result}', async () => {
-    let seen: { path: string; method: string; auth: string | null; body: unknown } | null = null;
+    const seen: Array<{ path: string; method: string; auth: string | null; body: unknown }> = [];
     const server = Bun.serve({
       port: 0,
       async fetch(req) {
         const url = new URL(req.url);
-        seen = { path: url.pathname, method: req.method, auth: req.headers.get('authorization'), body: await req.json() };
+        seen.push({ path: url.pathname, method: req.method, auth: req.headers.get('authorization'), body: await req.json() });
         return Response.json({ result: [{ id: 'head-1' }] });
       },
     });
     try {
       const result = await callAgentRpc(`http://localhost:${server.port}`, 'ptc_tok', 'my agent', 'getHeadRuns', [5]);
       expect(result).toEqual([{ id: 'head-1' }]);
-      expect(seen).toEqual({
+      expect(seen[0]).toEqual({
         path: '/api/cli/workspaces/my%20agent/rpc',
         method: 'POST',
         auth: 'Bearer ptc_tok',

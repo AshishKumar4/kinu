@@ -9,7 +9,8 @@
 // for the fidelity that matters most — a full runChat turn where the steer has
 // to actually reach the model's next request.
 import { describe, expect, test } from 'bun:test';
-import { tool, type LanguageModelV2StreamPart, type ModelMessage } from 'ai';
+import { tool, type ModelMessage } from 'ai';
+import type { ModelStreamPart } from '@proteus/test-utils';
 import { z } from 'zod';
 import {
   AgentOrchestrator, isFailingToolResult, runChat,
@@ -362,7 +363,7 @@ function grindingModel(prompts: ModelMessage[][]) {
       step += 1;
       const done = step > 4;
       return {
-        stream: new ReadableStream<LanguageModelV2StreamPart>({
+        stream: new ReadableStream<ModelStreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             if (done) {
@@ -499,7 +500,7 @@ function repeatingModel(prompts: ModelMessage[][], command: string | null) {
       step += 1;
       const done = step > 4;
       return {
-        stream: new ReadableStream<LanguageModelV2StreamPart>({
+        stream: new ReadableStream<ModelStreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             if (done) {

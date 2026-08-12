@@ -8,15 +8,13 @@ import {
   createAgentConfigStore,
   createWorkspaceNameFromMission as coreCreateAgentNameFromMission,
   fallbackWorkspaceIdentity,
-  initAgentConfigTable,
-  initCraftScoreTables,
-  initScaffoldTables,
-  initSearchTables,
+  initWorkspaceSchema,
   parseWorkspaceIdentityOutput,
   type LLMProviderConfig,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
 } from '@proteus/core';
+import { makeWorkspaceSchemaSql } from '@proteus/cli-backend';
 import {
   agentDbPath,
   agentDir,
@@ -180,10 +178,8 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   try {
     db.exec('PRAGMA journal_mode = WAL');
     const rt = createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
-    initSearchTables((ddl: string) => db.exec(ddl));
-    initScaffoldTables((ddl: string) => db.exec(ddl));
-    initCraftScoreTables((ddl: string) => db.exec(ddl));
-    initAgentConfigTable(rt.storage.execRaw);
+    // Every table a workspace has, on any backend — one list, in core.
+    initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = createAgentConfigStore(rt.storage.sql);
     agentConfig.setModel(modelSpecForAgentConfig(llmConfig, input.model));
     const reasoningEffort = input.reasoningEffort ?? loadConfigFile().reasoningEffort;

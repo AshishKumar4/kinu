@@ -16,7 +16,7 @@ import {
   getLocalAgentState,
   getLocalGepaRun,
   getLocalMctsNode,
-  getLocalProductBoard,
+  getLocalReleaseBoard,
   getLocalToolSurface,
   listLocalEvents,
   listLocalExecutors,
@@ -155,11 +155,6 @@ async function runOneShot(
   opts: AgentClientFlags & OneShotSessionFlags,
   surface: { json: boolean; headless: boolean },
 ): Promise<boolean> {
-  // Same @path semantics as the chat surfaces: images/PDFs inline as file
-  // parts, other files stay path references the agent reads with its tools.
-  const prompt = await resolvePromptAttachments(rawPrompt);
-  for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
-
   // The daemon is this process's deferred-work host: a one-shot run never
   // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
   // what eventually runs it (see AgentOrchestrator's exit contract).
@@ -169,6 +164,12 @@ async function runOneShot(
     { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },
     'one-shot',
   );
+
+  // Same @path semantics as the chat surfaces: images/PDFs inline as file
+  // parts, other files stay path references the agent reads with its tools.
+  // Resolved after the client exists — it reports the backend's inline cap.
+  const prompt = await resolvePromptAttachments(rawPrompt, { limitBytes: client.inlineAttachmentLimitBytes });
+  for (const problem of prompt.errors) console.error(`${ERR('error')} ${problem}`);
 
   let failed = false;
   const render = surface.json ? createJsonEventWriter(client) : renderRunEvent;
@@ -387,7 +388,7 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
       return rpc('executeInExecutor', [executor, command]);
     }
     case 'product':
-      return rpc('getProductChangeBoard', [numberField(cmd, 'limit') ?? 20]);
+      return rpc('getReleaseBoard', [numberField(cmd, 'limit') ?? 20]);
     case 'stop':
       return rpc('cancelCurrentWork');
     case 'webhook': {
@@ -461,7 +462,7 @@ async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, cl
       return executeLocalExecutor(name, executor, command);
     }
     case 'product':
-      return getLocalProductBoard(name, numberField(cmd, 'limit') ?? 20);
+      return getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20);
     case 'stop':
       client.stop();
       return { interrupted: true, cancelledBackgroundJobs: markLocalBackgroundJobsCancelled(name) };

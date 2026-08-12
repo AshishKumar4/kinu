@@ -100,7 +100,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt } = setup();
     rt.craftStore.create({
       name: 'fetch_and_summarize', description: 'Fetch a URL and summarize it',
-      code: 'async (args) => args.url', scope: 'global',
+      code: 'async (args) => args.url', params: null, scope: 'shared',
     });
     rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
                    VALUES ('fetch_and_summarize', 0.82, 5, ${Date.now()})`;
@@ -179,7 +179,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const sql = rt.storage.sql;
     const runId = startGepaRun(sql, { target: 'scaffold', budget: {} });
     finishGepaRun(sql, {
-      runId, status: 'completed', stopReason: 'budget', winnerId: 'cand-1',
+      runId, status: 'completed', stopReason: 'metric_budget_exhausted', winnerId: 'cand-1',
       metricCalls: 12, iterations: 3,
     });
     // An aborted run changed nothing — it must not appear.
@@ -350,7 +350,7 @@ describe('renderChangelogText — the one text form', () => {
 describe('reverts — real paths only', () => {
   test('craft retire removes the tool and its score; double-revert errors', async () => {
     const { rt, facts } = setup();
-    rt.craftStore.create({ name: 'tmp_tool', description: 'temp', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name: 'tmp_tool', description: 'temp', code: 'async () => 1', params: null, scope: 'local' });
     rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
                    VALUES ('tmp_tool', 0.5, 2, ${Date.now()})`;
 
@@ -489,7 +489,7 @@ describe('session-end digest — assembled when the window closes', () => {
 
     const startedAt = Date.now() - 5_000;
     facts.upsert('discovered_mid_session', 'yes');
-    rt.craftStore.create({ name: 'session_tool', description: 'made this session', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name: 'session_tool', description: 'made this session', code: 'async () => 1', params: null, scope: 'local' });
 
     await engine.onSessionComplete({
       sessionId: 'sess-1',
@@ -533,7 +533,7 @@ describe('session-end digest — assembled when the window closes', () => {
 /** Seed `n` crafted tools stamped at distinct, controllable times. */
 function seedTools(rt: AgentRuntime, names: ReadonlyArray<string>, at: (i: number) => number): void {
   names.forEach((name, i) => {
-    rt.craftStore.create({ name, description: `d-${name}`, code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name, description: `d-${name}`, code: 'async () => 1', params: null, scope: 'local' });
     rt.storage.sql`UPDATE crafted_tools SET created_at = ${at(i)}, updated_at = ${at(i)}
                    WHERE name = ${name}`;
   });
@@ -651,7 +651,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
   test('a crafted tool dates from its newest touch, even with a skewed updated_at', () => {
     const { rt } = setup();
     const created = Date.now();
-    rt.craftStore.create({ name: 'skewed', description: 'd', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name: 'skewed', description: 'd', code: 'async () => 1', params: null, scope: 'local' });
     rt.storage.sql`UPDATE crafted_tools SET created_at = ${created}, updated_at = ${created - 60_000}
                    WHERE name = 'skewed'`;
 
@@ -662,7 +662,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
 
   test('a tool with no EMA row is labelled unscored rather than losing its evidence', () => {
     const { rt } = setup();
-    rt.craftStore.create({ name: 'brand_new', description: 'fresh', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ name: 'brand_new', description: 'fresh', code: 'async () => 1', params: null, scope: 'local' });
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
     expect(entry.evidence).toContain('unscored (new)');

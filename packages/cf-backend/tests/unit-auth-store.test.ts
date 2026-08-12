@@ -1,3 +1,4 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { createSession, verifySession, type OAuthProfile } from '../src/auth/d1-store.js';
 import { createAuthDatabase, makeD1 } from './helpers/d1.js';
@@ -20,8 +21,7 @@ function setupEnv() {
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
-      },
-    } as unknown as Env,
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env,
   };
 }
 
@@ -89,8 +89,7 @@ describe('resolveOrCreateIdentity efficiency and orphan safety', () => {
     const userDO = { async ensureProfile() {} };
     return {
       AUTH_DB: makeD1(db, onQuery),
-      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
-    } as unknown as Env;
+      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   }
 
   test('exactly one auth_users upsert per login', async () => {

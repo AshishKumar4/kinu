@@ -126,10 +126,11 @@ describe('openTurnRun / closeTurnRun', () => {
     const rec = recorder();
     const observed: string[][] = [];
     const crafted: string[] = [];
+    const acc = new TurnAccumulator();
     const cycle = new CraftCycle({
       names: () => crafted,
       observe: (names) => { observed.push([...names]); return []; },
-    });
+    }, acc);
     cycle.reset(true);
 
     // The episode: craft in one call, reach for it in the next.
@@ -154,8 +155,12 @@ describe('openTurnRun / closeTurnRun', () => {
     expect(row.reused).toEqual(['sum']);
     expect(row.returned).toBe(1);
     expect(observed).toEqual([['sum']]);
+    // The same clock is what the graded turn reports as crafted-tool use.
+    expect(snapshotCompletedTurn(acc, {
+      userMessage: 'u', assistantResponse: 'a', sessionId: 'default', origin: 'user',
+    }).craftedToolsUsed).toEqual(['sum']);
 
-    const idle = new CraftCycle({ names: () => [], observe: () => [] });
+    const idle = new CraftCycle({ names: () => [], observe: () => [] }, new TurnAccumulator());
     idle.reset(true);
     closeTurnRun(rec, 'run-idle', {
       turnIndex: 0, usage: { input: 1, output: 1, cached: 0 }, reason: 'completed',

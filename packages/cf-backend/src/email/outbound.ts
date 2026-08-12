@@ -12,8 +12,7 @@
  *     (Evolution Changelog digests, background-job completions).
  */
 
-import type { EventLog, ReplyChannelStore } from '@proteus/core';
-import type { EmailThreadAddr } from '../events/ingress/email.js';
+import type { EmailThreadAddr, EventLog, ReplyChannelStore } from '@proteus/core';
 import { agentEmailAddress } from './inbound.js';
 import type { EmailOutbox } from './outbox.js';
 

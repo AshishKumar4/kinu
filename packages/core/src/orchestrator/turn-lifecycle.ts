@@ -124,6 +124,7 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
     userMessage: opts.userMessage,
     assistantResponse: opts.assistantResponse,
     toolCalls: acc.toolCalls,
+    craftedToolsUsed: acc.craftedToolsUsed(),
     steps: acc.stepCount,
     durationMs: acc.startedAt > 0 ? Date.now() - acc.startedAt : 0,
     feedback: null,

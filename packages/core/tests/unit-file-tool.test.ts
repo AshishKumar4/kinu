@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { applyFileEdits, readFileSlice } from '../src/tools/file-edit.js';
 import { TurnFileLedger } from '../src/tools/file-ledger.js';
 import { createFileTool } from '../src/tools/file-tool.js';
@@ -325,7 +326,7 @@ function memoryVfs(seed: Record<string, string> = {}): VFS & { files: Map<string
 
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
   const entry = createFileTool({ vfs, ledger, budget: new TurnContextBudget() });
-  const execute = (entry as { execute: (args: unknown) => Promise<unknown> }).execute;
+  const execute = toolExecute(entry);
   return { call: (args: unknown) => execute(args), ledger };
 }
 
@@ -451,7 +452,7 @@ describe('file tool', () => {
     const memory = { index: async (p: string) => { indexed.push(p); } } as unknown as Memory;
     for (const path of ['memory/a.md', '/memory/a.md', '/local/memory/a.md']) {
       const entry = createFileTool({ vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
-      await (entry as { execute: (a: unknown) => Promise<unknown> }).execute({ action: 'write', path, content: 'x' });
+      await toolExecute(entry)({ action: 'write', path, content: 'x' });
     }
     expect(indexed).toEqual(['memory/a.md', 'memory/a.md', 'memory/a.md']);
   });
@@ -504,7 +505,7 @@ describe('file tool', () => {
     const ledger = new TurnFileLedger();
     const budget = new TurnContextBudget();
     const entry = createFileTool({ vfs, ledger, budget });
-    await (entry as { execute: (a: unknown) => Promise<unknown> }).execute({ action: 'read', path: '/local/big.txt' });
+    await toolExecute(entry)({ action: 'read', path: '/local/big.txt' });
     expect(budget.snapshot().admittedChars).toBe(500);
   });
 

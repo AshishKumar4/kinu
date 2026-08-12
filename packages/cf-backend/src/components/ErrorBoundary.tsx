@@ -43,7 +43,7 @@ export class ErrorBoundary extends Component<Props, State> {
           <div className="text-sm font-medium p-text">
             Something went wrong rendering this view{this.props.label ? ` (${this.props.label})` : ''}.
           </div>
-          <div className="text-xs p-text-3 font-mono break-words p-elevated rounded p-3 border p-border text-left">
+          <div className="text-xs p-text-3 font-mono break-words p-fill rounded p-3 border p-border text-left">
             <div className="font-bold mb-2">{this.state.error.message || String(this.state.error)}</div>
             {this.state.error.stack && (
               <pre className="text-[10px] whitespace-pre-wrap opacity-70">{this.state.error.stack}</pre>
@@ -51,7 +51,7 @@ export class ErrorBoundary extends Component<Props, State> {
           </div>
           <button
             onClick={this.reset}
-            className="text-xs px-3 py-1.5 rounded-md p-elevated border p-border hover:p-text"
+            className="text-xs px-3 py-1.5 rounded-md p-fill border p-border hover:p-text"
           >
             Try again
           </button>

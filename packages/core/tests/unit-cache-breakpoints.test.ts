@@ -140,7 +140,7 @@ describe('markCacheTail', () => {
   });
 
   test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {
-    const tools = { a: {}, b: {} } as ToolSet;
+    const tools = { a: {}, b: {} } as unknown as ToolSet;
     markLastToolForAnthropicCache(tools);
     const toolMarkers = Object.values(tools)
       .filter((t) => (t as { providerOptions?: { anthropic?: unknown } }).providerOptions?.anthropic).length;
@@ -185,7 +185,8 @@ describe('markCacheTail', () => {
     // The @ai-sdk/openai-compatible converter only reads part metadata for
     // tool results and single-text user messages — markers must sit there.
     const toolParts = (marked[1] as Extract<ModelMessage, { role: 'tool' }>).content;
-    expect(toolParts[0].providerOptions).toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
+    expect((toolParts as Array<{ providerOptions?: unknown }>)[0]!.providerOptions)
+      .toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
     const userParts = (marked[2] as Extract<ModelMessage, { role: 'user' }>).content;
     expect(typeof userParts).not.toBe('string');
     expect((userParts as Array<{ providerOptions?: unknown }>)[1].providerOptions)
@@ -196,7 +197,8 @@ describe('markCacheTail', () => {
     const rolled = markCacheTail([...marked, { role: 'user', content: 'next' }], openrouterClaude);
     const markerCount = JSON.stringify(rolled).match(/"cache_control"/g)?.length ?? 0;
     expect(markerCount).toBe(2);
-    expect((rolled[1] as Extract<ModelMessage, { role: 'tool' }>).content[0].providerOptions).toBeUndefined();
+    const rolledToolParts = (rolled[1] as Extract<ModelMessage, { role: 'tool' }>).content as Array<{ providerOptions?: unknown }>;
+    expect(rolledToolParts[0]!.providerOptions).toBeUndefined();
   });
 
   test('no-marker strategies return an untouched copy', () => {

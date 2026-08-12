@@ -1,10 +1,11 @@
 // Behavior tests for the MCP write/act tools (run_task, send_peer, list_peers,
-// product_change). Each is a thin wrapper over an existing @callable on the
+// release). Each is a thin wrapper over an existing @callable on the
 // orchestrator: the tests drive a real MCP `tools/call` through handleMcpRequest
 // and assert the wrapper (a) reached the right @callable with the right args,
 // (b) surfaced its result honestly, and (c) is gated by the SAME auth +
 // per-agent ownership as the read tools — a scoped access token can't reach the
 // write surface at all, and an unowned agent is refused before any tool runs.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
@@ -43,15 +44,14 @@ function mcpEnv() {
       return { status: 'delivered', message_id: 'evt_123' };
     },
     async listPeersFromMcp() { record('listPeersFromMcp'); return [{ name: 'atlas', displayName: 'Atlas' }]; },
-    async getProductChangeBoard(limit: number) { record('getProductChangeBoard', limit); return { changes: [], bindings: [] }; },
-    async createProductChange(input: unknown) { record('createProductChange', input); return { id: 'pc_1', status: 'draft', bindingId: 'bind_1' }; },
-    async transitionProductChange(changeId: string, status: string) { record('transitionProductChange', changeId, status); return { id: changeId, status }; },
+    async getReleaseBoard(limit: number) { record('getReleaseBoard', limit); return { changes: [], bindings: [] }; },
+    async createReleaseChange(input: unknown) { record('createReleaseChange', input); return { id: 'pc_1', status: 'draft', bindingId: 'bind_1' }; },
+    async transitionReleaseChange(changeId: string, status: string) { record('transitionReleaseChange', changeId, status); return { id: changeId, status }; },
   };
   const env = {
     AUTH_DB: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
-  } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 
@@ -111,54 +111,54 @@ describe('MCP write tools → real @callables', () => {
     expect(calls.some((c) => c.method === 'listPeersFromMcp')).toBe(true);
   });
 
-  test('product_change list invokes getProductChangeBoard', async () => {
+  test('release list invokes getReleaseBoard', async () => {
     const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'list' }, SESSION_TOKEN), env);
+    const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'list' }, SESSION_TOKEN), env);
     expect(res?.status).toBe(200);
     await resultText(res);
-    expect(calls.some((c) => c.method === 'getProductChangeBoard')).toBe(true);
+    expect(calls.some((c) => c.method === 'getReleaseBoard')).toBe(true);
   });
 
-  test('product_change create invokes createProductChange with mapped args', async () => {
+  test('release create invokes createReleaseChange with mapped args', async () => {
     const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'create', bindingId: 'bind_1', prompt: 'add a button' }, SESSION_TOKEN), env);
+    const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'create', bindingId: 'bind_1', prompt: 'add a button' }, SESSION_TOKEN), env);
     expect(res?.status).toBe(200);
     expect(await resultText(res)).toContain('pc_1');
-    expect(calls.find((c) => c.method === 'createProductChange')?.args).toEqual([{ bindingId: 'bind_1', userPrompt: 'add a button', plan: null }]);
+    expect(calls.find((c) => c.method === 'createReleaseChange')?.args).toEqual([{ bindingId: 'bind_1', userPrompt: 'add a button', plan: null }]);
   });
 
-  test('product_change advance invokes transitionProductChange', async () => {
+  test('release advance invokes transitionReleaseChange', async () => {
     const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'advance', changeId: 'pc_1', status: 'planning' }, SESSION_TOKEN), env);
+    const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status: 'planning' }, SESSION_TOKEN), env);
     expect(res?.status).toBe(200);
     await resultText(res);
-    expect(calls.find((c) => c.method === 'transitionProductChange')?.args).toEqual(['pc_1', 'planning']);
+    expect(calls.find((c) => c.method === 'transitionReleaseChange')?.args).toEqual(['pc_1', 'planning']);
   });
 
-  test('product_change create without required args does not call the @callable', async () => {
+  test('release create without required args does not call the @callable', async () => {
     const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'create' }, SESSION_TOKEN), env);
+    const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'create' }, SESSION_TOKEN), env);
     expect(res?.status).toBe(200);
     expect(await resultText(res)).toContain('requires bindingId and prompt');
-    expect(calls.some((c) => c.method === 'createProductChange')).toBe(false);
+    expect(calls.some((c) => c.method === 'createReleaseChange')).toBe(false);
   });
 
-  test('product_change advance into an engine-owned state is refused — same gate as the builtin tool', async () => {
+  test('release advance into an engine-owned state is refused — same gate as the builtin tool', async () => {
     const { env, calls } = mcpEnv();
     for (const status of ['validating', 'preview_ready', 'applying', 'deployed', 'rolled_back']) {
-      const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'advance', changeId: 'pc_1', status }, SESSION_TOKEN), env);
+      const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status }, SESSION_TOKEN), env);
       expect(res?.status).toBe(200);
       expect(await resultText(res)).toContain('earned by execution');
     }
-    expect(calls.some((c) => c.method === 'transitionProductChange')).toBe(false);
+    expect(calls.some((c) => c.method === 'transitionReleaseChange')).toBe(false);
   });
 
-  test('product_change advance with a status outside the real enum is refused by the schema', async () => {
+  test('release advance with a status outside the real enum is refused by the schema', async () => {
     const { env, calls } = mcpEnv();
-    const res = await handleMcpRequest(toolCall('jarvis', 'product_change', { action: 'advance', changeId: 'pc_1', status: 'shipped' }, SESSION_TOKEN), env);
+    const res = await handleMcpRequest(toolCall('jarvis', 'release', { action: 'advance', changeId: 'pc_1', status: 'shipped' }, SESSION_TOKEN), env);
     expect(res?.status).toBe(200);
     expect(await resultText(res)).toContain('Invalid');
-    expect(calls.some((c) => c.method === 'transitionProductChange')).toBe(false);
+    expect(calls.some((c) => c.method === 'transitionReleaseChange')).toBe(false);
   });
 });
 

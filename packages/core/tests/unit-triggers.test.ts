@@ -15,7 +15,10 @@ import {
   DEFAULT_FORK_POLICY, TriggerRegistry, initEventsHubTables,
   type AlarmScheduler, type RegisterSpec, type TriggerKind,
 } from '../src/events/hub/index.ts';
-import type { SqlExec } from '../src/index.js';
+import {
+  EventLog, cancelTrigger, createTimerTrigger, fireDueTriggers, listTriggers,
+  type SqlExec, type TimerPayload,
+} from '../src/index.js';
 
 /** Records every wake request so the alarm contract is assertable, and models
  *  the real scheduler's "converge on the soonest pending time" semantics. */
@@ -403,5 +406,115 @@ describe('TriggerRegistry.forkPlan', () => {
   test('an empty registry plans nothing', () => {
     const { registry } = setup();
     expect(registry.forkPlan()).toEqual({ copy: [], share: [] });
+  });
+});
+
+/**
+ * Timer ingress — registering a schedule and firing the ones that are due.
+ *
+ * This is the loop every backend's clock drives: it published the timer event,
+ * re-armed cron, revoked one-shot, and it existed once per backend until the
+ * two copies became this one. What a host still owns is only when it is called.
+ */
+describe('timer ingress', () => {
+  function timers() {
+    const db = new Database(':memory:');
+    const sql: SqlExec = {
+      exec(query: string, ...bindings: unknown[]) {
+        const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
+        return { toArray: () => rows };
+      },
+    };
+    initEventsHubTables(sql);
+    const alarm = new RecordingAlarm();
+    const registry = new TriggerRegistry(sql, alarm);
+    const log = new EventLog(sql);
+    return {
+      registry, alarm, log,
+      fire: (now: number) => fireDueTriggers({ registry, log }, now),
+      fired: () => log.pending({ variant: 'timer' }).map((e) => e.payload as TimerPayload),
+    };
+  }
+
+  test('a cron schedule fires, re-arms itself, and stays active', () => {
+    const t = timers();
+    const timer = createTimerTrigger(t.registry, { cron: '*/5 * * * *', label: 'sweep' }, NOW);
+    expect(timer.kind).toBe('timer_cron');
+    expect(timer.nextFireAt).toBeGreaterThan(NOW);
+
+    expect(t.fire(timer.nextFireAt!)).toEqual({ fired: 1 });
+    expect(t.fired()).toEqual([{
+      trigger_id: timer.id, scheduled_fire_at: timer.nextFireAt!, label: 'sweep',
+      user_payload: undefined, mission_label: undefined,
+    }]);
+    const row = t.registry.get(timer.id)!;
+    expect(row.state).toBe('active');
+    expect(row.fire_count).toBe(1);
+    expect(row.next_fire_at).toBeGreaterThan(timer.nextFireAt!);
+    // …and the next wake was requested, so the chain does not end here.
+    expect(t.alarm.requested).toContain(row.next_fire_at!);
+  });
+
+  test('a one-shot fires once and revokes itself', () => {
+    const t = timers();
+    const timer = createTimerTrigger(t.registry, {
+      atMs: NOW + 1000, payload: { task: 'ship' }, missionLabel: 'release', trust: 'owner',
+    }, NOW);
+    expect(timer).toMatchObject({ kind: 'timer_oneshot', nextFireAt: NOW + 1000 });
+
+    expect(t.fire(NOW + 1000)).toEqual({ fired: 1 });
+    expect(t.fired()[0]).toMatchObject({ user_payload: { task: 'ship' }, mission_label: 'release' });
+    expect(t.registry.get(timer.id)).toMatchObject({ state: 'revoked', next_fire_at: null });
+
+    // Nothing is due any more, so a second tick publishes nothing.
+    expect(t.fire(NOW + 2000)).toEqual({ fired: 0 });
+    expect(t.fired()).toHaveLength(1);
+  });
+
+  test('a re-fire after the host was evicted dedupes on (trigger, scheduled fire)', () => {
+    const t = timers();
+    const timer = createTimerTrigger(t.registry, { cron: '*/5 * * * *' }, NOW);
+    t.fire(timer.nextFireAt!);
+    // The same due row, fired again at the same scheduled time: one event.
+    t.registry.markFired(timer.id, timer.nextFireAt!, timer.nextFireAt);
+    expect(t.fire(timer.nextFireAt!)).toEqual({ fired: 1 });
+    expect(t.fired()).toHaveLength(1);
+  });
+
+  test('a due trigger that is not a timer is left alone, not published as an alarm', () => {
+    const t = timers();
+    const watch = t.registry.register(
+      { kind: 'file_watch', spec: {}, creator_trust: 'owner', next_fire_at: NOW }, NOW,
+    );
+
+    expect(t.fire(NOW)).toEqual({ fired: 0 });
+    expect(t.fired()).toEqual([]);
+    expect(t.registry.get(watch)!.state).toBe('active');
+  });
+
+  test('an unusable schedule is refused at registration, before a row exists', () => {
+    const t = timers();
+    expect(() => createTimerTrigger(t.registry, { cron: 'not a cron' }, NOW))
+      .toThrow('Unsupported cron expression: not a cron');
+    expect(() => createTimerTrigger(t.registry, {}, NOW))
+      .toThrow('Timer trigger requires cron or atMs');
+    expect(t.registry.list()).toEqual([]);
+  });
+
+  test('the operator surface lists every column but never fires a cancelled one', () => {
+    const t = timers();
+    const timer = createTimerTrigger(t.registry, { cron: '*/5 * * * *', label: 'sweep' }, NOW);
+
+    expect(listTriggers(t.registry).triggers).toEqual([{
+      id: timer.id, kind: 'timer_cron', spec: { cron: '*/5 * * * *', label: 'sweep' },
+      creator_trust: 'authenticated', state: 'active', created_at: NOW,
+      paused_at: null, revoked_at: null, rate_limit_per_min: 60,
+      next_fire_at: timer.nextFireAt, last_fire_at: null, fire_count: 0,
+    }]);
+
+    expect(cancelTrigger(t.registry, timer.id, NOW)).toEqual({ ok: true, changed: true });
+    // Idempotent: cancelling twice is not an error, and reports no change.
+    expect(cancelTrigger(t.registry, timer.id, NOW)).toEqual({ ok: true, changed: false });
+    expect(t.fire(timer.nextFireAt!)).toEqual({ fired: 0 });
   });
 });

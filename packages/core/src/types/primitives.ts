@@ -35,7 +35,7 @@ export interface RawSqlExec {
  * The second SQL primitive, and a deliberate one: a tagged template cannot
  * express a query whose shape is built at runtime, so the stores holding DDL
  * and dynamic statements — the events hub, the experience library, the
- * product-change board, the subordinate roster — speak this instead. Prefer
+ * release board, the subordinate roster — speak this instead. Prefer
  * {@link SqlExecutor} wherever the statement is a literal.
  */
 export interface SqlExec {

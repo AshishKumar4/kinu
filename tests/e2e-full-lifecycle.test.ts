@@ -192,7 +192,7 @@ describe('E2E Full Lifecycle', () => {
     const names = Object.keys(tools);
     for (const name of names) expect(BUILTIN_TOOLS).toContain(name);
     for (const core of ['execute_tools', 'run', 'file', 'memory']) expect(names).toContain(core);
-    for (const ungated of ['skills', 'agents', 'product_change']) {
+    for (const ungated of ['skills', 'agents', 'release']) {
       expect(names).not.toContain(ungated);
     }
     console.log(`  Tools: ${names.join(', ')}`);

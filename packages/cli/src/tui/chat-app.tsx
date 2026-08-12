@@ -187,7 +187,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
    *  tokens) become attachments: images and PDFs inline as file parts, other
    *  files stay path references. */
   const sendPrompt = useCallback(async (input: string) => {
-    const prompt = await resolvePromptAttachments(input);
+    const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
     for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
     const steering = machineRef.current.activeTurns > 0;
     addMessage({

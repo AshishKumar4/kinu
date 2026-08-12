@@ -2,6 +2,10 @@
 
 // Identity system
 export { initActorTables, initAllTables, migrateWorkspaceStorage } from './identity/schema.js';
+export { readActivityLog, type ActivityLogEntry } from './identity/activity-log.js';
+// The one answer to "which tables a workspace has" — every composition root
+// calls this and nothing else (guarded by tests/contract-workspace-schema.test.ts).
+export { initWorkspaceSchema, type WorkspaceSchemaSql } from './identity/workspace-schema.js';
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
@@ -13,7 +17,13 @@ export {
 } from './identity/soul.js';
 export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
 export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
-export { forkWorkspaceStorage, readForkLineage, type ForkOpts, type ForkResult, type ForkLineageRow } from './identity/fork.js';
+export {
+  forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
+  type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
+} from './identity/fork.js';
+export {
+  forkWorkspace, type ForkTransport, type ForkDriverDeps, type ForkOutcome,
+} from './identity/fork-driver.js';
 // Workspace archive — one portable backup format for both backends.
 export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
@@ -156,50 +166,84 @@ export type * from './types/mcts.js';
 export type * from './types/craft.js';
 export type * from './types/evaluation.js';
 
-// Product self-customization lane — separate from scaffold evolution.
+// Views — agent-authored dashboards the host renders from JSON. Ungated, like
+// crafted tools: the containment is the vocabulary, not an approval.
 export {
-  assertProductChangeTransition,
-  PRODUCT_CHANGE_STATUSES,
-  ProductChangeEngine,
-  ProductChangeStore,
+  RESERVED_VIEW_TITLES,
+  VIEW_DATA_SOURCES,
+  VIEW_LIMITS,
+  VIEW_SPEC_VERSION,
+  ViewSpecSchema,
+  createView,
+  deleteView,
+  initViewTables,
+  listViewVersions,
+  listViews,
+  normalizeViewTitle,
+  parseViewSpec,
+  readView,
+  resolveViewPath,
+  revertView,
+  viewSlug,
+  type AgentViewSummary,
+  type AgentViewVersion,
+  type CreateViewResult,
+  type ReadViewResult,
+  type ViewBlock,
+  type ViewColumn,
+  type ViewDataSource,
+  type ViewLeafBlock,
+  type ViewSource,
+  type ViewSpec,
+  type ViewSpecResult,
+  type ViewStatus,
+  type ViewStoreDeps,
+} from './views/index.js';
+
+// Release lane — governed patch/deploy over a bound source — separate from scaffold evolution.
+export {
+  assertReleaseTransition,
+  RELEASE_STATUSES,
+  ReleaseEngine,
+  ReleaseStore,
   approvalTypeForEnvironment,
-  createProductChangeStore,
-  createSandboxProductChangeExec,
+  createReleaseStore,
+  createSandboxReleaseExec,
   deployApprovalDigest,
   deployTargetAsCommand,
-  initProductChangeTables,
+  initReleaseTables,
   isEngineOwnedTransitionTarget,
-  isSecretProductPath,
-  normalizeProductSourcePath,
+  isSecretReleasePath,
+  normalizeReleasePath,
   parseDeployOutput,
-  productChangeSqlFromExec,
-  redactProductDiff,
-  validateProductPatchPath,
+  releaseSqlFromExec,
+  redactReleaseDiff,
+  validateReleasePatchPath,
   type ApplyResult,
   type CheckRunResult,
   type DeployApprovalBinding,
   type DeployResult,
   type PreviewResult,
-  type ProductChangeBoard,
-  type ProductChangeApproval,
-  type ProductChangeCheck,
-  type ProductChangeDetail,
-  type ProductChangeEngineOptions,
-  type ProductChangeExec,
-  type ProductChangeLedger,
-  type ProductChangeRequest,
-  type ProductChangeSqlStore,
-  type ProductChangeStatus,
-  type ProductChangeStoreOptions,
-  type ProductChangeTransitionResult,
-  type ProductDeploymentRecord,
-  type ProductPathValidation,
-  type ProductSourceBinding,
-  type ProductSourceBindingInput,
-  type ProductSourceKind,
+  type ReleaseBoard,
+  type ReleaseApproval,
+  type ReleaseCheck,
+  type ReleaseDetail,
+  type ReleaseEngineOptions,
+  type ReleaseExec,
+  type ReleaseLedger,
+  type ReleaseChange,
+  type ReleaseSqlStore,
+  type ReleaseStatus,
+  type ReleaseStoreOptions,
+  type ReleaseTransitionResult,
+  type ReleaseDeployment,
+  type ReleasePathValidation,
+  type ReleaseSource,
+  type ReleaseSourceInput,
+  type ReleaseSourceKind,
   type RollbackResult,
   type RunChecksResult,
-} from './product-change/index.js';
+} from './release/index.js';
 
 // Cross-workspace experience transfer (owner-scoped library + gated imports).
 // The gate, the staging ledger and the settle path are driven from inside core
@@ -292,6 +336,11 @@ export {
   MISSION_LABELS_METADATA_KEY,
   readMissionLabels,
   readMissionLimits,
+  localMissionPort,
+  localMissionScope,
+  missionCallUsage,
+  type MissionBudgetPort,
+  type MissionScope,
   type MissionBudgetLimits,
   type MissionBudgetRefusal,
   type MissionBudgetSnapshot,
@@ -331,6 +380,9 @@ export {
 } from './tools/agents-tool.js';
 // The same delegation dispatch, projected into the codemode sandbox.
 export { createAgentsCodemodeProvider } from './tools/agents-codemode.js';
+// `agent.*` — self-direction (curriculum, scaffold proposals, schedules,
+// background jobs, compaction) over one host seam both backends implement.
+export { createAgentSelfProvider, type AgentSelfHost } from './tools/agent-self.js';
 // Subordinate roster, identity, admission and the orchestration policy over
 // them — platform-neutral, so a backend supplies only SubordinateRuntime.
 export {
@@ -354,7 +406,8 @@ export {
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,
-  type BuiltinToolDeps, type ProductChangeToolDeps,
+  type BuiltinToolDeps, type ReleaseToolDeps,
+  type CraftedToolSet, type CreateExecuteToolFactory,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
   type PeersToolDeps, type ReportToolDeps,
@@ -373,6 +426,7 @@ export {
   TOOL_OUTPUT_DIR,
   type ClampToolResultOptions,
 } from './tools/clamp.js';
+export { handRolledFileWrite, createFileToolSteer } from './tools/run-file-steer.js';
 export {
   toCraftedToolSource,
   type CraftedToolExecute,
@@ -385,6 +439,24 @@ export {
   FALLBACK_PURPOSE,
   type SystemPromptOptions,
 } from './prompt.js';
+// The boundaries of an assembled request — shared by the renderers that write
+// them and the meter that measures against them.
+export {
+  splitPromptSections,
+  DYNAMIC_CONTEXT_OPEN_TAG,
+  SOUL_SECTION_TITLE,
+  type PromptSection,
+} from './prompting/sections.js';
+// What one request was locally measured to be made of — an estimate, carried
+// next to the provider's authoritative totals rather than reconciled into them.
+export {
+  TurnContextMeter,
+  measureContext,
+  type ContextComposition,
+  type ContextPlane,
+  type ContextSegment,
+  type ToolDefsLike,
+} from './context-meter.js';
 export {
   compilePromptSurface,
   executorIsSelectable,
@@ -422,9 +494,11 @@ export {
 } from './prompting/attachment-sanitizer.js';
 export {
   DynamicContextLedger,
+  agentDynamicContext,
   executorAvailabilityLabel,
   fnv1a64,
   forkDelegates,
+  observeSystemPromptHash,
   fnv1a64Bytes,
   renderDynamicContextBlock,
   renderTurnLocalContext,
@@ -461,6 +535,7 @@ export {
 export {
   extractJsonArray,
   extractJsonObject,
+  generateJson,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
 } from './prompts/structured.js';
@@ -480,6 +555,11 @@ export { converge } from './mcts/convergence.js';
 export { pruneLowValueBranches } from './mcts/pruning.js';
 // Sibling diversity at expansion — backends render this into the explore prompt.
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity.js';
+// The one question a branch is asked, whatever substrate runs it.
+export {
+  explorePrompt, reflectionPrompt, extractCodeBlock,
+  type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
+} from './mcts/explore-prompt.js';
 // Whole-message branch context inheritance (shared by every explore() backend).
 export {
   formatInheritedContext, DEFAULT_INHERITED_MESSAGES,
@@ -505,7 +585,7 @@ export {
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
   BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId,
-  startBranchHead, settleBranchIntoTakes, settlePendingBranch,
+  startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type PendingBranch,
 } from './steer-branch.js';
@@ -595,16 +675,6 @@ export {
 export { emaUpdate, effectiveScore, filterByEffectiveScore, updateCraftScores } from './craft/ema.js';
 export { craftFailureMarker, CRAFT_NEUTRAL_PRIOR } from './craft/in-episode.js';
 export { maybeStoreCraftedTool } from './craft/discovery.js';
-// SKILL.md export/import (Hermes-style git-friendly tool format)
-export {
-  craftedToolToSkillMd,
-  parseSkillMd,
-  exportAllSkillsToVfs,
-  importSkillsFromVfs,
-  type SkillMdParseResult,
-  type ExportSkillsResult,
-  type ImportSkillsResult,
-} from './craft/skill-md.js';
 export { periodicCraftConsolidation } from './craft/consolidation.js';
 export { checkConflictsBeforeAdding, upsertCraftedTool } from './craft/conflict.js';
 export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migrate-duplicates.js';
@@ -636,7 +706,8 @@ export {
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   createParentRpcMountVFS,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type VfsError, type VfsErrorCode, type DeviceMountConsent,
+  type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
+  type VfsError, type VfsErrorCode, type DeviceMountConsent,
   type ParentRpcFileHandle, type ParentRpcWrite, type ParentRpcResult, type ParentRpcError,
 } from './vfs/index.js';
 
@@ -706,17 +777,21 @@ export {
   type SleepTimeInput, type SleepTimeUpdate,
 } from './memory/sleep-time-compute.js';
 
-// durable run-event log (Flue-style, SSE-resumable)
-// NOTE: superseded by the unified `events/hub/agent_log` table. The
-// RunEventRecorder API stays as a thin façade over `agent_log` writes for
-// SSE-stream compatibility. New code uses the EventsHub directly.
+// durable run-event log (Flue-style, SSE-resumable) — its own `run_events`
+// table. The EventsHub's `agent_log` is a separate ledger (ingress events,
+// phases, reactor decisions); the two coexist rather than one fronting the
+// other, and the per-step telemetry sample reads this one.
 export type {
-  RunEvent, RunEventBase, RunEventInput, RunEventType,
+  RunEvent, RunEventBase, RunEventInput, RunEventType, StepUsage,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
+  CacheHitStats, StepTelemetry,
 } from './events/index.js';
 export {
   initRunEventTables,
   RunEventRecorder,
+  cacheHitRate,
+  summarizeSteps,
+  CACHE_HIT_EMA_ALPHA,
   type RunEventListener,
   type RunEventQuery,
 } from './events/index.js';
@@ -725,6 +800,11 @@ export {
 // Builds the agent_log ledger plus the trust, channel, trigger and budget
 // primitives around it. Spec: docs/ARCHITECTURE.md — "Events and ingress".
 export * from './events/hub/index.js';
+
+// Ingress — the gated paths external signals take into that ledger: webhook
+// auth + rate limiting, timer registration and firing, the inbound-email
+// trust gate, the peer outbox, subordinate reports.
+export * from './events/ingress/index.js';
 
 // ExplorationStrategy — single seam for "search candidate continuations,
 // score, pick best." MCTS / Heads / ToT / Reflexion / single-shot fit this.
@@ -754,8 +834,8 @@ export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredent
 
 // Wire constants shared by the cf-backend Worker and the CLI.
 export {
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
   DEVICE_CONNECT_PATH,
-  MAX_INLINE_ATTACHMENT_BYTES,
   ORCHESTRATOR_AGENT_SLUG,
   SUBORDINATE_AGENT_SLUG,
 } from './cloud-wire.js';
@@ -774,10 +854,27 @@ export {
   argumentDigest,
   sha256Hex,
   stableStringify,
+  DeviceConsentRegistry,
+  DEVICE_CONSENT_SCOPE,
+  DEVICE_CONSENT_SCOPE_FULL_FS,
+  DEVICE_CONSENT_DENIED,
+  DEVICE_CONSENT_UNANSWERED,
+  DEVICE_CONSENT_TIMEOUT_MS,
+  parseConsentScope,
+  mergeConsentScope,
+  summarizeDeviceAction,
+  type DeviceConsentScope,
+  type DeviceConsentDecision,
+  type DeviceConsentAnswer,
+  type DeviceActionSummary,
+  type DeviceConsentRequest,
+  type PendingDeviceConsent,
+  type DeviceConsentNotice,
 } from './safety/index.js';
 
 // Utils
 export { nanoid } from './utils/nanoid.js';
+export { hmacSha256Hex, timingSafeEqual } from './utils/crypto.js';
 // Confidence intervals — every score this system reports travels with one.
 export {
   wilsonInterval, scoreInterval, lossInterval, formatScoreInterval, seededRandom,
@@ -795,7 +892,8 @@ export type {
   HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, HeadScore, MergeStrategy,
-  BudgetSplit, SerializedMessage,
+  HeadFileChange, HeadFileChangeSet,
+  SerializedMessage,
 } from './heads/index.js';
 export {
   DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY,
@@ -808,10 +906,10 @@ export {
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  NOMINAL_HEAD_STEPS, NOMINAL_STEP_TOKENS, MAX_FORK_WIDTH,
   type HeadInferenceDeps,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
+  HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
 } from './heads/index.js';
 
 // Background-job system — auto-background long tool calls + wake-on-completion.
@@ -858,7 +956,6 @@ export {
   type ScaffoldBridgeOpts, type ScaffoldHistoryQuery,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host.js';
-export { runSampledShadowEval, type ShadowEvalConfig } from './orchestrator/shadow-eval.js';
 export {
   BACKGROUNDABLE_TOOLS, wrapToolsForBackground, resumeForkBackgroundJob,
 } from './orchestrator/background-tools.js';
@@ -870,8 +967,9 @@ export {
 } from './orchestrator/turn-surface.js';
 export { ModelCatalogSession } from './orchestrator/model-catalog.js';
 export {
-  serializeContentForHeads, narrowInheritedRole,
-  inheritedContextFromHistory, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
+  serializeContentForHeads, narrowInheritedRole, headPhaseRunEvent,
+  inheritedContextFromHistory, inheritedContextFromRows,
+  INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
 } from './orchestrator/heads-support.js';
 export { recordGroundedHeadsTake } from './mcts/takes.js';
 
@@ -901,6 +999,16 @@ export type {
 // al., ICLR 2026 (arxiv 2507.19457).
 // Only the entry points + persistence + types are public; the algorithm
 // internals (pareto, mutate, merge helpers) stay inside evolution/gepa.
+// The scaffold evolution CONTROL PLANE — the drivers over those primitives.
+// They used to be Durable Object methods, which is why GEPA could not be run
+// from the CLI at all; both backends now call these.
+export {
+  applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
+  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
+  runScaffoldOnce, runTurnShadowEval,
+  type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
+  type ScaffoldDecisionResult, type ScaffoldSurface, type ScaffoldVersionView, type ShadowStatus,
+} from './evolution/control.js';
 export {
   runGepa, runScaffoldGepa,
   DEFAULT_GEPA_BUDGET,
@@ -947,3 +1055,51 @@ export type {
   CapabilityStatus, ConformanceFinding, ConformanceFindingKind, ConformanceManifest,
   ConformancePlane, ConformanceReport, ConformanceRoot, ObservedSurface, RootStatuses,
 } from './conformance/index.js';
+
+// ── Read models ──
+// The folds an operator surface asks for: what the workspace is, what a run
+// did, what changed on disk, what work is detached, what the knobs are set to.
+// Every one reads storage the agent already owns, so none of them is
+// backend-shaped — a backend supplies its transport and nothing else.
+export {
+  classifyEvolutionType, getRunTimeline, runEventToSpan, safeJsonParse, toolKindFor,
+} from './read-models/timeline.js';
+export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/timeline.js';
+export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
+export type { RunListEntry, RunSummary } from './read-models/runs.js';
+export {
+  captureWorkspaceBaseline, getExecutorDiff, getWorkspaceDiff, readWorkspaceFiles,
+  resetWorkspaceBaseline,
+} from './read-models/workspace-diff.js';
+export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff.js';
+export {
+  computeWorkspaceDiff, diffLines, parseGitDiff, MAX_LINES_PER_FILE,
+} from './vfs/diff.js';
+export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff.js';
+export {
+  getExecutorFiles, readExecutorFile, sortDirEntries, toCompositePath, writeExecutorFileOp,
+} from './read-models/files.js';
+export type { DirEntry, ExecutorWriteDeps, ExecutorWriteResult } from './read-models/files.js';
+export { getAgentStatus, getChatHistory, getToolList, uiMessageText } from './read-models/status.js';
+export type {
+  AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
+} from './read-models/status.js';
+export {
+  cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
+  jobResult, listBackgroundJobs, retryBackgroundJob,
+} from './read-models/background-jobs.js';
+export type {
+  BackgroundJobControl, BackgroundJobPlaneDeps, CancelWorkDeps, CancelWorkOutcome, RetryOutcome,
+} from './read-models/background-jobs.js';
+export {
+  getAlwaysActiveSkills, getEvolutionConfig, getMctsConfig, getReasoningEffort,
+  getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
+  setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
+} from './read-models/config-plane.js';
+export type {
+  EvolutionConfigView, MctsConfigView, SetModelDeps,
+} from './read-models/config-plane.js';
+export {
+  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+} from './read-models/evolution-views.js';
+export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views.js';

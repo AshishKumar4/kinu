@@ -34,7 +34,7 @@ export default function HomePage() {
       <main className="mx-auto grid min-h-full w-full max-w-5xl grid-cols-[minmax(0,1fr)] content-center gap-8 px-5 py-8 sm:px-8 lg:grid-cols-[minmax(0,1fr)_280px] lg:py-12">
         <section className="min-w-0">
           <div className="mb-7 flex flex-col items-start gap-3 sm:flex-row sm:items-center">
-            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border p-border p-elevated">
+            <div className="flex size-10 shrink-0 items-center justify-center rounded-lg border p-border p-fill">
               <BrainIcon size={23} weight="duotone" className="p-accent" />
             </div>
             <div className="min-w-0">

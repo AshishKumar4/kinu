@@ -5,8 +5,8 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   CapabilityDeniedError,
-  OWNER_SESSION,
   WORKSPACE_CAPABILITY_TIERS,
+  ownerCaller,
   getWorkspaceTier,
   initWorkspaceCapabilityTables,
   mintWorkspaceCapability,
@@ -16,7 +16,7 @@ import {
   type WorkspaceCapability,
 } from '../src/user/workspace-capability.js';
 import { isModelInferenceCredentialKey } from '../src/user/credential-headers.js';
-import { sqlExec } from './helpers/user-do.js';
+import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do.js';
 import type { SqlExec } from '@proteus/core';
 
 function setup() {
@@ -57,8 +57,8 @@ describe('capability token mint', () => {
     expect(getWorkspaceTier(sql, 'workspace-a')).toBe('shared');
 
     // The superseded token is dead; only one identity row per workspace exists.
-    await expect(requireTier(sql, { workspaceToken: first.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
-    expect(db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get<{ n: number }>()!.n).toBe(1);
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: first.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get() as { n: number } | null)!.n).toBe(1);
     db.close();
   });
 
@@ -68,7 +68,7 @@ describe('capability token mint', () => {
     revokeWorkspaceCapability(sql, 'workspace-a');
 
     expect(getWorkspaceTier(sql, 'workspace-a')).toBeNull();
-    await expect(requireTier(sql, { workspaceToken: minted.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
     db.close();
   });
 });
@@ -77,15 +77,42 @@ describe('requireTier fails closed', () => {
   test('denies a caller that presents nothing', async () => {
     const { db, sql } = setup();
     for (const bogus of [undefined, null, '', 'owner', {}, { workspaceToken: '' }, { workspaceToken: 7 }]) {
-      await expect(requireTier(sql, bogus as never, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
+      await expect(requireTier(sql, TEST_USER_ENV, bogus as never, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
     }
+    db.close();
+  });
+
+  test('owner authority is a derived secret, not a string anyone can type', async () => {
+    const { db, sql } = setup();
+    const owner = await testOwner();
+    expect(await requireTier(sql, TEST_USER_ENV, owner, 'credentials.other')).toEqual({ kind: 'owner_session' });
+
+    // The sentinel this replaced, and a guess at the token itself.
+    for (const bogus of ['owner_session', { ownerToken: 'owner_session' }, { ownerToken: 'a'.repeat(64) }]) {
+      await expect(requireTier(sql, TEST_USER_ENV, bogus as never, 'credentials.other'))
+        .rejects.toThrow(CapabilityDeniedError);
+    }
+
+    // A deployment holding a different secret derives a different capability,
+    // so an owner token cannot be lifted from one deployment to another.
+    const foreign = await ownerCaller({ CREDENTIAL_ENCRYPTION_KEY: 'a-completely-different-root-secret-value' });
+    await expect(requireTier(sql, TEST_USER_ENV, foreign, 'credentials.other'))
+      .rejects.toThrow(/Unrecognized owner capability/);
+    db.close();
+  });
+
+  test('without the secret there is no owner capability to present', async () => {
+    const { db, sql } = setup();
+    await expect(ownerCaller({})).rejects.toThrow(/CREDENTIAL_ENCRYPTION_KEY/);
+    await expect(requireTier(sql, {}, await testOwner(), 'credentials.other'))
+      .rejects.toThrow(/CREDENTIAL_ENCRYPTION_KEY/);
     db.close();
   });
 
   test('denies an unknown token', async () => {
     const { db, sql } = setup();
     await mintWorkspaceCapability(sql, 'workspace-a');
-    await expect(requireTier(sql, { workspaceToken: 'pwc_nope' }, 'credentials.model'))
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: 'pwc_nope' }, 'credentials.model'))
       .rejects.toThrow(/Unrecognized workspace capability token/);
     db.close();
   });
@@ -95,7 +122,7 @@ describe('requireTier fails closed', () => {
     const minted = await mintWorkspaceCapability(sql, 'workspace-a');
     db.prepare('DELETE FROM workspace_tiers WHERE workspace_name = ?').run('workspace-a');
 
-    await expect(requireTier(sql, { workspaceToken: minted.token }, 'credentials.model'))
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model'))
       .rejects.toThrow(/no capability tier registered/);
     db.close();
   });
@@ -110,7 +137,7 @@ describe('requireTier fails closed', () => {
       CREATE TABLE workspace_tiers (workspace_name TEXT PRIMARY KEY, tier TEXT NOT NULL, updated_at INTEGER NOT NULL);
       INSERT INTO workspace_tiers VALUES ('workspace-a', 'admin', 1);
     `);
-    await expect(requireTier(sql, { workspaceToken: minted.token }, 'credentials.model'))
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, 'credentials.model'))
       .rejects.toThrow(CapabilityDeniedError);
     db.close();
   });
@@ -121,7 +148,7 @@ describe('the attenuation matrix', () => {
     const { db, sql } = setup();
     const minted = await mintWorkspaceCapability(sql, 'workspace-a');
     for (const capability of CAPABILITIES) {
-      expect(await requireTier(sql, { workspaceToken: minted.token }, capability))
+      expect(await requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability))
         .toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'full' });
     }
     db.close();
@@ -133,7 +160,7 @@ describe('the attenuation matrix', () => {
     setWorkspaceTier(sql, 'workspace-a', 'shared');
 
     for (const capability of CAPABILITIES) {
-      const call = requireTier(sql, { workspaceToken: minted.token }, capability);
+      const call = requireTier(sql, TEST_USER_ENV, { workspaceToken: minted.token }, capability);
       if (WORKSPACE_CAPABILITY_TIERS[capability] === 'shared') {
         expect(await call).toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'shared' });
       } else {
@@ -151,7 +178,7 @@ describe('the attenuation matrix', () => {
   test('an owner session is never attenuated', async () => {
     const { db, sql } = setup();
     for (const capability of CAPABILITIES) {
-      expect(await requireTier(sql, OWNER_SESSION, capability)).toEqual({ kind: 'owner_session' });
+      expect(await requireTier(sql, TEST_USER_ENV, await testOwner(), capability)).toEqual({ kind: 'owner_session' });
     }
     db.close();
   });
@@ -163,8 +190,8 @@ describe('the attenuation matrix', () => {
     setWorkspaceTier(sql, 'workspace-a', 'shared');
 
     // b stays full; a's token must not inherit b's tier.
-    await expect(requireTier(sql, { workspaceToken: a.token }, 'device.rpc')).rejects.toThrow(CapabilityDeniedError);
-    const resolved = await requireTier(sql, { workspaceToken: a.token }, 'credentials.model');
+    await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: a.token }, 'device.rpc')).rejects.toThrow(CapabilityDeniedError);
+    const resolved = await requireTier(sql, TEST_USER_ENV, { workspaceToken: a.token }, 'credentials.model');
     expect(resolved).toEqual({ kind: 'workspace', workspace: 'workspace-a', tier: 'shared' });
     db.close();
   });

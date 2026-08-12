@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/web/provider.ts b/packages/core/src/web/provider.ts
-index 0eae95f..68dfdb0 100644
+index 6d4797d..50fe4bb 100644
 --- a/packages/core/src/web/provider.ts
 +++ b/packages/core/src/web/provider.ts
-@@ -232,7 +232,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
- 
+@@ -238,7 +238,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
+         : '';
        return {
          url: parsed.toString(),
 -        title: extractTitle(raw) || extractMarkdownTitle(markdown) || undefined,
 +        title: extractMarkdownTitle(markdown) || extractTitle(raw) || undefined,
          retrievedAt: new Date().toISOString(),
-         markdown: markdown.trim(),
+         markdown: markdown.trim() + note,
        };

@@ -330,6 +330,6 @@ describe('openai-compat + no-op providers', () => {
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
-    expect((body.messages as Array<{ role: string }>)[0]).toEqual({ role: 'system', content: 'sys' });
+    expect((body.messages as Array<{ role: string; content: unknown }>)[0]).toEqual({ role: 'system', content: 'sys' });
   });
 });

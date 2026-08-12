@@ -103,14 +103,52 @@ export async function authenticateRequest(request: Request, env: AuthEnv): Promi
   throw new AuthError(401, 'No Proteus session in request');
 }
 
-/** Public routes that bypass auth. Health check + sandbox preview proxy
- *  (which has its own token-in-URL auth). */
+/** Methods a site can be made to issue cross-site without reading the reply. */
+const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
+
+/**
+ * CSRF gate for cookie-authenticated requests.
+ *
+ * The session cookie is ambient: the browser attaches it to any request to this
+ * origin, including ones another page caused. Every state-changing request that
+ * arrives with it must therefore prove it was issued by this app, and the proof
+ * is the `Origin` header — set by the browser, not settable by script.
+ * WebSocket upgrades are included: they are GETs, but they open a live RPC
+ * channel to the agent and browsers always send `Origin` on the handshake.
+ *
+ * Requests authenticated some other way (CLI bearer token, connect ticket)
+ * carry no ambient credential and are not gated — an attacker's page cannot
+ * make the browser attach a token it does not have.
+ *
+ * Returns a denial, or null when the request may proceed.
+ */
+export function crossSiteRejection(request: Request): Response | null {
+  if (!readSessionToken(request)) return null;
+  const isUpgrade = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+  if (!isUpgrade && SAFE_METHODS.has(request.method)) return null;
+
+  const expected = new URL(request.url).origin;
+  const stated = request.headers.get('origin') ?? originOf(request.headers.get('referer'));
+  if (stated === expected) return null;
+
+  return new Response(
+    JSON.stringify({ error: 'Cross-site request rejected', code: 'CROSS_SITE' }),
+    { status: 403, headers: { 'content-type': 'application/json' } },
+  );
+}
+
+function originOf(value: string | null): string | null {
+  if (!value) return null;
+  try { return new URL(value).origin; } catch { return null; }
+}
+
+/** Public routes on the app's own host that bypass auth. (Sandbox previews are
+ *  not here: they are served on the preview host, which never reaches this.) */
 export function isPublicPath(pathname: string): boolean {
   if (pathname === '/api/health') return true;
   if (pathname === '/login' || pathname === '/logout') return true;
   if (pathname.startsWith('/auth/')) return true;
   if (pathname.startsWith('/api/auth/')) return true;
-  if (pathname.startsWith('/_preview/')) return true;
   // covers /pc/connect and /pc/connect-ticket — the tunnel uses its own auth
   if (pathname.startsWith(DEVICE_CONNECT_PATH)) return true;
   if (pathname.startsWith('/assets/')) return true;    // hashed static bundles

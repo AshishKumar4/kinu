@@ -2,7 +2,7 @@
  * Canonical tool registry — the single source of truth for Proteus's built-in
  * tool names and descriptions. Consumed by:
  *   - tools/builtins.ts      (factory for the built-in ToolSet)
- *   - evolution/engine.ts    (crafted-tool filter — BUILT_IN_TOOL_NAMES)
+ *   - prompting/surface.ts   (crafted-tool projection of the live ToolSet)
  *   - cf-backend/orchestrator.ts  (getToolList, getToolDescriptions, beforeTurn)
  *   - cli surfaces           (chat-loop, tui)
  *
@@ -18,7 +18,7 @@ export const BUILTIN_TOOLS = [
   'memory',
   'web',
   'report',
-  'product_change',
+  'release',
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
@@ -80,7 +80,14 @@ export const DELEGATION_RUNGS = {
     'Fork (action=fork) on two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
     'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to fork. ' +
     'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, may auto-background. ' +
-    'Leave settle unset to merge the forks back into this turn; set settle=mcts to have them scored against each other by execution instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since each branch\'s proposed code IS executed to earn its score. mcts branches propose text/code rather than running your own tool loop.',
+    // The payoff-before-limitation ORDER is deliberate and preserved: opening
+    // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus. What
+    // changed is precision — "scored against each other by execution" flat
+    // overstates mcts/evaluation.ts, where execution picks the score BAND and
+    // a judge ensemble places the branch inside it. The prompt now carries the
+    // full mechanism; this field keeps the trigger and the one ranking fact
+    // that follows from the band.
+    'Leave settle unset to merge the forks back into this turn; set settle=mcts to have them compete instead — how you pick between competing approaches, and the right settle for rival scripts that must produce a specific artifact, since a branch whose proposed code runs and passes outranks every branch whose code failed. mcts branches propose text/code rather than running your own tool loop.',
   staff:
     'Staff a subordinate (action=staff) whenever the work must outlive this turn — the user asks for several fixes or features at once, or a long-running effort — creating one subordinate per independent workstream and running them in parallel. ' +
     'A subordinate keeps its own context across turns and stays in your roster: hand it work with ask, steer it with send, read the roster with list. ' +
@@ -135,6 +142,10 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
         : '')
       + 'save/search hold a lesson or note too long to be a value; sessions reads what past sessions said, before re-deriving context you already have.',
     whenNotToUse: 'Do not store temporary task progress, stale logs, or anything this turn already carries.',
+    // Not a usage rule but a fact about what is already in the store: the
+    // harness writes failed work here as lessons, so the search is worth
+    // making before the retry rather than after it.
+    doctrine: 'Your own failures are recorded as lessons in here — search before retrying similar work.',
     result: hasFacts
       ? 'Returns save or fact-mutation status, recalled fact values, note search hits, or session transcript slices.'
       : 'Returns save status, note search hits, or session transcript slices.',
@@ -245,7 +256,12 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
-    example: "agents({action:'staff', role:'reviewer — auth changes', mission:'Review every auth diff here and report the risks.'})",
+    // The fork call, because it is the one shape here a model gets wrong: the
+    // trajectory data has `agents` called with an invented `fork_specs` for
+    // `forks`, and the nested {task, rationale} objects are the only argument
+    // shape in the whole surface that a name alone does not give away. staff's
+    // arguments are flat and its `role` property carries its own example.
+    example: "agents({action:'fork', task:'Why staging 502s under load', forks:[{task:'Read the gateway logs', rationale:'where the failure shows'}, {task:'Diff the last deploy', rationale:'timing points at the release'}]})",
   },
   memory: memoryToolSpec(true),
   web: {
@@ -268,13 +284,13 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
   },
-  product_change: {
-    name: 'product_change',
-    summary: 'Governed lane for changing the Proteus product/UI itself — plan, then apply/check/preview/deploy/rollback the change for real in the sandbox.',
-    whenToUse: 'Use when the user asks Proteus to modify its own app, UI, prompts, deployment, or product behavior. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
-    whenNotToUse: 'Do not use for ordinary user project work outside the Proteus product.',
+  release: {
+    name: 'release',
+    summary: 'Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.',
+    whenToUse: 'Use when the user asks Proteus to change its own app, UI, prompts, or deployment. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
+    whenNotToUse: 'Not for ordinary project work, and not for adding a workspace dashboard — that is workspace.createView, which needs no deploy.',
     result: 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.',
-    example: "product_change({action:'run_checks', changeId:'chg_4f2'})",
+    example: "release({action:'run_checks', changeId:'chg_4f2'})",
   },
 };
 

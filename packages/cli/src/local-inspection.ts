@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import {
-  createProductChangeStore,
+  createReleaseStore,
   BackgroundJobStore,
   BUILTIN_TOOL_DESCRIPTIONS,
   BUILTIN_TOOLS,
@@ -21,7 +21,7 @@ import {
   listGepaRuns,
   loadGepaCandidates,
   nextCronFire,
-  productChangeSqlFromExec,
+  releaseSqlFromExec,
   runCorpusEval,
   runEnsemble,
   sampleForLabeling,
@@ -37,7 +37,7 @@ import {
   type LabelingItem,
   type OutcomeLabel,
   type EventVariant,
-  type ProductChangeBoard,
+  type ReleaseBoard,
   type RunEvent,
   type SearchNode,
   type ReasoningEffort,
@@ -108,7 +108,7 @@ export function getLocalAgentState(name: string): unknown {
     mcts: listLocalMcts(name),
     timeline: listLocalTimeline(name, 250),
     executors: listLocalExecutors(),
-    product: getLocalProductBoard(name, 20),
+    release: getLocalReleaseBoard(name, 20),
   }));
 }
 
@@ -604,12 +604,12 @@ export async function executeLocalExecutor(name: string, executorId: string, com
   return { executor: executorId, command, ...result };
 }
 
-export function getLocalProductBoard(name: string, limit = 20): ProductChangeBoard {
+export function getLocalReleaseBoard(name: string, limit = 20): ReleaseBoard {
   return withLocalDb(name, (db) => {
-    if (!tableExists(db, 'product_source_bindings') || !tableExists(db, 'product_change_requests')) {
+    if (!tableExists(db, 'release_sources') || !tableExists(db, 'release_changes')) {
       return { bindings: [], changes: [], checks: [], approvals: [], deployments: [] };
     }
-    const store = createProductChangeStore(productChangeSqlFromExec(hubSql(db)));
+    const store = createReleaseStore(releaseSqlFromExec(hubSql(db)));
     return store.board(name, limit);
   });
 }

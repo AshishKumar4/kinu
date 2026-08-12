@@ -293,7 +293,7 @@ describe('web builtin', () => {
 
   test('action=search returns ranked, model-ready text', async () => {
     const { rt } = createTestRuntime();
-    const t = buildWithWeb(rt) as { web: { execute: (a: WebArgs) => Promise<string> } };
+    const t = buildWithWeb(rt) as unknown as { web: { execute: (a: WebArgs) => Promise<string> } };
     const out = await t.web.execute({ action: 'search', query: 'the topic' });
     expect(out).toContain('1. First & Best');
     expect(out).toContain('https://example.com/a');
@@ -302,7 +302,7 @@ describe('web builtin', () => {
 
   test('a call missing the argument its action needs says which', async () => {
     const { rt } = createTestRuntime();
-    const t = buildWithWeb(rt) as { web: { execute: (a: WebArgs) => Promise<unknown> } };
+    const t = buildWithWeb(rt) as unknown as { web: { execute: (a: WebArgs) => Promise<unknown> } };
     expect(await t.web.execute({ action: 'search' })).toEqual({ error: 'web.search requires `query`' });
     expect(await t.web.execute({ action: 'fetch' })).toEqual({ error: 'web.fetch requires `url`' });
   });
@@ -311,7 +311,7 @@ describe('web builtin', () => {
     const { rt } = createTestRuntime();
     const big = '<html><body>' + 'word '.repeat(20000) + '</body></html>';
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
-    const t = buildWithWeb(rt, provider) as { web: { execute: (a: WebArgs) => Promise<string> } };
+    const t = buildWithWeb(rt, provider) as unknown as { web: { execute: (a: WebArgs) => Promise<string> } };
     const out = await t.web.execute({ action: 'fetch', url: 'https://example.com/big' });
 
     expect(out).toContain('Source: https://example.com/big');
@@ -330,7 +330,7 @@ describe('web builtin', () => {
       search: async () => { throw new WebFetchError('rate limited', true); },
       fetch: async () => { throw new WebFetchError('x'); },
     };
-    const t = buildWithWeb(rt, failing) as { web: { execute: (a: WebArgs) => Promise<unknown> } };
+    const t = buildWithWeb(rt, failing) as unknown as { web: { execute: (a: WebArgs) => Promise<unknown> } };
     expect(await t.web.execute({ action: 'search', query: 'x' }))
       .toMatchObject({ error: 'rate limited', retriable: true });
     expect(await t.web.execute({ action: 'fetch', url: 'https://example.com' }))
@@ -344,7 +344,7 @@ describe('web builtin', () => {
         url.includes('duckduckgo') ? { body: DDG_HTML } : { body: '<html><body><p>page body</p></body></html>' },
       ).fetch,
     });
-    const t = buildWithWeb(rt, provider) as { execute_tools: { execute: (a: { code: string }) => Promise<{ result: unknown }> } };
+    const t = buildWithWeb(rt, provider) as unknown as { execute_tools: { execute: (a: { code: string }) => Promise<{ result: unknown }> } };
 
     const searched = await t.execute_tools.execute({
       code: 'const r = await web.search("topic", { limit: 2 }); return r.results.length;',

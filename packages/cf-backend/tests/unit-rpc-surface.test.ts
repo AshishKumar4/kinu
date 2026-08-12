@@ -4,7 +4,7 @@
  * `requireTier` gates every public `UserDO` method, but TypeScript `private` is
  * erased at compile time and Cloudflare resolves `stub.foo(...)` against the
  * receiver's prototype chain — so before `sealRpcSurface`, any Durable Object
- * holding a `UserDO` stub could call `sqlx` or `getCredentialRow` directly and
+ * holding a `UserDO` stub could call `sqlx` or `readCredential` directly and
  * never meet a gate. The first test here performs exactly that theft against a
  * real `UserDO` holding a real credential, and then shows the same call denied.
  *
@@ -15,6 +15,7 @@
  * rejects them with `The RPC receiver does not implement the method "x".` —
  * the same error it gives for a name that was never declared.
  */
+import { createTestUserDO, provisionTestWorkspace, testOwner } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import {
   AGENTS_FACET_RPC_SURFACE,
@@ -27,9 +28,7 @@ import {
   sealRpcSurface,
 } from '../src/rpc-surface.js';
 import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate.js';
-import { createTestUserDO, provisionTestWorkspace } from './helpers/user-do.js';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
-import { OWNER_SESSION } from '../src/user/workspace-capability.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -54,30 +53,32 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
   test('an internal call steals credentials without the seal, and cannot reach them with it', async () => {
     const harness = createTestUserDO();
     await provisionTestWorkspace(harness, 'alpha');
-    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_the_owners_pat' });
+    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_the_owners_pat' });
 
     // The hole, demonstrated. `sqlx` is `private` in TypeScript and therefore an
     // ordinary prototype method at runtime; every `requireTier` check sits in a
-    // public method above it.
+    // public method above it. Encryption at rest means the stolen row is a
+    // sealed envelope rather than the token — but `readCredential` opens it,
+    // so the reachable surface is still what has to hold.
     unsealRpcSurface(harness.userDO);
     const stolenBySql = callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials WHERE key = ?', 'github']);
-    expect(JSON.stringify(stolenBySql)).toContain('ghp_the_owners_pat');
-    const stolenByRow = callOverRpc(harness.userDO, 'getCredentialRow', ['github']);
+    expect(JSON.stringify(stolenBySql)).not.toContain('ghp_the_owners_pat');
+    const stolenByRow = await callOverRpc(harness.userDO, 'readCredential', ['github']);
     expect(stolenByRow).toMatchObject({ token: 'ghp_the_owners_pat' });
 
     // The same two calls, once the class's declared surface is enforced.
     sealRpcSurface(harness.userDO, USER_DO_RPC_SURFACE);
     expect(() => callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials']))
       .toThrow('The RPC receiver does not implement the method "sqlx".');
-    expect(() => callOverRpc(harness.userDO, 'getCredentialRow', ['github']))
-      .toThrow('The RPC receiver does not implement the method "getCredentialRow".');
+    expect(() => callOverRpc(harness.userDO, 'readCredential', ['github']))
+      .toThrow('The RPC receiver does not implement the method "readCredential".');
     harness.close();
   });
 
   test('a UserDO seals itself — no test may reconstruct the boundary for it', async () => {
     const harness = createTestUserDO();
-    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_untouched' });
-    for (const internal of ['sqlx', 'getCredentialRow', 'requireTier', 'ensureInit']) {
+    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_untouched' });
+    for (const internal of ['sqlx', 'readCredential', 'writeCredential', 'requireTier', 'ensureInit']) {
       expect(() => callOverRpc(harness.userDO, internal, [])).toThrow('does not implement');
     }
     harness.close();
@@ -88,7 +89,7 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     const token = await provisionTestWorkspace(harness, 'alpha');
 
     // A worker route acting for the owner.
-    expect(await callOverRpc(harness.userDO, 'listWorkspaces', [OWNER_SESSION]))
+    expect(await callOverRpc(harness.userDO, 'listWorkspaces', [await testOwner()]))
       .toMatchObject([{ name: 'alpha' }]);
     // A workspace presenting its capability token — same transport, still gated.
     await expect(callOverRpc(harness.userDO, 'listCredentials', [{ workspaceToken: token }]) as Promise<unknown>)
@@ -98,15 +99,15 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
 
   test('the seal leaves the class working from the inside', async () => {
     // Every credential path below runs through the sealed `sqlx`, `ensureInit`,
-    // `requireTier` and `getCredentialRow` — proving the shadowing changed
+    // `requireTier` and `readCredential` — proving the shadowing changed
     // reachability and nothing else.
     const harness = createTestUserDO();
-    await harness.userDO.setCredential(OWNER_SESSION, 'github', { kind: 'bearer', token: 'ghp_internal' });
-    expect(await harness.userDO.listCredentials(OWNER_SESSION)).toMatchObject([{ key: 'github' }]);
-    expect(await harness.userDO.getAuthHeaders(OWNER_SESSION, 'github'))
+    await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_internal' });
+    expect(await harness.userDO.listCredentials(await testOwner())).toMatchObject([{ key: 'github' }]);
+    expect(await harness.userDO.getAuthHeaders(await testOwner(), 'github'))
       .toEqual({ Authorization: 'Bearer ghp_internal' });
-    await harness.userDO.deleteCredential(OWNER_SESSION, 'github');
-    expect(await harness.userDO.listCredentials(OWNER_SESSION)).toEqual([]);
+    await harness.userDO.deleteCredential(await testOwner(), 'github');
+    expect(await harness.userDO.listCredentials(await testOwner())).toEqual([]);
     harness.close();
   });
 });
@@ -152,7 +153,8 @@ describe('the UserDO RPC surface cannot drift from the class', () => {
     expect(named('getAuthHeaders')).toBe(true);   // async, no modifier
     expect(named('fetch')).toBe(true);            // override async
     expect(named('sqlx')).toBe(true);             // private, non-async, generic
-    expect(named('getCredentialRow')).toBe(true); // private, non-async
+    expect(named('readCredential')).toBe(true);   // private, async
+    expect(named('rewrapCredentials')).toBe(true); // private, non-async, promise-returning
     expect(declaredMembers.filter(isInternalMember).length).toBeGreaterThan(5);
   });
 

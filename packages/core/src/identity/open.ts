@@ -108,7 +108,7 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
     memory, craftStore, judgeModel,
     spawnBranch: async () => ({
       explore: async () => ({ text: 'exploration', codeUsed: null }),
-      generateReflection: async () => 'reflection',
+      generateReflection: async () => ({ text: 'reflection' }),
     }),
     abortBranch: async () => {},
   });

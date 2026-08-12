@@ -28,12 +28,12 @@ import {
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
   effortFor,
-  EVIDENCE_BUDGETS, evidenceWindow,
   createAgentConfigStore, selectFastModel,
   type VectorStore, type VectorizeIndex,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
+import { previewHostSuffix } from "./lib/preview-origin.js";
 import { Nimbus } from "@nimbus-sh/sdk";
 import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
@@ -48,7 +48,7 @@ import { createAgentProviderRegistry, type UserCredentialSource } from "./provid
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
-import { agentAffinityKey, diversityDirective, formatInheritedContext } from "@proteus/core";
+import { agentAffinityKey, explorePrompt, extractCodeBlock, formatInheritedContext, missionCallUsage, reflectionPrompt } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import {
   nimbusSandboxConfig,
@@ -221,20 +221,18 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
-  // by the agent's stable name. `PREVIEW_HOSTNAME` is the public host for
-  // path-style preview URLs (see preview-proxy.ts); `sandboxId` is the
-  // stable DO key so URLs round-trip back to the correct container.
+  // by the agent's stable name. `PREVIEW_HOST_SUFFIX` is the zone the SDK
+  // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
+  // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
   const env = agent.env as Env & Record<string, unknown>;
-  const previewHostname = typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0
-    ? env.PREVIEW_HOSTNAME
-    : undefined;
+  const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = `proteus-${actor.workspaceName}`;
   // Every remote mount exposes the environment's REAL root ('/'); the
   // ergonomic working dir is metadata, not a path rewrite.
   const sandboxMountPolicy: MountPolicy =
     { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   let sandboxHandle: SandboxHandle | null = null;
-  if (env.Sandbox && previewHostname) {
+  if (env.Sandbox && previewSuffix) {
     try {
       const rawHandle = getSandbox(
         env.Sandbox as Parameters<typeof getSandbox>[0],
@@ -244,7 +242,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
       const configStore = createAgentConfigStore(sql);
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
-      executionRouter.register(createSandboxExecutor(handle, previewHostname, sandboxId));
+      executionRouter.register(createSandboxExecutor(handle, previewSuffix));
       // File plane: /sandbox over the same (restoring) raw handle the
       // codemode sandbox.* tools use — two consumers of one handle.
       compositeVfs.mount('sandbox', {
@@ -252,16 +250,16 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
         policy: sandboxMountPolicy,
         workingDir: '/workspace',
       });
-      console.log(`[proteus] SandboxExecutor registered (host=${previewHostname} id=${sandboxId})`);
+      console.log(`[proteus] SandboxExecutor registered (previews=*.${previewSuffix} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
       compositeVfs.reserve('sandbox', (err as Error).message, sandboxMountPolicy);
     }
   } else {
-    if (!previewHostname) console.warn("[proteus] PREVIEW_HOSTNAME not set — Sandbox executor running in stub mode");
+    if (!previewSuffix) console.warn("[proteus] PREVIEW_HOST_SUFFIX not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
-    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOSTNAME missing)', sandboxMountPolicy);
+    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOST_SUFFIX missing)', sandboxMountPolicy);
   }
 
   // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
@@ -350,9 +348,6 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
 function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
   if (typeof env.CLI_PUBLIC_ORIGIN === "string" && env.CLI_PUBLIC_ORIGIN.length > 0) {
     return env.CLI_PUBLIC_ORIGIN.replace(/\/+$/, "");
-  }
-  if (typeof env.PREVIEW_HOSTNAME === "string" && env.PREVIEW_HOSTNAME.length > 0) {
-    return `https://${env.PREVIEW_HOSTNAME}`;
   }
   return "https://proteus.local";
 }
@@ -721,28 +716,35 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
   const getModel = () => reg.resolveModel(spec);
 
   return {
-    explore: async (history, _tools, siblings = []) => {
-      // Match the Facet's explore() exactly — same context formatter and token
-      // budget — so the fallback path produces branches of equal fidelity, not
-      // a slice(-800) + 512-token stub that can't ground code (WP-A7).
-      const context = formatInheritedContext(history);
+    explore: async (history, craftedTools, siblings = []) => {
+      // The SAME question the facet asks (core explorePrompt), so a fallback
+      // branch is comparable with a facet one — they are scored against each
+      // other. This path once asked a materially weaker version of it while
+      // claiming to match, which is exactly what the shared prompt prevents.
+      const { system, user } = explorePrompt({
+        context: formatInheritedContext(history),
+        craftedTools,
+        siblings,
+      });
       const result = await generateText({
         model: getModel(),
-        system: "You are an expert exploring one approach to solve a task.\nIf your approach involves code, include it in a ```js code block.",
-        messages: [{ role: "user" as const, content: `Context:\n${context}\n\nPropose ONE approach. Include code if applicable.${diversityDirective(siblings)}` }],
+        system,
+        messages: [{ role: "user" as const, content: user }],
         ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
-      const codeMatch = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/);
-      return { text, codeUsed: codeMatch?.[1]?.trim() ?? null };
+      return { text, codeUsed: extractCodeBlock(text), usage: missionCallUsage(result.usage) };
     },
+    // No trace table on this path — the reflection is about the task alone,
+    // and the shared prompt drops the attempt heading rather than showing an
+    // empty one.
     generateReflection: async (task) => {
       const result = await generateText({
         model: getModel(),
-        messages: [{ role: "user" as const, content: `What went wrong? ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\nOne sentence.` }],
+        messages: [{ role: "user" as const, content: reflectionPrompt(task, '') }],
         ...effortFor('reflection'),
       });
-      return result.text.trim();
+      return { text: result.text.trim(), usage: missionCallUsage(result.usage) };
     },
   };
 }

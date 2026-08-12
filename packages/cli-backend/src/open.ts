@@ -10,8 +10,8 @@
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initAllTables, migrateWorkspaceStorage, readSoul, summarizeSoul, getCurrentScaffoldVersion } from '@proteus/core';
-import { createCLIRuntime, makeSql, makeExecRaw } from './runtime.js';
+import { initWorkspaceSchema, readSoul, summarizeSoul, getCurrentScaffoldVersion } from '@proteus/core';
+import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 
@@ -63,11 +63,11 @@ export function openWorkspaceCLI(
   config: CLIOpenConfig,
 ): { rt: AgentRuntime; info: WorkspaceInfo } {
   const sql = makeSql(db);
-  const execRaw = makeExecRaw(db);
 
-  // Ensure all tables exist (idempotent)
-  initAllTables(execRaw);
-  migrateWorkspaceStorage(sql);
+  // Every table a workspace has, on any backend — one list, in core. Opening
+  // is the only moment a workspace made by an older build (or by another
+  // backend) can gain what it is missing, so the full set runs here.
+  initWorkspaceSchema(makeWorkspaceSchemaSql(db));
 
   // Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`

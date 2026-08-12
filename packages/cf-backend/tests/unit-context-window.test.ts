@@ -3,7 +3,7 @@
 import { describe, test, expect } from "bun:test";
 import { userCredentialSource } from './helpers/user-credentials.js';
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import { catalogModelInfo, contextWindowForModel, type ProviderDeps } from "@proteus/core";
+import { catalogModelInfo, contextWindowForModel, type ModelProvider, type ProviderDeps } from "@proteus/core";
 
 describe("contextWindowForModel", () => {
   test("matches known model families on their spec", () => {
@@ -43,9 +43,9 @@ describe("catalogModelInfo", () => {
   const deps = {} as ProviderDeps;
 
   test("returns the catalog entry (window + input modalities) for a known model id", async () => {
-    const provider = {
+    const provider: Pick<ModelProvider, 'listModels'> = {
       listModels: async () => [
-        { id: "@cf/moonshotai/kimi-k2.6", contextWindow: 262_144, inputModalities: ["text", "image"] as const },
+        { id: "@cf/moonshotai/kimi-k2.6", contextWindow: 262_144, inputModalities: ["text", "image"] },
         { id: "@cf/openai/gpt-oss-120b", contextWindow: 128_000 },
       ],
     };

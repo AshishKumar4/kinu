@@ -47,6 +47,23 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- Chat attachments on a LOCAL agent are capped at 8 MiB per message instead of
+  1 MiB. The 1 MiB number was a Cloudflare fact — a chat message is one Durable
+  Object SQLite row — that a shared constant had turned into a universal rule,
+  so a local session with no row limit at all was refusing screenshots it could
+  have carried. Cloud agents are unchanged at 1 MiB, and the cap now comes from
+  whichever backend the session is talking to. Over-cap files still become path
+  references, which locally the agent can just read.
+- The Voyager curriculum proposer uses the configured judge model on cloud
+  agents, not the chat model. Proposing tasks is a judging job and the local
+  backend already routed it that way; with no judge model configured nothing
+  changes.
+- A local agent's `agent.*` self-direction namespace is now the same one a
+  cloud agent gets. The local copy had drifted: `agent.schedule` accepted a
+  cron expression its own scheduler could never fire (the trigger was created
+  and simply never ran), and `agent.jobResult` described itself without saying
+  what hands back a `{ jobId }` in the first place — so a local agent was
+  measurably worse at steering itself, with nothing failing to show it.
 - `proteus exec` no longer waits on the heavy evolution cadence before it can
   exit. The turn-level work (outcome review, the sampled scaffold trial) is
   still joined, now under a bound that says what it abandoned instead of waiting
@@ -68,6 +85,17 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Fixed
 
+- `/takes` on a local agent no longer claims a continuation was queued when it
+  was not. The local pick reported `continuationQueued: true` the moment it
+  dispatched the follow-up, without waiting to learn whether delivery landed —
+  so a pick that changed the answer and then went nowhere still read as
+  accepted. Both backends now settle on the delivered result, which is what
+  the cloud one already did.
+- A local agent's `head_split` / `head_merge` no longer appears twice in
+  `proteus exec --json`. The split was fanned out both as a broadcast and as a
+  run-event row; the broadcast copy reached no reader — no CLI surface renders
+  a head phase — so it was a duplicate line and nothing else. The run-event row
+  is unchanged, and it is the one the cloud backend has always written.
 - The outcome signal is no longer fabricated in headless use. Every `proteus
   exec` invocation is an independent task, so the next invocation's prompt was
   being read as a conversational follow-up on the previous turn — and the

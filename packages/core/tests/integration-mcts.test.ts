@@ -57,7 +57,7 @@ describe('MCTS integration', () => {
     rt.spawnBranch = async () => ({
       // Resolves — but with nothing the engine can read.
       explore: (async () => undefined) as unknown as never,
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
 
     initTables(rt);
@@ -86,7 +86,7 @@ describe('MCTS integration', () => {
           // assert downstream that explore actually consumed them.
           return { text: `branch ${idx} differs from: ${siblings.join(' | ')}`, codeUsed: null };
         },
-        generateReflection: async () => 'n/a',
+        generateReflection: async () => ({ text: 'n/a' }),
       };
     };
 
@@ -128,7 +128,7 @@ describe('MCTS integration', () => {
           text: `branch ${i} explored`,
           codeUsed: i % 2 === 0 ? 'const x = 1;' : null,
         }),
-        generateReflection: async () => `reflection for branch ${i}`,
+        generateReflection: async () => ({ text: `reflection for branch ${i}` }),
       };
     };
 
@@ -190,7 +190,7 @@ describe('MCTS integration', () => {
           text: `approach ${i}`,
           codeUsed: i === 0 ? 'const broken = FAIL_MARKER;' : 'const ok = 1;',
         }),
-        generateReflection: async () => 'n/a',
+        generateReflection: async () => ({ text: 'n/a' }),
       };
     };
 
@@ -223,7 +223,7 @@ describe('MCTS integration', () => {
     rt.judgeModel = llm;
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'prose approach', codeUsed: null }),
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
 
     initTables(rt);
@@ -240,7 +240,7 @@ describe('MCTS integration', () => {
     rt.judgeModel = llm;
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'prose approach', codeUsed: null }),
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
 
     initTables(rt);
@@ -260,7 +260,7 @@ describe('MCTS integration', () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'explored', codeUsed: null }),
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
 
     initTables(rt);
@@ -293,7 +293,7 @@ describe('MCTS integration', () => {
     });
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'bad approach', codeUsed: null }),
-      generateReflection: async () => 'approach failed because auth layer is tightly coupled',
+      generateReflection: async () => ({ text: 'approach failed because auth layer is tightly coupled' }),
     });
 
     initTables(rt);
@@ -326,7 +326,7 @@ describe('MCTS integration', () => {
     });
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'hopeless attempt', codeUsed: null }),
-      generateReflection: async () => 'everything failed',
+      generateReflection: async () => ({ text: 'everything failed' }),
     });
 
     initTables(rt);
@@ -350,7 +350,7 @@ describe('MCTS integration', () => {
     rt.judgeModel = downLLM;
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'provider produced rollout', codeUsed: null }),
-      generateReflection: async () => 'judge failure should penalize the branch',
+      generateReflection: async () => ({ text: 'judge failure should penalize the branch' }),
     });
 
     initTables(rt);
@@ -378,7 +378,7 @@ describe('MCTS branch lifetime', () => {
       spawned.push(id);
       return {
         explore: async () => ({ text: 'a solid approach', codeUsed: null }),
-        generateReflection: async () => 'lesson',
+        generateReflection: async () => ({ text: 'lesson' }),
       };
     };
     rt.abortBranch = async (id) => { aborted.push(id); };
@@ -417,7 +417,7 @@ describe('MCTS progress reporting', () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'a solid approach', codeUsed: null }),
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
 
     initTables(rt);
@@ -447,7 +447,7 @@ describe('MCTS progress reporting', () => {
           if (failing) throw new Error('Failed after 3 attempts. Last error: 429 rate limited');
           return { text: 'a solid approach', codeUsed: null };
         },
-        generateReflection: async () => 'n/a',
+        generateReflection: async () => ({ text: 'n/a' }),
       };
     };
 
@@ -504,7 +504,7 @@ describe('MCTS strategy — stored operator overrides', () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'explored', codeUsed: null }),
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
     initTables(rt);
 
@@ -531,7 +531,7 @@ describe('MCTS strategy — stored operator overrides', () => {
     rt.judgeModel = llm;
     rt.spawnBranch = async () => ({
       explore: async () => ({ text: 'explored', codeUsed: null }),
-      generateReflection: async () => 'n/a',
+      generateReflection: async () => ({ text: 'n/a' }),
     });
     initTables(rt);
 

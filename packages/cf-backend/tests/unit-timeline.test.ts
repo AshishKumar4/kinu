@@ -1,11 +1,10 @@
 /**
  * Run Timeline projection — contract tests for the pure classifiers that map
  * the agent's event sources onto the unified TimelineSpan spine. These run
- * without booting the Durable Object (the projection lives in lib/timeline.ts).
+ * without booting the Durable Object (the projection lives in core read-models).
  */
 import { describe, test, expect } from 'bun:test';
-import { runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse } from '../src/lib/timeline.ts';
-import type { RunEvent } from '@proteus/core';
+import { runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse, type RunEvent } from '@proteus/core';
 
 function ev<T extends RunEvent['type']>(type: T, extra: Record<string, unknown>): RunEvent {
   return { type, eventIndex: 0, runId: 'r1', timestamp: '2026-06-01T00:00:00.000Z', ...extra } as RunEvent;

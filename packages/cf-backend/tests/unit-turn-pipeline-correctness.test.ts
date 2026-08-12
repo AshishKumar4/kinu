@@ -10,7 +10,8 @@ const source = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'
 const headRuntime = readFileSync(join(import.meta.dir, '..', 'src', 'heads', 'head-runtime.ts'), 'utf8');
 const exploration = readFileSync(join(import.meta.dir, '..', 'src', 'exploration.ts'), 'utf8');
 const facetSpawn = readFileSync(join(import.meta.dir, '..', 'src', 'facet-spawn.ts'), 'utf8');
-const generateJson = readFileSync(join(import.meta.dir, '..', 'src', 'lib', 'generate-json.ts'), 'utf8');
+const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'prompts', 'structured.ts'), 'utf8');
+const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
@@ -57,7 +58,12 @@ describe('turn-pipeline correctness wiring', () => {
     expect(snapshot).toContain('this.renderFactsForTurn()');
     expect(snapshot).toContain('this.rt.executionRouter?.listExecutors()');
     expect(snapshot).toContain('this.jobs.listRunning()');
-    expect(snapshot).toContain('forkDelegates(this.headJournal.listLive())');
+    expect(snapshot).toContain('this.headJournal.listLive()');
+    // Which planes the block carries, and when one is omitted rather than
+    // rendered empty, is core's (agentDynamicContext — pinned behaviourally in
+    // core's unit-volatile-context.test.ts). This backend only says where each
+    // plane is read from.
+    expect(snapshot).toContain('agentDynamicContext({');
   });
 
   test('the dynamic-context ledger rides the shared STEP pipeline, not the turn assembly', () => {
@@ -93,12 +99,18 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).not.toContain('maxOutputTokens');
     expect(headRuntime).toContain("reasoningEffortOptions('low', parseModelSpec(spec).provider)");
 
-    const shadowJudge = actor.slice(
-      actor.indexOf('protected async runShadowEvalSampled'),
-      actor.indexOf('/** Build a streaming LLM callback'),
+    // The shadow eval's judge is the control plane's, and the plane builds it
+    // over the cross-family REVIEW model at the judge stage's own effort. The
+    // actor used to build a second judge here carrying provider options derived
+    // from the CHAT model's family — options a review model on a different
+    // provider cannot apply — so the effort is no longer named at this seam.
+    const control = actor.slice(
+      actor.indexOf('protected get scaffoldControl()'),
+      actor.indexOf("/** The scaffold's host.llmStream bridge"),
     );
-    expect(shadowJudge).not.toContain('maxOutputTokens');
-    expect(shadowJudge).toContain("reasoningEffortOptions('low', this.effectiveModelProviderFamily())");
+    expect(control).not.toContain('maxOutputTokens');
+    expect(control).toContain('judge: createJsonJudge(() => this.getModelForReview())');
+    expect(control).not.toContain('reasoningEffortOptions');
     expect(generateJson).not.toContain('opts.maxOutputTokens ??');
   });
 
@@ -296,13 +308,13 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {
-    const pick = source.slice(
-      source.indexOf('async pickAlternateTake('),
-      source.indexOf('/**\n   * The unified Run Timeline spine'),
-    );
+    // One implementation, in core, that both backends' transports call — the
+    // local session used to report every pick as queued without waiting.
+    const pick = takePick.slice(takePick.indexOf('export async function pickAlternateTake('));
     expect(pick).toContain('let continuationQueued = false');
-    expect(pick).toContain('const result = await this.orch.signals.deliver');
-    expect(pick).toContain("continuationQueued = result !== 'undelivered'");
+    expect(pick).toContain('const outcome = await deps.signals.deliver');
+    expect(pick).toContain("continuationQueued = outcome !== 'undelivered'");
     expect(pick).not.toContain('continuationQueued = true');
+    expect(source).toContain('await pickAlternateTake(');
   });
 });

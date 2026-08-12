@@ -35,8 +35,8 @@
  *   8. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
- *   9. product_change — governed product/UI self-customization lane.
- *                       Gated on deps.productChanges.
+ *   9. release — governed product/UI self-customization lane.
+ *                       Gated on deps.releases.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
  * execute_tools, the agents fork substrate) are injected through
@@ -51,6 +51,7 @@ import {
   MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
 } from './registry.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
+import { createFileToolSteer } from './run-file-steer.js';
 import { createFileTool } from './file-tool.js';
 import { TurnFileLedger } from './file-ledger.js';
 import { TurnContextBudget } from '../context-budget.js';
@@ -72,13 +73,13 @@ import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skil
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
 import {
   isEngineOwnedTransitionTarget,
-  type ProductChangeApproval,
-  type ProductChangeCheck,
-  type ProductChangeEngine,
-  type ProductChangeStatus,
-  type ProductDeploymentRecord,
-  type ProductSourceBinding,
-} from '../product-change/index.js';
+  type ReleaseApproval,
+  type ReleaseCheck,
+  type ReleaseEngine,
+  type ReleaseStatus,
+  type ReleaseDeployment,
+  type ReleaseSource,
+} from '../release/index.js';
 
 /** The crafted tools a sandbox may call, keyed by name. */
 export type CraftedToolSet =
@@ -188,7 +189,7 @@ export interface BuiltinToolDeps {
   skills?: SkillsToolDeps;
   /** Product self-customization lane. Backend-supplied because persistence,
    *  source bindings, approval identity, and deployments are platform-owned. */
-  productChanges?: ProductChangeToolDeps;
+  releases?: ReleaseToolDeps;
   /** Subordinate → parent progress reporting (the `report` tool). Wired only
    *  on subordinate actors. */
   report?: ReportToolDeps;
@@ -233,7 +234,7 @@ export interface ReportToolDeps {
   }): Promise<unknown>;
 }
 
-export interface ProductChangeToolDeps {
+export interface ReleaseToolDeps {
   board(): Promise<unknown>;
   bindSource(input: {
     kind: 'local' | 'github';
@@ -243,30 +244,30 @@ export interface ProductChangeToolDeps {
     localDeviceId?: string | null;
     localRoot?: string | null;
     deployTarget?: string | null;
-  }): Promise<ProductSourceBinding>;
+  }): Promise<ReleaseSource>;
   create(input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<unknown>;
   update(changeId: string, patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null }): Promise<unknown>;
-  transition(changeId: string, status: ProductChangeStatus): Promise<unknown>;
+  transition(changeId: string, status: ReleaseStatus): Promise<unknown>;
   recordCheck(changeId: string, input: {
     name: string;
-    status: ProductChangeCheck['status'];
+    status: ReleaseCheck['status'];
     stdout?: string | null;
     stderr?: string | null;
     durationMs?: number | null;
-  }): Promise<ProductChangeCheck>;
-  requestApproval(changeId: string, approvalType: ProductChangeApproval['approvalType']): Promise<ProductChangeApproval>;
+  }): Promise<ReleaseCheck>;
+  requestApproval(changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval>;
   recordDeployment(changeId: string, input: {
-    environment: ProductDeploymentRecord['environment'];
+    environment: ReleaseDeployment['environment'];
     workerVersionId?: string | null;
     deploymentId?: string | null;
     rollbackTarget?: string | null;
-  }): Promise<ProductDeploymentRecord>;
+  }): Promise<ReleaseDeployment>;
   /** Execution engine beneath the ledger (apply/run_checks/preview/deploy/
    *  rollback grounded in real sandbox execution). When wired, the tool
    *  refuses manual transitions into engine-owned states and refuses
    *  record_deployment — those results are EARNED via the engine actions.
    *  Absent on backends without an execution substrate. */
-  engine?: Pick<ProductChangeEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
+  engine?: Pick<ReleaseEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
 }
 
 /**
@@ -391,6 +392,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
+  // Same per-turn ownership as the budget: each hand-rolled-write shape gets
+  // its note once, on the call that earned it (run-file-steer.ts).
+  const fileToolSteer = createFileToolSteer();
 
   const tools: ToolSet = {};
 
@@ -528,8 +532,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
       // Restorable result budget — full stdout/stderr is offloaded to the
       // workspace VFS before clamping (see clamp.ts), so big outputs never
-      // rot the session and nothing is lost.
-      const clamp = (text: string) => clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+      // rot the session and nothing is lost. A command that hand-rolls a file
+      // edit carries the `file` steer back with it, the first time this turn
+      // uses that shape (run-file-steer.ts) — outside the clamp, so the note is
+      // never the part that gets truncated.
+      const steer = fileToolSteer(args.command);
+      const clamp = async (text: string) => {
+        const clamped = await clampToolResult(text, { vfs: rt.storage.vfs, budget, producer: 'run' });
+        return steer ? `${steer}\n\n${clamped}` : clamped;
+      };
       const defaultRuntime = 'workspace';
       const runtimeKey = args.runtime ?? defaultRuntime;
       if (runtimeKey === 'workspace') {
@@ -857,11 +868,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 10. product_change — governed product/UI self-customization lane ───────
-  if (deps.productChanges) {
-    const productChanges = deps.productChanges;
-    tools.product_change = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.product_change,
+  // ── 10. release — governed product/UI self-customization lane ───────
+  if (deps.releases) {
+    const releases = deps.releases;
+    tools.release = tool({
+      description: BUILTIN_TOOL_DESCRIPTIONS.release,
       inputSchema: jsonSchema<{
         action:
           | 'board'
@@ -893,11 +904,11 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         summary?: string | null;
         patch?: string | null;
         previewUrl?: string | null;
-        status?: ProductChangeStatus;
-        check?: { name?: string; status?: ProductChangeCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null };
-        approvalType?: ProductChangeApproval['approvalType'];
+        status?: ReleaseStatus;
+        check?: { name?: string; status?: ReleaseCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null };
+        approvalType?: ReleaseApproval['approvalType'];
         deployment?: {
-          environment?: ProductDeploymentRecord['environment'];
+          environment?: ReleaseDeployment['environment'];
           workerVersionId?: string | null;
           deploymentId?: string | null;
           rollbackTarget?: string | null;
@@ -981,12 +992,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         try {
           switch (args.action) {
             case 'board':
-              return await productChanges.board();
+              return await releases.board();
             case 'bind_source': {
               const b = args.binding ?? {};
               if (b.kind !== 'local' && b.kind !== 'github') return { error: 'binding.kind must be local or github' };
               if (!b.label) return { error: 'binding.label is required' };
-              return await productChanges.bindSource({
+              return await releases.bindSource({
                 kind: b.kind,
                 label: b.label,
                 repoUrl: b.repoUrl,
@@ -998,10 +1009,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             }
             case 'create':
               if (!args.bindingId || !args.userPrompt) return { error: 'create requires bindingId and userPrompt' };
-              return await productChanges.create({ bindingId: args.bindingId, userPrompt: args.userPrompt, plan: args.plan });
+              return await releases.create({ bindingId: args.bindingId, userPrompt: args.userPrompt, plan: args.plan });
             case 'update':
               if (!args.changeId) return { error: 'update requires changeId' };
-              return await productChanges.update(args.changeId, {
+              return await releases.update(args.changeId, {
                 plan: args.plan,
                 summary: args.summary,
                 patch: args.patch,
@@ -1009,17 +1020,17 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               });
             case 'transition':
               if (!args.changeId || !args.status) return { error: 'transition requires changeId and status' };
-              if (productChanges.engine && isEngineOwnedTransitionTarget(args.status)) {
+              if (releases.engine && isEngineOwnedTransitionTarget(args.status)) {
                 return {
                   error:
                     `status '${args.status}' is earned by execution, not asserted — ` +
                     `use action=apply / run_checks / deploy / rollback to get there for real`,
                 };
               }
-              return await productChanges.transition(args.changeId, args.status);
+              return await releases.transition(args.changeId, args.status);
             case 'record_check':
               if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
-              return await productChanges.recordCheck(args.changeId, {
+              return await releases.recordCheck(args.changeId, {
                 name: args.check.name,
                 status: args.check.status,
                 stdout: args.check.stdout,
@@ -1028,17 +1039,17 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               });
             case 'request_approval':
               if (!args.changeId || !args.approvalType) return { error: 'request_approval requires changeId and approvalType' };
-              return await productChanges.requestApproval(args.changeId, args.approvalType);
+              return await releases.requestApproval(args.changeId, args.approvalType);
             case 'record_deployment':
               if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
-              if (productChanges.engine) {
+              if (releases.engine) {
                 return {
                   error:
                     'deployments are recorded from REAL deploy results — use action=deploy; ' +
                     'the version id and rollback target come from the actual command output',
                 };
               }
-              return await productChanges.recordDeployment(args.changeId, {
+              return await releases.recordDeployment(args.changeId, {
                 environment: args.deployment.environment,
                 workerVersionId: args.deployment.workerVersionId,
                 deploymentId: args.deployment.deploymentId,
@@ -1049,7 +1060,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             case 'preview':
             case 'deploy':
             case 'rollback': {
-              const engine = productChanges.engine;
+              const engine = releases.engine;
               if (!engine) {
                 return { error: `action=${args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
               }

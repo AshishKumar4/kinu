@@ -147,7 +147,7 @@ function summarizePeers(input: Record<string, unknown>): string {
   }
 }
 
-function summarizeProductChange(input: Record<string, unknown>): string {
+function summarizeRelease(input: Record<string, unknown>): string {
   const action = str(input, "action");
   const changeId = str(input, "changeId").slice(0, 8);
   switch (action) {
@@ -197,9 +197,10 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   memory: summarizeMemory,
   web: summarizeWeb,
   // think/team/peers were unified into `agents`, fact into `memory`,
-  // web_search/web_fetch into `web`, and `experience` became an owner-driven
-  // RPC rather than a tool; their summarizers remain so tool calls in STORED
-  // transcripts keep rendering.
+  // web_search/web_fetch into `web`, `experience` became an owner-driven
+  // RPC rather than a tool, and `product_change` was renamed `release`;
+  // their summarizers remain so tool calls in STORED transcripts keep
+  // rendering under the name they were recorded with.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
@@ -209,8 +210,169 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   web_search: (input) => quoted(str(input, "query")),
   web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
-  product_change: summarizeProductChange,
+  release: summarizeRelease,
+  product_change: summarizeRelease,
 };
+
+/* ══════════════════════════════════════════════════════════════════════
+   What the call DOES, as opposed to what it was passed.
+
+   `run bun test packages/checkout` tells an operator what was typed. It
+   does not tell them the agent is running tests, which is the thing they
+   actually want to know while watching a turn go by. These functions read
+   the real arguments and name the action; when the arguments do not say,
+   they return "" and the row falls back to the tool name and the raw
+   summary. Nothing here guesses.
+   ══════════════════════════════════════════════════════════════════════ */
+
+/** Strip env assignments, `sudo`, and a leading path so `/usr/bin/git` and
+ *  `FOO=1 sudo git` both reduce to `git`. */
+function argv(command: string): string[] {
+  const parts = command.trim().split(/\s+/).filter(Boolean);
+  let i = 0;
+  while (i < parts.length && (/^[A-Z_][A-Z0-9_]*=/.test(parts[i]!) || parts[i] === "sudo" || parts[i] === "env")) i++;
+  const rest = parts.slice(i);
+  if (rest.length > 0) rest[0] = rest[0]!.split("/").pop()!;
+  return rest;
+}
+
+/** The verb each command word stands for. Keyed on the word the agent
+ *  actually typed, so a match is evidence rather than inference. */
+const RUN_VERBS: ReadonlyArray<readonly [test: (word: string) => boolean, verb: string]> = [
+  [(w) => w === "test" || w === "pytest" || w === "jest" || w === "vitest" || w === "mocha", "Ran tests"],
+  [(w) => w === "typecheck" || w === "tsc", "Typechecked"],
+  [(w) => w === "lint" || w === "eslint" || w === "ruff" || w === "clippy", "Linted"],
+  [(w) => w === "fmt" || w === "format" || w === "prettier" || w === "gofmt", "Formatted"],
+  [(w) => w === "build" || w === "make" || w === "compile", "Built"],
+  [(w) => w === "install" || w === "add" || w === "ci" || w === "sync", "Installed dependencies"],
+  [(w) => w === "deploy" || w === "publish", "Deployed"],
+  [(w) => w === "curl" || w === "wget" || w === "http" || w === "httpie", "Called an endpoint"],
+  [(w) => w === "grep" || w === "rg" || w === "ag" || w === "find" || w === "fd", "Searched the tree"],
+  [(w) => w === "cat" || w === "head" || w === "tail" || w === "ls" || w === "wc" || w === "stat", "Inspected files"],
+  [(w) => w === "mkdir" || w === "cp" || w === "mv" || w === "rm" || w === "touch" || w === "chmod", "Changed files"],
+  [(w) => w === "docker" || w === "podman" || w === "kubectl", "Drove a container"],
+  [(w) => w === "psql" || w === "sqlite3" || w === "mysql" || w === "redis-cli", "Queried a database"],
+];
+
+/** What a shell command is for, from its own argv. */
+export function describeCommand(command: string): string {
+  const words = argv(command);
+  if (words.length === 0) return "";
+  // Every git verb reads fine as "Git <verb>", and flattening them all to one
+  // phrase would lose the only thing the operator cares about.
+  if (words[0] === "git" && words[1]) return `Git ${words[1]}`;
+  // A runner and the tool it drives both sit in front of the verb
+  // (`bunx wrangler deploy`, `npm run build`), so look a few words in — but
+  // only a few, or a path argument starts deciding what the command was for.
+  for (const word of words.slice(0, 3)) {
+    for (const [test, verb] of RUN_VERBS) if (test(word)) return verb;
+  }
+  return "";
+}
+
+const FILE_VERBS: Record<string, string> = {
+  read: "Read", write: "Wrote", edit: "Edited", append: "Appended to",
+  delete: "Deleted", list: "Listed", search: "Searched", move: "Moved", copy: "Copied",
+};
+
+const MEMORY_VERBS: Record<string, string> = {
+  save: "Saved to memory", search: "Searched memory", get: "Recalled",
+  set: "Recorded a fact", delete: "Forgot", list: "Listed memory",
+};
+
+/** The last path segment — the part a person reads. */
+function basename(path: string): string {
+  const trimmed = path.replace(/\/+$/, "");
+  return trimmed.split("/").pop() || trimmed;
+}
+
+function describeAgents(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  const agent = str(input, "agent");
+  switch (action) {
+    case "fork": {
+      const forks = Array.isArray(input.forks) ? input.forks.length : 0;
+      return forks > 0 ? `Delegated to ${forks} parallel ${forks === 1 ? "fork" : "forks"}` : "Delegated to a fork";
+    }
+    case "staff":
+      return str(input, "scope") === "workspace"
+        ? "Staffed the workspace"
+        : agent ? `Staffed ${agent}` : "Staffed a subordinate";
+    case "ask":     return agent ? `Asked ${agent}` : "Asked a subordinate";
+    case "send":    return agent ? `Messaged ${agent}` : "Messaged a subordinate";
+    case "reply":   return "Replied to a subordinate";
+    case "dismiss": return agent ? `Dismissed ${agent}` : "Dismissed a subordinate";
+    case "list":    return "Listed the roster";
+    case "status":  return agent ? `Checked on ${agent}` : "Checked the roster";
+    default:        return "";
+  }
+}
+
+const DESCRIBERS: Record<string, (input: Record<string, unknown>) => string> = {
+  run: (input) => describeCommand(str(input, "command")),
+  file: (input) => {
+    const verb = FILE_VERBS[str(input, "action")];
+    if (!verb) return "";
+    const path = str(input, "path");
+    return path ? `${verb} ${basename(path)}` : verb;
+  },
+  agents: describeAgents,
+  memory: (input) => MEMORY_VERBS[str(input, "action")] ?? "",
+  web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
+  web_search: () => "Searched the web",
+  web_fetch: () => "Fetched a page",
+  execute_tools: () => "Ran a tool program",
+  think: (input) => {
+    const heads = Array.isArray(input.heads) ? input.heads.length : 0;
+    return heads > 0 ? `Explored with ${heads} heads` : "Explored the problem";
+  },
+  skills: (input) => (str(input, "action") === "run" ? "Ran a skill" : ""),
+  release: (input) => {
+    const action = str(input, "action");
+    if (action === "create") return "Opened a change";
+    if (action === "run_checks" || action === "record_check") return "Checked a change";
+    if (action === "deploy") return "Deployed a change";
+    if (action === "rollback") return "Rolled a change back";
+    if (action === "request_approval") return "Asked you to approve";
+    return "";
+  },
+  report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
+};
+
+/**
+ * A plain-English phrase for what a tool call is doing, derived only from
+ * its arguments. Empty when the arguments do not say — the caller then
+ * shows the tool name and the argument summary alone, which is the honest
+ * fallback for an MCP or crafted tool whose contract we do not know.
+ */
+export function describeToolCall(toolName: string, input: unknown): string {
+  if (!isRecord(input)) return "";
+  return DESCRIBERS[toolName]?.(input) ?? "";
+}
+
+/**
+ * The headline for a collapsed run of consecutive calls: a tally of what the
+ * agent did, in the order it first did each thing.
+ *
+ *   read, read, edit, write, fork  →  "5 calls · Read ×2 · Edited · Wrote · Delegated"
+ *
+ * The key is the verb from `describeToolCall`, so the line says what happened
+ * rather than which tool was invoked. A call whose arguments carry no verb
+ * falls back to its tool name, which is the most that can honestly be said
+ * about an MCP tool nobody has a contract for.
+ *
+ * A tally rather than a sentence: a run mixes verbs, and five clauses joined
+ * into prose reads worse at a glance than the counts do.
+ */
+export function summarizeToolRun(calls: ReadonlyArray<{ toolName: string; input: unknown }>): string {
+  const counts = new Map<string, number>();
+  for (const { toolName, input } of calls) {
+    const key = describeToolCall(toolName, input).split(" ")[0] || toolName;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  const tally = [...counts].map(([verb, n]) => (n > 1 ? `${verb} ×${n}` : verb)).join(" · ");
+  return `${calls.length} calls · ${tally}`;
+}
 
 /** MCP and crafted tools have no known argument contract. A single string
  *  argument IS the call's subject, so it can be shown as-is; anything else

@@ -19,12 +19,11 @@ import type { HeadJournal } from './heads/journal.js';
 import { recordBranchTakeSet, type AlternateTakeSet } from './mcts/takes.js';
 import { nanoid } from './utils/nanoid.js';
 
-/** A branch is one head answering one redirect — no recursive splits, and a
- *  tighter budget than a full agents fork run. */
+/** A branch is one head answering one redirect: depth 1, so it answers rather
+ *  than splitting further. Like any head it runs until it is done — the settle
+ *  is detached, so a branch that takes its time holds up nothing. */
 export const BRANCH_HEAD_BUDGET = {
   maxDepth: 1,
-  maxTokens: 16_000,
-  maxWallClockMs: 120_000,
 } as const;
 
 export const BRANCH_RATIONALE =
@@ -64,9 +63,9 @@ export interface SteerBranchHandle {
 }
 
 /**
- * Spawn + run the redirect as a single budgeted head. Journaled like any head
- * run (its trace shows up on the Reasoning surface), raced against the branch
- * wall-clock. Throws only when the runtime cannot spawn at all.
+ * Spawn + run the redirect as a single head. Journaled like any head run (its
+ * trace shows up on the Reasoning surface). Throws only when the runtime cannot
+ * spawn at all.
  */
 export async function startBranchHead(
   runtime: HeadRuntime,
@@ -91,12 +90,13 @@ export async function startBranchHead(
   journal.insertSpawn(headInput);
   const spawned = await runtime.spawnHead(headInput);
 
-  const result = raceWithTimeout(spawned, BRANCH_HEAD_BUDGET.maxWallClockMs)
+  const result = raceWithTimeout(spawned, undefined)
     .catch((err): HeadReport => ({
       id: headInput.id,
       status: 'budget_exceeded',
-      summary: 'Branch was aborted before producing an answer (wall-clock budget exceeded).',
-      evidence: [], decisions: [], artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
+      summary: 'Branch was aborted before producing an answer.',
+      evidence: [], decisions: [], artifactRefs: [], fileChanges: [],
+      childHeadIds: [], toolCalls: [], steps: [],
       tokenUsage: { input: 0, output: 0, total: 0 },
       wallClockMs: Date.now() - spawnedAt,
       errorMessage: err instanceof Error ? err.message : String(err),
@@ -167,6 +167,30 @@ export async function settlePendingBranch(
     });
   } else {
     fail(outcome.reason);
+  }
+}
+
+/**
+ * Settle every branch launched during the just-finished turn, draining the
+ * pending list as it goes.
+ *
+ * Detached per branch: a slow head must never hold up the turn queue that is
+ * already free to take the next message. Draining is the reason this is one
+ * function rather than a loop at each call site — a branch left in the list
+ * would be settled a second time against the NEXT turn's answer.
+ */
+export function settlePendingBranches(
+  deps: {
+    sql: SqlExecutor;
+    sessionId: string;
+    broadcast: (event: BranchStatusEvent) => void;
+  },
+  pending: PendingBranch[],
+  turnId: string | null,
+  liveText: string,
+): void {
+  for (const entry of pending.splice(0)) {
+    void settlePendingBranch(deps, entry, turnId, liveText);
   }
 }
 

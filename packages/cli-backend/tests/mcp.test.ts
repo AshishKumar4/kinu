@@ -7,6 +7,7 @@ import { mcpToolKey, type LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
 import { connectMcpServers } from '../src/mcp.js';
+import { toolExecute } from '@proteus/test-utils';
 
 const DUMMY_LLM: LLMProviderConfig = {
   name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model',
@@ -93,8 +94,8 @@ describe('connectMcpServers', () => {
       echo: { command: 'node', args: [fixtureServer] },
     });
     try {
-      const slow = conn.tools[mcpToolKey('echo', 'slow')] as { execute(i: unknown): Promise<string> };
-      await expect(slow.execute({ ms: 6_000 })).resolves.toBe('slept 6000ms');
+      const slow = toolExecute<unknown, string>(conn.tools[mcpToolKey('echo', 'slow')]);
+      await expect(slow({ ms: 6_000 })).resolves.toBe('slept 6000ms');
     } finally {
       await conn.close();
     }
@@ -107,8 +108,8 @@ describe('connectMcpServers', () => {
       expect(Object.keys(conn.tools)).toEqual(['mcp_echo_echo', 'mcp_echo_slow']);
       expect(conn.diagnostics).toEqual([{ server: 'echo', status: 'connected', toolCount: 2 }]);
       expect(logs.some((m) => m.includes('mcp: echo'))).toBe(true);
-      const tool = conn.tools.mcp_echo_echo as { execute(input: unknown): Promise<string> };
-      await expect(tool.execute({ text: 'hello' })).resolves.toBe('echo: hello');
+      const echo = toolExecute<unknown, string>(conn.tools.mcp_echo_echo);
+      await expect(echo({ text: 'hello' })).resolves.toBe('echo: hello');
     } finally {
       await conn.close();
     }

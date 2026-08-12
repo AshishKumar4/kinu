@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store.js';
+import { asFetchFunction } from '@proteus/core';
 
 describe('createFileCodexAuthStore', () => {
   test('refreshes Codex OAuth credentials atomically and preserves config', async () => {
@@ -22,14 +23,14 @@ describe('createFileCodexAuthStore', () => {
 
     const calls: string[] = [];
     const store = createFileCodexAuthStore(configPath, {
-      fetch: async (input) => {
+      fetch: asFetchFunction(async (input) => {
         calls.push(String(input));
         return Response.json({
           access_token: jwt({ exp: Math.floor(Date.now() / 1000) + 3600 }),
           refresh_token: 'refresh-new',
           expires_in: 3600,
         });
-      },
+      }),
     });
 
     expect(store.hasCredential()).toBe(true);

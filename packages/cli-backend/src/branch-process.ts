@@ -6,7 +6,9 @@
  * On Linux: child_process.fork(branch-worker.ts) with its own SQLite DB
  */
 
-import type { BranchHandle, SpawnBranch, AbortBranch } from '@proteus/core';
+import type {
+  BranchHandle, BranchExploration, BranchReflection, SpawnBranch, AbortBranch,
+} from '@proteus/core';
 import type { CraftedTool, LLMProviderConfig } from '@proteus/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
@@ -99,8 +101,8 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
 
     return {
       explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], siblings: readonly string[] = []) =>
-        rpc('explore', { history, tools, siblings }),
-      generateReflection: (task: string) => rpc('reflect', { task }),
+        rpc<BranchExploration>('explore', { history, tools, siblings }),
+      generateReflection: (task: string) => rpc<BranchReflection>('reflect', { task }),
     };
   };
 

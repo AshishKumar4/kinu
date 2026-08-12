@@ -67,7 +67,7 @@ export function filterByEffectiveScore<T extends { name: string }>(
 /** Update EMA score for tools used in a successful branch */
 export function updateCraftScores(
   sql: SqlExecutor,
-  usedToolNames: string[],
+  usedToolNames: readonly string[],
   outcome: number,
   alpha = DEFAULT_CONFIG.craftStore.emaAlpha,
 ): void {

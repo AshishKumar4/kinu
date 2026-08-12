@@ -48,8 +48,8 @@ describe('reciprocalRankFusion', () => {
   });
 
   test('attaches source items for each hit', () => {
-    const lex = [{ id: 'x', kind: 'lex' as const }];
-    const sem = [{ id: 'x', kind: 'sem' as const }, { id: 'y', kind: 'sem' as const }];
+    const lex: ReadonlyArray<{ id: string; kind: string }> = [{ id: 'x', kind: 'lex' }];
+    const sem: ReadonlyArray<{ id: string; kind: string }> = [{ id: 'x', kind: 'sem' }, { id: 'y', kind: 'sem' }];
     const out = reciprocalRankFusion([lex, sem]);
     const x = out.find((o) => o.id === 'x')!;
     expect(x.sources.length).toBe(2);

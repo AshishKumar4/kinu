@@ -54,7 +54,7 @@ describe('subordinate wiring', () => {
     }
   });
 
-  test('subordinate tools are structurally confined to report, without team, peers, or product changes', () => {
+  test('subordinate tools are structurally confined to report, without team, peers, or release changes', () => {
     const subordinate = source('subordinate-agent.ts');
     const profile = subordinate.slice(
       subordinate.indexOf('protected actorToolDeps()'),
@@ -63,7 +63,7 @@ describe('subordinate wiring', () => {
     expect(profile).toContain('report:');
     expect(profile).not.toContain('team:');
     expect(profile).not.toContain('peers:');
-    expect(profile).not.toContain('productChanges:');
+    expect(profile).not.toContain('releases:');
     // Cross-workspace experience transfer is no longer a tool at all — it is
     // the owner's RPC on the orchestrator, and reaches no actor's profile.
     expect(profile).not.toContain('experience:');
@@ -72,7 +72,7 @@ describe('subordinate wiring', () => {
     // …and absence is structural: a deps-gated name is dropped from the
     // advertised surface too, not just from the ToolSet.
     expect(source('actor-agent.ts'))
-      .toContain("const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;");
+      .toContain("const DEPS_GATED_TOOLS = ['report', 'release'] as const;");
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {
@@ -86,16 +86,18 @@ describe('subordinate wiring', () => {
     expect(subordinate).not.toContain('listSubordinates(');
   });
 
-  test('the parent ingress spills before opening its storage transaction', () => {
+  // The ingress sequence itself is core's, and its ordering is proven there by
+  // observation (core/tests/unit-subordinates.test.ts — the spill lands before
+  // the transaction opens). What is this backend's is the transaction it hands
+  // over: on a DO the admit + roster write must share one storage transaction.
+  test('the parent ingress runs core’s sequence inside the DO storage transaction', () => {
     const orchestrator = source('orchestrator.ts');
     const ingress = orchestrator.slice(
       orchestrator.indexOf('async receiveSubordinateEvent('),
       orchestrator.indexOf('// ── Mission Inbox'),
     );
-    expect(ingress.indexOf('await spillEventContent(this.rt.storage.vfs, content)'))
-      .toBeLessThan(ingress.indexOf('transactionSync'));
-    expect(ingress).toContain('const content = normalizeReportContent(input.content);');
-    expect(ingress).toContain('...(contentPath ? { contentPath } : {}),');
+    expect(ingress).toContain('return receiveSubordinateEvent({');
+    expect(ingress).toContain('transaction: (body) => this.ctx.storage.transactionSync(body),');
   });
 
   // The policy itself is core's, and its behaviour is proven there
@@ -125,16 +127,9 @@ describe('subordinate wiring', () => {
     expect(subordinate).toContain(
       'if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText }))');
 
-    const ingress = orchestrator.slice(
-      orchestrator.indexOf('async receiveSubordinateEvent('),
-      orchestrator.indexOf('// ── Mission Inbox'),
-    );
-    expect(ingress).toContain(
-      'if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate }))');
-    // Dropped before the spill: a relay the parent is not the audience for
-    // leaves no file on its plane either.
-    expect(ingress.indexOf('parentAdmitsSubordinateReport'))
-      .toBeLessThan(ingress.indexOf('await spillEventContent'));
+    // The parent half — the drop, and that it happens before any file is
+    // written — is core's (core/tests/unit-subordinates.test.ts).
+    expect(orchestrator).toContain('origin: SubordinateReportOrigin;');
   });
 
   test('the live roster stays a push channel; only the report rail is gated', () => {

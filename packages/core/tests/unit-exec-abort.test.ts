@@ -45,7 +45,7 @@ describe('remote executor exec abort', () => {
     const handle = {
       exec: () => hangingPromise(),
     } as unknown as SandboxHandle;
-    const provider = createSandboxExecutor(handle, 'preview.example.com', 'sb-1');
+    const provider = createSandboxExecutor(handle, 'preview.example.com');
     const controller = new AbortController();
 
     const pending = provider.tools.exec.execute('sleep 9999', { signal: controller.signal });
@@ -56,7 +56,8 @@ describe('remote executor exec abort', () => {
   test('laptop exec stops waiting and throws AbortError on abort', async () => {
     const transport: DeviceTransport = {
       rpc: () => hangingPromise(),
-      isConnected: () => true,
+      status: () => ({ connected: true, registered: true }),
+      refreshStatus: async () => ({ connected: true, registered: true }),
     };
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
@@ -87,7 +88,8 @@ describe('remote executor exec abort', () => {
     const calls: string[] = [];
     const transport: DeviceTransport = {
       rpc: async (method) => { calls.push(method); return { stdout: '', stderr: '', exitCode: 0 }; },
-      isConnected: () => true,
+      status: () => ({ connected: true, registered: true }),
+      refreshStatus: async () => ({ connected: true, registered: true }),
     };
     const provider = createDeviceTunnelExecutor(transport);
     const controller = new AbortController();
@@ -101,7 +103,8 @@ describe('remote executor exec abort', () => {
   test('without a signal, exec resolves normally', async () => {
     const transport: DeviceTransport = {
       rpc: async () => ({ stdout: 'ok', stderr: '', exitCode: 0 }),
-      isConnected: () => true,
+      status: () => ({ connected: true, registered: true }),
+      refreshStatus: async () => ({ connected: true, registered: true }),
     };
     const provider = createDeviceTunnelExecutor(transport);
     expect(await provider.tools.exec.execute('ls')).toBe('ok');

@@ -1,3 +1,4 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
 
@@ -121,8 +122,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
       get() { return agent; },
-    },
-  } as unknown as Env;
+    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 
@@ -156,7 +156,7 @@ describe('CLI control routes', () => {
 
     const deleted = await handleCliRequest(cliRequest('/api/cli/workspaces/%6Aarvis', { method: 'DELETE' }), env);
     expect(deleted?.status).toBe(200);
-    expect(await deleted?.json()).toEqual({ ok: true });
+    expect(await deleted?.json<{ ok: boolean }>()).toEqual({ ok: true });
     expect(calls).toContain(`workspace:remove:jarvis:${USER_ID}`);
 
     const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
@@ -170,7 +170,7 @@ describe('CLI control routes', () => {
     const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
     expect(ticket?.headers.get('cache-control')).toBe('no-store');
-    expect(await ticket?.json()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
+    expect(await ticket?.json<{ ticket: string; expiresAt: number }>()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
     expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
 
     const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown/connect-ticket', { method: 'POST' }), env);
@@ -267,8 +267,7 @@ describe('CLI control routes', () => {
           async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
           async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
         }),
-      },
-    } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
     const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
     expect((await thrown?.json() as { error: string }).error).toContain('Timer trigger requires cron or atMs');
@@ -291,8 +290,7 @@ describe('shared ownership claim status mapping', () => {
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({ async claimOwner() { throw new Error(message); } }),
-      },
-    } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   }
 
   test('cross-user collision → 403', async () => {

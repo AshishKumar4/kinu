@@ -267,10 +267,10 @@ describe("proteus exec (headless)", () => {
       // container-scoped run destroys on exit.
       const ledger = events
         .filter((e) => e.type === "run_event")
-        .map((e) => (e as { event: { type: string } }).event);
+        .map((e) => (e as { event: { type: string; runId?: unknown } }).event);
       expect(ledger.map((e) => e.type)).toEqual(["run_start", "turn_start", "step_finish", "turn_end", "run_end"]);
       expect(ledger.every((e) => typeof (e as { runId?: unknown }).runId === "string")).toBe(true);
-      expect(new Set(ledger.map((e) => (e as { runId: string }).runId)).size).toBe(1);
+      expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
       // --resume continues the same recorded session instead of opening a new one.
       const sessionId = String((events[0] as { id: string }).id);
@@ -440,7 +440,7 @@ function startMockLlm(answer: string): { port: number; stop(): void } {
       return new Response(sse, { headers: { "content-type": "text/event-stream" } });
     },
   });
-  return { port: server.port, stop: () => server.stop(true) };
+  return { port: server.port!, stop: () => server.stop(true) };
 }
 
 /** Like startMockLlm, but the first `calls` streamed responses are the SAME
@@ -497,7 +497,7 @@ function startToolLoopMockLlm(
       });
     },
   });
-  return { port: server.port, stop: () => server.stop(true) };
+  return { port: server.port!, stop: () => server.stop(true) };
 }
 
 function startFailingLlm(): { port: number; stop(): void } {
@@ -508,7 +508,7 @@ function startFailingLlm(): { port: number; stop(): void } {
       return Response.json({ error: { message: "mock outage" } }, { status: 500 });
     },
   });
-  return { port: server.port, stop: () => server.stop(true) };
+  return { port: server.port!, stop: () => server.stop(true) };
 }
 
 /** 200 OK, then an OpenAI-shaped error object in the SSE body — the shape a
@@ -526,7 +526,7 @@ function startInBandErrorLlm(payload: unknown): { port: number; stop(): void } {
       });
     },
   });
-  return { port: server.port, stop: () => server.stop(true) };
+  return { port: server.port!, stop: () => server.stop(true) };
 }
 
 /** The Proteus worker as far as the CLI's provider registry cares: a model
@@ -541,7 +541,7 @@ function startEmptyModelMenuOrigin(): { port: number; stop(): void } {
       return new Response("not found", { status: 404 });
     },
   });
-  return { port: server.port, stop: () => server.stop(true) };
+  return { port: server.port!, stop: () => server.stop(true) };
 }
 
 describe("proteus create — an unusable model is named at creation", () => {

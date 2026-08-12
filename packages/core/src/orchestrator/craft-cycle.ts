@@ -37,6 +37,23 @@ import type { BuiltinToolName } from '../tools/registry.js';
 /** The one tool crafted tools are reachable from. */
 const EXECUTE_TOOLS: BuiltinToolName = 'execute_tools';
 
+/**
+ * Where this clock publishes which crafted tools the turn used — the
+ * TurnAccumulator in production.
+ *
+ * The call-site scan below is the only thing in the system that can see it.
+ * Crafted tools are codemode-only, reached from inside an `execute_tools`
+ * block, so a crafted tool never appears as a tool-call name — and a consumer
+ * that infers the answer from the turn's tool-call list instead ("every name
+ * that is not built in") selects MCP and extension tools and nothing else.
+ * Both consumers that used to do exactly that — the turn's craft EMA and the
+ * durable turn↔craft usage row behind the thumbs re-score — now read the
+ * accumulator, so there is one definition.
+ */
+export interface CraftUsageSink {
+  noteCraftedToolUse(names: readonly string[]): void;
+}
+
 export class CraftCycle {
   /**
    * The callable set as of the last settled call — the turn's own set at turn
@@ -52,7 +69,7 @@ export class CraftCycle {
    */
   private seen: ReadonlySet<string> = new Set();
   private readonly crafted = new Set<string>();
-  private readonly invoked = new Set<string>();
+  private readonly invokedNames = new Set<string>();
   private readonly reused = new Set<string>();
   private readonly dropped = new Set<string>();
   private returned = 0;
@@ -61,12 +78,15 @@ export class CraftCycle {
    *  state at all, and a craft score is evolution state. */
   private enabled = false;
 
-  constructor(private readonly ledger: CraftLedger) {}
+  constructor(
+    private readonly ledger: CraftLedger,
+    private readonly usage: CraftUsageSink,
+  ) {}
 
   /** Clear for a new turn, and decide whether this turn observes anything. */
   reset(enabled: boolean): void {
     this.crafted.clear();
-    this.invoked.clear();
+    this.invokedNames.clear();
     this.reused.clear();
     this.dropped.clear();
     this.returned = 0;
@@ -110,7 +130,8 @@ export class CraftCycle {
 
     const sites = craftInvocationSites(code, known);
     if (sites.length === 0) return;
-    for (const name of sites) this.invoked.add(name);
+    for (const name of sites) this.invokedNames.add(name);
+    this.usage.noteCraftedToolUse(sites);
 
     // The stamp is the evidence, not the call's own verdict: a crafted tool
     // that raised has raised whether or not the model caught it, and whether or
@@ -138,10 +159,10 @@ export class CraftCycle {
    *  no crafted tool was called — `turn_end` is the denominator, so a turn
    *  that did neither writes no row. */
   snapshot(): CraftCycleRecord | null {
-    if (this.crafted.size === 0 && this.invoked.size === 0) return null;
+    if (this.crafted.size === 0 && this.invokedNames.size === 0) return null;
     return {
       crafted: [...this.crafted],
-      invoked: [...this.invoked],
+      invoked: [...this.invokedNames],
       reused: [...this.reused],
       returned: this.returned,
       raised: this.raised,

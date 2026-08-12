@@ -46,6 +46,7 @@ function fakeReport(id: string, overrides: Partial<HeadReport> = {}): HeadReport
     evidence: [{ id: `${id}-ev-1`, kind: 'fact', body: `${id} learned something.` }],
     decisions: [{ question: `Q for ${id}?`, choice: `Answer ${id}`, rationale: `Because ${id}` }],
     artifactRefs: [],
+    fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
     steps: [],
@@ -183,7 +184,7 @@ describe('HeadController.run', () => {
       inheritedContext: baseContext,
       request: baseRequest,
       parentBudget: {
-        maxDepth: 0, maxTokens: 1000, maxWallClockMs: 1000, spawnedAt: Date.now(),
+        maxDepth: 0, maxWallClockMs: 1000, spawnedAt: Date.now(),
       },
     })).rejects.toThrow(/max depth/i);
   });
@@ -211,7 +212,7 @@ describe('HeadController.run', () => {
       inheritedContext: baseContext,
       request: { rationale: 'tight budget test', heads: [{ task: 'angle A', rationale: 'slow' }] },
       parentBudget: {
-        maxDepth: 2, maxTokens: 10_000, maxWallClockMs: 50,
+        maxDepth: 2, maxWallClockMs: 50,
         spawnedAt: Date.now(),
       },
     });
@@ -447,7 +448,7 @@ describe('HeadJournal.listLive — the live fork roster', () => {
   const spawn = (journal: HeadJournal, rootId: string, id: string) => journal.insertSpawn({
     id, parentId: null, rootId, depth: 1, task: `t-${id}`, rationale: 'why',
     inheritedContext: [], mergeStrategy: 'consensus',
-    budget: { maxDepth: 2, maxTokens: 10, maxWallClockMs: 10, spawnedAt: Date.now() },
+    budget: { maxDepth: 2, maxWallClockMs: 10, spawnedAt: Date.now() },
   });
 
   test('a run with heads still running is reported with its progress and its split rationale', () => {
@@ -520,7 +521,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     expect(new Set(runs.map((r) => r.rootId)).size).toBe(2);
   });
 
-  test('child budget is derived from parent (depth-1, tokens split equally)', async () => {
+  test('child budget is derived from parent: depth-1, envelope undivided', async () => {
     const { journal } = newJournal();
     let observed: HeadInput | null = null;
     const runtime: HeadRuntime = {
@@ -540,12 +541,14 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest, // 2 heads
-      parentBudget: { maxDepth: 3, maxTokens: 10_000, maxWallClockMs: 60_000, spawnedAt: Date.now() },
+      parentBudget: { maxDepth: 3, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     });
 
     expect(observed).not.toBeNull();
     expect(observed!.budget.maxDepth).toBe(2);     // depth - 1
-    expect(observed!.budget.maxTokens).toBe(5_000); // 10000 / 2
-    expect(observed!.depth).toBe(1);                // 3 - 2 = 1
+    expect(observed!.depth).toBe(1);               // 3 - 2 = 1
+    // Fan-out does not divide a child's working room: two siblings each get the
+    // parent's envelope, not half of it.
+    expect(observed!.budget.maxWallClockMs).toBe(60_000);
   });
 });

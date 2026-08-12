@@ -6,6 +6,5 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src", "env.d.ts"],
-  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "tests"]
+  "include": ["src", "tests", "env.d.ts"]
 }

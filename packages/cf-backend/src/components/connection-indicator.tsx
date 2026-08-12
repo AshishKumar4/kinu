@@ -10,9 +10,12 @@ const STATUS_MAP: Record<ConnectionStatus, { dot: string; cls: string; label: st
 export function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
   const s = STATUS_MAP[status] ?? STATUS_MAP.disconnected;
   return (
-    <div className="flex items-center gap-2" role="status">
+    <div className="flex shrink-0 items-center gap-2" role="status" aria-label={s.label}>
       <span className={`size-2 rounded-full ${s.dot}`} />
-      <span className={`text-xs ${s.cls}`}>{s.label}</span>
+      {/* Healthy is the quiet default — the dot says it, and the ~70px the word
+          costs is what pushes the header's two halves into each other. Trouble
+          still gets words. */}
+      {status !== "connected" && <span className={`text-xs ${s.cls}`}>{s.label}</span>}
     </div>
   );
 }

@@ -72,6 +72,7 @@ export type AgentRpcAccess = AccessTokenScope | 'interactive' | 'never';
 export const AGENT_RPC_ACCESS = {
   // ── Reads a workspace.read token may perform (old GET /workspaces/:name/*) ──
   getAgentStatus: 'workspace.read',
+  getAgentView: 'workspace.read',
   getAlignmentConvergence: 'workspace.read',
   getChatHistory: 'workspace.read',
   getExecutors: 'workspace.read',
@@ -83,12 +84,13 @@ export const AGENT_RPC_ACCESS = {
   getMemoryContent: 'workspace.read',
   getOutcomeCalibration: 'workspace.read',
   getOutcomeEnsemble: 'workspace.read',
-  getProductChangeBoard: 'workspace.read',
+  getReleaseBoard: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getStoredModelSpec: 'workspace.read',
   getReasoningEffort: 'workspace.read',
   getToolDescriptions: 'workspace.read',
   getWorkspaceSnapshot: 'workspace.read',
+  listAgentViews: 'workspace.read',
   listBackgroundJobs: 'workspace.read',
   listPendingConsents: 'workspace.read',
   listRecentEvents: 'workspace.read',
@@ -117,9 +119,9 @@ export const AGENT_RPC_ACCESS = {
   listMounts: 'interactive',
   planFileRestore: 'interactive',
   clearBackgroundJobs: 'interactive',
-  createProductChange: 'interactive',
+  createReleaseChange: 'interactive',
   createTimerTrigger: 'interactive',
-  decideProductChangeApproval: 'interactive',
+  decideReleaseApproval: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubordinate: 'interactive',
   // The owner's backup of their own workspace. Interactive-only: a CI token
@@ -129,6 +131,7 @@ export const AGENT_RPC_ACCESS = {
   // importing from it, is the owner's call — interactive for the same reason.
   experienceAction: 'interactive',
   forkAgent: 'interactive',
+  getActivitySnapshot: 'interactive',
   getAlwaysActiveSkills: 'interactive',
   getExecutorDiff: 'interactive',
   getExecutorFiles: 'interactive',
@@ -151,7 +154,7 @@ export const AGENT_RPC_ACCESS = {
   proposeCurriculumTasks: 'interactive',
   readExecutorFile: 'interactive',
   recordOutcomeLabeling: 'interactive',
-  requestProductChangeApproval: 'interactive',
+  requestReleaseApproval: 'interactive',
   resetWorkspaceBaseline: 'interactive',
   resolveDeviceConsent: 'interactive',
   restoreFileCheckpoint: 'interactive',
@@ -170,7 +173,7 @@ export const AGENT_RPC_ACCESS = {
   setSoul: 'interactive',
   setTurnFeedback: 'interactive',
   spawnSubordinate: 'interactive',
-  upsertProductSourceBinding: 'interactive',
+  upsertReleaseSource: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',

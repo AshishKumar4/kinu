@@ -20,7 +20,7 @@ import {
   FORK_STRATEGY_ID, PEER_REPLY_TOPIC,
   type AgentsForkDeps, type AgentsToolDeps, type PeersToolDeps,
   type StrategyContext, type SubordinateRosterEntry, type TeamToolDeps,
-  type SubordinateDelivery, type SubordinateHandoff,
+  type SubordinateDelivery, type SubordinateHandoff, type SubordinatePhase,
 } from '../src/index.ts';
 
 interface Call { action: string; input: unknown }
@@ -176,6 +176,37 @@ describe('agents tool — fork dispatch', () => {
     expect(schema.jsonSchema.required).toEqual(['action']);
   });
 
+  test('the per-fork model field says what varying it is FOR, and states its cost', async () => {
+    // Heterogeneous fleets are first-class (heads/controller.ts threads the
+    // per-head model over the parent default), but the field only documented
+    // its syntax, so a real capability read as a knob. The purpose belongs
+    // here rather than in the prompt — it is a fill-time decision — and it
+    // carries the Self-MoA result (arXiv 2502.00674: panel quality tracks the
+    // AVERAGE member) so "put different models on it" does not read as free.
+    const schema = agentsTool({ fork: forkDeps() }).inputSchema as {
+      jsonSchema: { properties: { forks: { items: { properties: { model: { description: string } } } } } };
+    };
+    const model = schema.jsonSchema.properties.forks.items.properties.model.description;
+    expect(model).toContain('Omit to inherit');
+    expect(model).toMatch(/different vendor on a genuinely open question/);
+    expect(model).toMatch(/only as good as its average member/);
+  });
+
+  test('each merge_strategy says what it DOES, not just that it exists', async () => {
+    // The enum offered three names and one word of guidance ("Default
+    // synthesize"), so picking between them was a guess. What each one does
+    // was written down only in buildMergePrompt, addressed to the merge model
+    // rather than to the caller choosing.
+    const schema = agentsTool({ fork: forkDeps() }).inputSchema as {
+      jsonSchema: { properties: { merge_strategy: { description: string } } };
+    };
+    const merge = schema.jsonSchema.properties.merge_strategy.description;
+    expect(merge).toMatch(/Default synthesize/);
+    expect(merge).toMatch(/best_of takes the strongest fork whole/);
+    expect(merge).toMatch(/consensus reports what the forks agreed on/);
+    expect(merge).toMatch(/hands back each disagreement as an open question/);
+  });
+
   test('unknown settle id returns a structured error listing what exists', async () => {
     const t = agentsTool({ fork: forkDeps() });
     const result = await t.execute({ action: 'fork', task: 't', settle: 'nonexistent' }) as { error: string };
@@ -320,7 +351,7 @@ describe('agents tool — subordinate actions', () => {
     const t = agentsTool({ team: deps });
 
     const result = await t.execute({ action: 'ask', agent: 'researcher', message: 'Survey auth' }) as {
-      event_id: string; delivery: string; subordinate_phase: { busy: boolean; workingOn: string | null }; note: string;
+      event_id: string; delivery: string; subordinate_phase: SubordinatePhase; note: string;
     };
 
     expect(result.event_id).toBe('evt-steering_live_turn');

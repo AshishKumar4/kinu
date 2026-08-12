@@ -1,6 +1,10 @@
-import { renderAlignmentConvergence, renderCalibrationReport, type AlignmentConvergence } from '@proteus/core';
+import {
+  formatScoreInterval, renderAlignmentConvergence, renderCalibrationReport,
+  type AlignmentConvergence, type GepaOptimizationResult,
+} from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
 import { fetchReport } from './label.js';
+import { runLocalGepa } from '../local-agent-client.js';
 import { requireAuthConfig } from '../config.js';
 import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
 import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display.js';
@@ -10,7 +14,7 @@ import {
   getLocalAlignment,
   getLocalGepaRun,
   getLocalMctsNode,
-  getLocalProductBoard,
+  getLocalReleaseBoard,
   listLocalEvents,
   listLocalExecutors,
   listLocalGepaRuns,
@@ -28,6 +32,14 @@ interface InspectOpts {
   limit?: string;
   variant?: string;
   since?: string;
+}
+
+interface GepaOpts extends InspectOpts {
+  /** Run a pass instead of reading past ones. */
+  run?: boolean;
+  iterations?: string;
+  evalSize?: string;
+  metricCalls?: string;
 }
 
 export async function stopCommand(name: string, opts: InspectOpts = {}): Promise<void> {
@@ -128,8 +140,9 @@ export async function headsCommand(name: string, opts: InspectOpts = {}): Promis
   printRows(data, opts, formatHeadRow);
 }
 
-export async function gepaCommand(name: string, runId: string | undefined, opts: InspectOpts = {}): Promise<void> {
+export async function gepaCommand(name: string, runId: string | undefined, opts: GepaOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
+  if (opts.run) return runGepaPass(name, opts);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
     cloud: (auth) => runId
@@ -138,6 +151,37 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
     local: () => runId ? getLocalGepaRun(target.localName, runId) : listLocalGepaRuns(target.localName, limit),
   });
   printRows(data, opts, formatGepaRow);
+}
+
+/** Drive one GEPA optimisation pass, on whichever backend holds the agent.
+ *  The pass is core's; each backend only supplies the surface it runs on. */
+async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
+  const target = resolveAgentTarget(name);
+  const budget = {
+    ...(opts.iterations ? { maxIterations: Number(opts.iterations) } : {}),
+    ...(opts.evalSize ? { evalSize: Number(opts.evalSize) } : {}),
+    ...(opts.metricCalls ? { maxMetricCalls: Number(opts.metricCalls) } : {}),
+  };
+  const result = await readTarget(target, {
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'runScaffoldGepaOptimization', [budget]),
+    local: () => runLocalGepa(target.localName, budget),
+  }) as GepaOptimizationResult;
+  if (opts.json) return printJson(result);
+  if (!result.ok) {
+    console.log(`${ERR('GEPA did not run')} ${result.error ?? ''}`);
+    return;
+  }
+  console.log(`${OK('GEPA run')} ${ACCENT(result.runId ?? '')}  ${result.iterations ?? 0} iteration(s)`);
+  const score = (i: typeof result.seedScore): string => (i ? formatScoreInterval(i) : 'not scored');
+  console.log(`  seed  ${score(result.seedScore)}`);
+  console.log(`  best  ${score(result.bestScore)}`);
+  if (result.selection) {
+    console.log(DIM(`  selected on ${result.selection.heldOutNegatives} held-out failure(s) + ${result.selection.guards} guard(s)`));
+  }
+  if (result.selectionWarning) console.log(`${WARN('exploratory')} ${result.selectionWarning}`);
+  console.log(result.proposed
+    ? `${OK('proposed')} scaffold v${result.pendingVersion} — resolved by the shadow eval`
+    : DIM(`  no proposal: ${result.skipReason ?? 'no strictly better candidate'}`));
 }
 
 export async function executorsCommand(
@@ -204,12 +248,12 @@ export async function alignmentCommand(name: string, opts: InspectOpts = {}): Pr
   console.log(renderCalibrationReport(calibration));
 }
 
-export async function productCommand(name: string, opts: InspectOpts = {}): Promise<void> {
+export async function releaseCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getProductChangeBoard', [limit]),
-    local: () => getLocalProductBoard(target.localName, limit),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReleaseBoard', [limit]),
+    local: () => getLocalReleaseBoard(target.localName, limit),
   });
   printData(data, opts);
 }

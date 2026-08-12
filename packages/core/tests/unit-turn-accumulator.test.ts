@@ -2,6 +2,7 @@
 // (re-arch P2). Verifies the logic the DO used to own inline is preserved.
 import { describe, test, expect } from 'bun:test';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
+import type { StepUsage } from '../src/events/types.js';
 
 describe('TurnAccumulator', () => {
   test('reset clears all accounting + stamps startedAt', () => {
@@ -124,6 +125,57 @@ describe('TurnAccumulator', () => {
     a.recordStep({});
     a.recordStep({ finishReason: { type: 'stop' } });
     expect(reasons).toEqual(['stop', undefined, undefined]);
+  });
+
+  test('the step event carries the provider\'s own usage, cache read included', () => {
+    const events: Array<{ usage?: StepUsage }> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    a.recordStep({
+      usage: { inputTokens: 900, outputTokens: 40, cachedInputTokens: 0, reasoningTokens: 12 },
+      providerMetadata: { anthropic: { cacheReadInputTokens: 700 } },
+      response: { modelId: 'claude-sonnet-4.5' },
+    });
+    // Anthropic reports the cache read in providerMetadata, others on usage —
+    // the step row carries one reconciled `cached` either way.
+    expect(events[0]?.usage).toEqual({ input: 900, cached: 700, output: 40, reasoning: 12, modelId: 'claude-sonnet-4.5' });
+  });
+
+  test('a step the provider reported nothing for carries no usage rather than zeros', () => {
+    const events: Array<{ usage?: unknown }> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    a.recordStep({ finishReason: 'stop' });
+    expect(events[0]?.usage).toBeUndefined();
+  });
+
+  test('an unpriced model yields a step with no usd, never a blended guess', () => {
+    const events: Array<{ usage?: { usd?: number } }> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    a.recordStep({ usage: { inputTokens: 100, outputTokens: 10 } });
+    expect(events[0]?.usage).toBeDefined();
+    expect(events[0]?.usage?.usd).toBeUndefined();
+  });
+
+  test('the step event carries the measurement of the request that produced it', () => {
+    const events: Array<{ context?: { measuredChars: number } }> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    a.composition.openTurn({ system: 'soul' });
+    a.composition.measure([{ role: 'user', content: 'hello' }]);
+    a.recordStep({ usage: { inputTokens: 10, outputTokens: 1 } });
+    // Drained: the next step measured nothing, so it reports nothing rather
+    // than re-reporting the previous request's composition.
+    a.recordStep({ usage: { inputTokens: 10, outputTokens: 1 } });
+    expect(events[0]?.context?.measuredChars).toBe('soul'.length + 'hello'.length);
+    expect(events[1]?.context).toBeUndefined();
+  });
+
+  test('reset clears the composition meter with the rest of the turn', () => {
+    const events: Array<{ context?: unknown }> = [];
+    const a = new TurnAccumulator({ onStepEvent: (e) => events.push(e) });
+    a.composition.openTurn({ system: 'soul' });
+    a.composition.measure([{ role: 'user', content: 'hello' }]);
+    a.reset(0);
+    a.recordStep({ usage: { inputTokens: 10, outputTokens: 1 } });
+    expect(events[0]?.context).toBeUndefined();
   });
 
   test('works with no sinks (pure consumer)', () => {

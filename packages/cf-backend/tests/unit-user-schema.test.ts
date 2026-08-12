@@ -44,8 +44,8 @@ describe('UserDO schema bootstrap', () => {
 
     expect(columns(db, 'user_devices')).toContain('token_hash');
     expect(columns(db, 'user_devices')).not.toContain('token');
-    expect(db.prepare('SELECT COUNT(*) AS n FROM user_devices').get<{ n: number }>()!.n).toBe(0);
-    expect(db.prepare('SELECT email FROM user_profile WHERE id = 1').get<{ email: string }>()!.email)
+    expect((db.prepare('SELECT COUNT(*) AS n FROM user_devices').get() as { n: number } | null)!.n).toBe(0);
+    expect((db.prepare('SELECT email FROM user_profile WHERE id = 1').get() as { email: string } | null)!.email)
       .toBe('person@example.com');
     db.close();
   });
@@ -66,7 +66,7 @@ describe('UserDO schema bootstrap', () => {
 
     expect(columns(db, 'user_cli_tokens')).toContain('token_hash');
     expect(columns(db, 'user_cli_tokens')).not.toContain('token');
-    expect(db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get<{ n: number }>()!.n).toBe(0);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get() as { n: number } | null)!.n).toBe(0);
     db.close();
   });
 
@@ -80,7 +80,7 @@ describe('UserDO schema bootstrap', () => {
 
     initUserTables(sqlExec(db));
 
-    expect(db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get<{ n: number }>()!.n).toBe(1);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get() as { n: number } | null)!.n).toBe(1);
     db.close();
   });
 
@@ -99,14 +99,14 @@ describe('UserDO schema bootstrap', () => {
     initUserTables(sqlExec(db));
 
     expect(columns(db, 'user_devices')).toContain('token');
-    expect(db.prepare('SELECT COUNT(*) AS n FROM user_devices').get<{ n: number }>()!.n).toBe(1);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM user_devices').get() as { n: number } | null)!.n).toBe(1);
     db.close();
   });
 
   test('records the schema version after the first boot', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
-    const row = db.prepare(`SELECT value FROM user_schema_meta WHERE key = 'version'`).get<{ value: string }>();
+    const row = db.prepare(`SELECT value FROM user_schema_meta WHERE key = 'version'`).get() as { value: string } | null;
     expect(Number(row!.value)).toBeGreaterThanOrEqual(1);
     db.close();
   });
@@ -147,7 +147,7 @@ describe('UserDO schema bootstrap', () => {
     grant.run(foreign, 'scout', Date.now());         // idempotent
     expect(has(foreign, 'scout')).toBe(true);
     expect(has(foreign, 'other-agent')).toBe(false); // grants are per-agent
-    expect(db.prepare('SELECT COUNT(*) AS n FROM user_peer_grants').get<{ n: number }>()!.n).toBe(1);
+    expect((db.prepare('SELECT COUNT(*) AS n FROM user_peer_grants').get() as { n: number } | null)!.n).toBe(1);
 
     db.prepare(`DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`)
       .run(foreign, 'scout');

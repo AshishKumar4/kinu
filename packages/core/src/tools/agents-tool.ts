@@ -33,7 +33,7 @@ import {
   type AgentsToolAction,
 } from './registry.js';
 import { FORK_STRATEGY_ID } from '../strategy/heads.js';
-import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
+import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget.js';
 import type { StrategyContext, StrategyRegistry } from '../strategy/types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MergeStrategy } from '../heads/types.js';
@@ -427,23 +427,35 @@ async function runFork(
     rt,
     model: deps.model,
     signal: readAbortSignal(toolOptions),
+    // The governed `rt.llm` above covers everything that reaches a model
+    // through this process. A head does not: it resolves its own model in its
+    // own runtime, so it needs the ledger itself, and that is what this
+    // carries. Only present when a budget was actually declared.
+    ...(mission ? { mission: { labels: mission.labels, port: localMissionPort(mission.governor) } } : {}),
     budget: {
       // Unset = strategy default (lets stored agent-config overrides apply).
       maxIterations: input.budget,
       // Only set a wall-clock bound when the caller explicitly asks for one.
-      // A blanket 60s default silently killed forks mid-work (each fork's
-      // sub-agent cold-start alone could eat it); leaving it undefined lets
-      // heads fall through to DEFAULT_HEAD_BUDGET (5 min).
+      // Every blanket default here has silently killed forks mid-work (a 60s
+      // one that a fork's sub-agent cold-start alone could eat, then a 5-minute
+      // one that killed a codebase audit). Undefined means the forks run to
+      // completion, like the turn that spawned them; spend is the mission
+      // governor's ledger, declared below.
       wallClockMs: input.wall_clock_ms,
     },
     options,
   };
   try {
     const result = await strat.explore(ctx);
-    // The sub-agents' own spend, reported by the strategy rather than seen at
-    // this seam — the heads runtime counts its heads' tokens, so the fork's
-    // total lands on the ledger (and every ancestor label) exactly once.
-    mission?.governor.debit(result.cost.tokens ?? 0, { labels: mission.labels, spawns: 1 });
+    // The spawn always records. The TOKENS record here only when the strategy
+    // could not charge them itself. Both parallel strategies now do: a heads
+    // fork debits every step as it makes it, and MCTS debits every rollout as
+    // it returns — which is what lets an exhausted budget stop either one
+    // mid-flight. Charging their totals again here would double-count them.
+    mission?.governor.debit(result.cost.selfMetered ? 0 : result.cost.tokens ?? 0, {
+      labels: mission.labels,
+      spawns: 1,
+    });
     return {
       strategy: result.strategy,
       text: result.best.text,
@@ -477,7 +489,16 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
         properties: {
           task: { type: 'string', description: 'What this fork explores. Be concrete.' },
           rationale: { type: 'string', description: 'Why this angle matters.' },
-          model: { type: 'string', description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit." },
+          // The field said how to set it and never what setting it is FOR, so
+          // a first-class capability read as a knob. The caveat belongs on the
+          // parameter rather than in the prompt: mixed panels track their
+          // AVERAGE member, not their spread (Self-MoA, arXiv 2502.00674), so
+          // a weaker model added for variety measurably subtracts — which is
+          // exactly the mistake "put different models on it" invites.
+          model: {
+            type: 'string',
+            description: "Per-fork model spec (e.g. 'codex/gpt-5.5'). Omit to inherit this agent's. Set it to put a different vendor on a genuinely open question — a panel is only as good as its average member, so a weaker model chosen for variety costs more than it buys.",
+          },
           allowedTools: { type: 'array', items: { type: 'string' }, description: 'Tool names this fork may invoke.' },
         },
       },
@@ -489,13 +510,20 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
         description: 'For action=fork: how forks are settled. Default merge — the forks\' findings merge back into this turn. mcts scores competing approaches against each other by execution instead.',
       },
     } : {}),
+    // Three distinct behaviours whose names alone do not give them away, and
+    // whose semantics lived only in buildMergePrompt (heads/controller.ts) —
+    // instructions addressed to the merge model, not to the caller choosing
+    // between them. Same three behaviours, stated for the audience that picks.
     merge_strategy: {
       type: 'string',
       enum: ['synthesize', 'best_of', 'consensus'],
-      description: 'For action=fork: how to combine fork findings. Default synthesize.',
+      description: 'For action=fork: how the merge reads the forks. Default synthesize — one narrative, disagreements reconciled in favour of the stronger evidence. best_of takes the strongest fork whole. consensus reports what the forks agreed on and hands back each disagreement as an open question, which is what you want when the split itself is the answer you need.',
     },
     budget: { type: 'integer', minimum: 1, maximum: 200, description: 'For action=fork: max iterations.' },
-    wall_clock_ms: { type: 'integer', minimum: 1000, description: 'For action=fork: wall-clock cap in ms.' },
+    wall_clock_ms: {
+      type: 'integer', minimum: 1000,
+      description: 'For action=fork: abort the forks after this many ms. Omit unless the work is genuinely time-boxed — forks run to completion by default, and a deadline cuts them off mid-work.',
+    },
     options: { type: 'object', description: 'For action=fork: advanced per-settle tuning. Most callers leave unset.' },
     // The opt-in cumulative cap. Offered on fork, where the host genuinely owns
     // the exploration's model calls and can therefore enforce it; a subordinate

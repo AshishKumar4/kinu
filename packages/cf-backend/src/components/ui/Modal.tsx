@@ -34,12 +34,11 @@ export function Modal({ title, onClose, icon, children, footer, maxWidthClass = 
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: "rgba(0,0,0,0.5)" }}
+      className="p-scrim fixed inset-0 z-50 flex items-center justify-center p-4"
       onClick={dismiss}
     >
       <div
-        className={`w-full ${maxWidthClass} max-h-[calc(100vh-2rem)] overflow-y-auto rounded-lg border p-border p-elevated p-4 sm:p-5 space-y-4 animate-fade-in`}
+        className={`w-full ${maxWidthClass} max-h-[calc(100vh-2rem)] overflow-y-auto border p-border p-overlay p-4 sm:p-5 space-y-4 animate-fade-in`}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

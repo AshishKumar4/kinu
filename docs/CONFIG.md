@@ -56,8 +56,19 @@ not shadow a built-in command name.
 
 ## Providers
 
-`providers` holds local-only model credentials. Cloud workspaces never read
-them — connect providers to your account instead (`proteus providers connect`).
+**`proteus provider connect` no longer writes a key here by default.** Signed
+in, the key goes to your Proteus account, where it is encrypted at rest — and
+this machine reaches it through the provider proxy without holding a copy. Pass
+`--local` to keep one here instead, for offline use or an endpoint only this
+machine can see. A local key always wins over the account copy.
+
+Two exceptions, both deliberate. Codex stays local because the Codex endpoint
+refuses Cloudflare Workers egress, so proxying it would break a credential that
+works today. And with no account signed in there is nowhere else to put a key,
+so it lands here.
+
+`providers` is therefore the local-override store. Cloud workspaces never read
+it.
 
 | Field | What it is |
 | --- | --- |

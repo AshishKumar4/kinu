@@ -144,7 +144,7 @@ describe("executor lifecycle state", () => {
   test("configured sandbox is callable but inactive until first operation", async () => {
     const handle = sandboxHandle();
     const router = new DefaultExecutionRouter();
-    router.register(createSandboxExecutor(handle, "proteus.example.test", "proteus-agent"));
+    router.register(createSandboxExecutor(handle, "proteus.example.test"));
 
     const [info] = router.listExecutors().filter((e) => e.name === "sandbox");
     expect(info).toMatchObject({
@@ -164,7 +164,7 @@ describe("executor lifecycle state", () => {
 
   test("sandbox exec strips AbortSignal before remote SDK calls", async () => {
     const handle = sandboxHandle();
-    const executor = createSandboxExecutor(handle, "proteus.example.test", "proteus-agent");
+    const executor = createSandboxExecutor(handle, "proteus.example.test");
     const signal = new AbortController().signal;
 
     const result = await executor.tools.exec.execute("echo ok", { signal });

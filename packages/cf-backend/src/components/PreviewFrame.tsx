@@ -9,9 +9,8 @@
  */
 import { useState } from "react";
 import { CopyButton } from "@/components/ui/CopyButton";
+import { PREVIEW_SANDBOX, isPreviewUrl } from "@/lib/preview-origin";
 import { ArrowsClockwiseIcon, ArrowSquareOutIcon } from "@phosphor-icons/react";
-
-const IFRAME_SANDBOX = "allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads";
 
 export function PreviewFrame({ url, label }: {
   url: string;
@@ -19,9 +18,21 @@ export function PreviewFrame({ url, label }: {
   label?: string;
 }) {
   const [reloadKey, setReloadKey] = useState(0);
+  // The only gate on what this app frames. Preview URLs reach here out of raw
+  // tool output, so an agent that writes a URL of its own choosing must not get
+  // it rendered inside the workspace chrome.
+  if (!isPreviewUrl(url)) {
+    return (
+      <div className="h-full flex items-center justify-center p-4 text-center">
+        <span className="text-[11px] p-text-3 font-mono break-all">
+          Refused to preview a URL that is not a Proteus preview: {url}
+        </span>
+      </div>
+    );
+  }
   return (
     <div className="h-full flex flex-col">
-      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-elevated shrink-0">
+      <div className="flex items-center gap-1.5 px-3 py-1.5 border-b p-border p-fill shrink-0">
         <span className="size-1.5 rounded-full p-dot-success shrink-0" />
         {label && <span className="font-mono text-[11px] p-text-2 shrink-0">{label}</span>}
         <code className="text-[10px] p-text-3 font-mono truncate ml-2 flex-1">{url}</code>
@@ -43,8 +54,8 @@ export function PreviewFrame({ url, label }: {
         key={reloadKey}
         src={url}
         title={label ?? url}
-        className="flex-1 w-full bg-white"
-        sandbox={IFRAME_SANDBOX}
+        className="p-bg flex-1 w-full"
+        sandbox={PREVIEW_SANDBOX}
       />
     </div>
   );

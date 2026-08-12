@@ -25,6 +25,10 @@
  */
 
 import type { ToolCallRecord } from '../evolution/types.js';
+import type { HeadFileChange } from './file-changes.js';
+
+/** What a head did to the shared filesystem — see heads/file-changes.ts. */
+export type { HeadFileChange };
 
 /** Opaque head identifier — kebab-case string, globally unique within a turn. */
 export type HeadId = string;
@@ -36,29 +40,29 @@ export type MergeStrategy =
   | 'consensus';   // emphasize areas of agreement; surface disagreements
 
 /**
- * Hard budgets that propagate down the head tree.
+ * What propagates down the head tree.
  *
- * Each spawn DECREMENTS maxDepth. When 0, further splits are rejected.
- * Token + wall-clock budgets are shared across the subtree — child heads
- * receive their slice when spawned.
+ * A head is a FORK of its parent — the same workspace, files and sandbox — so it
+ * gets the same working envelope its parent turn gets: run until the work is
+ * done. There is no token pool and no wall clock by default. Cost is governed
+ * where cost is actually owned: the mission budget governor (mission-budget.ts),
+ * which is label-scoped, opt-in, and enforced at the spawn and model-call seams.
+ *
+ * The two fields here are not work limits:
+ *   • `maxDepth` terminates RECURSION. `split_subheads` lets a head spawn heads
+ *     that spawn heads; without a decrementing depth there is no fixed point and
+ *     a single fork call can expand without bound. It never stops a running
+ *     head — it refuses a NEW split.
+ *   • `maxWallClockMs` is undefined unless a caller explicitly asks for one
+ *     (`agents` fork `wall_clock_ms`). Opt-in, never a default.
  */
 export interface HeadBudget {
-  /** Remaining depth; root = configured root, decremented per spawn. */
+  /** Remaining recursive-split depth; decremented per spawn. 0 rejects splits. */
   readonly maxDepth: number;
-  /** Cumulative token ceiling for this head and its descendants. */
-  readonly maxTokens: number;
-  /** Wall-clock ceiling in milliseconds. */
-  readonly maxWallClockMs: number;
+  /** Caller-requested wall-clock ceiling in ms. Undefined = run to completion. */
+  readonly maxWallClockMs?: number;
   /** Epoch ms when the head was spawned; used for wall-clock enforcement. */
   readonly spawnedAt: number;
-}
-
-/** Cap a sub-budget on spawn — child gets at most this much of parent's budget. */
-export interface BudgetSplit {
-  /** Fraction of parent.maxTokens given to each child. Default = 1 / n_children. */
-  readonly tokensRatio?: number;
-  /** Fraction of parent.maxWallClockMs given to each child. Default = same as parent. */
-  readonly wallClockRatio?: number;
 }
 
 /** A snapshotted message from the parent's conversation, given to each head. */
@@ -85,6 +89,20 @@ export interface HeadInput {
   readonly model?: string;
   /** Names of crafted tools this head may invoke. Empty = none. Undefined = all. */
   readonly allowedTools?: readonly string[];
+  /**
+   * The mission-budget labels this head's model calls charge, carried down so a
+   * head running in another process can find the ledger its spend belongs to.
+   *
+   * Strings, not a port: this input crosses a facet boundary as structured
+   * data, and the boundary is exactly why the labels have to travel at all.
+   * The runtime on the far side turns them back into a
+   * {@link import('../mission-budget.js').MissionScope} over whatever reaches
+   * the ledger from there.
+   *
+   * Absent or empty means unbudgeted — the default, and then nothing is asked:
+   * no query, no RPC, no refusal.
+   */
+  readonly missionLabels?: readonly string[];
   /** Merge strategy the parent will apply — exposed so the head can shape its summary. */
   readonly mergeStrategy: MergeStrategy;
 }
@@ -107,6 +125,14 @@ export interface Decision {
   readonly rationale: string;
   /** Which evidence ids back this decision. */
   readonly supportingEvidence?: readonly string[];
+}
+
+/** One head's change set as the merge payload carries it. Heads that changed
+ *  nothing are absent rather than present-and-empty: a fork that touched no
+ *  files has nothing to report, and an empty row would still print a heading. */
+export interface HeadFileChangeSet {
+  readonly id: HeadId;
+  readonly changes: readonly HeadFileChange[];
 }
 
 /** Pointer to a tangible side-effect the head produced. */
@@ -141,6 +167,11 @@ export interface HeadReport {
   readonly evidence: readonly Evidence[];
   readonly decisions: readonly Decision[];
   readonly artifactRefs: readonly ArtifactRef[];
+  /** Files this head created, changed or deleted on the SHARED planes, with
+   *  line counts — the review a parent gets of what its child actually did.
+   *  Attributed at the head's own file plane, which is why a concurrent sibling
+   *  cannot appear here; see heads/file-changes.ts for what that leaves out. */
+  readonly fileChanges: readonly HeadFileChange[];
   /** Heads this one spawned (already merged before returning). */
   readonly childHeadIds: readonly HeadId[];
   /** Tool calls the head made — for telemetry. */
@@ -197,11 +228,8 @@ export interface SplitRequest {
   readonly mergeStrategy?: MergeStrategy;
   readonly budget?: Partial<{
     maxDepth: number;
-    maxTokens: number;
     maxWallClockMs: number;
   }>;
-  /** How to slice the parent's budget among children — default: equal share. */
-  readonly budgetSplit?: BudgetSplit;
 }
 
 /** Result of split → await → merge. The parent writes mergedNarrative back. */
@@ -223,6 +251,10 @@ export interface MergeResult {
    *  neutral 0.5 (no grounding seam wired). A failed/unresolved head scores below
    *  a head whose work ran and held up. */
   readonly headScores: readonly HeadScore[];
+  /** Which files each head created, changed or deleted — the review of the
+   *  split's actual effect on the shared workspace, per head, with line counts.
+   *  Only heads that changed something appear. */
+  readonly fileChanges: readonly HeadFileChangeSet[];
   /** True when headScores carry a real grounded verdict (the controller had a
    *  grounding seam); false when they are neutral placeholders. */
   readonly grounded: boolean;
@@ -253,88 +285,51 @@ export interface HeadScore {
   readonly grounding: 'execution' | 'judge';
 }
 
-/** Steps of room the DEFAULT pool gives each head at the widest legal fan-out
- *  — a pool-sizing factor, not a ceiling. The runaway step guard in
- *  head-inference derives from each head's own token budget. */
-export const NOMINAL_HEAD_STEPS = 16;
-
-/** Nominal marginal cost of one head step: the head's own output plus the tool
- *  output it pulls in. Two things derive from it — the tighter step cap a small
- *  budget implies (head-inference) and the default pool below. */
-export const NOMINAL_STEP_TOKENS = 1_200;
-
-/** Widest fan-out the fork surface accepts (2–6 head specs). The pool is divided
- *  among siblings, so this is the divisor the default has to survive. */
-export const MAX_FORK_WIDTH = 6;
-
 /**
- * Default budget for a fresh root head if the parent doesn't specify.
- *
- * `maxTokens` is a subtree pool, divided among siblings on spawn. It is sized so
- * that even at the widest legal fan-out each head still has room for
- * NOMINAL_HEAD_STEPS of nominal-cost work: below that the pool starves a head
- * before it can do the work the split assumed, and a fork returns empty because
- * it was starved rather than because it finished. (The old flat 50_000 gave a
- * 6-wide split 8.3k per head — under half of that room.)
+ * What a fresh root head inherits when the parent names nothing: recursion room
+ * and nothing else. No token pool, no clock — a fork works until the work is
+ * done, exactly like the turn it forked from.
  */
 export const DEFAULT_HEAD_BUDGET: Omit<HeadBudget, 'spawnedAt'> = {
   maxDepth: 3,
-  maxTokens: MAX_FORK_WIDTH * NOMINAL_HEAD_STEPS * NOMINAL_STEP_TOKENS,
-  maxWallClockMs: 5 * 60 * 1000,
 };
 
 /** Default merge strategy. */
 export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';
 
 /**
- * Split parent's budget among N children. Returns the per-child budget.
+ * The budget a child head inherits from its parent.
  *
- * Defaults: equal token split. Wall-clock is bounded by the parent's REMAINING
- * time, never the parent's full ceiling: the child resets `spawnedAt` to now, so
- * handing it the full `maxWallClockMs` would let a recursive subtree run past the
- * operator's wall-clock ceiling on every level it descends (a 3-deep split could
- * triple it). We cap each child's deadline at the parent's deadline by clamping
- * its wall-clock to the time the parent has left (THINKING-AUDIT §4 #7). Depth is
- * decremented unconditionally.
+ * Depth decrements — that is the whole point of it. A caller-requested
+ * wall-clock is bounded by the parent's REMAINING time rather than re-granted in
+ * full: the child resets `spawnedAt` to now, so handing it the parent's whole
+ * ceiling would let a recursive subtree run past the deadline the caller asked
+ * for, once per level it descends (THINKING-AUDIT §4 #7). With no wall clock
+ * requested there is nothing to clamp and the child, like the parent, just runs.
  */
-export function deriveChildBudget(
-  parent: HeadBudget,
-  n: number,
-  split?: BudgetSplit,
-  now: number = Date.now(),
-): HeadBudget {
-  const safeN = Math.max(1, n);
-  const tokensRatio = split?.tokensRatio ?? 1 / safeN;
-  const wallClockRatio = split?.wallClockRatio ?? 1;
-  const parentRemainingMs = Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt));
+export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()): HeadBudget {
   return {
     maxDepth: parent.maxDepth - 1,
-    maxTokens: Math.floor(parent.maxTokens * tokensRatio),
-    // A child can never outlive the parent's remaining wall-clock, regardless
-    // of the requested ratio — the child clock starts fresh at `now`.
-    maxWallClockMs: Math.min(
-      Math.floor(parent.maxWallClockMs * wallClockRatio),
-      parentRemainingMs,
-    ),
+    ...(parent.maxWallClockMs === undefined
+      ? {}
+      : { maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)) }),
     spawnedAt: now,
   };
 }
 
 /**
- * Returns true if this budget is exhausted along any dimension.
+ * Whether this head may still spawn, and whether a requested deadline has passed.
  *
- * `consumedTokens` is the MARGINAL spend of this head + descendants so far —
- * `HeadCapture.tokenUsage.budgetCharged`, not gross provider usage. Passing gross
- * bills the re-sent prompt prefix on every step, which makes the ceiling a
- * function of how long the parent has been running. Omitted (or 0) only checks
- * depth + wall-clock.
+ * Only two things can be spent: recursion depth, and the wall-clock a caller
+ * explicitly asked for. There is no token dimension — cumulative spend is the
+ * mission budget governor's job (mission-budget.ts), which owns a real ledger
+ * across a whole mission instead of a per-head pool that starves a fork before
+ * it can do the work the split assumed.
  */
-export function budgetExhausted(
-  b: HeadBudget,
-  consumedTokens = 0,
-): { exhausted: boolean; reason?: string } {
+export function budgetExhausted(b: HeadBudget): { exhausted: boolean; reason?: string } {
   if (b.maxDepth <= 0) return { exhausted: true, reason: 'max-depth' };
-  if (consumedTokens >= b.maxTokens) return { exhausted: true, reason: 'tokens' };
-  if (Date.now() - b.spawnedAt >= b.maxWallClockMs) return { exhausted: true, reason: 'wall-clock' };
+  if (b.maxWallClockMs !== undefined && Date.now() - b.spawnedAt >= b.maxWallClockMs) {
+    return { exhausted: true, reason: 'wall-clock' };
+  }
   return { exhausted: false };
 }

@@ -180,3 +180,52 @@ describe('integration: after restart, indices resume correctly', () => {
     expect(next.eventIndex).toBe(2);
   });
 });
+
+describe('RunEventRecorder.readRecentByType', () => {
+  test('spans runs, filters in SQL, and returns oldest first', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'step_finish', stepIndex: 1 });
+    recorder.emit('run-1', { type: 'turn_end', turnIndex: 0 });
+    recorder.emit('run-2', { type: 'step_finish', stepIndex: 1 });
+    const steps = recorder.readRecentByType('step_finish');
+    expect(steps.map((e) => e.runId)).toEqual(['run-1', 'run-2']);
+    expect(steps.every((e) => e.type === 'step_finish')).toBe(true);
+  });
+
+  test('limit is a real bound, keeping the NEWEST rows', () => {
+    // The distinction that matters for a percentile: a post-filter slice of a
+    // fetch window can come back short, or hold the oldest rows instead.
+    const { recorder } = setup();
+    for (let i = 0; i < 10; i++) {
+      recorder.emit('run-1', { type: 'turn_start', turnIndex: i });
+      recorder.emit('run-1', { type: 'step_finish', stepIndex: i });
+    }
+    const steps = recorder.readRecentByType('step_finish', 3);
+    expect(steps).toHaveLength(3);
+    expect(steps.map((e) => (e.type === 'step_finish' ? e.stepIndex : -1))).toEqual([7, 8, 9]);
+  });
+
+  test('a type nothing was recorded under reads empty, not stale', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', { type: 'turn_start', turnIndex: 0 });
+    expect(recorder.readRecentByType('step_finish')).toEqual([]);
+  });
+
+  test('round-trips the usage and context a step carries', () => {
+    const { recorder } = setup();
+    recorder.emit('run-1', {
+      type: 'step_finish',
+      stepIndex: 1,
+      usage: { input: 900, cached: 700, output: 40, reasoning: 0, usd: 0.001 },
+      context: {
+        segments: [{ plane: 'system', label: 'Soul', chars: 400, items: 1 }],
+        measuredChars: 400,
+        charsPerToken: 4,
+        estimatedTokens: 100,
+      },
+    });
+    const [step] = recorder.readRecentByType('step_finish');
+    expect(step?.type === 'step_finish' && step.usage?.cached).toBe(700);
+    expect(step?.type === 'step_finish' && step.context?.measuredChars).toBe(400);
+  });
+});

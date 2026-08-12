@@ -9,9 +9,9 @@
  * The cf-backend supplies a Facet-based HeadRuntime; tests supply in-memory.
  *
  * Concurrency: heads run via Promise.allSettled — one head's failure does
- * not block the others. Wall-clock enforcement is a race against the budget.
- * Token-budget enforcement is post-hoc (heads self-report; merge cost summary
- * surfaces overruns).
+ * not block the others. Heads run to completion; a deadline is raced only when
+ * the caller asked for one. Spend is the mission budget governor's ledger, not
+ * a per-head pool — the merge cost summary reports what a split actually cost.
  */
 
 import * as v from 'valibot';
@@ -77,7 +77,7 @@ export interface SpawnedHead {
   readonly id: HeadId;
   /** Kicks off the head; resolves with its report on completion. */
   run(): Promise<HeadReport>;
-  /** Best-effort abort — used on wall-clock timeout. */
+  /** Best-effort abort — used when a caller-requested deadline passes. */
   abort(reason: string): Promise<void>;
 }
 
@@ -101,7 +101,10 @@ export type SplitPhaseEvent =
   | { kind: 'split'; rootId: HeadId; headIds: readonly HeadId[]; rationale: string }
   /** Carries the whole cost summary rather than a copied-out head count, so a
    *  new outcome figure reaches the run-event ledger without a second edit. */
-  | { kind: 'merge'; rootId: HeadId; cost: MergeResult['costSummary']; mergedNarrative: string };
+  | { kind: 'merge'; rootId: HeadId; cost: MergeResult['costSummary']; mergedNarrative: string;
+      /** Per-head file changes — carried so the run-event ledger records what a
+       *  split actually did to the workspace, not only what it spent. */
+      fileChanges: MergeResult['fileChanges'] };
 
 export class HeadController {
   constructor(
@@ -125,6 +128,9 @@ export class HeadController {
     request: SplitRequest;
     parentBudget?: HeadBudget;
     model?: string;
+    /** Mission-budget labels every head in this split charges. Carried down to
+     *  each HeadInput so a head running out of process can find the ledger. */
+    missionLabels?: readonly string[];
     onPhase?: (event: SplitPhaseEvent) => void;
   }): Promise<MergeResult> {
     const rootId = opts.rootId ?? opts.parentHeadId ?? nanoid();
@@ -142,8 +148,7 @@ export class HeadController {
       throw new Error('Cannot split: no head tasks provided');
     }
 
-    const n = opts.request.heads.length;
-    const childBudget = deriveChildBudget(parentBudget, n, opts.request.budgetSplit);
+    const childBudget = deriveChildBudget(parentBudget);
 
     // Anchor the run identity before spawning so its heads group under one root
     // (top-level splits have a synthetic root with no head row of its own).
@@ -166,6 +171,7 @@ export class HeadController {
         model: h.model ?? opts.model,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
+        ...(opts.missionLabels?.length ? { missionLabels: opts.missionLabels } : {}),
       };
       this.journal.insertSpawn(input);
       return this.runtime.spawnHead(input);
@@ -182,26 +188,30 @@ export class HeadController {
       rationale: opts.request.rationale,
     });
 
-    // Race each head against the parent's wall-clock — measured from when the
-    // heads finished spawning (`startedAt`), NOT from `spawnedAt`: sub-agent
-    // cold-start can take tens of seconds and must not be charged against the
-    // head's own time-to-produce-a-report.
+    // Heads run to completion. Only when the caller asked for a deadline is one
+    // raced against — measured from when the heads finished spawning
+    // (`startedAt`), NOT from `spawnedAt`: sub-agent cold-start can take tens of
+    // seconds and must not be charged against the head's own
+    // time-to-produce-a-report.
     const reports = await Promise.all(
       handles.map(async (h): Promise<HeadReport> => {
-        const remainingMs = parentBudget.maxWallClockMs - (Date.now() - startedAt);
+        const remainingMs = parentBudget.maxWallClockMs === undefined
+          ? undefined
+          : parentBudget.maxWallClockMs - (Date.now() - startedAt);
         try {
           const report = await raceWithTimeout(h, remainingMs);
           this.journal.recordReport(report);
           return report;
         } catch (err) {
-          // Either abort failed or wall-clock blew. Synthesize a budget_exceeded report.
+          // Either the abort failed or a requested deadline blew.
           const failed: HeadReport = {
             id: h.id,
             status: 'budget_exceeded',
-            summary: 'Head was aborted before producing a report (wall-clock budget exceeded).',
+            summary: 'Head was aborted before producing a report.',
             evidence: [],
             decisions: [],
             artifactRefs: [],
+            fileChanges: [],
             childHeadIds: [],
             toolCalls: [],
             steps: [],
@@ -236,6 +246,7 @@ export class HeadController {
       rootId,
       cost: mergeResult.costSummary,
       mergedNarrative: mergeResult.mergedNarrative,
+      fileChanges: mergeResult.fileChanges,
     });
     return mergeResult;
   }
@@ -300,6 +311,7 @@ export class HeadController {
   ): Promise<MergeResult> {
     const grounded = this.runtime.grounding != null;
     const costSummary = summarizeCost(reports, parentBudget);
+    const fileChanges = collectFileChanges(reports);
 
     // Nothing to synthesize: every head stopped without banking a finding.
     // Asking an LLM to narrate that makes it invent a cause it cannot know — a
@@ -315,6 +327,7 @@ export class HeadController {
         evidenceAggregate: [],
         headIds,
         headScores,
+        fileChanges,
         grounded,
         costSummary,
       };
@@ -329,6 +342,7 @@ export class HeadController {
       evidenceAggregate: reports.flatMap((r) => r.evidence),
       headIds,
       headScores,
+      fileChanges,
       grounded,
       costSummary,
     });
@@ -344,6 +358,7 @@ export class HeadController {
       evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
       headIds,
       headScores,
+      fileChanges,
       grounded,
       costSummary,
     };
@@ -403,9 +418,12 @@ export class HeadController {
 
 // ── helpers ─────────────────────────────────────────────────────────
 
-/** Race a spawned head against its wall-clock budget, aborting on timeout.
- *  Shared with the Steer-as-Branch single-head runner (steer-branch.ts). */
-export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number): Promise<HeadReport> {
+/** Await a spawned head, racing a caller-requested deadline when there is one.
+ *  `undefined` — the default — means the head runs until it is done, the same
+ *  envelope the turn that forked it gets. Shared with the Steer-as-Branch
+ *  single-head runner (steer-branch.ts). */
+export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefined): Promise<HeadReport> {
+  if (timeoutMs === undefined) return h.run();
   if (timeoutMs <= 0) {
     await h.abort('wall-clock budget already exhausted at spawn time');
     throw new Error('wall-clock budget already exhausted');
@@ -422,6 +440,15 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number): Promis
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }
+}
+
+/** Each head's change set, heads that changed nothing omitted. A report arrives
+ *  over a DO RPC boundary, so tolerate a missing array exactly as the journal's
+ *  step recording does. */
+function collectFileChanges(reports: readonly HeadReport[]): MergeResult['fileChanges'] {
+  return reports
+    .filter((r) => (r.fileChanges?.length ?? 0) > 0)
+    .map((r) => ({ id: r.id, changes: r.fileChanges }));
 }
 
 function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget): MergeResult['costSummary'] {

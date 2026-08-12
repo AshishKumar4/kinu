@@ -236,6 +236,11 @@ export interface AgentClient {
   readonly consents: DeviceConsentSurface | null;
   readonly localControls: LocalSessionControls | null;
   readonly checkpoints: FileCheckpointSurface | null;
+  /** Per-message aggregate cap on raw bytes this backend will accept inlined
+   *  as data-URL file parts. A storage row limit on the cloud, a provider
+   *  request budget locally — the two numbers differ by 8×, so the chat
+   *  surfaces ask rather than assume. */
+  readonly inlineAttachmentLimitBytes: number;
 
   /** Bring up startup resources (MCP servers, orphaned-job recovery). Input
    *  should not be accepted before this resolves. */

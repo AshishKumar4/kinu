@@ -16,7 +16,7 @@
 import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
 import { DEVICE_CONNECT_PATH } from "@proteus/core";
 import { json, safeJson } from "./lib/http.js";
-import { OWNER_SESSION } from "./user/workspace-capability.js";
+import { ownerCaller } from "./user/workspace-capability.js";
 
 const DAEMON_JS_URL = "/pc/daemon.js";
 
@@ -92,7 +92,7 @@ async function handlePcConnectTicket(request: Request, env: Env): Promise<Respon
 
   const ns = env.UserDO;
   if (!ns) return json({ error: "No UserDO binding" }, { status: 500 });
-  const issued = await ns.get(ns.idFromName(body.user)).issueDeviceConnectTicket(OWNER_SESSION, body.token);
+  const issued = await ns.get(ns.idFromName(body.user)).issueDeviceConnectTicket(await ownerCaller(env), body.token);
   if (!issued.ok || !issued.ticket || !issued.expiresAt) return json({ error: "unauthorized" }, { status: 401 });
   return json({ ticket: issued.ticket, expiresAt: issued.expiresAt });
 }

@@ -1,6 +1,7 @@
 // Credential mutations must notify the user's active agents so each drops
 // its cached provider/model state (orchestrator.onCredentialsChanged) —
 // previously the hook existed but nothing ever invoked it.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { handleUserRequest } from '../src/user/routes.js';
 import type { AuthIdentity } from '../src/auth/session.js';
@@ -37,8 +38,7 @@ function setup() {
     OrchestratorAgent: {
       idFromName: (n: string) => n,
       get: (id: unknown) => ({ async onCredentialsChanged() { notified.push(String(id)); return { ok: true }; } }),
-    },
-  } as unknown as Env;
+    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, ctx, notified, pending };
 }
 

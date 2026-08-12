@@ -42,7 +42,7 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
       const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
       captured.push({ url, headers: new Headers(init?.headers) });
       return chatCompletionResponse();
-    }) as typeof fetch,
+    }) as unknown as typeof fetch,
     workersAI,
   });
   await generateText({
@@ -81,7 +81,7 @@ describe('Workers AI session affinity (REST path)', () => {
         return calls === 1
           ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
           : chatCompletionResponse();
-      }) as typeof fetch,
+      }) as unknown as typeof fetch,
     });
 
     const result = await generateText({

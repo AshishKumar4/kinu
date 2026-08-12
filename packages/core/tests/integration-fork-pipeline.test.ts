@@ -1,128 +1,28 @@
 /**
- * Integration test for the fork-copy pipeline end-to-end.
+ * The fork-copy pipeline end-to-end, across the transport boundary.
  *
- * This test simulates the cross-DO flow:
- *   1. Source agent materializes a ForkPayload from its own SQL rows
- *      (mirrors the CF backend's buildForkPayload)
- *   2. Payload is serialized to JSON and back (mirrors the RPC boundary)
- *   3. Fork DO receives the payload, builds an ephemeral SqlExecutor
- *      (mirrors cf-backend/orchestrator.ts::buildSqlFromPayload), and
- *      calls forkWorkspaceStorage to land the rows in its own SQLite
+ *   1. The source workspace materializes a ForkSnapshot from its own SQL rows
+ *      (snapshotWorkspaceForFork)
+ *   2. The snapshot crosses the wire — structuredClone, which is what DO RPC
+ *      does, and what preserves the canonical BLOB vfs rows
+ *   3. The target lands it in its own SQLite (writeForkSnapshot)
  *
- * Verifies the same invariants as unit-fork.test.ts, but over the full
- * pipeline including JSON round-trip. Catches payload-shape drift bugs.
+ * Both halves are core's, so this exercises the production path rather than a
+ * transcription of it: the copy used to be defined a second time inside the CF
+ * backend as a SqlExecutor shim answering the exact SELECTs the write issues,
+ * and a third time here, and each transcription was a place the shapes could
+ * drift apart in silence.
+ *
+ * Verifies the same invariants as unit-fork.test.ts, over the full round trip.
  */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { forkWorkspaceStorage, initAllTables, readForkLineage, readSoul, writeSoul } from '../src/index.js';
-import type { SqlExecutor } from '../src/types/primitives.js';
+import {
+  initAllTables, readForkLineage, readSoul, writeSoul,
+  snapshotWorkspaceForFork, writeForkSnapshot,
+} from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
-
-// Mirror of the ForkPayload type in cf-backend. Kept local to the test so
-// the test fails loudly if the CF payload drifts without a test update.
-interface ForkPayload {
-  forkName: string;
-  lineage: {
-    forkOriginAgentId: string;
-    forkOriginAgentName: string;
-    forkOriginMessageId: string;
-    forkOriginCreatedAt: number;
-    forkedAt: number;
-  };
-  messages: Array<{ id: string; session_id: string; parent_id: string | null; role: string; content: string; created_at: number }>;
-  conversationHistory: Array<{ session_id: string; role: string; message: string; created_at: number }>;
-  vfsFiles: Array<{ path: string; chunk_index: number; parent_path: string; data: unknown; is_dir: number; size: number; mtime: number }>;
-  memoryChunks: Array<{ id: string; path: string; start_line: number; end_line: number; hash: string; text: string; updated_at: number }>;
-  craftedTools: Array<{ name: string; description: string; params: string | null; code: string; scope: string; created_at: number; updated_at: number }>;
-  agentConfig: Array<{ key: string; value: string }>;
-}
-
-/** Mirror of cf-backend/orchestrator.ts::buildForkPayload for tests. */
-function buildPayload(src: { sql: SqlExecutor }, untilMessageId: string, forkName: string): ForkPayload {
-  const identity = src.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
-  const hit = src.sql<{ created_at: number }>`
-    SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
-  `;
-  const forkPointMs = hit[0]!.created_at;
-  const messages = src.sql<ForkPayload["messages"][number]>`
-    SELECT id, session_id, parent_id, role, content, created_at
-    FROM messages WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-    ORDER BY created_at ASC
-  `;
-  const conv = src.sql<ForkPayload["conversationHistory"][number]>`
-    SELECT session_id, role, message, created_at
-    FROM conversation_history WHERE created_at <= ${forkPointMs} AND session_id = 'default'
-    ORDER BY id ASC
-  `;
-  const vfs = src.sql<ForkPayload["vfsFiles"][number]>`
-    SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
-    FROM vfs_files WHERE path = 'SOUL.md' OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
-  `;
-  let memChunks: ForkPayload["memoryChunks"] = [];
-  try {
-    memChunks = src.sql<ForkPayload["memoryChunks"][number]>`
-      SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks
-    `;
-  } catch { /* not created */ }
-  const tools = src.sql<ForkPayload["craftedTools"][number]>`
-    SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools
-  `;
-  let agentConfig: ForkPayload["agentConfig"] = [];
-  try {
-    agentConfig = src.sql<ForkPayload["agentConfig"][number]>`SELECT key, value FROM agent_config`;
-  } catch { /* not created */ }
-
-  return {
-    forkName,
-    lineage: {
-      forkOriginAgentId: identity[0]?.id ?? '',
-      forkOriginAgentName: identity[0]?.name ?? '',
-      forkOriginMessageId: untilMessageId,
-      forkOriginCreatedAt: forkPointMs,
-      forkedAt: 88888,
-    },
-    messages,
-    conversationHistory: conv,
-    vfsFiles: vfs,
-    memoryChunks: memChunks,
-    craftedTools: tools,
-    agentConfig,
-  };
-}
-
-/** Mirror of cf-backend/orchestrator.ts::buildSqlFromPayload — the fork DO
- *  uses this to answer forkWorkspaceStorage's source queries without real SQL. */
-function buildSqlFromPayload(payload: ForkPayload): SqlExecutor {
-  const rawSql: (strings: TemplateStringsArray, ...values: unknown[]) => unknown[] =
-    (strings, ...values) => {
-      const query = strings.join('?').replace(/\s+/g, ' ').trim();
-      if (query.startsWith('SELECT created_at FROM messages WHERE id =')) {
-        const wantedId = values[0] as string;
-        const hit = payload.messages.find(m => m.id === wantedId);
-        return hit ? [{ created_at: hit.created_at }] : [];
-      }
-      if (query.startsWith('SELECT id, session_id, parent_id, role, content, created_at FROM messages')) {
-        const cutoff = values[0] as number;
-        return payload.messages.filter(m => m.created_at <= cutoff && m.session_id === 'default')
-          .sort((a, b) => a.created_at - b.created_at);
-      }
-      if (query.startsWith('SELECT session_id, role, message, created_at FROM conversation_history')) {
-        const cutoff = values[0] as number;
-        return payload.conversationHistory.filter(c => c.created_at <= cutoff && c.session_id === 'default');
-      }
-      if (query.startsWith('SELECT path, chunk_index, parent_path, data, is_dir, size, mtime FROM vfs_files')) return payload.vfsFiles;
-      if (query.startsWith('SELECT id, path, start_line, end_line, hash, text, updated_at FROM memory_chunks')) return payload.memoryChunks;
-      if (query.startsWith('SELECT name, description, params, code, scope, created_at, updated_at FROM crafted_tools')) return payload.craftedTools;
-      if (query.startsWith('SELECT key, value FROM agent_config')) return payload.agentConfig;
-      if (query.startsWith('SELECT id, name FROM workspace_identity')) return [{
-        id: payload.lineage.forkOriginAgentId,
-        name: payload.lineage.forkOriginAgentName,
-      }];
-      return [];
-    };
-  return rawSql as SqlExecutor;
-}
 
 function fresh() {
   const db = new Database(':memory:');
@@ -158,19 +58,14 @@ describe('fork pipeline (end-to-end)', () => {
 
     seedSource(src);
 
-    // Source side: build payload
-    const rawPayload = buildPayload(src, 'm2', 'my-fork');
-    // Simulate the RPC boundary — DO RPC uses structured clone, which
-    // preserves the canonical BLOB (Uint8Array/ArrayBuffer) vfs rows.
-    const payload = structuredClone(rawPayload);
+    // Source side: materialize the snapshot, then cross the RPC boundary.
+    // DO RPC uses structured clone, which preserves the canonical BLOB
+    // (Uint8Array/ArrayBuffer) vfs rows.
+    const snapshot = structuredClone(snapshotWorkspaceForFork(src.sql, 'm2'));
 
-    // Fork side: build ephemeral SqlExecutor + run forkWorkspaceStorage
-    const srcShim = buildSqlFromPayload(payload);
-    forkWorkspaceStorage(srcShim, tgt.sql, {
-      untilMessageId: payload.lineage.forkOriginMessageId,
-      targetWorkspaceId: 'FORK-DO-ID',
-      targetWorkspaceName: payload.forkName,
-      now: payload.lineage.forkedAt,
+    // Fork side: land it.
+    writeForkSnapshot(tgt.sql, snapshot, {
+      workspaceId: 'FORK-DO-ID', workspaceName: 'my-fork', now: 88888,
     });
 
     // Assertions — the fork has correct state after the round-trip
@@ -213,7 +108,7 @@ describe('fork pipeline (end-to-end)', () => {
     expect(cfg.get('display_name')).toBe('my-fork');
   });
 
-  test('payload with zero crafted tools and zero memory is safe', () => {
+  test('a snapshot with zero crafted tools and zero memory is safe', () => {
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
@@ -221,12 +116,10 @@ describe('fork pipeline (end-to-end)', () => {
     writeSoul(src.sql, 'p');
     src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
-    const rawPayload = buildPayload(src, 'm1', 'empty-fork');
-    const payload = structuredClone(rawPayload);
-    const srcShim = buildSqlFromPayload(payload);
+    const snapshot = structuredClone(snapshotWorkspaceForFork(src.sql, 'm1'));
 
-    expect(() => forkWorkspaceStorage(srcShim, tgt.sql, {
-      untilMessageId: 'm1', targetWorkspaceId: 'F', targetWorkspaceName: 'empty-fork', now: 7000,
+    expect(() => writeForkSnapshot(tgt.sql, snapshot, {
+      workspaceId: 'F', workspaceName: 'empty-fork', now: 7000,
     })).not.toThrow();
 
     const tools = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
@@ -234,10 +127,10 @@ describe('fork pipeline (end-to-end)', () => {
   });
 
   test('idempotent re-copy over a partial failure — second run succeeds', () => {
-    // Simulates a scenario where rawCopyFromFork was called twice: first call
-    // failed partway (leaving garbage in the fork DB), second call should
-    // produce the correct final state. forkWorkspaceStorage purges bootstrap + any
-    // prior fork_lineage, so it's effectively idempotent.
+    // Simulates rawCopyFromFork being called twice: the first call failed
+    // partway, leaving garbage in the fork DB, and the second must still
+    // produce the correct final state. writeForkSnapshot purges the bootstrap
+    // identity and any prior fork_lineage, so it is effectively idempotent.
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
@@ -249,12 +142,10 @@ describe('fork pipeline (end-to-end)', () => {
             VALUES (${1}, ${'OLD'}, ${'old'}, ${'x'}, ${0}, ${0})`;
 
     seedSource(src);
-    const rawPayload = buildPayload(src, 'm2', 'recovered-fork');
-    const payload = structuredClone(rawPayload);
-    const srcShim = buildSqlFromPayload(payload);
+    const snapshot = structuredClone(snapshotWorkspaceForFork(src.sql, 'm2'));
 
-    forkWorkspaceStorage(srcShim, tgt.sql, {
-      untilMessageId: 'm2', targetWorkspaceId: 'FINAL', targetWorkspaceName: 'recovered-fork', now: 99999,
+    writeForkSnapshot(tgt.sql, snapshot, {
+      workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
     });
 
     // Identity replaced clean

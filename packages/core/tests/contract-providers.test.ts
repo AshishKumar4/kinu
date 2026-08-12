@@ -11,6 +11,7 @@
 // so we only assert on the things THE PROVIDER controls (URL, headers,
 // auth scheme).
 import { describe, test, expect } from 'bun:test';
+import { asFetchFunction } from '../src/providers/fetch-shim.js';
 import { generateText } from 'ai';
 import {
   createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
@@ -68,12 +69,12 @@ describe('OpenAI provider contract', () => {
 
   test('routes model requests through the patient rate-limit fetch', async () => {
     let calls = 0;
-    const fetchImpl = (async () => {
+    const fetchImpl = asFetchFunction(async () => {
       calls++;
       return calls === 1
         ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
         : Response.json({ id: 'r', output: [] });
-    }) as typeof fetch;
+    });
     const deps = makeDeps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test-key' } },
     }, fetchImpl);

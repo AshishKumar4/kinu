@@ -29,7 +29,6 @@ import { streamText, tool, jsonSchema, stepCountIs } from "ai";
 import type { LanguageModel, ModelMessage, SystemModelMessage, ToolSet, UIMessage } from "ai";
 import type { SerializableToolDescriptor } from "./user/mcp.js";
 import type { McpToolSurface } from "./user/user-do.js";
-import { generateJson } from "./lib/generate-json.js";
 import type {
   TurnContext, TurnConfig,
   ToolCallResultContext, StepContext, ChunkContext,
@@ -44,10 +43,10 @@ import {
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
-  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory, runSampledShadowEval,
+  createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
+  runTurnShadowEval, createJsonJudge, type ScaffoldControl,
   SCAFFOLD_TURN_TIMEOUT_MS,
-  JudgeOutputSchema,
-  type StructuredJudgeFn, effortFor, type CompletedTurn, type TurnContinuity,
+  effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
   buildBuiltinTools,
   withClampedToolResults,
@@ -55,7 +54,7 @@ import {
   buildSystemPromptSync,
   currentDateForPrompt,
   promptModeForTurnEvent,
-  DynamicContextLedger, turnLocalContextMessage, fnv1a64, forkDelegates,
+  DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
@@ -79,7 +78,7 @@ import {
   // Durable run-event log
   RunEventRecorder,
   // Cumulative, label-scoped spend governor (opt-in; no label = no cap)
-  MissionGovernor,
+  MissionGovernor, type MissionSeam, type MissionBudgetRefusal, type MissionCallUsage,
   // agent_facts world model
   createFactsStore, type FactsStore,
   // Per-turn device awareness (laptop runtime presence + change notice)
@@ -100,7 +99,8 @@ import {
   type ActiveSkillSet, type SkillsVfs,
   // Heads support (takes capture + inherited-context digest)
   recordGroundedHeadsTake, narrowInheritedRole, INHERITED_CONTEXT_CAP, inheritedContextOmissionNote,
-  type ProductChangeToolDeps,
+  inheritedContextFromRows, headPhaseRunEvent,
+  type ReleaseToolDeps,
   isVfsError,
   type ParentRpcResult,
   type ParentRpcWrite,
@@ -117,6 +117,7 @@ import {
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
+  uiMessageText,
 } from "@proteus/core";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
@@ -226,19 +227,6 @@ function compactionLogDetail(message: string, data?: unknown): string {
   }
 }
 
-/** Flatten a stored UIMessage-JSON content string to plain text (assistant_messages rows). */
-export function uiMessageText(content: string): string {
-  try {
-    const parsed = JSON.parse(content) as { parts?: unknown };
-    if (Array.isArray(parsed.parts)) {
-      return parsed.parts
-        .flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])
-        .join('');
-    }
-  } catch { /* plain text fallback */ }
-  return content;
-}
-
 /** The per-actor-class tool deps `getRawTools` wires into the shared
  *  builtin factory. Structural absence IS the gate: a tool whose deps an
  *  actor class does not wire neither exists in the ToolSet nor is advertised
@@ -250,14 +238,14 @@ export interface ActorToolDeps {
   peers?: PeersToolDeps;
   /** Subordinate → parent progress spine — subordinate-only. */
   report?: ReportToolDeps;
-  productChanges?: ProductChangeToolDeps | undefined;
+  releases?: ReleaseToolDeps | undefined;
 }
 
 /** The deps-gated builtins: names dropped from the advertised tool surface
  *  when the actor profile wires no deps for them. The `agents` tool is never
  *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
  *  on the same profile (see actorAgentsActions). */
-const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
+const DEPS_GATED_TOOLS = ['report', 'release'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
@@ -265,7 +253,7 @@ const DEPS_GATED_TOOLS = ['report', 'product_change'] as const;
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
     report: !!deps.report,
-    product_change: !!deps.productChanges,
+    release: !!deps.releases,
   };
   return ACTIVE_TOOLS.filter((name) =>
     !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
@@ -341,7 +329,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** Tool deps only this actor class wires. Structural absence is the gating
    *  mechanism (the same way staffing is absent on the CLI backend): an actor
-   *  that returns {} has no staffing/peer actions and no product-change tool. */
+   *  that returns {} has no staffing/peer actions and no release tool. */
   protected abstract actorToolDeps(): ActorToolDeps;
 
   /** Codemode providers beyond the shared set. Spliced between `rlm` and
@@ -604,7 +592,7 @@ export abstract class ActorAgent extends Think<Env> {
           },
           onStepEvent: (ev) => {
             try {
-              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', stepIndex: ev.stepIndex, reason: ev.reason });
+              if (this._currentRunId) this.eventRecorder.emit(this._currentRunId, { type: 'step_finish', ...ev });
             } catch (err) { console.warn('[proteus] event emit failed at onStepFinish:', err); }
           },
         },
@@ -633,6 +621,33 @@ export abstract class ActorAgent extends Think<Env> {
       },
     });
     return this._budget;
+  }
+
+  /**
+   * The mission ledger, reached from a facet.
+   *
+   * A forked head runs as its own Durable Object with its own storage and its
+   * own resolved model, so the governed `LLM` the fork seam wraps never sees
+   * the calls it actually makes. These two are the ledger's other end: the head
+   * guards before each step and debits after it, over a cross-DO stub back to
+   * the actor that declared the budget.
+   *
+   * NOT `@callable`: cross-DO stub RPC never needed the decorator, and a
+   * spend ledger must not be writable over the public WS/HTTP transport. They
+   * are also inert without labels — `guard`/`debit` with an empty label set
+   * return immediately and touch no storage — so an unbudgeted head that
+   * somehow called them would still not create a cap.
+   */
+  async missionGuard(
+    seam: MissionSeam, labels: readonly string[],
+  ): Promise<MissionBudgetRefusal | null> {
+    return this.budget.guard(seam, labels);
+  }
+
+  async missionDebit(tokens: number, opts: {
+    labels: readonly string[]; calls?: number; spawns?: number; usage?: MissionCallUsage;
+  }): Promise<void> {
+    this.budget.debit(tokens, opts);
   }
 
   /** True while a keepAlive heartbeat is holding the DO open for evolution. */
@@ -679,7 +694,7 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * `orch.recordTurn` opens the outcome review + session cadence (which is
    * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, and `runShadowEvalSampled`
+   * holds the DO open for that detached work, and core's `runTurnShadowEval`
    * scores + promotes whatever proposal is pending. Split across subclasses
    * these drift: a facet that recorded turns but never settled or scored them
    * proposes exactly one scaffold and then stalls forever on it.
@@ -693,75 +708,68 @@ export abstract class ActorAgent extends Think<Env> {
     // never blocked, and held open by the keepAlive heartbeat instead.
     this.orch.recordTurn(turn, this._turnContinuity);
     this.settleEvolutionInBackground();
-    void this.runShadowEvalSampled(texts.userText, texts.assistantText);
-  }
-
-  /**
-   * Sampled per-turn auto-judge shadow rollout — the promotion half of the
-   * scaffold loop. When a pending scaffold exists, sample-and-run (default
-   * 25%) the pending against this turn's task, ask a judge LLM to compare,
-   * record. When minTrials is reached AND agent_config.auto_promote_scaffold
-   * allows it (default ON; the changelog makes the decision visible and
-   * revertable), auto-apply. Fire-and-forget — never extends the TurnQueue.
-   * Reads sampling/auto-promote from agent_config so the user can toggle
-   * without redeploys.
-   */
-  protected async runShadowEvalSampled(task: string, currentOutput: string): Promise<void> {
-    // Captured synchronously (before any await) so a later turn's stash can
-    // never bleed into this turn's shadow run.
+    // Read synchronously (before any await) so a later turn's stash can never
+    // bleed into this turn's shadow run.
     const liveOpts = this._lastTurnOpts;
-    const judge: StructuredJudgeFn = async (prompt) =>
-      generateJson({
-        model: await this.getModelForReview(),
-        schema: JudgeOutputSchema,
-        prompt,
-        providerOptions: reasoningEffortOptions('low', this.effectiveModelProviderFamily()),
-      });
-    const result = await runSampledShadowEval({
-      rt: this.rt,
-      config: this.config,
-      task,
-      currentOutput,
-      judge,
-      llmStream: this.makeScaffoldLLMStream(),
-      // Pass the same tool dispatcher the production chat path uses, so the
-      // pending scaffold runs with the real tool surface, not the disabled
-      // tool-call fallback that would penalize any tool-using pending.
-      callTool: this.makeScaffoldCallTool(),
-      history: this.makeScaffoldHistory(),
-      // host.defaultInference for the pending: replay the EXACT streamText
-      // opts the live answer ran with (full conversational context, system
-      // prompt, tool surface) so a pending that delegates to the default
-      // loop is judged on the scaffold delta alone. Costs one extra
-      // full-context inference — that IS the shadow run, already sampled.
-      // Fallback (DO restarted between the live turn and this eval): the task
-      // alone, but under the live loop's own step budget — a candidate judged
-      // against the live answer has to be allowed to reach one.
-      defaultInference: () => streamText(liveOpts ?? {
-        model: this.getModel(),
-        messages: [{ role: 'user', content: task }],
-        tools: this.getRawTools(),
-        stopWhen: stepCountIs(this.maxSteps),
-        ...effortFor('scaffold_mutation'),
-      }).toUIMessageStream(),
-    });
-    if (!result) return;
-
-    if (!result.skipped && result.evaluation) {
-      // Emit a structured note to the event log for visibility.
-      try {
-        if (this._currentRunId) {
+    void runTurnShadowEval(this.scaffoldControl, {
+      task: texts.userText,
+      currentOutput: texts.assistantText,
+      // Replay the EXACT streamText opts the live answer ran with — full
+      // conversational context, system prompt, tool surface — so a pending
+      // that delegates to the default loop is judged on the scaffold delta
+      // alone. Costs one extra full-context inference: that IS the shadow run,
+      // already sampled.
+      ...(liveOpts ? { replayLiveTurn: () => streamText(liveOpts).toUIMessageStream() } : {}),
+    }).then((result) => {
+      // What a DO does with the verdict: a note in the durable event log, so
+      // the Reasoning surface shows the comparison happened.
+      if (!result) return;
+      if (!result.skipped && result.evaluation && this._currentRunId) {
+        try {
           this.eventRecorder.emit(this._currentRunId, {
             type: 'memory_write',
             path: 'shadow-eval',
             bytes: result.evaluation.rationale.length,
           });
-        }
-      } catch { /* nop */ }
-    }
-    if (result.applied) {
-      console.log(`[proteus] auto-judge applied: ${result.applied}`);
-    }
+        } catch { /* nop */ }
+      }
+      if (result.applied) console.log(`[proteus] auto-judge applied: ${result.applied}`);
+    });
+  }
+
+  /**
+   * The scaffold evolution control plane's view of this actor: the four ports
+   * a candidate loop runs against, plus the two models it needs. The plane
+   * itself is core's (evolution/control.ts); this is the whole of what being a
+   * Durable Object contributes to it.
+   *
+   * On the substrate rather than on the orchestrator because the shadow eval
+   * above runs for EVERY actor, and a facet with a control plane it cannot
+   * reach would score no proposal at all.
+   */
+  protected get scaffoldControl(): ScaffoldControl {
+    return {
+      rt: this.rt,
+      sql: this.boundSql,
+      config: this.config,
+      surface: (task) => ({
+        llmStream: this.makeScaffoldLLMStream(),
+        // The same tool dispatcher the production chat path uses, so a
+        // candidate runs with the real tool surface rather than the disabled
+        // tool-call fallback that penalizes any tool-using candidate.
+        callTool: this.makeScaffoldCallTool(),
+        history: this.makeScaffoldHistory(),
+        defaultInference: () => streamText({
+          model: this.getModel(),
+          messages: [{ role: 'user', content: task }],
+          tools: this.getRawTools(),
+          stopWhen: stepCountIs(this.maxSteps),
+          ...effortFor('scaffold_mutation'),
+        }).toUIMessageStream(),
+      }),
+      model: () => this.getModel(),
+      judge: createJsonJudge(() => this.getModelForReview()),
+    };
   }
 
   /** The scaffold's host.llmStream bridge (core scaffold-host): tool names
@@ -1507,9 +1515,9 @@ export abstract class ActorAgent extends Think<Env> {
           currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
         },
         // The remaining actor-profile deps (subordinate report spine,
-        // product-change lane).
+        // release lane).
         ...(actorDeps.report ? { report: actorDeps.report } : {}),
-        ...(actorDeps.productChanges ? { productChanges: actorDeps.productChanges } : {}),
+        ...(actorDeps.releases ? { releases: actorDeps.releases } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       });
@@ -1592,15 +1600,15 @@ export abstract class ActorAgent extends Think<Env> {
         ) sub
         ORDER BY created_at ASC`;
       const total = this.sql<{ n: number }>`SELECT COUNT(*) AS n FROM assistant_messages`[0]?.n ?? rows.length;
-      return [
-        ...inheritedContextOmissionNote(total, rows.length),
-        ...rows.map((r) => ({
+      return inheritedContextFromRows(
+        rows.map((r) => ({
           id: r.id,
-          role: narrowInheritedRole(r.role),
+          role: r.role,
           content: uiMessageText(r.content),
           createdAt: Date.parse(r.created_at) || 0,
         })),
-      ];
+        total,
+      );
     } catch {
       // assistant_messages table may not yet exist on a fresh agent.
       return [];
@@ -1612,23 +1620,7 @@ export abstract class ActorAgent extends Think<Env> {
   private emitHeadPhase(event: SplitPhaseEvent): void {
     try {
       if (!this._currentRunId) return;
-      if (event.kind === 'split') {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'head_split',
-          rootId: event.rootId,
-          headIds: [...event.headIds],
-          rationale: event.rationale,
-        });
-      } else {
-        this.eventRecorder.emit(this._currentRunId, {
-          type: 'head_merge',
-          rootId: event.rootId,
-          headCount: event.cost.headCount,
-          headsWithFindings: event.cost.headsWithFindings,
-          totalTokens: event.cost.totalTokens,
-          mergedNarrative: event.mergedNarrative,
-        });
-      }
+      this.eventRecorder.emit(this._currentRunId, headPhaseRunEvent(event));
     } catch (err) {
       console.warn('[proteus] event emit failed at head onPhase:', err);
     }
@@ -1849,7 +1841,7 @@ export abstract class ActorAgent extends Think<Env> {
     this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
     // The actor's REAL tool surface: deps-gated builtins (report/
-    // product_change) are advertised only when this actor class wires them,
+    // release) are advertised only when this actor class wires them,
     // and the agents ladder renders only the actions this profile supports —
     // then restricted to the active skills' allowed union (skills tool kept,
     // core turn-surface).
@@ -2031,6 +2023,10 @@ export abstract class ActorAgent extends Think<Env> {
       stopWhen: stepCountIs(this.maxSteps),
       ...(providerOptions ? { providerOptions } : {}),
     };
+    // The turn's constants for the per-step context breakdown. Tool schemas
+    // ride every request of the turn and are otherwise invisible to anyone
+    // asking where the window went.
+    this.acc.composition.openTurn({ system: systemOverride, tools: this._lastTurnOpts.tools });
     return cfg;
   }
 
@@ -2055,17 +2051,14 @@ export abstract class ActorAgent extends Think<Env> {
    * the block on every request and append a block per step.
    */
   protected dynamicContextSnapshot(): DynamicContext {
-    const factsBlock = this.renderFactsForTurn();
-    return {
-      ...(factsBlock ? { factsBlock } : {}),
-      ...(this._turnMemoryTail ? { memoryTail: this._turnMemoryTail } : {}),
-      // Re-listed per step: a sandbox provisioned or a device connected mid-turn
-      // flips availability, and the whole point of the block is to say so.
+    return agentDynamicContext({
+      factsBlock: this.renderFactsForTurn(),
+      memoryTail: this._turnMemoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
-      tasks: this.jobs.listRunning().map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
-      delegates: forkDelegates(this.headJournal.listLive()),
-      ...(this._mcpUnavailable.length > 0 ? { missingCapabilities: this._mcpUnavailable } : {}),
-    };
+      runningJobs: this.jobs.listRunning(),
+      liveHeadRuns: this.headJournal.listLive(),
+      missingCapabilities: this._mcpUnavailable,
+    });
   }
 
   beforeStep(ctx: PrepareStepContext): StepConfig | void {
@@ -2081,6 +2074,7 @@ export abstract class ActorAgent extends Think<Env> {
       prune: this._turnContextWindow > 0 ? { contextWindow: this._turnContextWindow } : null,
       budget: this.budget,
       dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() },
+      meter: this.acc.composition,
     }, { stepNumber: ctx.stepNumber, messages: ctx.messages });
   }
 
@@ -2091,10 +2085,9 @@ export abstract class ActorAgent extends Think<Env> {
    *  cache-prefix regression. */
   private _lastSystemPromptHash: string | null = null;
   private recordSystemPromptHash(system: string): void {
-    const hash = fnv1a64(system);
-    const prev = this._lastSystemPromptHash;
+    const { hash, status } = observeSystemPromptHash(this._lastSystemPromptHash, system);
     this._lastSystemPromptHash = hash;
-    this.logActivity('system_prompt_hash', `${hash}${prev === null ? '' : prev === hash ? ' (stable)' : ' (changed)'}`);
+    this.logActivity('system_prompt_hash', status === 'first' ? hash : `${hash} (${status})`);
   }
 
   onChunk(_ctx: ChunkContext): void {

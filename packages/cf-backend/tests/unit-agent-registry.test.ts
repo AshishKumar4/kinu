@@ -135,9 +135,11 @@ describe('sync default provider with a null UserDO stub (inline-branch context)'
 describe('default-agent prompt model context (Kimi family gating)', () => {
   // Regression: the orchestrator used to build prompts from the RAW stored
   // model id — null on default-configured agents — so resolveFamily saw ''
-  // and the Kimi bare tool-name index never rendered on the primary hosted
-  // path. The prompt context must come from the RESOLVED spec.
-  test('an unset stored model resolves to a spec whose prompt renders the kimi index', () => {
+  // and nothing family-gated rendered on the primary hosted path. The prompt
+  // context must come from the RESOLVED spec. (This used to observe the kimi
+  // bare tool-name index, which is gone: the tool index is one rendering for
+  // every family now. The family-gated operating guidance is the observable.)
+  test('an unset stored model resolves to a spec whose prompt renders kimi guidance', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     const storedModelId: string | null = null; // default-configured agent
     const spec = reg.normalizeSpecSync(storedModelId);
@@ -151,9 +153,7 @@ describe('default-agent prompt model context (Kimi family gating)', () => {
       backend: 'cf',
       model: { id: modelId, provider },
     });
-    // Kimi family: bare names, no per-tool summary prose.
-    expect(prompt).toContain('\n- run\n');
-    expect(prompt).not.toContain('**run**');
+    expect(prompt).toContain('Kimi K2.6 works best when tool use is concrete and continuous');
 
     // Wiring: both orchestrator prompt-build sites must derive the model
     // context from the resolved spec, never the raw stored id.

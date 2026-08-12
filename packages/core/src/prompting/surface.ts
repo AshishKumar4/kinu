@@ -14,7 +14,7 @@ import {
 } from './model-profile.js';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
-export type PromptMode = 'chat' | 'plan' | 'build' | 'background_resume' | 'product_change' | 'cron';
+export type PromptMode = 'chat' | 'plan' | 'build' | 'background_resume' | 'release' | 'cron';
 
 /**
  * The turn's prompt mode from the `proteusEvent` metadata a programmatic turn

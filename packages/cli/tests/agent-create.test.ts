@@ -4,6 +4,7 @@ import {
   createWorkspaceNameFromMission,
   suggestAgentIdentityFromMission,
 } from '../src/agent-create';
+import type { CreateCloudAgentInput } from '../src/cloud-api';
 
 describe('CLI mission workspace names', () => {
   test('derives the name from the mission, memorable pair only for unusable missions', () => {
@@ -48,7 +49,7 @@ describe('CLI mission workspace names', () => {
   });
 
   test('creates an unnamed cloud workspace with the generated name and display name', async () => {
-    let createdInput: { name?: string; displayName?: string; purpose?: string } | undefined;
+    let createdInput: CreateCloudAgentInput | undefined;
     const created = await createCloudAgentFromMission(
       {
         purpose: 'Build a benchmark for Rust web frameworks',
@@ -88,7 +89,7 @@ describe('CLI mission workspace names', () => {
   });
 
   test('preserves an explicit cloud workspace name', async () => {
-    let createdInput: { name?: string; displayName?: string; purpose?: string } | undefined;
+    let createdInput: CreateCloudAgentInput | undefined;
     await createCloudAgentFromMission(
       {
         name: 'jarvis',

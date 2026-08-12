@@ -42,9 +42,15 @@ they default to Workers AI with no key of your own. To bring your own provider
 instead:
 
 ```bash
-proteus providers list                 # what's connected, with status
+proteus providers list                 # what's connected, and where each key lives
 proteus providers connect openai       # or anthropic, openrouter, codex, openai-compatible
 ```
+
+Signed in, the key goes to your Proteus account rather than this disk, and this
+machine uses it through Proteus without holding a copy — so the same key works
+from every machine you sign in on, and connecting a provider in the web UI is
+enough. Add `--local` to keep a key on this machine instead (for offline work,
+or an endpoint only this machine can reach); a local key always wins.
 
 `--alias jarvis` puts a `jarvis` command on your PATH that means
 `proteus run jarvis`. It is the difference between using this daily and not.
@@ -130,8 +136,15 @@ proteus jobs jarvis       # background jobs, and cancel them
 
 The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
 has the same information as six work surfaces — Output, Brain, Reasoning,
-Product, Tasks, Environment — plus the Evolution Changelog, where you approve or
+Releases, Tasks, Environment — plus the Evolution Changelog, where you approve or
 revert the changes the agent proposes to itself.
+
+Proteus can add work surfaces of its own. Ask it for a dashboard and it publishes
+a **view**: a tab, after the six, marked with a sparkle and labelled *written by
+Proteus*. A view is data, not code — it reads workspace state you can already see
+and draws it with the same components everything else uses, so it can show you
+numbers but can never ask you for anything. "View source" shows exactly what it
+wrote, and the Evolution Changelog reverts it.
 
 ## 7. Backup, and moving a workspace
 

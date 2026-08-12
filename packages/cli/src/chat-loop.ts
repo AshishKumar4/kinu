@@ -129,7 +129,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
       console.log(DIM('  A turn is running — type to steer it, or use /queue <text>, /branch <text>, /stop.'));
       return;
     }
-    const resolved = await resolvePromptAttachments(input);
+    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
     const payload = resolved.files.length > 0 ? { text: resolved.text, files: resolved.files } : resolved.text;
     if (client.steer(payload, { cwd: process.cwd() })) {
@@ -180,7 +180,7 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
   const runTurn = async (input: string) => {
     // @path mentions (plus quoted/~ path tokens) become attachments: images
     // and PDFs inline as file parts, other files stay path references.
-    const resolved = await resolvePromptAttachments(input);
+    const resolved = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
     for (const problem of resolved.errors) console.log(WARN(`  ${problem}`));
     if (resolved.attached.length > 0) {
       console.log(DIM(`  📎 ${resolved.attached.map(describePromptAttachment).join(' · ')}`));

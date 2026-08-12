@@ -27,7 +27,7 @@ import { createUserDOAuthResolver } from '../providers/agent-registry.js';
 import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway.js';
 import { listAvailableModels } from './available-models.js';
 import { json } from '../lib/http.js';
-import { OWNER_SESSION } from './workspace-capability.js';
+import { ownerCaller } from './workspace-capability.js';
 
 export const USER_AI_PROXY_PREFIX = '/api/user/ai/v1';
 
@@ -42,7 +42,7 @@ export async function handleUserAIProxyRequest(
   const path = url.pathname.slice(USER_AI_PROXY_PREFIX.length);
 
   if (path === '/models' && request.method === 'GET') {
-    const menu = await listAvailableModels(env, cli.userId, OWNER_SESSION);
+    const menu = await listAvailableModels(env, cli.userId, await ownerCaller(env));
     return json({
       object: 'list',
       data: menu.models
@@ -52,13 +52,13 @@ export async function handleUserAIProxyRequest(
   }
 
   if (path === '/chat/completions' && request.method === 'POST') {
-    return proxyChatCompletion(request, cli.userDO);
+    return proxyChatCompletion(request, env, cli.userDO);
   }
 
   return errorResponse(404, `No such AI proxy route: ${request.method} ${path}`);
 }
 
-async function proxyChatCompletion(request: Request, userDO: DurableObjectStub<UserDO>): Promise<Response> {
+async function proxyChatCompletion(request: Request, env: Env, userDO: DurableObjectStub<UserDO>): Promise<Response> {
   const body = await request.text();
   let model: unknown;
   try {
@@ -76,7 +76,7 @@ async function proxyChatCompletion(request: Request, userDO: DurableObjectStub<U
 
   const aiFetch = createCloudflareAIFetch({
     credKey: workersAI ? CLOUDFLARE_OAUTH_CRED_KEY : CLOUDFLARE_AI_GATEWAY_CRED_KEY,
-    getAuth: createUserDOAuthResolver({ stub: userDO, caller: OWNER_SESSION }),
+    getAuth: createUserDOAuthResolver({ stub: userDO, caller: await ownerCaller(env) }),
     placeholder: PROXY_PLACEHOLDER,
     missingCredentialMessage: workersAI
       ? 'Connect Cloudflare in your Proteus user settings before using Workers AI models.'

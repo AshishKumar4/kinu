@@ -315,7 +315,7 @@ function landingResponse(origin: string): Response {
         <div class="workflow" aria-label="Ways to work with Proteus">
           <article>
             <h2>Dashboard for persistent agents</h2>
-            <p>Use the web app for long-running agents, settings, credentials, triggers, product-change review, and workspace state.</p>
+            <p>Use the web app for long-running agents, settings, credentials, triggers, release review, and workspace state.</p>
           </article>
           <article>
             <h2>CLI for daily work</h2>

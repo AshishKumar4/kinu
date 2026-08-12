@@ -2,6 +2,10 @@
  * Shared UI domain types for the agent RPC surface (@callable methods).
  */
 
+import type {
+	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, StepUsage,
+} from "@proteus/core";
+
 export interface MCTSNode {
 	id: string;
 	parentId: string | null;
@@ -42,11 +46,25 @@ export interface MCTSNodeDetail extends MCTSNodeSummary {
 
 export interface ToolInfo {
 	name: string;
+	/** The one-line headline — what a list row shows. For a builtin this is the
+	 *  registry's own `summary`; a crafted tool's description is already one
+	 *  line, so it is its own summary. Never derived by splitting
+	 *  `description`: the docstring's shape is the model's contract, not the
+	 *  UI's. */
+	summary: string;
+	/** The full docstring the model sees — summary, when-to-use, doctrine,
+	 *  returns. Shown on demand, never as a list row's body. */
 	description: string;
-	scope: "local" | "global";
+	/** Where the tool came from: shipped with the agent, or crafted by it. */
+	learned: boolean;
+	/**
+	 * How the model reaches it — a tool definition in the turn's ToolSet
+	 * (`native`), or only from inside an `execute_tools` program (`codemode`).
+	 * Derived by the orchestrator from the assembled surface, never declared.
+	 */
+	exposure: "native" | "codemode";
 	qualityScore: number;
 	usageCount: number;
-	lastUsed: string;
 }
 
 export interface MemoryEntry {
@@ -54,14 +72,6 @@ export interface MemoryEntry {
 	content: string;
 	matchScore: number;
 	updatedAt: string;
-}
-
-/** One directory entry in the per-executor file manager (getExecutorFiles).
- *  Normalized across executors (each provider's readdir has its own format). */
-export interface DirEntry {
-	name: string;
-	type: "file" | "dir";
-	size?: number;
 }
 
 /** One agent in the workspace roster (getWorkspaceAgents). The orchestrator
@@ -103,30 +113,6 @@ export interface SubordinateActivityEvent {
  *  wrapper, so call sites read `rpc<Foo>("getFoo", [])` cast-free. */
 export type Rpc = <T = unknown>(method: string, args?: unknown[]) => Promise<T>;
 
-/** One typed span on the unified Run Timeline spine (getRunTimeline). The
- *  server merges run_events + evolution_events + search_nodes into this single
- *  ordered shape so the client never re-merges three sources (no drift). */
-export type TimelineKind =
-	| "llm-turn" | "tool-call" | "runtime-exec" | "mcts" | "scaffold" | "shadow-eval"
-	| "craft" | "reflection" | "head-split" | "head-merge" | "gepa" | "skills"
-	| "curriculum" | "trigger" | "event-ingress" | "background" | "error" | "abort" | "recovery" | "other";
-
-export interface TimelineSpan {
-	ts: number;
-	kind: TimelineKind;
-	label: string;
-	detail?: string;
-	/** Latency in ms when known (tool calls, activity timings). */
-	elapsedMs?: number;
-	/** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
-	data?: unknown;
-	source: "run" | "evolution" | "mcts" | "background";
-	/** Id for driving the work surface (node id, run-event id, root id…). */
-	refId?: string;
-	/** Original backend event type, for finer UI affordances. */
-	rawType?: string;
-}
-
 /** A background task (auto-detached >30s tool call). Mirrors core BackgroundJob;
  *  surfaced by listBackgroundJobs for the Tasks surface + chat event cards. */
 export interface BackgroundJob {
@@ -140,11 +126,11 @@ export interface BackgroundJob {
 	settledAt: number | null;
 }
 
-export type ProductChangeStatus =
+export type ReleaseStatus =
 	| "draft" | "planning" | "patching" | "validating" | "preview_ready" | "awaiting_approval"
 	| "applying" | "deployed" | "rejected" | "rolled_back" | "failed";
 
-export interface ProductSourceBinding {
+export interface ReleaseSource {
 	id: string;
 	kind: "local" | "github";
 	label: string;
@@ -157,11 +143,11 @@ export interface ProductSourceBinding {
 	updatedAt: number;
 }
 
-export interface ProductChangeRequest {
+export interface ReleaseChange {
 	id: string;
 	agentName: string;
 	bindingId: string;
-	status: ProductChangeStatus;
+	status: ReleaseStatus;
 	userPrompt: string;
 	plan: string | null;
 	summary: string | null;
@@ -171,7 +157,7 @@ export interface ProductChangeRequest {
 	updatedAt: number;
 }
 
-export interface ProductChangeCheck {
+export interface ReleaseCheck {
 	id: string;
 	changeId: string;
 	name: string;
@@ -183,7 +169,7 @@ export interface ProductChangeCheck {
 	updatedAt: number;
 }
 
-export interface ProductChangeApproval {
+export interface ReleaseApproval {
 	id: string;
 	changeId: string;
 	approvalType: "apply" | "deploy_staging" | "deploy_production" | "rollback";
@@ -194,7 +180,7 @@ export interface ProductChangeApproval {
 	decidedAt: number | null;
 }
 
-export interface ProductDeploymentRecord {
+export interface ReleaseDeployment {
 	id: string;
 	changeId: string;
 	environment: "local" | "staging" | "production";
@@ -204,12 +190,12 @@ export interface ProductDeploymentRecord {
 	deployedAt: number;
 }
 
-export interface ProductChangeBoard {
-	bindings: ProductSourceBinding[];
-	changes: ProductChangeRequest[];
-	checks: ProductChangeCheck[];
-	approvals: ProductChangeApproval[];
-	deployments: ProductDeploymentRecord[];
+export interface ReleaseBoard {
+	bindings: ReleaseSource[];
+	changes: ReleaseChange[];
+	checks: ReleaseCheck[];
+	approvals: ReleaseApproval[];
+	deployments: ReleaseDeployment[];
 }
 
 /** A pending device-consent request — an agent wants to run a command on a
@@ -221,4 +207,35 @@ export interface PendingConsent {
 	command: string;
 	scope: "all_local_actions";
 	createdAt: number;
+}
+
+/**
+ * The Activity surface's whole payload — one round trip, refreshed per step.
+ *
+ * The split down the middle is the point: `latest.usage` is what the provider
+ * said the newest request cost, `latest.context` is what that request was
+ * locally measured to be made of, and the two are carried separately because
+ * they do not reconcile. Anything the agent could not source is null, never a
+ * plausible-looking stand-in.
+ */
+export interface ActivitySnapshot {
+	/** The newest step the provider reported usage for. Null before the first
+	 *  measured step of the workspace's life. */
+	latest: {
+		at: number;
+		runId: string;
+		stepIndex: number;
+		usage: StepUsage;
+		/** Absent for steps recorded before the meter existed, or when the
+		 *  turn driver never measured. */
+		context: ContextComposition | null;
+	} | null;
+	/** The resolved model's context window, or null when the catalog has not
+	 *  answered — a percentage against a guessed window would be fiction. */
+	contextWindow: number | null;
+	telemetry: StepTelemetry;
+	/** Mission budgets, empty when the workspace runs under no mission label
+	 *  (the default). `pricing.source` says how honest each USD figure is. */
+	budgets: MissionBudgetSnapshot[];
+	log: ActivityLogEntry[];
 }

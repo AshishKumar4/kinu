@@ -20,7 +20,7 @@ export default function Layout() {
 
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
-      <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-elevated px-3 md:hidden">
+      <header className="flex h-14 shrink-0 items-center justify-between border-b p-border p-sidebar px-3 md:hidden">
         <div className="flex items-center gap-1">
           <button
             type="button"
@@ -49,15 +49,15 @@ export default function Layout() {
       </header>
 
       {/* Desktop rail */}
-      <aside className="hidden w-64 shrink-0 h-full p-elevated border-r p-border md:block">
+      <aside className="hidden w-64 shrink-0 h-full p-sidebar border-r p-border md:block">
         <Sidebar />
       </aside>
 
       {/* Mobile drawer */}
       {drawerOpen && (
         <div className="fixed inset-0 z-50 animate-fade-in md:hidden">
-          <div className="absolute inset-0 bg-black/60" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
-          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-elevated border-r p-border shadow-2xl">
+          <div className="p-scrim absolute inset-0" onClick={() => setDrawerOpen(false)} aria-hidden="true" />
+          <aside className="absolute inset-y-0 left-0 w-72 max-w-[85vw] p-sidebar border-r p-border p-shadow-overlay">
             <Sidebar />
           </aside>
         </div>

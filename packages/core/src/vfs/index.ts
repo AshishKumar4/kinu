@@ -5,7 +5,7 @@
 export {
   CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath,
+  type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
 } from './composite.js';
 export {
   makeVfsError, isVfsError, ERRNO,

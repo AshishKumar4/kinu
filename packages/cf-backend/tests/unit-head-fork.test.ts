@@ -15,7 +15,7 @@
 
 import { describe, expect, mock, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { HeadInput } from '@proteus/core';
+import { HeadCapture, type HeadInput } from '@proteus/core';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
 mockAgentsSdk();
@@ -110,6 +110,7 @@ interface Facet {
   initHead(input: HeadInput): Promise<unknown>;
   runAsHead(): Promise<unknown>;
   headRuntime(): import('../src/runtime.js').CFRuntime;
+  buildHeadTools(input: HeadInput, capture: HeadCapture): unknown;
 }
 
 function makeFacet(parentFiles: Record<string, string> = {}) {
@@ -131,7 +132,7 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
   const env = {
     LOADER: {},
     Sandbox: {},
-    PREVIEW_HOSTNAME: 'preview.test',
+    PREVIEW_HOST_SUFFIX: 'preview.test',
     AI_GATEWAY_URL: 'https://gateway.test',
     AI_GATEWAY_AUTH: 'token',
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => parent.stub },
@@ -148,7 +149,7 @@ function headInput(): HeadInput {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
     task: 'map the cloned repo', rationale: 'the parser angle',
     inheritedContext: [],
-    budget: { maxDepth: 1, maxTokens: 4_000, maxWallClockMs: 30_000, spawnedAt: Date.now() },
+    budget: { maxDepth: 1, maxWallClockMs: 30_000, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
   };
 }
@@ -183,7 +184,7 @@ describe('a head forks its parent workspace', () => {
 
     // The container the parent agent works in — `proteus-${workspaceName}` in
     // runtime.ts — and emphatically not `proteus-head-1`.
-    expect(requestedSandboxId).toBe('proteus-proteus-main');
+    expect(requestedSandboxId as string | null).toBe('proteus-proteus-main');
   });
 
   test('/local stays this head\'s own private scratch', async () => {
@@ -195,6 +196,23 @@ describe('a head forks its parent workspace', () => {
 
     expect(await rt.storage.vfs.readFile('scratch/notes.md', { encoding: 'utf8' })).toBe('private');
     expect(parent.calls.map((c) => c.method)).not.toContain('writeWorkspaceFile');
+  });
+
+  test("the head's writes to the parent workspace are attributed to that head", async () => {
+    // The cf half of the attribution: a head's plane is its facet's own, so what
+    // it writes over the parent RPC mount lands in ITS capture and nothing else's.
+    const { facet } = makeFacet({ 'repo/parser.ts': 'one\ntwo\n' });
+    await facet.setSharedParent('proteus-main');
+    const capture = new HeadCapture();
+    facet.buildHeadTools(headInput(), capture);
+    const rt = facet.headRuntime();
+
+    await rt.storage.vfs.writeFile('/workspace/repo/parser.ts', 'one\ntwo\nthree\n');
+    await rt.storage.vfs.writeFile('/local/notes.md', 'my own thinking\n');
+
+    expect(capture.files.snapshot()).toEqual([
+      { path: '/workspace/repo/parser.ts', status: 'changed', added: 1, removed: 0 },
+    ]);
   });
 
   test('an MCTS branch — seeded without a parent workspace — cannot fork at all', async () => {

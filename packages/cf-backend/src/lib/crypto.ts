@@ -20,6 +20,16 @@ export async function sha256Hex(input: string | ArrayBuffer): Promise<string> {
   return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
+/** Lowercase-hex HMAC-SHA256. Used to derive values that must be
+ *  unforgeable without the secret (webhook signatures, the owner capability). */
+export async function hmacSha256Hex(secret: string, message: string): Promise<string> {
+  const key = await crypto.subtle.importKey(
+    'raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign'],
+  );
+  const signature = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(message));
+  return Array.from(new Uint8Array(signature), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 /** Constant-time string comparison — guards secret checks against
  *  timing-side-channel enumeration. */
 export function timingSafeEqual(a: string, b: string): boolean {

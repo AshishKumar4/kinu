@@ -26,7 +26,16 @@ action of `agents`.
 | `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
-| `product_change` | Governed lane for changing the Proteus product/UI itself |
+| `release` | Governed release pipeline over a bound source repo — patch, check, preview, owner approval, deploy, rollback |
+
+Not every self-change is a tool. Two of them live on the codemode `workspace.*`
+surface inside `execute_tools`, because they are artifacts the agent writes for
+itself rather than instruments it reaches for:
+
+| Call | What it makes |
+| --- | --- |
+| `workspace.createTool(name, description, code)` | a reusable crafted tool, callable the same turn |
+| `workspace.createView(name, spec)` | a dashboard tab in the web UI, drawn by the host from declarative JSON |
 
 ## file — the file plane
 

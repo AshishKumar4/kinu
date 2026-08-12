@@ -73,11 +73,14 @@ function stallingModel(): LanguageModel {
 
 function fakeResolver(model: LanguageModel): LocalModelResolver {
   return {
-    normalizeSpecSync: (spec) => spec?.trim() || 'fake/fake-model',
+    normalizeSpecSync: (spec: string | null | undefined) => spec?.trim() || 'fake/fake-model',
     resolveModel: () => model,
     listProviders: async () => [{ id: 'fake', label: 'Fake', available: true }],
-    listModels: async () => [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }],
+    listModels: async () => ({ models: [{ id: 'fake-model', label: 'Fake Model', provider: 'fake' }], failures: [] }),
     modelInfo: async () => null,
+    judgeCandidates: async () => [],
+    fastModelCandidates: () => [],
+    getAuth: async () => null,
   };
 }
 
@@ -108,6 +111,7 @@ function setup(model: LanguageModel) {
     mcpServers: {},
     noAutoEvolve: true,
     sessionOptions: { sessionDir: join(home, 'sessions') },
+    surface: 'interactive',
   });
   return { client, home, rt };
 }
@@ -285,7 +289,7 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
     const { executeSlashCommand } = await import('../src/slash-commands.js');
 
     // Seed real ledgers: one crafted tool + two learned facts in one aggregate.
-    rt.craftStore.create({ name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
+    rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
     rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                    VALUES ('favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
     rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)

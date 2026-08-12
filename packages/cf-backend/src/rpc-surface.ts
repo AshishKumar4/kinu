@@ -8,7 +8,7 @@
  *   1. TypeScript `private` is erased at compile time, so a `private` method is
  *      an ordinary prototype method and IS callable over RPC. Every
  *      `requireTier` check in `user/workspace-capability.ts` sits at the top of
- *      a public method; a stub-holder that calls `sqlx` or `getCredentialRow`
+ *      a public method; a stub-holder that calls `sqlx` or `readCredential`
  *      instead never reaches one.
  *   2. SUPERCLASS methods are reachable too — the walk does not stop at the
  *      most-derived class. `Agent.sql` from the agents SDK is a tagged-template
@@ -195,7 +195,7 @@ function inheritedDescriptor(instance: object, name: string): PropertyDescriptor
  * lists are the same list: a name here is a name the gate has already vetted.
  *
  * Nothing else on this class or anywhere in its inheritance chain is reachable
- * from a stub — not `sqlx`, not `getCredentialRow`, and not the SDK's inherited
+ * from a stub — not `sqlx`, not `readCredential`, and not the SDK's inherited
  * `sql`, which would otherwise hand any Durable Object in this Worker arbitrary
  * queries against the credential store.
  *
@@ -203,8 +203,8 @@ function inheritedDescriptor(instance: object, name: string): PropertyDescriptor
  */
 const USER_DO_METHODS = [
   'backfillWorkspaceCapabilities',
-  'createProductChange',
-  'decideProductChangeApproval',
+  'createReleaseChange',
+  'decideReleaseApproval',
   'deleteCredential',
   'deviceRpc',
   'disconnectCodex',
@@ -216,8 +216,8 @@ const USER_DO_METHODS = [
   'getCredentialBaseURL',
   'getDeviceFsConsent',
   'getExperienceEntry',
-  'getProductChangeBoard',
-  'getProductChangeDetail',
+  'getReleaseBoard',
+  'getReleaseDetail',
   'getProfile',
   'hasPeerGrant',
   'hasWorkspace',
@@ -236,12 +236,12 @@ const USER_DO_METHODS = [
   'mintCliToken',
   'pollCodexDeviceFlow',
   'publishExperience',
-  'recordProductChangeCheck',
-  'recordProductDeployment',
+  'recordReleaseCheck',
+  'recordReleaseDeployment',
   'registerDevice',
   'registerWorkspace',
   'removeWorkspace',
-  'requestProductChangeApproval',
+  'requestReleaseApproval',
   'revokeAccessToken',
   'revokeCliTokenHash',
   'revokeDevice',
@@ -253,9 +253,9 @@ const USER_DO_METHODS = [
   'setWorkspaceDisplayName',
   'startCodexDeviceFlow',
   'touchWorkspace',
-  'transitionProductChange',
-  'updateProductChange',
-  'upsertProductSourceBinding',
+  'transitionReleaseChange',
+  'updateReleaseChange',
+  'upsertReleaseSource',
   'userMcp_add',
   'userMcp_callTool',
   'userMcp_handleOAuthCallback',
@@ -276,9 +276,15 @@ export const USER_DO_RPC_SURFACE: readonly string[] = [...PLATFORM_RPC_SURFACE, 
 
 /**
  * The members every actor exposes to a stub-holder — the workspace-capability
- * handshake, the credential-change fan-out, and the workspace filesystem a
- * forked facet (a subordinate, or a head) reaches on its parent. Concrete actors
- * add their own on top.
+ * handshake, the credential-change fan-out, the workspace filesystem a forked
+ * facet (a subordinate, or a head) reaches on its parent, and the mission
+ * ledger that facet charges. Concrete actors add their own on top.
+ *
+ * `missionGuard`/`missionDebit` are here rather than on the public transport
+ * for the same reason `rawCopyFromFork` is: they are how a facet reaches the
+ * actor that declared a budget, and nothing else should be able to move a
+ * spend ledger. They are inert without labels either way — both return
+ * immediately on an empty label set, so reaching them cannot create a cap.
  *
  * Everything else this class declares — including every `protected` member a
  * subclass relies on — stays an ordinary method and stays unreachable, because
@@ -288,6 +294,8 @@ const ACTOR_AGENT_RPC_SURFACE = [
   'deleteWorkspaceFile',
   'installWorkspaceCapability',
   'listWorkspaceFiles',
+  'missionDebit',
+  'missionGuard',
   'onCredentialsChanged',
   'readWorkspaceFile',
   'statWorkspaceFile',
@@ -335,7 +343,7 @@ const ORCHESTRATOR_METHODS = [
   'setEmailAllowlist',
   'setEmailNotifications',
   'setProvisionalDisplayName',
-  'transitionProductChange',
+  'transitionReleaseChange',
   'writeExecutorFile',
 ] as const satisfies readonly (keyof OrchestratorAgent)[];
 

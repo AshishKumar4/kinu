@@ -1,0 +1,12 @@
+diff --git a/packages/core/src/release/lifecycle.ts b/packages/core/src/release/lifecycle.ts
+--- a/packages/core/src/release/lifecycle.ts
++++ b/packages/core/src/release/lifecycle.ts
+@@ -5,7 +5,7 @@
+   planning: new Set(['patching', 'rejected', 'failed']),
+   patching: new Set(['validating', 'planning', 'rejected', 'failed']),
+   validating: new Set(['preview_ready', 'patching', 'failed']),
+-  preview_ready: new Set(['awaiting_approval', 'patching', 'rejected', 'failed']),
++  preview_ready: new Set(['awaiting_approval', 'applying', 'patching', 'rejected', 'failed']),
+   awaiting_approval: new Set(['applying', 'preview_ready', 'rejected', 'failed']),
+   applying: new Set(['deployed', 'rolled_back', 'failed']),
+   deployed: new Set(['rolled_back']),

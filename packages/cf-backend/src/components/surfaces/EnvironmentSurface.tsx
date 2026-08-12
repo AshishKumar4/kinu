@@ -237,7 +237,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
             ))}
             {selectedMount.name === "sandbox" && mountPorts.length === 0 && (
               <div className="text-[11px] p-text-3 italic">
-                No exposed ports yet — when the agent calls <code className="font-mono p-elevated px-1 rounded">sandbox.exposePort(N)</code>, the preview will open here.
+                No exposed ports yet — when the agent calls <code className="font-mono p-fill px-1 rounded">sandbox.exposePort(N)</code>, the preview will open here.
               </div>
             )}
             <div className="ml-auto flex items-center gap-1 shrink-0">
@@ -258,7 +258,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
             <div className="flex items-center gap-1 flex-wrap px-3 py-1 border-b p-border shrink-0">
               <span className="text-[10px] p-text-3 mr-1">{selectedExec.kind}</span>
               {selectedExec.capabilities.map((c) => (
-                <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-full p-elevated p-text-3 font-mono">{c}</span>
+                <span key={c} className="text-[10px] px-1.5 py-0.5 rounded-full p-fill p-text-3 font-mono">{c}</span>
               ))}
             </div>
           )}
@@ -355,7 +355,7 @@ function PcConnectCta() {
         hint={registered
           ? <>
               {labels} {devices.length > 1 ? "are" : "is"} registered but the daemon is not running.
-              Restart it on that machine with <code className="font-mono p-elevated px-1 rounded">proteus connect</code>.
+              Restart it on that machine with <code className="font-mono p-fill px-1 rounded">proteus connect</code>.
             </>
           : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it — with your consent, one device for all your agents."}
       >

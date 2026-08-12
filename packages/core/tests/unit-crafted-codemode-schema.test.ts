@@ -28,7 +28,35 @@ import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
   type CraftedToolExecute,
+  type CreateExecuteToolFactory,
 } from '../src/index.js';
+
+type ExecuteToolOptions = Parameters<CreateExecuteToolFactory>[0];
+
+/**
+ * Capture what the CF adapter would have passed to createExecuteTool.
+ *
+ * A box rather than a `let`: TypeScript cannot see an assignment made inside a
+ * callback, so a `let x: T | null = null` reads back as `null` and every use
+ * needs a cast to undo the narrowing.
+ */
+function captureExecuteTool(): {
+  factory: CreateExecuteToolFactory;
+  options: () => ExecuteToolOptions;
+} {
+  const seen: ExecuteToolOptions[] = [];
+  return {
+    factory: (opts) => {
+      seen.push(opts);
+      return { description: 'mock', execute: async () => null };
+    },
+    options: () => {
+      const first = seen[0];
+      if (!first) throw new Error('createExecuteTool was never called');
+      return first;
+    },
+  };
+}
 
 describe('Phase D — crafted tools reach createExecuteTool under codemode.*', () => {
   test('crafted tool appears in the tools map passed to createExecuteTool', () => {
@@ -51,34 +79,23 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       return async (arg) => Number(arg) * 2;
     };
 
-    // Capture what the CF adapter would have passed to createExecuteTool.
-    let captured: {
-      craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-      providers: unknown[];
-      loader: unknown;
-    } | null = null;
-    const captureFactory: Parameters<typeof buildBuiltinTools>[0]['createExecuteTool'] = (opts) => {
-      captured = opts;
-      return { description: 'mock', execute: async () => null } as never;
-    };
-
+    const capture = captureExecuteTool();
     buildBuiltinTools({
       rt,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: factory,
-      createExecuteTool: captureFactory,
+      createExecuteTool: capture.factory,
     });
 
-    expect(captured).not.toBeNull();
-    const captured2 = captured as NonNullable<typeof captured>;
+    const captured = capture.options();
     // Nothing is resolved until the sandbox asks: the crafted set is read per
     // execute so a tool crafted mid-turn is callable on the next call.
     expect(factoryCallCount).toBe(0);
 
-    const resolved = captured2.craftedTools();
+    const resolved = captured.craftedTools();
     expect(Object.keys(resolved)).toContain('double');
     // The loader is forwarded unchanged
-    expect(captured2.loader).toBeDefined();
+    expect(captured.loader).toBeDefined();
 
     // Entry shape — description and execute
     const doubleEntry = resolved.double;
@@ -96,19 +113,14 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       tool_name TEXT PRIMARY KEY, score REAL NOT NULL DEFAULT 0.5,
       uses INTEGER NOT NULL DEFAULT 0, last_used_at INTEGER NOT NULL DEFAULT 0
     )`);
-    let captured: {
-      craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-    } | null = null;
+    const capture = captureExecuteTool();
     buildBuiltinTools({
       rt,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: (tool) => async (arg) => (new Function('return ' + tool.code)() as (a: unknown) => unknown)(arg),
-      createExecuteTool: ((opts) => {
-        captured = opts as never;
-        return { description: '', execute: async () => null };
-      }) as never,
+      createExecuteTool: capture.factory,
     });
-    const resolve = (captured as never as NonNullable<typeof captured>)!.craftedTools;
+    const resolve = capture.options().craftedTools;
     expect(Object.keys(resolve())).toEqual([]);
 
     // The in-episode move: the agent crafts a tool mid-turn.
@@ -145,20 +157,15 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       return fn(arg);
     };
 
-    let captured: {
-      craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-    } | null = null;
+    const capture = captureExecuteTool();
     buildBuiltinTools({
       rt,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: factory,
-      createExecuteTool: ((opts) => {
-        captured = opts as never;
-        return { description: '', execute: async () => null };
-      }) as never,
+      createExecuteTool: capture.factory,
     });
 
-    const tripleExec = (captured as never as NonNullable<typeof captured>)!.craftedTools().triple!.execute;
+    const tripleExec = capture.options().craftedTools().triple!.execute;
     expect(await tripleExec(7)).toBe(21);
     expect(execCalls).toBe(1);
   });
@@ -183,18 +190,15 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       factoryCalls++;
       return async () => null;
     };
-    let captured: { craftedTools: () => Record<string, unknown> } | null = null;
+    const capture = captureExecuteTool();
     buildBuiltinTools({
       rt,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
       craftedToolExecute: factory,
-      createExecuteTool: ((opts) => {
-        captured = opts as never;
-        return { description: '', execute: async () => null };
-      }) as never,
+      createExecuteTool: capture.factory,
     });
 
-    const names = Object.keys((captured as never as NonNullable<typeof captured>)!.craftedTools());
+    const names = Object.keys(capture.options().craftedTools());
     expect(factoryCalls).toBe(0);
     expect(names).not.toContain('forgotten');
   });

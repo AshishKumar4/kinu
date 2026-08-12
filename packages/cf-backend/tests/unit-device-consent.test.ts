@@ -1,9 +1,10 @@
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
-} from '../src/user/device-consent.js';
+} from '@proteus/core';
 import { handleUserRequest } from '../src/user/routes.js';
 import type { AuthIdentity } from '../src/auth/session.js';
 
@@ -88,7 +89,7 @@ function consentRoutesSetup() {
       return { ok: true };
     },
   };
-  const env = { UserDO: { idFromName: (n: string) => n, get: () => stub } } as unknown as Env;
+  const env = { UserDO: { idFromName: (n: string) => n, get: () => stub }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   const call = (path: string, method: string, body?: unknown) =>
     handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
       method,
@@ -108,7 +109,7 @@ describe('device consent-tier routes (the full_filesystem grant path)', () => {
 
     const list = await call('/devices/consents', 'GET');
     expect(list?.status).toBe(200);
-    expect(await list?.json()).toEqual([
+    expect(await list?.json<unknown[]>()).toEqual([
       expect.objectContaining({ agentName: 'jarvis', deviceId: 'dev-1', scope: 'full_filesystem' }),
     ]);
   });

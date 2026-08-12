@@ -1,5 +1,6 @@
 // Step-up gate on the web trigger-creation route (events/routes.ts) —
 // the same isFreshAuthTime rule the CLI webhook route enforces.
+import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { STEP_UP_WINDOW_MS, isFreshAuthTime } from '../src/auth/session.js';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
@@ -21,8 +22,7 @@ function hubEnv() {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
       get() { return agent; },
-    },
-  } as unknown as Env;
+    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
   return { env, calls };
 }
 

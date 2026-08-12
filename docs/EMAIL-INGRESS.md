@@ -16,7 +16,7 @@ inbound   Email Routing (catch-all on EMAIL_DOMAIN)
             → routeInboundEmail: recipient → workspace name (src/email/route.ts)
               parse MIME once (postal-mime), strip quoted history
             → agent DO: acceptEmailDelivery             (src/orchestrator.ts)
-              acceptInboundEmail (src/events/ingress/email.ts)
+              EmailInbox.accept (core/src/events/ingress/email.ts)
               trust gate → EventLog.publish (email variant, Message-ID dedupe)
               + email_thread ReplyChannel (threading headers, 24h TTL)
             → scheduleDrain() wakes a turn (debounced; duplicates don't re-wake)

@@ -5,7 +5,14 @@
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
-**Workers.dev fallback:** https://proteus.ashishkmr472.workers.dev
+**Sandbox previews:** `https://<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>`
+
+Previewed apps are agent-written HTML, so each exposed port gets a hostname of
+its own — isolated from the app and from every other preview, which is what
+lets a previewed app keep cookies, storage and same-origin fetch. This is the
+@cloudflare/sandbox SDK's own scheme, so Proteus derives no hostnames itself.
+It needs a wildcard DNS record; `PREVIEW_HOST_SUFFIX` below has the two steps,
+and `packages/cf-backend/src/lib/preview-origin.ts` has the reasoning.
 
 ## Local Development
 
@@ -29,9 +36,10 @@ bun install
 cd packages/cf-backend
 
 # Create .dev.vars with your AI Gateway credentials
-cat > .dev.vars << 'EOF'
+cat > .dev.vars << EOF
 AI_GATEWAY_URL=https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1
 AI_GATEWAY_AUTH=Bearer <your-token>
+CREDENTIAL_ENCRYPTION_KEY=$(openssl rand -base64 32)
 EOF
 
 # Start dev server (from repo root)
@@ -40,7 +48,7 @@ bun run dev
 
 Open http://localhost:5173 in your browser. The Vite cloudflare() plugin runs real Durable Objects locally via Miniflare.
 
-Those two keys get you the platform AI Gateway fallback provider. For the
+Those gateway keys get you the platform AI Gateway fallback provider. For the
 primary path — models billed to the signed-in user's own Cloudflare account —
 you also need `CLOUDFLARE_OAUTH_CLIENT_ID` and `CLOUDFLARE_OAUTH_CLIENT_SECRET`
 in `.dev.vars`, or `DEV_USER_EMAIL` to skip auth entirely for headless work.
@@ -76,6 +84,14 @@ Set your `account_id` in `packages/cf-backend/wrangler.jsonc`:
 ```bash
 cd packages/cf-backend
 
+# REQUIRED, and the first thing to set. This is the Worker's root secret for
+# the user plane: it encrypts the credential store (every provider API key and
+# OAuth token a user connects) and derives the owner capability that authorizes
+# every privileged call. Without it the Worker cannot serve a signed-in user at
+# all — sign-in, the CLI, and credentials all return 503; public routes still
+# answer. Keep a copy: losing it means every user reconnects every provider.
+openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
+
 # Set the AI Gateway auth token as a Wrangler secret (encrypted, never in code)
 printf 'Bearer <your-token>' | bunx wrangler secret put AI_GATEWAY_AUTH
 
@@ -85,6 +101,24 @@ printf '<google-client-secret>' | bunx wrangler secret put GOOGLE_OAUTH_CLIENT_S
 printf '<github-client-secret>' | bunx wrangler secret put GITHUB_OAUTH_CLIENT_SECRET
 printf '<cloudflare-client-secret>' | bunx wrangler secret put CLOUDFLARE_OAUTH_CLIENT_SECRET
 ```
+
+#### Rotating CREDENTIAL_ENCRYPTION_KEY
+
+Stored credentials name the key that sealed them, so a rotation is a two-key
+window rather than a downtime:
+
+```bash
+# 1. keep the outgoing key readable, 2. install the new one
+printf '<outgoing-key>' | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY_PREVIOUS
+openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
+```
+
+Each user's UserDO re-seals its credentials under the new key on its next
+credential access. Once every account has been active — or after a deliberate
+sweep — delete `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS`. `PREVIOUS` accepts a
+comma-separated list, so an interrupted rotation can be resumed rather than
+unwound. Losing a key with rows still sealed under it is unrecoverable by
+design: those providers must be reconnected.
 
 ### 3. Build and Deploy
 
@@ -242,10 +276,12 @@ exhausted budget returns the original response rather than throwing.
 
 | Variable | Where | Description |
 |----------|-------|-------------|
+| `CREDENTIAL_ENCRYPTION_KEY` | Wrangler secret | **Required.** Root secret for the user plane: encrypts `user_credentials` at rest and derives the owner capability. Without it no signed-in surface works. |
+| `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | AI Gateway endpoint URL |
 | `AI_GATEWAY_AUTH` | Wrangler secret | `Bearer <token>` (NEVER in code) |
 | `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
-| `PREVIEW_HOSTNAME` | wrangler.jsonc `vars` | Hostname used for sandbox preview URLs |
+| `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone sandbox previews are served under, one hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
 | `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |
@@ -275,7 +311,7 @@ exhausted budget returns the original response rather than throwing.
 |---------|------|-------------|
 | `OrchestratorAgent` | Durable Object | The workspace agent (extends `ActorAgent` → `Think`) |
 | `ExplorationAgent` | Durable Object | MCTS branches and heads (Facets) |
-| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, product changes |
+| `UserDO` | Durable Object | Per-user profile, CLI tokens, devices, release changes |
 | `MonitorDO` | Durable Object | Synthetic monitoring: open incidents + the alert outbox (one instance, `site`) |
 | `NIMBUS_SESSION` | Durable Object | `NimbusSession` from `@nimbus-sh/sdk` — built-in lightweight sandbox (local DO class, deployed with this Worker) |
 | `Sandbox` | Durable Object + Container | `ProteusSandbox` (@cloudflare/sandbox) — one container per agent |

@@ -15,6 +15,7 @@ import {
   type PromptModelContext,
 } from './prompting/model-profile.js';
 import { applyCacheBreakpoints, hasCacheMarkers, type CacheRetention } from './prompting/cache-breakpoints.js';
+import type { TurnContextMeter } from './context-meter.js';
 import { composePrepareStep, type StepDynamicContext } from './prompting/prepare-step.js';
 import type { MissionGovernor } from './mission-budget.js';
 import type { AttachmentPolicy } from './prompting/attachment-sanitizer.js';
@@ -59,6 +60,9 @@ export interface ChatOptions {
    *  and re-woven at EVERY step by the shared step pipeline, never at turn
    *  assembly, so a compaction plugin never sees or persists a block. */
   dynamicContext?: StepDynamicContext;
+  /** Per-step context measurement. runChat opens the turn on it with this
+   *  turn's system + tools; the step pipeline then measures each request. */
+  meter?: TurnContextMeter;
   /** Turn-local context (skill activation reasons, device notice) — spliced
    *  at the tail of the turn's initial array for THIS turn only; never visible
    *  to a transform and never treated as durable history. */
@@ -201,6 +205,11 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     `Model stream stalled: no data from the provider for ${Math.round(stallTimeoutMs / 1000)}s — the turn was aborted.`,
   );
 
+  // The turn's constants for the per-step breakdown: the cache-eligible system
+  // is the text that actually rides the request, and the merged ToolSet is the
+  // schema payload that rides it every step.
+  opts.meter?.openTurn({ system: cache.system, tools });
+
   const result = streamText({
     model: opts.model,
     system: cache.system,
@@ -225,6 +234,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         prune: { contextWindow },
         ...(opts.budget ? { budget: opts.budget } : {}),
         ...(opts.dynamicContext ? { dynamic: opts.dynamicContext } : {}),
+        ...(opts.meter ? { meter: opts.meter } : {}),
       }, { stepNumber, messages }),
     onStepFinish: (step) => {
       stepCount++;

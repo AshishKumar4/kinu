@@ -6,7 +6,7 @@ import {
   toCompositePath,
   writeExecutorFileOp,
   type ExecutorWriteDeps,
-} from "../src/lib/files";
+} from "@proteus/core";
 
 describe("toCompositePath", () => {
   test("workspace paths pass through unchanged", () => {
@@ -111,16 +111,16 @@ describe("writeExecutorFileOp", () => {
   });
 });
 
-describe("MAX_INLINE_ATTACHMENT_BYTES", () => {
+describe("CLOUD_MAX_INLINE_ATTACHMENT_BYTES", () => {
   test("a max-size attachment message fits the agents SDK row guard", async () => {
-    const { MAX_INLINE_ATTACHMENT_BYTES } = await import("@proteus/core");
+    const { CLOUD_MAX_INLINE_ATTACHMENT_BYTES } = await import("@proteus/core");
     const { ROW_MAX_BYTES } = await import("agents/chat");
     // Chat messages persist as ONE DO SQLite row (2 MB platform limit); the
     // SDK truncates to ROW_MAX_BYTES but can shrink only TEXT parts — file
     // parts ride through verbatim as base64 data URLs (4/3 × raw). Keep slack
     // for the message text + JSON envelope so a max-size attachment message
     // never hits the guard.
-    const encoded = Math.ceil((MAX_INLINE_ATTACHMENT_BYTES * 4) / 3);
+    const encoded = Math.ceil((CLOUD_MAX_INLINE_ATTACHMENT_BYTES * 4) / 3);
     const slack = 256 * 1024;
     expect(encoded + slack).toBeLessThan(ROW_MAX_BYTES);
     expect(ROW_MAX_BYTES).toBeLessThan(2 * 1024 * 1024);

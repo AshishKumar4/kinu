@@ -1,17 +1,19 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent, type FormEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
-import { Panel, Group as PanelGroup, Separator as PanelResizeHandle, usePanelRef } from "react-resizable-panels";
+import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
+import { btnSmCls } from "@/components/ui/form";
 import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
   GearIcon, GearSixIcon, TimerIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
   ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon, LightningIcon,
+  StackIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
-import { MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
 import type { AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
@@ -21,19 +23,20 @@ import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { PreviewFrame } from "@/components/PreviewFrame";
 import { Modal } from "@/components/ui/Modal";
-import { MarkdownContent, extractPreviewUrl, CodeBlock } from "@/components/surfaces/shared";
+import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
+import { extractPreviewUrl } from "@/lib/preview-origin";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
-import { summarizeToolCall } from "@/components/tool-call-summary";
+import { describeToolCall, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
+import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import {
   classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
   type DrainedEvent, type ProgrammaticTurn, type SignalCard,
 } from "@/components/background-event";
-import { RunTimeline } from "@/components/surfaces/RunTimeline";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
-import type { TimelineSpan, TimelineKind, PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
+import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
 
@@ -124,7 +127,7 @@ function InlineWorkspaceTitle({ title, onRename }: {
 
   return (
     <div className="group/title flex min-w-0 items-center gap-1">
-      <span className="font-medium text-sm p-text truncate max-w-[180px]">{title}</span>
+      <span className="font-medium text-sm p-text truncate max-w-[180px]" title={title}>{title}</span>
       <button
         onClick={() => setEditing(true)}
         className="shrink-0 rounded p-1 opacity-0 group-hover/title:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all"
@@ -147,7 +150,7 @@ function dataUrlRawBytes(url: string): number {
 function AttachmentChip({ part, onRemove }: { part: FileUIPart; onRemove?: () => void }) {
   const name = part.filename ?? "file";
   return (
-    <span className="inline-flex items-center gap-1.5 max-w-56 rounded-md border p-border p-elevated pl-1.5 pr-1.5 py-1 text-[11px] p-text-2">
+    <span className="inline-flex items-center gap-1.5 max-w-56 rounded-md border p-border p-fill pl-1.5 pr-1.5 py-1 text-[11px] p-text-2">
       {part.mediaType.startsWith("image/")
         ? <img src={part.url} alt={name} className="size-5 rounded object-cover shrink-0" />
         : <FileIcon size={13} className="p-text-3 shrink-0" />}
@@ -179,26 +182,21 @@ function MessageTimestamp({ createdAt }: { createdAt?: string | number | Date })
 function ReasoningBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   return (
-    <div className="p-card rounded-lg px-3 py-2 my-1.5" style={{ borderLeftWidth: 2, borderLeftColor: "var(--c-accent)" }}>
-      <button onClick={() => setExpanded(!expanded)} className="flex items-center gap-2 text-xs w-full text-left" style={{ color: "var(--c-sage)" }}>
-        <GearIcon size={12} className="shrink-0" />
-        <span className="font-medium">Thinking</span>
-        {expanded ? <CaretDownIcon size={12} className="ml-auto" /> : <CaretRightIcon size={12} className="ml-auto" />}
+    <div className="my-1.5">
+      <button onClick={() => setExpanded(!expanded)} className="group/reason flex items-center gap-2 p-row-text p-text-3 hover:p-text-2 w-full text-left transition-colors cursor-pointer">
+        <BrainIcon size={14} className="shrink-0" />
+        <span className="font-medium">{expanded ? "Thoughts" : "Thinking"}</span>
+        {!expanded && <span className="min-w-0 truncate p-meta p-text-3 opacity-70">{text.slice(0, 90)}</span>}
+        <CaretRightIcon size={11} className={`shrink-0 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/reason:opacity-100`} />
       </button>
-      <div className={`mt-1 text-xs p-text-2 whitespace-pre-wrap ${!expanded ? "line-clamp-2" : ""}`}>
-        {expanded ? text : text.length > 100 ? text.slice(0, 100) + "..." : text}
-      </div>
+      {expanded && (
+        <div className="mt-1.5 ml-[7px] border-l p-border pl-4 p-meta p-text-2 whitespace-pre-wrap leading-relaxed">
+          {text}
+        </div>
+      )}
     </div>
   );
 }
-
-/** Color-coded badge for the runtime a `run` tool call dispatched on. */
-const RUNTIME_COLORS: Record<string, string> = {
-  workspace: 'p-badge-neutral',
-  nimbus:    'p-badge-info',
-  sandbox:   'p-badge-success',
-  laptop:    'p-badge-warning',
-};
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
  *  string-ified tool output. Returns null if the output doesn't match. */
@@ -250,35 +248,37 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   // What this call is actually about, from its own arguments — without it a
   // row of `agents` chips is six identical rows for six different calls.
   const summary = summarizeToolCall(toolName, input);
+  const description = describeToolCall(toolName, input);
 
+  const failed = isError || !!provisionErr;
   return (
-    <div className="my-1.5">
-      <button onClick={() => setExpanded(!expanded)} className="flex w-full items-center gap-2 text-left text-xs p-text-2 hover:p-text transition-colors">
-        <span className="shrink-0 flex items-center">
-          {isRunning ? <Loader size="sm" /> : isError || provisionErr ? <WrenchIcon size={12} className="p-danger" /> : <CheckCircleIcon size={12} className="p-success" />}
+    <div className="my-0.5">
+      <button onClick={() => setExpanded(!expanded)} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
+        <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
+          {isRunning ? <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+            : failed ? <span className="size-1.5 rounded-full p-dot-danger" />
+            : <WrenchIcon size={13} className="p-text-3 opacity-60" />}
         </span>
-        <span className="font-mono shrink-0">{toolName}</span>
+        <span className={`font-mono text-[12px] shrink-0 ${isRunning ? "p-shimmer" : failed ? "p-danger" : ""}`}>{toolName}</span>
+        {/* What the call does, then what it was passed. The description is
+            derived from the same arguments as the summary — when they do
+            not say, it is absent rather than invented. */}
+        {description && <span className="shrink-0 p-text">{description}</span>}
         {summary && (
-          <span className="min-w-0 truncate p-text-3" title={summary}>
-            <span aria-hidden>· </span>{summary}
-          </span>
+          <span className="min-w-0 truncate p-text-3" title={summary}>{summary}</span>
         )}
-        {runtime && (
-          <span className={`shrink-0 px-1.5 py-0.5 rounded text-[10px] font-mono ${RUNTIME_COLORS[runtime] ?? 'p-badge-neutral'}`}
-                title={`Runtime: ${runtime}`}>
-            {runtime}
-          </span>
+        {runtime && runtime !== "workspace" && (
+          <span className="shrink-0 font-mono text-[11px] p-text-3" title={`Runtime: ${runtime}`}>@{runtime}</span>
         )}
-        {isRunning && <span className="shrink-0 p-warning text-[11px]">running...</span>}
-        {durationLabel && !isRunning && <span className="shrink-0 p-text-3 text-[10px] flex items-center gap-0.5"><TimerIcon size={10} />{durationLabel}</span>}
-        <span className="shrink-0">{expanded ? <CaretDownIcon size={10} /> : <CaretRightIcon size={10} />}</span>
+        {durationLabel && !isRunning && <span className="shrink-0 p-text-3 p-num text-[11px]">{durationLabel}</span>}
+        <CaretRightIcon size={11} className={`shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90" : ""} opacity-0 group-hover/tool:opacity-100 ${expanded ? "opacity-100" : ""}`} />
       </button>
       {provisionErr && (
         <div className="p-tint-warning mt-1.5 ml-5 rounded-lg border px-3 py-2 text-xs p-text-2 flex items-start gap-2">
           <WrenchIcon size={12} className="p-warning mt-0.5 shrink-0" />
           <div className="space-y-1">
             <div>
-              The agent asked for the <code className="font-mono p-elevated px-1 rounded">{provisionErr.runtime}</code> runtime
+              The agent asked for the <code className="font-mono p-fill px-1 rounded">{provisionErr.runtime}</code> runtime
               but it isn't provisioned yet.
             </div>
             <div className="p-text-3">{provisionErr.message}</div>
@@ -289,15 +289,82 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
         </div>
       )}
       {expanded && (
-        <div className="mt-1.5 ml-5 space-y-1 animate-scale-in">
+        <div className="mt-1 ml-[7px] border-l p-border pl-4 space-y-2 animate-scale-in">
           {/* execute_tools is the agent's primary doing-mechanism: render the
               LLM-authored JS program legibly, not as escaped JSON. */}
           {toolName === "execute_tools" && typeof input?.code === "string" ? (
             <CodeBlock className="language-js">{input.code}</CodeBlock>
           ) : input != null ? (
-            <pre className="rounded-lg p-elevated border p-border p-2.5 text-xs font-mono p-text-2 max-h-40 overflow-auto">{JSON.stringify(input, null, 2)}</pre>
+            <div>
+              <div className="p-eyebrow mb-1">Input</div>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{JSON.stringify(input, null, 2)}</pre>
+            </div>
           ) : null}
-          {output != null && <pre className="rounded-lg p-elevated border p-border p-2.5 text-xs font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>}
+          {output != null && (
+            <div>
+              <div className="p-eyebrow mb-1">Output</div>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A run of consecutive finished tool calls, as one row.
+ *
+ * A repair is rarely one call — it is read, read, edit, write, delegate, run
+ * — and rendering each as its own row turns a turn into a wall of identical
+ * chrome that buries the prose around it. The run collapses to a single line
+ * carrying the tally, and opens to the same rows as before.
+ *
+ * Only FINISHED calls are folded in; a call still running keeps its own row
+ * so the count never changes under the reader's eye while the agent works.
+ */
+function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
+  const [expanded, setExpanded] = useState(false);
+  const failed = parts.some((p) => p.state === "output-error");
+  const headline = summarizeToolRun(parts.map((p) => ({ toolName: getToolName(p), input: p.input })));
+
+  return (
+    <div className="my-0.5">
+      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded}
+        className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
+        <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
+          {failed ? <span className="size-1.5 rounded-full p-dot-danger" />
+            : <StackIcon size={13} className="p-text-3 opacity-60" />}
+        </span>
+        <span className="min-w-0 truncate">{headline}</span>
+        <CaretRightIcon size={11} className={`ml-auto shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90 opacity-100" : "opacity-0 group-hover/tool:opacity-100"}`} />
+      </button>
+      {expanded && (
+        <div className="mt-0.5 ml-[7px] border-l p-border pl-3 animate-scale-in">
+          {parts.map((part) => <ToolCallPart key={part.toolCallId} part={part} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** One tool part: its row, plus the live preview a tool can return. */
+function ToolCallPart({ part }: { part: AnyToolPart }) {
+  const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+  const previewUrl = extractPreviewUrl(output);
+  return (
+    <div>
+      <ToolCallBlock toolName={getToolName(part)}
+        input={part.input as Record<string, unknown> | undefined}
+        output={output}
+        isRunning={part.state === "input-available" || part.state === "input-streaming"}
+        isError={part.state === "output-error"} />
+      {/* Inline preview card — when a tool returns a /_preview/ URL, surface a
+          live iframe under the tool block so the user sees the running app
+          inline (also promoted to the Output surface). */}
+      {previewUrl && (
+        <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
+          <PreviewFrame url={previewUrl} />
         </div>
       )}
     </div>
@@ -305,7 +372,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
 }
 
 /** Consent card: an agent wants to use a connected device. */
-function DeviceConsentCard({ consent, onResolve }: {
+export function DeviceConsentCard({ consent, onResolve }: {
   consent: PendingConsent;
   onResolve: (consentId: string, decision: "once" | "always" | "deny") => void;
 }) {
@@ -317,7 +384,7 @@ function DeviceConsentCard({ consent, onResolve }: {
           <div className="text-xs p-text">
             This agent wants to use <span className="font-medium">{consent.deviceLabel}</span> for a local action:
           </div>
-          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-elevated rounded px-2 py-1">{consent.command || "(command)"}</code>
+          <code className="block mt-1 text-[11px] p-text-2 font-mono break-all p-fill rounded px-2 py-1">{consent.command || "(command)"}</code>
           <div className="mt-1 text-[10px] p-text-3">
             Always allow grants this agent all future local actions on this device until revoked.
           </div>
@@ -338,7 +405,7 @@ function DeviceConsentCard({ consent, onResolve }: {
 /** Terminal chat error — the turn failed (provider error, stream break) and
  *  produced no visible answer. Shows the honest error body with a retry
  *  affordance; the hook clears it on the next send. */
-function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
+export function ChatErrorCard({ message, streaming, onRetry, onDismiss }: {
   message: string;
   streaming: boolean;
   onRetry: () => void;
@@ -490,7 +557,7 @@ function SubordinateEventCard({ event, workspace }: { event: SubordinateActivity
 // Memoized: @ai-sdk's replaceMessage only clones the streaming message, so
 // historical messages keep referential identity across stream ticks and skip
 // re-rendering (and re-parsing their markdown) entirely.
-const MessageView = memo(function MessageView({
+export const MessageView = memo(function MessageView({
   message, isLast, isStreaming, onFork, onFeedback, feedback, onRestoreFiles, takes, onPickTake,
   signalState,
 }: {
@@ -537,7 +604,7 @@ const MessageView = memo(function MessageView({
     const fileParts = message.parts.filter((p): p is FileUIPart => p.type === "file");
     return (
       <div className="flex flex-col items-end animate-fade-in group">
-        <div className="relative max-w-[75%] px-4 py-3 rounded-2xl rounded-br-sm p-user-bubble text-sm leading-relaxed whitespace-pre-wrap">
+        <div className="relative max-w-[75%] px-4 py-2.5 rounded-[14px] rounded-br-md p-user-bubble p-body whitespace-pre-wrap">
           {fileParts.length > 0 && (
             <div className="flex flex-wrap gap-1.5 mb-1.5">
               {fileParts.map((p, i) => <FilePartView key={i} part={p} />)}
@@ -578,12 +645,8 @@ const MessageView = memo(function MessageView({
   if (isLive && !hasContent) {
     return (
       <div className="flex items-center gap-2 animate-fade-in py-2">
-        <div className="flex gap-1">
-          <span className="size-1.5 rounded-full bg-[var(--c-text-3)] animate-bounce [animation-delay:0ms]" />
-          <span className="size-1.5 rounded-full bg-[var(--c-text-3)] animate-bounce [animation-delay:150ms]" />
-          <span className="size-1.5 rounded-full bg-[var(--c-text-3)] animate-bounce [animation-delay:300ms]" />
-        </div>
-        <span className="text-xs p-text-3">Thinking...</span>
+        <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+        <span className="p-row-text p-shimmer font-medium">Thinking</span>
       </div>
     );
   }
@@ -599,7 +662,11 @@ const MessageView = memo(function MessageView({
           <GitBranchIcon size={12} />
         </button>
       )}
-      {message.parts.map((part, i) => {
+      {groupMessageParts(message.parts).map((block, i) => {
+        if (block.kind === "tool-run") {
+          return <ToolCallGroup key={block.parts[0]!.toolCallId} parts={block.parts} />;
+        }
+        const part = block.part;
         if (part.type === "reasoning") {
           const t = (part as { text?: string }).text;
           return t ? <ReasoningBlock key={i} text={t} /> : null;
@@ -610,7 +677,7 @@ const MessageView = memo(function MessageView({
         if (part.type === "text") {
           const t = (part as { text: string }).text;
           if (!t) return null;
-          const isLastText = message.parts.slice(i + 1).every(p => p.type !== "text");
+          const isLastText = message.parts.slice(message.parts.indexOf(part) + 1).every(p => p.type !== "text");
           return (
             <div key={i} className="prose-chat p-text">
               <MarkdownContent content={t} />
@@ -618,27 +685,7 @@ const MessageView = memo(function MessageView({
             </div>
           );
         }
-        if (isToolUIPart(part)) {
-          const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
-          const previewUrl = extractPreviewUrl(output);
-          return (
-            <div key={part.toolCallId}>
-              <ToolCallBlock toolName={getToolName(part)}
-                input={part.input as Record<string, unknown> | undefined}
-                output={output}
-                isRunning={part.state === "input-available" || part.state === "input-streaming"}
-                isError={part.state === "output-error"} />
-              {/* Inline preview card — when a tool returns a /_preview/ URL,
-                  surface a live iframe under the tool block so the user sees
-                  the running app inline (also promoted to the Output surface). */}
-              {previewUrl && (
-                <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
-                  <PreviewFrame url={previewUrl} />
-                </div>
-              )}
-            </div>
-          );
-        }
+        if (isToolUIPart(part)) return <ToolCallPart key={part.toolCallId} part={part} />;
         return null;
       })}
       {!isLive && (
@@ -745,9 +792,9 @@ function ForkModal({
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={submit} disabled={busy}>
+        <button className={`p-btn ${btnSmCls}`} onClick={submit} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Forking…</span></> : "Fork"}
-        </Button>
+        </button>
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
@@ -781,18 +828,6 @@ function ForkModal({
   );
 }
 
-/** Which work surface a clicked timeline span should reveal. Returns null for
- *  spans with no specific home (the surface stays put; only the selection moves). */
-function surfaceForKind(kind: TimelineKind): SurfaceKind | null {
-  switch (kind) {
-    case "mcts": case "head-split": case "head-merge": case "gepa": return "Reasoning";
-    case "scaffold": case "shadow-eval": case "craft": case "reflection": case "curriculum": case "skills": return "Brain";
-    // Legacy "Workspace"/"Devices" spans predate the merged tab — both live
-    // in Environment now.
-    case "runtime-exec": return "Environment";
-    default: return null;
-  }
-}
 
 /* ── Subordinate chat (Column A body when a subordinate tab is active) ── */
 
@@ -835,19 +870,24 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
   const as = state.agentStatus;
   return (
-    <div className="relative flex flex-col flex-1 min-h-0">
-      <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
-        <div className="flex min-w-0 items-center gap-3">
+    <div className="@container relative flex flex-col flex-1 min-h-0">
+      <div className="flex items-center justify-between gap-3 px-5 py-3.5 border-b p-border">
+        <div className="flex min-w-0 flex-1 items-center gap-3">
           <ConnectionIndicator status={state.connectionStatus} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <span className="font-medium text-sm p-text truncate max-w-[180px]">{as?.displayName || subName}</span>
-              {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+              <span className="font-medium text-sm p-text truncate">{as?.displayName || subName}</span>
+              {state.isStreaming && (
+                  <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
+                    <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
+                  </span>
+                )}
             </div>
-            {as?.purpose && <span className="block text-[11px] p-text-3 truncate max-w-[220px]">{as.purpose}</span>}
+            {as?.purpose && <span className="block text-[11px] p-text-3 truncate">{as.purpose}</span>}
           </div>
         </div>
-        <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="w-52" />
+        <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-28 @[30rem]:w-36 @[42rem]:w-44" />
       </div>
 
       <ErrorBoundary label="Subordinate chat">
@@ -880,7 +920,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
 
       <div className="px-5 py-3 border-t p-border lg:px-7">
         {state.error && <WorkspaceErrorBanner message={state.error} onRetry={state.retryLoad} />}
-        <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+        <div className="flex items-end gap-2.5 p-composer p-2.5">
           <InputArea ref={inputRef} value={input} onValueChange={setInput}
             onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
             placeholder={`Message ${as?.displayName || subName}…`} disabled={state.connectionStatus !== "connected"} rows={1}
@@ -914,18 +954,7 @@ export default function WorkspacePage() {
   const [surface, setSurface] = useState<SurfaceKind>("Brain");
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
-  const [follow, setFollow] = useState(true);
-  const [selectedRef, setSelectedRef] = useState<string | null>(null);
-  // Run Timeline (Column B) is collapsed by default — it's a spine you summon,
-  // not an always-on firehose. (feedback: the live timeline was distracting.)
-  const timelineRef = usePanelRef();
-  const [timelineOpen, setTimelineOpen] = useState(false);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
-  const toggleTimeline = useCallback(() => {
-    const t = timelineRef.current;
-    if (!t) return;
-    if (t.isCollapsed()) t.resize("24%"); else t.collapse();
-  }, [timelineRef]);
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
   const initialPromptSent = useRef(false);
@@ -938,9 +967,9 @@ export default function WorkspacePage() {
 
   const addFiles = useCallback(async (files: FileList | null | undefined) => {
     if (!files || files.length === 0) return;
-    // MAX_INLINE_ATTACHMENT_BYTES is a per-message AGGREGATE: all pending
+    // CLOUD_MAX_INLINE_ATTACHMENT_BYTES is a per-message AGGREGATE: all pending
     // data-URL parts persist inside one DO message row (see core/cloud-wire).
-    let budget = MAX_INLINE_ATTACHMENT_BYTES
+    let budget = CLOUD_MAX_INLINE_ATTACHMENT_BYTES
       - pendingAttachments.reduce((sum, p) => sum + dataUrlRawBytes(p.url), 0);
     const accepted: File[] = [];
     const rejected: string[] = [];
@@ -949,7 +978,7 @@ export default function WorkspacePage() {
       else rejected.push(f.name);
     }
     setAttachError(rejected.length > 0
-      ? `Chat attachments are capped at ${MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
+      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
       : null);
     if (accepted.length === 0) return;
     const dt = new DataTransfer();
@@ -1005,16 +1034,6 @@ export default function WorkspacePage() {
     if (n > prevPortCountRef.current) setSurface("Output");
     prevPortCountRef.current = n;
   }, [state.pinnedPorts.length]);
-
-  // A timeline span drives the work surface (Column C): pin the selection and,
-  // when the span maps to a specific surface, switch to it. Turning off Follow
-  // so the spine stops auto-scrolling while the user inspects.
-  const onTimelineSelect = useCallback((span: TimelineSpan) => {
-    setFollow(false);
-    if (span.refId) setSelectedRef(span.refId);
-    const s = surfaceForKind(span.kind);
-    if (s) setSurface(s);
-  }, []);
 
   // Send the creation mission as the opening message — once, deterministically,
   // the moment the socket is connected. The mission rides in via navigation
@@ -1204,10 +1223,10 @@ export default function WorkspacePage() {
           agent over time — curriculum, runs, automations). */}
       <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
         <span className="text-xs p-text-2 font-medium truncate">{workspaceTitle}</span>
-        <div className="ml-auto flex items-center gap-0.5 p-elevated rounded-md p-0.5">
+        <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
           {(["run", "supervise"] as const).map((a) => (
             <button key={a} onClick={() => setAltitude(a)}
-              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-card p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
+              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
               {a}
             </button>
           ))}
@@ -1238,7 +1257,7 @@ export default function WorkspacePage() {
             {subName ? (
               <SubordinateChatColumn key={subName} workspace={agentId} subName={subName} />
             ) : (
-            <div className="relative flex flex-col flex-1 min-h-0"
+            <div className="@container relative flex flex-col flex-1 min-h-0"
               onDragOver={onChatDragOver} onDragLeave={onChatDragLeave} onDrop={onChatDrop}>
             {dragOver && (
               <div className="absolute inset-0 z-10 pointer-events-none flex items-center justify-center rounded-lg border-2 border-dashed"
@@ -1248,16 +1267,26 @@ export default function WorkspacePage() {
                 </div>
               </div>
             )}
-            {/* Header */}
-            <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
-              <div className="flex min-w-0 items-center gap-3">
+            {/* Header. Below ~26rem the row cannot hold a title, a model picker
+                and two buttons at once — the title is what loses, and a
+                workspace called "Checkout co…" is the one thing on this bar
+                that has to survive. So the title takes a full row of its own
+                at phone widths and the controls drop beneath it, rather than
+                every element being squeezed until the name is unreadable. */}
+            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 @[26rem]:py-3.5 border-b p-border">
+              <div className="flex min-w-0 basis-full @[26rem]:basis-0 @[26rem]:flex-1 items-center gap-3">
                 <ConnectionIndicator status={state.connectionStatus} />
                 <InlineWorkspaceTitle title={workspaceTitle} onRename={state.setDisplayName} />
-                {state.isStreaming && <Badge variant="primary">streaming</Badge>}
+                {state.isStreaming && (
+                  <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
+                    <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
+                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
+                  </span>
+                )}
                 {as?.forkLineage && (
                   <Link
                     to={`/workspace/${as.forkLineage.sourceWorkspaceName}`}
-                    className="flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
+                    className="shrink-0 flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
                     title={`Open parent workspace from ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
                   >
                     <GitBranchIcon size={10} />
@@ -1265,16 +1294,8 @@ export default function WorkspacePage() {
                   </Link>
                 )}
               </div>
-              <div className="flex items-center gap-2">
-                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="w-52" />
-                <button
-                  onClick={toggleTimeline}
-                  title={timelineOpen ? "Hide run timeline" : "Show run timeline"}
-                  aria-label="Toggle run timeline"
-                  className={`p-1 rounded transition-colors cursor-pointer ${timelineOpen ? "p-accent" : "p-text-3 hover:p-text-2"}`}
-                >
-                  <ClockIcon size={14} />
-                </button>
+              <div className="flex shrink-0 items-center gap-2 ml-auto">
+                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-32 @[30rem]:w-36 @[42rem]:w-44" />
                 {state.messages.length > 0 && (
                   <Button variant="ghost" shape="square" size="sm"
                     onClick={() => setShowClearConfirm(true)}
@@ -1378,7 +1399,7 @@ export default function WorkspacePage() {
                   ))}
                 </div>
               )}
-              <div className="flex items-end gap-3 p-card rounded-xl p-3 p-focus transition-all">
+              <div className="flex items-end gap-2.5 p-composer p-2.5">
                 <input ref={fileInputRef} type="file" multiple className="hidden"
                   onChange={e => { void addFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
                 <button onClick={() => fileInputRef.current?.click()} disabled={state.connectionStatus !== "connected"}
@@ -1411,26 +1432,7 @@ export default function WorkspacePage() {
 
         <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
 
-        {/* ── Column B — Run Timeline (the spine; collapsed by default) ── */}
-        <Panel panelRef={timelineRef} collapsible collapsedSize={0} defaultSize={0} minSize={15}
-          onResize={(s) => setTimelineOpen(s.asPercentage > 0.5)}>
-          <div className="flex flex-col h-full border-r p-border">
-            <ErrorBoundary label="Timeline">
-              <RunTimeline
-                spans={state.runTimeline}
-                selectedRef={selectedRef}
-                onSelect={onTimelineSelect}
-                follow={follow}
-                onToggleFollow={() => setFollow(f => !f)}
-                onClose={toggleTimeline}
-              />
-            </ErrorBoundary>
-          </div>
-        </Panel>
-
-        <PanelResizeHandle className="w-[3px] bg-[var(--c-border)] hover:bg-[var(--c-accent-subtle)] transition-colors cursor-col-resize" />
-
-        {/* ── Column C — Work Surface ─────────────────────────── */}
+        {/* ── Work Surface ────────────────────────────────────── */}
         <Panel minSize={28} defaultSize={58}>
           <WorkSurface
             surface={surface}
@@ -1452,6 +1454,7 @@ export default function WorkspacePage() {
             onRefreshTasks={state.refreshBackgroundJobs}
             changelogUnseen={state.changelogUnseen}
             onChangelogSeen={state.clearChangelogUnseen}
+            agentViews={state.agentViews}
             rpc={state.rpc}
           />
         </Panel>
@@ -1490,7 +1493,7 @@ export default function WorkspacePage() {
           onClose={() => setShowClearConfirm(false)}
           footer={<>
             <Button size="sm" variant="ghost" onClick={() => setShowClearConfirm(false)}>Cancel</Button>
-            <Button size="sm" variant="primary" onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</Button>
+            <button className={`p-btn-danger ${btnSmCls}`} onClick={() => { state.clearHistory(); setShowClearConfirm(false); }}>Clear history</button>
           </>}
         >
           <p className="text-xs p-text-2 leading-relaxed">
@@ -1533,9 +1536,9 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       busy={busy}
       footer={<>
         <Button size="sm" variant="ghost" onClick={onCancel} disabled={busy}>Cancel</Button>
-        <Button size="sm" variant="primary" onClick={onConfirm} disabled={busy}>
+        <button className={`p-btn ${btnSmCls}`} onClick={onConfirm} disabled={busy}>
           {busy ? <><Loader size="sm" /><span className="ml-1">Restoring…</span></> : `Restore ${plan.files.length} file${plan.files.length === 1 ? "" : "s"}`}
-        </Button>
+        </button>
       </>}
     >
       <div className="space-y-2">

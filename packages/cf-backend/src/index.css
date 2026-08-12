@@ -1,114 +1,387 @@
-/* Kumo ships pre-built components whose Tailwind classes exist only inside its
-   dist bundle, so Tailwind has to scan it or Button/Badge/Loader render bare.
-   The path is the workspace root's node_modules — where bun hoists shared
-   dependencies — and `unit-css-source-globs.test.ts` fails if it stops
-   matching, because a glob that matches nothing is silently a no-op. */
+/* Kumo is hoisted to the workspace root, not packages/cf-backend — the path
+   has to reach it or Tailwind emits none of the utilities Kumo's own markup
+   uses, and its components render half-styled (e.g. the combobox's clear
+   button, positioned with `right-5`, lands on top of the input's text). */
 @source "../../../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
 @import "tailwindcss";
 @import "@cloudflare/kumo/styles/tailwind";
 
+/* ════════════════════════════════════════════════════════════════════
+   Proteus design language — the landing page, applied to the app.
+
+   The signed-out landing page (`landing-route.ts`) is the reference, and
+   it is not a second design system to be absorbed: it is THE one. Its
+   ground (#1A1613), ink (#F5EFE6), muted (#B6A893), brass (#E0A458),
+   brass-strong (#F0CF9B) and brass hairline (brass @14%) are reproduced
+   here verbatim, and the app's dark mode is built around them.
+
+   Rules the tokens encode:
+   · The dark canvas IS the landing's canvas. Chrome sits a step above
+     it (the landing's header does the same); wells sit below.
+   · Hairlines are brass at low alpha — that warmth is the "colour
+     scheme" the app is recognised by. Brass at FULL strength stays
+     rationed to intent: primary action, active nav, links, focus, live
+     work.
+   · Surfaces are a warm ladder. In DARK, hierarchy comes from surface
+     steps plus hairlines, never from shadows.
+   · LIGHT is not the dark palette warmed and lightened. Two passes did
+     that and both produced the same defect: a monochrome beige field
+     where canvas, rails, panels and cards were one hue separated by a
+     few percent lightness. Light gets its structure the way strong
+     light modes actually get it — near-neutral ground, PAPER cards,
+     real hairlines, real elevation — and brass is rationed to intent
+     rather than being the atmosphere. The planes carry roughly half
+     the chroma they used to; brass is then the only saturated thing on
+     screen, which is what makes it read as an accent at all.
+   · `--c-elevated` and `--c-fill` are one value in dark and two in
+     light, because dark conflates two roles that light cannot. "Raised
+     off the canvas" (composer, dialogs, cards) is PAPER in light;
+     "a plane inside a card" (chips, segments, meter tracks, hover) is
+     a step DOWN from paper. One token served both only because moving
+     up the dark ladder happens to do both at once.
+   · Every text token meets WCAG AA (4.5:1+) on every surface it is
+     specced for, in both modes — enforced by unit-palette-contrast.
+
+   The `.p-*` component classes live in `@layer components` so that any
+   Tailwind utility written beside one wins. Unlayered, `.p-card`'s
+   `border` shorthand silently re-drew the bottom edge of every element
+   that asked for `border-b-0` — which is why the active chat tab came
+   out as a floating four-sided box instead of a tab.
+   ════════════════════════════════════════════════════════════════════ */
+
 html, body, #root {
   width: 100%; height: 100%; margin: 0;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  font-family: var(--font-ui);
 }
 
-/* ── Proteus color system ──────────────────────────────────────── */
-/* Warm Workshop — walnut/oak darks, brass primary, sage secondary  */
-
 :root {
-  --c-bg:       #1A1613;
-  --c-surface:  #241E18;
-  --c-elevated: #2E261E;
-  --c-border:   rgba(224, 164, 88, 0.14);
-  --c-input-border: #3a2f23;
+  /* type */
+  --font-ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 
-  --c-accent:   #E0A458;
-  --c-accent-fg: #F0CF9B;
-  --c-accent-subtle: rgba(224, 164, 88, 0.12);
+  /* radii — one grammar: control 6, row/field 8, card 10, overlay 14, pill 999 */
+  --r-control: 6px;
+  --r-row: 8px;
+  --r-card: 10px;
+  --r-overlay: 14px;
 
-  --c-success:  #7FB069;
-  --c-warning:  #D99A4E;
-  --c-danger:   #E07A5F;
-  --c-info:     #7CA0C4;
+  /* motion */
+  --ease-out-strong: cubic-bezier(0.23, 1, 0.32, 1);
+  --dur-fast: 120ms;
+  --dur-base: 150ms;
+  --dur-enter: 220ms;
 
-  --c-success-tint: rgba(127, 176, 105, 0.16);
-  --c-warning-tint: rgba(217, 154, 78, 0.16);
-  --c-danger-tint:  rgba(224, 122, 95, 0.16);
-  --c-info-tint:    rgba(124, 160, 196, 0.16);
-  --c-neutral-tint: rgba(245, 239, 230, 0.08);
+  /* ── DARK (default) — the landing page's umber ─────────────────────
+     Values marked "landing" are copied from `landing-route.ts` and must
+     stay identical to it: the two surfaces are one product, and the
+     first thing a signed-in user notices is when they are not. ── */
+  --c-recessed: #120F0C;   /* wells, tracks, inset code   */
+  --c-bg:       #1A1613;   /* landing --bg — the canvas   */
+  --c-sidebar:  #201A15;   /* landing header tone — panels */
+  --c-surface:  #241E18;   /* card   */
+  --c-elevated: #2C251E;   /* raised off the canvas: composer, dialogs, menus */
+  --c-overlay:  #332B23;   /* dialogs */
+  /* A plane INSIDE a card — chip, segment, meter track, row hover. Dark has
+     no use for the distinction (up the ladder reads as both), so it is the
+     same value as `--c-elevated` here and the two only diverge on paper. */
+  --c-fill:     #2C251E;
 
-  --c-text:     #F5EFE6;
-  --c-text-2:   #B6A893;
-  --c-text-3:   #7d7261;
+  /* Brass hairlines. The landing draws every rule this way and it is what
+     makes the surface read warm rather than merely dark. */
+  --c-border:        rgba(224, 164, 88, 0.14);  /* landing --line */
+  --c-border-strong: rgba(224, 164, 88, 0.28);
+  --c-input-border:  rgba(224, 164, 88, 0.22);
 
-  --c-user-bg:     #2E261E;
-  --c-user-border: rgba(224, 164, 88, 0.14);
+  --c-text:     #F5EFE6;   /* landing --ink    15.7:1 on bg */
+  --c-text-2:   #B6A893;   /* landing --muted   7.7:1 */
+  --c-text-3:   #A19682;   /* dim  6.2:1 on bg, 4.8:1 on overlay */
 
-  --c-sage:     #88A06B;
-  --c-accent-on: #2a1d0c;
+  --c-accent:    #E0A458;  /* landing --accent        */
+  --c-accent-fg: #F0CF9B;  /* landing --accent-strong */
+  --c-accent-on: #2a1d0c;  /* landing --accent-on, 7.5:1 on brass */
+  --c-accent-subtle: rgba(224, 164, 88, 0.14);
+
+  /* The status hues are the landing canvas's own palette (sage, tan,
+     terracotta), lifted until each clears AA on the top of the ladder. */
+  --c-success:  #9EBE7E;   /* 8.7:1 */
+  --c-warning:  #E8B97A;   /* landing --code, 10.0:1 */
+  --c-danger:   #E8907A;   /* 7.5:1 */
+  --c-info:     #8FB6D6;   /* 8.4:1 */
+
+  --c-success-tint: rgba(158, 190, 126, 0.14);
+  --c-warning-tint: rgba(232, 185, 122, 0.14);
+  --c-danger-tint:  rgba(232, 144, 122, 0.14);
+  --c-info-tint:    rgba(143, 182, 214, 0.14);
+  --c-neutral-tint: rgba(245, 239, 230, 0.07);
+
+  --c-user-bg:     #2A211A;  /* user turn: warm-tinted raised surface */
+  --c-user-border: rgba(224, 164, 88, 0.18);
+
+  /* The code surface. The landing renders code as one warm tone on a
+     recessed panel rather than syntax-coloured, and that is deliberate
+     here too — see CodeBlock in components/surfaces/shared.tsx. */
+  --c-code:     #E8B97A;   /* landing --code */
+  /* A code block is a well, which is what `--c-recessed` already means; the
+     two were the same literal in both modes and drifted apart by hand. */
+  --c-code-bg:  var(--c-recessed);
+
+  /* One scrim behind every overlay — dialogs, drawers, sheets. Warm-black so
+     it deepens the umber ground instead of greying it. */
+  --c-scrim: rgba(10, 8, 5, 0.55);
+
+  /* elevation — role-named; dark = black-based, heavier */
+  /* Dark draws no card shadow at all (the rule above): a card is a rung of
+     the ladder plus a hairline. On paper that is not enough, so the token
+     exists and is `none` here. */
+  --shadow-card: none;
+  --shadow-overlay: 0 18px 44px -12px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.35);
+  --shadow-menu:    0 10px 28px -10px rgba(0, 0, 0, 0.5);
+  --shadow-composer: 0 -6px 24px -16px rgba(0, 0, 0, 0.45);
+
+  /* ── Kumo, retoned ──────────────────────────────────────────────
+     Kumo's components are compiled: their utilities (`bg-kumo-brand`,
+     `border-kumo-hairline`, …) are baked into its dist bundle and cannot
+     be restyled per call site. They resolve through Kumo's own custom
+     properties, so re-pointing those at the `--c-*` layer reskins the whole
+     library with no wrappers and no `!important` wars.
+
+     Kumo declares them inside `@layer base` and keys its dark set on the
+     same `[data-mode]` attribute we use; this block is unlayered, so it
+     outranks both without needing higher specificity. The mapping must stay
+     COMPLETE — Kumo's defaults are cool neutrals plus a blue brand
+     (`oklch(0.5772 0.2324 260)`), and any token left unmapped shows up as
+     exactly that blue/grey against the umber ground. `unit-kumo-token-
+     coverage.test.ts` fails when Kumo adds one we have not mapped.
+
+     Light mode needs no second copy: every value indirects through `--c-*`,
+     which the `[data-mode="light"]` block below re-points. ── */
+  --color-kumo-canvas: var(--c-bg);
+  --color-kumo-base: var(--c-bg);
+  --color-kumo-elevated: var(--c-elevated);
+  --color-kumo-tint: var(--c-surface);
+  --color-kumo-recessed: var(--c-recessed);
+  --color-kumo-overlay: var(--c-overlay);
+  --color-kumo-control: var(--c-surface);
+  --color-kumo-contrast: var(--c-text);
+  --color-kumo-interact: var(--c-fill);
+  /* `fill` is a chip/track tone (Kumo's Badge, Combobox and Meter), so it has
+     to read as a step above whatever it sits on — a solid surface step
+     disappears the moment the container is that same step, which is exactly
+     where badges live. An ink alpha composes over any rung of the ladder. */
+  --color-kumo-fill: var(--c-neutral-tint);
+  --color-kumo-fill-hover: var(--c-border-strong);
+  --color-kumo-line: var(--c-border);
+  --color-kumo-hairline: var(--c-input-border);
+  --color-kumo-brand: var(--c-accent);
+  --color-kumo-brand-hover: color-mix(in srgb, var(--c-accent) 92%, #000);
+  --color-kumo-danger: var(--c-danger);
+  --color-kumo-success: var(--c-success);
+  --color-kumo-warning: var(--c-warning);
+  --color-kumo-info: var(--c-info);
+  --color-kumo-danger-tint: var(--c-danger-tint);
+  --color-kumo-success-tint: var(--c-success-tint);
+  --color-kumo-warning-tint: var(--c-warning-tint);
+  --color-kumo-info-tint: var(--c-info-tint);
+  --color-kumo-shadow-edge: var(--c-border);
+  --color-kumo-shadow-drop: rgba(0, 0, 0, 0.3);
+  --color-kumo-tip-shadow: transparent;
+  --color-kumo-tip-stroke: var(--c-border);
+
+  /* Kumo's badge hues are a categorical set (red/orange/green/teal/blue/
+     purple). Proteus has no categorical palette — a badge means a status —
+     so each maps onto the status role it stands for, and the two hues with
+     no status meaning (teal, purple) fold into neutral rather than staying
+     the only cyan and violet on screen. */
+  --color-kumo-badge-red: var(--c-danger);
+  --color-kumo-badge-orange: var(--c-accent);
+  --color-kumo-badge-orange-subtle: var(--c-accent-subtle);
+  --color-kumo-badge-green: var(--c-success);
+  --color-kumo-badge-blue: var(--c-info);
+  --color-kumo-badge-teal: var(--c-text-3);
+  --color-kumo-badge-teal-subtle: var(--c-neutral-tint);
+  --color-kumo-badge-purple: var(--c-text-3);
+  --color-kumo-badge-neutral: var(--c-neutral-tint);
+  --color-kumo-badge-inverted: var(--c-accent-subtle);
+
+  --text-color-kumo-default: var(--c-text);
+  --text-color-kumo-strong: var(--c-text);
+  --text-color-kumo-subtle: var(--c-text-2);
+  --text-color-kumo-inactive: var(--c-text-3);
+  --text-color-kumo-placeholder: var(--c-text-3);
+  --text-color-kumo-brand: var(--c-accent-fg);
+  --text-color-kumo-link: var(--c-accent-fg);
+  --text-color-kumo-inverse: var(--c-accent-on);
+  --text-color-kumo-info: var(--c-info);
+  --text-color-kumo-success: var(--c-success);
+  --text-color-kumo-danger: var(--c-danger);
+  --text-color-kumo-warning: var(--c-warning);
+  --text-color-kumo-badge-inverted: var(--c-accent-fg);
+  --text-color-kumo-badge-neutral-subtle: var(--c-text-2);
+  --text-color-kumo-badge-orange-subtle: var(--c-accent-fg);
+  --text-color-kumo-badge-teal-subtle: var(--c-text-2);
 }
 
 [data-mode="light"] {
-  --c-bg:       #FBF7F0;
-  --c-surface:  #F0E9DD;
-  --c-elevated: #FFFDF9;
-  --c-border:   rgba(60, 45, 25, 0.12);
-  --c-input-border: #E6DCC9;
+  /* ── LIGHT — near-neutral ground, paper cards, brass rationed ──────
+     Three passes of complaint, all the same one: "it's all mostly the
+     same colour and shade on most panels." Both previous attempts
+     answered it by moving the steps of a warm ladder around. That could
+     not work, because the problem was never the spacing of the steps —
+     it was that every plane on screen was the SAME saturated beige, and
+     brass, the accent, was that beige too. An accent cannot be an
+     accent when the whole field is already its hue.
 
-  --c-accent:   #B5793A;
-  --c-accent-fg: #9c6428;
-  --c-accent-subtle: rgba(181, 121, 58, 0.10);
+     So the planes give up most of their chroma (roughly 42% → 20%
+     saturation) and gain lightness, and the structure comes from where
+     good light modes actually get it:
 
-  --c-success:  #5e8a45;
-  --c-warning:  #b07a2e;
-  --c-danger:   #c0563a;
-  --c-info:     #4a6f96;
+       ground      a near-neutral warm grey you would call "off-white"
+       chrome      rails and panel headers, a real step BELOW the canvas
+       paper       cards, composer, dialogs — WHITE, the reading surface
+       line        hairlines strong enough to see (1.43:1 on white,
+                   GitHub-strength; the old rule was 1.19:1 and vanished)
+       lift        cards cast a shadow, which dark deliberately forbids
 
-  --c-success-tint: rgba(94, 138, 69, 0.14);
-  --c-warning-tint: rgba(176, 122, 46, 0.14);
-  --c-danger-tint:  rgba(192, 86, 58, 0.14);
-  --c-info-tint:    rgba(74, 111, 150, 0.12);
-  --c-neutral-tint: rgba(60, 45, 25, 0.07);
+     The measured steps, as luminance ratios:
+       paper : canvas   1.147     canvas : chrome   1.124
+       paper : fill     1.22      canvas : recessed 1.19
+     Every one of those is a step you can see without hunting; the old
+     canvas : chrome was 1.07, which is why the rail and the canvas read
+     as one surface.
 
-  --c-text:     #241E18;
-  --c-text-2:   #6f6457;
-  --c-text-3:   #9c917f;
+     Brass survives verbatim as `--c-accent` — the same object as dark —
+     and is now the only saturated colour in the room. ── */
+  --c-recessed: #E4E0D8;   /* wells, tracks, code             */
+  --c-sidebar:  #E7E2D9;   /* chrome: rails, panel headers    */
+  --c-fill:     #EDE9E1;   /* chips, segments, tracks, hover  */
+  --c-bg:       #F2EFE9;   /* the canvas                      */
+  --c-surface:  #FFFFFF;   /* cards — paper                   */
+  --c-elevated: #FFFFFF;   /* raised — paper, lifted by shadow */
+  --c-overlay:  #FFFFFF;   /* dialogs — paper, lifted further  */
 
-  --c-user-bg:     #F3EAD9;
-  --c-user-border: rgba(181, 121, 58, 0.14);
+  /* Warm-brown ink alpha: borders flip source (brass→ink) but keep the
+     hue family, so a rule looks like the same rule in both modes. On a
+     near-white ground they have to be a good deal stronger than the
+     brass hairlines dark uses, or the paper edges disappear. */
+  --c-border:        rgba(74, 56, 30, 0.20);
+  --c-border-strong: rgba(74, 56, 30, 0.34);
+  --c-input-border:  rgba(74, 56, 30, 0.26);
 
-  --c-sage:     #6f8a52;
-  --c-accent-on: #FBF7F0;
+  --c-text:     #2A2118;   /* 15.7:1 on paper */
+  --c-text-2:   #5C5044;   /*  7.5:1 */
+  --c-text-3:   #655749;   /*  6.4:1 on paper, 4.9:1 on recessed */
+
+  --c-accent:    #E0A458;  /* the same brass object as dark */
+  --c-accent-fg: #8A4E0D;  /* deep bronze ink, 6.6:1 on paper */
+  --c-accent-on: #2a1d0c;
+  --c-accent-subtle: rgba(224, 164, 88, 0.22);
+
+  --c-success:  #37622E;
+  --c-warning:  #7E5205;
+  --c-danger:   #9C3A28;
+  --c-info:     #2F6289;
+
+  --c-success-tint: rgba(55, 98, 46, 0.11);
+  --c-warning-tint: rgba(126, 82, 5, 0.12);
+  --c-danger-tint:  rgba(156, 58, 40, 0.11);
+  --c-info-tint:    rgba(47, 98, 137, 0.11);
+  --c-neutral-tint: rgba(58, 45, 30, 0.08);
+
+  /* The user's own turn is the one plane that stays frankly warm: on a
+     near-neutral field it now reads as brass rather than as more beige. */
+  --c-user-bg:     #FBEDD5;
+  --c-user-border: rgba(138, 78, 13, 0.22);
+
+  --c-code:     #5E3604;   /* the brass ink, deepened for paper */
+
+  /* On paper the scrim reads as ink pulled over the page, not a blackout. */
+  --c-scrim: rgba(43, 26, 4, 0.32);
+  /* Light shadows are warm ink. They are the whole reason a white card on a
+     near-white canvas reads as an object, so a card gets one too. */
+  --shadow-card:    0 1px 2px rgba(60, 45, 25, 0.05), 0 2px 6px -2px rgba(60, 45, 25, 0.07);
+  --shadow-overlay: 0 16px 40px -14px rgba(43, 26, 4, 0.20), 0 2px 8px rgba(43, 26, 4, 0.07);
+  --shadow-menu:    0 10px 24px -10px rgba(43, 26, 4, 0.18), 0 1px 3px rgba(43, 26, 4, 0.06);
+  --shadow-composer: 0 -6px 20px -16px rgba(43, 26, 4, 0.14), 0 1px 2px rgba(60, 45, 25, 0.05);
+
+  /* The one Kumo token whose light value is not a re-pointed `--c-*`: on
+     paper the drop shadow is warm ink, not black. */
+  --color-kumo-shadow-drop: rgba(43, 26, 4, 0.14);
 }
 
 body { background: var(--c-bg); color: var(--c-text); }
 
-/* ── Scrollbar ──────────────────────────────────────────────────── */
-::-webkit-scrollbar { width: 6px; height: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--c-border); border-radius: 3px; }
-* { scrollbar-width: thin; scrollbar-color: var(--c-border) transparent; }
+/* ── Scrollbars — calm at rest, visible on interaction ───────────────
+   Layered, and it has to be: unlayered, `*` outranks every layer no matter
+   how specific the selector beside it, so `.p-tabstrip { scrollbar-width:
+   none }` in `@layer components` lost to `* { scrollbar-width: thin }` and
+   the tab strip grew the scrollbar it explicitly asks not to have. `base` is
+   where a default for every element belongs. */
+@layer base {
+  * { scrollbar-width: thin; scrollbar-color: transparent transparent; }
+  *:hover, *:focus-within { scrollbar-color: var(--c-border-strong) transparent; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: transparent; border-radius: 999px; }
+  *:hover::-webkit-scrollbar-thumb { background: var(--c-border-strong); }
+}
 
-/* ── Chat markdown ──────────────────────────────────────────────── */
+/* ════════════════════════════════════════════════════════════════════
+   Everything below is `@layer components`, which places it BELOW
+   Tailwind's utilities in the cascade. That is the whole point: a class
+   like `p-card` is a starting grammar, and `border-b-0` or `rounded-none`
+   written next to it must be able to change its mind.
+
+   Unlayered — which is what these were — a component class outranks
+   every layer, so `.p-card`'s `border` shorthand quietly re-drew the
+   bottom edge of anything that asked for `border-b-0`, and its
+   `border-radius` overrode `rounded-t-md`. The active chat tab asked for
+   both, got neither, and rendered as a floating four-sided box.
+
+   Two rules stay out of the layer on purpose; each says why.
+   ════════════════════════════════════════════════════════════════════ */
+@layer components {
+
+/* ── Chat markdown ─────────────────────────────────────────────────── */
 .prose-chat {
-  font-size: 0.875rem; line-height: 1.7; color: var(--c-text);
-  p { margin: 0.4em 0; }
+  font-size: 0.875rem; line-height: 1.65; color: var(--c-text);
+  letter-spacing: -0.006em;
+  p { margin: 0.45em 0; }
   p:first-child { margin-top: 0; }
   p:last-child { margin-bottom: 0; }
   strong { font-weight: 600; }
-  ul, ol { margin: 0.4em 0; padding-left: 1.25rem; }
+  ul, ol { margin: 0.45em 0; padding-left: 1.25rem; }
   ul { list-style: disc; } ol { list-style: decimal; }
-  h1, h2, h3 { font-weight: 600; margin: 0.6em 0 0.3em; }
-  h1 { font-size: 1.15em; } h2 { font-size: 1.05em; } h3 { font-size: 0.95em; }
+  h1, h2, h3 { font-weight: 600; margin: 0.7em 0 0.3em; letter-spacing: -0.01em; }
+  h1 { font-size: 1.1em; } h2 { font-size: 1.05em; } h3 { font-size: 1em; }
 }
 
-/* ── Surfaces ───────────────────────────────────────────────────── */
+/* ── Type roles — the scale lives here, not in per-component literals ─ */
+.p-eyebrow  { font-size: 11px; line-height: 16px; font-weight: 600; letter-spacing: 0.07em; text-transform: uppercase; color: var(--c-text-3); }
+.p-meta     { font-size: 12px; line-height: 16px; letter-spacing: -0.005em; }
+.p-row-text { font-size: 13px; line-height: 18px; letter-spacing: -0.008em; }
+.p-body     { font-size: 14px; line-height: 21px; letter-spacing: -0.006em; }
+.p-title    { font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -0.01em; }
+/* A numeral *treatment*, not a type role — size comes from the role next to
+   it. (These classes are unlayered and so outrank Tailwind's utilities: a
+   font-size here silently overrides the `text-[11px]` it is written beside.) */
+.p-num      { font-variant-numeric: tabular-nums; font-family: var(--font-mono); }
+
+/* ── Surfaces ──────────────────────────────────────────────────────── */
 .p-bg       { background: var(--c-bg); }
+.p-recessed { background: var(--c-recessed); }
+.p-sidebar  { background: var(--c-sidebar); }
 .p-surface  { background: var(--c-surface); }
 .p-elevated { background: var(--c-elevated); }
+.p-fill     { background: var(--c-fill); }
+.p-overlay  { background: var(--c-overlay); box-shadow: var(--shadow-overlay); border-radius: var(--r-overlay); }
+/* For overlays that own their own background (a drawer is a full-height
+   panel, not a dialog) but still need the dialog's lift. */
+.p-shadow-overlay { box-shadow: var(--shadow-overlay); }
+.p-shadow-menu { box-shadow: var(--shadow-menu); }
+.p-scrim { background: var(--c-scrim); backdrop-filter: blur(2px); }
 .p-border   { border-color: var(--c-border); }
 
-/* ── Text ───────────────────────────────────────────────────────── */
+/* ── Text ──────────────────────────────────────────────────────────── */
 .p-text   { color: var(--c-text); }
 .p-text-2 { color: var(--c-text-2); }
 .p-text-3 { color: var(--c-text-3); }
@@ -117,14 +390,12 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-accent-bg      { background: var(--c-accent-subtle); }
 .p-accent-subtle  { background: var(--c-accent-subtle); }
 
-/* ── Status ─────────────────────────────────────────────────────── */
-/* text */
+/* ── Status ────────────────────────────────────────────────────────── */
 .p-success { color: var(--c-success); }
 .p-warning { color: var(--c-warning); }
 .p-danger  { color: var(--c-danger); }
 .p-info    { color: var(--c-info); }
 
-/* solid fills — status dots and progress-bar fills */
 .p-dot-success { background: var(--c-success); }
 .p-dot-warning { background: var(--c-warning); }
 .p-dot-danger  { background: var(--c-danger); }
@@ -132,67 +403,294 @@ body { background: var(--c-bg); color: var(--c-text); }
 .p-dot-neutral { background: var(--c-text-3); }
 .p-dot-accent  { background: var(--c-accent); }
 
-/* pill badges — tinted background + legible foreground */
+/* pill badges — tint + AA text, 11px/500, pill radius */
+.p-badge-success, .p-badge-warning, .p-badge-danger, .p-badge-info, .p-badge-neutral {
+  font-size: 11px; line-height: 16px; font-weight: 500; border-radius: 999px;
+}
 .p-badge-success { background: var(--c-success-tint); color: var(--c-success); }
 .p-badge-warning { background: var(--c-warning-tint); color: var(--c-warning); }
 .p-badge-danger  { background: var(--c-danger-tint);  color: var(--c-danger); }
 .p-badge-info    { background: var(--c-info-tint);    color: var(--c-info); }
 .p-badge-neutral { background: var(--c-neutral-tint); color: var(--c-text-2); }
 
-/* tinted attention cards — background + hairline only; body text stays neutral
-   (pair with a `border` width class). For colored-text alerts use .p-notice-*. */
 .p-tint-warning { background: var(--c-warning-tint); border-color: color-mix(in srgb, var(--c-warning) 30%, transparent); }
 
-/* inline notice boxes — tint + text + hairline border */
-.p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 35%, transparent); }
-.p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 35%, transparent); }
-.p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 35%, transparent); }
+.p-notice-success { background: var(--c-success-tint); color: var(--c-success); border: 1px solid color-mix(in srgb, var(--c-success) 30%, transparent); }
+.p-notice-warning { background: var(--c-warning-tint); color: var(--c-warning); border: 1px solid color-mix(in srgb, var(--c-warning) 30%, transparent); }
+.p-notice-danger  { background: var(--c-danger-tint);  color: var(--c-danger);  border: 1px solid color-mix(in srgb, var(--c-danger) 30%, transparent); }
+.p-notice-info    { background: var(--c-info-tint);    color: var(--c-info);    border: 1px solid color-mix(in srgb, var(--c-info) 30%, transparent); }
 
-/* ── Cards ──────────────────────────────────────────────────────── */
+/* ── Cards — quiet at rest; only cards that are actually interactive
+      react (`p-card-hover`), and with a surface step, never an accent flood. ── */
 .p-card {
   background: var(--c-surface);
   border: 1px solid var(--c-border);
-  transition: border-color 0.15s;
+  border-radius: var(--r-card);
+  box-shadow: var(--shadow-card);
+  transition: border-color var(--dur-base) ease-out, background-color var(--dur-base) ease-out;
 }
-.p-card:hover { border-color: var(--c-accent); }
-.p-card-hover:hover { background: var(--c-elevated); }
+.p-card-hover:hover { background: var(--c-fill); }
 
-/* User chat bubble */
+/* ── Code ──────────────────────────────────────────────────────────
+   One warm ink on a recessed ground, exactly as the landing page sets
+   its install command. Kumo's `<Code>` is the deprecated no-highlight
+   component and gave us an unpadded transparent slab that its caller
+   then clipped; this owns the surface instead.
+
+   `p-code-scroll` is the part that was actually broken: a long line has
+   to scroll, and it can only scroll if the flex/grid parent lets the
+   track be narrower than its content (`min-width: 0`). */
+.p-code {
+  background: var(--c-code-bg);
+  border: 1px solid var(--c-border);
+  color: var(--c-code);
+  font-family: var(--font-mono);
+}
+/* The header shares the block's ground and is separated by the hairline
+   alone. Given its own lighter surface it read as the brighter half of the
+   object, which put the emphasis on the label rather than the code. */
+.p-code-head {
+  border-bottom: 1px solid var(--c-border);
+  color: var(--c-text-3);
+}
+/* The mechanism, shared by the code block and wide tables: `min-width: 0` is
+   what lets a track inside a flex/grid column be narrower than its content,
+   and without it the content simply pushes the column open instead.
+
+   Naming only ONE axis is not enough: the other stays `visible`, which
+   computes to `auto` the moment its partner is not — so a track a single
+   pixel taller than its box grows a vertical scrollbar for content it does
+   not have. Every horizontal scroller here says both axes out loud. */
+.p-scroll-x {
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+
+/* …plus the affordance, so a clipped line looks scrollable rather than
+   broken. One recipe for every horizontal scroller — the code block and both
+   tab strips: solid covers travel with the content (`local`) and hide a
+   hairline pinned to each end (`scroll`), so an edge is ruled only while
+   there is more content that way. `--scroll-ground` is the surface the
+   scroller sits on, which is what the covers are painted in.
+
+   The mark is a hairline because the umber ground gives a soft one nothing to
+   resolve against. This was a radial shadow, and `farthest-side` over a
+   `100%`-tall box made it an ellipse: a brass smear that faded down the block
+   as well as across it, reading as banding on the near-black code well rather
+   than as an edge. The covers were fades rather than solids too, so they
+   could never fully hide it — the left edge stayed smeared with nothing to
+   scroll back to. A hairline in the colour the rest of the language already
+   divides with is either there or it is not. */
+.p-code-scroll, .p-tabstrip {
+  background:
+    linear-gradient(var(--scroll-ground), var(--scroll-ground)) 0 0 / 12px 100% no-repeat local,
+    linear-gradient(var(--scroll-ground), var(--scroll-ground)) 100% 0 / 12px 100% no-repeat local,
+    linear-gradient(var(--c-border-strong), var(--c-border-strong)) 0 0 / 1px 100% no-repeat scroll,
+    linear-gradient(var(--c-border-strong), var(--c-border-strong)) 100% 0 / 1px 100% no-repeat scroll;
+}
+.p-code-scroll { --scroll-ground: var(--c-code-bg); }
+
+/* Inline code sits IN a sentence: it takes the warm ink and a whisper of
+   ground, never a border, and it wraps rather than pushing the column. */
+.p-code-inline {
+  background: var(--c-neutral-tint);
+  color: var(--c-code);
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  padding: 0.1em 0.35em;
+  border-radius: var(--r-control);
+  overflow-wrap: anywhere;
+}
+
+/* User chat turn */
 .p-user-bubble {
   background: var(--c-user-bg);
   border: 1px solid var(--c-user-border);
   color: var(--c-text);
 }
 
-/* ── Interactive ────────────────────────────────────────────────── */
+/* ── Interactive ───────────────────────────────────────────────────── */
 
 .p-focus:focus-within {
-  border-color: var(--c-accent) !important;
+  border-color: var(--c-accent);
   box-shadow: 0 0 0 3px var(--c-accent-subtle);
 }
 
+/* ── Tabs ──────────────────────────────────────────────────────────
+   A tab belongs to the panel underneath it, and says so with its bottom
+   edge. It is never a box: a four-sided tab is a chip that has floated
+   free of the thing it switches, which is what the agent tab strip had
+   become. One grammar for all three strips — work surfaces, output
+   sub-tabs, and the agent tabs above the chat. Pair with `-mb-px` on the
+   strip so the active bar lands on the strip's own rule. */
+.p-tab {
+  border-bottom: 2px solid transparent;
+  color: var(--c-text-3);
+  transition: color var(--dur-base) ease-out, border-color var(--dur-base) ease-out;
+}
+.p-tab:hover { color: var(--c-text-2); }
 .p-tab-active {
   color: var(--c-accent-fg);
   border-bottom-color: var(--c-accent);
 }
+.p-tab-active:hover { color: var(--c-accent-fg); }
 
+/* Tab strip — scrolls when its column is narrower than the set of surfaces,
+   rather than clipping a label. It carries the scroll-edge affordance above;
+   the scrollbar is suppressed, because a 6px classic scrollbar would change
+   the strip's height and shift the underline.
+
+   Vertically it must not scroll at all: a tab overhangs the strip by the
+   pixel its `-mb-px` pulls back, which is layout the tab grammar depends on
+   but is not content, and left to compute as `auto` that pixel is enough for
+   a vertical scrollbar to appear beside a single row of tabs. */
+.p-tabstrip {
+  --scroll-ground: var(--c-bg);
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+}
+.p-tabstrip::-webkit-scrollbar { display: none; }
+
+/* Buttons — one hierarchy.
+   p-btn        primary: brass fill + ink, both modes
+   p-btn-danger destructive confirm: danger fill + ink
+   p-btn-quiet  secondary: hairline + surface
+   p-btn-ghost  tertiary: text only, surface on hover
+
+   Filled buttons carry their own ink rather than white: brass is a LIGHT
+   fill (white on it measures 2.4:1), and so is the dark-mode danger tone.
+   Kumo's `primary`/`destructive` variants hardcode `!text-white` and are
+   therefore the one part of its library we do not use — see the call sites,
+   which pair these with `btnSmCls` from components/ui/form.tsx. */
 .p-btn {
   background: var(--c-accent);
   color: var(--c-accent-on);
   border: none;
-  border-radius: 0.5rem;
-  transition: opacity 0.15s;
+  border-radius: var(--r-row);
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  transition: background-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
 }
-.p-btn:hover { opacity: 0.85; }
-.p-btn:disabled { opacity: 0.35; cursor: default; }
+.p-btn:hover { background: color-mix(in srgb, var(--c-accent) 92%, #000); }
+.p-btn:active { transform: scale(0.98); }
+/* A filled button cannot fade to disabled: 45% brass over a warm canvas is
+   the canvas, and HomePage's primary action disappeared until you typed.
+   Disabled drops the fill entirely and becomes a neutral chip — still an
+   object, visibly not actionable. */
+.p-btn:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); cursor: default; transform: none; }
 
-/* ── Animations ─────────────────────────────────────────────────── */
+/* Brass is the same light object in both modes, so its ink is fixed. Danger
+   is not — it is a light salmon on umber and a deep red on paper — so its ink
+   is the ground, which is that tone's opposite in either mode. */
+.p-btn-danger {
+  background: var(--c-danger);
+  color: var(--c-bg);
+  border: none;
+  border-radius: var(--r-row);
+  font-weight: 600;
+  letter-spacing: -0.008em;
+  transition: background-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+}
+.p-btn-danger:hover { background: color-mix(in srgb, var(--c-danger) 88%, #000); }
+.p-btn-danger:active { transform: scale(0.98); }
+.p-btn-danger:disabled { background: var(--c-neutral-tint); color: var(--c-text-3); cursor: default; transform: none; }
+
+.p-btn-quiet {
+  background: var(--c-surface);
+  color: var(--c-text);
+  border: 1px solid var(--c-input-border);
+  border-radius: var(--r-row);
+  font-weight: 500;
+  letter-spacing: -0.008em;
+  transition: background-color var(--dur-base) ease-out, border-color var(--dur-base) ease-out, transform var(--dur-fast) var(--ease-out-strong);
+}
+.p-btn-quiet:hover { background: var(--c-fill); border-color: var(--c-border-strong); }
+.p-btn-quiet:active { transform: scale(0.98); }
+.p-btn-quiet:disabled { opacity: 0.45; cursor: default; transform: none; }
+
+.p-btn-ghost {
+  background: transparent;
+  color: var(--c-text-2);
+  border: none;
+  border-radius: var(--r-control);
+  font-weight: 500;
+  transition: background-color var(--dur-base) ease-out, color var(--dur-base) ease-out;
+}
+.p-btn-ghost:hover { background: var(--c-neutral-tint); color: var(--c-text); }
+.p-btn-ghost:disabled { opacity: 0.45; cursor: default; }
+
+/* Composer — the one place the user acts; a distinct raised surface that
+   lifts a touch on focus. */
+.p-composer {
+  background: var(--c-elevated);
+  border: 1px solid var(--c-input-border);
+  border-radius: var(--r-overlay);
+  box-shadow: var(--shadow-composer);
+  transition: border-color var(--dur-base) ease-out, box-shadow var(--dur-base) ease-out;
+}
+.p-composer:focus-within {
+  border-color: var(--c-accent);
+  box-shadow: var(--shadow-composer), 0 0 0 3px var(--c-accent-subtle);
+}
+
+.p-nav-active {
+  background: var(--c-accent-subtle);
+  color: var(--c-accent-fg);
+}
+
+.p-row-hover:hover { background: var(--c-neutral-tint); }
+
+/* Streaming label shimmer — live work reads as light moving through text. */
+.p-shimmer {
+  background: linear-gradient(90deg, var(--c-text-3) 0%, var(--c-text) 50%, var(--c-text-3) 100%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation: p-shimmer 1.8s linear infinite;
+}
+} /* end @layer components */
+
+@keyframes p-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+
+/* ════════════════════════════════════════════════════════════════════
+   Deliberately unlayered — these two have to outrank utilities.
+   ════════════════════════════════════════════════════════════════════ */
+
+/* The focus ring is an accessibility floor, not a default. Several call
+   sites carry `focus:outline-none` to suppress the browser's own ring
+   before drawing their own border treatment; layered, that utility would
+   win and leave those controls with no visible focus at all. */
+:focus-visible {
+  outline: 2px solid var(--c-accent);
+  outline-offset: 1px;
+}
+
+/* Kumo's combobox trigger always renders a clear button and always reserves
+   its width (`pr-7` at xs). A picker that cannot be cleared therefore ships a
+   dead control on top of a label that is already clipping. Kumo's own
+   utilities are emitted into the utilities layer, so this has to sit above
+   it to win. The label below is the one ModelPicker passes as `clearLabel`;
+   the two are held together by unit-combobox-clear-affordance.test.ts. */
+.p-combobox-no-clear > [aria-label="Clear selection (unused)"] { display: none; }
+.p-combobox-no-clear > input { padding-right: calc(var(--spacing) * 5); }
+
+/* ── Animations ────────────────────────────────────────────────────── */
 @keyframes fade-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes scale-in { from { opacity: 0; transform: scale(0.97); } to { opacity: 1; transform: scale(1); } }
 @keyframes blink-cursor { 0%, 50% { opacity: 1; } 51%, 100% { opacity: 0; } }
 
 @layer utilities {
-  .animate-fade-in { animation: fade-in 0.15s ease-out; }
-  .animate-scale-in { animation: scale-in 0.12s ease-out; }
+  .animate-fade-in { animation: fade-in var(--dur-enter) var(--ease-out-strong); }
+  .animate-scale-in { animation: scale-in var(--dur-fast) ease-out; }
   .animate-blink-cursor { animation: blink-cursor 1s step-end infinite; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .p-shimmer { animation: none; color: var(--c-text-2); -webkit-text-fill-color: currentColor; }
+  .animate-fade-in, .animate-scale-in { animation: none; }
+  .p-btn:active, .p-btn-quiet:active { transform: none; }
 }

@@ -1,8 +1,9 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import type { WorkspaceInfo, AgentRuntime, SearchNode, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, BACKGROUND_POLICY } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, BACKGROUND_POLICY, type GepaOptimizationResult } from '@proteus/core';
 import {
+  LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
   openWorkspaceCLI,
   resolveChatModel,
@@ -102,6 +103,27 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
   });
 }
 
+/**
+ * Run one GEPA optimisation pass over a local workspace's scaffold.
+ *
+ * The pass itself is core's evolution control plane — the same one the cloud
+ * backend drives. It used to be a Durable Object method, so this was simply
+ * not reachable from a local workspace at all.
+ */
+export async function runLocalGepa(
+  name: string,
+  opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
+): Promise<GepaOptimizationResult> {
+  // One-shot surface: the pass is the whole job, and auto-evolution must not
+  // race the candidate it is measuring.
+  const client = openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
+  try {
+    return await client.runScaffoldGepaOptimization(opts);
+  } finally {
+    await client.close();
+  }
+}
+
 /** Workspaces created before mission-derived titling still show their raw
  *  directory name. Title them from SOUL.md's mission on open, through the same
  *  identity path `proteus create` uses. The deterministic title lands before
@@ -161,6 +183,7 @@ export class LocalAgentClient implements AgentClient {
   readonly consents = null;
   readonly localControls: LocalSessionControls;
   readonly checkpoints: FileCheckpointSurface;
+  readonly inlineAttachmentLimitBytes = LOCAL_MAX_INLINE_ATTACHMENT_BYTES;
 
   private readonly deps: LocalAgentClientDeps;
   private readonly listeners = new Set<(event: AgentClientEvent) => void>();
@@ -325,6 +348,14 @@ export class LocalAgentClient implements AgentClient {
   async settleBackgroundWork(): Promise<void> {
     if (this.closed) return;
     await this.session.settleBackgroundWork();
+  }
+
+  /** One GEPA optimisation pass over this workspace's scaffold (core's
+   *  evolution control plane, over this session's local surface). */
+  runScaffoldGepaOptimization(
+    opts?: { maxIterations?: number; evalSize?: number; maxMetricCalls?: number },
+  ): Promise<GepaOptimizationResult> {
+    return this.session.runScaffoldGepaOptimization(opts);
   }
 
   async close(): Promise<void> {

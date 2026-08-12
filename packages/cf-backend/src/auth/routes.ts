@@ -6,6 +6,7 @@ import {
   type OAuthProfile,
 } from './d1-store.js';
 import { escapeHtml, json } from '../lib/http.js';
+import { publicHtmlHeaders } from '../lib/security-headers.js';
 import {
   clientAuth, getAuthorizationServer, getOAuthProvider, listConfiguredOAuthProviders,
   type OAuthProviderConfig,
@@ -18,7 +19,7 @@ import {
 } from '../lib/cloudflare-oauth.js';
 import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access.js';
-import { OWNER_SESSION } from '../user/workspace-capability.js';
+import { ownerCaller } from '../user/workspace-capability.js';
 
 export async function handleAuthRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -205,11 +206,11 @@ async function attachCloudflareWorkersAI(
   try {
     const credential = await cloudflareTokenToCredential(tokens);
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    await userDO.setCredential(OWNER_SESSION, CLOUDFLARE_OAUTH_CRED_KEY, credential);
+    await userDO.setCredential(await ownerCaller(env), CLOUDFLARE_OAUTH_CRED_KEY, credential);
     // Only default to Workers AI when the credential can actually serve it;
     // otherwise the operator lands on a model they cannot call.
-    if (isCloudflareCredentialUsable(credential) && !await userDO.getConfig(OWNER_SESSION, 'default_model')) {
-      await userDO.setConfig(OWNER_SESSION, 'default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
+    if (isCloudflareCredentialUsable(credential) && !await userDO.getConfig(await ownerCaller(env), 'default_model')) {
+      await userDO.setConfig(await ownerCaller(env), 'default_model', DEFAULT_WORKERS_AI_MODEL_SPEC);
     }
     notifyWorkspacesCredentialsChanged(env, userDO, ctx);
   } catch (e) {
@@ -550,7 +551,7 @@ function redirect(location: string, init: ResponseInit = {}): Response {
 
 function html(title: string, body: string, init: ResponseInit = {}): Response {
   const headers = new Headers(init.headers);
-  headers.set('content-type', 'text/html; charset=utf-8');
+  for (const [key, value] of Object.entries(publicHtmlHeaders())) headers.set(key, value);
   return new Response(`<!doctype html>
 <html lang="en">
 <head>

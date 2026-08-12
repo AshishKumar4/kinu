@@ -38,7 +38,7 @@ describe('hybridSearch', () => {
   test('merges lexical + semantic; shared item ranks first', async () => {
     const out = await hybridSearch('whatever', lexicalFn, vectorStore(semanticCorpus));
     expect(out[0].id).toBe('shared');
-    expect(out[0].sources.sort()).toEqual(['lexical', 'semantic']);
+    expect([...out[0].sources].sort()).toEqual(['lexical', 'semantic']);
     expect(out[0].lexicalScore).toBeDefined();
     expect(out[0].semanticScore).toBeDefined();
   });
@@ -131,7 +131,7 @@ describe('hybridSearch', () => {
     const out = await hybridSearch('q', async () => lex, vectorStore(sem));
     // One fused hit, not two — the matching ids merge.
     expect(out.length).toBe(1);
-    expect(out[0].sources.sort()).toEqual(['lexical', 'semantic']);
+    expect([...out[0].sources].sort()).toEqual(['lexical', 'semantic']);
     expect(out[0].snippet).toBe('the actual chunk text');
     expect(out[0].lexicalScore).toBe(0.4);
     expect(out[0].semanticScore).toBe(0.9);

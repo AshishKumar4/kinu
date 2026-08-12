@@ -2,7 +2,10 @@
  * CLI backend — Linux/Bun runtime for the self-evolving agent.
  */
 
-export { createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, createHostShell, withCheckpointedShell, type CLIRuntimeConfig } from './runtime.js';
+export {
+  createCLIRuntime, buildCLIHeadRuntime, makeSql, makeExecRaw, makeSqlExec, makeWorkspaceSchemaSql,
+  createHostShell, withCheckpointedShell, type CLIRuntimeConfig, type LocalDb,
+} from './runtime.js';
 export { createHostCheckpoints, type HostCheckpointsOpts } from './checkpoints.js';
 export { proteusHome } from './home.js';
 export { openWorkspaceCLI, type WorkspaceInfo, type CLIOpenConfig } from './open.js';
@@ -13,7 +16,7 @@ export { createNodeCraftedExecute } from './craft-executor.js';
 export { discoverAgentsMd } from './agents-md.js';
 export { createNodeExecuteToolFactory, type NodeExecuteToolFactoryDeps } from './execute-tools-factory.js';
 export {
-  LocalAgentSession, resolveChatModel,
+  LocalAgentSession, resolveChatModel, LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   type LocalAgentSessionOpts, type SessionEvent, type LocalSessionDb,
   type ShellApprovalHandler,
 } from './local-session.js';

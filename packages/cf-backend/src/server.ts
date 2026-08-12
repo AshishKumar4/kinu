@@ -2,8 +2,8 @@
  * Worker entry point — exports all DO classes and routes agent requests.
  *
  * Routing order (Worker runs first for every non-hashed-asset path):
- *   1. proxyToSandbox — if the host is a preview URL (PORT-SANDBOX-TOKEN.host),
- *      forward to the sandbox container.
+ *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves sandbox
+ *      container previews and nothing else.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Proteus session is present.
@@ -27,7 +27,7 @@ import {
   isForeignAgentNamespacePath,
 } from "./agent-routing.js";
 import { handlePcRequest } from "./pc-handler.js";
-import { proxyPreviewRequest } from "./preview-proxy.js";
+import { servePreviewRequest } from "./preview-proxy.js";
 import { handleRunEventsRequest } from "./run-events-routes.js";
 import { handleMcpRequest } from "./mcp-server.js";
 import { handleHealthRequest } from "./health-route.js";
@@ -41,12 +41,14 @@ import { handleInboundEmail } from "./email/handler.js";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do.js";
 import { handleNimbusPreviewRequest } from "./nimbus-route.js";
 import {
-  authenticateRequest, AuthError, isPublicPath,
+  authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
   type AuthIdentity,
 } from "./auth/session.js";
+import { containPreviewResponse, isPreviewHostRequest, previewHostSuffix } from "./lib/preview-origin.js";
+import { withAppSecurityHeaders } from "./lib/security-headers.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
-import { OWNER_SESSION } from "./user/workspace-capability.js";
+import { ownerCaller } from "./user/workspace-capability.js";
 import { CLI_SCOPES_HEADER } from "./cli/rpc-gate.js";
 import { claimOwnedWorkspace } from "./user/workspace-access.js";
 import { err } from "./lib/http.js";
@@ -79,6 +81,16 @@ export {
   NimbusDOStub,
   CirrusHmrRPC,
 } from "@nimbus-sh/sdk/worker";
+
+/** The SPA and every other static asset, under the app's document policy. */
+async function serveApp(request: Request, env: Env): Promise<Response> {
+  const suffix = previewHostSuffix(env);
+  return withAppSecurityHeaders(
+    await env.ASSETS.fetch(request),
+    new URL(request.url),
+    suffix ? `https://*.${suffix}` : null,
+  );
+}
 
 function authError(request: Request, e: AuthError): Response {
   if (e.status === 401 && wantsHtml(request)) {
@@ -141,7 +153,7 @@ async function authenticateCliAgentTicketRequest(
   }
   try {
     const userDO = env.UserDO.get(env.UserDO.idFromName(userId));
-    const verified = await userDO.verifyCliAgentConnectTicket(OWNER_SESSION, ticket, {
+    const verified = await userDO.verifyCliAgentConnectTicket(await ownerCaller(env), ticket, {
       userId,
       agentClass: ORCHESTRATOR_AGENT_SLUG,
       agentName,
@@ -178,9 +190,14 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
-    // 1. Preview proxy — sandbox container, token-gated via URL itself.
-    const previewResp = await proxyPreviewRequest(request, env);
-    if (previewResp) return previewResp;
+    // 1. Preview host — sandbox containers, one hostname per exposed port,
+    //    token-gated by that hostname. It is the ONLY thing served there: no
+    //    SPA, no login, no OAuth callback, so nothing ever mints a session on
+    //    those origins and hostile preview HTML has none to steal
+    //    (lib/preview-origin.ts).
+    if (isPreviewHostRequest(url, env)) {
+      return servePreviewRequest(request, env);
+    }
 
     // 2. PC agent tunnel — its own auth (short-lived ticket + UserDO token hash).
     if (url.pathname.startsWith("/pc/")) {
@@ -213,7 +230,7 @@ export default {
 
     // 7. Public bypass list.
     if (isPublicPath(url.pathname)) {
-      return env.ASSETS.fetch(request);
+      return serveApp(request, env);
     }
 
     // 7b. Webhook delivery — public-but-per-trigger-authenticated. The
@@ -244,8 +261,16 @@ export default {
       }
     }
 
+    // 8b. CSRF. Everything below is reachable with the ambient session cookie,
+    //     so a state-changing request must prove the app issued it.
+    const crossSite = crossSiteRejection(request);
+    if (crossSite) return crossSite;
+
+    // Nimbus previews are container HTML that must be fetched with the owner's
+    // session (the tenant check needs it), so they cannot move to the preview
+    // host — the sandbox CSP is what keeps them out of the app's origin.
     const nimbusResp = await handleNimbusPreviewRequest(authenticatedRequest, env, identity.userId);
-    if (nimbusResp) return withD1Bookmark(nimbusResp, identity);
+    if (nimbusResp) return withD1Bookmark(containPreviewResponse(nimbusResp, 'app-host'), identity);
 
     // 9. /api/user/* — user-scoped routes.
     const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);
@@ -287,7 +312,7 @@ export default {
     }
 
     // 11. SPA fallback.
-    return withD1Bookmark(await env.ASSETS.fetch(request), identity);
+    return withD1Bookmark(await serveApp(request, env), identity);
   },
 
   // Mission Inbox — Cloudflare Email Routing (catch-all rule on EMAIL_DOMAIN)

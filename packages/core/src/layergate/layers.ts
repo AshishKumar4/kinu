@@ -19,6 +19,8 @@ import type { ModelMessage } from 'ai';
 import { ExtensionHost } from '../extension.js';
 import { DynamicContextLedger } from '../prompting/volatile-context.js';
 import { TurnAccumulator } from '../orchestrator/turn-accumulator.js';
+import { CraftCycle } from '../orchestrator/craft-cycle.js';
+import type { CraftLedger } from '../craft/in-episode.js';
 import { TurnContextBudget } from '../context-budget.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
 import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
@@ -318,19 +320,25 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         },
       },
       {
-        id: 'context-assembly/kimi-bare-tool-index',
-        asserts: 'kimi-family prompts index tool names only — no per-tool prose',
+        id: 'context-assembly/tool-index-is-family-neutral',
+        asserts: 'every model family gets the same tool index — no family branch in the catalogue',
         observe: (s) => {
-          const prompt = s.buildSystemPromptSync({
-            soulOverride: 'You are Proteus.',
-            availableTools: ['run', 'agents', 'memory'],
-            backend: 'cf',
-            model: { id: 'kimi-k3-instruct', provider: 'moonshot' },
-            currentDate: '2026-01-01',
-          });
+          const section = (id: string, provider: string) => {
+            const prompt = s.buildSystemPromptSync({
+              soulOverride: 'You are Proteus.',
+              availableTools: ['run', 'agents', 'memory'],
+              backend: 'cf',
+              model: { id, provider },
+              currentDate: '2026-01-01',
+            });
+            const start = prompt.indexOf('## Tools available this turn');
+            return prompt.slice(start, prompt.indexOf('\n## ', start + 1));
+          };
+          const kimi = section('kimi-k3-instruct', 'moonshot');
           return {
-            hasSummaries: prompt.includes(BUILTIN_TOOL_SPECS.run.summary),
-            toolLines: prompt.split('\n').filter((line) => /^- (run|agents|memory)$/.test(line)),
+            identicalAcrossFamilies: kimi === section('claude-sonnet-4-7', 'anthropic')
+              && kimi === section('gpt-5.5', 'openai'),
+            index: kimi,
           };
         },
       },
@@ -1208,7 +1216,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
   {
     id: 'craft-fitness',
     owns: 'the in-episode fitness signal for crafted tools: which tools a submitted block actually called, ' +
-      'and which of them a failure is attributable to',
+      'which of them a failure is attributable to, and what the whole turn therefore reports as crafted-tool use',
     subjects: ['craftInvocationSites', 'craftFailureBlame', 'craftInvocationError'],
     probes: [
       {
@@ -1241,6 +1249,40 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => [['a.b'], ['.*'], ['x y'], ['2bad']].map(
           (known) => [known[0], s.craftInvocationSites('tools.x(1) tools.a.b(1) tools.2bad(1) tools.x y(1)', known)],
         ),
+      },
+      {
+        id: 'craft-fitness/turn-usage-is-the-call-site-scan',
+        asserts: 'the turn reports as crafted-tool use exactly what the call-site scan saw — an MCP or native tool call contributes nothing, and a run with evolution off reports none',
+        observe: () => {
+          const ledger: CraftLedger = { names: () => ['sum', 'fmt'], observe: () => [] };
+          const turn = (
+            calls: ReadonlyArray<{ toolName: string; code?: string }>,
+            enabled = true,
+          ): string[] => {
+            const acc = new TurnAccumulator();
+            const cycle = new CraftCycle(ledger, acc);
+            cycle.reset(enabled);
+            for (const call of calls) {
+              cycle.onToolResult({
+                toolName: call.toolName,
+                args: call.code === undefined ? {} : { code: call.code },
+                result: '{"result":"ok"}',
+                success: true,
+              });
+            }
+            return acc.craftedToolsUsed();
+          };
+          return [
+            ['crafted', turn([{ toolName: 'execute_tools', code: 'await tools.sum(1); codemode.fmt(2)' }])],
+            ['mcp', turn([{ toolName: 'mcp__github__create_issue' }, { toolName: 'run' }])],
+            ['mentioned-only', turn([{ toolName: 'execute_tools', code: '// tools.sum(1)' }])],
+            ['across-blocks', turn([
+              { toolName: 'execute_tools', code: 'await tools.sum(1)' },
+              { toolName: 'execute_tools', code: 'await tools.sum(2); await tools.fmt(3)' },
+            ])],
+            ['evolution-off', turn([{ toolName: 'execute_tools', code: 'await tools.sum(1)' }], false)],
+          ];
+        },
       },
       {
         id: 'craft-fitness/blame-by-stamp-only',

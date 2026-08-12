@@ -72,16 +72,16 @@ proteus <command> [options]
 | [`proteus timeline <name>`](#proteus-timeline-name) | List the run/evolution/MCTS timeline |
 | [`proteus mcts <name> [nodeId]`](#proteus-mcts-name-nodeid) | Inspect MCTS search history |
 | [`proteus heads <name>`](#proteus-heads-name) | Inspect parallel reasoning branch runs |
-| [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs |
+| [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
 | [`proteus alignment <name>`](#proteus-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
 | [`proteus label [action] [name] [file]`](#proteus-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
-| [`proteus product <name>`](#proteus-product-name) | Inspect product self-customization state |
+| [`proteus release <name>`](#proteus-release-name) | Inspect the governed release lane: sources, changes, checks, approvals, deployments |
 
 ### This computer
 
 | Command | What it does |
 | --- | --- |
-| [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon |
+| [`proteus connect`](#proteus-connect) | Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days) |
 | [`proteus desktop [action]`](#proteus-desktop-action) | Connect or inspect the local desktop execution daemon |
 | [`proteus daemon [action]`](#proteus-daemon-action) | Manage the local scheduler daemon: start, stop, restart, status, logs |
 | [`proteus doctor`](#proteus-doctor) | Inspect local Proteus CLI installation state |
@@ -100,6 +100,7 @@ Connect your account; optionally configure local-only model credentials.
 | `--provider <name>` | Provider: codex, openai, openrouter, anthropic, openai-compatible, skip |
 | `--model <id>` | Default model for the selected provider |
 | `--local-model` | Configure credentials for local-only agents |
+| `--local` | Keep the provider key on this machine instead of your Proteus account |
 | `-y, --yes` | Accept recommended setup choices where possible |
 | `--skip-cloud` | Skip account sign-in |
 
@@ -113,6 +114,7 @@ Also: `proteus providers`
 | --- | --- |
 | `--origin <url>` | Proteus app origin |
 | `--model <id>` | Default model for the selected provider |
+| `--local` | Keep the provider key on this machine instead of your Proteus account |
 
 ### proteus auth
 
@@ -434,10 +436,14 @@ Inspect parallel reasoning branch runs.
 
 ### proteus gepa <name> [runId]
 
-Inspect GEPA optimization runs.
+Inspect GEPA optimization runs, or run a pass with --run.
 
 | Option | What it does |
 | --- | --- |
+| `--run` | Run one optimisation pass over the scaffold |
+| `--iterations <n>` | Reflection iterations (--run) |
+| `--eval-size <n>` | Labeled turns to draw the split from (--run) |
+| `--metric-calls <n>` | Metric-call ceiling (--run) |
 | `--limit <n>` | Run limit |
 | `--json` | Print raw JSON |
 
@@ -464,9 +470,9 @@ Hand-label turn outcomes (export | ingest | ensemble | report) to measure and co
 | `--limit <n>` | Labeled turns to put to the raters (score; default: 25) |
 | `--json` | Print raw JSON |
 
-### proteus product <name>
+### proteus release <name>
 
-Inspect product self-customization state.
+Inspect the governed release lane: sources, changes, checks, approvals, deployments.
 
 | Option | What it does |
 | --- | --- |
@@ -475,7 +481,7 @@ Inspect product self-customization state.
 
 ### proteus connect
 
-Link this computer as the desktop execution daemon.
+Link this computer as the desktop execution daemon (the link renews itself while the daemon connects; re-run this after 180 idle days).
 
 | Option | What it does |
 | --- | --- |

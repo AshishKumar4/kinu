@@ -5,15 +5,33 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import type { SqlExecutor, SqlValue, VFS } from '@proteus/core';
+import { initWorkspaceSchema, type SqlExecutor, type SqlValue, type VFS } from '@proteus/core';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,
   createVfsTranscriptStore,
-  initCompactionStateTable,
   type ArchiveRange,
   type PlanSnapshot,
 } from '../src/index.js';
+
+/** The compaction tables come from core's one workspace-schema list; a store
+ *  test needs exactly those two tables, so it runs the same entry point. */
+function initCompactionStateTable(db: Database): void {
+  initWorkspaceSchema({
+    execRaw: (ddl) => db.exec(ddl),
+    sql: sqliteSql(db),
+    exec: {
+      exec(query: string, ...bindings: unknown[]) {
+        const stmt = db.prepare(query);
+        if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
+          return { toArray: () => stmt.all(...bindings as never[]) as Array<Record<string, unknown>> };
+        }
+        stmt.run(...bindings as never[]);
+        return { toArray: () => [] };
+      },
+    },
+  });
+}
 
 function sqliteSql(db: Database): SqlExecutor {
   return (<T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
@@ -27,7 +45,7 @@ function sqliteSql(db: Database): SqlExecutor {
 
 function stateRig() {
   const db = new Database(':memory:');
-  initCompactionStateTable((ddl) => db.exec(ddl));
+  initCompactionStateTable(db);
   return { db, store: createCompactionStateStore(sqliteSql(db)) };
 }
 
@@ -203,7 +221,7 @@ describe('createCompactionStateStore', () => {
     )`);
     db.prepare(`INSERT INTO compaction_state (session_key, last_prompt_tokens, measured_at_length)
                 VALUES ('legacy', 5000, 12)`).run();
-    initCompactionStateTable((ddl) => db.exec(ddl));
+    initCompactionStateTable(db);
     const store = createCompactionStateStore(sqliteSql(db));
     expect(store.loadPromptTokens('legacy', 12)).toBe(5_000);
     expect(store.takeForceCompaction('legacy')).toBe(false);

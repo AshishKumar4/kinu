@@ -55,36 +55,6 @@ export function createVfsTranscriptStore(getVfs: () => VFS): TranscriptStore {
   };
 }
 
-export function initCompactionStateTable(execRaw: RawSqlExec): void {
-  execRaw(`
-    CREATE TABLE IF NOT EXISTS compaction_state (
-      session_key        TEXT PRIMARY KEY,
-      plan_json          TEXT,
-      last_prompt_tokens INTEGER,
-      measured_at_length INTEGER,
-      force_compaction   INTEGER
-    )
-  `);
-  // Tables created before overflow recovery existed lack the flag column —
-  // ADD COLUMN is idempotent-by-catch (SQLite errors on a duplicate column).
-  try {
-    execRaw(`ALTER TABLE compaction_state ADD COLUMN force_compaction INTEGER`);
-  } catch { /* column already exists */ }
-  execRaw(`
-    CREATE TABLE IF NOT EXISTS compaction_archive (
-      session_key     TEXT NOT NULL,
-      range_hash      TEXT NOT NULL,
-      path            TEXT NOT NULL,
-      start_turn      INTEGER NOT NULL,
-      end_turn        INTEGER NOT NULL,
-      user_turns      INTEGER NOT NULL,
-      assistant_turns INTEGER NOT NULL,
-      first_user_ask  TEXT NOT NULL,
-      PRIMARY KEY (session_key, range_hash)
-    )
-  `);
-}
-
 /**
  * Durable per-session compaction state: the replayable plan snapshot AND the
  * provider-reported prompt-token signal of the last completed turn — the

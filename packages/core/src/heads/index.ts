@@ -16,22 +16,23 @@ export type {
   ArtifactRef,
   SplitRequest,
   MergeResult,
+  HeadFileChange,
+  HeadFileChangeSet,
   HeadScore,
   MergeStrategy,
-  BudgetSplit,
   SerializedMessage,
 } from './types.js';
 
 export {
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
-  NOMINAL_HEAD_STEPS,
-  NOMINAL_STEP_TOKENS,
-  MAX_FORK_WIDTH,
   deriveChildBudget,
   budgetExhausted,
 } from './types.js';
 
+export {
+  HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
+} from './file-changes.js';
 export { initHeadsTables } from './schema.js';
 export { HeadJournal, type HeadJournalRow, type LiveHeadRun } from './journal.js';
 export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
