@@ -59,7 +59,7 @@ describe('buildSystemPromptSync', () => {
     // lives in the schema every family reads, not in the prompt index.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
     expect(agents).toMatch(/set settle=mcts/);
-    expect(agents).toMatch(/scored against each other by execution/);
+    expect(agents).toMatch(/runs and passes outranks every branch whose code failed/);
     // It is never introduced as a ladder rung of its own, in either surface.
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
@@ -171,15 +171,22 @@ describe('buildSystemPromptSync', () => {
     // uses). It now leads with the payoff and names the shape it fits, with
     // the limitation stated plainly at the end rather than as a gate.
     const agents = BUILTIN_TOOL_DESCRIPTIONS.agents;
-    expect(agents).toMatch(/scored against each other by execution/);
     expect(agents).toMatch(/rival scripts that must produce a specific artifact/);
-    expect(agents).toMatch(/proposed code IS executed to earn its score/);
     expect(agents).toMatch(/propose text\/code rather than running your own tool loop/);
+    // 2026-08-11: the ranking claim is now stated the way the scorer actually
+    // works. "scored against each other by execution" read as pure execution
+    // scoring; mcts/evaluation.ts uses execution to pick the score BAND (pass
+    // [0.60,1.00] vs fail [0.05,0.30]) and a judge ensemble to place the
+    // branch inside it. What survives verbatim is the consequence that band
+    // ordering guarantees, which is the part a caller decides on.
+    expect(agents).toMatch(/runs and passes outranks every branch whose code failed/);
+    expect(agents).not.toMatch(/proposed code IS executed to earn its score/);
     // The deterrent framing is gone: no "only", no "genuinely unclear".
     expect(agents).not.toMatch(/set settle=mcts only/);
     expect(agents).not.toMatch(/genuinely unclear/);
-    // Payoff before limitation, in that order.
-    expect(agents.indexOf('IS executed to earn its score'))
+    // Payoff before limitation, in that order — the ordering this test was
+    // written for, unchanged.
+    expect(agents.indexOf('outranks every branch whose code failed'))
       .toBeLessThan(agents.indexOf('rather than running your own tool loop'));
   });
 
@@ -227,11 +234,44 @@ describe('buildSystemPromptSync', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt);
     expect(prompt).toMatch(/Merging \(the default\) keeps every fork's piece/);
-    expect(prompt).toMatch(/settle=mcts keeps one — rival attempts at the same thing/);
-    expect(prompt).toMatch(/scored by executing what each proposes, losers discarded/);
+    expect(prompt).toMatch(/settle=mcts keeps one instead, for rival attempts at a single thing/);
     // The limit is stated, so a model does not reach for mcts when the rivals
     // need their own tool loops.
-    expect(prompt).toMatch(/proposes code rather than running its own tool loop/);
+    expect(prompt).toMatch(/propose code rather than running their own tool loops/);
+  });
+
+  test('the prompt describes what mcts DOES, matching the engine rather than tree search in general', () => {
+    // A trigger alone did not move it: settle=mcts was used once in 89 trials.
+    // Each clause below is checked against the engine, because an impressive
+    // inaccurate description is worse than none — every one of these is a
+    // place the runtime does something a reader of "MCTS" would not assume.
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt);
+    // The call shape differs from merge: strategy/mcts.ts runs on ctx.task and
+    // never reads `forks`, so hand-authored rivals would be dead arguments.
+    expect(prompt).toMatch(/you give it the task and it writes the competing approaches itself/);
+    // mcts/diversity.ts assigns each branch a fixed angle and tells it what
+    // its siblings drew — divergence by construction, not by temperature.
+    expect(prompt).toMatch(/each on a different angle so they do not converge/);
+    // The engine's budget loop: UCT select, backpropagate, prune, re-expand.
+    expect(prompt).toMatch(/over several rounds that drop the weak ones and expand what scored well/);
+    // The band, stated as the ordering it guarantees (mcts/evaluation.ts).
+    expect(prompt).toMatch(/a proposal whose code runs and passes places above every proposal whose code failed/);
+    expect(prompt).toMatch(/prose that produced no code places below both once a rival produced some/);
+    expect(prompt).toMatch(/the judge only orders proposals inside the band execution already fixed/);
+    // And never the overstatement it replaced.
+    expect(prompt).not.toMatch(/scored by executing what each proposes/);
+  });
+
+  test('the prompt says forks cannot see each other, which is why a fork task must stand alone', () => {
+    // heads/controller.ts spawns every head concurrently with the SAME
+    // inherited context and no channel between them, so a plan where one fork
+    // consumes another's finding silently gets nothing. `whenNotToUse` already
+    // forbids forks that RACE on a mutable resource; this is the other half —
+    // the visibility fact that makes dependent fork tasks a mistake.
+    const { rt } = createTestRuntime();
+    expect(buildSystemPromptSync(rt))
+      .toMatch(/Forks cannot see each other's work and meet only at the merge/);
   });
 
   test('per-fork models are discoverable, and named as a case rather than a default', () => {
@@ -789,7 +829,17 @@ describe('buildSystemPromptSync', () => {
       // peer-addressing line was DELEGATION_CONVERSE paraphrased; the roster/
       // dismiss tail was DELEGATION_RUNGS.staff paraphrased; the report line
       // was the `report` schema's whenToUse/whenNotToUse paraphrased.
-      'Delegation': 1870,
+      // 2026-08-11: RAISED 1870 → 2250 (back to its pre-2026-08-11 ceiling).
+      // A trigger alone did not move settle=mcts — 1 use in 89 trials — so the
+      // section now states the MECHANISM: that mcts writes its own rival
+      // approaches from the task (the call shape differs from merge), that it
+      // varies their angles, that it runs rounds, and that execution fixes the
+      // score band the judge then orders within. Plus the fork-visibility fact
+      // that makes dependent fork tasks a mistake. Paid for in part by two
+      // duplicates this pass created: the merge clause's restatement of the
+      // rung's own 2+-angles trigger, and `workspace.createTool`'s output,
+      // which the Code-execution section already describes.
+      'Delegation': 2250,
       'Background work': 260,
       // 2026-08: new section. Two of five benchmark failures were a solved
       // problem with a fumbled deliverable, and the prompt had no doctrine

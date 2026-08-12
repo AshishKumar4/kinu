@@ -319,14 +319,35 @@ function renderAgentStateSection(surface: PromptSurface): string {
     }
     if (has('fork')) {
       lines.push(
-        // Both settles are specified in the `agents` schema; what is missing
-        // there is the SHAPE each one is for, which is the same judgement the
-        // rung above asks for. Per-fork `model` is named as a case and never a
-        // default: panel quality tracks the AVERAGE member (Self-MoA, arXiv
-        // 2502.00674), so the caveat rides the parameter in agents-tool.ts,
-        // where it is read at the moment the field is being filled.
-        "Merging (the default) keeps every fork's piece — work that splits into parts you want all of; settle=mcts keeps one — rival attempts at the same thing, scored by executing what each proposes, losers discarded. An mcts branch proposes code rather than running its own tool loop; the proposal is what runs. A fork can take its own `model` — how you put a different vendor on a genuinely open question.",
-        'Forks recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary.',
+        // Per-fork `model` is named as a case and never a default: panel
+        // quality tracks the AVERAGE member (Self-MoA, arXiv 2502.00674), so
+        // the caveat rides the parameter in agents-tool.ts, where it is read
+        // at the moment the field is being filled.
+        // "work that splits into parts you want all of" was the rung's own
+        // 2+-angles trigger said twice, once the settle line below gained a
+        // real contrast to carry ("keeps every piece" against "keeps one").
+        "Merging (the default) keeps every fork's piece. A fork can take its own `model` — how you put a different vendor on a genuinely open question.",
+        // The MECHANISM of mcts, because a trigger alone did not move it: 1
+        // use in 89 trials. Each clause is a decision, checked against the
+        // engine rather than against how tree search usually works —
+        //   "you give it the task": mcts/engine.ts runs on ctx.task and never
+        //     reads `forks` (strategy/mcts.ts), so the call shape differs from
+        //     merge and a model that hand-authors rivals is writing dead args.
+        //   "a different angle": mcts/diversity.ts assigns a fixed angle per
+        //     branch and tells each what its siblings drew, so proposals
+        //     diverge by construction rather than by temperature.
+        //   "several rounds": the engine's budget loop selects by UCT,
+        //     backpropagates, prunes below threshold, and re-expands.
+        //   the band: mcts/evaluation.ts — execution picks the band (pass
+        //     [0.60,1.00], fail [0.05,0.30], prose [0,0.75] and [0,0.30] once
+        //     a sibling produced code); the judge ensemble only places within
+        //     it. Saying "scored by execution" flat is the overstatement this
+        //     replaces.
+        'settle=mcts keeps one instead, for rival attempts at a single thing: you give it the task and it writes the competing approaches itself, each on a different angle so they do not converge, over several rounds that drop the weak ones and expand what scored well. Execution sets that ranking — a proposal whose code runs and passes places above every proposal whose code failed, and prose that produced no code places below both once a rival produced some; the judge only orders proposals inside the band execution already fixed. Branches propose code rather than running their own tool loops, so mcts fits rivals you can express as code.',
+        // Heads are spawned concurrently with the same inherited context and
+        // no channel between them (heads/controller.ts) — so a plan where one
+        // fork consumes another's finding silently gets nothing.
+        "Forks cannot see each other's work and meet only at the merge, so each fork's task has to stand on its own. They recurse up to split depth 3 and leave durable findings under `shared/findings/` — read them after the merge for detail beyond the summary.",
       );
     }
     // The rungs are also a codemode namespace, so a multi-step plan is code
@@ -335,7 +356,10 @@ function renderAgentStateSection(surface: PromptSurface): string {
     // that produced surface.agentsActions, so it exists exactly when they do.
     if (actions.length > 0 && hasTool(tools, 'execute_tools')) {
       lines.push(
-        'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves it as a reusable, schedulable workflow. A fork started there rides that call, which does not resume after an eviction.',
+        // What `workspace.createTool` produces is the Code-execution section's
+        // own bullet; what belongs here is only that a delegated plan is one
+        // of the scripts worth saving.
+        'The same rungs are callable inside execute_tools as `agents.<action>`, so a multi-step plan can be one script — loop, branch, Promise.all — and `workspace.createTool` saves that script as a reusable workflow. A fork started there rides that call, which does not resume after an eviction.',
       );
     }
     if (has('staff')) {
