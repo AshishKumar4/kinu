@@ -488,24 +488,21 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/separate filesystems/i);
   });
 
-  test('the disjoint-filesystem warning is a fact about the backend, not the executor count', () => {
-    // It was rendered on `executors.length > 1` alone, and on cli-local that
-    // was false: cli-backend/runtime.ts hands createInlineExecutor and the
-    // laptop executor the SAME createHostShell(process.cwd()), so a command in
-    // either sees the same files. A model that believed the line would copy
-    // files between two views of one directory.
+  test('every runtime is its own filesystem, on every backend', () => {
+    // This used to be a backend conditional: on cli-local the workspace and
+    // laptop executors shared one host shell, so "separate filesystems" was
+    // false there. The workspace is its own durable filesystem on both
+    // backends now, so the fact is unconditional and the exception is gone.
     const { rt } = createTestRuntime();
     const executors = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
     ];
-    const local = buildSystemPromptSync(rt, { backend: 'cli-local', executors });
-    expect(local).not.toMatch(/separate filesystems/i);
-    expect(local).toContain('execute on the same machine and see the same files');
-
-    const cf = buildSystemPromptSync(rt, { backend: 'cf', executors });
-    expect(cf).toMatch(/separate filesystems/i);
-    expect(cf).not.toContain('the same machine and see the same files');
+    for (const backend of ['cli-local', 'cf'] as const) {
+      const prompt = buildSystemPromptSync(rt, { backend, executors });
+      expect(prompt).toMatch(/separate filesystems/i);
+      expect(prompt).not.toContain('the same machine and see the same files');
+    }
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -587,7 +584,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/exposePort/);
   });
 
-  test('names the workspace mount table (/local + per-environment mounts) and keeps exec target-native', () => {
+  test('names the workspace filesystem and each environment by its own namespace', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
@@ -598,19 +595,20 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
-    expect(prompt).toContain('mount table');
-    expect(prompt).toContain('/local is the durable base');
-    expect(prompt).toContain('/sandbox');
-    expect(prompt).toContain('/nimbus');
-    expect(prompt).toContain('/pc');
-    expect(prompt).toContain('target-native');
+    // The workspace filesystem is named by where it actually is, and the shell
+    // is said to run over exactly those bytes — the property the mount table
+    // used to assert about `/local`.
+    expect(prompt).toContain('/home/user');
+    expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
+    // Every other environment is a namespace, never a directory of this one.
+    expect(prompt).toContain('`sandbox.*`');
+    expect(prompt).toContain('`nimbus.*`');
+    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).toContain('THEIR native paths');
+    expect(prompt).not.toContain('mount table');
   });
 
-  test('the CLI-local VFS mounts its one remote plane, /pc, and says so', () => {
-    // The local backend used to mount /local alone, so the doctrine was gated
-    // off for cli-local entirely. It now mounts the host filesystem at the same
-    // /pc prefix the cloud backend reaches the user's machine through, so the
-    // doctrine follows the executor list on both backends.
+  test('the doctrine follows the executor list, not the backend', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
@@ -619,10 +617,9 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
-    expect(prompt).toContain('mount table');
-    expect(prompt).toContain('/local is the durable base, and /pc is a live window');
-    expect(prompt).not.toContain('/sandbox');
-    expect(prompt).not.toContain('/nimbus');
+    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).not.toContain('`sandbox.*`');
+    expect(prompt).not.toContain('`nimbus.*`');
   });
 
   test('a workspace with no execution devices renders no mount doctrine', () => {

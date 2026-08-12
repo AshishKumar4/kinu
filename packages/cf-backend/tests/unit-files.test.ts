@@ -1,29 +1,7 @@
-// Behavior tests for the file-manager plumbing: the executor→composite path
-// mapping (one plane for read and write) and the writeExecutorFileOp seam.
+// Behavior tests for the file-manager plumbing: each executor's own file view
+// and the writeExecutorFileOp seam over it.
 import { describe, test, expect } from "bun:test";
-import {
-  sortDirEntries,
-  toCompositePath,
-  writeExecutorFileOp,
-  type ExecutorWriteDeps,
-} from "@proteus/core";
-
-describe("toCompositePath", () => {
-  test("workspace paths pass through unchanged", () => {
-    expect(toCompositePath("workspace", "/src/main.ts")).toBe("/src/main.ts");
-    expect(toCompositePath("workspace", "/")).toBe("/");
-  });
-
-  test("remote executors map onto their mount prefix (leading slash normalized)", () => {
-    expect(toCompositePath("sandbox", "/workspace/a.ts")).toBe("/sandbox/workspace/a.ts");
-    expect(toCompositePath("nimbus", "home/user/b")).toBe("/nimbus/home/user/b");
-    expect(toCompositePath("laptop", "/home/me/c")).toBe("/pc/home/me/c");
-  });
-
-  test("an executor with no file plane → null", () => {
-    expect(toCompositePath("ghost", "/a")).toBeNull();
-  });
-});
+import { sortDirEntries, writeExecutorFileOp, type VFS } from "@proteus/core";
 
 describe("sortDirEntries", () => {
   test("dirs before files, alphabetical within each group", () => {
@@ -38,18 +16,17 @@ describe("sortDirEntries", () => {
 });
 
 describe("writeExecutorFileOp", () => {
-  /** In-memory deps: a capturing composite VFS, optionally throwing like a
-   *  reserved/offline mount. */
+  /** A router of one executor whose file view captures what it is given —
+   *  optionally throwing, like an environment that went offline. */
   function makeDeps(opts: { throwOn?: RegExp; error?: string } = {}) {
     const written = new Map<string, Uint8Array | string>();
-    const deps: ExecutorWriteDeps = {
-      vfs: {
-        writeFile: async (path, data) => {
-          if (opts.throwOn?.test(path)) throw new Error(opts.error ?? "mount unavailable");
-          written.set(path, data);
-        },
+    const files = {
+      writeFile: async (path: string, data: Uint8Array | string) => {
+        if (opts.throwOn?.test(path)) throw new Error(opts.error ?? "environment unavailable");
+        written.set(path, data);
       },
-    };
+    } as unknown as VFS;
+    const deps = { getProvider: () => ({ files }) };
     return { deps, written };
   }
 
@@ -61,32 +38,35 @@ describe("writeExecutorFileOp", () => {
     expect(written.get("/uploads/blob.bin")).toEqual(bytes);
   });
 
-  test("executor uploads land BINARY-SAFE through the executor's composite mount", async () => {
+  test("executor uploads land BINARY-SAFE through the executor's own file view", async () => {
     const { deps, written } = makeDeps();
     const bin = new Uint8Array([0x89, 0x50, 0x00, 0xff, 0xfe]);
+    // Each environment gets the path in ITS OWN namespace — no prefix is added
+    // and none is stripped, because there is no namespace above them to map.
     expect(await writeExecutorFileOp(deps, "sandbox", "/workspace/logo.png", bin)).toEqual({ ok: true });
-    expect(written.get("/sandbox/workspace/logo.png")).toEqual(bin);
+    expect(written.get("/workspace/logo.png")).toEqual(bin);
 
     expect(await writeExecutorFileOp(deps, "nimbus", "/home/user/a.bin", bin)).toEqual({ ok: true });
-    expect(written.get("/nimbus/home/user/a.bin")).toEqual(bin);
+    expect(written.get("/home/user/a.bin")).toEqual(bin);
 
     expect(await writeExecutorFileOp(deps, "laptop", "/home/me/proj/b.bin", bin)).toEqual({ ok: true });
-    expect(written.get("/pc/home/me/proj/b.bin")).toEqual(bin);
+    expect(written.get("/home/me/proj/b.bin")).toEqual(bin);
   });
 
-  test("an unavailable mount surfaces the composite's honest reservation error", async () => {
+  test("an unavailable environment surfaces its own honest reason", async () => {
     const { deps } = makeDeps({
-      throwOn: /^\/sandbox\//,
-      error: "ENXIO: /sandbox is not available (sandbox executor not configured), open '/sandbox/workspace/x'",
+      throwOn: /^\/workspace\//,
+      error: "the sandbox container is not running",
     });
     const result = await writeExecutorFileOp(deps, "sandbox", "/workspace/x", new TextEncoder().encode("y"));
-    expect(result).toMatchObject({ error: expect.stringContaining("/sandbox is not available") });
+    expect(result).toMatchObject({ error: expect.stringContaining("not running") });
   });
 
-  test("unknown executor → typed error", async () => {
-    const { deps } = makeDeps();
-    const result = await writeExecutorFileOp(deps, "ghost", "/a", new TextEncoder().encode("x"));
-    expect(result).toEqual({ error: 'Executor "ghost" not found' });
+  test("an environment with no file plane → typed error, not a throw", async () => {
+    const result = await writeExecutorFileOp(
+      { getProvider: () => undefined }, "ghost", "/a", new TextEncoder().encode("x"),
+    );
+    expect(result).toEqual({ error: 'Executor "ghost" has no file plane' });
   });
 
   test("rejects a missing path and a directory path", async () => {

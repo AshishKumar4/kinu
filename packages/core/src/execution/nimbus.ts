@@ -8,10 +8,13 @@
  */
 
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
+import type { VFS } from '../types/primitives.js';
+import { makeVfsError } from '../vfs/errno.js';
+import { shellQuote } from '../utils/shell.js';
+import { parseStatLine } from './exec-result.js';
 import type { ExecutorCapability, ExecutorProvider } from './types.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
-import { shellQuote } from '../utils/shell.js';
 
 export interface NimbusExecOptions {
   cwd?: string;
@@ -351,6 +354,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
 
   return {
     name: 'nimbus',
+    ...(box ? { files: nimbusSessionFiles(box) } : {}),
     kind: 'nimbus',
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'python', 'native_binary', 'shell', 'npm', 'git',
@@ -410,5 +414,44 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
         status: 'unknown' as const,
       })).filter((p) => p.url);
     },
+  };
+}
+
+/**
+ * A Nimbus session's files, in the session's own absolute paths.
+ *
+ * The cleanest of the raw handles — read/readBytes/write/list/exists/mkdir/
+ * delete, with `write` taking Uint8Array natively, so binary round-trips
+ * exactly. Only stat is missing; `stat(1)` in the session supplies real size
+ * and mtime.
+ */
+export function nimbusSessionFiles(box: NimbusSandboxHandle): VFS {
+  return {
+    async readFile(path, opts) {
+      if (opts?.encoding !== 'utf8' && box.files.readBytes) {
+        const bytes = await box.files.readBytes(path);
+        if (bytes === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+        return bytes;
+      }
+      const content = await box.files.read(path);
+      if (content === null) throw makeVfsError('ENOENT', `no such file or directory, open '${path}'`, path);
+      return opts?.encoding === 'utf8' ? content : new TextEncoder().encode(content);
+    },
+    async writeFile(path, data) { await box.files.write(path, data); },
+    async readdir(path) { return (await box.files.list(path)).map((e) => e.name); },
+    async stat(path) {
+      const r = await box.exec(`stat -c '%s %Y %F' ${shellQuote(path)}`);
+      if (!r.success || r.exitCode !== 0) return null;
+      return parseStatLine(r.stdout);
+    },
+    async unlink(path) { await box.files.delete(path); },
+    async mkdir(path, opts) {
+      if (box.files.mkdir) { await box.files.mkdir(path); return; }
+      const r = await box.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
+      if (!r.success || r.exitCode !== 0) {
+        throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir '${path}'`, path);
+      }
+    },
+    async exists(path) { return box.files.exists(path); },
   };
 }

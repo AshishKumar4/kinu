@@ -38,7 +38,7 @@ export class HeadCapture {
   readonly toolCalls: ToolCallRecord[] = [];
   readonly childHeadIds: HeadId[] = [];
   /** What this head changed on the shared file planes. The backend installs it
-   *  on the head's own CompositeVFS (`observeWrites`) when it builds the head's
+   *  on the head's own view of its parent (`observeWrites`) when it builds the head's
    *  runtime; unwired, it simply stays empty. */
   readonly files = new HeadFileChanges();
   /** Gross provider spend — what the report carries and the mission budget
@@ -168,24 +168,22 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   }
   if (hasHeadTool(tools, 'execute_tools')) {
     lines.push(
-      '- execute_tools runs JavaScript against the SAME resources your parent agent has. `workspace.*` file ops address a mount table: '
-      + '`/parent/…` is the parent agent\'s durable workspace (start here — the code and data you were spawned to study usually live there), '
-      + '`/sandbox/…` and `/nimbus/…` are live windows into its containers, `/pc/…` is the user\'s machine, and `/local/…` is YOUR private scratch. '
-      + '`workspace.exec` reads and searches those same mount paths (cat/ls/grep/find/sed over the plane), but it runs no real programs: '
-      + 'to BUILD, test or install, use the environment\'s own namespace (`sandbox.*`, `nimbus.*`, `laptop.*`), which takes that environment\'s '
-      + 'NATIVE paths, not mount paths. `web.*` and `llm.query` are also in scope.',
+      '- execute_tools runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
+      + '`parent.*` is the workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
+      + '`sandbox.*` and `nimbus.*` are its containers, `laptop.*` is the user\'s machine, and `workspace.*` is YOUR private scratch. '
+      + '`parent.exec` runs a real shell in the parent workspace, so `grep -rn X .` searches it in one call. '
+      + '`web.*` and `llm.query` are also in scope.',
     );
   }
   if (hasHeadTool(tools, 'run')) {
     lines.push(
-      '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments with real binaries. '
-      + 'The default `workspace` runtime is the emulated shell over your file plane — it reads and searches every mount, `/parent/…` included '
-      + '(`grep -rn X /parent`), and runs no real programs.',
+      '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments with real binaries, '
+      + 'and `parent` is the workspace you forked. The default `workspace` runtime is a real shell over YOUR OWN private scratch filesystem.',
     );
   }
   if (hasHeadTool(tools, 'file')) {
     lines.push(
-      '- file reads and edits over that same mount table. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read '
+      '- file reads and edits your own workspace filesystem. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read '
       + 'rather than rewriting the file or shelling out to sed.',
     );
   }

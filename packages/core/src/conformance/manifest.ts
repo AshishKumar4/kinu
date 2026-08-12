@@ -74,10 +74,12 @@ const CLI_HAS_NO_STAFF = 'local sessions have no subordinate roster; the fork ru
 
 /** The cloud workspace's durable base. The CLI works on the real machine, so
  *  it provisions no emulated filesystem and none of its bookkeeping. */
+/** The workspace filesystem — the same component on every root now that there
+ *  is only one of them. */
 const NIMBUS_BASE: RootStatuses = {
   'cf-orchestrator': WIRED,
   'cf-subordinate': WIRED,
-  cli: { absent: 'the local backend works on the real machine; /local stays SqliteFS there' },
+  cli: WIRED,
 };
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
 const RELEASE_TABLE: RootStatuses = {
@@ -152,7 +154,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     workspace_identity: EVERYWHERE,
     messages: EVERYWHERE,
     conversation_history: EVERYWHERE,
-    vfs_files: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     craft_scores: EVERYWHERE,
     search_nodes: EVERYWHERE,
@@ -223,14 +224,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     release_approvals: RELEASE_TABLE,
     release_deployments: RELEASE_TABLE,
 
-    // ── the Nimbus durable base ──
-    // `/local` is the Nimbus filesystem on the cf roots and SqliteFS's
-    // `vfs_files` on the CLI, which runs on the real machine and needs no
-    // emulated one. The generation counter is what stops a re-created Durable
-    // Object from reissuing write authority a dead process still holds; the
-    // migration marker records the one-time copy off the pre-Nimbus base.
+    // ── the workspace filesystem ──
+    // Nimbus, on every root — one filesystem, one shell, one set of paths. The
+    // generation counter is what stops a re-created Durable Object from
+    // reissuing write authority a dead process still holds.
     proteus_workspace_generation: NIMBUS_BASE,
-    proteus_local_nimbus_migration: NIMBUS_BASE,
     // The filesystem itself. This is the exact set NimbusWorkspace.destroy()
     // drops — the namespace the library commits to owning inside a host's
     // database — so an addition here is a signal that the dependency changed

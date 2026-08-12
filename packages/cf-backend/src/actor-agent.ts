@@ -103,7 +103,7 @@ import {
   inheritedContextFromRows, headPhaseRunEvent,
   type ReleaseToolDeps,
   isVfsError,
-  type ParentRpcResult,
+  type ParentRpcResult, type ParentExecResult,
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
@@ -1353,7 +1353,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
 
-  /** Subordinate facets mount these methods at `/workspace`. They deliberately
+  /** A fork reaches these through its `parent` executor. They deliberately
    * carry no `@callable`: only a worker-held parent stub can reach them. */
   private workspaceFileFailure<T>(path: string, error: unknown): ParentRpcResult<T> {
     return {
@@ -1410,6 +1410,24 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
+  /**
+   * Run a command in THIS workspace's shell on behalf of a fork.
+   *
+   * The reason `parent` is worth being an executor rather than a file view: a
+   * fork searching its parent used to walk the tree one RPC per file through an
+   * emulated shell; this is one round trip into the real one, with the whole
+   * coreutils set behind it.
+   */
+  async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
+    const shell = this.rt.shell;
+    if (!shell) return this.workspaceFileFailure('', new Error('this workspace has no shell'));
+    try {
+      return { ok: true, value: await shell.exec(command) };
+    } catch (error) {
+      return this.workspaceFileFailure('', error);
+    }
+  }
+
   /** The web search + fetch provider — built once per DO lifetime. Key-less by
    *  default (DuckDuckGo + Markdown-for-Agents); a stored `tavily` credential,
    *  resolved through the registry's getAuth seam, upgrades search. HTML→markdown
@@ -1446,14 +1464,23 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected _cachedSystemPrompt: string | null = null;
   protected _cachedSystemPromptKey: string = "";
-  /** Cached SOUL.md text. Loaded lazily on first read, invalidated by
-   *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
+  /**
+   * Cached SOUL.md text, refreshed at turn start and invalidated by setSoul().
+   *
+   * A cache rather than a read because `getSystemPrompt` is synchronous — Think
+   * calls it that way, and the prompt it builds is the byte-stable cacheable
+   * prefix — while the soul is a FILE in the workspace filesystem. So the read
+   * happens where there is a promise to await (refreshSoulText, from
+   * beforeTurn), and the prefix builder only ever consults what is already
+   * loaded. A cold activation that has not reached a turn yet renders the
+   * default identity, exactly as an unwritten SOUL.md always did.
+   */
   protected _cachedSoulText: string | null = null;
+  protected async refreshSoulText(): Promise<void> {
+    this._cachedSoulText = (await readSoul(this.rt.storage.vfs)) ?? '';
+  }
   private getSoulText(): string {
-    if (this._cachedSoulText === null) {
-      this._cachedSoulText = readSoul(this.boundSql) ?? '';
-    }
-    return this._cachedSoulText;
+    return this._cachedSoulText ?? '';
   }
 
   getSystemPrompt(): string {
@@ -1871,6 +1898,8 @@ export abstract class ActorAgent extends Think<Env> {
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    // The soul is a file; load it where there is a promise to await.
+    if (this._cachedSoulText === null) await this.refreshSoulText();
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
     // The continuation flag resets mid-turn signal splice state: a continuation

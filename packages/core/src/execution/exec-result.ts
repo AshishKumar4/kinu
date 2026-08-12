@@ -69,3 +69,11 @@ export function formatExecResult(result: ExecOutcome): string {
   if (sections.length === 1) sections.push(NO_OUTPUT);
   return sections.join('\n');
 }
+
+/** Parse `<size> <mtime-seconds> <type words>` from stat(1) output — how an
+ *  executor whose handle has no stat synthesizes one from its own shell. */
+export function parseStatLine(stdout: string): { size: number; mtimeMs: number; isDir: boolean } | null {
+  const m = stdout.trim().match(/^(\d+)\s+(\d+)\s+(.+)$/);
+  if (!m) return null;
+  return { size: Number(m[1]), mtimeMs: Number(m[2]) * 1000, isDir: /directory/i.test(m[3]) };
+}

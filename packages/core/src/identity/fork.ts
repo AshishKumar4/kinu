@@ -31,8 +31,8 @@
  * Formal spec + rationale: docs/WORKSPACES.md.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
-import { SOUL_PATH } from './soul.js';
+import type { SqlExecutor, VFS } from '../types/primitives.js';
+import { SOUL_PATH, summarizeSoul } from './soul.js';
 
 /** One row of each table the copy reads. Everything is JSON-serializable, so a
  *  snapshot survives a transport that only carries structured clones. */
@@ -55,10 +55,10 @@ export interface ForkSnapshot {
     id: string; session_id: string; parent_id: string | null;
     role: string; content: string; created_at: string;
   }>;
-  vfsFiles: Array<{
-    path: string; chunk_index: number; parent_path: string;
-    data: unknown; is_dir: number; size: number; mtime: number;
-  }>;
+  /** The files a fork inherits — SOUL.md and `memory/`, read through the
+   *  workspace filesystem rather than lifted out of its tables, so a fork
+   *  carries FILES and not one storage engine's row encoding. */
+  files: Array<{ path: string; content: string }>;
   memoryChunks: Array<{
     id: string; path: string; start_line: number; end_line: number;
     hash: string; text: string; updated_at: number;
@@ -94,7 +94,9 @@ export interface ForkResult {
  * Throws if `untilMessageId` does not exist in the source's `messages` table —
  * the one failure worth surfacing before a target workspace is created.
  */
-export function snapshotWorkspaceForFork(source: SqlExecutor, untilMessageId: string): ForkSnapshot {
+export async function snapshotWorkspaceForFork(
+  source: SqlExecutor, sourceVfs: VFS, untilMessageId: string,
+): Promise<ForkSnapshot> {
   const hit = source<{ created_at: number }>`
     SELECT created_at FROM messages WHERE id = ${untilMessageId} AND session_id = 'default'
   `;
@@ -132,15 +134,11 @@ export function snapshotWorkspaceForFork(source: SqlExecutor, untilMessageId: st
       ORDER BY created_at ASC
     `;
   } catch { /* Session may never have appended — non-fatal */ }
-  // Scaffold rows are deliberately excluded so the fork re-bootstraps v0 fresh.
-  const vfsFiles = source<ForkSnapshot['vfsFiles'][number]>`
-    SELECT path, chunk_index, parent_path, data, is_dir, size, mtime
-    FROM vfs_files
-    WHERE path = ${SOUL_PATH} OR path LIKE 'memory/%' OR (path = 'memory' AND is_dir = 1)
-  `;
+  // The scaffold is deliberately excluded so the fork re-bootstraps v0 fresh.
+  const files = await readForkFiles(sourceVfs);
   // The FTS content table (agent-utils MemoryStore). Copying it is an
-  // optimization — the text itself is in vfs_files/memory/*.md, so a missing
-  // table just means the fork reindexes on next write.
+  // optimization — the text itself is in the memory/*.md FILES above, so a
+  // missing table just means the fork reindexes on next write.
   let memoryChunks: ForkSnapshot['memoryChunks'] = [];
   try {
     memoryChunks = source<ForkSnapshot['memoryChunks'][number]>`
@@ -164,7 +162,7 @@ export function snapshotWorkspaceForFork(source: SqlExecutor, untilMessageId: st
     messages,
     conversationHistory,
     assistantMessages,
-    vfsFiles,
+    files,
     memoryChunks,
     craftedTools,
     agentConfig,
@@ -176,18 +174,38 @@ export function snapshotWorkspaceForFork(source: SqlExecutor, untilMessageId: st
  * `ctx.storage.transactionSync` on CF; bun:sqlite exec each stmt in tests where
  * per-statement failure is acceptable).
  */
-export function writeForkSnapshot(
+export async function writeForkSnapshot(
   target: SqlExecutor,
+  targetVfs: VFS,
   snapshot: ForkSnapshot,
-  opts: { workspaceId: string; workspaceName: string; now?: number },
-): ForkResult {
+  opts: {
+    workspaceId: string; workspaceName: string; now?: number;
+    /**
+     * Runs the ROW half atomically. Files are written outside it and cannot be
+     * inside it: a host transaction is synchronous, and the filesystem is not —
+     * it runs each write in a transaction of its own. Splitting them is what
+     * that fact requires, and the split is safe because the file half is a set
+     * of idempotent overwrites that a retry simply repeats.
+     */
+    transaction?: (rows: () => void) => void;
+  },
+): Promise<ForkResult> {
   const now = opts.now ?? Date.now();
   const forkPointMs = snapshot.cut.createdAtMs;
 
-  // 1. Purge any default-bootstrap identity/SOUL.md rows the target's boot path
+  // The files first, outside any transaction the caller is holding. They
+  // overwrite whatever the target's own bootstrap seeded, which is also what
+  // replaces the default SOUL.md.
+  for (const f of snapshot.files) {
+    const dir = f.path.slice(0, f.path.lastIndexOf('/'));
+    if (dir) await targetVfs.mkdir(dir, { recursive: true });
+    await targetVfs.writeFile(f.path, f.content);
+  }
+
+  const rows = (): void => {
+  // 1. Purge any default-bootstrap identity rows the target's boot path
   //    may have inserted. This makes the write idempotent across retries.
   target`DELETE FROM workspace_identity`;
-  target`DELETE FROM vfs_files WHERE path = ${SOUL_PATH}`;
 
   // 2. Rewrite workspace_identity — new id, new name, fresh created_at.
   target`
@@ -234,15 +252,11 @@ export function writeForkSnapshot(
     }
   } catch { /* pure-test targets may lack the table — non-fatal */ }
 
-  // 6. SOUL.md + memory/* VFS rows.
-  for (const f of snapshot.vfsFiles) {
-    target`
-      INSERT OR REPLACE INTO vfs_files
-      (path, chunk_index, parent_path, data, is_dir, size, mtime)
-      VALUES
-      (${f.path}, ${f.chunk_index}, ${f.parent_path}, ${f.data as never}, ${f.is_dir}, ${f.size}, ${f.mtime})
-    `;
-  }
+  // 6. SOUL.md + memory/* are FILES and are written before this, outside the
+  //    row transaction — see writeForkFiles at the top of this function.
+  target`UPDATE workspace_identity SET mission = ${
+    summarizeSoul(snapshot.files.find((f) => f.path === SOUL_PATH)?.content ?? '')
+  }`;
 
   // 7. memory_chunks — skipped silently when the target has no such table yet.
   try {
@@ -316,6 +330,10 @@ export function writeForkSnapshot(
       VALUES (${syntheticId}, ${''}, ${snapshot.cut.messageId}, ${'system'}, ${syntheticContent}, ${syntheticCreatedAt})
     `;
   } catch { /* assistant_messages was already guarded above — non-fatal */ }
+  };
+
+  if (opts.transaction) opts.transaction(rows);
+  else rows();
 
   return {
     forkPointMs,
@@ -326,12 +344,15 @@ export function writeForkSnapshot(
 
 /** Read a source workspace and land it in a target, in one call — the shape a
  *  backend uses when both databases are open in the same process. */
-export function forkWorkspaceStorage(
+export async function forkWorkspaceStorage(
   source: SqlExecutor,
+  sourceVfs: VFS,
   target: SqlExecutor,
+  targetVfs: VFS,
   opts: ForkOpts,
-): ForkResult {
-  return writeForkSnapshot(target, snapshotWorkspaceForFork(source, opts.untilMessageId), {
+): Promise<ForkResult> {
+  const snapshot = await snapshotWorkspaceForFork(source, sourceVfs, opts.untilMessageId);
+  return writeForkSnapshot(target, targetVfs, snapshot, {
     workspaceId: opts.targetWorkspaceId,
     workspaceName: opts.targetWorkspaceName,
     ...(opts.now !== undefined ? { now: opts.now } : {}),
@@ -369,4 +390,30 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * The files a fork inherits: SOUL.md, and everything under `memory/`.
+ *
+ * A directory walk rather than a table scan — the fork carries what the agent
+ * can see, so a store that chunks or compresses differently cannot change what
+ * a fork means.
+ */
+async function readForkFiles(vfs: VFS): Promise<ForkSnapshot['files']> {
+  const out: ForkSnapshot['files'] = [];
+  const readText = async (path: string): Promise<void> => {
+    const content = await vfs.readFile(path, { encoding: 'utf8' });
+    if (typeof content === 'string') out.push({ path, content });
+  };
+  if (await vfs.exists(SOUL_PATH)) await readText(SOUL_PATH);
+  const walk = async (dir: string): Promise<void> => {
+    for (const name of await vfs.readdir(dir)) {
+      const full = `${dir}/${name}`;
+      const st = await vfs.stat(full);
+      if (st?.isDir) await walk(full);
+      else if (st) await readText(full);
+    }
+  };
+  if (await vfs.exists('memory')) await walk('memory');
+  return out;
 }

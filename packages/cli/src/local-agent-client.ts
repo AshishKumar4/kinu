@@ -72,7 +72,7 @@ export interface LocalAgentClientOptions {
 }
 
 /** Open a local agent database and wrap its LocalAgentSession as an AgentClient. */
-export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): LocalAgentClient {
+export async function openLocalAgentClient(name: string, opts: LocalAgentClientOptions = {}): Promise<LocalAgentClient> {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
     throw new Error(`Agent "${name}" not found. Create it with: proteus create ${name}`);
@@ -85,7 +85,7 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH,
     checkpointKeep: loadConfigFile().checkpointKeep,
   };
-  const { rt, info } = openWorkspaceCLI(db, dbPath, openConfig);
+  const { rt, info } = await openWorkspaceCLI(db, dbPath, openConfig);
   autoTitleLocalWorkspace(name, rt, info.purpose, opts);
   return new LocalAgentClient({
     agentName: name,
@@ -93,7 +93,7 @@ export function openLocalAgentClient(name: string, opts: LocalAgentClientOptions
     db,
     dbPath,
     info,
-    refreshInfo: () => openWorkspaceCLI(db, dbPath, openConfig).info,
+    refreshInfo: async () => (await openWorkspaceCLI(db, dbPath, openConfig)).info,
     model: resolveChatModel(llmConfig),
     modelResolver: resolver,
     mcpServers: resolveMcpServers(),
@@ -116,7 +116,7 @@ export async function runLocalGepa(
 ): Promise<GepaOptimizationResult> {
   // One-shot surface: the pass is the whole job, and auto-evolution must not
   // race the candidate it is measuring.
-  const client = openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
+  const client = await openLocalAgentClient(name, { surface: 'one-shot', noAutoEvolve: true });
   try {
     return await client.runScaffoldGepaOptimization(opts);
   } finally {
@@ -160,7 +160,7 @@ export interface LocalAgentClientDeps {
   db: Database;
   dbPath: string;
   info: WorkspaceInfo;
-  refreshInfo: () => WorkspaceInfo;
+  refreshInfo: () => Promise<WorkspaceInfo>;
   model: ReturnType<typeof resolveChatModel>;
   modelResolver: LocalModelResolver;
   mcpServers: Record<string, McpServerConfig>;
@@ -388,7 +388,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async status(): Promise<AgentClientStatus> {
-    const info = this.deps.refreshInfo();
+    const info = await this.deps.refreshInfo();
     return {
       name: info.name,
       purpose: info.purpose,

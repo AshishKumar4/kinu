@@ -294,13 +294,14 @@ requirements:
       - Proteus.Storage.SqliteFSCorrectness.mkdir_idempotent
       - Proteus.Storage.SqliteFSCorrectness.writes_commute
     tsRefs:
-      - packages/agent-utils/src/vfs/sqlite.ts:60
-      - packages/agent-utils/src/vfs/sqlite.ts:135
-      - packages/agent-utils/src/vfs/sqlite.ts:226
-      - packages/agent-utils/src/vfs/sqlite.ts:261
+      - packages/core/src/vfs/nimbus-workspace.ts:72
+      - packages/core/src/vfs/nimbus-workspace.ts:76
+      - packages/core/src/vfs/nimbus-workspace.ts:88
+      - packages/core/tests/vfs-conformance.test.ts:1
     remainingEvidence:
       - Production normalizes paths before writing, so distinct raw strings can alias and the model hypothesis needs a normalization correspondence
-      - Integration tests cover round trips but not repeated mkdir idempotence or concurrent multi-write serialization
+      - The conformance suite covers round trips per implementation but not repeated mkdir idempotence or concurrent multi-write serialization
+      - The filesystem is now @nimbus-sh/core's, so the model corresponds to a dependency's implementation rather than to code in this repo
   PR-STORE-004:
     statement: Positive-size byte chunking in the abstract filesystem reassembles the original byte list and decreases its chunk count one chunk at a time.
     status: proved-in-abstract-model
@@ -308,8 +309,8 @@ requirements:
       - Proteus.Storage.SqliteFSCorrectness.chunkCount_drop
       - Proteus.Storage.SqliteFSCorrectness.chunk_reassembly
     tsRefs:
-      - packages/agent-utils/src/vfs/sqlite.ts:96
-      - packages/agent-utils/src/vfs/sqlite.ts:161
+      - packages/core/src/vfs/nimbus-workspace.ts:76
+      - packages/core/src/vfs/nimbus-workspace.ts:72
       - packages/agent-utils/src/vfs/encoding.ts:4
     remainingEvidence:
       - No covering integration test writes a payload larger than the production chunk size

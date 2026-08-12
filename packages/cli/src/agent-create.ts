@@ -177,7 +177,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const db = new Database(dbPath);
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    const rt = createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
+    const rt = await createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = createAgentConfigStore(rt.storage.sql);

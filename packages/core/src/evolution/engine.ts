@@ -766,7 +766,7 @@ export class EvolutionEngine {
    * Also callable manually via `proteus evolve`.
    */
   async onLifetimeEvolution(session?: SessionWriter): Promise<void> {
-    const purpose = summarizeSoul(readSoul(this.rt.storage.sql)) || 'be a helpful assistant';
+    const purpose = summarizeSoul(await readSoul(this.rt.storage.vfs)) || 'be a helpful assistant';
 
     this.emit({
       type: 'mcts_started',

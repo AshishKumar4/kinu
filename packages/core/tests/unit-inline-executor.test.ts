@@ -10,7 +10,6 @@
 import { describe, test, expect } from 'bun:test';
 import { createTestRuntime } from './helpers.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
-import { CompositeVFS } from '../src/vfs/index.js';
 import { DefaultExecutionRouter } from '../src/execution/router.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode.js';
@@ -163,11 +162,11 @@ describe('workspace provider (InlineExecutor)', () => {
 
 /**
  * workspace.writeFile over the REAL file plane. Both backends register this
- * executor with the CompositeVFS (cf/cli runtime.ts), and the tool creates
+ * executor with the workspace filesystem (cf/cli runtime.ts), and the tool creates
  * parent directories before writing — so every path shape the agent can name
  * has to survive that mkdir, not just the write.
  */
-describe('workspace.writeFile over the CompositeVFS — the file plane both backends register', () => {
+describe('workspace.writeFile over the workspace filesystem — what both backends register', () => {
   function buildPlane() {
     const { rt } = createTestRuntime();
     const sandbox = {
@@ -183,13 +182,10 @@ describe('workspace.writeFile over the CompositeVFS — the file plane both back
       async mkdir(path: string) { sandbox.dirs.push(path); },
       async exists(path: string) { return sandbox.files.has(path); },
     };
-    const vfs = new CompositeVFS({ local: rt.storage.vfs });
-    // The cf backend's sandbox mount: the container's REAL root.
-    vfs.mount('sandbox', {
-      vfs: sandboxVfs,
-      policy: { readOnly: false, rootPath: '/', consistency: 'ephemeral' },
-      workingDir: '/workspace',
-    });
+    // The workspace's own filesystem. The container is a separate environment
+    // reached through `sandbox.*` in its own paths, so it is deliberately NOT
+    // addressable from here.
+    const vfs = rt.storage.vfs;
     const exec = createInlineExecutor({
       vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
@@ -198,35 +194,30 @@ describe('workspace.writeFile over the CompositeVFS — the file plane both back
     return { vfs, exec, sandbox };
   }
 
-  test('REGRESSION: an absolute non-mount path writes instead of failing EROFS', async () => {
-    // `/workspace/x` has always COMPAT-routed to /local — but ensureDir's
-    // mkdir of its parent was refused as a mount-table entry, so the whole
-    // call died with EROFS on a path whose write would have succeeded.
+  test('a deep path creates its parents and round-trips', async () => {
     const { vfs, exec } = buildPlane();
-    const result = await exec.tools.writeFile.execute('/workspace/notes.md', 'from codemode');
+    const result = await exec.tools.writeFile.execute('notes/deep/todo.md', 'from codemode');
     expect(String(result)).toContain('Written');
-    expect(await vfs.readFile('/local/workspace/notes.md', { encoding: 'utf8' })).toBe('from codemode');
+    expect(await vfs.readFile('notes/deep/todo.md', { encoding: 'utf8' })).toBe('from codemode');
   });
 
-  test('writing at a mount root does not require creating the root', async () => {
-    const { exec, sandbox } = buildPlane();
-    expect(String(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top'))).toContain('Written');
-    expect(sandbox.files.get('/app.ts')).toBe('top');
-    // The composite absorbed mkdir('/sandbox') — the environment was never asked.
-    expect(sandbox.dirs).toEqual([]);
-
-    // A deeper sandbox path DOES create its parent, inside the environment.
-    expect(String(await exec.tools.writeFile.execute('/sandbox/workspace/app.ts', 'deep'))).toContain('Written');
-    expect(sandbox.files.get('/workspace/app.ts')).toBe('deep');
-    expect(sandbox.dirs).toEqual(['/workspace']);
-  });
-
-  test('the /local base and relative paths keep working unchanged', async () => {
+  test('relative and absolute name the same file — one namespace, no prefixes', async () => {
     const { vfs, exec } = buildPlane();
-    await exec.tools.writeFile.execute('/local/src/main.ts', 'a');
-    await exec.tools.writeFile.execute('notes/todo.md', 'b');
-    expect(await vfs.readFile('/local/src/main.ts', { encoding: 'utf8' })).toBe('a');
-    expect(await vfs.readFile('/local/notes/todo.md', { encoding: 'utf8' })).toBe('b');
+    await exec.tools.writeFile.execute('src/main.ts', 'a');
+    // Relative paths resolve at the workspace root, which is where the shell
+    // starts too, so both spellings are the same bytes.
+    expect(await vfs.readFile('src/main.ts', { encoding: 'utf8' })).toBe('a');
+    expect(await vfs.readFile('/home/user/src/main.ts', { encoding: 'utf8' })).toBe('a');
+  });
+
+  test('another environment is not addressable from here at all', async () => {
+    const { exec, sandbox } = buildPlane();
+    // The container is reached through `sandbox.*` in its own paths. Writing
+    // "/sandbox/app.ts" makes an ordinary file called sandbox/app.ts in this
+    // filesystem, and the container never hears about it — which is the point:
+    // there is no path that silently means two places.
+    expect(String(await exec.tools.writeFile.execute('/sandbox/app.ts', 'top'))).toContain('Written');
+    expect(sandbox.files.size).toBe(0);
   });
 });
 
@@ -240,54 +231,54 @@ describe('workspace.writeFile over the CompositeVFS — the file plane both back
 describe('workspace.editFile — the same gate the native `file` tool enforces', () => {
   test('refuses to edit a file never read or written in this scope', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/local/blind.md', 'original');
+    await rt.storage.vfs.writeFile('blind.md', 'original');
     const exec = buildExec(rt);
-    const result = await exec.tools.editFile.execute('/local/blind.md', [
+    const result = await exec.tools.editFile.execute('blind.md', [
       { old_text: 'original', new_text: 'changed' },
     ]) as { ok?: boolean; error?: string };
     expect(result.ok).toBeUndefined();
     expect(result.error).toContain('has not been read here yet');
-    expect(await rt.storage.vfs.readFile('/local/blind.md', { encoding: 'utf8' })).toBe('original');
+    expect(await rt.storage.vfs.readFile('blind.md', { encoding: 'utf8' })).toBe('original');
   });
 
   test('readFile then editFile: the read counts, the edit lands', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/local/notes.md', 'Hello world');
+    await rt.storage.vfs.writeFile('notes.md', 'Hello world');
     const exec = buildExec(rt);
-    await exec.tools.readFile.execute('/local/notes.md');
-    const result = await exec.tools.editFile.execute('/local/notes.md', [
+    await exec.tools.readFile.execute('notes.md');
+    const result = await exec.tools.editFile.execute('notes.md', [
       { old_text: 'world', new_text: 'proteus' },
     ]) as { ok?: boolean; error?: string };
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('/local/notes.md', { encoding: 'utf8' })).toBe('Hello proteus');
+    expect(await rt.storage.vfs.readFile('notes.md', { encoding: 'utf8' })).toBe('Hello proteus');
   });
 
   test('writeFile then editFile in the same script: the write counts as having read it', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
-    await exec.tools.writeFile.execute('/local/fresh.md', 'v1 content');
-    const result = await exec.tools.editFile.execute('/local/fresh.md', [
+    await exec.tools.writeFile.execute('fresh.md', 'v1 content');
+    const result = await exec.tools.editFile.execute('fresh.md', [
       { old_text: 'v1', new_text: 'v2' },
     ]) as { ok?: boolean; error?: string };
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('/local/fresh.md', { encoding: 'utf8' })).toBe('v2 content');
+    expect(await rt.storage.vfs.readFile('fresh.md', { encoding: 'utf8' })).toBe('v2 content');
   });
 
   test('refuses a non-unique old_text, touching nothing', async () => {
     const { rt } = createTestRuntime();
     const exec = buildExec(rt);
-    await exec.tools.writeFile.execute('/local/dup.md', 'foo\nfoo\n');
-    const result = await exec.tools.editFile.execute('/local/dup.md', [
+    await exec.tools.writeFile.execute('dup.md', 'foo\nfoo\n');
+    const result = await exec.tools.editFile.execute('dup.md', [
       { old_text: 'foo', new_text: 'bar' },
     ]) as { ok?: boolean; error?: string };
     expect(result.ok).toBeUndefined();
     expect(result.error).toBeTruthy();
-    expect(await rt.storage.vfs.readFile('/local/dup.md', { encoding: 'utf8' })).toBe('foo\nfoo\n');
+    expect(await rt.storage.vfs.readFile('dup.md', { encoding: 'utf8' })).toBe('foo\nfoo\n');
   });
 
   test('a shared ledger thunk makes workspace.readFile and the native `file` tool see the SAME read state', async () => {
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/local/shared.md', 'shared content');
+    await rt.storage.vfs.writeFile('shared.md', 'shared content');
     const ledger = new TurnFileLedger();
     const exec = createInlineExecutor({
       vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
@@ -296,16 +287,16 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
       ledger: () => ledger,
     });
     // Read via workspace.*...
-    await exec.tools.readFile.execute('/local/shared.md');
+    await exec.tools.readFile.execute('shared.md');
     // ...then edit via the NATIVE `file` tool, over the SAME shared ledger.
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<Record<string, unknown>, { ok?: boolean; error?: string }>(fileTool);
     const result = await execute({
-      action: 'edit', path: '/local/shared.md',
+      action: 'edit', path: 'shared.md',
       edits: [{ old_text: 'shared', new_text: 'REPLACED' }],
     });
     expect(result.ok).toBe(true);
-    expect(await rt.storage.vfs.readFile('/local/shared.md', { encoding: 'utf8' })).toBe('REPLACED content');
+    expect(await rt.storage.vfs.readFile('shared.md', { encoding: 'utf8' })).toBe('REPLACED content');
   });
 
   test('without a shared ledger, workspace.* and the native `file` tool have INDEPENDENT read state', async () => {
@@ -313,13 +304,13 @@ describe('workspace.editFile — the same gate the native `file` tool enforces',
     // private ledger, so a workspace.readFile does not satisfy the native
     // `file` tool's read-before-edit gate.
     const { rt } = createTestRuntime();
-    await rt.storage.vfs.writeFile('/local/unshared.md', 'content');
+    await rt.storage.vfs.writeFile('unshared.md', 'content');
     const exec = buildExec(rt); // no ledger thunk
-    await exec.tools.readFile.execute('/local/unshared.md');
+    await exec.tools.readFile.execute('unshared.md');
     const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
     const execute = toolExecute<Record<string, unknown>, { ok?: boolean; error?: string }>(fileTool);
     const result = await execute({
-      action: 'edit', path: '/local/unshared.md',
+      action: 'edit', path: 'unshared.md',
       edits: [{ old_text: 'content', new_text: 'changed' }],
     });
     expect(result.error).toContain('has not been read here yet');
@@ -358,10 +349,7 @@ describe('declared resource limits', () => {
 describe('workspace.* VFS errors carry the addressing correction', () => {
   function buildPlane() {
     const { rt } = createTestRuntime();
-    const vfs = new CompositeVFS({ local: rt.storage.vfs });
-    vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding', {
-      readOnly: false, rootPath: '/', consistency: 'ephemeral',
-    });
+    const vfs = rt.storage.vfs;
     return createInlineExecutor({
       vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
@@ -380,18 +368,18 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
     expect(err.message).toContain('own virtual filesystem');
     expect(err.message).toContain('NOT the machine or container');
     expect(err.message).toContain('`run` tool');
-    // The roots come from the live mount table, so the hint cannot drift from
+    // The roots come from the live filesystem, so the hint cannot drift from
     // the runtime it is describing.
-    expect(err.message).toContain("roots are: local");
+    expect(err.message).toContain('roots are: ');
   });
 
-  test('a reserved-but-unavailable mount gets the same correction, with its own code', async () => {
+  test('a missing file anywhere gets the same correction', async () => {
     const exec = buildPlane();
     let raised: unknown;
-    try { await exec.tools.readFile.execute('/sandbox/app/gblock.txt'); } catch (err) { raised = err; }
+    try { await exec.tools.readFile.execute('app/gblock.txt'); } catch (err) { raised = err; }
 
     const err = raised as { message: string; code: string };
-    expect(err.code).toBe('ENXIO');
+    expect(err.code).toBe('ENOENT');
     expect(err.message).toContain('own virtual filesystem');
   });
 
@@ -405,7 +393,7 @@ describe('workspace.* VFS errors carry the addressing correction', () => {
   test('a non-VFS failure is not dressed up as an addressing problem', async () => {
     const { rt } = createTestRuntime();
     const exec = createInlineExecutor({
-      vfs: new CompositeVFS({ local: rt.storage.vfs }), memory: rt.memory, craftStore: rt.craftStore,
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
       shell: { exec: async () => { throw new Error('shell is not available'); } },
       sql: rt.storage.sql,
     });

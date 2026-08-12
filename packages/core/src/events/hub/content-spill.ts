@@ -10,7 +10,7 @@
  * brief, and the agent reads it back with its normal file tools (the same
  * drop-content-keep-the-path recipe the tool-result clamp teaches).
  *
- * Content-addressed, beside the other spill dirs (`/local/.proteus/compaction`,
+ * Content-addressed, beside the other spill dirs (`.proteus/compaction`,
  * `.proteus/tool-output`): identical content always lands on the same path, so
  * a redelivered event renders a byte-identical brief.
  */
@@ -20,7 +20,7 @@ import type { VFS } from '../../types/primitives.js';
 import { EVENT_BRIEF_MAX_CHARS } from './visibility.js';
 
 /** Workspace VFS directory spilled event content is offloaded to. */
-export const EVENT_CONTENT_DIR = '/local/.proteus/event-content';
+export const EVENT_CONTENT_DIR = '.proteus/event-content';
 
 /** The content-addressed path for one spilled body. Pure. */
 export function eventContentPath(content: string): string {

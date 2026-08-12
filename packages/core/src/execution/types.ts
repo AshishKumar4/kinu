@@ -8,6 +8,8 @@
  * Lean formalization: lean/Proteus/Execution/{Capabilities,ToolSystem}.lean
  */
 
+import type { VFS } from '../types/primitives.js';
+
 export type ExecutorCapability =
   | 'javascript'
   | 'typescript'
@@ -26,7 +28,7 @@ export type ExecutorCapability =
   | 'process_signal'
   | 'gpu';
 
-export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop';
+export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop' | 'parent';
 
 export type ExecutorLifecycleStatus =
   | 'not_configured'
@@ -75,6 +77,18 @@ export interface ExecutorProvider {
 
   /** Which kind of executor this is */
   readonly kind: ExecutorKind;
+
+  /**
+   * This environment's files, in ITS OWN native paths, over the executor's RAW
+   * handle — never its LLM tools, which return error strings and lossy
+   * listings. Present only where the environment has a filesystem a host can
+   * browse; the file manager is the one consumer.
+   *
+   * Deliberately NOT the agent's own `Storage.vfs`, and never merged into it:
+   * one environment, one file view. The agent's own filesystem is Nimbus and
+   * has no mount table.
+   */
+  readonly files?: VFS;
 
   /** Declared capabilities — immutable after construction */
   readonly capabilities: ReadonlySet<ExecutorCapability>;

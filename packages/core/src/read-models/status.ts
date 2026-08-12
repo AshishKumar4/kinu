@@ -14,7 +14,7 @@ import { readSoul, summarizeSoul } from '../identity/soul.js';
 import { isRecord } from '../providers/util.js';
 import { BUILTIN_TOOLS } from '../tools/registry.js';
 import type { CraftStore } from '../types/agent-runtime.js';
-import type { SqlExecutor } from '../types/primitives.js';
+import type { VFS, SqlExecutor } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import type { ReasoningEffort } from '../strategy/effort.js';
 
@@ -57,6 +57,8 @@ export interface ToolListEntry {
  *  first turn has been mirrored into `messages`. */
 export interface AgentStatusDeps {
   readonly sql: SqlExecutor;
+  /** The workspace filesystem — SOUL.md is a file in it. */
+  readonly vfs: VFS;
   readonly config: AgentConfigStore;
   readonly fallbackId: string;
   readonly name: string;
@@ -85,10 +87,10 @@ function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
 /** Identity, size and configuration in one round trip. Storage this young can
  *  legitimately be missing every table, so an unreadable workspace answers
  *  with what the caller already knows rather than failing the surface. */
-export function getAgentStatus(deps: AgentStatusDeps): AgentStatus {
-  const { sql, config } = deps;
+export async function getAgentStatus(deps: AgentStatusDeps): Promise<AgentStatus> {
+  const { sql, config, vfs } = deps;
   try {
-    const soul = readSoul(sql) ?? '';
+    const soul = (await readSoul(vfs)) ?? '';
     const purpose = summarizeSoul(soul);
     const identity = sql<{ id: string; name: string; created_at: number }>`
       SELECT id, name, created_at FROM workspace_identity LIMIT 1`;

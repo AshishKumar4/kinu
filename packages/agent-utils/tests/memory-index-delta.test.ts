@@ -3,14 +3,12 @@
 // text to embed) and chunk ids that no longer exist (deletedIds). allChunksAfter
 // pages the table for the one-time backfill.
 import { describe, test, expect } from "bun:test";
-import { SqliteFS } from "../src/vfs/sqlite";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb } from "./helpers";
+import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
 	const { sql } = createTestDb();
-	const fs = new SqliteFS(sql);
-	fs.init();
+	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql);
 	store.ensureSchema();
 	return { store };

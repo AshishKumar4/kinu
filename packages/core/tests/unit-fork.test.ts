@@ -2,16 +2,15 @@
  * Unit tests for forkWorkspaceStorage — the storage-layer fork helper.
  * Backend-agnostic: drives two bun:sqlite handles in-memory.
  *
- * Schema parity: these tests use the canonical initAllTables() DDL from
- * packages/core/src/identity/schema.ts, NOT the test-helper VFS (which
- * has a different vfs_files shape). This keeps the tests locked to the
- * real production schema.
+ * Schema parity: the canonical initAllTables() DDL from
+ * packages/core/src/identity/schema.ts, and the production workspace
+ * filesystem — a fork carries FILES, so the test forks real ones.
  */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { forkWorkspaceStorage, readForkLineage, initAllTables, readSoul, writeSoul } from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
 
 /** Build a fresh in-memory DB with the full production schema applied. */
 function fresh() {
@@ -19,12 +18,13 @@ function fresh() {
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initAllTables(execRaw);
-  return { db, sql, execRaw };
+  const vfs = createWorkspaceBundle(db).vfs;
+  return { db, sql, execRaw, vfs };
 }
 
 /** Seed a source DB with identity, SOUL.md, N messages, and some crafted tools. */
-function seedSource(
-  { sql, execRaw }: ReturnType<typeof fresh>,
+async function seedSource(
+  { sql, execRaw, vfs }: ReturnType<typeof fresh>,
   opts: {
     identity: { id: string; name: string };
     purpose: string;
@@ -33,7 +33,7 @@ function seedSource(
   },
 ) {
   sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
-  writeSoul(sql, opts.purpose);
+  await writeSoul(vfs, sql, opts.purpose);
   for (const m of opts.messages) {
     sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
         VALUES (${m.id}, ${'default'}, ${m.parent_id ?? null}, ${m.role}, ${m.content}, ${m.created_at})`;
@@ -51,20 +51,20 @@ function seedSource(
   sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
 }
 
-function seedTargetBootstrap({ sql, execRaw }: ReturnType<typeof fresh>) {
+async function seedTargetBootstrap({ sql, execRaw, vfs }: ReturnType<typeof fresh>) {
   // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
   // forkWorkspaceStorage should purge these before writing the real fork rows.
   sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
-  writeSoul(sql, 'default bootstrap purpose');
+  await writeSoul(vfs, sql, 'default bootstrap purpose');
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 }
 
 describe('forkWorkspaceStorage', () => {
-  test('1. preserves messages 0..N with identical PKs and parent_ids', () => {
+  test('1. preserves messages 0..N with identical PKs and parent_ids', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'SRC-ID', name: 'source-agent' },
       purpose: 'original purpose',
       messages: [
@@ -76,7 +76,7 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
 
-    const result = forkWorkspaceStorage(src.sql, tgt.sql, {
+    const result = await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'msg-3',
       targetWorkspaceId: 'TGT-ID',
       targetWorkspaceName: 'fork-agent',
@@ -94,14 +94,14 @@ describe('forkWorkspaceStorage', () => {
     expect(targetMsgs[0]!.parent_id).toBeNull();
     expect(targetMsgs[1]!.parent_id).toBe('msg-1');
     expect(targetMsgs[2]!.parent_id).toBe('msg-2');
-    expect(readSoul(tgt.sql)).toBe('original purpose');
+    expect(await readSoul(tgt.vfs)).toBe('original purpose');
   });
 
-  test('2. copies crafted_tools verbatim', () => {
+  test('2. copies crafted_tools verbatim', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'SRC', name: 'src' },
       purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
@@ -111,7 +111,7 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
 
-    const res = forkWorkspaceStorage(src.sql, tgt.sql, {
+    const res = await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1',
       targetWorkspaceId: 'T',
       targetWorkspaceName: 'fork',
@@ -130,18 +130,18 @@ describe('forkWorkspaceStorage', () => {
     expect(copied[1]!.updated_at).toBe(700);
   });
 
-  test('3. resets MCTS and evolution tables', () => {
+  test('3. resets MCTS and evolution tables', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
     src.sql`INSERT INTO search_nodes (id, task, action, visits, value) VALUES (${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
     src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
 
-    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const nodes = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`;
     const events = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM evolution_events`;
@@ -149,18 +149,18 @@ describe('forkWorkspaceStorage', () => {
     expect(events[0]!.c).toBe(0);
   });
 
-  test('4. resets craft_scores (fork starts fresh EMA)', () => {
+  test('4. resets craft_scores (fork starts fresh EMA)', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
       craftedTools: [{ name: 'foo', description: 'x', code: '() => 1', scope: 'local', created_at: 500, updated_at: 500 }],
     });
     src.sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES (${'foo'}, ${0.9}, ${12})`;
 
-    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const scores = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM craft_scores`;
     expect(scores[0]!.c).toBe(0);
@@ -169,41 +169,38 @@ describe('forkWorkspaceStorage', () => {
     expect(tools[0]!.c).toBe(1);
   });
 
-  test('5. copies memory VFS rows but not scaffold VFS rows', () => {
+  test('5. copies memory files but not the scaffold', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    // Use real chunked VFS schema (path, chunk_index, ...)
-    src.sql`INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
-            VALUES (${'memory/MEMORY.md'}, ${0}, ${'memory'}, ${'remembered'}, ${0}, ${10}, ${1000})`;
-    src.sql`INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
-            VALUES (${'memory'}, ${0}, ${''}, ${null}, ${1}, ${0}, ${1000})`;
-    src.sql`INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime)
-            VALUES (${'scaffold/agent.js'}, ${0}, ${'scaffold'}, ${'// scaffold source'}, ${0}, ${20}, ${1000})`;
+    await src.vfs.mkdir('memory', { recursive: true });
+    await src.vfs.writeFile('memory/MEMORY.md', 'remembered');
+    await src.vfs.mkdir('scaffold', { recursive: true });
+    await src.vfs.writeFile('scaffold/agent.js', '// scaffold source');
 
-    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
-    const mem = tgt.sql<{ path: string }>`SELECT path FROM vfs_files WHERE path LIKE 'memory/%'`;
-    const scaf = tgt.sql<{ path: string }>`SELECT path FROM vfs_files WHERE path LIKE 'scaffold/%'`;
-    expect(mem.map(m => m.path)).toContain('memory/MEMORY.md');
-    expect(scaf.length).toBe(0);
+    // The memory the fork inherits, and the scaffold it deliberately does not:
+    // a fork re-bootstraps v0 rather than carrying its parent's evolution.
+    expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('remembered');
+    expect(await tgt.vfs.exists('scaffold/agent.js')).toBe(false);
   });
 
-  test('6. writes fork_lineage row with correct fields', () => {
+  test('6. writes fork_lineage row with correct fields', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'SRC-UUID-123', name: 'source-alpha' },
       purpose: 'p',
       messages: [{ id: 'msgX', role: 'user', content: 'hi', created_at: 1234 }],
     });
 
-    forkWorkspaceStorage(src.sql, tgt.sql, {
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'msgX',
       targetWorkspaceId: 'TGT', targetWorkspaceName: 'fork-beta', now: 9999,
     });
@@ -217,13 +214,13 @@ describe('forkWorkspaceStorage', () => {
     expect(lineage!.forkedAt).toBe(9999);
   });
 
-  test('7. fork of a fork — lineage points to immediate parent', () => {
+  test('7. fork of a fork — lineage points to immediate parent', async () => {
     const a = fresh();
     const b = fresh();
     const c = fresh();
-    seedTargetBootstrap(b);
-    seedTargetBootstrap(c);
-    seedSource(a, {
+    await seedTargetBootstrap(b);
+    await seedTargetBootstrap(c);
+    await seedSource(a, {
       identity: { id: 'A-ID', name: 'agent-A' }, purpose: 'p',
       messages: [
         { id: 'a1', role: 'user', content: 'in A', parent_id: null, created_at: 1000 },
@@ -232,7 +229,7 @@ describe('forkWorkspaceStorage', () => {
     });
 
     // Fork A → B
-    forkWorkspaceStorage(a.sql, b.sql, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
+    await forkWorkspaceStorage(a.sql, a.vfs, b.sql, b.vfs, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
     // Add a turn in B to differentiate it
     b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
           VALUES (${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
@@ -240,7 +237,7 @@ describe('forkWorkspaceStorage', () => {
           VALUES (${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
 
     // Fork B → C
-    forkWorkspaceStorage(b.sql, c.sql, { untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000 });
+    await forkWorkspaceStorage(b.sql, b.vfs, c.sql, c.vfs, { untilMessageId: 'b4', targetWorkspaceId: 'C-ID', targetWorkspaceName: 'agent-C', now: 7000 });
 
     // C has all 4 messages (a1, a2, b3, b4)
     const cMsgs = c.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC`;
@@ -253,25 +250,25 @@ describe('forkWorkspaceStorage', () => {
     expect(lineage!.sourceMessageId).toBe('b4');
   });
 
-  test('8. unknown untilMessageId throws "fork point not found"', () => {
+  test('8. unknown untilMessageId throws "fork point not found"', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
 
-    expect(() => forkWorkspaceStorage(src.sql, tgt.sql, {
+    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'does-not-exist', targetWorkspaceId: 'T', targetWorkspaceName: 'f',
-    })).toThrow('fork point not found');
+    })).rejects.toThrow('fork point not found');
   });
 
-  test('9. forkPointMs is inclusive (messages at created_at == T are copied)', () => {
+  test('9. forkPointMs is inclusive (messages at created_at == T are copied)', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [
         { id: 'm1', role: 'user', content: 'a', created_at: 1000 },
@@ -280,7 +277,7 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
 
-    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
     const ids = tgt.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC, id ASC`.map(r => r.id);
     expect(ids).toContain('m1');
@@ -288,16 +285,16 @@ describe('forkWorkspaceStorage', () => {
     expect(ids).not.toContain('m3');
   });
 
-  test('10. workspace_identity rewritten with new UUID + name + fresh created_at', () => {
+  test('10. workspace_identity rewritten with new UUID + name + fresh created_at', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'SRC-UUID', name: 'src-name' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
 
-    forkWorkspaceStorage(src.sql, tgt.sql, {
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'NEW-UUID', targetWorkspaceName: 'fork-name', now: 7777,
     });
 
@@ -312,11 +309,11 @@ describe('forkWorkspaceStorage', () => {
     expect(ident[0]!.id).not.toBe('TARGET-BOOTSTRAP-ID');   // bootstrap row was purged
   });
 
-  test('11. synthetic fork-notice system message appended to conversation_history', () => {
+  test('11. synthetic fork-notice system message appended to conversation_history', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 'alpha' }, purpose: 'p',
       messages: [
         { id: 'm1', role: 'user', content: 'hi', created_at: 1000 },
@@ -324,7 +321,7 @@ describe('forkWorkspaceStorage', () => {
       ],
     });
 
-    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'beta', now: 5000 });
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm2', targetWorkspaceId: 'T', targetWorkspaceName: 'beta', now: 5000 });
 
     // Post-fork conversation_history has 3 rows: 2 copied + 1 synthetic system
     const rows = tgt.sql<{ role: string; created_at: number; message: string }>`
@@ -337,16 +334,16 @@ describe('forkWorkspaceStorage', () => {
     expect(rows[2]!.message).toContain('alpha');
   });
 
-  test('12. agent_config copied but display_name overwritten', () => {
+  test('12. agent_config copied but display_name overwritten', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
 
-    forkWorkspaceStorage(src.sql, tgt.sql, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked-display' });
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked-display' });
 
     const cfg = tgt.sql<{ key: string; value: string }>`
       SELECT key, value FROM agent_config ORDER BY key
@@ -358,18 +355,18 @@ describe('forkWorkspaceStorage', () => {
     expect(map.get('display_name')).not.toBe('src');
   });
 
-  test('13. readForkLineage returns null for non-forked agents', () => {
+  test('13. readForkLineage returns null for non-forked agents', async () => {
     const { sql } = fresh();
     expect(readForkLineage(sql)).toBeNull();
   });
 
-  test('14. assistant_messages (Think Session table) carried to fork', () => {
+  test('14. assistant_messages (Think Session table) carried to fork', async () => {
     // Populate the Session-owned table on the source and verify the fork
     // hydrates its chat UI from the same rows.
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [
         { id: 'm1', role: 'user', content: 'hello', created_at: 1000 },
@@ -400,7 +397,7 @@ describe('forkWorkspaceStorage', () => {
               ${JSON.stringify({ id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] })},
               '1970-01-01 00:00:02.000')`;
 
-    forkWorkspaceStorage(src.sql, tgt.sql, {
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm2',    // forkPointMs = 1100
       targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     });
@@ -418,30 +415,30 @@ describe('forkWorkspaceStorage', () => {
     expect(userRows[0]!.content).toContain('hello');
   });
 
-  test('15. assistant_messages copy is no-op when source has no such table', () => {
+  test('15. assistant_messages copy is no-op when source has no such table', async () => {
     // Pure-test source DBs never call into Session so this table is missing.
     // Helper must not throw in that case.
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'S', name: 'src' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    expect(() => forkWorkspaceStorage(src.sql, tgt.sql, {
+    await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
-    })).not.toThrow();
+    })).resolves.toBeDefined();
   });
 
-  test('16. synthetic fork marker written to assistant_messages for UI visibility', () => {
+  test('16. synthetic fork marker written to assistant_messages for UI visibility', async () => {
     const src = fresh();
     const tgt = fresh();
-    seedTargetBootstrap(tgt);
-    seedSource(src, {
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
       identity: { id: 'SRC', name: 'alpha' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    forkWorkspaceStorage(src.sql, tgt.sql, {
+    await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'beta',
     });
 

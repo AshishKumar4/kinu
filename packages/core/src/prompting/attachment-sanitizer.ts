@@ -5,7 +5,7 @@
  * Given the model-visible history and the media kinds the resolved
  * model+provider can actually accept, every file/image part the model cannot
  * take is written ONCE to the workspace VFS (content-addressed under
- * /local/attachments) and replaced with a text part referencing the path, so
+ * attachments/) and replaced with a text part referencing the path, so
  * the agent can read the payload back with its normal file tools instead of
  * the provider rejecting the whole request.
  *

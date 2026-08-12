@@ -14,7 +14,7 @@
  *                       chooses workspace / nimbus / sandbox / laptop, with
  *                       workspace (rt.shell) as the conservative default.
  *   3. file           — the ONE file plane: read / edit / write over the same
- *                       CompositeVFS every other surface addresses. The edit is
+ *                       workspace filesystem every other surface addresses. The edit is
  *                       exact-match, atomic and unique-or-refused; the read is
  *                       capped and names the offset that continues it.
  *                       Unconditional — every runtime has rt.storage.vfs.
@@ -476,7 +476,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   // ── 3. file ─────────────────────────────────────────────────────────────
-  // The file plane: read / edit / write over the same CompositeVFS `run` and
+  // The file plane: read / edit / write over the same filesystem `run` and
   // execute_tools address, so one tool serves every mount on both backends.
   // Unconditional — every runtime has rt.storage.vfs, and a model without an
   // exact-match editor falls back to sed -i and heredocs, which is what this

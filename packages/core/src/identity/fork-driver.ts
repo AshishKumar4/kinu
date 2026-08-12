@@ -16,7 +16,7 @@
  * That is the whole of the per-backend difference.
  */
 
-import type { SqlExecutor } from '../types/primitives.js';
+import type { VFS, SqlExecutor } from '../types/primitives.js';
 import { nanoid } from '../utils/nanoid.js';
 import { snapshotWorkspaceForFork, type ForkSnapshot } from './fork.js';
 
@@ -45,6 +45,8 @@ export interface ForkTransport {
 }
 
 export interface ForkDriverDeps {
+  /** The workspace filesystem a fork inherits SOUL.md and memory/ from. */
+  readonly vfs: VFS;
   /** The source workspace's own SQL — where the snapshot is read from. */
   sql: SqlExecutor;
   transport: ForkTransport;
@@ -84,7 +86,7 @@ export async function forkWorkspace(
 
   // Resolve the cut point FIRST, so an unknown message id costs nothing: the
   // snapshot throws on a missing id, and it is the cheapest thing here.
-  const snapshot = snapshotWorkspaceForFork(deps.sql, untilMessageId);
+  const snapshot = await snapshotWorkspaceForFork(deps.sql, deps.vfs, untilMessageId);
 
   const requestedName = opts?.name?.trim();
   const name = requestedName && requestedName.length > 0

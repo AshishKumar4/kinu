@@ -1,8 +1,8 @@
 /**
  * InlineExecutor — the "workspace" provider inside the codemode sandbox.
  *
- * Wraps the agent's DO-local resources (SqliteFS, MemoryStore, shell emulator)
- * as workspace.* APIs callable from LLM-generated JS:
+ * Wraps the agent's own resources — the Nimbus filesystem and shell, memory,
+ * the craft store — as workspace.* APIs callable from LLM-generated JS:
  *
  *   workspace.readFile("/src/main.ts")
  *   workspace.writeFile("/src/util.ts", code)
@@ -39,9 +39,9 @@ export interface InlineExecutorDeps {
   memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
-  /** The measured limits of wherever `shell` really runs. The cf backend's
-   *  workspace shell is emulated in the Worker and declares none; the CLI's is
-   *  the host process, so it passes its own cgroup's. */
+  /** The measured limits of wherever `shell` really runs. The workspace shell
+   *  runs inside the Worker/process and declares none unless the host measured
+   *  one (the CLI passes its own cgroup's). */
   resourceLimits?: ResourceLimits;
   /** Optional — used to look up craft_scores for listTools(). Falls back to 0.7 if missing. */
   sql?: SqlExecutor;
@@ -178,9 +178,9 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
     exec: {
       description:
-        'Read and search the workspace file plane with a POSIX-shaped command, over the SAME paths and mounts readFile/readdir address. '
-        + 'Emulated in-process, so the command set is exactly: cat, head, tail, ls, tree, find, grep, echo, mkdir, touch, rm, cp, mv, sed, stat, wc, pwd. '
-        + 'Pipes (|), redirects (>, >>) and && / || work; there are no other binaries and no processes — run those in sandbox/nimbus/laptop.',
+        'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
+        + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
+        + 'It has no compilers or package managers — build, test and install in sandbox/nimbus/laptop.',
       execute: async (command: unknown, context?: unknown) => {
         const signal = readExecSignal(context);
         return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
@@ -354,10 +354,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   function readdir(path: string): Promise<string[]>;
   function exists(path: string): Promise<boolean>;
   /**
-   * Read/search the SAME file plane the calls above address, POSIX-style.
-   * Emulated in-process: cat, head, tail, ls, tree, find, grep, echo, mkdir,
-   * touch, rm, cp, mv, sed, stat, wc, pwd — plus pipes, redirects and &&/||.
-   * No other binaries and no processes: run those in sandbox/nimbus/laptop.
+   * Run a command in the workspace shell, over the SAME files the calls above
+   * address. A real POSIX shell: ~95 coreutils, pipes, redirects, loops,
+   * variables, and a working directory that persists across calls. No
+   * compilers or package managers — build and test in sandbox/nimbus/laptop.
    */
   function exec(command: string): Promise<string>;
   function searchMemory(query: string): Promise<string>;
@@ -392,6 +392,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   return {
     name: 'workspace',
     kind: 'workspace',
+    files: vfs,
     capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
     ...(resourceLimits ? { resourceLimits } : {}),
     isAvailable: () => true,

@@ -42,11 +42,21 @@ export interface ExecutorDiffResult {
  */
 export async function readWorkspaceFiles(rt: AgentRuntime): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  let paths: string[];
-  try {
-    paths = rt.storage.sql<{ path: string }>`
-      SELECT DISTINCT path FROM vfs_files WHERE is_dir = 0 AND path != '' LIMIT ${MAX_SNAPSHOT_FILES}`.map((r) => r.path);
-  } catch { return out; }
+  // Walked, not scanned: the snapshot is of the files the agent can open, so it
+  // cannot go stale against however the filesystem encodes them.
+  const paths: string[] = [];
+  const walk = async (dir: string): Promise<void> => {
+    if (paths.length >= MAX_SNAPSHOT_FILES) return;
+    for (const name of await rt.storage.vfs.readdir(dir)) {
+      if (paths.length >= MAX_SNAPSHOT_FILES) return;
+      const full = dir === '' ? name : `${dir}/${name}`;
+      const st = await rt.storage.vfs.stat(full);
+      if (!st) continue;
+      if (st.isDir) await walk(full);
+      else paths.push(full);
+    }
+  };
+  try { await walk(''); } catch { return out; }
   for (const path of paths) {
     try {
       const stat = await rt.storage.vfs.stat(path);

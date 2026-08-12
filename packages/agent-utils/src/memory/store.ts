@@ -1,5 +1,5 @@
 import type { SqlExecutor } from "../types";
-import type { VFS, VFSError } from "../vfs/types";
+import type { ReadWriteVFS, VFSError } from "../vfs/types";
 import { readVfsText } from "../core/utils";
 import { chunkMarkdown } from "./chunker";
 import { sanitizeFtsQuery } from "./query";
@@ -44,7 +44,7 @@ export interface MemoryIndexDelta {
 }
 
 export class MemoryStore {
-	private vfs: VFS;
+	private vfs: ReadWriteVFS;
 	private sql: SqlExecutor;
 	private memoryDir: string;
 	private logsDir: string;
@@ -54,7 +54,7 @@ export class MemoryStore {
 	private snippetMaxChars: number;
 	private searchConfig: Required<SearchConfig>;
 
-	constructor(vfs: VFS, sql: SqlExecutor, config?: MemoryConfig) {
+	constructor(vfs: ReadWriteVFS, sql: SqlExecutor, config?: MemoryConfig) {
 		this.vfs = vfs;
 		this.sql = sql;
 		this.memoryDir = config?.memoryDir ?? "memory";

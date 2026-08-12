@@ -47,3 +47,13 @@ export {
   type NimbusExecOptions,
   type NimbusExecResult,
 } from './nimbus.js';
+
+export {
+  createParentExecutor, createParentWorkspaceVfs,
+  type ParentWorkspaceHandle, type ParentExecResult,
+  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+} from './parent.js';
+export { sandboxFiles } from './sandbox.js';
+export { nimbusSessionFiles } from './nimbus.js';
+export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor.js';
+export { parseStatLine } from './exec-result.js';

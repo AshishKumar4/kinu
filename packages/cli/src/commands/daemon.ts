@@ -205,7 +205,7 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
     const providerCredentials = resolveProviderCredentials();
     const codexAuthStore = createCodexAuthStore();
     const mcpServers = resolveMcpServers();
-    const { rt } = openWorkspaceCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
+    const { rt } = await openWorkspaceCLI(db, dbPath, { llm: llmConfig, providerCredentials, codexAuthStore, codexConfigPath: CONFIG_PATH });
     const session = new LocalAgentSession({
       rt,
       db,

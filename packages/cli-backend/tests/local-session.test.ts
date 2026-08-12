@@ -1,5 +1,5 @@
 // LocalAgentSession — the local backend's agent loop (re-arch P5). Driven by the
-// authentic createCLIRuntime (real SqliteFS / shell / durable fiber) + a fake
+// authentic createCLIRuntime (real filesystem / shell / durable fiber) + a fake
 // streaming model, so it exercises the orchestrator + BackendHost wiring without
 // a network LLM. Tool-call accounting is covered by the core TurnAccumulator
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
@@ -370,12 +370,12 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     // The replacement text carries the content-addressed path…
     const referenced = observed.find((m) =>
-      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+      m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
     expect(referenced).toBeDefined();
     const referencedJson = JSON.stringify(referenced!.content);
     expect(referencedJson).toContain('resume.pdf');
     const path = /saved to (\S+) — read/.exec(referencedJson)?.[1];
-    expect(path).toStartWith('/local/attachments/');
+    expect(path).toStartWith('attachments/');
 
     // …and the exact payload bytes are readable back through the agent's VFS.
     const stored = await rt.storage.vfs.readFile(path!);
@@ -385,7 +385,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     // reference — byte-stable, so the prompt-cache prefix holds.
     await session.send('continue');
     const again = captures[1]!.find((m) =>
-      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+      m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
     expect(again).toBeDefined();
     expect(JSON.stringify(again!.content)).toBe(referencedJson);
   });

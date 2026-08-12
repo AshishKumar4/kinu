@@ -1,11 +1,10 @@
 /**
  * `file` — the built-in file plane: read, edit, write.
  *
- * Everything here goes through `rt.storage.vfs`, which IS the CompositeVFS, so
- * one implementation reaches `/local`, `/workspace`, `/sandbox`, `/nimbus` and
- * `/pc` on both backends. There is deliberately no second filesystem path and no
- * per-runtime variant: a mount that is reserved or offline answers with its own
- * ENXIO reason, which is more useful than a tool that pretends not to exist.
+ * Everything here goes through `rt.storage.vfs`, the workspace filesystem, on
+ * both backends. There is deliberately no second filesystem path and no
+ * per-runtime variant: another environment is reached through its own
+ * namespace, in its own paths, rather than through a prefix here.
  *
  * Why one tool with three actions rather than three tools: reading a file,
  * replacing text inside it and creating it are one concept — the file plane —
@@ -256,7 +255,7 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
           enum: ['read', 'write', 'edit'],
           description: 'read the file, edit exact text inside it, or write it whole.',
         },
-        path: { type: 'string', description: 'Absolute path. /local is this agent\'s durable filesystem; the other roots are live windows into the execution environments listed for this turn.' },
+        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
         offset: { type: 'number', description: 'For action=read: 1-indexed first line to return (default 1).' },
         limit: { type: 'number', description: 'For action=read: how many lines to return (default: as many as fit).' },
         content: { type: 'string', description: 'For action=write: the file\'s complete new contents.' },

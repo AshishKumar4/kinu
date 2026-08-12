@@ -57,7 +57,10 @@ export async function clampToolResult(
     try {
       await opts.vfs.mkdir(TOOL_OUTPUT_DIR, { recursive: true });
       await opts.vfs.writeFile(path, text);
-      savedPath = `/${path}`;
+      // The path as written, not rooted: relative paths resolve at the
+      // workspace root for every surface that reads them, and a leading slash
+      // would name the filesystem's real root instead.
+      savedPath = path;
     } catch {
       savedPath = null; // offload failed — still clamp, marker stays honest
     }
@@ -74,11 +77,9 @@ export async function clampToolResult(
   const reason = tightened
     ? ' This turn has already admitted enough tool output that the cap tightened for the rest of it — hand the bulk to a fork rather than pulling more of it in here.'
     : '';
-  // The advertised remedy must hold on every backend: the run tool's
-  // "workspace" runtime is the VFS shell on CF but the HOST shell locally
-  // (where this offload file does not exist), so the marker only promises
-  // workspace.readFile — execute_tools reads it over the same VFS on both
-  // backends, and the model can filter inside the sandbox arrow.
+  // The marker promises workspace.readFile, which reads the same filesystem
+  // the run tool's `workspace` shell runs over on every backend — so the
+  // model can also grep the file it names.
   const marker = savedPath
     ? `[output truncated: ${omitted} chars omitted; full output saved to ${savedPath} — ` +
       'read or filter it with workspace.readFile inside execute_tools ' +

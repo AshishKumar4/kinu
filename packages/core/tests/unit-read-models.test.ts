@@ -10,7 +10,7 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers.js';
+import { createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
 import { createAgentConfigStore } from '../src/config/store.js';
@@ -44,7 +44,7 @@ function workspace() {
     },
   };
   initWorkspaceSchema({ execRaw, sql, exec });
-  return { db, sql, execRaw, config: createAgentConfigStore(sql) };
+  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: createAgentConfigStore(sql) };
 }
 
 /** A real job store plus a recording stand-in for the runner: this plane's
@@ -163,14 +163,14 @@ describe('run timeline', () => {
 });
 
 describe('agent status', () => {
-  test('identity, counts and config in one shape', () => {
-    const { db, sql, config } = workspace();
+  test('identity, counts and config in one shape', async () => {
+    const { db, sql, config, vfs } = workspace();
     sql`INSERT INTO workspace_identity (id, name, created_at) VALUES ('id-1', 'jarvis', 42)`;
     sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'user', 'hi', 1)`;
     config.setReasoningEffort('high');
 
-    expect(getAgentStatus({
-      sql, config, fallbackId: 'fallback', name: 'fallback-name',
+    expect(await getAgentStatus({
+      sql, vfs, config, fallbackId: 'fallback', name: 'fallback-name',
       displayName: 'Jarvis', fallbackMessageCount: 99,
     })).toMatchObject({
       id: 'id-1', name: 'jarvis', displayName: 'Jarvis', createdAt: 42,
@@ -179,11 +179,12 @@ describe('agent status', () => {
     db.close();
   });
 
-  test('storage with no tables answers with what the caller already knows', () => {
+  test('storage with no tables answers with what the caller already knows', async () => {
     const db = new Database(':memory:');
     const sql = makeSql(db);
-    const status = getAgentStatus({
-      sql, config: createAgentConfigStore(sql), fallbackId: 'do-id', name: 'agent-7',
+    const status = await getAgentStatus({
+      sql, vfs: createWorkspaceBundle(db).vfs,
+      config: createAgentConfigStore(sql), fallbackId: 'do-id', name: 'agent-7',
       displayName: 'ignored on the degraded path', fallbackMessageCount: 3,
     });
     expect(status).toMatchObject({ id: 'do-id', name: 'agent-7', displayName: 'agent-7', messageCount: 0 });
@@ -268,45 +269,56 @@ describe('workspace change-set', () => {
 });
 
 describe('executor file plane', () => {
+  /** A router holding one executor, the way a real runtime hands one over. */
+  function router(files?: import('../src/types/primitives.js').VFS) {
+    return { getProvider: (name: string) => (name === 'workspace' ? { ...(files ? { files } : {}) } : undefined) };
+  }
+
   test('workspace listings are typed, sized and directories-first', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/proj/sub', { recursive: true });
-    await rt.storage.vfs.writeFile('/proj/a.txt', 'aa');
+    await rt.storage.vfs.mkdir('proj/sub', { recursive: true });
+    await rt.storage.vfs.writeFile('proj/a.txt', 'aa');
 
-    const listed = await getExecutorFiles(rt.storage.vfs, 'workspace', '/proj');
+    const listed = await getExecutorFiles(router(rt.storage.vfs), 'workspace', 'proj');
     expect(listed.entries?.map((e) => [e.name, e.type])).toEqual([['sub', 'dir'], ['a.txt', 'file']]);
     expect(listed.entries?.find((e) => e.name === 'a.txt')?.size).toBe(2);
     db.close();
   });
 
-  test('an unknown executor is an error value, not a throw', async () => {
+  test('an environment with no file plane is an error value, not a throw', async () => {
     const { rt, db } = createTestRuntime();
-    expect(await getExecutorFiles(rt.storage.vfs, 'ghost', '/')).toEqual({ error: 'Executor "ghost" not found' });
-    expect(await readExecutorFile(rt.storage.vfs, 'ghost', '/a')).toEqual({ error: 'Executor "ghost" not found' });
-    expect(await readExecutorFile(rt.storage.vfs, 'workspace', '')).toEqual({ error: 'path required' });
+    // Unknown id, and a known executor that has no filesystem to browse (the
+    // laptop before a device connects) read the same way: a rendered reason.
+    expect(await getExecutorFiles(router(rt.storage.vfs), 'ghost', '.'))
+      .toEqual({ error: 'Executor "ghost" has no file plane' });
+    expect(await getExecutorFiles(router(), 'workspace', '.'))
+      .toEqual({ error: 'Executor "workspace" has no file plane' });
+    expect(await readExecutorFile(router(rt.storage.vfs), 'workspace', '')).toEqual({ error: 'path required' });
     db.close();
   });
 
   test('reading refuses binaries and directories, and reports truncation', async () => {
     const { rt, db } = createTestRuntime();
-    await rt.storage.vfs.mkdir('/dir', { recursive: true });
-    await rt.storage.vfs.writeFile('/bin', `x y`);
-    await rt.storage.vfs.writeFile('/big', 'z'.repeat(512 * 1024 + 10));
+    const r = router(rt.storage.vfs);
+    await rt.storage.vfs.mkdir('dir', { recursive: true });
+    await rt.storage.vfs.writeFile('bin', `x\u0000y`);
+    await rt.storage.vfs.writeFile('big', 'z'.repeat(512 * 1024 + 10));
 
-    expect(await readExecutorFile(rt.storage.vfs, 'workspace', '/dir')).toEqual({ error: 'path is a directory' });
-    expect(await readExecutorFile(rt.storage.vfs, 'workspace', '/bin')).toEqual({ error: 'binary file — not previewable' });
-    const big = await readExecutorFile(rt.storage.vfs, 'workspace', '/big');
+    expect(await readExecutorFile(r, 'workspace', 'dir')).toEqual({ error: 'path is a directory' });
+    expect(await readExecutorFile(r, 'workspace', 'bin')).toEqual({ error: 'binary file — not previewable' });
+    const big = await readExecutorFile(r, 'workspace', 'big');
     expect(big.truncated).toBe(true);
     expect(big.content).toHaveLength(512 * 1024);
     db.close();
   });
 
-  test('a write round-trips through the same composite address the read uses', async () => {
+  test("a write round-trips through the same environment's own paths", async () => {
     const { rt, db } = createTestRuntime();
-    expect(await writeExecutorFileOp({ vfs: rt.storage.vfs }, 'workspace', '/up.txt', new TextEncoder().encode('hi')))
+    const r = router(rt.storage.vfs);
+    expect(await writeExecutorFileOp(r, 'workspace', 'up.txt', new TextEncoder().encode('hi')))
       .toEqual({ ok: true });
-    expect(await readExecutorFile(rt.storage.vfs, 'workspace', '/up.txt')).toEqual({ content: 'hi' });
-    expect(await writeExecutorFileOp({ vfs: rt.storage.vfs }, 'workspace', '/dir/', new Uint8Array()))
+    expect(await readExecutorFile(r, 'workspace', 'up.txt')).toEqual({ content: 'hi' });
+    expect(await writeExecutorFileOp(r, 'workspace', 'dir/', new Uint8Array()))
       .toEqual({ error: 'file path required' });
     db.close();
   });

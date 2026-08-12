@@ -369,8 +369,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // Test runtime has no rt.shell — `run` must return an error string rather
     // than throwing. This lets test harnesses exercise the tool shape without
     // providing a real shell dependency.
+    // A runtime with no shell at all: every real one has the workspace's, so
+    // this is the degraded case the fallback exists for.
     const { rt } = createTestRuntime();
-    const t = tools(rt);
+    const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'echo hi' });
     expect(typeof result).toBe('string');

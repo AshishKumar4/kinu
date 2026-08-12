@@ -21,3 +21,39 @@ export function createTestDb(): TestDb {
 	}) as SqlExecutor;
 	return { db, sql, execRaw: (ddl: string) => db.exec(ddl) };
 }
+
+/**
+ * The three methods a store here consumes, over a Map.
+ *
+ * A fixture rather than the real filesystem because that lives in
+ * `@proteus/core`, one layer up, and this package cannot import it — and
+ * because `ReadWriteVFS` is exactly three methods, so a stand-in for it is
+ * honest rather than a stub of something larger.
+ */
+export function createMemoryVfs(seed: Record<string, string> = {}) {
+	const files = new Map<string, string>(Object.entries(seed));
+	return {
+		files,
+		async readFile(path: string, options?: { encoding?: "utf8" }): Promise<Uint8Array | string> {
+			const content = files.get(path);
+			if (content === undefined) {
+				const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as Error & { code: string };
+				err.code = "ENOENT";
+				throw err;
+			}
+			return options?.encoding === "utf8" ? content : new TextEncoder().encode(content);
+		},
+		async writeFile(path: string, data: Uint8Array | string): Promise<void> {
+			files.set(path, typeof data === "string" ? data : new TextDecoder().decode(data));
+		},
+		async readdir(path: string): Promise<string[]> {
+			const prefix = path === "" || path === "." ? "" : `${path}/`;
+			const names = new Set<string>();
+			for (const key of files.keys()) {
+				if (!key.startsWith(prefix)) continue;
+				names.add(key.slice(prefix.length).split("/")[0]!);
+			}
+			return [...names];
+		},
+	};
+}

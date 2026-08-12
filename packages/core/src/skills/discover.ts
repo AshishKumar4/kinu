@@ -11,7 +11,7 @@ import { parseSkillFile } from './parse.js';
 import { BUILTIN_SKILLS } from './builtins.js';
 import { SKILLS_DIR, type ParsedSkill } from './types.js';
 
-/** Minimal VFS shape — duck-typed against SqliteFS and MemoryVFS. */
+/** Minimal VFS shape — duck-typed against any file view. */
 export interface SkillsVfs {
   exists(path: string): Promise<boolean>;
   readFile(path: string, opts?: { encoding?: string }): Promise<string | Uint8Array>;

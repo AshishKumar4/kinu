@@ -1,12 +1,12 @@
 /**
  * VFS error taxonomy — the closed set of error codes the workspace file plane
- * speaks. Every throw from the CompositeVFS and its mount adapters carries one
- * of these codes; the conformance suite asserts the right code per operation.
+ * speaks. Every throw from the workspace filesystem and from an executor's
+ * file view carries one; the conformance suite asserts the right code per
+ * operation.
  *
  * A closed union (never a bare `Error`) is the agent-core house rule: callers
  * switch on `err.code` exhaustively instead of regex-matching messages.
- * SqliteFS (agent-utils, a lower layer that cannot import core) raises the same
- * code strings by value, so the taxonomy is shared across the whole plane.
+
  */
 
 /** The closed set of POSIX-style codes the file plane raises. */

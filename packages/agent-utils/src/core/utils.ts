@@ -1,4 +1,4 @@
-import type { VFS } from "../vfs/types";
+import type { ReadWriteVFS, VFS } from "../vfs/types";
 
 export function combineAbortSignals(signals: AbortSignal[]): AbortSignal {
 	const live = signals.filter((signal): signal is AbortSignal => Boolean(signal));
@@ -66,7 +66,7 @@ export function normalizePath(path: string): string {
 // VFS helpers
 // ---------------------------------------------------------------------------
 
-export async function readVfsText(vfs: VFS, path: string): Promise<string> {
+export async function readVfsText(vfs: ReadWriteVFS, path: string): Promise<string> {
 	const result = await vfs.readFile(path, { encoding: "utf8" });
 	if (typeof result !== "string") {
 		throw new Error(`Expected text content for ${path}, got ${typeof result}`);

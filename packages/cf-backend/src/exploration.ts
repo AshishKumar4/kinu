@@ -51,9 +51,9 @@ import {
   type MergeStrategy,
   type HeadBudget,
   type MergeResult,
-  type ParentRpcFileHandle,
+  type ParentWorkspaceHandle, type ParentRpcWrite, type VFS as CoreVFS,
   type SqlExecutor,
-  createParentRpcMountVFS,
+  createParentExecutor, createParentWorkspaceVfs, observeWrites,
   initHeadsTables,
   HeadController,
   HeadJournal,
@@ -129,6 +129,8 @@ export class ExplorationAgent extends Agent<Env> {
    * silent ENOENT against that unrelated empty shell — see head-inference.ts.
    */
   private _headRt: CFRuntime | null = null;
+  private _parentFiles: CoreVFS | null = null;
+  private _parentHandle: ParentWorkspaceHandle | null = null;
   private headRuntime(): CFRuntime {
     if (this._headRt) return this._headRt;
     const parent = this.getSharedParentStub();
@@ -141,21 +143,23 @@ export class ExplorationAgent extends Agent<Env> {
       workspaceName,
       capabilityToken: async () => this.getCapabilityToken(),
     });
-    const handle: ParentRpcFileHandle = {
-      read: (path) => parent.readWorkspaceFile(path),
-      write: (input) => parent.writeWorkspaceFile(input),
-      list: (path) => parent.listWorkspaceFiles(path),
-      stat: (path) => parent.statWorkspaceFile(path),
-      delete: (path) => parent.deleteWorkspaceFile(path),
+    const handle: ParentWorkspaceHandle = {
+      read: (path: string) => parent.readWorkspaceFile(path),
+      write: (input: ParentRpcWrite) => parent.writeWorkspaceFile(input),
+      list: (path: string) => parent.listWorkspaceFiles(path),
+      stat: (path: string) => parent.statWorkspaceFile(path),
+      delete: (path: string) => parent.deleteWorkspaceFile(path),
+      exec: (command: string) => parent.execWorkspaceCommand(command),
     };
-    rt.compositeVfs.mount('parent', {
-      vfs: createParentRpcMountVFS(handle),
-      policy: {
-        readOnly: false,
-        rootPath: '',
-        consistency: 'durable',
-      },
-    });
+    // Attribution wraps the view BEFORE the executor is built, so every write
+    // this head makes to the parent — and nothing a sibling makes — lands in
+    // this head's capture. The recorder is installed per head run
+    // (buildHeadTools); until then writes simply go unobserved.
+    this._parentFiles = createParentWorkspaceVfs(handle);
+    this._parentHandle = handle;
+    rt.executionRouter?.register(createParentExecutor({
+      handle, vfs: this._parentFiles, workspaceName,
+    }));
     this._headRt = rt;
     return rt;
   }
@@ -381,10 +385,17 @@ export class ExplorationAgent extends Agent<Env> {
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture) {
     const rt = this.headRuntime();
-    // Attribute this head's file writes to this head. The plane is this facet's
-    // own, so a sibling head writing the same file at the same moment lands in
-    // ITS capture and never in this one.
-    rt.compositeVfs.observeWrites(capture.files);
+    // Attribute this head's writes to the PARENT workspace to this head. The
+    // view is this facet's own, so a sibling head writing the same file at the
+    // same moment lands in ITS capture and never in this one. This head's own
+    // workspace is private scratch and deliberately unattributed.
+    if (this._parentHandle) {
+      rt.executionRouter?.register(createParentExecutor({
+        handle: this._parentHandle,
+        vfs: observeWrites(this._parentFiles!, capture.files),
+        workspaceName: this.getSharedParent() ?? undefined,
+      }));
+    }
     return buildHeadToolSet({
       input,
       capture,

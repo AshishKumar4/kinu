@@ -20,6 +20,11 @@ import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
+import type { VFS } from '../types/primitives.js';
+import { makeVfsError } from '../vfs/errno.js';
+import { shellQuote } from '../utils/shell.js';
+import { vfsDirname } from '../utils/vfs-helpers.js';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
 
 /**
  * Duck-typed handle — matches the subset of @cloudflare/sandbox's getSandbox()
@@ -401,6 +406,7 @@ declare namespace sandbox {
   return {
     name: 'sandbox',
     kind: 'sandbox',
+    ...(handle ? { files: sandboxFiles(handle) } : {}),
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
     getStatus: () => ({
@@ -491,6 +497,77 @@ declare namespace sandbox {
       } catch {
         return [];
       }
+    },
+  };
+}
+
+/**
+ * The container's files, in the container's own absolute paths.
+ *
+ * Over the raw SDK handle, which has no stat and no mkdir: stat is synthesized
+ * from a listing of the parent (size + type; the SDK reports no mtime, so mtime
+ * is 0, never invented), and mkdir/exists go through the container's shell.
+ * Binary content rides the SDK's base64 encoding both ways — the SDK flags a
+ * binary read itself — so bytes round-trip exactly.
+ */
+export function sandboxFiles(handle: SandboxHandle): VFS {
+  const isDir = (f: { type?: string; isDirectory?: boolean }): boolean =>
+    f.isDirectory ?? (f.type === 'directory' || f.type === 'dir');
+  const nameOf = (f: { name?: string; path?: string }): string => {
+    const p = f.name ?? f.path ?? '';
+    return p.slice(p.lastIndexOf('/') + 1);
+  };
+
+  return {
+    async readFile(path, opts) {
+      const r = await handle.readFile(path);
+      if (r.exitCode != null && r.exitCode !== 0) {
+        throw makeVfsError('ENOENT', `no such file or directory, open '${path}' (exit ${r.exitCode})`, path);
+      }
+      if (r.encoding === 'base64') {
+        const bytes = base64ToBytes(r.content ?? '');
+        return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
+      }
+      const text = r.content ?? '';
+      return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
+    },
+
+    async writeFile(path, data) {
+      if (typeof data === 'string') await handle.writeFile(path, data);
+      else await handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' });
+    },
+
+    async readdir(path) {
+      const r = await handle.listFiles(path, { recursive: false });
+      return (r.files ?? []).map(nameOf).filter((n) => n.length > 0);
+    },
+
+    async stat(path) {
+      if (path === '/') return { size: 0, mtimeMs: 0, isDir: true };
+      const name = path.slice(path.lastIndexOf('/') + 1);
+      let files: Awaited<ReturnType<SandboxHandle['listFiles']>>['files'];
+      try {
+        files = (await handle.listFiles(vfsDirname(path), { recursive: false })).files ?? [];
+      } catch {
+        return null; // parent unreadable/missing — nothing to describe
+      }
+      const entry = files.find((f) => nameOf(f) === name);
+      if (!entry) return null;
+      return { size: entry.size ?? 0, mtimeMs: 0, isDir: isDir(entry) };
+    },
+
+    async unlink(path) { await handle.deleteFile(path); },
+
+    async mkdir(path, opts) {
+      const r = await handle.exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
+      if ((r.exitCode ?? 0) !== 0) {
+        throw makeVfsError('EIO', `${(r.stderr ?? r.output ?? '').trim() || 'operation failed'}, mkdir '${path}'`, path);
+      }
+    },
+
+    async exists(path) {
+      const r = await handle.exec(`test -e ${shellQuote(path)} && echo true || echo false`);
+      return (r.stdout ?? r.output ?? '').includes('true');
     },
   };
 }

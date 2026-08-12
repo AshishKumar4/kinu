@@ -52,7 +52,7 @@ export async function chatCommand(name: string | undefined, opts: {
 
   const target = resolveAgentTarget(name);
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, opts);
+  const client = await createAgentClient(target, opts);
   const hydrateHistory = target.mode === 'cloud'
     ? !opts.initialPrompt
     : Boolean(opts.session || opts.continue || opts.resume || opts.fork);

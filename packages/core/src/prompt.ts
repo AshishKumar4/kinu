@@ -20,9 +20,9 @@ import {
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface.js';
-import { DEFAULT_SOUL_MD, readSoul } from './identity/soul.js';
+import { DEFAULT_SOUL_MD } from './identity/soul.js';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
-import { EXECUTOR_MOUNT_PREFIX } from './vfs/composite.js';
+import { WORKSPACE_ROOT } from './vfs/nimbus-workspace.js';
 
 export type {
   PromptBackend,
@@ -170,7 +170,7 @@ function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): 
       // boundary (an interpreter or a toolchain) that still needs an executor.
       case 'workspace':
         return backend === 'cli-local'
-          ? '- **workspace.*** / `runtime: "workspace"`: the machine the CLI is running on, at the directory it was invoked in — a real shell with real binaries. Its file ops address the file plane (/local durable state, /pc the machine).'
+          ? '- **workspace.*** / `runtime: "workspace"`: your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.'
           : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable filesystem, with a real POSIX shell over it — pipes, redirection, variables, loops, `cd`, and the usual coreutils (grep/sed/awk/sort/find/tar/diff/xargs/curl...). No NATIVE binaries live here: node, python, git, package managers and builds have no executable to run and belong in the runtimes above.';
       case 'nimbus':
         return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
@@ -220,35 +220,26 @@ function renderExecutorSection(surface: PromptSurface): string {
     '',
     ...lines,
   ];
-  // Whether two runtimes are two filesystems is a fact about the backend, not
-  // about the count. On cli-local the workspace and laptop executors are both
-  // handed the SAME host shell (cli-backend/runtime.ts) — a command in either
-  // sees the same files — so the disjoint-filesystem warning was false there,
-  // and a model that believed it would copy a file between two views of one
-  // directory. Every other backend provisions a real container per runtime.
+  // No backend conditional: the workspace filesystem is the same durable
+  // component everywhere, and every other runtime is a different machine. That
+  // used to be untrue on cli-local, where the workspace and laptop executors
+  // shared one host shell, and the prompt had to carry the exception.
   if (executors.length > 1) {
-    parts.push('', surface.backend === 'cli-local'
-      ? 'These runtimes execute on the same machine and see the same files — there is nothing to copy between them.'
-      : 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
+    parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
   }
-  // Mount-table doctrine. Every backend's workspace VFS mounts the file plane
-  // of the execution environments it actually has — /sandbox and /nimbus on cf,
-  // /pc on both (the device tunnel there, node:fs here) — so the doctrine
-  // follows the executor list rather than the backend.
-  const mounts = devices.map((exec) => EXECUTOR_MOUNT_PREFIX[exec.name]).filter(Boolean);
-  if (mounts.length > 0) {
+  // The file doctrine. Every environment is its own filesystem addressed in its
+  // own native paths — there is no mount table and no path that means two
+  // places. The workspace's filesystem is the one the file tools address, and
+  // the workspace shell is a real shell over exactly those bytes.
+  parts.push(
+    '',
+    `Your own workspace is a durable POSIX filesystem at ${WORKSPACE_ROOT}, and the \`workspace\` runtime is a real shell over it — `
+    + 'the same bytes the `file` tool and `workspace.*` file ops read, by the same paths. Relative paths resolve there; `cd` persists between commands.',
+  );
+  if (devices.length > 0) {
     parts.push(
-      '',
-      `The workspace filesystem is a mount table: /local is the durable base, and ${mounts.join(', ')} ${mounts.length === 1 ? 'is a live window' : 'are live windows'} into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
-      // What `workspace` MEANS as a run runtime differs by backend, and the
-      // difference decides whether the shell shares the mount table's paths.
-      // On cf it is the emulated shell over this very plane; on cli-local it is
-      // the user's real machine shell at the process cwd, which is the same
-      // FILES as /pc but not the same PATHS. Saying "one table, one set of
-      // paths" on cli-local would be a straightforward falsehood.
-      surface.backend === 'cli-local'
-        ? 'The `file` tool and workspace.* file ops address that table; run\'s `workspace` runtime is the real machine shell at the process working directory — the same files as /pc, by the machine\'s own paths rather than mount paths.'
-        : 'The `file` tool, workspace.* file ops and the workspace shell all address that ONE table by the same paths. Only EXECUTION stays target-native: anything needing a real binary goes to that environment\'s own runtime, in ITS native paths.',
+      'The other environments above are SEPARATE machines with separate filesystems, reached only through their own namespaces '
+      + `(${devices.map((exec) => `\`${exec.name}.*\``).join(', ')}) in THEIR native paths. To move a file between two of them, read it from one and write it to the other.`,
     );
   }
   if (devices.length > 1) {
@@ -442,9 +433,16 @@ function renderAgentStateSection(surface: PromptSurface): string {
   return parts.join('\n\n');
 }
 
-function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
-  if (override) return override;
-  return readSoul(rt.storage.sql) ?? FALLBACK_PURPOSE;
+/**
+ * The soul this prompt speaks with.
+ *
+ * Passed in, never read here: the soul is a FILE now, and this builder is the
+ * byte-stable cacheable prefix — synchronous by contract, and no place to do
+ * I/O. Callers that hold a runtime read it once and hand it over (the cf actor
+ * caches it per activation); a caller that does not gets the default.
+ */
+function readSoulForPrompt(override?: string): string {
+  return override?.trim() || FALLBACK_PURPOSE;
 }
 
 /** Skill BODIES belong in the stable prefix (an activation-set change is a
@@ -469,7 +467,7 @@ export function buildSystemPromptSync(
 ): string {
   const surface = compilePromptSurface(opts);
   return [
-    readSoulForPrompt(rt, opts.soulOverride),
+    readSoulForPrompt(opts.soulOverride),
     renderRuntimeContext(opts),
     renderOperatingGuidance(surface),
     renderToolsSection(surface),

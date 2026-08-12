@@ -186,8 +186,11 @@ describe('head tool surface — containment', () => {
   test('the head prompt describes the real workspace it was given', () => {
     const { tools } = buildSurface();
     const prompt = buildHeadSystemPrompt(headInput(), Object.keys(tools));
-    expect(prompt).toContain('/parent/');
-    expect(prompt).toContain('/local/');
+    // The parent workspace is an executor namespace, not a directory of this
+    // head's filesystem — and `parent.exec` is what makes searching it one call.
+    expect(prompt).toContain('`parent.*`');
+    expect(prompt).toContain('parent.exec');
+    expect(prompt).toContain('');
     expect(prompt).not.toContain('sandbox_exec');
   });
 });

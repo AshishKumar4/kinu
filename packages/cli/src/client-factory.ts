@@ -29,11 +29,11 @@ export interface AgentClientFlags {
  * exits after its answer, which changes how long work may run before it is
  * moved to the background and how long teardown waits for it.
  */
-export function createAgentClient(
+export async function createAgentClient(
   target: AgentTarget,
   opts: AgentClientFlags & CliSessionOptions,
   surface: SessionSurface = 'interactive',
-): AgentClient {
+): Promise<AgentClient> {
   if (target.mode === 'cloud') {
     rejectLocalLlmFlags(opts);
     const auth = requireAuthConfig();

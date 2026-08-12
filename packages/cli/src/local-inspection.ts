@@ -50,7 +50,6 @@ import {
   type SearchNode,
   type MctsSearchRunSummary,
   type ReasoningEffort,
-  readSoul,
   summarizeSoul,
   type SqlExec,
 } from '@proteus/core';
@@ -146,9 +145,9 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
       taskCount: tableExists(db, 'task_history')
         ? get<{ c: number }>(db, `SELECT COUNT(*) AS c FROM task_history`)?.c ?? 0
         : 0,
-      memorySize: tableExists(db, 'vfs_files')
-        ? localMemorySize(db)
-        : 0,
+      // Not reported: it is a walk of the workspace filesystem, and this path
+      // may not open one (see getLocalStatus).
+      memorySize: 0,
       createdAt: status.createdAt ?? 0,
       conversationCount: tableExists(db, 'messages')
         ? get<{ c: number }>(db, `SELECT COUNT(DISTINCT session_id) AS c FROM messages`)?.c ?? 0
@@ -159,8 +158,26 @@ export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   });
 }
 
+/**
+ * The curated memory document, reassembled from its indexed chunks.
+ *
+ * `memory_chunks` is MemoryStore's index OF `memory/MEMORY.md` — the same text,
+ * in a table this read-only path can open. Reading the file itself would mean
+ * opening the workspace filesystem, which writes; see getLocalStatus.
+ */
 export function readLocalMemory(name: string): string {
-  return withLocalDb(name, (db) => readVfsFile(db, 'memory/MEMORY.md') ?? '');
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, 'memory_chunks')) return '';
+    const cols = columnSet(db, 'memory_chunks');
+    const column = cols.has('text') ? 'text' : cols.has('content') ? 'content' : null;
+    if (!column) return '';
+    const order = cols.has('start_line') ? 'start_line' : 'rowid';
+    return all<{ body: string }>(
+      db,
+      `SELECT ${safeIdentifier(column)} AS body FROM memory_chunks
+       WHERE path = 'memory/MEMORY.md' ORDER BY ${safeIdentifier(order)} ASC`,
+    ).map((row) => row.body).join('\n');
+  });
 }
 
 export function searchLocalMemory(name: string, query: string, limit = 10): Array<{ path: string; text: string; score?: number; startLine?: number; endLine?: number }> {
@@ -741,17 +758,6 @@ function safeIdentifier(value: string): string {
   return value;
 }
 
-function readVfsFile(db: SqliteDb, path: string): string | null {
-  if (!tableExists(db, 'vfs_files')) return null;
-  const rows = all<{ data: unknown }>(
-    db,
-    `SELECT data FROM vfs_files WHERE path = ? AND is_dir = 0 ORDER BY chunk_index`,
-    path,
-  );
-  if (rows.length === 0) return null;
-  return rows.map((row) => decodeBlob(row.data)).join('');
-}
-
 function decodeBlob(value: unknown): string {
   if (value == null) return '';
   if (typeof value === 'string') return value;
@@ -786,15 +792,31 @@ function summarizeMcts(node: SearchNode): LocalMctsNodeDetail['path'][number] {
 }
 
 function getLocalStatus(db: SqliteDb): unknown {
-  const identity = tableExists(db, 'workspace_identity')
-    ? get<{ id: string; name: string; created_at: number }>(db, `SELECT id, name, created_at FROM workspace_identity LIMIT 1`)
+  // `agent_identity` is the pre-rename table. Read it here rather than adopting
+  // it: this path is READ-ONLY, and the adoption belongs to the write-capable
+  // open path (identity/schema.ts adoptLegacyAgentIdentity).
+  const identityTable = tableExists(db, 'workspace_identity') ? 'workspace_identity'
+    : tableExists(db, 'agent_identity') ? 'agent_identity'
+      : null;
+  const identity = identityTable
+    ? get<{ id: string; name: string; created_at: number }>(
+      db, `SELECT id, name, created_at FROM ${safeIdentifier(identityTable)} LIMIT 1`)
     : null;
-  const soul = tableExists(db, 'vfs_files') ? readSoul(makeSql(db)) : null;
+  // The MISSION, off the identity row — not SOUL.md itself.
+  //
+  // This inspection opens the database READ-ONLY, and reading the document
+  // means opening the workspace filesystem, which writes (it seeds its base
+  // directories and advances the process-generation counter on every open). A
+  // listing that mutated every workspace it walked past would be wrong twice
+  // over, so `writeSoul` keeps this one line current instead (identity/soul.ts).
+  const mission = identityTable
+    ? get<{ mission: string | null }>(db, `SELECT mission FROM ${safeIdentifier(identityTable)} LIMIT 1`)?.mission?.trim() || null
+    : null;
   return {
     id: identity?.id ?? null,
     name: identity?.name ?? null,
-    purpose: summarizeSoul(soul),
-    soul: soul ?? '',
+    purpose: mission ?? '',
+    soul: '',
     createdAt: identity?.created_at ?? null,
     // The LIVE version — the one that actually drives a turn. MAX(version)
     // reported an unresolved pending proposal as though it were already running.
@@ -831,22 +853,6 @@ function getLocalToolSummary(db: SqliteDb): unknown {
   };
 }
 
-function localMemorySize(db: SqliteDb): number {
-  const cols = columnSet(db, 'vfs_files');
-  if (cols.has('size')) {
-    return get<{ total: number }>(
-      db,
-      `SELECT COALESCE(SUM(size), 0) AS total FROM vfs_files WHERE path LIKE 'memory/%'`,
-    )?.total ?? 0;
-  }
-  if (cols.has('data')) {
-    return get<{ total: number }>(
-      db,
-      `SELECT COALESCE(SUM(LENGTH(data)), 0) AS total FROM vfs_files WHERE path LIKE 'memory/%'`,
-    )?.total ?? 0;
-  }
-  return 0;
-}
 
 const NOOP_ALARM = {
   scheduleAt() {},

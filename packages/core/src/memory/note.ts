@@ -13,7 +13,7 @@
  * Centralized here so the format stays consistent.
  */
 
-import type { Memory } from '../types/primitives.js';
+import type { VFS, Memory } from '../types/primitives.js';
 
 const MEMORY_PATH = 'memory/MEMORY.md';
 
@@ -26,7 +26,7 @@ const MEMORY_DIR = 'memory/';
  * outside the memory directory.
  *
  * The same file answers to three spellings — `memory/a.md`, `/memory/a.md` and
- * `/local/memory/a.md` — because bare absolute paths compat-route into /local,
+ * `memory/a.md` — relative to the workspace root,
  * whose mount root is ''. A writer that recognised only one of them left the
  * index stale for the other two, which is the one directory where that is
  * never harmless.
@@ -64,4 +64,23 @@ export async function appendMemoryNote(
   await memory.append(MEMORY_PATH, `\n### ${heading} (${date})\n${content}\n`);
   await memory.index(MEMORY_PATH);
   return 'Note saved to memory.';
+}
+
+/**
+ * Bytes the agent's memory occupies, walked through the workspace filesystem.
+ *
+ * A walk rather than a SUM over a storage table: the number a user is shown
+ * should be the size of the files they can open, not of whatever encoding the
+ * store happens to use for them.
+ */
+export async function memoryBytes(vfs: VFS, dir = 'memory'): Promise<number> {
+  if (!await vfs.exists(dir)) return 0;
+  let total = 0;
+  for (const name of await vfs.readdir(dir)) {
+    const full = `${dir}/${name}`;
+    const st = await vfs.stat(full);
+    if (!st) continue;
+    total += st.isDir ? await memoryBytes(vfs, full) : st.size;
+  }
+  return total;
 }

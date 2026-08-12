@@ -15,7 +15,7 @@
  * dedicated CRUD dispatcher would have been a second path to the same bytes.
  *
  * No mocking of internal helpers — uses an in-memory SkillsVfs that's the
- * same shape SqliteFS exposes. Built-in skills come from BUILTIN_SKILLS,
+ * same shape the workspace filesystem exposes. Built-in skills come from BUILTIN_SKILLS,
  * not stubs.
  */
 

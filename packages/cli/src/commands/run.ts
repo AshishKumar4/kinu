@@ -159,7 +159,7 @@ async function runOneShot(
   // starts the cadence-heavy evolution pass it cannot finish, so the daemon is
   // what eventually runs it (see AgentOrchestrator's exit contract).
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(
+  const client = await createAgentClient(
     target,
     { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, noAutoEvolve: opts.noAutoEvolve, ...sessionOptions(opts) },
     'one-shot',
@@ -256,7 +256,7 @@ async function runRpc(
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const client = createAgentClient(target, clientOpts);
+    const client = await createAgentClient(target, clientOpts);
     output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() });
     const unsubscribe = client.subscribe((event) => output({ type: 'event', event }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -294,7 +294,7 @@ async function runRpc(
   }
 
   ensureLocalDaemonRunning();
-  const client = createAgentClient(target, clientOpts);
+  const client = await createAgentClient(target, clientOpts);
   client.subscribe((event) => output({ type: 'event', event }));
   output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() });
   // Defer MCP connection and job recovery until the first prompt.

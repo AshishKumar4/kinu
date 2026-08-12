@@ -10,12 +10,15 @@ export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
   readSoul,
+  readMission,
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
   writeSoul,
 } from './identity/soul.js';
 export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
+export { WORKSPACE_IDENTITY_DDL } from './identity/schema.js';
+export { createInlineWorkspace } from './identity/inline-primitives.js';
 export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
 export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
@@ -718,18 +721,18 @@ export {
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
   formatExecResult, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
+  type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
+  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index.js';
 
-// File plane — CompositeVFS mount table + raw-handle mount adapters
+// The workspace filesystem — Nimbus, with nothing layered over it.
 export {
-  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
-  makeVfsError, isVfsError, ERRNO,
-  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
-  createParentRpcMountVFS, shellFsOverVfs,
-  type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
-  type VfsError, type VfsErrorCode, type DeviceMountConsent,
-  type ParentRpcFileHandle, type ParentRpcWrite, type ParentRpcResult, type ParentRpcError,
+  createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration, workspacePath, WORKSPACE_ROOT,
+  makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
+  observeWrites,
+  type WorkspaceBundle, type WorkspaceOptions, type WorkspaceVFS,
+  type VfsError, type VfsErrorCode, type WriteEvent, type WriteObserver,
 } from './vfs/index.js';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
@@ -774,6 +777,7 @@ export {
 // Memory write primitive — single canonical "save a note to MEMORY.md".
 // Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
 // readMemoryTail is the shared bounded-tail read both backends weave per turn.
+export { memoryBytes } from './memory/note.js';
 export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note.js';
 
 // Zero-LLM transcript search over the canonical `messages` table (FTS5).
@@ -1111,9 +1115,13 @@ export {
 } from './vfs/diff.js';
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff.js';
 export {
-  getExecutorFiles, readExecutorFile, sortDirEntries, toCompositePath, writeExecutorFileOp,
+  getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
+  listEnvironments,
 } from './read-models/files.js';
-export type { DirEntry, ExecutorWriteDeps, ExecutorWriteResult } from './read-models/files.js';
+export type {
+  DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
+  EnvironmentInfo, MountInfo,
+} from './read-models/files.js';
 export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
 export { listForkRuns } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';

@@ -20,16 +20,22 @@ import {
   type ArchiveCursor,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
+import { createWorkspaceBundle } from './helpers.js';
 import { SessionSearchStore } from "../src/memory/session-search.js";
-import { writeVfsFileSync } from '@proteus/agent-utils/vfs';
 
 function fresh() {
   const db = new Database(':memory:');
-  return { db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db) };
+  // The filesystem is built on demand: a database used only as a RESTORE
+  // TARGET must stay genuinely empty, and building one creates tables.
+  let vfs: ReturnType<typeof createWorkspaceBundle>['vfs'] | null = null;
+  return {
+    db, sql: makeSql(db), execRaw: makeExecRaw(db), archive: archiveSqlFromDatabase(db),
+    get vfs() { return (vfs ??= createWorkspaceBundle(db).vfs); },
+  };
 }
 
 /** A workspace with the production schema plus content of every awkward kind. */
-function seeded() {
+async function seeded() {
   const ws = fresh();
   initAllTables(ws.execRaw);
   ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'w1'}, ${'scout'}, ${100})`;
@@ -40,16 +46,18 @@ function seeded() {
   // Binary content through the canonical VFS writer — the chunked BLOB path.
   const bytes = new Uint8Array(300);
   for (let i = 0; i < bytes.length; i++) bytes[i] = (i * 7) % 256;
-  writeVfsFileSync(ws.sql, 'artifacts/logo.bin', bytes);
-  writeVfsFileSync(ws.sql, 'notes/plan.md', 'a plan with a "quote" and a \\ backslash');
+  await ws.vfs.mkdir('artifacts', { recursive: true });
+  await ws.vfs.writeFile('artifacts/logo.bin', bytes);
+  await ws.vfs.mkdir('notes', { recursive: true });
+  await ws.vfs.writeFile('notes/plan.md', 'a plan with a "quote" and a \\ backslash');
   // External-content FTS5 over `messages`, maintained by triggers.
   new SessionSearchStore(ws.sql).search('sqlite');
   return { ...ws, bytes };
 }
 
 describe('workspace archive', () => {
-  test('round-trips a workspace into an empty database, byte-exactly', () => {
-    const source = seeded();
+  test('round-trips a workspace into an empty database, byte-exactly', async () => {
+    const source = await seeded();
     const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local', now: 42 });
 
     const target = fresh();
@@ -67,18 +75,15 @@ describe('workspace archive', () => {
       'hello sqlite 0', 'hello sqlite 1', 'hello sqlite 2', 'hello sqlite 3', 'hello sqlite 4',
     ]);
 
-    // BLOB fidelity: the restored chunk is the same bytes, not a lossy decode.
-    const blob = target.sql<{ data: Uint8Array }>`
-      SELECT data FROM vfs_files WHERE path = ${'artifacts/logo.bin'} AND chunk_index = 0`;
-    expect(new Uint8Array(blob[0]!.data)).toEqual(source.bytes);
-    const text = target.sql<{ data: Uint8Array }>`
-      SELECT data FROM vfs_files WHERE path = ${'notes/plan.md'} AND chunk_index = 0`;
-    expect(new TextDecoder().decode(new Uint8Array(text[0]!.data)))
+    // BLOB fidelity, asserted where it matters: the restored workspace opens
+    // its own files and gets the same bytes back, awkward ones included.
+    expect(await target.vfs.readFile('artifacts/logo.bin')).toEqual(source.bytes);
+    expect(await target.vfs.readFile('notes/plan.md', { encoding: 'utf8' }))
       .toBe('a plan with a "quote" and a \\ backslash');
   });
 
-  test('the restored FTS index is searchable — it is rebuilt, not copied', () => {
-    const source = seeded();
+  test('the restored FTS index is searchable — it is rebuilt, not copied', async () => {
+    const source = await seeded();
     const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local' });
 
     const target = fresh();
@@ -91,8 +96,8 @@ describe('workspace archive', () => {
     expect(lines.some((l) => l.includes('"table":"messages_fts_data"'))).toBe(false);
   });
 
-  test('the workspace capability secret is never in an archive', () => {
-    const source = seeded();
+  test('the workspace capability secret is never in an archive', async () => {
+    const source = await seeded();
     source.db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL)`);
     source.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${'pwc_supersecret'})`;
 
@@ -108,8 +113,8 @@ describe('workspace archive', () => {
     expect(table).toEqual([]);
   });
 
-  test('a paged export reassembles into the same archive as an unpaged one', () => {
-    const source = seeded();
+  test('a paged export reassembles into the same archive as an unpaged one', async () => {
+    const source = await seeded();
     const whole = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', now: 7 });
 
     const paged: string[] = [];
@@ -133,7 +138,7 @@ describe('workspace archive', () => {
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM messages`[0]!.n).toBe(5);
   });
 
-  test('a page stops at the first row that fills it, however big the rows are', () => {
+  test('a page stops at the first row that fills it, however big the rows are', async () => {
     const ws = fresh();
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
     const big = new Uint8Array(64 * 1024);
@@ -158,7 +163,7 @@ describe('workspace archive', () => {
     expect(rowsPerPage.filter((n) => n > 0)).toEqual([1, 1, 1, 1, 1]);
   });
 
-  test('a table of big rows is never fetched in the batch size small rows earned', () => {
+  test('a table of big rows is never fetched in the batch size small rows earned', async () => {
     const ws = fresh();
     ws.execRaw(`CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)`);
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
@@ -189,8 +194,8 @@ describe('workspace archive', () => {
     expect(Math.max(...asked.filter((a) => a.table === 'blobs').map((a) => a.limit))).toBeLessThanOrEqual(8);
   });
 
-  test('a truncated archive is refused, not half-restored', () => {
-    const source = seeded();
+  test('a truncated archive is refused, not half-restored', async () => {
+    const source = await seeded();
     const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
 
     const target = fresh();
@@ -198,8 +203,8 @@ describe('workspace archive', () => {
       .toThrow(/incomplete/);
   });
 
-  test('a damaged archive that lost rows is refused', () => {
-    const source = seeded();
+  test('a damaged archive that lost rows is refused', async () => {
+    const source = await seeded();
     const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
     const withoutARow = lines.filter((l, i) => !(l.includes('"t":"row"') && i > 20));
 
@@ -207,7 +212,7 @@ describe('workspace archive', () => {
     expect(() => restoreWorkspaceArchive(target.archive, withoutARow)).toThrow(/damaged/);
   });
 
-  test('a file that is not an archive is refused by its first line', () => {
+  test('a file that is not an archive is refused by its first line', async () => {
     const target = fresh();
     expect(() => restoreWorkspaceArchive(target.archive, ['SQLite format 3']))
       .toThrow(/not a Proteus workspace archive/);
@@ -215,7 +220,7 @@ describe('workspace archive', () => {
       .toThrow(/not a Proteus workspace archive/);
   });
 
-  test('an empty workspace archives and restores to an empty workspace', () => {
+  test('an empty workspace archives and restores to an empty workspace', async () => {
     const source = fresh();
     initAllTables(source.execRaw);
     const lines = writeWorkspaceArchive(source.archive, { workspace: 'blank', source: 'local' });

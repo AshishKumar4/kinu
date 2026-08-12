@@ -253,7 +253,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'workspace.* is the agent\'s OWN virtual filesystem, not the filesystem of the machine or container this agent runs on — a container path such as /app is not reachable through it. '
       + 'Read and write files that live on a real machine or container by running a shell command there with the `run` tool, in the runtime that owns them.',
     result: 'Returns whatever the code returns, as a structured result, or a structured error.',
-    example: "execute_tools({code:\"const files = await workspace.readdir('/local/reports'); return files.slice(0, 5)\"})",
+    example: "execute_tools({code:\"const files = await workspace.readdir('reports'); return files.slice(0, 5)\"})",
   },
   run: {
     name: 'run',
@@ -303,7 +303,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'read returns the content, naming the offset that continues it when a cap or a limit stopped it early. '
       + 'edit returns the line each replacement landed on, or one failure naming what was wrong. '
       + 'write returns the size written and whether the file was created or replaced.',
-    example: "file({action:'edit', path:'/local/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
+    example: "file({action:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
   // The agents spec is the SINGLE SOURCE of delegation doctrine: it composes
   // the DELEGATION_RUNGS + DELEGATION_CONVERSE constants above, which the

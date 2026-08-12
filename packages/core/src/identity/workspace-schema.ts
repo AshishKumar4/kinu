@@ -102,11 +102,6 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
  */
 function repairLegacyTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   try {
-    // vfs_files: the pre-chunking schema lacks chunk_index, which SqliteFS needs.
-    const vfsCols = sql<{ name: string }>`PRAGMA table_info(vfs_files)`;
-    if (vfsCols.length > 0 && !vfsCols.some((c) => c.name === 'chunk_index')) {
-      execRaw('DROP TABLE vfs_files');
-    }
     // memory_chunks: the 3-column flat schema against MemoryStore's 7-column FTS5 one.
     const mcCols = sql<{ name: string }>`PRAGMA table_info(memory_chunks)`;
     if (mcCols.length > 0 && !mcCols.some((c) => c.name === 'start_line')) {

@@ -67,7 +67,7 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
       orchestrator.indexOf("async _proteusTimerTick()"),
     );
     expect(onStart).toContain("if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
-    expect(onStart).toContain("void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''))");
+    expect(onStart).toContain("void readSoul(this.rt.storage.vfs).then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))");
   });
 
   test("the first turn drives the same one titling path, fire-and-forget", () => {

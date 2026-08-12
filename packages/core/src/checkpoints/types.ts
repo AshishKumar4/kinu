@@ -13,7 +13,7 @@
  *     `checkpointPlan` / `checkpointRestore` RPCs, plus a per-frame
  *     `checkpoint` hint that triggers the pre-mutation snapshot).
  *
- * The agent VFS (SqliteFS) is out of scope: vfs_files stores current state
+ * The workspace filesystem is out of scope: it stores current state
  * only (no history/content-addressing), so VFS rollback has no cheap existing
  * structure to expose here.
  */

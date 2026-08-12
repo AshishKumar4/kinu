@@ -199,28 +199,33 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
 });
 
 describe('a local head forks the parent runtime (the caffe-fork capability)', () => {
-  test('sees real workspace files, runs real commands, keeps /local private', async () => {
+  test("sees the parent's workspace, runs real commands, keeps its own scratch private", async () => {
     const dir = mkdtempSync(join(tmpdir(), 'proteus-head-'));
-    writeFileSync(join(dir, 'hello.txt'), 'from the real workspace');
+    writeFileSync(join(dir, 'hello.txt'), 'from the real machine');
     const parent = makeParent();
+    await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
     const headDb = new Database(':memory:');
     const rt = buildCLIHeadRuntime(headDb as never, {
       parentRuntime: parent, cwd: dir, agentId: 'h', agentName: 'head-h',
     });
 
-    // Real workspace files are visible through the /parent mount — the exact
-    // thing the old :memory:-backed fork could not see.
-    const seen = await rt.storage.vfs.readFile('/parent/hello.txt', { encoding: 'utf8' });
-    expect(seen).toBe('from the real workspace');
+    // The parent's workspace, through the parent EXECUTOR — the exact thing the
+    // old :memory:-backed fork could not see.
+    const parentExec = rt.executionRouter!.getProvider('parent')!;
+    expect(await parentExec.tools.readFile.execute('hello.txt')).toBe('from the parent workspace');
+    // And its real shell, in one call rather than a per-file walk.
+    expect(String(await parentExec.tools.exec.execute('cat hello.txt')))
+      .toContain('from the parent workspace');
 
     // Real commands run through the parent's shared laptop executor.
     const laptop = rt.executionRouter!.getProvider('laptop')!;
     const out = await laptop.tools.exec!.execute(`cat ${join(dir, 'hello.txt')}`);
-    expect(String(out)).toContain('from the real workspace');
+    expect(String(out)).toContain('from the real machine');
 
-    // /local is a PRIVATE scratch overlay, not a window onto the host.
-    await rt.storage.vfs.writeFile('/local/scratch.txt', 'private');
+    // Its own filesystem is PRIVATE scratch — not the host, not the parent.
+    await rt.storage.vfs.writeFile('scratch.txt', 'private');
     expect(existsSync(join(dir, 'scratch.txt'))).toBe(false);
+    expect(await parent.storage.vfs.exists('scratch.txt')).toBe(false);
     headDb.close();
   });
 
@@ -283,8 +288,8 @@ function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
         input: JSON.stringify(input),
       }], 'tool-calls');
-      if (step === 1) return fileCall({ action: 'write', path: '/local/note.txt', content: `scratch-of-${marker}` });
-      if (step === 2) { await arrive(); return fileCall({ action: 'read', path: '/local/note.txt' }); }
+      if (step === 1) return fileCall({ action: 'write', path: 'note.txt', content: `scratch-of-${marker}` });
+      if (step === 2) { await arrive(); return fileCall({ action: 'read', path: 'note.txt' }); }
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
     },
   } as unknown as LanguageModel;
@@ -358,9 +363,13 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
+      // Through the parent EXECUTOR: that is where a head's writes to its
+      // parent land, and where attribution is recorded.
       const write = (content: string) => envelope([{
-        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
-        input: JSON.stringify({ action: 'write', path: `/parent/${marker}.ts`, content }),
+        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'execute_tools',
+        input: JSON.stringify({
+          code: `await parent.writeFile(${JSON.stringify(`${marker}.ts`)}, ${JSON.stringify(content)})`,
+        }),
       }], 'tool-calls');
       if (step === 1) return write('one\n');
       if (step === 2) { await arrive(); return write('one\ntwo\nthree\n'); }
@@ -382,18 +391,14 @@ describe('a head reports the files IT changed, with concurrent siblings on the s
       (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
     ]);
 
-    // Both files really are on the shared plane, both written while the other
-    // head was still running — this is the smear scenario, not a sequential one.
-    expect(existsSync(join(dir, 'alpha.ts'))).toBe(true);
-    expect(existsSync(join(dir, 'beta.ts'))).toBe(true);
-
     // Each head reports exactly its own file, at its NET line count (two writes
-    // to that path, one entry, three lines).
+    // to that path, one entry, three lines) — written while the other head was
+    // still running, which is the smear scenario rather than a sequential one.
     expect(alpha.fileChanges).toEqual([
-      { path: '/parent/alpha.ts', status: 'added', added: 3, removed: 0 },
+      { path: 'alpha.ts', status: 'added', added: 3, removed: 0 },
     ]);
     expect(beta.fileChanges).toEqual([
-      { path: '/parent/beta.ts', status: 'added', added: 3, removed: 0 },
+      { path: 'beta.ts', status: 'added', added: 3, removed: 0 },
     ]);
   });
 

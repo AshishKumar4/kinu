@@ -4,7 +4,6 @@
  * (Environment mounts, Output diff chips, terminals) reads labels/order from
  * here so the vocabulary never drifts across tabs.
  */
-import { EXECUTOR_MOUNT_PREFIX } from "@proteus/core";
 
 /** Live executor row as reported by the orchestrator's getExecutors RPC. */
 export interface ExecutorInfo {
@@ -36,15 +35,10 @@ export function executorSortKey(name: string): number {
   return idx === -1 ? 99 : idx;
 }
 
-/** CompositeVFS mount name → the executor that runs commands there (inverse
- *  of core's EXECUTOR_MOUNT_PREFIX; /local is the workspace VFS itself). The
- *  mount is the file plane; the executor is the exec plane of the same
- *  environment. */
+/** An environment row's name IS its executor's name: one environment, one
+ *  filesystem, one exec plane. Kept as a function because the file browser
+ *  calls it per row and used to need a real translation. */
 export function executorForMount(mountName: string): string {
-  if (mountName === "local") return "workspace";
-  for (const [executor, prefix] of Object.entries(EXECUTOR_MOUNT_PREFIX)) {
-    if (prefix === `/${mountName}`) return executor;
-  }
   return mountName;
 }
 

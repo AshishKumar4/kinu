@@ -92,7 +92,7 @@ describe('citesSpillAddress', () => {
 
   test('ordinary tool calls are not follow-ups', () => {
     expect(citesSpillAddress({ command: 'ls -la src' })).toBe(false);
-    expect(citesSpillAddress({ path: '/local/notes.md' })).toBe(false);
+    expect(citesSpillAddress({ path: 'notes.md' })).toBe(false);
     expect(citesSpillAddress(null)).toBe(false);
     expect(citesSpillAddress(undefined)).toBe(false);
   });

@@ -81,7 +81,7 @@ export function renderAgentsMdSection(
  * defaults; a subordinate's `/workspace` parent mount adds the enclosing
  * workspace instructions; the sandbox workspace — read only when a container
  * is already active, never provisioned for this — is nearest and wins on
- * conflict. Files are read through the CompositeVFS as structured bytes, so
+ * conflict. Files are read through the workspace filesystem as structured bytes, so
  * an executor error string can never masquerade as file content. Best-effort:
  * a failed read yields an absent file, never an error.
  */

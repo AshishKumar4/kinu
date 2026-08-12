@@ -9,7 +9,6 @@
  * - The workspace identity (stable UUID) — the ownership root
  */
 
-import { writeVfsFileSync } from '@proteus/agent-utils/vfs';
 import type { AgentRuntime, BranchHandle } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { LLMProviderConfig } from '../llm.js';
@@ -17,7 +16,7 @@ import { initAllTables } from './schema.js';
 import { seedSoul } from './soul.js';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
-  createInlineSchedule, createInlineVFS, wrapDatabase, type AgentDatabase,
+  createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
 } from './inline-primitives.js';
 import { INITIAL_SCAFFOLD_SOURCE } from '../scaffold/bootstrap.js';
 import { nanoid } from '../utils/nanoid.js';
@@ -41,9 +40,10 @@ function buildComponents(
   db: AgentDatabase,
   sql: SqlExecutor,
   execRaw: RawSqlExec,
+  workspace: ReturnType<typeof createInlineWorkspace>,
   config: { llm: LLMProviderConfig; judge?: LLMProviderConfig; agentId: string; agentName: string },
 ) {
-  const vfs = createInlineVFS(sql);
+  const vfs = workspace.vfs;
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
   const executor = createInlineExecutor();
@@ -59,7 +59,7 @@ function buildComponents(
   };
 
   return buildRuntime({
-    sql, execRaw, vfs, llm, executor, schedule,
+    sql, execRaw, vfs, llm, executor, schedule, shell: workspace.shell,
     agentId: config.agentId, agentName: config.agentName,
     memory, craftStore, judgeModel,
     spawnBranch: async () => mockBranch,
@@ -67,30 +67,36 @@ function buildComponents(
   });
 }
 
-/** Create a new workspace from scratch. Returns the default agent's runtime. */
-export function createWorkspace(db: AgentDatabase, config: WorkspaceBirthConfig): AgentRuntime {
+/**
+ * Create a new workspace from scratch. Returns the default agent's runtime.
+ *
+ * Async because the seeds are FILES in a real filesystem: SOUL.md, the initial
+ * scaffold and MEMORY.md are written through the same VFS the agent will use,
+ * not injected into storage behind it.
+ */
+export async function createWorkspace(
+  db: AgentDatabase, config: WorkspaceBirthConfig,
+): Promise<AgentRuntime> {
   const { sql, execRaw } = wrapDatabase(db);
 
-  // Initialize all tables
   initAllTables(execRaw);
+  const workspace = createInlineWorkspace(db);
 
-  // Write the workspace identity
   const workspaceId = nanoid();
   sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
 
-  // Seed SOUL.md from the initial mission. It is the workspace's canonical
-  // identity document, embodied by its default agent.
-  seedSoul(sql, { name: config.name, mission: config.purpose });
+  // SOUL.md — the workspace's canonical identity document, embodied by its
+  // default agent. seedSoul also seeds the mission a listing reads.
+  await seedSoul(workspace.vfs, sql, { name: config.name, mission: config.purpose });
 
-  // Bootstrap scaffold into VFS
-  const scaffoldCode = config.scaffold ?? INITIAL_SCAFFOLD_SOURCE;
-  writeVfsFileSync(sql, 'scaffold/agent.js', scaffoldCode);
+  await workspace.vfs.mkdir('scaffold', { recursive: true });
+  await workspace.vfs.writeFile('scaffold/agent.js', config.scaffold ?? INITIAL_SCAFFOLD_SOURCE);
   sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${nowMs()}, ${'initial bootstrap'})`;
 
-  // Initialize MEMORY.md
-  writeVfsFileSync(sql, 'memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);
+  await workspace.vfs.mkdir('memory', { recursive: true });
+  await workspace.vfs.writeFile('memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  return buildComponents(db, sql, execRaw, {
+  return buildComponents(db, sql, execRaw, workspace, {
     llm: config.llm, judge: config.judge, agentId: workspaceId, agentName: config.name,
   });
 }

@@ -137,7 +137,7 @@ import {
   getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
-  getExecutorFiles, readExecutorFile, writeExecutorFileOp,
+  getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob,
@@ -1341,7 +1341,7 @@ export class OrchestratorAgent extends ActorAgent {
     // every other workspace is already titled, so it costs a config read.
     // Fire-and-forget: boot never waits on a model call.
     if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
-      void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''));
+      void readSoul(this.rt.storage.vfs).then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')));
     }
   }
 
@@ -1459,6 +1459,7 @@ export class OrchestratorAgent extends ActorAgent {
   async getAgentStatus() {
     return getAgentStatus({
       sql: this.boundSql,
+      vfs: this.rt.storage.vfs,
       config: this.config,
       fallbackId: this.ctx.id.toString(),
       name: this.name,
@@ -2442,11 +2443,10 @@ export class OrchestratorAgent extends ActorAgent {
     return this.rt.executionRouter?.listExecutors() ?? [];
   }
 
-  /** The workspace mount table — the CompositeVFS data surface behind the
-   *  unified file browser. One row per environment (/local always; /sandbox,
-   *  /nimbus, /pc as configured), with live state + declared policy. */
+  /** The environments behind the unified file browser — one row per executor
+   *  that has a filesystem, with live state and how durable it is. */
   @callable() async listMounts() {
-    return this.rt.compositeVfs.listMounts();
+    return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
   }
 
   /** The agent roster as seen from this workspace: this DO's orchestrator is
@@ -2555,15 +2555,17 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  /** Typed directory listing for the file manager — read straight off the
-   *  CompositeVFS for every executor (accurate types + sizes). */
+  /** Typed directory listing for the file manager — read off each executor's
+   *  own raw handle, in that environment's own paths. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
-    return getExecutorFiles(this.rt.storage.vfs, executorId, path);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return getExecutorFiles(this.rt.executionRouter, executorId, path);
   }
 
   /** Read a single file's text content for the file-manager viewer. */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
-    return readExecutorFile(this.rt.storage.vfs, executorId, path);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return readExecutorFile(this.rt.executionRouter, executorId, path);
   }
 
   /** Upload one file into an executor (file-manager drop/Upload).
@@ -2572,7 +2574,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
    *  ordinary files died at the socket as an opaque connection failure. */
   async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
-    return writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return writeExecutorFileOp(this.rt.executionRouter, executorId, path, bytes);
   }
 
   /**
@@ -2651,7 +2654,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
     if (!text) throw new Error('SOUL.md cannot be empty.');
-    writeSoul(this.boundSql, text);
+    await writeSoul(this.rt.storage.vfs, this.boundSql, text);
     // Invalidate the cached SOUL.md + system prompt so the next turn
     // picks up the new identity.
     this._cachedSoulText = null;
@@ -2697,6 +2700,7 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
     const fork = await forkWorkspace({
       sql: this.boundSql,
+      vfs: this.rt.storage.vfs,
       sourceName: this.name,
       busy: () => this._inFlight,
       transport: this.forkTransport,
@@ -2759,13 +2763,15 @@ export class OrchestratorAgent extends ActorAgent {
     // missing table.
     this.ensureSchema();
 
-    // Atomic. `this.boundSql` is a stable closure over `this.sql` that
-    // preserves the `this`-binding the Agent base class needs.
-    this.ctx.storage.transactionSync(() => {
-      writeForkSnapshot(this.boundSql, snapshot, {
-        workspaceId: this.ctx.id.toString(),
-        workspaceName: forkName,
-      });
+    // The row copy is atomic; the file copy cannot be inside that transaction
+    // (a host transaction is synchronous, the filesystem is not) and does not
+    // need to be — it is a set of idempotent overwrites. `this.boundSql` is a
+    // stable closure over `this.sql` that preserves the `this`-binding the
+    // Agent base class needs.
+    await writeForkSnapshot(this.boundSql, this.rt.storage.vfs, snapshot, {
+      workspaceId: this.ctx.id.toString(),
+      workspaceName: forkName,
+      transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
 
     return { ok: true, agentId: this.ctx.id.toString() };

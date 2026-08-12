@@ -19,9 +19,9 @@ export async function ensureDir(vfs: Pick<VFS, 'mkdir'>, dir: string): Promise<v
   try {
     await vfs.mkdir(dir, { recursive: true });
   } catch (err) {
-    // mkdir({recursive:true}) on the SqliteFS impl is a no-op when the
-    // directory exists, but external VFSes (Node fs, R2) may surface
-    // EEXIST. Re-throw if it's clearly not a "exists" error.
+    // mkdir({recursive:true}) is a no-op when the directory exists on the
+    // workspace filesystem, but a remote environment's may surface EEXIST.
+    // Re-throw if it's clearly not an "exists" error.
     const msg = err instanceof Error ? err.message.toLowerCase() : '';
     if (!msg.includes('exist') && !msg.includes('eexist')) throw err;
   }

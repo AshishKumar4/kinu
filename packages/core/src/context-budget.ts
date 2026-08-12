@@ -33,14 +33,14 @@
  *  their paths from here, and {@link citesSpillAddress} recognises a tool call
  *  that went back for one. */
 export const SPILL_DIRS = {
-  /** Clamped tool results (tools/clamp.ts). Workspace-relative by history. */
+  /** Clamped tool results (tools/clamp.ts). */
   toolOutput: '.proteus/tool-output',
   /** Message-borne bulk: attachments and pasted text (attachment-sanitizer). */
-  attachments: '/local/attachments',
+  attachments: 'attachments',
   /** Oversize event payloads (events/hub/content-spill.ts). */
-  eventContent: '/local/.proteus/event-content',
+  eventContent: '.proteus/event-content',
   /** Compaction transcripts (@proteus/compaction stores.ts). */
-  compaction: '/local/.proteus/compaction',
+  compaction: '.proteus/compaction',
 } as const;
 
 const SPILL_DIR_VALUES: readonly string[] = Object.values(SPILL_DIRS);

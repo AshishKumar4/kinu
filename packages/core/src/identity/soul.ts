@@ -1,25 +1,20 @@
 /**
- * SOUL.md — the agent's identity document, stored at the VFS root.
+ * SOUL.md — the agent's identity document, a real file in the workspace
+ * filesystem.
  *
- * The soul is an ordinary vfs_files entry written through the canonical
- * SqliteFS encoding, so every VFS consumer (file manager, workspace shell,
- * shared scratch) reads the same bytes. Unlike the pre-SOUL.md `agent_soul`
- * table (creation-only), SOUL.md is deliberately mutable: the user edits it
- * via the backend setSoul RPC and the agent can evolve it through its own
- * file tools.
+ * It is deliberately a FILE and not a row: the user edits it through the setSoul
+ * RPC, and the agent evolves it with its own file tools, so it has to live where
+ * `file`, `workspace.readFile` and `grep` can all reach it by one path.
  *
- * readSoul is a pure read: read-only consumers (`proteus list`, `proteus
- * status`) open the database readonly, so a read must never write. The
- * one-time repairs for pre-existing agents live in migrateSoulStorage, which
- * the write-capable workspace-open paths run:
- *   - `agent_soul` table (pre-b7fefa1) → rendered SOUL.md, table dropped.
- *   - TEXT-typed SOUL.md rows (written by the broken raw-SQL writer that
- *     shipped with b7fefa1) → rewritten as canonical BLOBs, which is what
- *     SqliteFS needs (it decodes TEXT `data` as legacy base64).
+ * Its MISSION, separately, is a column on `workspace_identity`. That is not a
+ * second copy of the document — it is the one line a listing needs, maintained
+ * by {@link writeSoul} and by nothing else. The alternative was to boot a whole
+ * filesystem to render `proteus list`, which both costs a filesystem per
+ * workspace listed and MUTATES each one on the way past (the process-generation
+ * counter advances on every open). A listing must not do either.
  */
 
-import { concatBuffers, rowDataToBytes, writeVfsFileSync } from '@proteus/agent-utils/vfs';
-import type { SqlExecutor } from '../types/primitives.js';
+import type { SqlExecutor, VFS } from '../types/primitives.js';
 
 export const SOUL_PATH = 'SOUL.md';
 
@@ -99,75 +94,51 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
   return `${summary.slice(0, Math.max(0, maxLength - 3)).trimEnd()}...`;
 }
 
-type SoulRow = { data: string | ArrayBuffer | Uint8Array | null };
-
-function selectSoulRows(sql: SqlExecutor): SoulRow[] {
-  return sql<SoulRow>`
-    SELECT data FROM vfs_files
-    WHERE path = ${SOUL_PATH} AND is_dir = 0
-    ORDER BY chunk_index ASC
-  `;
-}
-
-/** TEXT rows carry the markdown verbatim (the pre-fix writer bound it as a
- *  string); canonical rows are UTF-8 BLOB chunks. */
-function decodeSoulRows(rows: SoulRow[]): string {
-  if (rows.some((row) => typeof row.data === 'string')) {
-    return rows.map((row) => (typeof row.data === 'string' ? row.data : '')).join('');
+/**
+ * The soul document, or null when the workspace has none.
+ *
+ * Reads the file, so it needs a filesystem — which every caller inside a turn
+ * has. A read-only inspection (`proteus list`, `proteus status`) deliberately
+ * does not call this: it reads {@link readMission} instead.
+ */
+export async function readSoul(vfs: VFS): Promise<string | null> {
+  try {
+    const text = await vfs.readFile(SOUL_PATH, { encoding: 'utf8' });
+    return typeof text === 'string' && text.trim() ? text : null;
+  } catch {
+    return null;
   }
-  return new TextDecoder().decode(concatBuffers(rows.map((row) => rowDataToBytes(row.data))));
-}
-
-export function readSoul(sql: SqlExecutor): string | null {
-  const rows = selectSoulRows(sql);
-  if (rows.length === 0) return hasLegacyAgentSoul(sql) ? renderLegacyAgentSoul(sql) : null;
-  const text = decodeSoulRows(rows);
-  return text.trim() ? text : null;
-}
-
-export function writeSoul(sql: SqlExecutor, markdown: string): void {
-  writeVfsFileSync(sql, SOUL_PATH, markdown);
-}
-
-export function seedSoul(sql: SqlExecutor, input: { name: string; mission?: string }): string {
-  const soul = renderSoulMarkdown(input);
-  writeSoul(sql, soul);
-  return soul;
 }
 
 /**
- * Bring pre-canonical soul storage up to date. Idempotent, and it writes —
- * run it from the workspace-open paths (right after schema init), never from
- * a read path.
+ * The workspace's mission, straight off its identity row.
+ *
+ * The one datum a listing needs, readable without opening a filesystem — and
+ * therefore without writing to the database it is only reading.
  */
-export function migrateSoulStorage(sql: SqlExecutor): void {
-  const rows = selectSoulRows(sql);
-  if (rows.length > 0) {
-    if (rows.some((row) => typeof row.data === 'string')) writeSoul(sql, decodeSoulRows(rows));
-    return;
-  }
-  if (!hasLegacyAgentSoul(sql)) return;
-  const soul = renderLegacyAgentSoul(sql);
-  if (soul) writeSoul(sql, soul);
-  sql`DROP TABLE agent_soul`;
+export function readMission(sql: SqlExecutor): string | null {
+  const mission = sql<{ mission: string | null }>`
+    SELECT mission FROM workspace_identity LIMIT 1
+  `[0]?.mission?.trim();
+  return mission || null;
 }
 
-function hasLegacyAgentSoul(sql: SqlExecutor): boolean {
-  return sql<{ name: string }>`
-    SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_soul'
-  `.length > 0;
+/**
+ * Write the soul, and refresh the mission a listing reads.
+ *
+ * The single writer of both. Keeping the refresh here rather than at each call
+ * site is what stops the row from drifting away from the document: there is no
+ * path that changes one without the other.
+ */
+export async function writeSoul(vfs: VFS, sql: SqlExecutor, markdown: string): Promise<void> {
+  await vfs.writeFile(SOUL_PATH, markdown);
+  sql`UPDATE workspace_identity SET mission = ${summarizeSoul(markdown)}`;
 }
 
-/** Render the pre-SOUL.md `agent_soul` purpose as SOUL.md markdown. Callers
- *  must have confirmed the table exists. */
-function renderLegacyAgentSoul(sql: SqlExecutor): string | null {
-  const purpose = sql<{ purpose: string | null }>`
-    SELECT purpose FROM agent_soul LIMIT 1
-  `[0]?.purpose?.trim();
-  if (!purpose) return null;
-
-  const name = sql<{ name: string | null }>`
-    SELECT name FROM workspace_identity LIMIT 1
-  `[0]?.name ?? '';
-  return renderSoulMarkdown({ name, mission: purpose });
+export async function seedSoul(
+  vfs: VFS, sql: SqlExecutor, input: { name: string; mission?: string },
+): Promise<string> {
+  const soul = renderSoulMarkdown(input);
+  await writeSoul(vfs, sql, soul);
+  return soul;
 }

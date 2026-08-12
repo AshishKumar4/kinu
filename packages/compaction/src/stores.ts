@@ -1,14 +1,14 @@
 /**
  * The real engine ports over Proteus's shared storage primitives.
  *
- * Both backends expose the SAME two primitives — a CompositeVFS whose /local
- * mount is the durable SqliteFS (DO storage on cf, agent.db on cli) and a
+ * Both backends expose the SAME two primitives — a workspace filesystem whose
+ * filesystem is Nimbus (DO storage on cf, agent.db on cli) and a
  * SqlExecutor over that same database — so the transcript store and the
  * durable compaction state are built ONCE here and injected as ports.
  * Backends supply only what genuinely differs: the summarizer transport
  * (their model call), the logger sink, and the onOutcome ledger reset.
  *
- * Transcripts live at `/local/.proteus/compaction/<sessionKey>/<rangeHash>.md`
+ * Transcripts live at `.proteus/compaction/<sessionKey>/<rangeHash>.md`
  * — inside the agent's own file plane, so the reference message's citation is
  * directly readable back through the agent's normal file tools
  * (workspace.readFile / the shell). That read-back IS the lossless-recall

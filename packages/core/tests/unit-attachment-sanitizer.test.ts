@@ -78,7 +78,7 @@ describe('sanitizeAttachmentsForModel', () => {
 
     // No file-typed part survives; the payload round-trips through the VFS.
     const path = /saved to (\S+)/.exec(replacement!.text!)?.[1];
-    expect(path).toStartWith('/local/attachments/');
+    expect(path).toStartWith('attachments/');
     const stored = await vfs.readFile(path!);
     expect(stored instanceof Uint8Array ? Array.from(stored) : stored).toEqual(Array.from(PDF_BYTES));
     expect(writes()).toBe(1);
@@ -91,7 +91,7 @@ describe('sanitizeAttachmentsForModel', () => {
     const second = await sanitizeAttachmentsForModel([pdfMessage()], policy);
     expect(JSON.stringify(second)).toBe(JSON.stringify(first));
     expect(writes()).toBe(1);
-    expect(await vfs.readdir('/local/attachments')).toHaveLength(1);
+    expect(await vfs.readdir('attachments')).toHaveLength(1);
   });
 
   test('passes images through for image-capable models and replaces them for text-only ones', async () => {
@@ -110,8 +110,8 @@ describe('sanitizeAttachmentsForModel', () => {
     const replaced = await sanitizeAttachmentsForModel([message], { accepts: accepts(), vfs });
     const parts = replaced[0]!.content as Array<{ type: string; text?: string }>;
     expect(parts.every((p) => p.type === 'text')).toBe(true);
-    expect(parts[0]!.text).toContain('/local/attachments/');
-    expect(parts[1]!.text).toContain('/local/attachments/');
+    expect(parts[0]!.text).toContain('attachments/');
+    expect(parts[1]!.text).toContain('attachments/');
   });
 
   test('passes PDFs through untouched for pdf-capable models', async () => {
@@ -156,7 +156,7 @@ describe('sanitizeAttachmentsForModel', () => {
     };
     const out = await sanitizeAttachmentsForModel([message], { accepts: accepts('image'), vfs });
     const part = (out[0]!.content as Array<{ type: string; text: string }>)[0]!;
-    expect(part.text).toContain('/local/attachments/');
+    expect(part.text).toContain('attachments/');
     expect(part.text).not.toContain(body);
     expect(writes()).toBe(1);
   });
@@ -208,7 +208,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     expect(text).toContain(`${HUGE_PASTE.length} bytes`);
     expect(text).toContain('slice + llm.query each slice, aggregate');
     const path = /saved to (\S+) —/.exec(text)?.[1];
-    expect(path).toStartWith('/local/attachments/');
+    expect(path).toStartWith('attachments/');
     expect(new TextDecoder().decode(await vfs.readFile(path!) as Uint8Array)).toBe(HUGE_PASTE);
     expect(writes()).toBe(1);
     expect(budget.snapshot().trips).toEqual({ pasted_text: 1 });
@@ -225,7 +225,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
       .content as Array<{ type: string; text: string }>;
     expect(parts).toHaveLength(2);
     expect(parts[0]!.text).toBe('here is the log:');
-    expect(parts[1]!.text).toContain('/local/attachments/');
+    expect(parts[1]!.text).toContain('attachments/');
   });
 
   test('ordinary messages inline untouched — the root must not starve on normal material', async () => {
@@ -280,7 +280,7 @@ describe('message-borne bulk (pasted text and oversize accepted documents)', () 
     const part = (spilled[0]!.content as Array<{ type: string; text: string }>)[0]!;
     expect(part.type).toBe('text');
     expect(part.text).toContain('thesis.pdf');
-    expect(part.text).toContain('/local/attachments/');
+    expect(part.text).toContain('attachments/');
     expect(budget.snapshot().trips).toEqual({ attachment: 1 });
 
     const small = pdfMessage();

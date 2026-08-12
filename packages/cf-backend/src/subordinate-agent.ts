@@ -5,12 +5,12 @@ import type { ChatResponseResult } from '@cloudflare/think';
 import {
   EvolutionEngine,
   bootstrapScaffold,
-  createParentRpcMountVFS,
+  createParentExecutor, createParentWorkspaceVfs,
   initWorkspaceSchema,
   seedSoul,
   snapshotCompletedTurn,
   type CompletedTurn,
-  type ParentRpcFileHandle,
+  type ParentWorkspaceHandle, type ParentRpcWrite,
   type SubordinateHandoff,
   type SubordinateReportStatus,
   // Read models — the same control-plane implementations the orchestrator uses.
@@ -128,26 +128,20 @@ export class SubordinateAgent extends ActorAgent {
     this._schemaReady = true;
   }
 
-  private async mountParentWorkspace(): Promise<void> {
+  private async registerParentWorkspace(): Promise<void> {
     const parent = await this.parentAgent(OrchestratorAgent);
-    const handle: ParentRpcFileHandle = {
-      read: (path) => parent.readWorkspaceFile(path),
-      write: (input) => parent.writeWorkspaceFile(input),
-      list: (path) => parent.listWorkspaceFiles(path),
-      stat: (path) => parent.statWorkspaceFile(path),
-      delete: (path) => parent.deleteWorkspaceFile(path),
+    const handle: ParentWorkspaceHandle = {
+      read: (path: string) => parent.readWorkspaceFile(path),
+      write: (input: ParentRpcWrite) => parent.writeWorkspaceFile(input),
+      list: (path: string) => parent.listWorkspaceFiles(path),
+      stat: (path: string) => parent.statWorkspaceFile(path),
+      delete: (path: string) => parent.deleteWorkspaceFile(path),
+      exec: (command: string) => parent.execWorkspaceCommand(command),
     };
-    // Named `/parent`, not `/workspace` — the `run` tool's `runtime: "workspace"`
-    // already names this subordinate's OWN emulated scratch shell (see
-    // exploration.ts's headRuntime() for the same choice on the head side).
-    this.rt.compositeVfs.mount('parent', {
-      vfs: createParentRpcMountVFS(handle),
-      policy: {
-        readOnly: false,
-        rootPath: '',
-        consistency: 'durable',
-      },
-    });
+    // An executor named `parent`, not a directory of this subordinate's own
+    // filesystem: the parent workspace is another Durable Object reached over
+    // async RPC, exactly like the sandbox and the user's machine.
+    this.rt.executionRouter?.register(createParentExecutor({ handle }));
   }
 
   @callable()
@@ -173,7 +167,7 @@ export class SubordinateAgent extends ActorAgent {
       parentWorkspace: bootstrap.parentWorkspace,
       ownerUserId: bootstrap.ownerUserId,
     });
-    seedSoul(this.boundSql, {
+    await seedSoul(this.rt.storage.vfs, this.boundSql, {
       name: input.displayName,
       mission: `Role: ${input.role}\n\n${input.mission}`,
     });
@@ -184,7 +178,7 @@ export class SubordinateAgent extends ActorAgent {
     this._cachedSoulText = null;
     this._cachedSystemPrompt = null;
     this.invalidateModelCaches();
-    await this.mountParentWorkspace();
+    await this.registerParentWorkspace();
     if (!(await this.rt.identity.scaffold.exists())) await bootstrapScaffold(this.rt);
     return { ok: true };
   }
@@ -192,7 +186,7 @@ export class SubordinateAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.ensureSchema();
     if (this.identity.read()) {
-      await this.mountParentWorkspace();
+      await this.registerParentWorkspace();
       if (!(await this.rt.identity.scaffold.exists())) await bootstrapScaffold(this.rt);
     }
   }

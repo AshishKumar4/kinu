@@ -36,7 +36,9 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
   const executor = createMockExecutor();
   const schedule = createMemorySchedule(db);
 
-  db.run("INSERT INTO vfs_files (path, data, size, mtime) VALUES ('scaffold/agent.js', 'initial', 7, ?)", [Date.now()]);
+  void vfs.mkdir('scaffold', { recursive: true })
+    .then(() => vfs.writeFile('scaffold/agent.js', 'initial'))
+    .catch(() => {});
 
   function createRealBranch(branchLLM: LLM): BranchHandle {
     return {
