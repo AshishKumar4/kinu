@@ -128,7 +128,7 @@ import {
   receiveSubordinateEvent,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
-  getAgentStatus, getChatHistory, getToolList, type ChatHistoryEntry,
+  getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, type ChatHistoryEntry,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
@@ -1454,9 +1454,10 @@ export class OrchestratorAgent extends ActorAgent {
     return getToolList(this.boundSql, this.rt.craftStore);
   }
 
+  /** The LATEST search's tree only — settled earlier searches stay in
+   *  search_nodes and must never shadow the run the operator is watching. */
   @callable() async getMctsTree() {
-    return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
-      FROM search_nodes ORDER BY depth, created_at`;
+    return readLatestSearchTree(this.boundSql);
   }
 
   @callable() async getMctsNodeDetail(nodeId: string) {
@@ -2607,8 +2608,10 @@ export class OrchestratorAgent extends ActorAgent {
    */
   broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
     try {
-      const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
-        FROM search_nodes ORDER BY depth, created_at`;
+      // Same scoped projection as getMctsTree: the tree in progress IS the
+      // latest one, and pushing every settled search's rows made the client
+      // render whichever root it picked out of the pile.
+      const nodes = readLatestSearchTree(this.boundSql);
       this.broadcast(JSON.stringify({
         type: "mcts-progress",
         phase,

@@ -7,6 +7,7 @@
  * detail the arguments do not carry: when they say nothing the summary is
  * empty and the card falls back to the tool name alone.
  */
+import { isFailingToolResult } from "@proteus/core";
 
 /** Chip budget — long enough for a command or a short task, short enough to
  *  stay on one line next to the name, runtime badge and duration. */
@@ -14,6 +15,30 @@ const MAX = 72;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Whether a tool call is a failure, as the agent itself would read it — not
+ * just as the transport does.
+ *
+ * The `run` tool (and every built-in) catches its own failure and RETURNS it
+ * as an ordinary, successful result — `Error (exit 1)…` or `{"error": "…"}`
+ * (execution/exec-result.ts, tools/builtins.ts) — because that text is what
+ * steers the model's next step. A card that only checks the transport state
+ * renders that exact case as a plain success: the curl that came back
+ * `HTTP 500` looks identical to the one that came back `HTTP 200`. This reuses
+ * the SAME predicate core's turn-steering already keys the agent's own
+ * self-correction hints on, so the UI and the agent see failure the same way.
+ */
+export function isToolCallFailed(toolName: string, input: unknown, output: unknown, protocolFailed: boolean): boolean {
+  if (protocolFailed) return true;
+  if (output == null) return false;
+  const result = typeof output === "string" ? output : jsonOrString(output);
+  return isFailingToolResult({ toolName, args: isRecord(input) ? input : {}, result, success: true });
+}
+
+function jsonOrString(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function str(input: Record<string, unknown>, key: string): string {

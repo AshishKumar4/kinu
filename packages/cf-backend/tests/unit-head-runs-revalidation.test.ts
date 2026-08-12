@@ -1,10 +1,15 @@
 // The Branches view reads a journal nothing pushes. It must keep re-reading
-// while a split is being written, and must stop once there is nothing left to
-// watch — a view that polls forever is a view that never stops costing.
+// while a split is being written, and must never fall permanently silent once
+// the loaded snapshot looks settled — the workspace can start a NEW split from
+// a background job, a drain, or an autonomous turn this browser tab was never
+// "streaming" for, and the old policy (stop polling entirely once nothing in
+// view looked live) left the tab frozen on a prior attempt until the operator
+// forced a remount. It still polls fast while work is visibly in flight, and
+// slow otherwise — never zero.
 import { describe, test, expect } from 'bun:test';
 import type { HeadRunView } from '@proteus/core';
 import {
-  BRANCHES_REVALIDATE_MS, branchesRevalidateMs, hasLiveHeadRun,
+  BRANCHES_IDLE_REVALIDATE_MS, BRANCHES_REVALIDATE_MS, branchesRevalidateMs, hasLiveHeadRun,
 } from '../src/components/surfaces/head-runs.ts';
 
 function run(status: string, headStatuses: string[]): HeadRunView {
@@ -42,20 +47,27 @@ describe('live head runs', () => {
 });
 
 describe('branches revalidation policy', () => {
-  test('a live split keeps the view refreshing', () => {
+  test('a live split keeps the view refreshing at the fast cadence', () => {
     expect(branchesRevalidateMs([run('running', ['running'])], false)).toBe(BRANCHES_REVALIDATE_MS);
   });
 
-  test('a turn in flight refreshes even before the first run exists', () => {
+  test('a turn in flight refreshes fast even before the first run exists', () => {
     // The split that is about to start is what the operator opened the tab for.
     expect(branchesRevalidateMs([], true)).toBe(BRANCHES_REVALIDATE_MS);
     expect(branchesRevalidateMs(null, true)).toBe(BRANCHES_REVALIDATE_MS);
   });
 
-  test('an idle workspace with settled runs stops polling', () => {
-    expect(branchesRevalidateMs([run('completed', ['completed'])], false)).toBeNull();
-    expect(branchesRevalidateMs([], false)).toBeNull();
-    // A failed load with nothing ever loaded hands back to the manual retry.
-    expect(branchesRevalidateMs(null, false)).toBeNull();
+  test('an idle workspace with settled runs keeps polling — slowly, never zero', () => {
+    // This is the regression: a split can start from work this tab never
+    // observes as "streaming" (a background job, a drain, an autonomous
+    // turn). A view that stops polling here never finds out.
+    expect(branchesRevalidateMs([run('completed', ['completed'])], false)).toBe(BRANCHES_IDLE_REVALIDATE_MS);
+    expect(branchesRevalidateMs([], false)).toBe(BRANCHES_IDLE_REVALIDATE_MS);
+    // A failed load with nothing ever loaded still keeps trying.
+    expect(branchesRevalidateMs(null, false)).toBe(BRANCHES_IDLE_REVALIDATE_MS);
+  });
+
+  test('the idle cadence is strictly slower than the live one — it is a keep-fresh tick, not a poll storm', () => {
+    expect(BRANCHES_IDLE_REVALIDATE_MS).toBeGreaterThan(BRANCHES_REVALIDATE_MS);
   });
 });

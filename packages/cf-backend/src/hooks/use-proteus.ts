@@ -836,7 +836,12 @@ function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
   ];
 }
 
-function buildTree(nodes: MctsRow[]): MCTSNode {
+/** Fold search_nodes rows into the tree the MCTS views render. The server
+ *  scopes rows to the latest search; if a payload still carries several
+ *  searches' roots (an old server, a mid-deploy broadcast), the NEWEST root
+ *  wins — rooting at the oldest is how the first search a workspace ever ran
+ *  shadowed every one after it. Exported for the gallery and its tests. */
+export function buildTree(nodes: MctsRow[]): MCTSNode {
   const map = new Map<string, MCTSNode>();
   for (const n of nodes) {
     map.set(n.id, {
@@ -851,7 +856,11 @@ function buildTree(nodes: MctsRow[]): MCTSNode {
   for (const node of map.values()) {
     if (node.parentId && map.has(node.parentId)) {
       map.get(node.parentId)!.children.push(node);
-    } else if (!root || node.depth < root.depth) {
+    } else if (
+      !root
+      || node.depth < root.depth // a true root beats a stray orphan
+      || (node.depth === root.depth && (node.createdAt ?? 0) > (root.createdAt ?? 0))
+    ) {
       root = node;
     }
   }

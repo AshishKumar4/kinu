@@ -1,7 +1,7 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { WorkspaceInfo, AgentRuntime, SearchNode, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, BACKGROUND_POLICY, type GepaOptimizationResult } from '@proteus/core';
+import type { WorkspaceInfo, AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, type GepaOptimizationResult } from '@proteus/core';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -438,7 +438,8 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
-    const nodes = this.deps.rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
+    // The latest search only — the same projection the cloud getMctsTree serves.
+    const nodes = readLatestSearchTree(this.deps.rt.storage.sql);
     return nodes.map((node) => ({
       depth: node.depth,
       status: node.status,

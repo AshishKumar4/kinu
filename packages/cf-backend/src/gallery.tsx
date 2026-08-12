@@ -6,6 +6,10 @@
  *   /gallery.html            → all sections stacked
  *   /gallery.html?frame=shell    → full workspace shell (hero shot)
  *   /gallery.html?frame=chat     → chat column inventory
+ *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
+ *                                    (quiet failure, protocol failure, a
+ *                                    multi-line `run`, an MCP tool, a failing
+ *                                    group)
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
@@ -21,7 +25,7 @@
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
@@ -220,7 +224,13 @@ const MESSAGES: UIMessage[] = [
       // has to survive without becoming a wall of identical rows.
       { type: "tool-file", toolCallId: "t4", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
       { type: "tool-file", toolCallId: "t5", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
-      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: "ok" },
+      // Deliberately a QUIET failure: the transport reports success
+      // (state: output-available) but the tool caught its own failure and
+      // returned it as a normal result — the shape every built-in uses
+      // (tools/builtins.ts `{error: "…"}`). The migration file moved on since
+      // the read above, so the edit's old_text no longer matches uniquely.
+      // This is the case that used to make a whole 5-call group read as clean.
+      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
       { type: "tool-file", toolCallId: "t7", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
       { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], settle: "merge", task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
       { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "sandbox", command: "bun test packages/checkout" } },
@@ -235,6 +245,43 @@ const MESSAGES: UIMessage[] = [
     id: "d1", role: "user",
     metadata: { proteusEvent: "event_drain" },
     parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
+  }),
+  msg({
+    id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
+    parts: [
+      { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
+      // A real multi-line command, kept as its OWN row (a lone text part on
+      // either side stops it folding into a 3+ run) so its expanded state is
+      // inspectable — the case that used to render as escaped-JSON instead
+      // of a readable script.
+      {
+        type: "tool-run", toolCallId: "t9", state: "output-available",
+        input: {
+          runtime: "sandbox",
+          command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone",
+        },
+        output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
+      },
+      { type: "text", text: "Migrations are clean. One more check before I loop back to the edit." },
+      // A genuine protocol-level failure (the executor itself crashed/timed
+      // out), distinct from the quiet t6 case above: no `output` at all, the
+      // reason lives in errorText.
+      {
+        type: "tool-run", toolCallId: "t10", state: "output-error",
+        input: { runtime: "nimbus", command: "curl -sf https://ci.internal/status/checkout-fixes" },
+        errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443",
+      },
+      { type: "text", text: "CI didn't answer — checking the PR directly instead." },
+      // An MCP tool the host has no summarizer contract for — the honest
+      // fallback (name + its one string argument, no invented annotation),
+      // and long enough to exercise the row's truncation + hover title.
+      {
+        type: "dynamic-tool", toolCallId: "t11", toolName: "gh__search_pull_requests", state: "output-available",
+        input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
+        output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+      },
+      { type: "text", text: "CI didn't answer — retrying after the migration lands. PR #212 is already up for review." },
+    ],
   }),
 ];
 
@@ -1022,6 +1069,96 @@ function SuperviseFrame() {
   );
 }
 
+/* ── Tool-call rendering states ─────────────────────────────────── */
+
+/** One message per state that the `chat` frame either folds into a group or
+ *  can't show pre-expanded: a quiet failure (the tool caught it and returned
+ *  it as a normal result), a protocol-level failure (the executor itself
+ *  crashed — errorText, no output), a clean multi-line `run`, and an MCP tool
+ *  with no known summarizer contract. Auto-expanded on mount below so the
+ *  input/output panel is the thing the screenshot shows. */
+const TOOLCALL_MESSAGES: UIMessage[] = [
+  msg({
+    id: "tc-quiet", role: "assistant",
+    parts: [
+      { type: "text", text: "Quiet failure — the transport reports success, but the tool caught its own error and returned it as a normal result." },
+      { type: "tool-file", toolCallId: "tc1", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
+    ],
+  }),
+  msg({
+    id: "tc-protocol", role: "assistant",
+    parts: [
+      { type: "text", text: "Protocol-level failure — the executor crashed before it could return anything; the reason lives in errorText, not output." },
+      { type: "tool-run", toolCallId: "tc2", state: "output-error", input: { runtime: "nimbus", command: "curl -sf https://ci.internal/status/checkout-fixes" }, errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443" },
+    ],
+  }),
+  msg({
+    id: "tc-run", role: "assistant",
+    parts: [
+      { type: "text", text: "A multi-line `run` command, expanded — a shell script, not an escaped JSON string." },
+      {
+        type: "tool-run", toolCallId: "tc3", state: "output-available",
+        input: { runtime: "sandbox", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
+        output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
+      },
+    ],
+  }),
+  msg({
+    id: "tc-mcp", role: "assistant",
+    parts: [
+      { type: "text", text: "An MCP tool with no known summarizer contract — the honest fallback (name + its one argument), and long enough to test truncation." },
+      {
+        type: "dynamic-tool", toolCallId: "tc4", toolName: "gh__search_pull_requests", state: "output-available",
+        input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
+        output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+      },
+    ],
+  }),
+  msg({
+    id: "tc-group", role: "assistant",
+    parts: [
+      { type: "text", text: "A run of 5 finished calls, one of them the same quiet failure as above — the group's own dot has to say so before anyone clicks in." },
+      { type: "tool-file", toolCallId: "tc5", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "tc6", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
+      { type: "tool-file", toolCallId: "tc7", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
+      { type: "tool-file", toolCallId: "tc8", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
+      { type: "tool-agents", toolCallId: "tc9", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], settle: "merge", task: "Check every other call site" }, output: "3 forks merged" },
+    ],
+  }),
+];
+
+/** Clicks open every collapsed tool-call row shortly after mount — the
+ *  expand/collapse toggle is local component state with no prop to preset
+ *  it, and simulating the one click an operator would make is simpler and
+ *  more honest than adding a gallery-only prop to the real component. */
+function useAutoExpandToolCalls(): void {
+  useEffect(() => {
+    const clickAll = () => {
+      document.querySelectorAll('button[aria-expanded="false"]').forEach((el) => (el as HTMLButtonElement).click());
+    };
+    const id = setTimeout(() => {
+      clickAll();
+      // A group's own toggle mounts its members' toggles a render later —
+      // one more pass after React commits catches those too.
+      requestAnimationFrame(() => requestAnimationFrame(clickAll));
+    }, 50);
+    return () => clearTimeout(id);
+  }, []);
+}
+
+function ToolCallsFrame() {
+  useAutoExpandToolCalls();
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {TOOLCALL_MESSAGES.map((m) => (
+          <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SelfFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
@@ -1048,6 +1185,7 @@ async function mount() {
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
+  else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "panels") node = <SelfFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;

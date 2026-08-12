@@ -27,7 +27,7 @@ import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
-import { describeToolCall, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
+import { describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import {
   classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
@@ -213,8 +213,12 @@ function parseProvisionError(output: unknown):
   return null;
 }
 
-function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
+function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText }: {
   toolName: string; input?: Record<string, unknown>; output?: unknown; isRunning: boolean; isError: boolean;
+  /** The transport's own reason for a protocol-level failure (a crashed
+   *  executor, a timeout) — distinct from `output`, which a tool that caught
+   *  its own failure returns as an ordinary result. Never present together. */
+  errorText?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const startTime = useRef<number | null>(null);
@@ -253,7 +257,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   const failed = isError || !!provisionErr;
   return (
     <div className="my-0.5">
-      <button onClick={() => setExpanded(!expanded)} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
+      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
         <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
           {isRunning ? <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
             : failed ? <span className="size-1.5 rounded-full p-dot-danger" />
@@ -290,10 +294,28 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
       )}
       {expanded && (
         <div className="mt-1 ml-[7px] border-l p-border pl-4 space-y-2 animate-scale-in">
+          {/* A protocol-level failure (crashed executor, timeout) carries its
+              reason here, never in `output` — without this, expanding one of
+              these showed a red row and then nothing: the actual cause was
+              dropped on the floor. */}
+          {errorText && (
+            <div>
+              <div className="p-eyebrow mb-1 p-danger">Error</div>
+              <pre className="text-[12px] font-mono p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{errorText}</pre>
+            </div>
+          )}
           {/* execute_tools is the agent's primary doing-mechanism: render the
-              LLM-authored JS program legibly, not as escaped JSON. */}
+              LLM-authored JS program legibly, not as escaped JSON. A `run`
+              command gets the same treatment — its args are just
+              {runtime, command}, and pretty-printed JSON turns every quote
+              and newline in the command into an escape sequence, which is
+              unreadable for exactly the multi-line commands worth expanding
+              to read. The runtime stays visible in the collapsed row's `@x`
+              badge, so nothing is lost by not repeating it here. */}
           {toolName === "execute_tools" && typeof input?.code === "string" ? (
             <CodeBlock className="language-js">{input.code}</CodeBlock>
+          ) : toolName === "run" && typeof input?.command === "string" ? (
+            <CodeBlock className="language-bash">{input.command}</CodeBlock>
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
@@ -323,9 +345,28 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
  * Only FINISHED calls are folded in; a call still running keeps its own row
  * so the count never changes under the reader's eye while the agent works.
  */
+/** The live output value of a finished part — undefined while it's still
+ *  running or never finished, which is exactly when there is nothing to read
+ *  a failure out of yet. Shared by the group's failure tally and the part's
+ *  own card so the two can never disagree about the same call. */
+function partOutput(part: AnyToolPart): unknown {
+  return part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+}
+
+/** Whether this part failed — protocol-level (`output-error`) or the quieter
+ *  kind a built-in catches and returns as a normal result (isToolCallFailed). */
+function partFailed(part: AnyToolPart): boolean {
+  return isToolCallFailed(getToolName(part), part.input, partOutput(part), part.state === "output-error");
+}
+
 function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   const [expanded, setExpanded] = useState(false);
-  const failed = parts.some((p) => p.state === "output-error");
+  // Reads every call's own output, not just the transport state — a run of
+  // calls whose failure is a `run` tool's `Error (exit 1)` (caught and
+  // returned as a normal result) used to collapse into a group that looked
+  // exactly like a clean one; expanding it was the only way to find out which
+  // row, if any, was the problem.
+  const failed = parts.some(partFailed);
   const headline = summarizeToolRun(parts.map((p) => ({ toolName: getToolName(p), input: p.input })));
 
   return (
@@ -336,7 +377,10 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
           {failed ? <span className="size-1.5 rounded-full p-dot-danger" />
             : <StackIcon size={13} className="p-text-3 opacity-60" />}
         </span>
-        <span className="min-w-0 truncate">{headline}</span>
+        {/* title: the tally can run longer than the column and truncate —
+            every other row in this card offers the untruncated text on
+            hover, and this one didn't. */}
+        <span className="min-w-0 truncate" title={headline}>{headline}</span>
         <CaretRightIcon size={11} className={`ml-auto shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90 opacity-100" : "opacity-0 group-hover/tool:opacity-100"}`} />
       </button>
       {expanded && (
@@ -350,7 +394,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
 
 /** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part }: { part: AnyToolPart }) {
-  const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+  const output = partOutput(part);
   const previewUrl = extractPreviewUrl(output);
   return (
     <div>
@@ -358,7 +402,8 @@ function ToolCallPart({ part }: { part: AnyToolPart }) {
         input={part.input as Record<string, unknown> | undefined}
         output={output}
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
-        isError={part.state === "output-error"} />
+        isError={partFailed(part)}
+        errorText={part.state === "output-error" ? (part as { errorText?: string }).errorText : undefined} />
       {/* Inline preview card — when a tool returns a /_preview/ URL, surface a
           live iframe under the tool block so the user sees the running app
           inline (also promoted to the Output surface). */}

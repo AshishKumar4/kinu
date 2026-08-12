@@ -1089,6 +1089,7 @@ export {
   getExecutorFiles, readExecutorFile, sortDirEntries, toCompositePath, writeExecutorFileOp,
 } from './read-models/files.js';
 export type { DirEntry, ExecutorWriteDeps, ExecutorWriteResult } from './read-models/files.js';
+export { readLatestSearchTree } from './read-models/search-tree.js';
 export { getAgentStatus, getChatHistory, getToolList, uiMessageText } from './read-models/status.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
