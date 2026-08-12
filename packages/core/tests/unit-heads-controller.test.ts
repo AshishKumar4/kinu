@@ -46,6 +46,7 @@ function fakeReport(id: string, overrides: Partial<HeadReport> = {}): HeadReport
     evidence: [{ id: `${id}-ev-1`, kind: 'fact', body: `${id} learned something.` }],
     decisions: [{ question: `Q for ${id}?`, choice: `Answer ${id}`, rationale: `Because ${id}` }],
     artifactRefs: [],
+    fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
     steps: [],

@@ -51,7 +51,7 @@ function verdictExecutor(): Executor {
 function report(id: string, o: Partial<HeadReport> = {}): HeadReport {
   return {
     id, status: 'completed', summary: `Head ${id} finding.`,
-    evidence: [], decisions: [], artifactRefs: [], childHeadIds: [],
+    evidence: [], decisions: [], artifactRefs: [], fileChanges: [], childHeadIds: [],
     toolCalls: [], steps: [], tokenUsage: { input: 10, output: 10, total: 20 },
     wallClockMs: 5, ...o,
   };

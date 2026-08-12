@@ -23,6 +23,7 @@ const headReport: HeadReport = {
   evidence: [],
   decisions: [],
   artifactRefs: [],
+  fileChanges: [],
   childHeadIds: [],
   toolCalls: [],
   steps: [],

@@ -46,6 +46,7 @@ function report(id: string): HeadReport {
     evidence: [],
     decisions: [],
     artifactRefs: [],
+    fileChanges: [],
     childHeadIds: [],
     toolCalls: [],
     steps: [],

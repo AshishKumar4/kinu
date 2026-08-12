@@ -136,7 +136,7 @@ describe('agents.* in the cf codemode tool', () => {
 describe('agents.fork called back from an in-flight sandbox call', () => {
   const headReport: HeadReport = {
     id: 'head-1', status: 'completed', summary: 'done', evidence: [], decisions: [],
-    artifactRefs: [], childHeadIds: [], toolCalls: [], steps: [],
+    artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
     tokenUsage: { input: 1, output: 1, total: 2 }, wallClockMs: 1,
   };
 
