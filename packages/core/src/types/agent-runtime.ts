@@ -18,6 +18,11 @@ import type { CraftedTool, CraftScoreEntry } from './craft.js';
 import type { MissionCallUsage } from '../mission-budget.js';
 import type { ExecutionRouter } from '../execution/types.js';
 import type { FileCheckpoints } from '../checkpoints/types.js';
+import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate.js';
+
+/** A live channel a surface that owns a user (ACP's `session/request_permission`)
+ *  offers for 'gate'-tier shell approvals — see AgentRuntime.setShellApprovalChannel. */
+export type RequestShellApproval = (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
 
 /** CraftStore interface — matches agent-utils CraftStore API */
 export interface CraftStore {
@@ -125,4 +130,14 @@ export interface AgentRuntime {
    * engine; absence simply means no /undo for that backend's file surface.
    */
   checkpoints?: FileCheckpoints;
+  /**
+   * Attach or detach the interactive channel for 'gate'-tier shell approvals
+   * under 'strict' mode (the CLI's ACP `session/request_permission`).
+   * `shell` and every `executionRouter` provider read it LIVE at exec time
+   * (safety/approval-gate.ts's ShellApprovalPolicy), so attaching/detaching
+   * takes effect on the very next command — no toolset rebuild needed.
+   * Backends with no interactive surface (CF) never call this; 'strict'
+   * keeps its explanatory refusal there, same as before this field existed.
+   */
+  setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
 }

@@ -19,6 +19,7 @@ export {
 } from './exec-result.js';
 export { DefaultExecutionRouter } from './router.js';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
+export { withApprovalGatedShell, gateProviderExec } from './approval.js';
 export {
   createSandboxExecutor, type SandboxHandle,
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,

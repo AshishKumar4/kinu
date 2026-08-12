@@ -72,10 +72,6 @@ import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executo
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import {
-  reviewCommand, formatApproval, approvalGrants,
-  type ShellApprovalRequest, type ShellApprovalOutcome,
-} from '../safety/approval-gate.js';
 import { formatExecResult } from '../execution/exec-result.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
@@ -148,23 +144,6 @@ export interface BuiltinToolDeps {
    * when the underlying binding is unavailable.
    */
   vectorStore?: import('../memory/vector-store.js').VectorStore;
-  /**
-   * How to handle 'gate' decisions from the approval-gate review.
-   *   'strict'    — ask `requestShellApproval`; reject when no channel is wired (default)
-   *   'allow_all' — treat gate as warn (logged but executed). Use for trusted
-   *                 dev environments only. Set per-agent via the
-   *                 setShellApprovalMode RPC.
-   *   'deny_all'  — reject everything that isn't 'allow' (max safety)
-   */
-  shellApprovalMode?: 'strict' | 'allow_all' | 'deny_all';
-  /**
-   * The interactive approval channel consulted for a 'gate' decision under
-   * 'strict'. Resolves 'allow'/'deny' when a surface can ask the user, or null
-   * when none is connected — the caller then gets the same message it has
-   * always got. Surfaces that own a user (ACP's session/request_permission)
-   * install one; headless runs leave it unset.
-   */
-  requestShellApproval?: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
   /** agent_facts world model. When provided, the `memory` tool also exposes
    *  the keyed-fact actions (remember / recall / forget). */
   facts?: import('../memory/facts.js').FactsStore;
@@ -439,40 +418,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }),
     execute: async (args: { command: string; runtime?: string }, options?: unknown) => {
       const signal = readAbortSignal(options);
-      // Approval-gate pre-flight — same ruleset across every runtime.
-      // 'gate' behavior depends on shellApprovalMode (strict / allow_all /
-      // deny_all). See safety/approval-gate.ts.
-      const mode = deps.shellApprovalMode ?? 'strict';
-      const review = reviewCommand(args.command);
-      if (review.decision === 'deny') {
-        return `Denied by approval gate:\n${formatApproval(review)}`;
-      }
-      if (review.decision === 'gate') {
-        if (mode === 'allow_all') {
-          console.warn(`[proteus] approval-gate gate→allow (allow_all mode): ${formatApproval(review)}`);
-        } else {
-          // 'deny_all' never asks. Under 'strict' a connected surface gets to
-          // put the decision to the user; null means nobody is listening.
-          const outcome = mode === 'strict' && deps.requestShellApproval
-            ? await deps.requestShellApproval({ command: args.command, review })
-            : null;
-          if (outcome === null) {
-            // Actionable for the MODEL: setShellApprovalMode is a backend RPC
-            // it cannot call — the user changes the mode in agent settings.
-            return `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
-                   `or change the shell approval mode in agent settings.\n${formatApproval(review)}`;
-          }
-          if (!approvalGrants(outcome)) {
-            return `Denied by the user.\n${formatApproval(review)}`;
-          }
-        }
-      }
-      if (review.decision === 'warn') {
-        if (mode === 'deny_all') {
-          return `Denied by approval gate (deny_all mode):\n${formatApproval(review)}`;
-        }
-        console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
-      }
+      // No gate here — the approval ladder (reviewCommand / shellApprovalMode
+      // / the interactive channel) lives at the execution seam this tool
+      // dispatches to: the `shell` a workspace command runs through, and
+      // every ExecutionRouter provider's `exec` for everything else (see
+      // execution/approval.ts). That is also where codemode's
+      // `workspace.exec()` / `nimbus.exec()` / `sandbox.exec()` /
+      // `laptop.exec()` land, so the same command answers to the identical
+      // decision whichever path reached it — not a check re-derived here.
 
       // Restorable result budget — full stdout/stderr is offloaded to the
       // workspace VFS before clamping (see clamp.ts), so big outputs never

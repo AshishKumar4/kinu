@@ -24,7 +24,7 @@ import type {
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
-  ShellApprovalRequest, ShellApprovalOutcome,
+  ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   AgentsForkDeps, AgentsToolDeps,
   IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery,
@@ -594,10 +594,32 @@ export class LocalAgentSession implements BackendHost {
   /** Install the interactive approval channel for gated shell commands, or
    *  null to remove it. Surfaces that own a live user (ACP) set this; without
    *  one, 'strict' keeps rejecting gate hits with its explanatory message.
-   *  Returns a disposer so a surface can detach on disconnect. */
+   *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
+   *  `rt.shell` and every `rt.executionRouter` provider consult, so an
+   *  approval answers `run` and a codemode `workspace.exec()`/`nimbus.exec()`/
+   *  `sandbox.exec()`/`laptop.exec()` call identically. Returns a disposer so
+   *  a surface can detach on disconnect. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
     this.shellApprovalHandler = handler;
-    return () => { if (this.shellApprovalHandler === handler) this.shellApprovalHandler = null; };
+    this.rt.setShellApprovalChannel?.(handler ? this.wrapShellApprovalHandler(handler) : null);
+    return () => {
+      if (this.shellApprovalHandler === handler) {
+        this.shellApprovalHandler = null;
+        this.rt.setShellApprovalChannel?.(null);
+      }
+    };
+  }
+
+  /** `allow_always`/`deny_always` also carry the user's intent to change the
+   *  session's standing shell approval mode — that side effect belongs to
+   *  the session (which owns setShellApprovalMode), not to the gate itself. */
+  private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
+    return async (req) => {
+      const outcome = await handler(req) ?? null;
+      if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
+      else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
+      return outcome;
+    };
   }
 
   /** Stored model spec, or null when unset (parity with DO getStoredModelSpec). */
@@ -2185,16 +2207,11 @@ export class LocalAgentSession implements BackendHost {
 
     const rawTools = buildBuiltinTools({
       rt: this.rt,
-      shellApprovalMode: this.config.getShellApprovalMode(),
-      // Stable indirection: the toolset is rebuilt only on model change, so it
-      // must read the handler live rather than capture whichever was installed
-      // when the model was resolved.
-      requestShellApproval: async (req) => {
-        const outcome = await this.shellApprovalHandler?.(req) ?? null;
-        if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
-        else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
-        return outcome;
-      },
+      // No shellApprovalMode/requestShellApproval here — the gate lives at
+      // the execution seam now (rt.shell / rt.executionRouter, wired once in
+      // runtime.ts off agent_config live and the channel `setShellApprovalHandler`
+      // installs below), not re-derived per toolset build. See
+      // execution/approval.ts.
       // The turn's cumulative bulk budget — held on the accumulator so this
       // toolset (rebuilt only on model change) reads the live turn's state.
       contextBudget: this.orch.acc.context,

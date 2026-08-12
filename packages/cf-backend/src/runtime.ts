@@ -25,6 +25,7 @@ import {
   CompositeVFS, type MountPolicy,
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   DefaultExecutionRouter, createInlineExecutor,
+  withApprovalGatedShell, type ShellApprovalPolicy,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
@@ -218,8 +219,17 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const identity = createIdentity(agent, vfs, sql);
 
   // Execution router — manages codemode providers (workspace, nimbus, sandbox, laptop)
-  const shell = createShell(sqliteFS);
-  const executionRouter: ExecutionRouter = new DefaultExecutionRouter();
+  // Live shell-approval policy every gated exec boundary consults (`run`'s
+  // workspace/router dispatch and every ExecutorProvider's exec — see
+  // execution/approval.ts). `mode` reads agent_config directly off the SAME
+  // store the memory backfill above already opened, so a setShellApprovalMode
+  // RPC takes effect on the very next command with no toolset rebuild needed.
+  // No interactive channel: CF never wires the ACP permission surface, so
+  // 'strict' keeps its explanatory refusal here, same as before this policy
+  // existed.
+  const approvalPolicy: ShellApprovalPolicy = { mode: () => memoryConfig.getShellApprovalMode() };
+  const shell = withApprovalGatedShell(createShell(sqliteFS), approvalPolicy);
+  const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell,
     // sql is used by workspace.listTools() to look up EMA craft_scores.

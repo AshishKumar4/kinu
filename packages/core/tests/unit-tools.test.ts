@@ -34,6 +34,7 @@ import {
   runReleaseAction,
   createMemoryCodemodeProvider,
   createReportCodemodeProvider,
+  withApprovalGatedShell,
   type CraftedToolExecute,
   type ReleaseActionInput,
   type ReleaseToolDeps,
@@ -398,8 +399,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // Regression: the gate message used to tell the model to call
     // setShellApprovalMode('allow_all') — a backend RPC the model cannot
     // reach. The actionable path is asking the user.
+    //
+    // The gate itself now lives at the execution seam (`shell`/the
+    // ExecutionRouter — see execution/approval.ts), not inside `run`'s own
+    // executor, so this needs a real (gated) shell to see the message —
+    // createTestRuntime() has none by default.
     const { rt } = createTestRuntime();
-    const t = tools(rt);
+    const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
+    const t = tools({ ...rt, shell });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'sudo whoami' });
     expect(result).toContain('Requires user approval (mode=strict)');

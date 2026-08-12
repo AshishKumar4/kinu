@@ -1505,8 +1505,6 @@ export abstract class ActorAgent extends Think<Env> {
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
 
-      const shellApprovalMode = this.config.getShellApprovalMode();
-
       const actorDeps = this.actorToolDeps();
       const tools = buildBuiltinTools({
         rt: this.rt,
@@ -1528,8 +1526,6 @@ export abstract class ActorAgent extends Think<Env> {
         // Vectorize-backed semantic memory. memory.search auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
-        // Per-agent approval policy for shell exec.
-        shellApprovalMode,
         // Typed, keyed world-model store — exposes the `fact` tool.
         facts: this.facts,
         // The remaining actor-profile dep: the subordinate report spine.

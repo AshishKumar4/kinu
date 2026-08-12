@@ -12,6 +12,7 @@ import type {
 } from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
 import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
+import type { RequestShellApproval, ShellApprovalPolicy } from '@proteus/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
@@ -19,6 +20,7 @@ import {
   type LLMProviderConfig, buildRuntime,
   CompositeVFS, type MountPolicy, type CompositeWriteObserver,
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
+  withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
 import { SqliteFS } from '@proteus/agent-utils';
@@ -216,8 +218,13 @@ export function createCLIRuntime(
     codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
   });
   initAgentConfigTable(execRaw);
+  // Shared for every typed agent_config read/write this runtime needs at
+  // construction time — the fast-model lookup below, and the live shell-
+  // approval-mode getter the execution seam's gate reads on every command
+  // (see approvalPolicy below).
+  const agentConfig = createAgentConfigStore(sql);
   const fast = selectFastModel({
-    fastSpec: createAgentConfigStore(sql).getFastModel(),
+    fastSpec: agentConfig.getFastModel(),
     chatSpec: fastResolver.normalizeSpecSync(null),
     providers: fastResolver.fastModelCandidates(),
   });
@@ -284,8 +291,26 @@ export function createCLIRuntime(
   // run tool + laptop.exec — and laptop.writeFile) snapshots its target dir
   // before the first mutation of each turn. Invisible until /undo.
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
-  const shell: Shell = withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd());
-  const executionRouter = new DefaultExecutionRouter();
+  // The live shell-approval policy every gated exec boundary below consults:
+  // `mode` reads agent_config directly (no staleness — a setShellApprovalMode
+  // RPC takes effect on the very next command, no toolset rebuild needed);
+  // `requestApproval` is a mutable slot a surface that owns a live user (ACP)
+  // fills in later via AgentRuntime.setShellApprovalChannel — this runtime is
+  // built before that surface exists, so the channel can only be attached
+  // after the fact.
+  let approvalChannel: RequestShellApproval | null = null;
+  const approvalPolicy: ShellApprovalPolicy = {
+    mode: () => agentConfig.getShellApprovalMode(),
+    requestApproval: (req) => approvalChannel?.(req) ?? Promise.resolve(null),
+  };
+  // Gate is the OUTERMOST wrap: a denied/gated command never reaches
+  // checkpointing, so a refused `rm -rf /` doesn't spend a snapshot on a
+  // command that never ran.
+  const shell: Shell = withApprovalGatedShell(
+    withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd()),
+    approvalPolicy,
+  );
+  const executionRouter = new DefaultExecutionRouter(approvalPolicy);
   // Both local executors run their commands in THIS process's container, so
   // both carry its measured cgroup limits — the truth `nproc` cannot tell the
   // model. Null off a cgroup, and then nothing is claimed.
@@ -312,6 +337,7 @@ export function createCLIRuntime(
     agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell, checkpoints,
+    setShellApprovalChannel: (fn) => { approvalChannel = fn; },
   });
 }
 
@@ -389,7 +415,12 @@ export function buildCLIHeadRuntime(
 
   // The `workspace` run runtime + codemode `workspace.*` is the head's private
   // emulated scratch shell (mirrors the cf head's createShell over its SqliteFS).
-  const shell = createShell(sqliteFs);
+  // No policy threaded through: a head has no shellApprovalMode of its own
+  // (never did — buildHeadToolSet never passed one either) and no interactive
+  // surface, so withApprovalGatedShell/DefaultExecutionRouter fall back to
+  // their conservative default (strict, nobody to ask) — same posture heads
+  // have always run under.
+  const shell = withApprovalGatedShell(createShell(sqliteFs));
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell, sql }));
   // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
