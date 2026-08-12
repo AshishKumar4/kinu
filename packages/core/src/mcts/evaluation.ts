@@ -79,6 +79,45 @@ const FAIL_SPAN = 0.25;
 const FAIL_CEIL = FAIL_FLOOR + FAIL_SPAN;
 const PROSE_CONFIDENCE = 0.75;
 
+/**
+ * Wall clock on a SINGLE judge completion.
+ *
+ * The judge is an ordinary provider call (`generateText` with no abort signal),
+ * so an upstream that accepts the request and then never responds leaves the
+ * promise pending forever. The evaluator awaits these calls inside a
+ * `Promise.all` / `Promise.allSettled`, which resolves only when EVERY member
+ * settles — so one non-responding judge stalls the whole evaluation. MCTS runs
+ * that evaluation inside a durable background fiber that carries no wall clock
+ * of its own (fork wall_clock_ms is intentionally unset so real work runs to
+ * completion), and nothing aborts it, so the stall becomes a permanent hang:
+ * the search freezes on its first expansion and the tree never grows again.
+ *
+ * A timed-out judge is DROPPED exactly like a thrown one (see sampleJudgeScore /
+ * generateAssertions), so the ensemble degrades to the samples that did answer
+ * instead of the search dying. Generous by design — a real judge completion on
+ * a bounded prompt finishes well inside this even on a reasoning model; only a
+ * genuinely stuck call is cut. Override per-evaluation via
+ * EvaluateBranchOptions.judgeCallTimeoutMs.
+ */
+export const DEFAULT_JUDGE_CALL_TIMEOUT_MS = 120_000;
+
+/** `judge.complete`, bounded. Rejects (→ the caller's existing catch → the
+ *  sample is dropped) if the provider does not answer within `timeoutMs`. The
+ *  underlying call cannot be cancelled without an abort signal the LLM seam
+ *  does not carry, but losing the race unblocks the evaluator, which is the
+ *  freeze this fixes. */
+async function completeWithinTimeout(judge: LLM, prompt: string, timeoutMs: number): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`judge call exceeded ${timeoutMs}ms`)), timeoutMs);
+  });
+  try {
+    return await Promise.race([judge.complete(prompt), timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export interface EvaluateBranchOptions {
   task: string;
   /** The branch's exploration output (proposal text / trajectory). */
@@ -101,6 +140,10 @@ export interface EvaluateBranchOptions {
   /** Per-evaluation LLM-call budget: assertion generation + judge samples.
    *  The operator's spend dial — see DEFAULT_CONFIG.mcts.maxEvalLLMCalls. */
   maxLLMCalls?: number;
+  /** Wall clock on each individual judge call, so a non-responding judge is
+   *  dropped rather than hanging the whole search. Defaults to
+   *  DEFAULT_JUDGE_CALL_TIMEOUT_MS. */
+  judgeCallTimeoutMs?: number;
 }
 
 export interface BranchEvaluation {
@@ -175,6 +218,7 @@ export async function evaluateWithMultiModelJudging(
   const judgeSamples = Math.max(1, opts.judgeSamples ?? defaults.judgeSamples);
   const maxLLMCalls = Math.max(1, opts.maxLLMCalls ?? defaults.maxEvalLLMCalls);
   const judge = opts.judge ?? opts.explorer;
+  const judgeTimeoutMs = opts.judgeCallTimeoutMs ?? DEFAULT_JUDGE_CALL_TIMEOUT_MS;
 
   const code = opts.codeUsed?.trim() || extractCode(trajectory);
 
@@ -186,7 +230,7 @@ export async function evaluateWithMultiModelJudging(
     let assertions: string | null = null;
     if (llmCallsLeft >= 2) {
       llmCallsLeft--;
-      assertions = await generateAssertions(judge, opts.task, code);
+      assertions = await generateAssertions(judge, opts.task, code, judgeTimeoutMs);
     }
     execution = await runForVerdict(opts.executor, code, assertions);
     // Cascade stage 0: source that never parsed has decided its own verdict.
@@ -200,7 +244,7 @@ export async function evaluateWithMultiModelJudging(
   const k = Math.min(judgeSamples, llmCallsLeft);
   const prompt = buildJudgePrompt(opts.task, trajectory, opts.siblings ?? [], execution);
   const samples = await Promise.all(
-    Array.from({ length: k }, () => sampleJudgeScore(judge, prompt)),
+    Array.from({ length: k }, () => sampleJudgeScore(judge, prompt, judgeTimeoutMs)),
   );
   const parsed = samples.filter((s): s is number => s !== null);
   const judgeScore = parsed.length > 0 ? median(parsed) : null;
@@ -239,7 +283,12 @@ function extractCode(trajectory: string): string | null {
  * Exported so the convergence tie-break (mcts/test-selection.ts, DO-NOW #3)
  * generates ONE discriminating harness reused across the near-tied candidates.
  */
-export async function generateAssertions(judge: LLM, task: string, code: string): Promise<string | null> {
+export async function generateAssertions(
+  judge: LLM,
+  task: string,
+  code: string,
+  timeoutMs: number = DEFAULT_JUDGE_CALL_TIMEOUT_MS,
+): Promise<string | null> {
   const prompt = `You are writing a verification harness for code proposed by another agent.
 
 Task the code is meant to solve:
@@ -259,7 +308,7 @@ Reply with ONLY a \`\`\`js code block. If the code cannot be meaningfully
 verified by assertions, reply with exactly: UNVERIFIABLE`;
 
   try {
-    const text = await judge.complete(prompt);
+    const text = await completeWithinTimeout(judge, prompt, timeoutMs);
     if (/^\s*UNVERIFIABLE\s*$/.test(text)) return null;
     const match = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)\n```/);
     const snippet = match?.[1]?.trim();
@@ -336,10 +385,10 @@ ${jsonObjectOnlyInstruction()}`;
 
 /** One judge sample. Unparseable or failed samples are DROPPED (null), never
  *  scored 0 — a single flaky parse must not crater the ensemble median. */
-async function sampleJudgeScore(judge: LLM, prompt: string): Promise<number | null> {
+async function sampleJudgeScore(judge: LLM, prompt: string, timeoutMs: number): Promise<number | null> {
   let text: string;
   try {
-    text = await judge.complete(prompt);
+    text = await completeWithinTimeout(judge, prompt, timeoutMs);
   } catch {
     return null;
   }

@@ -485,3 +485,64 @@ describe('isParseFailure', () => {
     ]) expect(isParseFailure(message)).toBe(false);
   });
 });
+
+describe('a non-responding judge cannot hang the search', () => {
+  // A judge whose provider call accepts the request and then never answers —
+  // the promise stays pending forever. This is what froze a real production
+  // MCTS search: the engine awaits the judge ensemble inside Promise.all, so a
+  // single stuck call stalled the whole evaluation, and MCTS runs that inside a
+  // durable background fiber with no wall clock, so the search hung on its first
+  // expansion and its tree never grew again (read by the operator as "MCTS
+  // never goes live").
+  const hungJudge: LLM = {
+    async *stream() { yield ''; },
+    complete() { return new Promise<string>(() => { /* never settles */ }); },
+  };
+
+  // Rejects (→ a failing test with a clear message) if `p` has not settled in
+  // `ms`, so the "without the fix it hangs" case fails fast instead of waiting
+  // out bun's default timeout. The timer is always cleared.
+  async function settlesWithin<T>(p: Promise<T>, ms: number): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    const guard = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`evaluator did not settle within ${ms}ms`)), ms);
+    });
+    try { return await Promise.race([p, guard]); } finally { clearTimeout(timer!); }
+  }
+
+  test('prose-only branch drops the dead judge and settles instead of hanging', async () => {
+    const result = await settlesWithin(
+      evaluateWithMultiModelJudging({
+        task: 'compare two approaches',
+        trajectory: 'a thoughtful prose-only comparison',
+        executor: exec(),
+        judge: hungJudge,
+        explorer: hungJudge,
+        judgeCallTimeoutMs: 50,
+      }),
+      3000,
+    );
+    expect(result.grounding).toBe('judge');
+    expect(result.judgeSamplesUsed).toBe(0);
+    expect(result.score).toBe(0);
+  });
+
+  test('passing code still grounds to the pass floor when the judge never answers', async () => {
+    const result = await settlesWithin(
+      evaluateWithMultiModelJudging({
+        task: 'return 42',
+        trajectory: 'here is the code',
+        codeUsed: 'const x = 42;',
+        executor: exec(),
+        judge: hungJudge,
+        explorer: hungJudge,
+        judgeCallTimeoutMs: 50,
+      }),
+      3000,
+    );
+    expect(result.grounding).toBe('execution');
+    expect(result.execution?.passed).toBe(true);
+    expect(result.judgeSamplesUsed).toBe(0);
+    expect(result.score).toBeGreaterThanOrEqual(0.6); // PASS_FLOOR — execution carries it
+  });
+});
