@@ -17,15 +17,17 @@
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
  *   /gallery.html?frame=viewfail → the same View when its spec stops validating
  *   /gallery.html?frame=releases → the Releases board with a pending approval
- *   /gallery.html?frame=tasks    → the agent's own task list, in Column C's chrome
- *   /gallery.html?frame=tasksempty → the same column before the agent has written one
- *   /gallery.html?frame=jobs     → background jobs (what the Tasks tab used to show)
+ *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
+ *                                  running jobs, and the settled journal
+ *   /gallery.html?frame=workempty → the same column before anything has happened
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
- *   /gallery.html?frame=mcts     → the Exploration surface on a real 106-node,
- *                                  depth-6 search, in Column C's actual width
- *   /gallery.html?frame=mctsfull → the same search in the full-screen explorer
- *   /gallery.html?frame=mctsbig  → the scale probe: 520 nodes, depth 9
+ *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
+ *                                  competition, in Column C's actual width
+ *   /gallery.html?frame=forkmerge → the same surface on a MERGED fork: the same
+ *                                  tree at depth 1, with no score encodings
+ *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
+ *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
@@ -45,15 +47,17 @@ import { ModelPicker } from "@/components/ModelPicker";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
-import { SelfSurface } from "@/components/surfaces/SelfSurface";
+import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
-import type { BackgroundJob, MCTSNode, Rpc, ToolInfo } from "@/lib/protocol";
-import { buildTree, type AgentStatus, type MctsRow } from "@/hooks/use-proteus";
+import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
+import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
+import type { AgentStatus } from "@/hooks/use-proteus";
+import type { ForkRunSummary, HeadRunView, PendingAction } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 
 const frame = new URLSearchParams(location.search).get("frame");
@@ -205,7 +209,7 @@ function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
  *  three levels deeper, so the claim that this view survives a few hundred
  *  nodes is something the harness photographs rather than something a comment
  *  asserts. */
-const MCTS_ROWS = frame === "mctsbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
+const MCTS_ROWS = frame === "forkbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
 const MCTS_TREE = buildTree(MCTS_ROWS);
 
 /* ── Agent socket stub ──────────────────────────────────────────── */
@@ -396,12 +400,136 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   return {} as unknown as T;
 };
 
-/** `getMctsNodeDetail` legitimately answers null for a node the server has
- *  retired; the view then falls back to the row it already holds. stubRpc's
- *  blanket `[]` for a `get*` is not that shape and crashes the inspector. */
-const mctsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+/**
+ * The two fork runs the Exploration frames list, and the stores behind them.
+ *
+ * Both settle policies are in the same list on purpose: that IS the change.
+ * `getMctsNodeDetail` legitimately answers null for a node the server has
+ * retired and the view falls back to the row it holds — stubRpc's blanket `[]`
+ * for a `get*` is not that shape and crashes the inspector.
+ */
+const FORK_RUNS: ForkRunSummary[] = [
+  {
+    id: "n000", task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
+    status: "completed", settle: "competed", branches: 105, winnerScore: 0.91,
+  },
+  {
+    id: "root-merge-1", task: "Check every other call site that indexes rules by kind",
+    startedAt: NOW - 52e5, status: "completed", settle: "merged", branches: 3, winnerScore: null,
+  },
+  {
+    id: "root-merge-0", task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
+    status: "partial", settle: "merged", branches: 2, winnerScore: null,
+  },
+];
+
+const MERGED_RUN: HeadRunView = {
+  rootId: "root-merge-1",
+  task: "Check every other call site that indexes rules by kind",
+  rationale: "Three call sites, three readers — cheaper in parallel than in sequence.",
+  status: "completed",
+  spawnedAt: NOW - 52e5,
+  heads: [
+    {
+      id: "root-merge-1-h0", task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
+      status: "completed", summary: "Two more reads of rules[kind]; both guarded by the same ?? inferKind fix.",
+      errorMessage: null, tokenInput: 8_420, tokenOutput: 610, wallClockMs: 14_200,
+      toolCalls: [{ name: "file", status: "ok" }, { name: "run", status: "exit=0" }],
+      decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
+      steps: [
+        { text: "Reading the handler and its two callers.", reasoning: "The 500 is a deref, so the fix has to be where the deref is.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" }] },
+        { text: "Both call sites take the same shape. One guard covers them.", toolCalls: [] },
+      ],
+    },
+    {
+      id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
+      status: "completed", summary: "One read, already null-safe — no change needed here.",
+      errorMessage: null, tokenInput: 5_110, tokenOutput: 240, wallClockMs: 9_800,
+      toolCalls: [{ name: "file", status: "ok" }], decisions: [],
+      steps: [{ text: "Already uses the optional chain.", toolCalls: [] }],
+    },
+    {
+      id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
+      status: "errored", summary: null,
+      errorMessage: "the admin package is not checked out in this sandbox",
+      tokenInput: 1_020, tokenOutput: 0, wallClockMs: 2_100,
+      toolCalls: [{ name: "file", status: "error: ENOENT" }], decisions: [], steps: [],
+    },
+  ],
+  merge: {
+    narrative: "One real call site left, in apply-coupon.ts, and the same ?? inferKind guard covers both reads. The cart serializer is already null-safe. The admin report could not be checked — that package is not in this sandbox.",
+    headCount: 3, totalTokens: 15_400,
+  },
+};
+
+/**
+ * Agent → Evolution reads three shapes that are NOT arrays, so stubRpc's
+ * blanket `[]` for a `get*` is a lie the components then dereference — the
+ * same trap `getMctsNodeDetail` fell into. Real shapes, populated, so the frame
+ * photographs the panels rather than their empty states.
+ */
+const REPLAY_EVALS = [
+  { id: "rev_3", ranAt: NOW - 2 * 864e5, sampleSize: 24, acceptedCount: 19, negativeCount: 5, meanScore: 0.79, loss: 0.21, scaffoldVersion: 7, interval: { lo: 0.64, hi: 0.89, n: 24 } },
+  { id: "rev_2", ranAt: NOW - 9 * 864e5, sampleSize: 21, acceptedCount: 14, negativeCount: 7, meanScore: 0.67, loss: 0.33, scaffoldVersion: 6, interval: { lo: 0.51, hi: 0.80, n: 21 } },
+  { id: "rev_1", ranAt: NOW - 17 * 864e5, sampleSize: 18, acceptedCount: 10, negativeCount: 8, meanScore: 0.55, loss: 0.45, scaffoldVersion: 6, interval: { lo: 0.39, hi: 0.71, n: 18 } },
+];
+
+const ALIGNMENT = {
+  segments: [
+    { scaffoldVersion: 6, firstAt: NOW - 20 * 864e5, turns: 62, abandoned: 3, rate: { per100: 14.5, lowPer100: 8.1, highPer100: 24.4, reliable: true } },
+    { scaffoldVersion: 7, firstAt: NOW - 6 * 864e5, turns: 41, abandoned: 1, rate: { per100: 7.3, lowPer100: 2.8, highPer100: 17.6, reliable: true } },
+  ],
+  overall: { turns: 103, abandoned: 4, rate: { per100: 11.7, lowPer100: 7.0, highPer100: 18.9, reliable: true } },
+  trend: "improving",
+  deltaPer100: -7.2,
+  comparedVersions: { from: 6, to: 7 },
+  note: "Corrections per 100 graded turns, from the turn-outcomes ledger alone — no benchmark and no judge.",
+};
+
+const CALIBRATION = {
+  universe: 103, labeled: 0, unclear: 0, orphaned: 0, labelers: [], lastLabeledAt: null,
+  strata: [], accuracy: null, kappa: null, overall: null, segments: [],
+  gap: { kind: "no_labels", labeled: 0, needed: 100 },
+};
+
+const GEPA_RUNS = [
+  { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
+  { runId: "gepa_1", target: "scaffold", startedAt: NOW - 12 * 864e5, status: "completed", winnerId: "cand_1c", iterations: 4, metricCalls: 32 },
+];
+
+const GEPA_DETAIL = {
+  run: GEPA_RUNS[0],
+  candidates: [
+    { id: "cand_2a", parentId: null, aggregateScore: 0.61, scores: { i1: 0.6, i2: 0.55, i3: 0.68 }, createdAt: NOW - 3 * 864e5 },
+    { id: "cand_2b", parentId: "cand_2a", aggregateScore: 0.78, scores: { i1: 0.81, i2: 0.72, i3: 0.81 }, createdAt: NOW - 3 * 864e5 },
+    { id: "cand_2c", parentId: "cand_2a", aggregateScore: 0.44, scores: { i1: 0.4, i2: 0.51, i3: 0.41 }, createdAt: NOW - 3 * 864e5 },
+  ],
+  pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
+};
+
+const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getReplayEvals") return REPLAY_EVALS as unknown as T;
+  if (method === "getAlignmentConvergence") return ALIGNMENT as unknown as T;
+  if (method === "getOutcomeCalibration") return CALIBRATION as unknown as T;
+  if (method === "getGepaRuns") return GEPA_RUNS as unknown as T;
+  if (method === "getGepaRun") return GEPA_DETAIL as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listForkRuns") return FORK_RUNS as unknown as T;
+  if (method === "getSearchTree") return MCTS_ROWS as unknown as T;
+  if (method === "getHeadRuns") return [MERGED_RUN] as unknown as T;
   if (method === "getMctsNodeDetail") return null as T;
   return stubRpc<T>(method, args);
+};
+
+/** The same surface with the MERGED run selected — a fork is a tree at depth 1,
+ *  and every score encoding has to be absent rather than drawn from a zero no
+ *  branch earned. This frame is where that claim is checked. */
+const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listForkRuns") return FORK_RUNS.slice(1) as unknown as T;
+  return forkRpc<T>(method, args);
 };
 
 /* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
@@ -454,7 +582,10 @@ function ChatMessages() {
   );
 }
 
-function Shell({ surface = "Output", mctsTree = null }: { surface?: SurfaceKind; mctsTree?: MCTSNode | null }) {
+function Shell(
+  { surface = "Output", mctsTree = null, rpc = stubRpc, pendingActions = [] }:
+  { surface?: SurfaceKind; mctsTree?: ForkNode | null; rpc?: Rpc; pendingActions?: PendingAction[] },
+) {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
@@ -480,8 +611,8 @@ function Shell({ surface = "Output", mctsTree = null }: { surface?: SurfaceKind;
                 surface={surface} onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={mctsTree} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={[]} runningJobCount={2} onRefreshJobs={() => {}} changelogUnseen={3}
-                rpc={mctsTree ? mctsRpc : stubRpc}
+                backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={pendingActions}
+                rpc={rpc}
               />
             </div>
           </div>
@@ -803,7 +934,7 @@ function LandingV2() {
   );
 }
 
-/* The Self surface: the collapsible sections and the native/code-mode
+/* The Agent surface: the collapsible sections and the native/code-mode
    exposure badge, at the width Column C actually gets. */
 /* The real docstrings, from the registry the orchestrator serves them from.
    Mocking short ones is how the Tools list shipped as a wall of prose without
@@ -918,7 +1049,7 @@ function ViewsFrame() {
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshJobs={() => {}}
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={viewRpc}
         />
       </div>
@@ -1002,12 +1133,12 @@ function ReleasesFrame() {
 }
 
 
-/* ── Tasks + Jobs ───────────────────────────────────────────────── */
+/* ── Work ───────────────────────────────────────────────────────── */
 
-// The agent's own task list, at the shape it actually reaches: a plan several
-// steps long, one item active, one task broken into subtasks, and a finished
-// task folded away behind the second section. Photographed inside Column C's
-// chrome so the split the rename created — Tasks beside Jobs — is in frame.
+// The agent's own plan, at the shape it actually reaches: several steps, one
+// item active, one task broken into subtasks, one dropped. Photographed inside
+// Column C's chrome, beside the jobs and self-changes it now shares a surface
+// with — the split that used to put each of those three in a room of its own.
 const AGENT_TASKS = [
   {
     id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
@@ -1032,55 +1163,11 @@ const AGENT_TASKS = [
   },
 ];
 
-const tasksRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listAgentTasks") return AGENT_TASKS as unknown as T;
-  return stubRpc<T>(method, args);
-};
-
-function TasksFrame() {
-  return (
-    <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[720px] h-screen border-x p-border">
-        <WorkSurface
-          surface="Tasks" onSurface={() => {}}
-          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
-          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={[]} runningJobCount={2} onRefreshJobs={() => {}}
-          rpc={tasksRpc}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** The same column with nothing written yet — the state a fresh workspace
- *  opens on, which is the one an empty-state has to earn its copy in. */
-function TasksEmptyFrame() {
-  const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
-    (method === "listAgentTasks" ? ([] as unknown as T) : stubRpc<T>(method, args));
-  return (
-    <div className="p-bg min-h-screen flex justify-center">
-      <div className="w-[720px] h-screen border-x p-border">
-        <WorkSurface
-          surface="Tasks" onSurface={() => {}}
-          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
-          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
-          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshJobs={() => {}}
-          rpc={emptyRpc}
-        />
-      </div>
-    </div>
-  );
-}
-
-/** What the Tasks tab used to show, under the name it should always have had.
- *  Both lifecycle halves are in frame: one job still running (cancel), two
- *  settled (retry / dismiss). */
+/** Both lifecycle halves in frame: one job still running (Now, cancel), two
+ *  settled (journal, retry / dismiss). */
 const BACKGROUND_JOBS = [
   {
-    id: "bgjob-7c1e4a92", kind: "think_heads", label: "explore three coupon-lookup fixes",
+    id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
     status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
   },
   {
@@ -1095,17 +1182,94 @@ const BACKGROUND_JOBS = [
   },
 ];
 
-function JobsFrame() {
+const CHANGELOG = {
+  seenAt: NOW - 30e5,
+  unseenCount: 2,
+  entries: [
+    {
+      id: "cl_1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8, revert: true,
+      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
+      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie",
+    },
+    {
+      id: "cl_2", kind: "tool", at: NOW - 26e5, scaffoldVersion: null, revert: true,
+      summary: "Learned a tool: bisect_migration",
+      evidence: "extracted from 3 successful turns · quality 0.82",
+    },
+    {
+      id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
+      summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
+      evidence: null,
+    },
+  ],
+};
+
+/** The queue that closes the badge gap: a release approval used to light
+ *  nothing at all while a running job — which needs nobody — carried a digit. */
+const PENDING_ACTIONS: PendingAction[] = [
+  {
+    id: "apr_1", kind: "release_approval", at: NOW - 12e5,
+    title: "Approve: deploy to production",
+    detail: "Warm up the empty-state copy",
+  },
+  {
+    id: "scaffold-v8", kind: "scaffold_version", at: NOW - 10e5,
+    title: "Scaffold v8 is waiting to be promoted or rolled back",
+    detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
+  },
+  {
+    id: "bgjob-9d3c6e11", kind: "failed_job", at: NOW - 58e5,
+    title: "run failed",
+    detail: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+  },
+  {
+    id: "unseen-changes", kind: "unseen_changes", at: NOW - 10e5,
+    title: "2 self-changes you have not seen",
+    detail: "Keep or revert them in the journal below.",
+  },
+];
+
+const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") return AGENT_TASKS as unknown as T;
+  if (method === "getEvolutionChangelog") return CHANGELOG as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+function WorkFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] min-h-screen border-x p-border">
+        <WorkSurface
+          surface="Work" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
+          rpc={workRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** The same column before anything has happened — the state a fresh workspace
+ *  opens on, which is the one an empty-state has to earn its copy in. */
+function WorkEmptyFrame() {
+  const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "listAgentTasks") return [] as unknown as T;
+    if (method === "getEvolutionChangelog") return { entries: [], unseenCount: 0, seenAt: 0 } as unknown as T;
+    return stubRpc<T>(method, args);
+  };
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[720px] h-screen border-x p-border">
         <WorkSurface
-          surface="Jobs" onSurface={() => {}}
+          surface="Work" onSurface={() => {}}
           pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-          backgroundJobs={BACKGROUND_JOBS} runningJobCount={1} onRefreshJobs={() => {}}
-          rpc={tasksRpc}
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
+          rpc={emptyRpc}
         />
       </div>
     </div>
@@ -1182,7 +1346,7 @@ const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
 function SuperviseFrame() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} onOpenJobs={() => {}} />
+      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} />
     </div>
   );
 }
@@ -1277,14 +1441,14 @@ function ToolCallsFrame() {
   );
 }
 
-function SelfFrame() {
+function AgentFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[740px] border-x p-border min-h-screen p-5">
-        <SelfSurface
+        <AgentSurface
           agentStatus={BRAIN_STATUS} tools={BRAIN_TOOLS} memory={[]}
           memoryContent={"## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n- Percentage coupons carry `kind: null` after Tuesday's migration.\n"}
-          onSearchMemory={() => {}} rpc={stubRpc}
+          onSearchMemory={() => {}} rpc={evolutionRpc}
         />
       </div>
     </div>
@@ -1295,10 +1459,11 @@ async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
   if (frame === "shell") node = <Shell />;
-  else if (frame === "mcts") node = <Shell surface="Exploration" mctsTree={MCTS_TREE} />;
-  else if (frame === "mctsfull" || frame === "mctsbig") {
+  else if (frame === "forks") node = <Shell surface="Exploration" mctsTree={MCTS_TREE} rpc={forkRpc} />;
+  else if (frame === "forkmerge") node = <Shell surface="Exploration" rpc={mergeFirstRpc} />;
+  else if (frame === "forkfull" || frame === "forkbig") {
     const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
-    entries = ["/mcts/checkout-fixes"];
+    entries = ["/mcts/checkout-fixes?run=n000"];
     node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
   }
   else if (frame === "modal") node = <GalleryModal />;
@@ -1308,14 +1473,13 @@ async function mount() {
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
-  else if (frame === "panels") node = <SelfFrame />;
+  else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
-  else if (frame === "tasks") node = <TasksFrame />;
-  else if (frame === "tasksempty") node = <TasksEmptyFrame />;
-  else if (frame === "jobs") node = <JobsFrame />;
+  else if (frame === "work") node = <WorkFrame />;
+  else if (frame === "workempty") node = <WorkEmptyFrame />;
   else if (frame === "supervise") node = <SuperviseFrame />;
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");

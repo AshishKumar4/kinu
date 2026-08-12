@@ -1,38 +1,42 @@
 /**
  * Work Surface — the right column of the RUN altitude. A thin segmented
- * switcher over the workspace's pinned work surfaces (Output · Self ·
- * Exploration · Releases · Tasks · Jobs · Environment), NOT a row of co-equal
- * debug tabs. This owns the switcher chrome + dispatch.
+ * switcher over the workspace's pinned surfaces (Output · Work · Releases ·
+ * Exploration · Agent · Environment), NOT a row of co-equal debug tabs. This
+ * owns the switcher chrome + dispatch.
  *
  * The naming rule for anything added here: a label names what the reader goes
- * there to find out, never the machinery that produces it. "Self" is what the
- * agent IS — identity, memory, learned tools, scaffold, its own changelog —
- * and "Exploration" is where it tried more than one thing. Neither was named
- * for the component behind it, and neither should be. "Tasks" is the agent's
- * own plan; "Jobs" is detached work it is waiting on.
+ * there to find out, never the machinery that produces it. "Work" is what the
+ * agent is working through — planned, running and done, plus anything of that
+ * work waiting on the owner; "Exploration" is where it tried more than one
+ * thing; "Agent" is what this agent is and whether it is getting better.
+ * "Tasks", "Jobs" and "Changelog" were three tabs for slices of one question
+ * and are now three parts of Work; the words live on where they are true — the
+ * `tasks` tool, the jobs read model, chat's job cards, Work's filter chips.
+ *
+ * The gauge at the right is deliberately apart and deliberately unchanged: the
+ * run's meters are about the run rather than a place to work in it.
  */
 import { useEffect, useRef } from "react";
 import {
-  MonitorIcon, BrainIcon, TreeStructureIcon, ClockIcon, GitDiffIcon, StackIcon, GaugeIcon,
-  ListChecksIcon, SparkleIcon,
+  MonitorIcon, TreeStructureIcon, GitDiffIcon, StackIcon, GaugeIcon,
+  PulseIcon, SparkleIcon, FingerprintIcon,
 } from "@phosphor-icons/react";
+import type { AgentViewSummary, PendingAction } from "@proteus/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
-import type { ToolInfo, MemoryEntry, MCTSNode, BackgroundJob, Rpc } from "@/lib/protocol";
-import type { AgentViewSummary } from "@proteus/core";
+import type { ToolInfo, MemoryEntry, ForkNode, BackgroundJob, Rpc } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
-import { SelfSurface } from "./SelfSurface";
+import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
-import { TasksSurface } from "./TasksSurface";
-import { JobsSurface } from "./JobsSurface";
+import { WorkTab } from "./WorkTab";
 import { EnvironmentSurface } from "./EnvironmentSurface";
 import { ReleasesSurface } from "./ReleasesSurface";
 import { ActivitySurface } from "./ActivitySurface";
 import { AgentViewSurface } from "./AgentViewSurface";
 
-export const SURFACES = ["Output", "Self", "Exploration", "Releases", "Tasks", "Jobs", "Environment"] as const;
+export const SURFACES = ["Output", "Work", "Releases", "Exploration", "Agent", "Environment"] as const;
 /** Not one of the segmented work surfaces: Activity is about the run rather
  *  than a place to work in it, so it sits apart at the right of the strip and
  *  carries no label. */
@@ -49,11 +53,10 @@ export const agentViewSlug = (surface: SurfaceKind): string | null =>
 
 const SURFACE_ICON: Record<(typeof SURFACES)[number], React.ComponentType<{ size?: number }>> = {
   Output: MonitorIcon,
-  Self: BrainIcon,
-  Exploration: TreeStructureIcon,
+  Work: PulseIcon,
   Releases: GitDiffIcon,
-  Tasks: ListChecksIcon,
-  Jobs: ClockIcon,
+  Exploration: TreeStructureIcon,
+  Agent: FingerprintIcon,
   Environment: StackIcon,
 };
 
@@ -62,14 +65,14 @@ export interface WorkSurfaceProps {
   onSurface: (s: SurfaceKind) => void;
   // Output
   pinnedPorts: PinnedPort[];
-  // Self
+  // Agent
   agentStatus: AgentStatus | null;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
-  // Exploration
-  mctsTree: MCTSNode | null;
+  // Exploration — the tree of the search in flight, pushed by the engine.
+  mctsTree: ForkNode | null;
   /** A turn is in flight — the live surfaces revalidate while it is. */
   isStreaming: boolean;
   // Environment (mounts + terminals)
@@ -77,13 +80,13 @@ export interface WorkSurfaceProps {
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
-  // Background jobs (Jobs surface) + live running count for its tab badge.
+  // Work
   backgroundJobs: BackgroundJob[];
-  runningJobCount?: number;
   onRefreshJobs: () => void;
-  // Evolution Changelog: unseen self-changes badge the Self tab; viewing
-  // the digest (inside Self) zeroes it.
-  changelogUnseen?: number;
+  /** Everything asynchronous waiting on the owner. One read feeds both the
+   *  Work tab's queue and the one accent badge on the strip. */
+  pendingActions: PendingAction[];
+  /** The changelog was seen inside Work — zero the unseen count upstream. */
   onChangelogSeen?: () => void;
   /** Dashboards Proteus published for this workspace. Appended after the host
    *  surfaces, in their own marked group. */
@@ -109,24 +112,25 @@ export function WorkSurface(props: WorkSurfaceProps) {
           append its own, the strip overflows and an `ml-auto` button scrolls
           away with everything else. */}
       <div className="border-b p-border shrink-0 flex items-stretch">
-        {/* The labelled surfaces need ~600px. Below that the switcher condenses
-            to icons and only the current surface keeps its word, so the row
-            stays one thin line instead of clipping a label; the strip still
-            scrolls as the last resort. */}
+        {/* Below the breakpoint the switcher condenses to icons and only the
+            current surface keeps its word, so the row stays one thin line
+            instead of clipping a label; the strip still scrolls as the last
+            resort. Six labels reach lower than seven did — measured in the
+            gallery, not guessed. */}
         <div ref={strip} className="p-tabstrip flex items-center min-w-0 flex-1 px-2 gap-0.5 -mb-px">
           {SURFACES.map((s) => {
             const Icon = SURFACE_ICON[s];
-            // Live-port badge lights Output ONLY — one home per signal.
+            // Two signals, two homes, two encodings: live ports light Output
+            // green, and decisions waiting on the owner light Work in accent.
+            // Liveness gets no digit — something merely running needs nobody,
+            // and the chat header's pulsing pill already says it.
             const badge = s === "Output" ? props.pinnedPorts.length
-              : s === "Jobs" ? (props.runningJobCount ?? 0)
-              : s === "Self" ? (props.changelogUnseen ?? 0) : 0;
-            const badgeTone = s === "Jobs" ? "p-badge-warning"
-              : s === "Self" ? "p-accent-subtle p-accent"
-              : "p-badge-success";
+              : s === "Work" ? props.pendingActions.length : 0;
+            const badgeTone = s === "Work" ? "p-accent-subtle p-accent" : "p-badge-success";
             return (
               <button key={s} onClick={() => onSurface(s)} title={s} aria-current={surface === s ? "true" : undefined}
                 className={`${tabCls} ${surface === s ? "p-tab-active" : ""}`}>
-                <Icon size={14} /><span className={surface === s ? "" : "hidden @[38rem]:inline"}>{s}</span>
+                <Icon size={14} /><span className={surface === s ? "" : "hidden @[34rem]:inline"}>{s}</span>
                 {badge > 0 && (
                   <span className={`inline-flex items-center justify-center min-w-[16px] h-[16px] px-1 rounded-full text-[10px] font-semibold p-num ${badgeTone}`}>{badge}</span>
                 )}
@@ -149,7 +153,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               aria-current={surface === kind ? "true" : undefined}
               className={`${tabCls} ${surface === kind ? "p-tab-active" : ""}`}>
               <SparkleIcon size={14} />
-              <span className={surface === kind ? "" : "hidden @[38rem]:inline"}>{view.title}</span>
+              <span className={surface === kind ? "" : "hidden @[34rem]:inline"}>{view.title}</span>
             </button>
           );
         })}
@@ -166,18 +170,26 @@ export function WorkSurface(props: WorkSurfaceProps) {
       <div className="flex-1 overflow-y-auto p-5 min-h-0">
         <ErrorBoundary key={surface} label={surface}>
           {surface === "Output" && <OutputSurface pinnedPorts={props.pinnedPorts} executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} />}
-          {surface === "Self" && (
-            <SelfSurface
+          {surface === "Work" && (
+            <WorkTab
+              pendingActions={props.pendingActions}
+              backgroundJobs={props.backgroundJobs}
+              onRefreshJobs={props.onRefreshJobs}
+              onOpenSurface={onSurface}
+              onChangelogSeen={props.onChangelogSeen}
+              isStreaming={props.isStreaming}
+              rpc={props.rpc}
+            />
+          )}
+          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} />}
+          {surface === "Exploration" && <ExplorationSurface liveTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
+          {surface === "Agent" && (
+            <AgentSurface
               agentStatus={props.agentStatus} tools={props.tools}
               memory={props.memory} memoryContent={props.memoryContent}
               onSearchMemory={props.onSearchMemory} rpc={props.rpc}
-              onChangelogSeen={props.onChangelogSeen}
             />
           )}
-          {surface === "Exploration" && <ExplorationSurface mctsTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
-          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} />}
-          {surface === "Tasks" && <TasksSurface rpc={props.rpc} />}
-          {surface === "Jobs" && <JobsSurface jobs={props.backgroundJobs} onRefresh={props.onRefreshJobs} rpc={props.rpc} />}
           {surface === "Environment" && (
             <EnvironmentSurface
               rpc={props.rpc}
@@ -185,7 +197,6 @@ export function WorkSurface(props: WorkSurfaceProps) {
               executorOutputs={props.executorOutputs}
               lastActiveExecutor={props.lastActiveExecutor}
               onExecute={props.onExecute}
-              pinnedPorts={props.pinnedPorts}
             />
           )}
           {surface === ACTIVITY_SURFACE && <ActivitySurface rpc={props.rpc} isStreaming={props.isStreaming} />}

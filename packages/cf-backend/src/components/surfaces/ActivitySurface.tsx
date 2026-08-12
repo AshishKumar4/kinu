@@ -1,6 +1,12 @@
 /**
  * Activity — the instrument panel for the run itself.
  *
+ * The raw `activity_log` dump that used to close this panel is gone. Event
+ * name + detail + ms is telemetry, and everything in it a person should read
+ * already lands in chat, in the Work tab's journal, or in the meters above —
+ * the same argument that retired the Run Timeline. `proteus debug` prints the
+ * rows for anyone who wants them; the table and its RPC are untouched.
+ *
  * Two kinds of number live here and they are never blended. The provider's
  * report (what the request cost, what was a cache read) is authoritative and
  * labelled `API`. The breakdown of where the context went is measured locally,
@@ -11,7 +17,7 @@
  */
 import { useCallback } from "react";
 import {
-  GaugeIcon, CurrencyDollarIcon, LightningIcon, ListDashesIcon, WarningCircleIcon,
+  GaugeIcon, CurrencyDollarIcon, LightningIcon, WarningCircleIcon,
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { LoadFailure } from "@/components/ui/LoadFailure";
@@ -61,7 +67,6 @@ export function ActivitySurface({ rpc, isStreaming }: ActivitySurfaceProps) {
       <ContextBlock snap={snap} />
       <CostBlock snap={snap} />
       <CacheBlock snap={snap} />
-      <LogBlock entries={snap.log} />
     </div>
   );
 }
@@ -440,41 +445,6 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
             run-event log, not all time.
           </p>
         </>
-      )}
-    </section>
-  );
-}
-
-/* ── log ────────────────────────────────────────────────────────── */
-
-function LogBlock({ entries }: { entries: ActivitySnapshot["log"] }) {
-  return (
-    <section>
-      <BlockHeader icon={ListDashesIcon} title="Log" note={`${entries.length} entries`} />
-      {entries.length === 0 ? (
-        <Empty>Nothing logged yet.</Empty>
-      ) : (
-        <div className="rounded border p-border overflow-hidden">
-          {[...entries].reverse().map((entry, i) => (
-            <div
-              key={`${entry.createdAt}:${i}`}
-              className="flex items-baseline gap-2 px-2 py-1 border-b p-border last:border-b-0"
-            >
-              <Num className="text-[10px] p-text-3 shrink-0">
-                {new Date(entry.createdAt).toLocaleTimeString([], { hour12: false })}
-              </Num>
-              <span className="text-[10px] font-medium p-text-2 shrink-0 w-[104px] truncate" title={entry.event}>
-                {entry.event}
-              </span>
-              <span className="text-[10px] p-text-3 font-mono truncate" title={entry.detail ?? ""}>
-                {entry.detail ?? ""}
-              </span>
-              {entry.elapsedMs > 0 && (
-                <Num className="text-[10px] p-text-3 ml-auto shrink-0">{entry.elapsedMs}ms</Num>
-              )}
-            </div>
-          ))}
-        </div>
       )}
     </section>
   );

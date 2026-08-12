@@ -87,6 +87,7 @@ export const AGENT_RPC_ACCESS = {
   getOutcomeEnsemble: 'workspace.read',
   getReleaseBoard: 'workspace.read',
   getRunTimeline: 'workspace.read',
+  getSearchTree: 'workspace.read',
   getStoredModelSpec: 'workspace.read',
   getReasoningEffort: 'workspace.read',
   getToolDescriptions: 'workspace.read',
@@ -94,6 +95,7 @@ export const AGENT_RPC_ACCESS = {
   listAgentTasks: 'workspace.read',
   listAgentViews: 'workspace.read',
   listBackgroundJobs: 'workspace.read',
+  listForkRuns: 'workspace.read',
   listPendingConsents: 'workspace.read',
   listRecentEvents: 'workspace.read',
   listTriggers: 'workspace.read',
@@ -155,6 +157,10 @@ export const AGENT_RPC_ACCESS = {
   getShellApprovalMode: 'interactive',
   listAlternateTakes: 'interactive',
   listCurriculumTasks: 'interactive',
+  // The needs-you queue. Interactive because it is an aggregate, and an
+  // aggregate is only as open as its strictest input: it folds the changelog,
+  // the scaffold archive and the curriculum, all of which are interactive.
+  listPendingActions: 'interactive',
   listScaffoldVersions: 'interactive',
   listTurnFeedback: 'interactive',
   markChangelogSeen: 'interactive',

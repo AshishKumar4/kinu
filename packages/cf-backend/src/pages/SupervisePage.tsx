@@ -22,7 +22,7 @@ import { describeError, lastValue, useAsyncResource } from "@/hooks/use-async-re
 import { Modal } from "@/components/ui/Modal";
 import { btnSmCls, inputCls } from "@/components/ui/form";
 import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@/lib/user-api";
-import type { Rpc, BackgroundJob } from "@/lib/protocol";
+import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
 import { cacheHitRate } from "@proteus/core";
 
@@ -43,11 +43,16 @@ interface TriggerRow {
 export interface SupervisePageProps {
   rpc: Rpc;
   onRunTask: (task: string) => void;
-  /** Cross-link into the RUN altitude's Jobs surface to manage a job. */
-  onOpenJobs: () => void;
 }
 
-export function SupervisePage({ rpc, onRunTask, onOpenJobs }: SupervisePageProps) {
+/**
+ * The background-jobs digest that used to close this page is gone. It was a
+ * third rendering of one list — six rows and a "Manage in Jobs →" cross-link,
+ * kept because the data was handy and because Jobs was hard to find. Jobs are
+ * one glance in the RUN altitude's Work tab now, running beside the plan and
+ * settled in the journal, so the crutch has nothing left to hold up.
+ */
+export function SupervisePage({ rpc, onRunTask }: SupervisePageProps) {
   return (
     <div className="h-full overflow-y-auto px-6 py-5 lg:px-10 max-w-5xl mx-auto space-y-8">
       <CurriculumBlock rpc={rpc} onRunTask={onRunTask} />
@@ -55,46 +60,7 @@ export function SupervisePage({ rpc, onRunTask, onOpenJobs }: SupervisePageProps
         <RunHistoryBlock rpc={rpc} />
         <AutomationsBlock rpc={rpc} />
       </div>
-      <BackgroundJobsBlock rpc={rpc} onOpenJobs={onOpenJobs} />
     </div>
-  );
-}
-
-/* ── Background jobs — supervise-level digest, cross-linking to RUN ─ */
-
-function BackgroundJobsBlock({ rpc, onOpenJobs }: { rpc: Rpc; onOpenJobs: () => void }) {
-  const load = useCallback(() => rpc<BackgroundJob[]>("listBackgroundJobs", [20]), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
-  const jobs = lastValue(resource);
-  const running = (jobs ?? []).filter((j) => j.status === "running").length;
-  return (
-    <section>
-      <div className="flex flex-wrap items-center gap-2 mb-3">
-        <ClockIcon size={16} className="p-accent" />
-        <h2 className="text-sm font-semibold p-text">Background jobs</h2>
-        {running > 0 && <Badge variant="secondary">{running} running</Badge>}
-        <div className="flex-1" />
-        <Button size="sm" variant="ghost" onClick={onOpenJobs}>Manage in Jobs →</Button>
-      </div>
-      {jobs === null ? (
-        resource.status === "error"
-          ? <LoadFailure what="background jobs" message={resource.message} onRetry={reload} />
-          : <div className="flex justify-center py-6"><Loader size="sm" /></div>
-        )
-        : jobs.length === 0 ? <p className="text-xs p-text-3">No background jobs — long tool calls (&gt;30s) detach here.</p>
-        : (
-          <div className="rounded-md border p-border overflow-hidden text-xs">
-            {jobs.slice(0, 6).map((j) => (
-              <div key={j.id} className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
-                <span className={`size-1.5 rounded-full shrink-0 ${j.status === "running" ? "p-dot-warning" : j.status === "completed" ? "p-dot-success" : j.status === "cancelled" ? "p-dot-neutral" : "p-dot-danger"}`} />
-                <span className="font-mono p-text-2">{j.kind}</span>
-                <span className="p-text-3 truncate flex-1">{j.id.replace(/^bgjob-/, "").slice(0, 8)}</span>
-                <span className="p-text-3 shrink-0">{j.status}</span>
-              </div>
-            ))}
-          </div>
-        )}
-    </section>
   );
 }
 

@@ -2,14 +2,14 @@
 // the picture (which line the search paid for, how big a node is, what a label
 // says, which branches are foldable) without a DOM to render them into.
 import { describe, test, expect } from 'bun:test';
-import type { MCTSNode } from '../src/lib/protocol.js';
+import type { ForkNode } from '../src/lib/protocol.js';
 import {
   ancestorIds, cleanNodeLabel, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
   NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, treeStats, truncate,
-} from '../src/components/mcts-tree-model.js';
+} from '../src/components/fork-tree-model.js';
 
 let seq = 0;
-function node(over: Partial<MCTSNode> = {}): MCTSNode {
+function node(over: Partial<ForkNode> = {}): ForkNode {
   return {
     id: `n${seq++}`, parentId: null, depth: 0, value: 0.5, visits: 1,
     status: 'open', action: 'do a thing', children: [], ...over,

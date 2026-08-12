@@ -996,7 +996,9 @@ export default function WorkspacePage() {
   const [altitude, setAltitude] = useState<"run" | "supervise">(
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
-  const [surface, setSurface] = useState<SurfaceKind>("Self");
+  // A returning driver opens on status, not on the agent's own description.
+  // Output still takes over the moment there is something running to look at.
+  const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -1063,14 +1065,17 @@ export default function WorkspacePage() {
   // roster reflects status for workspaces visited this session.
   useEffect(() => {
     if (!agentId) return;
-    const running = state.isStreaming || state.runningJobCount > 0;
+    const running = state.isStreaming || state.backgroundJobs.some((j) => j.status === "running");
     window.dispatchEvent(new CustomEvent("proteus:workspace-activity", {
       detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
     }));
-  }, [agentId, state.isStreaming, state.runningJobCount, state.changelogUnseen]);
+  }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen]);
 
-  // Auto-switch the work surface to the live Preview the moment a new sandbox
-  // port is exposed — the running app becomes the centre of attention.
+  // The ONE rule that steers the surface on its own: a newly exposed sandbox
+  // port switches to Output, where the running app is. Environment used to run
+  // a second, competing rule over the same signal — two owners of one decision,
+  // which is a bug however either of them behaves — and it went with the
+  // preview panes it drove.
   // (Port discovery itself lives in useProteus' live-data poll, so this fires
   // from any surface.)
   const prevPortCountRef = useRef(0);
@@ -1281,7 +1286,7 @@ export default function WorkspacePage() {
       {altitude === "supervise" ? (
         <div className="flex-1 min-h-0">
           <ErrorBoundary label="Supervise">
-            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} onOpenJobs={() => { setAltitude("run"); setSurface("Jobs"); }} />
+            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} />
           </ErrorBoundary>
         </div>
       ) : (
@@ -1495,9 +1500,8 @@ export default function WorkspacePage() {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
-            runningJobCount={state.runningJobCount}
             onRefreshJobs={state.refreshBackgroundJobs}
-            changelogUnseen={state.changelogUnseen}
+            pendingActions={state.pendingActions}
             onChangelogSeen={state.clearChangelogUnseen}
             agentViews={state.agentViews}
             rpc={state.rpc}

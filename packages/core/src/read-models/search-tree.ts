@@ -29,3 +29,19 @@ export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
     )
     ORDER BY depth, created_at`;
 }
+
+/**
+ * One named search's tree.
+ *
+ * The unified fork list can select a competed run that is not the latest, and
+ * "latest" is then the wrong tree to show — it would render another search's
+ * branches under the selected run's heading. Same projection, same ordering,
+ * scoped by the root the caller asked for.
+ */
+export function readSearchTree(sql: SqlExecutor, rootId: string): SearchNode[] {
+  return sql<SearchNode>`
+    SELECT id, parent_id, root_id, task, action, observation, code_used,
+           visits, value, depth, status, msg_id, branch_agent_key, created_at
+    FROM search_nodes WHERE root_id = ${rootId}
+    ORDER BY depth, created_at`;
+}

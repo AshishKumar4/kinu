@@ -1,5 +1,11 @@
 /**
- * The MCTS search tree.
+ * The fork tree — every time the agent split its work, drawn as the tree it is.
+ *
+ * A merge (settle=merge) is this tree at depth 1: the task at the root, one
+ * head per child. A competition (settle=mcts) is the same tree deeper, with
+ * its branches scored against each other. One renderer, one node shape, depth
+ * varying — because the alternative was two panes where the same user action
+ * landed in one or the other depending on an internal strategy id.
  *
  * Laid out left→right at a CONSTANT pitch — d3's `nodeSize`, not `size`. The
  * old layout stretched the whole search to fit the panel, so a node's row got
@@ -9,14 +15,21 @@
  * fitted, pans and zooms, folds branches away, and drops labels below the zoom
  * at which they would collide.
  *
- * What the picture says before anything is clicked:
+ * What the picture says before anything is clicked, when the fork COMPETED:
  *   fill                 score, on the product's danger→warning→success ramp
  *   radius               rollouts spent here (area ∝ visits)
  *   brass spine          the principal variation — the line the search paid for
  *   edge width           rollouts that flowed down that edge
- *   hollow, danger ring  the branch failed
  *   faded, dashed edge   the branch was pruned
  *   brass ring + halo    terminal: the answer the search settled on
+ *
+ * and always, whichever way it settled:
+ *   hollow, danger ring  the branch failed
+ *   amber fill           the branch is still running
+ *
+ * Every score/rollout encoding is gated on the branches actually carrying
+ * those numbers. A merge ranks nothing, and a ramp fill or a winning spine
+ * drawn from its absent values would state a verdict the fork never reached.
  */
 import { useRef, useEffect, useState, useCallback } from "react";
 import * as d3 from "d3";
@@ -25,18 +38,18 @@ import {
 	ArrowsInSimpleIcon, ArrowsOutSimpleIcon,
 } from "@phosphor-icons/react";
 import { useTheme } from "@/hooks/use-theme";
-import type { MCTSNode } from "@/lib/protocol";
+import type { ForkNode } from "@/lib/protocol";
 import {
-	ancestorIds, cleanNodeLabel, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX, nodeRadius,
-	principalVariation, subtreeCount, treeStats, truncate,
-} from "./mcts-tree-model";
+	ancestorIds, cleanNodeLabel, isCompeted, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
+	NODE_R_UNSCORED, nodeRadius, principalVariation, subtreeCount, treeStats, truncate,
+} from "./fork-tree-model";
 
 interface Props {
-	root: MCTSNode;
+	root: ForkNode;
 	width?: number;
 	height?: number;
-	onNodeClick?: (node: MCTSNode) => void;
-	selectedNode?: MCTSNode | null;
+	onNodeClick?: (node: ForkNode) => void;
+	selectedNode?: ForkNode | null;
 }
 
 /** Row pitch. One text line plus air — labels cannot collide at any tree size. */
@@ -71,14 +84,17 @@ const AUTO_FOLD_NODES = 40;
 const RULER_H = 20;
 const FIT_PAD = 16;
 
-function initialFold(root: MCTSNode): Set<string> {
+function initialFold(root: ForkNode): Set<string> {
 	return treeStats(root).nodes > AUTO_FOLD_NODES ? losingBranchIds(root) : new Set<string>();
 }
 
-type PointNode = d3.HierarchyPointNode<MCTSNode>;
+type PointNode = d3.HierarchyPointNode<ForkNode>;
 
 interface RenderState {
 	pv: Set<string>;
+	/** Whether this fork ranked its branches — gates every score/rollout
+	 *  encoding, so a merge is never drawn as if it had picked a winner. */
+	competed: boolean;
 	visitMax: number;
 	byId: Map<string, PointNode>;
 	extent: { x0: number; x1: number; y0: number; y1: number };
@@ -101,10 +117,14 @@ function scoreToken(value: number): string {
 	return value >= 0.7 ? "var(--c-success)" : value >= 0.4 ? "var(--c-warning)" : "var(--c-danger)";
 }
 
-function nodeFill(node: MCTSNode, ramp: (t: number) => string): string {
+function nodeFill(node: ForkNode, ramp: (t: number) => string): string {
 	// A failed branch has no score to show — it never produced one — so it is
 	// drawn hollow rather than coloured by a zero it did not earn.
 	if (node.status === "failed") return "var(--c-surface)";
+	if (node.status === "running") return "var(--c-warning)";
+	// Unscored: the same argument as `failed`, for every branch of a fork that
+	// ranked none of them. Neutral, not a ramp position.
+	if (node.value === null) return "var(--c-border-strong)";
 	return ramp(Math.min(1, Math.max(0, node.value)));
 }
 
@@ -122,7 +142,7 @@ function applyEmphasis(
 	const onPath = new Set(hovered ? hovered.ancestors().map((d) => d.data.id) : []);
 	const lit = (id: string) => state.pv.has(id) || onPath.has(id);
 
-	g.selectAll<SVGPathElement, d3.HierarchyPointLink<MCTSNode>>("path.mcts-link")
+	g.selectAll<SVGPathElement, d3.HierarchyPointLink<ForkNode>>("path.mcts-link")
 		.attr("stroke", (d) => {
 			if (lit(d.target.data.id)) return "var(--c-accent)";
 			if (d.target.data.status === "failed") return "var(--c-danger)";
@@ -134,7 +154,7 @@ function applyEmphasis(
 			return 0.6;
 		})
 		.attr("stroke-width", (d) => {
-			const w = linkWidth(d.target.data.visits, state.visitMax);
+			const w = state.competed ? linkWidth(d.target.data.visits, state.visitMax) : 1.2;
 			return lit(d.target.data.id) ? Math.max(2, w) : w;
 		});
 
@@ -159,7 +179,7 @@ function applyEmphasis(
 		.attr("data-pinned", (d) => (selectedId === d.data.id || hoverId === d.data.id ? "" : null));
 }
 
-export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selectedNode }: Props) {
+export function ForkTree({ root, width = 800, height = 600, onNodeClick, selectedNode }: Props) {
 	const svgRef = useRef<SVGSVGElement>(null);
 	const gRef = useRef<SVGGElement | null>(null);
 	const rulerRef = useRef<SVGGElement | null>(null);
@@ -178,7 +198,8 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 	const hoverIdRef = useRef<string | null>(null);
 	const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => initialFold(root));
 	const foldedFor = useRef(root.id);
-	const [tooltip, setTooltip] = useState<{ x: number; y: number; node: MCTSNode } | null>(null);
+	const [tooltip, setTooltip] = useState<{ x: number; y: number; node: ForkNode } | null>(null);
+	const competedRoot = isCompeted(root);
 	const mode = useTheme();
 
 	const fit = useCallback(() => {
@@ -269,17 +290,19 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 		g.selectAll("*").remove();
 
 		const hierarchy = d3.hierarchy(root, (d) => (collapsed.has(d.id) ? [] : d.children));
-		const layout = d3.tree<MCTSNode>().nodeSize([ROW, COL])
+		const layout = d3.tree<ForkNode>().nodeSize([ROW, COL])
 			.separation((a, b) => (a.parent === b.parent ? 1 : 1.6));
 		const data = layout(hierarchy);
 		const nodes = data.descendants();
 		const ramp = scoreRamp();
 		const visitMax = maxVisits(root);
+		const competed = isCompeted(root);
+		const radiusOf = (node: ForkNode) => (competed ? nodeRadius(node.visits, visitMax) : NODE_R_UNSCORED);
 		const pv = principalVariation(root);
 		const depth = d3.max(nodes, (d) => d.depth) ?? 0;
 		const rowSpan = d3.extent(nodes, (d) => d.x) as [number, number];
 		const state: RenderState = {
-			pv, visitMax, depth,
+			pv, competed, visitMax, depth,
 			byId: new Map(nodes.map((d) => [d.data.id, d])),
 			// Screen axes are swapped: depth runs along x, rows down y.
 			extent: { x0: -NODE_R_MAX, x1: depth * COL + LABEL_W, y0: rowSpan[0] - ROW, y1: rowSpan[1] + ROW },
@@ -303,7 +326,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.attr("class", "mcts-link")
 			.attr("stroke-linecap", "round")
 			.attr("stroke-dasharray", (d) => (d.target.data.status === "pruned" ? "3,4" : null))
-			.attr("d", d3.linkHorizontal<d3.HierarchyPointLink<MCTSNode>, PointNode>()
+			.attr("d", d3.linkHorizontal<d3.HierarchyPointLink<ForkNode>, PointNode>()
 				.x((d) => d.y).y((d) => d.x));
 
 		const nodeG = g.append("g").attr("class", "mcts-nodes")
@@ -318,7 +341,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 		// must never look like work that was never done.
 		nodeG.filter((d) => collapsed.has(d.data.id))
 			.append("circle")
-			.attr("r", (d) => nodeRadius(d.data.visits, visitMax) + 3.5)
+			.attr("r", (d) => radiusOf(d.data) + 3.5)
 			.attr("fill", "none")
 			.attr("stroke", "var(--c-text-3)")
 			.attr("stroke-width", 1)
@@ -326,7 +349,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 
 		nodeG.append("circle")
 			.attr("class", "mcts-dot")
-			.attr("r", (d) => nodeRadius(d.data.visits, visitMax))
+			.attr("r", (d) => radiusOf(d.data))
 			.attr("fill", (d) => nodeFill(d.data, ramp));
 
 		// A generous invisible hit area: a 3.5px dot is not a pointer target.
@@ -371,13 +394,16 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.attr("paint-order", "stroke")
 			.attr("stroke", "var(--c-surface)").attr("stroke-width", 3).attr("stroke-linejoin", "round");
 		// Score first, in the score's own colour: a column of percentages is
-		// scannable in a way a hundred prose fragments are not.
-		text.append("tspan")
-			.text((d) => (d.data.status === "failed" ? "fail" : `${Math.round(Math.min(1, Math.max(0, d.data.value)) * 100)}%`))
+		// scannable in a way a hundred prose fragments are not. A branch with no
+		// score contributes no tspan at all, so the label starts at its text
+		// rather than at a fabricated `0%`.
+		text.filter((d) => d.data.status === "failed" || d.data.value !== null)
+			.append("tspan")
+			.text((d) => (d.data.status === "failed" ? "fail" : `${Math.round(Math.min(1, Math.max(0, d.data.value ?? 0)) * 100)}%`))
 			.attr("font-family", "var(--font-mono)").attr("font-size", "9px")
-			.attr("fill", (d) => (d.data.status === "failed" ? "var(--c-danger)" : scoreToken(d.data.value)));
+			.attr("fill", (d) => (d.data.status === "failed" ? "var(--c-danger)" : scoreToken(d.data.value ?? 0)));
 		text.append("tspan")
-			.text((d) => ` ${truncate(cleanNodeLabel(d.data.action, "(root)"), 20)}`)
+			.text((d) => `${d.data.status === "failed" || d.data.value !== null ? " " : ""}${truncate(cleanNodeLabel(d.data.action, "(root)"), 20)}`)
 			.attr("fill", (d) => (d.data.status === "pruned" ? "var(--c-text-3)" : "var(--c-text-2)"));
 		text.filter((d) => collapsed.has(d.data.id))
 			.append("tspan")
@@ -433,6 +459,12 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 			}
 			return;
 		}
+		// A fitted view already shows every node, so there is nothing to bring
+		// into view — and the fit is a TRANSITION, so the check below would read
+		// the PRE-fit transform, decide the node is off-screen, and pan away from
+		// the very tree it was fitting. Only a view the reader has moved can hide
+		// a node from them.
+		if (!userMoved.current) return;
 		const t = d3.zoomTransform(svgRef.current);
 		const [sx, sy] = [t.applyX(target.y), t.applyY(target.x)];
 		if (sx > 40 && sx < width - 40 && sy > RULER_H + 20 && sy < height - 20) return;
@@ -455,15 +487,28 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 				{/* On a narrow canvas the full key wraps into a block that covers
 				    the tree it explains, so only the colour scale survives. */}
 				<div className="min-w-0 flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] p-text-3 select-none">
-					<span className="flex items-center gap-1.5">
-						<span className="h-2 w-14 rounded-full" style={{ background: "linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success))" }} />
-						score
-					</span>
-					{width >= 470 && (
+					{competedRoot ? (
 						<>
-							<span className="flex items-center gap-1"><span className="size-1 rounded-full p-dot-neutral" /><span className="size-2 rounded-full p-dot-neutral" />visits</span>
-							<span className="flex items-center gap-1"><span className="inline-block w-3 h-px" style={{ background: "var(--c-accent)" }} />winning line</span>
-							<span className="opacity-70">dashed = pruned · hollow = failed</span>
+							<span className="flex items-center gap-1.5">
+								<span className="h-2 w-14 rounded-full" style={{ background: "linear-gradient(90deg in oklab, var(--c-danger), var(--c-warning), var(--c-success))" }} />
+								score
+							</span>
+							{width >= 470 && (
+								<>
+									<span className="flex items-center gap-1"><span className="size-1 rounded-full p-dot-neutral" /><span className="size-2 rounded-full p-dot-neutral" />visits</span>
+									<span className="flex items-center gap-1"><span className="inline-block w-3 h-px" style={{ background: "var(--c-accent)" }} />winning line</span>
+									<span className="opacity-70">dashed = pruned · hollow = failed</span>
+								</>
+							)}
+						</>
+					) : (
+						/* Nothing was ranked here, so the key says what the picture
+						   actually encodes: lifecycle, and only lifecycle. */
+						<>
+							<span>every branch fed the merge — none was ranked</span>
+							{width >= 470 && (
+								<span className="opacity-70">amber = running · hollow = failed</span>
+							)}
 						</>
 					)}
 				</div>
@@ -477,7 +522,7 @@ export function MCTSTree({ root, width = 800, height = 600, onNodeClick, selecte
 				</div>
 			</div>
 
-			{tooltip && <NodeTip node={tooltip.node} x={tooltip.x} y={tooltip.y} width={width} />}
+			{tooltip && <NodeTip node={tooltip.node} x={tooltip.x} y={tooltip.y} width={width} competed={competedRoot} />}
 		</div>
 	);
 }
@@ -517,14 +562,30 @@ function positionRuler(
 		.text((d) => `d${d}`);
 }
 
-const STATUS_NOTE: Record<string, string> = {
-	open: "still explorable",
-	terminal: "the answer the search settled on",
-	pruned: "dropped below the prune floor",
-	failed: "the branch never produced a score",
+/** What a branch's state MEANS depends on how the fork settled: `open` is
+ *  "still explorable" in a competition and "done, its findings went into the
+ *  merge" in a merge. Same word in the data, two different facts. */
+const STATUS_NOTE: Record<"competed" | "merged", Record<string, string>> = {
+	competed: {
+		open: "still explorable",
+		terminal: "the answer the search settled on",
+		pruned: "dropped below the prune floor",
+		failed: "the branch never produced a score",
+		running: "still running",
+	},
+	merged: {
+		open: "finished — its findings went into the merge",
+		terminal: "finished — its findings went into the merge",
+		pruned: "abandoned",
+		failed: "this branch errored",
+		running: "still running",
+	},
 };
 
-function NodeTip({ node, x, y, width }: { node: MCTSNode; x: number; y: number; width: number }) {
+function NodeTip(
+	{ node, x, y, width, competed }:
+	{ node: ForkNode; x: number; y: number; width: number; competed: boolean },
+) {
 	const TIP_W = 260;
 	const flip = x + TIP_W + 24 > width;
 	return (
@@ -536,16 +597,22 @@ function NodeTip({ node, x, y, width }: { node: MCTSNode; x: number; y: number; 
 				{cleanNodeLabel(node.action, "(root)")}
 			</div>
 			<div className="flex items-center gap-2 tabular-nums">
-				<span
-					className="text-base font-semibold leading-none"
-					style={{ color: node.status === "failed" ? "var(--c-danger)" : scoreToken(node.value) }}
-				>
-					{node.status === "failed" ? "fail" : `${Math.round(Math.min(1, Math.max(0, node.value)) * 100)}%`}
-				</span>
-				<span className="p-text-3">{node.visits} rollout{node.visits === 1 ? "" : "s"}</span>
+				{(node.status === "failed" || node.value !== null) && (
+					<span
+						className="text-base font-semibold leading-none"
+						style={{ color: node.status === "failed" ? "var(--c-danger)" : scoreToken(node.value ?? 0) }}
+					>
+						{node.status === "failed" ? "fail" : `${Math.round(Math.min(1, Math.max(0, node.value ?? 0)) * 100)}%`}
+					</span>
+				)}
+				{node.visits !== null && (
+					<span className="p-text-3">{node.visits} rollout{node.visits === 1 ? "" : "s"}</span>
+				)}
 				<span className="p-text-3">depth {node.depth}</span>
 			</div>
-			<div className="p-text-3 mt-1">{STATUS_NOTE[node.status] ?? node.status}</div>
+			<div className="p-text-3 mt-1">
+				{STATUS_NOTE[competed ? "competed" : "merged"][node.status] ?? node.status}
+			</div>
 			{node.observation && (
 				<div className="mt-1.5 pt-1.5 border-t p-border p-text-2 leading-relaxed line-clamp-3">
 					{node.observation}

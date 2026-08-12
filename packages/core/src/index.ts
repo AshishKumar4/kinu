@@ -602,7 +602,7 @@ export {
 // Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
-  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId,
+  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId, isSteerBranchRunId,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type PendingBranch,
@@ -1114,7 +1114,11 @@ export {
   getExecutorFiles, readExecutorFile, sortDirEntries, toCompositePath, writeExecutorFileOp,
 } from './read-models/files.js';
 export type { DirEntry, ExecutorWriteDeps, ExecutorWriteResult } from './read-models/files.js';
-export { readLatestSearchTree } from './read-models/search-tree.js';
+export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
+export { listForkRuns } from './read-models/fork-runs.js';
+export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
+export { buildPendingActions } from './read-models/pending-actions.js';
+export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';
 export { getAgentStatus, getChatHistory, getToolList, uiMessageText } from './read-models/status.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,

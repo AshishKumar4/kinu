@@ -1,35 +1,43 @@
 /**
- * Self surface — the agent's durable self: identity, learned tools (CraftStore),
- * and long-term memory, plus the scaffold version-lineage + shadow-eval verdict
- * + promote/rollback (the moat) and agent_facts.
+ * Agent — what this agent is, and whether it is getting better.
  *
- * Everything the agent IS, as opposed to what it did (Output), how it searched
- * (Exploration), or where it works (Environment).
+ * Identity · Memory · World model · Tools · Evolution. Everything the agent IS,
+ * as opposed to what it made (Output), what it is working through (Work), how
+ * it explored (Exploration), or where it can act (Environment).
+ *
+ * Evolution is the whole trajectory in one place: the scaffold lineage with its
+ * shadow verdict and promote/rollback, the GEPA passes that generate candidates
+ * for the next version, and the quality scoreboard that says whether the
+ * versions are measurably better. The last two used to sit under Exploration,
+ * beside the fork strategies, purely because the strategy code is adjacent —
+ * and the quality rows are literally keyed by `scaffoldVersion`, so beside the
+ * lineage they measure is where they read as one loop.
+ *
+ * The changelog left for Work: a self-change is an EVENT, and "what happened
+ * while I was away" is not a question anyone opens a CV to answer.
  */
 import { useState, useEffect } from "react";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
   FingerprintIcon, PackageIcon, MagnifyingGlassIcon, DatabaseIcon, FolderOpenIcon, BrainIcon,
-  CaretRightIcon,
+  CaretRightIcon, GitBranchIcon,
 } from "@phosphor-icons/react";
 import { ScoreBar } from "@/components/ui/score-bar";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
-import { EvolutionChangelog } from "./EvolutionChangelog";
+import { GepaView, QualityView } from "./evolution-panels";
 
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
-export interface SelfSurfaceProps {
+export interface AgentSurfaceProps {
   agentStatus: AgentStatus | null;
   tools: ToolInfo[];
   memory: MemoryEntry[];
   memoryContent: string;
   onSearchMemory: (q: string) => void;
   rpc: Rpc;
-  /** The changelog was viewed — zero the unseen tab badge. */
-  onChangelogSeen?: () => void;
 }
 
 /**
@@ -104,7 +112,7 @@ function ToolCard({ tool }: { tool: ToolInfo }) {
   );
 }
 
-export function SelfSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc, onChangelogSeen }: SelfSurfaceProps) {
+export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, onSearchMemory, rpc }: AgentSurfaceProps) {
   const [memorySearch, setMemorySearch] = useState("");
   const [facts, setFacts] = useState<Fact[]>([]);
   useEffect(() => { rpc<Fact[]>("getFacts", [100]).then(setFacts).catch(() => {}); }, [rpc]);
@@ -148,23 +156,6 @@ export function SelfSurface({ agentStatus: as, tools, memory, memoryContent, onS
           </div>
         </Section>
       ) : <div className="flex items-center justify-center h-32"><Loader size="base" /></div>}
-
-      {/* Evolution Changelog — what the agent changed about itself, with
-          evidence + per-line keep/revert/diff. Viewing marks entries seen. */}
-      <EvolutionChangelog rpc={rpc} onSeen={onChangelogSeen} />
-
-      {/* Scaffold evolution — the moat: lineage + diff + shadow verdict + promote/rollback. */}
-      {as && <ScaffoldLineage rpc={rpc} currentVersion={as.scaffoldVersion} />}
-
-      {/* Tools (CraftStore + builtins) */}
-      <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
-        badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
-        <div className="space-y-2">
-          {tools.length === 0 ? (
-            <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />
-          ) : tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)}
-        </div>
-      </Section>
 
       {/* Memory */}
       <Section id="memory" title="Memory" icon={<DatabaseIcon size={14} className="p-text-2" />}>
@@ -214,6 +205,44 @@ export function SelfSurface({ agentStatus: as, tools, memory, memoryContent, onS
           </div>
         </Section>
       )}
+
+      {/* Tools (CraftStore + builtins) */}
+      <Section id="tools" title="Tools" icon={<PackageIcon size={14} className="p-text-2" />}
+        badge={tools.length > 0 ? <Badge variant="secondary">{tools.length}</Badge> : undefined}>
+        <div className="space-y-2">
+          {tools.length === 0 ? (
+            <EmptyState icon={<PackageIcon size={28} />} title="No tools discovered yet" hint={EMPTY_HINTS.tools} />
+          ) : tools.map((tool) => <ToolCard key={tool.name} tool={tool} />)}
+        </div>
+      </Section>
+
+      {/* Evolution — the agent's versions, where the next candidates come from,
+          and whether the versions are measurably better. One loop, one place. */}
+      <Section id="evolution" title="Evolution" defaultOpen={false}
+        icon={<GitBranchIcon size={14} className="p-text-2" />}
+        badge={as ? <Badge variant="secondary">v{as.scaffoldVersion}</Badge> : undefined}>
+        <div className="space-y-5">
+          {as && <ScaffoldLineage rpc={rpc} currentVersion={as.scaffoldVersion} />}
+          <EvolutionBlock title="Self-tuning" hint="GEPA passes propose candidates for the next scaffold version.">
+            <GepaView rpc={rpc} />
+          </EvolutionBlock>
+          <EvolutionBlock title="Quality" hint="Replay loss, correction rate and calibration, per scaffold version.">
+            <QualityView rpc={rpc} />
+          </EvolutionBlock>
+        </div>
+      </Section>
     </div>
+  );
+}
+
+/** A labelled block inside Evolution. Not a Section: three nested collapsibles
+ *  inside one is a fold you have to fight, and these three are one story. */
+function EvolutionBlock({ title, hint, children }: { title: string; hint: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-1.5">
+      <div className="text-[10px] uppercase tracking-normal p-text-3">{title}</div>
+      <p className="text-[10px] p-text-3 leading-relaxed">{hint}</p>
+      {children}
+    </section>
   );
 }

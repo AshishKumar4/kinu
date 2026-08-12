@@ -6,15 +6,37 @@ import type {
 	ActivityLogEntry, ContextComposition, MissionBudgetSnapshot, StepTelemetry, StepUsage,
 } from "@proteus/core";
 
-export interface MCTSNode {
+/**
+ * One branch of a fork, as the tree view draws it.
+ *
+ * A fork is a tree whatever settled it: a competition (settle=mcts) is a deep
+ * tree whose branches were scored against each other, and a merge
+ * (settle=merge) is the same tree at depth 1 — the task at the root, one head
+ * per child. One shape, one renderer, depth varying.
+ *
+ * `value` and `visits` are nullable BECAUSE of that: only a competition scores
+ * its branches and counts rollouts. A merge has neither, and the encodings
+ * that carry them (fill ramp, radius, the winning spine, the score in the
+ * label) must be absent rather than drawn from a zero no branch earned.
+ */
+export interface ForkNode {
 	id: string;
 	parentId: string | null;
 	depth: number;
-	value: number;
-	visits: number;
-	status: "open" | "pruned" | "terminal" | "failed";
+	/** Branch score in [0,1] — null when the fork did not compete its branches. */
+	value: number | null;
+	/** Rollouts spent here — null for the same reason. */
+	visits: number | null;
+	/**
+	 * `running` is the one state a search node never reaches (search_nodes
+	 * constrains its column to the other four) and the one a head is in for
+	 * most of its life, so the view union is the superset of both mechanisms.
+	 * `terminal` means "the branch the fork settled on" and only a competition
+	 * has one.
+	 */
+	status: "open" | "pruned" | "terminal" | "failed" | "running";
 	action: string;
-	children: MCTSNode[];
+	children: ForkNode[];
 	task?: string;
 	observation?: string;
 	codeUsed?: string | null;
@@ -29,7 +51,7 @@ export interface MCTSNodeSummary {
 	depth: number;
 	value: number;
 	visits: number;
-	status: MCTSNode["status"];
+	status: ForkNode["status"];
 	action: string;
 	createdAt?: number;
 }

@@ -128,7 +128,10 @@ import {
   receiveSubordinateEvent,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
-  getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, type ChatHistoryEntry,
+  getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, readSearchTree,
+  listForkRuns, type ForkRunSummary,
+  buildPendingActions, type PendingAction,
+  type ChatHistoryEntry,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
@@ -1478,6 +1481,49 @@ export class OrchestratorAgent extends ActorAgent {
    *  search_nodes and must never shadow the run the operator is watching. */
   @callable() async getMctsTree() {
     return readLatestSearchTree(this.boundSql);
+  }
+
+  /** One named search's tree. The unified fork list can select a competed run
+   *  that is not the latest, and `getMctsTree` would then answer with another
+   *  search's branches under it. */
+  @callable() async getSearchTree(rootId: string) {
+    return readSearchTree(this.boundSql, rootId);
+  }
+
+  /** Every fork this workspace has run, newest first, whichever settle policy
+   *  it chose — the one entry point the Exploration surface lists. Detail
+   *  stays per-mechanism (`getSearchTree` for a competition, `getHeadRuns`
+   *  for a merge); this is the list they are both reached from. */
+  @callable() async listForkRuns(limit: number = 20): Promise<ForkRunSummary[]> {
+    return listForkRuns(this.boundSql, limit);
+  }
+
+  /**
+   * Everything asynchronous that is waiting on the owner, in one queue.
+   *
+   * Host-owned by design: this is NOT in `VIEW_DATA_SOURCES` and must not be
+   * added. An agent-authored view that could draw the needs-you queue could
+   * draw a plausible fake of it — the same argument that keeps
+   * `listPendingConsents` off that list, on the surface an owner reads right
+   * before authorising something.
+   *
+   * A read that fails degrades to "nothing pending of that kind" rather than
+   * failing the whole queue: a broken release hub must not hide a failed job.
+   */
+  @callable() async listPendingActions(): Promise<PendingAction[]> {
+    const board = await this.getReleaseBoard(20).catch(() => null);
+    const changelog = await this.getEvolutionChangelog({ limit: 1 }).catch(() => null);
+    return buildPendingActions({
+      approvals: board?.approvals ?? [],
+      changes: board?.changes ?? [],
+      scaffoldVersions: listScaffoldVersions(this.boundSql, 20),
+      jobs: listBackgroundJobs(this.jobs, 50),
+      unseenChanges: {
+        count: changelog?.unseenCount ?? 0,
+        latestAt: changelog?.entries[0]?.at ?? Date.now(),
+      },
+      curriculum: listProposedTasks(this.rt, 'pending'),
+    });
   }
 
   /** The run-level MCTS ledger (mcts_search_runs): every search this workspace

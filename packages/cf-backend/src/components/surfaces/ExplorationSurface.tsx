@@ -1,349 +1,389 @@
 /**
- * Exploration surface — where the agent tried more than one thing, across the
- * three real strategies it can run: MCTS (the d3 tree + node inspector),
- * branching Heads (think strategy=heads → getHeadRuns), and GEPA offline
- * optimisation (Pareto front + ancestry → getGepaRuns / getGepaRun). All bound
- * to wired backends.
+ * Exploration — every time the agent tried more than one path.
+ *
+ * ONE list and ONE tree, not a tab per mechanism. The old surface split MCTS
+ * from Branches, which mirrored a storage split (search_nodes vs head_journal)
+ * that `agents(action:'fork')` picks between on its `settle` argument — so the
+ * same user action landed in a different tab depending on an internal strategy
+ * id, and the owner twice found an empty pane where his forks should have been.
+ *
+ * The unification is honest because a fork IS a tree either way: a merge is
+ * that tree at depth 1 (the task, then one branch per head) and a competition
+ * is the same tree deeper, with scores on it. Master-detail rather than
+ * latest-vs-past tabs: every fork the workspace ever ran is a row, newest
+ * first, the live one selected on arrival.
  *
  * NOT the chat's thinking text — that streams inline as reasoning blocks in the
- * transcript, which is why this surface does not wear that word.
+ * transcript, which is why this surface does not wear that word. GEPA and the
+ * quality scoreboard are not here either: they measure the agent's trajectory
+ * across scaffold versions and live under Agent → Evolution.
  */
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Button, Badge, Loader } from "@cloudflare/kumo";
-import { GitBranchIcon, TreeStructureIcon, GitForkIcon, DatabaseIcon, WrenchIcon, BrainIcon, GaugeIcon, ArrowsOutIcon } from "@phosphor-icons/react";
+import { Button, Loader } from "@cloudflare/kumo";
 import {
-  DEFAULT_QUALITY_THRESHOLD, describeCalibrationGap, lossInterval, scoreInterval,
-  type AlignmentConvergence, type CalibrationReport, type HeadRunHeadView, type HeadRunView,
-  type HeadStep, type ScoreInterval,
-} from "@proteus/core";
-import { MCTSTree } from "@/components/mcts-tree";
-import { cleanNodeLabel, treeStats } from "@/components/mcts-tree-model";
-import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
+  GitForkIcon, TreeStructureIcon, WrenchIcon, BrainIcon, ArrowsOutIcon,
+} from "@phosphor-icons/react";
+import type { ForkRunSummary, HeadRunHeadView, HeadRunView, HeadStep } from "@proteus/core";
+import { ForkTree } from "@/components/fork-tree";
+import { cleanNodeLabel, isCompeted, treeStats } from "@/components/fork-tree-model";
+import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
+import type { ForkNode, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
-import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { EmptyState, EMPTY_HINTS, MarkdownContent } from "./shared";
-import { branchesRevalidateMs } from "./head-runs";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import {
+  DetailSection, EmptyState, EMPTY_HINTS, formatScore, MarkdownContent, Metric, scoreColor,
+} from "./shared";
+import { findHead, forkRunsRevalidateMs, headRunToTree } from "./fork-runs";
 
-type SubView = "mcts" | "branches" | "gepa" | "quality";
+/** How many forks the list reaches back over. Past runs are reached by
+ *  scrolling this list, not by a second tab. */
+const RUN_LIMIT = 30;
 
 export interface ExplorationSurfaceProps {
-  mctsTree: MCTSNode | null;
-  /** A turn is in flight — new head runs and steps land while it is. */
+  /** The tree of the search in flight, fed by `mcts-progress` broadcasts. Used
+   *  in place of a fetch when it IS the selected run, so a running search
+   *  redraws per iteration rather than per poll. */
+  liveTree: ForkNode | null;
+  /** A turn is in flight — new forks and branches land while it is. */
   isStreaming: boolean;
   rpc: Rpc;
 }
 
-export function ExplorationSurface({ mctsTree, isStreaming, rpc }: ExplorationSurfaceProps) {
+export function ExplorationSurface({ liveTree, isStreaming, rpc }: ExplorationSurfaceProps) {
   const { agentId } = useParams();
-  const [view, setView] = useState<SubView>("mcts");
-  const tabs: Array<{ id: SubView; label: string; icon: React.ComponentType<{ size?: number }> }> = [
-    { id: "mcts", label: "MCTS", icon: TreeStructureIcon },
-    { id: "branches", label: "Branches", icon: GitForkIcon },
-    { id: "gepa", label: "Self-tuning", icon: DatabaseIcon },
-    { id: "quality", label: "Quality", icon: GaugeIcon },
-  ];
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  const loadRuns = useCallback(() => rpc<ForkRunSummary[]>("listForkRuns", [RUN_LIMIT]), [rpc]);
+  const revalidate = useCallback(
+    (runs: ForkRunSummary[] | null) => forkRunsRevalidateMs(runs, isStreaming),
+    [isStreaming],
+  );
+  const { resource, reload } = useAsyncResource(loadRuns, revalidate);
+  const runs = lastValue(resource);
+
+  if (runs === null) {
+    return resource.status === "error"
+      ? <LoadFailure what="the fork runs" message={resource.message} onRetry={reload} />
+      : <div className="flex justify-center py-8"><Loader size="sm" /></div>;
+  }
+  if (runs.length === 0) {
+    return <EmptyState icon={<GitForkIcon size={28} />} title="No forks yet" hint={EMPTY_HINTS.forks} />;
+  }
+
+  // The newest fork is what the operator came to look at, so it is selected on
+  // arrival; once they pick another, a later poll must not yank the pane back.
+  const selected = runs.find((run) => run.id === selectedId) ?? runs[0]!;
+
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center gap-1 mb-3 shrink-0">
-        {tabs.map((t) => (
-          <button key={t.id} onClick={() => setView(t.id)}
-            className={`px-2.5 py-1 text-[11px] rounded-md transition-colors flex items-center gap-1.5 ${view === t.id ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
-            <t.icon size={12} />{t.label}
-          </button>
+    // Stacked, the list is content-height (capped, then it scrolls) so it
+    // cannot stretch into dead space above the tree; side by side it fills its
+    // column.
+    <div className="h-full min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] animate-fade-in">
+      <div className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
+        {runs.map((run) => (
+          <ForkRunRow key={run.id} run={run} selected={selected.id === run.id}
+            onSelect={() => setSelectedId(run.id)} />
         ))}
-        {/* Full-screen MCTS explorer — the one entry point to /mcts/:id. */}
-        {view === "mcts" && agentId && (
-          <Link to={`/mcts/${agentId}`}
-            className="ml-auto flex items-center gap-1 px-2 py-1 text-[11px] rounded-md p-text-3 hover:p-text transition-colors"
-            title="Open the full-screen MCTS explorer">
-            <ArrowsOutIcon size={12} />Expand
-          </Link>
-        )}
       </div>
-      <div className="flex-1 min-h-0">
-        {view === "mcts" && <MctsView mctsTree={mctsTree} rpc={rpc} />}
-        {view === "branches" && <BranchesView rpc={rpc} isStreaming={isStreaming} />}
-        {view === "gepa" && <GepaView rpc={rpc} />}
-        {view === "quality" && <QualityView rpc={rpc} />}
-      </div>
+      <ForkRunDetail
+        key={selected.id} run={selected} rpc={rpc}
+        liveTree={liveTree?.id === selected.id ? liveTree : null}
+        isStreaming={isStreaming}
+        expandTo={agentId ? `/mcts/${agentId}?run=${encodeURIComponent(selected.id)}` : null}
+      />
     </div>
   );
 }
 
-/* ── MCTS tree ─────────────────────────────────────────────────── */
+/* ── the run list ──────────────────────────────────────────────── */
 
-function MctsView({ mctsTree, rpc }: { mctsTree: MCTSNode | null; rpc: Rpc }) {
-  const [selectedNode, setSelectedNode] = useState<MCTSNode | null>(null);
-  const [detail, setDetail] = useState<MCTSNodeDetail | null>(null);
-  const [detailError, setDetailError] = useState<string | null>(null);
+const RUN_DOT: Record<ForkRunSummary["status"], string> = {
+  running: "p-dot-warning",
+  completed: "p-dot-success",
+  failed: "p-dot-danger",
+  partial: "p-dot-neutral",
+};
+
+/** How the fork settled, as a property of the row rather than as navigation —
+ *  which is exactly where an implementation detail belongs. */
+export function describeSettle(run: ForkRunSummary): string {
+  const branches = `${run.branches} branch${run.branches === 1 ? "" : "es"}`;
+  if (run.settle === "merged") return `merged · ${branches}`;
+  const winner = run.winnerScore === null ? "" : ` · winner ${formatScore(run.winnerScore)}`;
+  return `competed · ${branches}${winner}`;
+}
+
+function ForkRunRow(
+  { run, selected, onSelect }: { run: ForkRunSummary; selected: boolean; onSelect: () => void },
+) {
+  return (
+    <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined}
+      className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "hover:p-card"}`}>
+      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${RUN_DOT[run.status]} ${run.status === "running" ? "animate-pulse" : ""}`} />
+      <div className="min-w-0 flex-1">
+        <div className="text-[11px] p-text-2 truncate" title={run.task}>{run.task}</div>
+        <div className="text-[10px] p-text-3 tabular-nums">
+          {describeSettle(run)} · {new Date(run.startedAt).toLocaleDateString()}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+/* ── one fork: its tree, and whatever the selected branch actually was ── */
+
+/**
+ * The selected run's tree, from whichever store holds it.
+ *
+ * A competed run whose search is the one in flight is served by the broadcast
+ * tree instead of a fetch — the engine pushes a node per iteration, and
+ * polling for that would be both slower and noisier.
+ */
+export function useForkRunTree(
+  run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, isStreaming: boolean,
+) {
+  const load = useCallback(async (): Promise<{ tree: ForkNode | null; headRun: HeadRunView | null }> => {
+    if (run.settle === "competed") {
+      const rows = await rpc<MctsRow[]>("getSearchTree", [run.id]);
+      return { tree: rows.length > 0 ? buildTree(rows) : null, headRun: null };
+    }
+    const headRuns = await rpc<HeadRunView[]>("getHeadRuns", [RUN_LIMIT]);
+    const found = headRuns.find((candidate) => candidate.rootId === run.id) ?? null;
+    return { tree: found ? headRunToTree(found) : null, headRun: found };
+  }, [rpc, run.id, run.settle]);
+
+  const revalidate = useCallback(
+    () => (run.status === "running" || isStreaming ? 1500 : null),
+    [run.status, isStreaming],
+  );
+  const { resource, reload } = useAsyncResource(load, revalidate);
+  const loaded = lastValue(resource);
+  return { tree: liveTree ?? loaded?.tree ?? null, headRun: loaded?.headRun ?? null, resource, reload };
+}
+
+/**
+ * What to inspect before anything is clicked.
+ *
+ * A competition opens on the branch it settled on — "which one won" is the
+ * first question, and the tree already draws the spine that leads there. A
+ * merge has no winner, so it opens on the split itself, where the merge
+ * narrative is. Either way the pane says something: an empty inspector beside
+ * a full tree is a third of the surface spent on a prompt to click.
+ */
+function defaultSelection(tree: ForkNode): ForkNode {
+  if (!isCompeted(tree)) return tree;
+  let best = tree;
+  const walk = (node: ForkNode): void => {
+    if (node.status === "terminal" && (node.value ?? 0) >= (best.value ?? 0)) best = node;
+    node.children.forEach(walk);
+  };
+  walk(tree);
+  return best;
+}
+
+function ForkRunDetail(
+  { run, rpc, liveTree, isStreaming, expandTo }:
+  { run: ForkRunSummary; rpc: Rpc; liveTree: ForkNode | null; isStreaming: boolean; expandTo: string | null },
+) {
+  const [selectedNode, setSelectedNode] = useState<ForkNode | null>(null);
   const graphRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState({ w: 700, h: 520 });
+  const [dims, setDims] = useState({ w: 700, h: 460 });
 
   useEffect(() => {
     const el = graphRef.current;
     if (!el) return;
-    const resize = () => setDims({ w: el.clientWidth, h: Math.max(420, el.clientHeight - 8) });
+    const resize = () => setDims({ w: el.clientWidth, h: Math.max(340, el.clientHeight - 8) });
     const ro = new ResizeObserver(resize);
     ro.observe(el);
     resize();
     return () => ro.disconnect();
   }, []);
 
-  useEffect(() => {
-    if (!selectedNode) {
-      setDetail(null);
-      setDetailError(null);
-      return;
-    }
-    let cancelled = false;
-    setDetail(null);
-    setDetailError(null);
-    rpc<MCTSNodeDetail | null>("getMctsNodeDetail", [selectedNode.id])
-      .then((d) => { if (!cancelled) setDetail(d); })
-      .catch((err) => {
-        if (!cancelled) setDetailError(err instanceof Error ? err.message : String(err));
-      });
-    return () => { cancelled = true; };
-  }, [rpc, selectedNode?.id]);
+  const { tree, headRun, resource, reload } = useForkRunTree(run, rpc, liveTree, isStreaming);
 
-  if (!mctsTree) return <EmptyState icon={<GitBranchIcon size={28} />} title="No exploration history" hint={EMPTY_HINTS.mcts} />;
-  const fallbackDetail = selectedNode ? mctsNodeToDetail(selectedNode) : null;
-  const openNodeById = (id: string) => {
-    const next = findMctsNode(mctsTree, id);
-    if (next) setSelectedNode(next);
-  };
-  const stats = treeStats(mctsTree);
+  // Only ever the FIRST selection for this run: the component is keyed on the
+  // run id, so a poll that grows the tree must not drag the pane off whatever
+  // the reader is reading.
+  const picked = useRef(false);
+  useEffect(() => {
+    if (picked.current || tree === null) return;
+    picked.current = true;
+    setSelectedNode(defaultSelection(tree));
+  }, [tree]);
+
+  if (tree === null) {
+    return (
+      <div className="min-h-0 rounded-lg border p-border p-surface p-4 flex flex-col justify-center">
+        {resource.status === "error"
+          ? <LoadFailure what="this fork" message={resource.message} onRetry={reload} />
+          : resource.status === "loading"
+            ? <div className="flex justify-center py-8"><Loader size="sm" /></div>
+            : <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
+                hint="The run is in the ledger but its branches were never written — it was interrupted before the first one landed." />}
+      </div>
+    );
+  }
+
+  const stats = treeStats(tree);
   return (
-    // Container-, not viewport-width: `xl:` split this panel the moment the
-    // WINDOW passed 1280px, and Column C is barely 600px there — the tree got
-    // ~100px beside a 440px inspector, which is most of why it was unreadable.
-    <div className="animate-fade-in min-h-0 @4xl:h-full grid gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(340px,400px)]">
+    <div className="min-h-0 grid gap-3 grid-rows-[minmax(340px,1fr)_auto] @6xl:grid-rows-1 @6xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
       <div className="min-h-0 flex flex-col">
-        <div className="flex flex-wrap items-center gap-4 mb-2 text-xs p-text-2 shrink-0">
-          <span>Nodes: <span className="p-text font-mono">{stats.nodes}</span></span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2 text-xs p-text-2 shrink-0">
+          <span>Branches: <span className="p-text font-mono">{Math.max(0, stats.nodes - 1)}</span></span>
           <span>Depth: <span className="p-text font-mono">{stats.depth}</span></span>
-          <span>Root score: <span className="p-text font-mono">{mctsTree.value.toFixed(3)}</span></span>
-          {selectedNode && <span>Selected: <span className="p-text font-mono">{selectedNode.id.slice(0, 8)}</span></span>}
+          <span className="p-text-3">{describeSettle(run)}</span>
+          {expandTo && (
+            <Link to={expandTo} title="Open this fork full-screen"
+              className="ml-auto flex items-center gap-1 px-2 py-1 text-[11px] rounded-md p-text-3 hover:p-text transition-colors">
+              <ArrowsOutIcon size={12} />Expand
+            </Link>
+          )}
         </div>
-        <div ref={graphRef} className="flex-1 min-h-[460px] overflow-hidden rounded-lg border p-border p-surface">
-          {dims.w > 0 && <MCTSTree root={mctsTree} width={dims.w} height={dims.h} onNodeClick={setSelectedNode} selectedNode={selectedNode} />}
+        <div ref={graphRef} className="flex-1 min-h-0 overflow-hidden rounded-lg border p-border p-surface">
+          {dims.w > 0 && (
+            <ForkTree root={tree} width={dims.w} height={dims.h}
+              onNodeClick={setSelectedNode} selectedNode={selectedNode} />
+          )}
         </div>
       </div>
-      <MctsBranchInspector
-        selected={selectedNode}
-        detail={detail ?? fallbackDetail}
-        loading={!!selectedNode && !detail && !detailError}
-        error={detailError}
+      <BranchInspector
+        node={selectedNode} tree={tree} run={run} headRun={headRun} rpc={rpc}
         onClose={() => setSelectedNode(null)}
-        onOpenNode={openNodeById}
+        onOpenNode={(id) => setSelectedNode(findNode(tree, id))}
       />
     </div>
   );
 }
 
-function findMctsNode(root: MCTSNode, id: string): MCTSNode | null {
+function findNode(root: ForkNode, id: string): ForkNode | null {
   if (root.id === id) return root;
   for (const child of root.children) {
-    const found = findMctsNode(child, id);
+    const found = findNode(child, id);
     if (found) return found;
   }
   return null;
 }
 
-function mctsNodeToDetail(node: MCTSNode): MCTSNodeDetail {
-  return {
-    id: node.id,
-    parentId: node.parentId,
-    depth: node.depth,
-    visits: node.visits,
-    value: node.value,
-    status: node.status,
-    action: node.action,
-    task: node.task ?? "",
-    observation: node.observation ?? "",
-    codeUsed: node.codeUsed ?? null,
-    branchAgentKey: node.branchAgentKey ?? null,
-    msgId: node.msgId ?? null,
-    createdAt: node.createdAt,
-    path: [{
-      id: node.id,
-      parentId: node.parentId,
-      depth: node.depth,
-      visits: node.visits,
-      value: node.value,
-      status: node.status,
-      action: node.action,
-      createdAt: node.createdAt,
-    }],
-    children: node.children.map(toMctsSummary),
+function pathTo(root: ForkNode, id: string): ForkNode[] {
+  const walk = (node: ForkNode, trail: ForkNode[]): ForkNode[] | null => {
+    const next = [...trail, node];
+    if (node.id === id) return next;
+    for (const child of node.children) {
+      const found = walk(child, next);
+      if (found) return found;
+    }
+    return null;
   };
+  return walk(root, []) ?? [];
 }
 
-function toMctsSummary(node: MCTSNode): MCTSNodeSummary {
-  return {
-    id: node.id,
-    parentId: node.parentId,
-    depth: node.depth,
-    visits: node.visits,
-    value: node.value,
-    status: node.status,
-    action: node.action,
-    createdAt: node.createdAt,
-  };
-}
+/* ── the inspector ─────────────────────────────────────────────── */
 
-function scoreColor(value: number): string {
-  if (value >= 0.7) return "p-success";
-  if (value >= 0.4) return "p-warning";
-  return "p-danger";
-}
-
-function formatScore(value: number): string {
-  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
-}
-
-function statusLabel(status: string): string {
-  if (status === "terminal") return "winner";
-  if (status === "pruned") return "pruned";
-  if (status === "failed") return "failed";
+function statusLabel(node: ForkNode, competed: boolean): string {
+  if (node.status === "running") return "running";
+  if (node.status === "failed") return "failed";
+  if (!competed) return node.parentId === null ? "the split" : "branch";
+  if (node.status === "terminal") return "winner";
+  if (node.status === "pruned") return "pruned";
   return "candidate";
 }
 
-function statusSentence(status: string): string {
-  if (status === "terminal") return "Selected as the best branch in this search.";
-  if (status === "pruned") return "No longer being explored after scoring and comparison.";
-  if (status === "failed") return "The branch failed or could not be evaluated usefully.";
-  return "Still available for further exploration.";
+function statusDot(status: ForkNode["status"]): string {
+  if (status === "terminal") return "p-dot-success";
+  if (status === "failed") return "p-dot-danger";
+  if (status === "running") return "p-dot-warning";
+  return "p-dot-neutral";
 }
 
-function MctsBranchInspector({
-  selected,
-  detail,
-  loading,
-  error,
-  onClose,
-  onOpenNode,
+/**
+ * One pane for both mechanisms. Every section renders only where its data
+ * exists, so a competed branch shows its score, rollouts and search path while
+ * a head shows its steps, tool calls and decisions — without either pretending
+ * to be the other.
+ */
+function BranchInspector({
+  node, tree, run, headRun, rpc, onClose, onOpenNode,
 }: {
-  selected: MCTSNode | null;
-  detail: MCTSNodeDetail | null;
-  loading: boolean;
-  error: string | null;
+  node: ForkNode | null;
+  tree: ForkNode;
+  run: ForkRunSummary;
+  headRun: HeadRunView | null;
+  rpc: Rpc;
   onClose: () => void;
   onOpenNode: (id: string) => void;
 }) {
-  if (!selected) {
+  if (!node) {
     return (
-      <div className="rounded-lg border p-border p-surface p-4 min-h-0 flex flex-col justify-center">
+      <aside className="rounded-lg border p-border p-surface p-4 min-h-0 flex flex-col justify-center">
         <EmptyState
           icon={<TreeStructureIcon size={28} />}
           title="Select a branch"
-          hint="Pick a node to inspect the branch result, score, path, and child branches."
+          hint={run.settle === "competed"
+            ? "Pick a node to inspect its result, score, search path and child branches."
+            : "Pick a branch to inspect its steps, tool calls and decisions."}
         />
-      </div>
+      </aside>
     );
   }
 
-  const branch = detail ?? mctsNodeToDetail(selected);
-  const parentVisits = branch.path.length >= 2 ? Math.max(1, branch.path[branch.path.length - 2]!.visits) : Math.max(1, branch.visits);
-  const uct = branch.visits > 0
-    ? branch.value + Math.SQRT2 * Math.sqrt(Math.log(parentVisits) / branch.visits)
-    : Infinity;
-  const branchAnswer = branch.observation || branch.action || "(no branch output captured)";
-  const title = cleanNodeLabel(branch.action || branch.observation, branch.task || branch.id);
-  const label = statusLabel(branch.status);
+  const competed = isCompeted(tree);
+  const head = headRun ? findHead(headRun, node.id) : null;
+  const path = pathTo(tree, node.id);
+  const title = cleanNodeLabel(node.action || node.observation, node.task || node.id);
 
   return (
-    <aside className="min-h-0 rounded-lg border p-border p-surface overflow-hidden flex flex-col">
+    <aside className="min-h-0 max-h-[70vh] @6xl:max-h-none rounded-lg border p-border p-surface overflow-hidden flex flex-col">
       <div className="px-4 py-3 border-b p-border shrink-0">
         <div className="flex items-center gap-2">
-          <span className={`size-1.5 rounded-full shrink-0 ${branch.status === "terminal" ? "p-dot-success" : branch.status === "failed" ? "p-dot-danger" : branch.status === "pruned" ? "p-dot-neutral" : "p-dot-warning"}`} />
-          <span className="text-[10px] uppercase p-text-3 tracking-normal">{label}</span>
-          <span className="text-[10px] p-text-3">depth {branch.depth}</span>
+          <span className={`size-1.5 rounded-full shrink-0 ${statusDot(node.status)}`} />
+          <span className="text-[10px] uppercase p-text-3 tracking-normal">{statusLabel(node, competed)}</span>
+          <span className="text-[10px] p-text-3">depth {node.depth}</span>
           <Button variant="ghost" size="sm" className="ml-auto" onClick={onClose}>Close</Button>
         </div>
         <div className="mt-2 min-w-0">
-          <div className="text-sm font-semibold p-text leading-snug line-clamp-3" title={title}>
-            {title}
-          </div>
-          <div className="text-[10px] p-text-3 font-mono mt-1 truncate">{branch.id}</div>
+          <div className="text-sm font-semibold p-text leading-snug line-clamp-3" title={title}>{title}</div>
+          <div className="text-[10px] p-text-3 font-mono mt-1 truncate">{node.id}</div>
         </div>
       </div>
 
       <div className="p-4 overflow-y-auto min-h-0 space-y-4">
-        {loading && <div className="flex items-center gap-2 text-[11px] p-text-3"><Loader size="sm" /> Refreshing branch details...</div>}
-        {error && <div className="text-[11px] p-danger">Could not refresh branch details: {error}</div>}
+        {competed
+          ? <CompetedVerdict node={node} path={path} />
+          : <MergedVerdict node={node} head={head} />}
 
-        <div className="rounded-lg border p-border p-elevated p-3">
-          <div className="flex items-start gap-3">
-            <div className={`text-3xl font-semibold leading-none tabular-nums ${scoreColor(branch.value)}`}>{formatScore(branch.value)}</div>
-            <div className="min-w-0 flex-1">
-              <div className="text-[11px] font-medium p-text">Search verdict</div>
-              <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">{statusSentence(branch.status)}</div>
+        {node.parentId === null && headRun?.merge && (
+          <DetailSection title="Merge">
+            <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{headRun.merge.narrative}</p>
+            <div className="text-[10px] p-text-3 mt-1 font-mono">
+              {headRun.merge.headCount} branches · {headRun.merge.totalTokens} tokens
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-2 mt-3">
-            <Metric label="Explored" value={`${branch.visits}x`} />
-            <Metric label="Priority" value={isFinite(uct) ? uct.toFixed(2) : "new"} />
-            <Metric label="Depth" value={branch.depth} />
-            <Metric label="Next branches" value={branch.children.length} />
-          </div>
-        </div>
-
-        <DetailSection title="Branch answer">
-          <div className="rounded-lg border p-border p-card px-3 py-2 text-[11px] p-text-2 leading-relaxed max-h-80 overflow-y-auto">
-            <MarkdownContent content={branchAnswer} />
-          </div>
-        </DetailSection>
-
-        {branch.codeUsed && (
-          <DetailSection title="Code draft">
-            <pre className="text-[10px] p-text-2 leading-relaxed whitespace-pre-wrap break-words max-h-56 overflow-y-auto rounded-md p-fill border p-border p-2">
-              {branch.codeUsed}
-            </pre>
           </DetailSection>
         )}
 
-        {branch.task && (
-          <details className="rounded-lg border p-border p-card px-3 py-2">
-            <summary className="cursor-pointer text-[10px] uppercase tracking-normal p-text-3">Original task</summary>
-            <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words mt-2">{branch.task}</p>
-          </details>
+        {node.observation && node.parentId !== null && (
+          <DetailSection title={competed ? "Branch answer" : "Summary"}>
+            <div className="rounded-lg border p-border p-card px-3 py-2 text-[11px] p-text-2 leading-relaxed max-h-80 overflow-y-auto">
+              <MarkdownContent content={node.observation} />
+            </div>
+          </DetailSection>
         )}
 
-        <DetailSection title="Search path">
-          <div className="space-y-1">
-            {branch.path.map((p, i) => (
-              <button
-                key={p.id}
-                type="button"
-                onClick={() => onOpenNode(p.id)}
-                className={`w-full flex items-start gap-2 rounded-md px-2 py-1 text-left transition-colors ${p.id === branch.id ? "p-fill" : "hover:p-card"}`}
-              >
-                <span className="text-[9px] p-text-3 font-mono w-5 text-right shrink-0">{i}</span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[10px] p-text-2 truncate" title={cleanNodeLabel(p.action, p.id)}>{cleanNodeLabel(p.action, "(root)")}</div>
-                  <div className="text-[9px] p-text-3 font-mono">{p.id.slice(0, 12)} · {formatScore(p.value)} · {statusLabel(p.status)}</div>
-                </div>
-              </button>
-            ))}
-          </div>
-        </DetailSection>
+        {head && <HeadTrace head={head} />}
+        {competed && <CompetedExtras node={node} rpc={rpc} />}
 
-        {branch.children.length > 0 && (
-          <DetailSection title="Next branches">
+        {path.length > 1 && (
+          <DetailSection title={competed ? "Search path" : "Path"}>
             <div className="space-y-1">
-              {branch.children.map((c) => (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => onOpenNode(c.id)}
-                  className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-fill text-left hover:p-card transition-colors"
-                >
-                  <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "p-dot-success" : c.status === "failed" ? "p-dot-danger" : c.status === "pruned" ? "p-dot-neutral" : "p-dot-warning"}`} />
+              {path.map((step, i) => (
+                <button key={step.id} type="button" onClick={() => onOpenNode(step.id)}
+                  className={`w-full flex items-start gap-2 rounded-md px-2 py-1 text-left transition-colors ${step.id === node.id ? "p-fill" : "hover:p-card"}`}>
+                  <span className="text-[9px] p-text-3 font-mono w-5 text-right shrink-0">{i}</span>
                   <div className="min-w-0 flex-1">
-                    <div className="text-[10px] p-text-2 truncate" title={cleanNodeLabel(c.action, c.id)}>{cleanNodeLabel(c.action, "(branch)")}</div>
-                    <div className="text-[9px] p-text-3 font-mono">{c.id.slice(0, 12)} · {formatScore(c.value)} · {c.visits} visits</div>
+                    <div className="text-[10px] p-text-2 truncate">{cleanNodeLabel(step.action, "(root)")}</div>
+                    <div className="text-[9px] p-text-3 font-mono">
+                      {step.id.slice(0, 12)}{step.value !== null && ` · ${formatScore(step.value)}`}
+                    </div>
                   </div>
                 </button>
               ))}
@@ -351,46 +391,123 @@ function MctsBranchInspector({
           </DetailSection>
         )}
 
-        {(branch.branchAgentKey || branch.msgId) && (
-          <details className="rounded-lg border p-border px-3 py-2">
-            <summary className="cursor-pointer text-[10px] uppercase tracking-normal p-text-3">Debug references</summary>
-            <div className="space-y-1 text-[10px] p-text-3 font-mono break-all mt-2">
-              {branch.branchAgentKey && <div>branch_agent_key: {branch.branchAgentKey}</div>}
-              {branch.msgId && <div>msg_id: {branch.msgId}</div>}
+        {node.children.length > 0 && (
+          <DetailSection title="Branches from here">
+            <div className="space-y-1">
+              {node.children.map((child) => (
+                <button key={child.id} type="button" onClick={() => onOpenNode(child.id)}
+                  className="w-full flex items-start gap-2 rounded-md px-2 py-1 p-fill text-left hover:p-card transition-colors">
+                  <span className={`mt-1 size-1.5 rounded-full shrink-0 ${statusDot(child.status)}`} />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[10px] p-text-2 truncate" title={cleanNodeLabel(child.action, child.id)}>
+                      {cleanNodeLabel(child.action, "(branch)")}
+                    </div>
+                    <div className="text-[9px] p-text-3 font-mono">
+                      {child.id.slice(0, 12)}
+                      {child.value !== null && ` · ${formatScore(child.value)}`}
+                      {child.visits !== null && ` · ${child.visits} visits`}
+                    </div>
+                  </div>
+                </button>
+              ))}
             </div>
-          </details>
+          </DetailSection>
         )}
       </div>
     </aside>
   );
 }
 
-function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+const COMPETED_VERDICT: Record<string, string> = {
+  terminal: "Selected as the best branch in this search.",
+  pruned: "No longer being explored after scoring and comparison.",
+  failed: "The branch failed or could not be evaluated usefully.",
+  running: "Still running.",
+  open: "Still available for further exploration.",
+};
+
+function CompetedVerdict({ node, path }: { node: ForkNode; path: ForkNode[] }) {
+  const visits = node.visits ?? 0;
+  const parentVisits = path.length >= 2 ? Math.max(1, path[path.length - 2]!.visits ?? 1) : Math.max(1, visits);
+  const uct = visits > 0
+    ? (node.value ?? 0) + Math.SQRT2 * Math.sqrt(Math.log(parentVisits) / visits)
+    : Infinity;
   return (
-    <div className="rounded-md border p-border p-recessed px-2 py-1.5">
-      <div className="text-[9px] uppercase tracking-normal p-text-3">{label}</div>
-      <div className="text-[11px] p-text font-mono tabular-nums">{value}</div>
+    <div className="rounded-lg border p-border p-elevated p-3">
+      <div className="flex items-start gap-3">
+        <div className={`text-3xl font-semibold leading-none tabular-nums ${scoreColor(node.value ?? 0)}`}>
+          {node.value === null ? "—" : formatScore(node.value)}
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="text-[11px] font-medium p-text">Search verdict</div>
+          <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">{COMPETED_VERDICT[node.status] ?? node.status}</div>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 mt-3">
+        <Metric label="Explored" value={`${visits}x`} />
+        <Metric label="Priority" value={isFinite(uct) ? uct.toFixed(2) : "new"} />
+        <Metric label="Depth" value={node.depth} />
+        <Metric label="Next branches" value={node.children.length} />
+      </div>
     </div>
   );
 }
 
-function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+/** A merged fork ranked nothing, so the headline is what the branch DID — the
+ *  numbers a head actually carries — never a score it never earned. */
+function MergedVerdict({ node, head }: { node: ForkNode; head: HeadRunHeadView | null }) {
+  if (!head) {
+    return (
+      <div className="rounded-lg border p-border p-elevated p-3">
+        <div className="text-[11px] font-medium p-text">The split</div>
+        <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">
+          {node.children.length} branch{node.children.length === 1 ? "" : "es"} ran in parallel and were merged
+          into one answer. Nothing here was ranked against anything else.
+        </div>
+      </div>
+    );
+  }
   return (
-    <section className="space-y-1.5">
-      <div className="text-[10px] uppercase tracking-normal p-text-3">{title}</div>
-      {children}
-    </section>
+    <div className="grid grid-cols-2 gap-2">
+      <Metric label="Steps" value={head.steps.length} />
+      <Metric label="Tools" value={head.toolCalls.length} />
+      <Metric label="Tokens" value={head.tokenInput + head.tokenOutput} />
+      <Metric label="Wall" value={`${head.wallClockMs}ms`} />
+    </div>
   );
 }
 
-/* ── Branching heads ───────────────────────────────────────────── */
-
-function statusDot(status: string): string {
-  if (status === "completed") return "p-dot-success";
-  if (status === "errored" || status === "failed") return "p-dot-danger";
-  if (status === "budget_exceeded") return "p-dot-warning";
-  return "p-dot-warning";
+/** The code draft and full task text only a search node carries — the tree
+ *  rows do not bring them down at depth. */
+function CompetedExtras({ node, rpc }: { node: ForkNode; rpc: Rpc }) {
+  const load = useCallback(
+    () => rpc<{ task: string; codeUsed: string | null } | null>("getMctsNodeDetail", [node.id]),
+    [rpc, node.id],
+  );
+  const { resource } = useAsyncResource(load);
+  const detail = lastValue(resource);
+  const codeUsed = detail?.codeUsed ?? node.codeUsed ?? null;
+  const task = detail?.task ?? node.task ?? "";
+  return (
+    <>
+      {codeUsed && (
+        <DetailSection title="Code draft">
+          <pre className="text-[10px] p-text-2 leading-relaxed whitespace-pre-wrap break-words max-h-56 overflow-y-auto rounded-md p-fill border p-border p-2">
+            {codeUsed}
+          </pre>
+        </DetailSection>
+      )}
+      {task && (
+        <details className="rounded-lg border p-border p-card px-3 py-2">
+          <summary className="cursor-pointer text-[10px] uppercase tracking-normal p-text-3">Original task</summary>
+          <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words mt-2">{task}</p>
+        </details>
+      )}
+    </>
+  );
 }
+
+/* ── a branch's trace (merged forks) ───────────────────────────── */
 
 /** Compact one-line digest of a tool call's input/output value. */
 function digestValue(v: unknown): string {
@@ -400,8 +517,7 @@ function digestValue(v: unknown): string {
 }
 
 // One reasoning step: ordinal + optional reasoning + prose + its tool calls
-// (name with input → output). This is the "what each branch actually did,
-// turn by turn" view the run timeline drills into.
+// (name with input → output).
 function StepRow({ step, n }: { step: HeadStep; n: number }) {
   return (
     <div className="flex gap-2">
@@ -433,470 +549,54 @@ function StepRow({ step, n }: { step: HeadStep; n: number }) {
   );
 }
 
-interface HeadSelection { run: HeadRunView; head: HeadRunHeadView }
-
-function HeadListButton({
-  h,
-  selected,
-  onSelect,
-}: {
-  h: HeadRunHeadView;
-  selected: boolean;
-  onSelect: () => void;
-}) {
+function HeadTrace({ head }: { head: HeadRunHeadView }) {
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`w-full flex items-start gap-2 text-left rounded-md px-2 py-1.5 transition-colors ${selected ? "p-fill" : "hover:p-card"}`}
-    >
-      <span className={`mt-1 size-1.5 rounded-full shrink-0 ${statusDot(h.status)}`} />
-      <div className="min-w-0 flex-1">
-        <div className="text-[11px] p-text-2 truncate" title={h.task}>{h.task}</div>
-        {h.summary && <div className="text-[10px] p-text-3 line-clamp-2">{h.summary}</div>}
-      </div>
-      <div className="flex items-center gap-1.5 shrink-0 text-[9px] p-text-3 tabular-nums pt-0.5">
-        {h.steps.length > 0 && <span>{h.steps.length} steps</span>}
-        {h.toolCalls.length > 0 && <span className="flex items-center gap-0.5"><WrenchIcon size={10} />{h.toolCalls.length}</span>}
-      </div>
-    </button>
-  );
-}
-
-function HeadBranchInspector({ selection }: { selection: HeadSelection | null }) {
-  if (!selection) {
-    return (
-      <div className="rounded-lg border p-border p-surface p-4 min-h-0 flex flex-col justify-center">
-        <EmptyState icon={<GitForkIcon size={28} />} title="Select a branch" hint="Select a head to inspect its steps, tool calls, decisions, and merge context." />
-      </div>
-    );
-  }
-
-  const { run, head } = selection;
-  const totalTokens = head.tokenInput + head.tokenOutput;
-  return (
-    <aside className="min-h-0 rounded-lg border p-border p-surface overflow-hidden flex flex-col">
-      <div className="px-3 py-2 border-b p-border flex items-start gap-2 shrink-0">
-        <span className={`mt-1.5 size-1.5 rounded-full shrink-0 ${statusDot(head.status)}`} />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium p-text truncate" title={head.task}>{head.task}</div>
-          <div className="text-[10px] p-text-3 font-mono truncate">{head.id}</div>
-        </div>
-        <Badge variant="secondary">{head.status}</Badge>
-      </div>
-
-      <div className="p-3 overflow-y-auto min-h-0 space-y-3">
-        <div className="grid grid-cols-2 gap-2">
-          <Metric label="Steps" value={head.steps.length} />
-          <Metric label="Tools" value={head.toolCalls.length} />
-          <Metric label="Tokens" value={totalTokens} />
-          <Metric label="Wall" value={`${head.wallClockMs}ms`} />
-          <Metric label="Decisions" value={head.decisions.length} />
-          <Metric label="Run heads" value={run.heads.length} />
-        </div>
-
-        <DetailSection title="Run">
-          <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{run.task || run.rationale}</p>
+    <>
+      {head.rationale && (
+        <DetailSection title="Rationale">
+          <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{head.rationale}</p>
         </DetailSection>
+      )}
 
-        {head.rationale && (
-          <DetailSection title="Rationale">
-            <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{head.rationale}</p>
-          </DetailSection>
-        )}
-
-        {head.summary && (
-          <DetailSection title="Summary">
-            <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{head.summary}</p>
-          </DetailSection>
-        )}
-
-        {head.errorMessage && (
-          <DetailSection title="Error">
-            <div className="text-[11px] p-danger break-words">{head.errorMessage}</div>
-          </DetailSection>
-        )}
-
-        <DetailSection title="Progress">
-          {head.steps.length > 0 ? (
-            <div className="space-y-1.5">
-              {head.steps.map((s, i) => <StepRow key={i} step={s} n={i + 1} />)}
-            </div>
-          ) : head.toolCalls.length > 0 ? (
-            <div className="space-y-1">
-              {head.toolCalls.map((t, i) => (
-                <div key={i} className="flex items-center gap-1.5 text-[10px]">
-                  <WrenchIcon size={10} className="p-text-3 shrink-0" />
-                  <code className="p-text-2">{t.name}</code>
-                  {t.status && <span className={/error|exit=[1-9]/.test(t.status) ? "p-danger" : "p-text-3"}>{t.status}</span>}
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="text-[11px] p-text-3">No step trace captured for this head.</div>
-          )}
+      {head.errorMessage && (
+        <DetailSection title="Error">
+          <div className="text-[11px] p-danger break-words">{head.errorMessage}</div>
         </DetailSection>
+      )}
 
-        {head.decisions.length > 0 && (
-          <DetailSection title="Decisions">
-            <div className="space-y-1">
-              {head.decisions.map((d, i) => (
-                <div key={i} className="rounded-md p-fill border p-border p-2 text-[10px]">
-                  <div className="p-text-2">{d.question}</div>
-                  <div className="p-accent mt-0.5">→ {d.choice}</div>
-                  {d.rationale && <div className="p-text-3 mt-0.5">{d.rationale}</div>}
-                </div>
-              ))}
-            </div>
-          </DetailSection>
-        )}
-
-        {run.merge && (
-          <DetailSection title="Merge">
-            <p className="text-[11px] p-text-2 leading-relaxed whitespace-pre-wrap break-words">{run.merge.narrative}</p>
-            <div className="text-[10px] p-text-3 mt-1 font-mono">{run.merge.headCount} heads · {run.merge.totalTokens} tokens</div>
-          </DetailSection>
-        )}
-      </div>
-    </aside>
-  );
-}
-
-function BranchesView({ rpc, isStreaming }: { rpc: Rpc; isStreaming: boolean }) {
-  const [selectedHeadId, setSelectedHeadId] = useState<string | null>(null);
-  const load = useCallback(() => rpc<HeadRunView[]>("getHeadRuns", [20]), [rpc]);
-  const revalidate = useCallback(
-    (runs: HeadRunView[] | null) => branchesRevalidateMs(runs, isStreaming),
-    [isStreaming],
-  );
-  const { resource, reload } = useAsyncResource(load, revalidate);
-  const runs = lastValue(resource);
-  if (runs === null) {
-    if (resource.status === "error") return <LoadFailure what="the branching-head runs" message={resource.message} onRetry={reload} />;
-    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  }
-  if (runs.length === 0) return <EmptyState icon={<GitForkIcon size={28} />} title="No branching-head runs yet" hint="When the agent runs think(strategy:'heads'), the parallel reasoning branches and their merge appear here." />;
-  const selections: HeadSelection[] = runs.flatMap((run) => run.heads.map((head) => ({ run, head })));
-  const selected = selections.find((s) => s.head.id === selectedHeadId) ?? selections[0] ?? null;
-  return (
-    <div className="h-full min-h-0 grid gap-3 lg:grid-cols-[minmax(280px,420px)_minmax(0,1fr)] animate-fade-in">
-      <div className="min-h-0 overflow-y-auto rounded-lg border p-border p-surface p-2 space-y-3">
-        {runs.map((run) => (
-          <section key={run.rootId} className="space-y-1.5">
-            <div className="flex items-center gap-2 px-1">
-              <GitForkIcon size={13} className="p-accent shrink-0" />
-              <span className="text-xs font-medium p-text truncate flex-1" title={run.task}>{run.task}</span>
-              <Badge variant="secondary">{run.heads.length} heads</Badge>
-            </div>
-            <div className="space-y-1">
-              {run.heads.map((h) => (
-                <HeadListButton
-                  key={h.id}
-                  h={h}
-                  selected={selected?.head.id === h.id}
-                  onSelect={() => setSelectedHeadId(h.id)}
-                />
-              ))}
-            </div>
-          </section>
-        ))}
-      </div>
-      <HeadBranchInspector selection={selected} />
-    </div>
-  );
-}
-
-/* ── GEPA ──────────────────────────────────────────────────────── */
-
-interface GepaRunRow { runId: string; target: string; startedAt: number; status: string; winnerId: string | null; iterations: number; metricCalls: number }
-interface GepaCandidate { id: string; parentId: string | null; aggregateScore: number; scores: Record<string, number>; createdAt: number }
-interface GepaRunDetail { run: GepaRunRow | null; candidates: GepaCandidate[]; pareto: Array<{ candidateId: string; instanceId: string; score: number }> }
-
-function GepaView({ rpc }: { rpc: Rpc }) {
-  const [sel, setSel] = useState<string | null>(null);
-  const [detail, setDetail] = useState<AsyncResource<GepaRunDetail>>({ status: "loading" });
-  const load = useCallback(() => rpc<GepaRunRow[]>("getGepaRuns", [20]), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
-  const open = useCallback((runId: string) => {
-    setSel(runId);
-    setDetail({ status: "loading" });
-    rpc<GepaRunDetail>("getGepaRun", [runId]).then(
-      (d) => setDetail(loadSucceeded(d)),
-      (err) => setDetail((prev) => loadFailed(prev, err)),
-    );
-  }, [rpc]);
-
-  const runs = lastValue(resource);
-  if (runs === null) {
-    if (resource.status === "error") return <LoadFailure what="the self-tuning runs" message={resource.message} onRetry={reload} />;
-    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  }
-  if (runs.length === 0) return <EmptyState icon={<DatabaseIcon size={28} />} title="No self-tuning runs yet" hint="Trigger a scaffold self-tuning pass (GEPA) from Settings; its candidates + Pareto front appear here." />;
-
-  const loadedDetail = lastValue(detail);
-  const paretoIds = new Set((loadedDetail?.pareto ?? []).map((p) => p.candidateId));
-  const maxAgg = Math.max(0.0001, ...(loadedDetail?.candidates ?? []).map((c) => c.aggregateScore));
-  return (
-    <div className="space-y-3 animate-fade-in overflow-y-auto h-full">
-      <div className="space-y-1">
-        {runs.map((r) => (
-          <button key={r.runId} onClick={() => open(r.runId)}
-            className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${sel === r.runId ? "p-fill" : "hover:p-card"}`}>
-            <span className={`size-1.5 rounded-full shrink-0 ${r.status === "completed" ? "p-dot-success" : r.status === "running" ? "p-dot-warning" : "p-dot-neutral"}`} />
-            <span className="text-[11px] p-text-2 flex-1 truncate">{r.target} · {r.iterations} iters · {r.metricCalls} evals</span>
-            <span className="text-[10px] p-text-3 shrink-0">{new Date(r.startedAt).toLocaleDateString()}</span>
-          </button>
-        ))}
-      </div>
-
-      {sel && (loadedDetail === null ? (
-        detail.status === "error"
-          ? <LoadFailure what="this run's candidates" message={detail.message} onRetry={() => open(sel)} />
-          : <div className="flex justify-center py-4"><Loader size="sm" /></div>
-      ) : (
-        <div className="space-y-2">
-          <div className="text-[11px] p-text-3">{loadedDetail.candidates.length} candidates · {paretoIds.size} on the Pareto front · winner {loadedDetail.run?.winnerId?.slice(0, 8) ?? "—"}</div>
-          {/* Candidate aggregate-score bars; Pareto-front + winner highlighted. */}
+      <DetailSection title="Progress">
+        {head.steps.length > 0 ? (
+          <div className="space-y-1.5">
+            {head.steps.map((s, i) => <StepRow key={i} step={s} n={i + 1} />)}
+          </div>
+        ) : head.toolCalls.length > 0 ? (
           <div className="space-y-1">
-            {loadedDetail.candidates.map((c) => {
-              const onPareto = paretoIds.has(c.id);
-              const isWinner = loadedDetail.run?.winnerId === c.id;
-              // The aggregate is a mean over a handful of judged instances —
-              // shown with its interval so two candidates aren't read apart on
-              // a gap the eval set can't resolve.
-              const ci = scoreInterval(Object.values(c.scores));
-              return (
-                <div key={c.id} className="flex items-center gap-2 text-[10px]">
-                  <span className={`font-mono shrink-0 w-14 truncate ${isWinner ? "p-success" : "p-text-3"}`}>{c.id.slice(0, 8)}</span>
-                  <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${ci.lo.toFixed(2)}–${ci.hi.toFixed(2)} over ${ci.n} instances`}>
-                    <div className={`h-full ${isWinner ? "p-dot-success" : onPareto ? "p-dot-info" : "p-dot-neutral"}`} style={{ width: `${(c.aggregateScore / maxAgg) * 100}%` }} />
-                  </div>
-                  <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{c.aggregateScore.toFixed(2)}</span>
-                  <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{ci.lo.toFixed(2)}–{ci.hi.toFixed(2)}]</span>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/* ── Quality scoreboard ────────────────────────────────────────── */
-
-// The replay-eval loss curve (getReplayEvals): the live scaffold re-scored
-// against graded turns over time. Each row is tagged with the scaffold_version
-// it ran under, so version changes mark before-vs-after-evolution boundaries.
-interface ReplayEvalRow {
-  id: string; ranAt: number; sampleSize: number;
-  acceptedCount: number; negativeCount: number;
-  meanScore: number; loss: number; scaffoldVersion: number | null;
-  /** 95% interval on meanScore — a dozen judge verdicts is not a point. */
-  interval: ScoreInterval;
-}
-
-// A reported score is never shown alone: the 95% interval sits under it, at
-// the sample sizes these runs use it is the whole story.
-function ScoreWithInterval({ value, interval, className }: { value: number; interval: ScoreInterval; className?: string }) {
-  return (
-    <span className="flex flex-col leading-tight">
-      <span className={className}>{value.toFixed(3)}</span>
-      <span className="text-[9px] p-text-3 tabular-nums">95% CI {interval.lo.toFixed(2)}–{interval.hi.toFixed(2)}</span>
-    </span>
-  );
-}
-
-// Both quality signals load together so the pane resolves once, rather than
-// flashing an empty state while the second call is still in flight.
-function QualityView({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(async () => {
-    const [rows, align, calibration] = await Promise.all([
-      rpc<ReplayEvalRow[]>("getReplayEvals", [50]),
-      rpc<AlignmentConvergence>("getAlignmentConvergence"),
-      rpc<CalibrationReport>("getOutcomeCalibration"),
-    ]);
-    return { rows, align, calibration };
-  }, [rpc]);
-  const { resource, reload } = useAsyncResource(load);
-
-  const data = lastValue(resource);
-  if (data === null) {
-    if (resource.status === "error") return <LoadFailure what="the quality history" message={resource.message} onRetry={reload} />;
-    return <div className="flex justify-center py-8"><Loader size="sm" /></div>;
-  }
-  const { rows, align, calibration } = data;
-  const hasAlignment = align.overall.turns > 0;
-  if (rows.length === 0 && !hasAlignment) return <EmptyState icon={<GaugeIcon size={28} />} title="No quality history yet" hint="Replay-eval runs (fired by lifetime evolution; browsable via agent.replayEvals) re-score the live scaffold against graded turns. The loss curve, K_align, and latest aggregate appear here." />;
-
-  return (
-    <div className="space-y-4 animate-fade-in overflow-y-auto h-full">
-      {hasAlignment && <AlignmentPanel k={align} calibration={calibration} />}
-      {rows.length > 0 && <ReplayEvalPanel rows={rows} />}
-    </div>
-  );
-}
-
-function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
-  const chrono = [...rows].reverse(); // oldest → newest for the curve
-  const latest = rows[0];
-  const latestLoss = lossInterval(latest.interval);
-  return (
-    <div className="space-y-4">
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Metric label="Latest score" value={<ScoreWithInterval value={latest.meanScore} interval={latest.interval} className={scoreColor(latest.meanScore)} />} />
-        <Metric label="Loss" value={<ScoreWithInterval value={latest.loss} interval={latestLoss} />} />
-        <Metric label="Sample" value={`${latest.sampleSize} (${latest.acceptedCount}✓ / ${latest.negativeCount}✗)`} />
-        <Metric label="Scaffold" value={latest.scaffoldVersion ?? "—"} />
-      </div>
-
-      <section className="space-y-1.5">
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] uppercase tracking-normal p-text-3">Mean score over time</div>
-          <div className="text-[10px] p-text-3">floor {DEFAULT_QUALITY_THRESHOLD.toFixed(2)}</div>
-        </div>
-        <QualitySparkline points={chrono} threshold={DEFAULT_QUALITY_THRESHOLD} />
-      </section>
-
-      <section className="space-y-1.5">
-        <div className="text-[10px] uppercase tracking-normal p-text-3">Recent runs</div>
-        <div className="space-y-1">
-          {rows.map((r, i) => {
-            const prev = rows[i + 1]; // next-oldest
-            const evolved = prev != null && prev.scaffoldVersion !== r.scaffoldVersion;
-            return (
-              <div key={r.id} className="flex items-center gap-2 text-[10px]">
-                <span className="p-text-3 shrink-0 w-16 truncate">{new Date(r.ranAt).toLocaleDateString()}</span>
-                {r.scaffoldVersion != null && (
-                  <span className={`shrink-0 font-mono ${evolved ? "p-accent" : "p-text-3"}`} title={evolved ? "scaffold evolved" : undefined}>v{r.scaffoldVersion}{evolved ? "↑" : ""}</span>
-                )}
-                <div className="flex-1 h-2 rounded-full p-fill overflow-hidden" title={`95% CI ${r.interval.lo.toFixed(2)}–${r.interval.hi.toFixed(2)} over ${r.sampleSize} turns`}>
-                  <div className={`h-full ${r.meanScore >= 0.7 ? "p-dot-success" : r.meanScore >= 0.4 ? "p-dot-warning" : "p-dot-danger"}`} style={{ width: `${Math.max(0, Math.min(1, r.meanScore)) * 100}%` }} />
-                </div>
-                <span className="font-mono p-text-3 tabular-nums shrink-0 w-10 text-right">{r.meanScore.toFixed(2)}</span>
-                <span className="hidden sm:inline font-mono p-text-3 tabular-nums shrink-0 w-20 text-right opacity-70">[{r.interval.lo.toFixed(2)}–{r.interval.hi.toFixed(2)}]</span>
+            {head.toolCalls.map((t, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-[10px]">
+                <WrenchIcon size={10} className="p-text-3 shrink-0" />
+                <code className="p-text-2">{t.name}</code>
+                {t.status && <span className={/error|exit=[1-9]/.test(t.status) ? "p-danger" : "p-text-3"}>{t.status}</span>}
               </div>
-            );
-          })}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/* ── K_align (Alignment Convergence Rate) ──────────────────────── */
-
-// How often the user had to correct the agent, per 100 graded turns, split by
-// the scaffold version that served them — computed from the turn_outcomes
-// ledger alone (no benchmark, no judge). Every rate is shown WITH its 95%
-// Wilson interval, and a segment whose interval is too wide to read is drawn
-// muted, because the point of this panel is to stop small numbers being
-// over-read as progress.
-const TREND_STYLE: Record<AlignmentConvergence["trend"], { label: string; className: string }> = {
-  improving: { label: "improving", className: "p-success" },
-  worsening: { label: "worsening", className: "p-danger" },
-  flat: { label: "no detectable change", className: "p-text-2" },
-  insufficient: { label: "not enough data", className: "p-text-3" },
-};
-
-function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibration: CalibrationReport }) {
-  const trend = TREND_STYLE[k.trend];
-  // One shared scale so segment intervals are visually comparable; the floor
-  // keeps a near-zero rate from filling the whole track.
-  const scaleMax = Math.max(20, ...k.segments.map((s) => s.rate.highPer100));
-  return (
-    <section className="space-y-2">
-      <div className="flex items-baseline justify-between gap-2">
-        <div className="text-[10px] uppercase tracking-normal p-text-3">K_align · corrections per 100 turns</div>
-        <div className={`text-[10px] ${trend.className}`}>
-          {trend.label}{k.deltaPer100 !== null ? ` (${k.deltaPer100 > 0 ? "+" : ""}${k.deltaPer100.toFixed(1)})` : ""}
-        </div>
-      </div>
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-        <Metric label="Rate" value={`${k.overall.rate.per100.toFixed(1)}`} />
-        <Metric label="95% interval" value={`${k.overall.rate.lowPer100.toFixed(1)}–${k.overall.rate.highPer100.toFixed(1)}`} />
-        <Metric label="Graded turns" value={`${k.overall.turns}${k.overall.abandoned > 0 ? ` (+${k.overall.abandoned} ungraded)` : ""}`} />
-      </div>
-      <div className="space-y-1">
-        {k.segments.map((s) => (
-          <div key={`${s.scaffoldVersion ?? "none"}-${s.firstAt}`}
-            className={`flex items-center gap-2 text-[10px] ${s.rate.reliable ? "" : "opacity-50"}`}
-            title={s.rate.reliable ? undefined : "interval too wide to read as a rate"}>
-            <span className="shrink-0 font-mono p-text-3 w-8">v{s.scaffoldVersion ?? "?"}</span>
-            <span className="shrink-0 p-text-3 w-12 tabular-nums">n={s.turns}</span>
-            <div className="flex-1 h-2 rounded-full p-fill relative overflow-hidden">
-              <div className="absolute inset-y-0 p-dot-info opacity-40" style={{
-                left: `${(s.rate.lowPer100 / scaleMax) * 100}%`,
-                width: `${Math.max(1, ((s.rate.highPer100 - s.rate.lowPer100) / scaleMax) * 100)}%`,
-              }} />
-              <div className="absolute inset-y-0 w-0.5 p-dot-info" style={{ left: `${(s.rate.per100 / scaleMax) * 100}%` }} />
-            </div>
-            <span className="font-mono p-text-3 tabular-nums shrink-0 w-8 text-right">{s.rate.per100.toFixed(1)}</span>
+            ))}
           </div>
-        ))}
-      </div>
-      <div className="text-[10px] p-text-3">{k.note}</div>
-      <CalibrationNote report={calibration} />
-    </section>
-  );
-}
+        ) : (
+          <div className="text-[11px] p-text-3">No step trace captured for this branch.</div>
+        )}
+      </DetailSection>
 
-// The rate above is the CLASSIFIER's count of corrections. How far that is from
-// the real one is measurable, and until it has been measured this says so
-// rather than letting the number read as ground truth.
-function CalibrationNote({ report }: { report: CalibrationReport }) {
-  if (report.accuracy === null || report.overall === null) {
-    return (
-      <div className="text-[10px] p-text-3">
-        <span className="p-warning">Uncalibrated</span>{" — this is the classifier's count of corrections, not a measured one. "}
-        {report.gap === null ? "" : `${describeCalibrationGap(report.gap)}. `}
-        Check ~100 turns by hand with <span className="font-mono">proteus label export</span>.
-      </div>
-    );
-  }
-  const per100 = (value: number): string => (value * 100).toFixed(1);
-  const { corrected, bias } = report.overall;
-  return (
-    <div className="text-[10px] p-text-3">
-      Corrected: <span className="font-mono p-text tabular-nums">{per100(corrected.mean)}</span>
-      {` per 100 (95% CI ${per100(corrected.lo)}–${per100(corrected.hi)}), `}
-      {`${bias >= 0 ? "+" : ""}${per100(bias)} off what the classifier said · `}
-      {`sensitivity ${report.accuracy.sensitivity.mean.toFixed(2)}, specificity ${report.accuracy.specificity.mean.toFixed(2)}`}
-      {report.kappa === null ? "" : `, κ ${report.kappa.value.toFixed(2)}`}
-      {` · ${report.labeled} hand labels`}
-    </div>
-  );
-}
-
-// Inline SVG mean-score curve with a dashed quality-floor reference. Points are
-// coloured by score band; the path uses a non-scaling stroke so it stays crisp
-// under preserveAspectRatio="none".
-function QualitySparkline({ points, threshold }: { points: ReplayEvalRow[]; threshold: number }) {
-  const W = 100, H = 32, pad = 2;
-  const n = points.length;
-  const x = (i: number) => n <= 1 ? W / 2 : pad + (i / (n - 1)) * (W - 2 * pad);
-  const y = (score: number) => pad + (1 - Math.max(0, Math.min(1, score))) * (H - 2 * pad);
-  const line = points.map((p, i) => `${x(i).toFixed(2)},${y(p.meanScore).toFixed(2)}`).join(" ");
-  // The 95% band the means sit inside — drawn so the curve can't be read as
-  // more precise than it is.
-  const band = [
-    ...points.map((p, i) => `${x(i).toFixed(2)},${y(p.interval.hi).toFixed(2)}`),
-    ...[...points].reverse().map((p, i) => `${x(points.length - 1 - i).toFixed(2)},${y(p.interval.lo).toFixed(2)}`),
-  ].join(" ");
-  const floorY = y(threshold).toFixed(2);
-  const dotColor = (s: number) => s >= 0.7 ? "var(--c-success)" : s >= 0.4 ? "var(--c-warning)" : "var(--c-danger)";
-  return (
-    <div className="rounded-lg border p-border p-surface p-2">
-      <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-24">
-        <line x1={pad} y1={floorY} x2={W - pad} y2={floorY} stroke="var(--c-text-3)" strokeWidth={0.4} strokeDasharray="2 2" vectorEffect="non-scaling-stroke" opacity={0.6} />
-        {n > 1 && <polygon points={band} fill="var(--c-accent)" opacity={0.14} />}
-        {n > 1 && <polyline points={line} fill="none" stroke="var(--c-accent)" strokeWidth={1} vectorEffect="non-scaling-stroke" />}
-        {points.map((p, i) => (
-          <circle key={p.id} cx={x(i)} cy={y(p.meanScore)} r={1.4} fill={dotColor(p.meanScore)} vectorEffect="non-scaling-stroke">
-            <title>{`${new Date(p.ranAt).toLocaleString()} · score ${p.meanScore.toFixed(3)} (95% CI ${p.interval.lo.toFixed(2)}–${p.interval.hi.toFixed(2)}) · loss ${p.loss.toFixed(3)}${p.scaffoldVersion != null ? ` · scaffold v${p.scaffoldVersion}` : ""}`}</title>
-          </circle>
-        ))}
-      </svg>
-    </div>
+      {head.decisions.length > 0 && (
+        <DetailSection title="Decisions">
+          <div className="space-y-1">
+            {head.decisions.map((d, i) => (
+              <div key={i} className="rounded-md p-fill border p-border p-2 text-[10px]">
+                <div className="p-text-2">{d.question}</div>
+                <div className="p-accent mt-0.5">→ {d.choice}</div>
+                {d.rationale && <div className="p-text-3 mt-0.5">{d.rationale}</div>}
+              </div>
+            ))}
+          </div>
+        </DetailSection>
+      )}
+    </>
   );
 }

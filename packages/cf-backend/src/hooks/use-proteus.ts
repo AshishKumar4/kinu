@@ -4,14 +4,18 @@
 
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import { useAgent } from "agents/react";
-import { ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG, type AgentViewSummary } from "@proteus/core";
+import {
+  ORCHESTRATOR_AGENT_SLUG, SUBORDINATE_AGENT_SLUG,
+  type AgentViewSummary, type PendingAction,
+} from "@proteus/core";
 import type { TimelineSpan } from "@proteus/core";
 import { useAgentChat } from "@cloudflare/ai-chat/react";
 import type { FileUIPart, UIMessage } from "ai";
+import { buildTree, type MctsRow } from "../lib/fork-tree-rows";
 import type {
   ToolInfo,
   MemoryEntry,
-  MCTSNode,
+  ForkNode,
   BackgroundJob,
   PendingConsent,
   Rpc,
@@ -136,7 +140,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
   const [tools, setTools] = useState<ToolInfo[]>([]);
   const [memory, setMemory] = useState<MemoryEntry[]>([]);
-  const [mctsTree, setMctsTree] = useState<MCTSNode | null>(null);
+  const [mctsTree, setMctsTree] = useState<ForkNode | null>(null);
   const [memoryContent, setMemoryContent] = useState<string>("");
   // Failures keyed by source, so one source recovering never erases another's
   // error, and none of them expire on a timer: an unread failure that quietly
@@ -161,7 +165,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // unless the executor is already active.
   const [pinnedPorts, setPinnedPorts] = useState<Array<{ port: number; url: string; name?: string }>>([]);
   // Background jobs (auto-detached >30s tool calls) — single source for the
-  // Tasks surface + the Tasks-tab running badge (visible on any surface).
+  // Work surface's Now half and its journal.
   const [backgroundJobs, setBackgroundJobs] = useState<BackgroundJob[]>([]);
   // Dashboards Proteus published for this workspace — the agent-authored tabs
   // at the right of the work-surface strip. Refreshed with the rest of the
@@ -170,8 +174,14 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // Pending device-consent requests — an agent wants to use a connected device;
   // the chat renders a card and the user decides (ask-once-then-remember).
   const [pendingConsents, setPendingConsents] = useState<PendingConsent[]>([]);
-  // Evolution Changelog unseen count — badges the Self tab from any surface;
-  // viewing the digest (SelfSurface) marks seen server-side and zeroes it.
+  // Everything asynchronous waiting on the owner — pending release approvals,
+  // a scaffold version under trial, failed jobs, unseen self-changes,
+  // curriculum proposals. ONE read behind both the Work tab's queue and the one
+  // accent badge on the strip, so the badge can never say something the queue
+  // does not show. Host-owned: see the RPC's note on VIEW_DATA_SOURCES.
+  const [pendingActions, setPendingActions] = useState<PendingAction[]>([]);
+  // Unseen self-changes, kept only for the sidebar roster's dot — the tab badge
+  // is the queue's length now.
   const [changelogUnseen, setChangelogUnseen] = useState(0);
   // Steer-as-Branch runs — the split progress chips near the streaming answer.
   const [branchRuns, setBranchRuns] = useState<BranchRun[]>([]);
@@ -372,6 +382,17 @@ export function useProteus(target?: string | ProteusActorAddress) {
     rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
   }, [rpc]);
 
+  // The queue and the changelog's unseen count come from one call: the queue
+  // already folds the unseen digest into a row, and the sidebar dot reads the
+  // same answer rather than a second poll that could disagree with it.
+  const refreshPendingActions = useCallback(() => {
+    rpc<PendingAction[]>("listPendingActions", []).then((actions) => {
+      setPendingActions(actions);
+      const unseen = actions.find((a) => a.kind === "unseen_changes");
+      setChangelogUnseen(unseen ? 1 : 0);
+    }).catch(() => {});
+  }, [rpc]);
+
   const abortChat = useCallback(() => {
     stop();
     rpc("cancelCurrentWork", [])
@@ -462,9 +483,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     refreshBackgroundJobs();
     refreshExposedPorts();
     rpc<AgentViewSummary[]>("listAgentViews", []).then(setAgentViews).catch(() => {});
-    // Unseen self-changes for the Self-tab badge.
-    rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
-      .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
+    refreshPendingActions();
     // Re-hydrate any consent cards still pending after a reload.
     rpc<PendingConsent[]>("listPendingConsents", []).then(setPendingConsents).catch(() => {});
   }
@@ -487,8 +506,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
         for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
         setExecutorOutputs(outputs);
         refreshExposedPorts();
-        rpc<{ unseenCount: number }>("getEvolutionChangelog", [{ limit: 1 }])
-          .then((r) => setChangelogUnseen(r.unseenCount)).catch(() => {});
+        refreshPendingActions();
       });
   }
 
@@ -546,6 +564,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     setMctsTree(null);
     mctsFingerprint.current = "";
     setPinnedPorts([]);
+    setPendingActions([]);
     setChatError(null);
     if (!isSubordinate) {
       setSubordinates([]);
@@ -709,19 +728,23 @@ export function useProteus(target?: string | ProteusActorAddress) {
     executeInExecutor,
     /** Exposed ports across all sandbox-capable executors (currently just sandbox). */
     pinnedPorts,
-    /** Background jobs + a live running count for the Jobs-tab badge. */
+    /** Background jobs — the Work surface's Now half and its journal. */
     backgroundJobs,
-    runningJobCount: backgroundJobs.filter((j) => j.status === "running").length,
     refreshBackgroundJobs,
+    /** Everything waiting on the owner: the Work queue and its strip badge. */
+    pendingActions,
     /** Agent-authored dashboards, as tabs. */
     agentViews,
     /** Pending device-consent requests + the resolver (chat consent cards). */
     pendingConsents,
     resolveConsent,
-    /** Unseen Evolution Changelog entries (Self-tab badge) + the local clear
-     *  (SelfSurface marks seen server-side, then calls this). */
+    /** Whether unseen self-changes remain — the sidebar roster's dot. Work
+     *  marks them seen server-side, then calls the clear. */
     changelogUnseen,
-    clearChangelogUnseen: () => setChangelogUnseen(0),
+    clearChangelogUnseen: () => {
+      setChangelogUnseen(0);
+      setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
+    },
     /** Steer-as-Branch chips (running → settled/error) + the dismiss. */
     branchRuns,
     dismissBranchRun: (branchId: string) =>
@@ -814,13 +837,6 @@ function parseSubordinateActivityEvent(value: unknown): SubordinateActivityEvent
   };
 }
 
-export interface MctsRow {
-  id: string; parent_id: string | null; depth: number;
-  visits: number; value: number; status: string; action: string;
-  task?: string; observation?: string; code_used?: string | null;
-  branch_agent_key?: string | null; msg_id?: string | null; created_at?: number;
-}
-
 interface ToolDescResult {
   builtIn: Array<{ name: string; summary: string; description: string; exposure: ToolInfo["exposure"] }>;
   crafted: Array<{ name: string; description: string; exposure: ToolInfo["exposure"]; qualityScore?: number; usageCount?: number }>;
@@ -834,37 +850,6 @@ function mapToolDescriptions(r: ToolDescResult): ToolInfo[] {
     // A crafted tool's description IS its one line — it has no second register.
     ...r.crafted.map((t) => ({ ...t, summary: t.description, learned: true, qualityScore: t.qualityScore ?? 0.5, usageCount: t.usageCount ?? 0 })),
   ];
-}
-
-/** Fold search_nodes rows into the tree the MCTS views render. The server
- *  scopes rows to the latest search; if a payload still carries several
- *  searches' roots (an old server, a mid-deploy broadcast), the NEWEST root
- *  wins — rooting at the oldest is how the first search a workspace ever ran
- *  shadowed every one after it. Exported for the gallery and its tests. */
-export function buildTree(nodes: MctsRow[]): MCTSNode {
-  const map = new Map<string, MCTSNode>();
-  for (const n of nodes) {
-    map.set(n.id, {
-      id: n.id, parentId: n.parent_id, depth: n.depth, visits: n.visits,
-      value: n.value, status: n.status as MCTSNode["status"], action: n.action,
-      task: n.task, observation: n.observation, codeUsed: n.code_used,
-      branchAgentKey: n.branch_agent_key, msgId: n.msg_id, createdAt: n.created_at,
-      children: [],
-    });
-  }
-  let root: MCTSNode | null = null;
-  for (const node of map.values()) {
-    if (node.parentId && map.has(node.parentId)) {
-      map.get(node.parentId)!.children.push(node);
-    } else if (
-      !root
-      || node.depth < root.depth // a true root beats a stray orphan
-      || (node.depth === root.depth && (node.createdAt ?? 0) > (root.createdAt ?? 0))
-    ) {
-      root = node;
-    }
-  }
-  return root ?? { id: "root", parentId: null, depth: 0, visits: 0, value: 0, status: "open", action: "root", children: [] };
 }
 
 /** Parse MEMORY.md sections into MemoryEntry[] for the UI */
