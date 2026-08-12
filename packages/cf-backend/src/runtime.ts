@@ -22,7 +22,7 @@ import type {
   TurnAccumulator,
 } from "@proteus/core";
 import {
-  CompositeVFS, type MountPolicy,
+  CompositeVFS, type MountPolicy, shellFsOverVfs,
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   DefaultExecutionRouter, createInlineExecutor,
   withApprovalGatedShell, type ShellApprovalPolicy,
@@ -224,11 +224,16 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // execution/approval.ts). `mode` reads agent_config directly off the SAME
   // store the memory backfill above already opened, so a setShellApprovalMode
   // RPC takes effect on the very next command with no toolset rebuild needed.
-  // No interactive channel: CF never wires the ACP permission surface, so
-  // 'strict' keeps its explanatory refusal here, same as before this policy
-  // existed.
   const approvalPolicy: ShellApprovalPolicy = { mode: () => memoryConfig.getShellApprovalMode() };
-  const shell = withApprovalGatedShell(createShell(sqliteFS), approvalPolicy);
+  // The emulated shell runs over the COMPOSITE, not the raw SqliteFS: `run` and
+  // `workspace.exec` then address the same paths `workspace.readFile` and the
+  // `file` tool do, every mount included (see vfs/shell-fs.ts). Still gated —
+  // withApprovalGatedShell wraps the Shell object, so what createShell is handed
+  // is transparent to the approval seam.
+  const shell = withApprovalGatedShell(
+    createShell(shellFsOverVfs(compositeVfs), { cwd: compositeVfs.cwd }),
+    approvalPolicy,
+  );
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell,

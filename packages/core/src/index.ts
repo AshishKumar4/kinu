@@ -725,7 +725,7 @@ export {
   CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
   makeVfsError, isVfsError, ERRNO,
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
-  createParentRpcMountVFS,
+  createParentRpcMountVFS, shellFsOverVfs,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
   type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
   type VfsError, type VfsErrorCode, type DeviceMountConsent,

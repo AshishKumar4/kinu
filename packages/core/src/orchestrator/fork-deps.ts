@@ -18,6 +18,7 @@ import { createHeadsStrategy } from '../strategy/heads.js';
 import type { AgentsForkDeps } from '../tools/agents-tool.js';
 import type { SessionWriter } from '../mcts/record-node.js';
 import type { MctsSearchStore } from '../mcts/search-store.js';
+import type { MCTSProgressEvent } from '../types/mcts.js';
 import type { HeadController, SplitPhaseEvent } from '../heads/controller.js';
 import type { MergeResult, SerializedMessage } from '../heads/types.js';
 import type { MctsOverrides } from '../config/store.js';
@@ -32,6 +33,20 @@ export interface ForkDepsWiring {
     /** The operator's stored overrides (mcts_c / iterations / depth /
      *  branches), read per call so config changes land without a rebuild. */
     overrides: () => MctsOverrides;
+    /**
+     * Per-iteration progress sink — the MCTS twin of `heads.onPhase`, and a
+     * FACTORY for the same reason: a fork detaches the instant its spawn is
+     * confirmed, so whatever run-scope is valid at DISPATCH has to be bound
+     * once, here, rather than read fresh at each event.
+     *
+     * Without it a search is invisible while it runs. Only the lifetime
+     * evolution cycle ever passed `onProgress` into runMCTS, so an
+     * agent-initiated search — every search an operator actually watches —
+     * broadcast nothing at all, and the tree only moved when a surface
+     * happened to poll. Optional: a backend with no live search surface (the
+     * CLI, whose `mcts` command is a one-shot inspection) wires nothing.
+     */
+    onProgress?: () => (event: MCTSProgressEvent) => void;
   };
   heads: {
     /** Resolved per call (cf: throws until the agent has an owner). */
@@ -70,7 +85,12 @@ export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
     rt: wiring.rt,
     model: wiring.model,
     defaultOptions: () => ({
-      mcts: { session: wiring.mcts.session(), search: wiring.mcts.search, ...wiring.mcts.overrides() },
+      mcts: {
+        session: wiring.mcts.session(),
+        search: wiring.mcts.search,
+        ...wiring.mcts.overrides(),
+        ...(wiring.mcts.onProgress ? { onProgress: wiring.mcts.onProgress() } : {}),
+      },
       heads: {
         controller: wiring.heads.controller(),
         inheritedContext: wiring.heads.inheritedContext(),

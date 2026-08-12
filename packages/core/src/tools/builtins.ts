@@ -409,7 +409,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           enum: ['workspace', 'nimbus', 'sandbox', 'laptop'],
           description:
             'Execution runtime. Use one of the environments listed in the system prompt — that list is live for this turn; check it instead of assuming availability. ' +
-            'workspace is the internal Proteus VFS shell and the default only when runtime is omitted. ' +
+            'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
             "laptop is the user's own PC, available when their device is connected; its first use may pause for a user consent prompt (expected, not an error). " +
             'Choose nimbus, sandbox, or laptop explicitly when that environment is the right execution target.',
         },

@@ -14,6 +14,7 @@ import { DEFAULT_CONFIG } from '../config.js';
 import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
 import type { SessionWriter } from '../mcts/record-node.js';
 import type { MctsSearchStore } from '../mcts/search-store.js';
+import type { MCTSProgressEvent } from '../types/mcts.js';
 
 interface MCTSStrategyOptions {
   /** Default iteration budget when the caller doesn't pass one explicitly. */
@@ -31,6 +32,9 @@ interface MCTSStrategyOptions {
   session: SessionWriter;
   /** Durable search checkpoint (host-injected) — enables evict-resume (B6). */
   search?: MctsSearchStore;
+  /** Per-iteration progress sink (host-injected). This is what makes a running
+   *  search visible: without it the tree only changes when something polls. */
+  onProgress?: (event: MCTSProgressEvent) => void;
 }
 
 export function createMCTSStrategy(): ExplorationStrategy {
@@ -62,6 +66,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
         takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
         signal: ctx.signal,
         ...(o.search ? { search: o.search } : {}),
+        ...(o.onProgress ? { onProgress: o.onProgress } : {}),
         // Branch rollouts resolve their own model in another process, so the
         // governed `ctx.rt.llm` never sees them; the engine debits each rollout
         // from the report that comes back with it and stops opening expansions

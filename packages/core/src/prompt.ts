@@ -163,8 +163,13 @@ function renderToolsSection(surface: PromptSurface): string {
  *  prefix, so a sandbox waking up doesn't re-prefill the whole conversation. */
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   switch (exec.name) {
+      // What the `workspace` SHELL is differs by backend, and the difference
+      // is the one an agent gets wrong: hosted, it is an emulator over the
+      // file plane with no binaries at all; locally, it is the real machine.
       case 'workspace':
-        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state. It starts EMPTY and stays that way — it is never a repository checkout or a view onto any real machine, and it runs no real binaries; the user\'s PC and a full Linux sandbox are the other runtimes below, and are where real code actually lives.';
+        return backend === 'cli-local'
+          ? '- **workspace.*** / `runtime: "workspace"`: the machine the CLI is running on, at the directory it was invoked in — a real shell with real binaries. Its file ops address the file plane (/local durable state, /pc the machine).'
+          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable state, plus an EMULATED shell over the workspace file plane — cat/ls/grep/find/sed/stat/wc/pwd across every mount, and no real programs. Real commands run in the runtimes above.';
       case 'nimbus':
         return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
       case 'sandbox':
@@ -232,8 +237,16 @@ function renderExecutorSection(surface: PromptSurface): string {
   if (mounts.length > 0) {
     parts.push(
       '',
-      `The workspace filesystem (workspace.* file ops) is a mount table: /local is the durable base, and ${mounts.join(', ')} ${mounts.length === 1 ? 'is a live window' : 'are live windows'} into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
-      'Mounts are the FILE plane only: command execution stays target-native — run commands via the environment\'s own namespace or the run tool, never against a mount path.',
+      `The workspace filesystem is a mount table: /local is the durable base, and ${mounts.join(', ')} ${mounts.length === 1 ? 'is a live window' : 'are live windows'} into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
+      // What `workspace` MEANS as a run runtime differs by backend, and the
+      // difference decides whether the shell shares the mount table's paths.
+      // On cf it is the emulated shell over this very plane; on cli-local it is
+      // the user's real machine shell at the process cwd, which is the same
+      // FILES as /pc but not the same PATHS. Saying "one table, one set of
+      // paths" on cli-local would be a straightforward falsehood.
+      surface.backend === 'cli-local'
+        ? 'The `file` tool and workspace.* file ops address that table; run\'s `workspace` runtime is the real machine shell at the process working directory — the same files as /pc, by the machine\'s own paths rather than mount paths.'
+        : 'The `file` tool, workspace.* file ops and the workspace shell all address that ONE table by the same paths. Only EXECUTION stays target-native: anything needing a real binary goes to that environment\'s own runtime, in ITS native paths.',
     );
   }
   if (devices.length > 1) {

@@ -60,9 +60,12 @@ agents are the actors that work inside it.
 - **One default agent, more on demand.** Three kinds of extra actor, and which
   one you get depends on whether the work is ephemeral, durable-in-workspace, or
   cross-workspace:
-  - **Heads** (`think(strategy:'heads')`) are ephemeral. Each gets a bare
-    per-head VFS and virtual shell — they do NOT see the workspace mounts —
-    and findings come back through the merge.
+  - **Heads** (`think(strategy:'heads')`) are ephemeral. Each gets its own
+    `/local` scratch, and the parent workspace's durable files arrive as a
+    `/workspace` mount of its plane. Its emulated shell runs over that plane
+    too, so `grep -rn X /workspace` from a head reads the same bytes
+    `workspace.readFile('/workspace/…')` does. Findings come back through the
+    merge.
   - **Subordinates** (`team`: `list | spawn | assign | status | message |
     dismiss`) are durable. Each is a `SubordinateAgent` facet with its own
     SQLite and its own full turn loop, sharing the workspace's files through a

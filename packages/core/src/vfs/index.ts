@@ -17,3 +17,4 @@ export {
   type DeviceMountConsent, type ParentRpcFileHandle, type ParentRpcWrite,
   type ParentRpcResult, type ParentRpcError,
 } from './mount-adapters.js';
+export { shellFsOverVfs } from './shell-fs.js';

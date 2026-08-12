@@ -92,7 +92,7 @@ import {
   BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob,
-  MctsSearchStore,
+  MctsSearchStore, readLatestSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills + per-turn surface (core turn-surface)
@@ -1008,6 +1008,51 @@ export abstract class ActorAgent extends Think<Env> {
     if (!this._mctsSearchStore) this._mctsSearchStore = new MctsSearchStore(this.boundSql);
     return this._mctsSearchStore;
   }
+
+  /**
+   * Push the search tree to every connected client, after each MCTS iteration.
+   * The ONE broadcast both producers use — the lifetime evolution cycle and an
+   * agent-initiated `agents` fork (see getAgentsToolDeps). It used to hang off
+   * the orchestrator and be reachable only from the first of those, so a
+   * search an operator started emitted nothing and its tree sat still for as
+   * long as it ran.
+   *
+   * Same scoped projection as getMctsTree: the tree in progress IS the latest
+   * one, and pushing every settled search's rows made the client render
+   * whichever root it picked out of the pile.
+   *
+   * Several events fire per iteration and each carries the WHOLE tree —
+   * observations and proposed code included — so an unchanged tree is skipped
+   * rather than re-serialized and fanned out. The receiver discards an
+   * identical payload on the same key anyway (use-proteus's fingerprint), so
+   * nothing downstream can tell the difference except the bytes it did not pay
+   * for.
+   */
+  broadcastMctsProgress(phase: string, iteration?: number, budget?: number): void {
+    try {
+      const nodes = readLatestSearchTree(this.boundSql);
+      const fingerprint = nodes.map((n) => `${n.id}:${n.visits}:${n.value}:${n.status}`).join('|');
+      if (fingerprint === this._lastMctsFingerprint) return;
+      this._lastMctsFingerprint = fingerprint;
+      this.broadcast(JSON.stringify({
+        type: 'mcts-progress', phase, iteration, budget,
+        nodeCount: nodes.length, nodes,
+      }));
+    } catch (err) {
+      console.warn('[proteus] broadcastMctsProgress failed:', err);
+    }
+  }
+
+  /** The tree last pushed. Per activation, which is the right lifetime: a
+   *  reconnecting client is served by the surface's own poll, not by a resend. */
+  private _lastMctsFingerprint = '';
+
+  /** One MCTS progress event → the broadcast, whichever producer raised it. */
+  protected onMctsProgress(event: MCTSProgressEvent): void {
+    const phase = event.type === 'phase' ? event.phase : event.type;
+    const budget = event.type === 'branch-failed' ? undefined : event.remainingBudget;
+    this.broadcastMctsProgress(phase, event.iteration, budget);
+  }
   // The backend-agnostic background-job lifecycle (detach → settle → wake +
   // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
   // and the BackendHost programmatic-turn wake. Owns the cancel-controller map.
@@ -1073,6 +1118,9 @@ export abstract class ActorAgent extends Think<Env> {
           session: () => this.createMCTSSession(),
           search: this.mctsSearchStore,
           overrides: () => this.config.getMctsOverrides(),
+          // The search the operator watches. Bound at dispatch (the fork
+          // detaches on spawn-confirm), same as heads' onPhase.
+          onProgress: () => (event: MCTSProgressEvent) => this.onMctsProgress(event),
         },
         heads: {
           controller: () => this.getHeadController(),

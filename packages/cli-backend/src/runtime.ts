@@ -18,7 +18,7 @@ import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
-  CompositeVFS, type MountPolicy, type CompositeWriteObserver,
+  CompositeVFS, type MountPolicy, type CompositeWriteObserver, shellFsOverVfs,
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
@@ -413,14 +413,12 @@ export function buildCLIHeadRuntime(
   craftStoreImpl.ensureSchema();
   const craftStore = adaptCraftStore(craftStoreImpl);
 
-  // The `workspace` run runtime + codemode `workspace.*` is the head's private
-  // emulated scratch shell (mirrors the cf head's createShell over its SqliteFS).
-  // No policy threaded through: a head has no shellApprovalMode of its own
-  // (never did — buildHeadToolSet never passed one either) and no interactive
-  // surface, so withApprovalGatedShell/DefaultExecutionRouter fall back to
-  // their conservative default (strict, nobody to ask) — same posture heads
-  // have always run under.
-  const shell = withApprovalGatedShell(createShell(sqliteFs));
+  // The `workspace` run runtime + codemode `workspace.*` is the head's emulated
+  // shell over its own file plane — the COMPOSITE, so `ls /parent` and
+  // `grep -rn X /parent` reach the same host files `workspace.readFile` does.
+  // Still gated: withApprovalGatedShell wraps the Shell object, so swapping what
+  // createShell is handed is transparent to the approval seam.
+  const shell = withApprovalGatedShell(createShell(shellFsOverVfs(vfs), { cwd: vfs.cwd }));
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell, sql }));
   // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`

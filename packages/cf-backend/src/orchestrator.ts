@@ -502,11 +502,9 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        onMctsProgress: (event) => {
-          const phase = event.type === "phase" ? event.phase : event.type;
-          const budget = event.type === "branch-failed" ? undefined : event.remainingBudget;
-          this.broadcastMctsProgress(phase, event.iteration, budget);
-        },
+        // The same sink an agent-initiated fork(settle=mcts) uses — one
+        // broadcast for every search this workspace runs (ActorAgent).
+        onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
@@ -2630,29 +2628,6 @@ export class OrchestratorAgent extends ActorAgent {
 
   @callable() async setEvolutionConfig(config: Partial<EvolutionConfigView>): Promise<EvolutionConfigView> {
     return setEvolutionConfig(this.config, config);
-  }
-
-  /**
-   * Broadcast the current MCTS tree to all connected WebSocket clients.
-   * Called after each MCTS iteration so the UI updates in real-time.
-   */
-  broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
-    try {
-      // Same scoped projection as getMctsTree: the tree in progress IS the
-      // latest one, and pushing every settled search's rows made the client
-      // render whichever root it picked out of the pile.
-      const nodes = readLatestSearchTree(this.boundSql);
-      this.broadcast(JSON.stringify({
-        type: "mcts-progress",
-        phase,
-        iteration,
-        budget,
-        nodeCount: nodes.length,
-        nodes,
-      }));
-    } catch (err) {
-      console.warn("[proteus] broadcastMctsProgress failed:", err);
-    }
   }
 
   // ── Fork RPCs ──────────────────────────────────────────────────

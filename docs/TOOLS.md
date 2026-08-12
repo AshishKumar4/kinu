@@ -352,14 +352,22 @@ without saying how to continue it — with faults that model each being lost.
 
 ## run — Shell Command
 
-Direct POSIX shell execution over the agent's virtual filesystem (SqliteFS).
+Direct POSIX shell execution over the workspace **file plane** — the same
+`CompositeVFS` the `file` tool and `workspace.*` address, mounts included, so
+`ls /` is the mount table and a path means the same thing on every surface.
 
-**Supported commands** (16): `cat`, `head`, `tail`, `ls`, `tree`, `find`, `grep`, `echo`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `sed`, `stat`, `wc`
+**Supported commands** (17): `cat`, `head`, `tail`, `ls`, `tree`, `find`, `grep`, `echo`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `sed`, `stat`, `wc`, `pwd`
 
 **Features**: Pipelines (`|`), redirects (`>`, `>>`), chaining (`&&`, `||`, `;`)
 
-**Runtime routing**: the `runtime` parameter takes `workspace` (the default,
-the in-VFS virtual shell), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
+There are no other binaries and no processes: it is emulated in-process, so
+anything that has to RUN (a build, a test, a package manager) belongs in an
+executor that has a real shell. A command it does not implement says so, names
+what it does implement, and points at those executors.
+
+**Runtime routing**: the `runtime` parameter takes `workspace` (the default —
+the emulated shell above on the hosted backend, the real machine shell at the
+process cwd on cli-local), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
 via the pc-agent daemon and a consent prompt on first use). Anything other than
 `workspace` dispatches through the `ExecutionRouter`. There is no fallback
 chain: asking for a runtime that isn't provisioned returns a structured

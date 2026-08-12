@@ -177,7 +177,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     exec: {
-      description: 'Execute a POSIX shell command. Supports cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq, xargs. Pipes (|) and redirects (>, >>) work.',
+      description:
+        'Read and search the workspace file plane with a POSIX-shaped command, over the SAME paths and mounts readFile/readdir address. '
+        + 'Emulated in-process, so the command set is exactly: cat, head, tail, ls, tree, find, grep, echo, mkdir, touch, rm, cp, mv, sed, stat, wc, pwd. '
+        + 'Pipes (|), redirects (>, >>) and && / || work; there are no other binaries and no processes — run those in sandbox/nimbus/laptop.',
       execute: async (command: unknown, context?: unknown) => {
         const signal = readExecSignal(context);
         return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
@@ -350,6 +353,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string }>;
   function readdir(path: string): Promise<string[]>;
   function exists(path: string): Promise<boolean>;
+  /**
+   * Read/search the SAME file plane the calls above address, POSIX-style.
+   * Emulated in-process: cat, head, tail, ls, tree, find, grep, echo, mkdir,
+   * touch, rm, cp, mv, sed, stat, wc, pwd — plus pipes, redirects and &&/||.
+   * No other binaries and no processes: run those in sandbox/nimbus/laptop.
+   */
   function exec(command: string): Promise<string>;
   function searchMemory(query: string): Promise<string>;
   function saveNote(content: string): Promise<string>;

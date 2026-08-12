@@ -333,6 +333,67 @@ export class CompositeVFS implements VFS {
     return r.vfs.exists(r.sub);
   }
 
+  // ── Beyond the 7: what `mv` and `rm -r` need ──────────────────────
+  //
+  // Not part of the core VFS interface — a mount only has to implement the
+  // seven. They live here because both are decisions about the PLANE (which
+  // mount owns the path, is it writable, does that mount know a better way to
+  // do this), which is exactly what a mount table is for.
+
+  /**
+   * Move a file, across mounts if the two paths name different ones.
+   *
+   * Copy-then-unlink, because that is the only rename expressible over mounts
+   * that share nothing. Refused on a directory rather than half-moving one.
+   */
+  async rename(oldPath: string, newPath: string): Promise<void> {
+    const st = await this.stat(oldPath);
+    if (!st) throw makeVfsError('ENOENT', `no such file or directory, rename '${oldPath}'`, oldPath);
+    if (st.isDir) {
+      throw makeVfsError(
+        'EISDIR',
+        `renaming a directory is not supported on this file plane; move its files or run mv `
+        + `in an executor with real binaries, rename '${oldPath}'`,
+        oldPath,
+      );
+    }
+    await this.writeFile(newPath, await this.readFile(oldPath));
+    await this.unlink(oldPath);
+  }
+
+  /**
+   * Delete a path and everything under it.
+   *
+   * Delegated to the mount when it knows how — SqliteFS does it in one DELETE,
+   * and only the mount can remove its own directory entries (the core VFS has
+   * no rmdir, and `unlink` on a directory is EPERM there). Mounts without it
+   * fall back to unlinking every file below the path, which leaves their
+   * directory entries behind; that is stated rather than papered over.
+   */
+  async removeRecursive(path: string): Promise<void> {
+    const r = this.demandResolved(path, 'unlink');
+    if (r.kind === 'root') throw makeVfsError('EPERM', `operation not permitted, unlink '${path}'`, path);
+    if (r.kind === 'rootEntry') throw this.rootTableError(path);
+    if (r.isMountRoot) throw makeVfsError('EPERM', `cannot remove the /${r.name} mount, unlink '${path}'`, path);
+    this.assertWritable(r, path);
+
+    const native = (r.vfs as VFS & { removeRecursive?(p: string): Promise<void> }).removeRecursive;
+    if (typeof native === 'function') return native.call(r.vfs, r.sub);
+
+    const st = await r.vfs.stat(r.sub);
+    if (!st) throw makeVfsError('ENOENT', `no such file or directory, unlink '${path}'`, path);
+    if (!st.isDir) return r.vfs.unlink(r.sub);
+    const walk = async (dir: string): Promise<void> => {
+      for (const name of await r.vfs.readdir(dir)) {
+        const full = `${dir.replace(/\/$/, '')}/${name}`;
+        const entry = await r.vfs.stat(full);
+        if (entry?.isDir) await walk(full);
+        else await r.vfs.unlink(full);
+      }
+    };
+    await walk(r.sub);
+  }
+
   // ── internals ─────────────────────────────────────────────────────
 
   /**

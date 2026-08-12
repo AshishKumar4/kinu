@@ -90,14 +90,15 @@ because there is no `team` tool in its ToolSet to call.
 
 **`ExplorationAgent` deliberately stays on the bare `Agent`.** It is not an
 `ActorAgent` and never inherits the actor tool surface. Its ToolSet is
-hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`, the
-four `sandbox_*` verbs over its own ephemeral SqliteFS and virtual shell,
-`web`, three `shared_*` verbs into the root's scratch, and
-the depth-budgeted `split_subheads`. No `execute_tools`, no `run`, no `think`,
-no `team`, no `peers`. Recursion is bounded by construction: without `think` a
-head cannot start a fresh strategy run, and its one fan-out path,
-`split_subheads`, decrements `maxDepth` on every spawn and refuses once the
-budget is exhausted.
+hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`,
+`execute_tools`, `run`, `file`, `web`, and the depth-budgeted `split_subheads`.
+No `agents`, so it cannot delegate. Its file plane is its own: `/local` is a
+private scratch siblings cannot see, and the parent workspace's durable files
+arrive as a `/workspace` mount over the parent RPC handle. Its `run`/
+`workspace.exec` shell runs over that same plane, so a head reads and searches
+the files it was spawned to study by the paths the mount table gives them.
+Recursion is bounded by construction: its one fan-out path, `split_subheads`,
+decrements `maxDepth` on every spawn and refuses once the budget is exhausted.
 
 All three share the owner/provider/model/web substrate by **composition**, not
 inheritance: `OwnedModelServices`

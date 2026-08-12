@@ -521,7 +521,9 @@ describe('buildSystemPromptSync', () => {
 
     expect(prompt).toContain('nimbus.*');
     expect(prompt).toContain('workspace.*');
-    expect(prompt).toContain('internal Proteus state');
+    // The hosted workspace runtime is an emulator over the file plane, not a
+    // machine — the model must not read it as somewhere it can build or test.
+    expect(prompt).toContain('EMULATED shell');
     expect(prompt).not.toContain('laptop');
     expect(prompt).not.toContain('sandbox.*');
     expect(prompt).not.toMatch(/Showing a running app/);
