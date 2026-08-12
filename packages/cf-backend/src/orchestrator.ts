@@ -161,7 +161,7 @@ import {
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
 } from "@proteus/core";
-import type { CodemodeProvider } from "@proteus/core";
+import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
 import { agentEmailAddress } from "./email/inbound.js";
 import {
@@ -1458,6 +1458,14 @@ export class OrchestratorAgent extends ActorAgent {
    *  search_nodes and must never shadow the run the operator is watching. */
   @callable() async getMctsTree() {
     return readLatestSearchTree(this.boundSql);
+  }
+
+  /** The run-level MCTS ledger (mcts_search_runs): every search this workspace
+   *  has run, newest-updated first, with its status/iteration/budget. Distinct
+   *  from getMctsTree's node rows — this is how a caller tells which search is
+   *  the latest without inferring it from node ordering. */
+  @callable() async getMctsSearchRuns(limit: number = 20): Promise<MctsSearchRunSummary[]> {
+    return this.mctsSearchStore.list(limit);
   }
 
   @callable() async getMctsNodeDetail(nodeId: string) {
