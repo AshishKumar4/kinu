@@ -80,6 +80,7 @@ export const AGENT_RPC_ACCESS = {
   getGepaRuns: 'workspace.read',
   getHeadRuns: 'workspace.read',
   getMctsNodeDetail: 'workspace.read',
+  getMctsSearchRuns: 'workspace.read',
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
   getOutcomeCalibration: 'workspace.read',
@@ -141,7 +142,14 @@ export const AGENT_RPC_ACCESS = {
   getEvolutionConfig: 'interactive',
   getMctsConfig: 'interactive',
   getReplayEvals: 'interactive',
+  // Raw per-run events: full tool-call arguments/results and every turn's
+  // context-budget/steering/file-edit telemetry. Same sensitivity class as
+  // exportWorkspaceArchive — a workspace.read token gets the read MODELS
+  // (getRunTimeline's merged spans, getRunSummaries' cost folds), not the
+  // unredacted event payloads themselves.
+  getRunEvents: 'interactive',
   getRunSummaries: 'interactive',
+  listRuns: 'interactive',
   getScaffoldDiff: 'interactive',
   getShadowVerdict: 'interactive',
   getShellApprovalMode: 'interactive',

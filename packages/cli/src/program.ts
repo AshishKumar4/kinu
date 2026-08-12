@@ -36,6 +36,7 @@ import {
   timelineCommand,
   webhookCommand,
 } from './commands/inspect.js';
+import { debugCommand } from './commands/debug.js';
 import { labelCommand } from './commands/label.js';
 import { exportCommand, importCommand } from './commands/export-import.js';
 import { tokensCommand } from './commands/tokens.js';
@@ -379,6 +380,17 @@ export function buildProgram(): Command {
     .option('--limit <n>', 'Run limit')
     .option('--json', 'Print raw JSON')
     .action(wrapAction(headsCommand));
+
+  program
+    .command('debug <name>')
+    .helpGroup(INSPECT)
+    .description('Fetch everything about a workspace — identity, messages, runs and their events, ' +
+      'heads, MCTS searches, background jobs, evolution state, memory and facts — into one bundle')
+    .option('-o, --out <file>', 'Bundle output path (default: <name>.debug.jsonl)')
+    .option('--runs <n>', 'How many recent runs/head-runs/searches to page through')
+    .option('--limit <n>', 'Row limit for the smaller sections (messages, jobs, facts, ...)')
+    .option('--json', 'Print the assembled summary as JSON instead of a human report')
+    .action(wrapAction(debugCommand));
 
   program
     .command('gepa <name> [runId]')

@@ -72,6 +72,7 @@ proteus <command> [options]
 | [`proteus timeline <name>`](#proteus-timeline-name) | List the run/evolution/MCTS timeline |
 | [`proteus mcts <name> [nodeId]`](#proteus-mcts-name-nodeid) | Inspect MCTS search history |
 | [`proteus heads <name>`](#proteus-heads-name) | Inspect parallel reasoning branch runs |
+| [`proteus debug <name>`](#proteus-debug-name) | Fetch everything about a workspace — identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts — into one bundle |
 | [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
 | [`proteus alignment <name>`](#proteus-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
 | [`proteus label [action] [name] [file]`](#proteus-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
@@ -433,6 +434,17 @@ Inspect parallel reasoning branch runs.
 | --- | --- |
 | `--limit <n>` | Run limit |
 | `--json` | Print raw JSON |
+
+### proteus debug <name>
+
+Fetch everything about a workspace — identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts — into one bundle.
+
+| Option | What it does |
+| --- | --- |
+| `-o, --out <file>` | Bundle output path (default: <name>.debug.jsonl) |
+| `--runs <n>` | How many recent runs/head-runs/searches to page through |
+| `--limit <n>` | Row limit for the smaller sections (messages, jobs, facts, ...) |
+| `--json` | Print the assembled summary as JSON instead of a human report |
 
 ### proteus gepa <name> [runId]
 

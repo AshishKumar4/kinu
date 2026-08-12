@@ -48,6 +48,7 @@ function createLocalAgent(home: string, name: string): void {
     CREATE TABLE search_nodes (
       id TEXT PRIMARY KEY,
       parent_id TEXT,
+      root_id TEXT,
       task TEXT NOT NULL,
       action TEXT NOT NULL DEFAULT '',
       observation TEXT NOT NULL DEFAULT '',

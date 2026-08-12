@@ -7,18 +7,23 @@ import {
   BUILTIN_TOOLS,
   EventLog,
   HeadJournal,
+  MctsSearchStore,
   RunEventRecorder,
   TriggerRegistry,
   createAgentConfigStore,
+  createFactsStore,
   initAgentConfigTable,
   initEventsHubTables,
   alignmentConvergence,
   calibrationReport,
   createCompletionLLM,
   ensembleReport,
+  getChatHistory,
+  getEvolutionChangelog,
   ingestOutcomeLabels,
   initTurnOutcomeTables,
   listGepaRuns,
+  listScaffoldVersions,
   loadGepaCandidates,
   nextCronFire,
   releaseSqlFromExec,
@@ -28,8 +33,10 @@ import {
   selectEnsembleJudges,
   type AlignmentConvergence,
   type CalibrationReport,
+  type ChatHistoryEntry,
   type CorpusEvalReport,
   type CorpusTurn,
+  type EvolutionChangelogView,
   type WeakLabel,
   type EnsembleReport,
   type EnsembleRunResult,
@@ -39,7 +46,9 @@ import {
   type EventVariant,
   type ReleaseBoard,
   type RunEvent,
+  type ScaffoldVersionView,
   type SearchNode,
+  type MctsSearchRunSummary,
   type ReasoningEffort,
   readSoul,
   summarizeSoul,
@@ -283,16 +292,30 @@ export function listLocalTimeline(name: string, limit = 100): unknown[] {
   });
 }
 
-export function listLocalMcts(name: string): SearchNode[] {
+/** A search_nodes row plus root_id — the column `SearchNode` omits because
+ *  the MCTS engine itself never needs it (a running search already knows
+ *  which store/root it owns); a debugging read across every search this
+ *  workspace has ever run does. */
+export type LocalSearchNode = SearchNode & { root_id: string | null };
+
+export function listLocalMcts(name: string): LocalSearchNode[] {
   return withLocalDb(name, (db) => tableExists(db, 'search_nodes')
-    ? all<SearchNode>(
+    ? all<LocalSearchNode>(
       db,
-      `SELECT id, parent_id, task, action, observation, code_used, visits, value, depth,
+      `SELECT id, parent_id, root_id, task, action, observation, code_used, visits, value, depth,
               status, msg_id, branch_agent_key, created_at
        FROM search_nodes
        ORDER BY depth, created_at`,
     )
     : []);
+}
+
+/** Local peer of the cloud `getMctsSearchRuns` RPC — the mcts_search_runs
+ *  ledger, newest-updated first. */
+export function listLocalMctsSearchRuns(name: string, limit = 20): MctsSearchRunSummary[] {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'mcts_search_runs') ? new MctsSearchStore(makeSql(db)).list(limit) : []
+  ));
 }
 
 export function getLocalMctsNode(name: string, nodeId: string): LocalMctsNodeDetail | null {
@@ -348,6 +371,40 @@ export function listLocalGepaRuns(name: string, limit = 20): unknown[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'gepa_runs')) return [];
     return listGepaRuns(makeSql(db), limit);
+  });
+}
+
+/** Local peer of the cloud `getChatHistory` RPC — no local wrapper existed
+ *  before `proteus debug` needed the full transcript, though the read model
+ *  itself (core status.ts) has always worked over any SqlExecutor. */
+export function getLocalChatHistory(name: string, limit = 100): ChatHistoryEntry[] {
+  return withLocalDb(name, (db) => getChatHistory(makeSql(db), limit));
+}
+
+/** Local peer of the cloud `getEvolutionChangelog` RPC. */
+export function getLocalChangelog(name: string, limit = 50): EvolutionChangelogView {
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, 'agent_config')) initAgentConfigTable((ddl) => { db.exec(ddl); });
+    return getEvolutionChangelog(createAgentConfigStore(makeSql(db)), makeSql(db), limit);
+  });
+}
+
+/** Local peer of the cloud `listScaffoldVersions` RPC. */
+export function getLocalScaffoldVersions(name: string, limit = 20): ScaffoldVersionView[] {
+  return withLocalDb(name, (db) => (
+    tableExists(db, 'scaffold_versions') ? listScaffoldVersions(makeSql(db), limit) : []
+  ));
+}
+
+/** Local peer of the cloud `getFacts` RPC. */
+export function getLocalFacts(name: string, limit = 100): Array<{
+  key: string; value: unknown; confidence: number; source: string; lastObservedAt: number;
+}> {
+  return withLocalDb(name, (db) => {
+    if (!tableExists(db, 'agent_facts')) return [];
+    return createFactsStore(makeSql(db)).recentTopK(limit).map((f) => ({
+      key: f.key, value: f.value, confidence: f.confidence, source: f.source, lastObservedAt: f.lastObservedAt,
+    }));
   });
 }
 

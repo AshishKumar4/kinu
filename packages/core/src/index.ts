@@ -599,6 +599,7 @@ export {
   persistableMCTSConfig,
   type PersistedMCTSConfig,
   type ResumableSearch,
+  type MctsSearchRunSummary,
 } from './mcts/search-store.js';
 export { initScaffoldTables } from './scaffold/schemas.js';
 export { initCraftScoreTables } from './craft/schemas.js';
