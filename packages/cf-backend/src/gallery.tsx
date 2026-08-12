@@ -22,6 +22,10 @@
  *   /gallery.html?frame=jobs     → background jobs (what the Tasks tab used to show)
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
+ *   /gallery.html?frame=mcts     → the Exploration surface on a real 106-node,
+ *                                  depth-6 search, in Column C's actual width
+ *   /gallery.html?frame=mctsfull → the same search in the full-screen explorer
+ *   /gallery.html?frame=mctsbig  → the scale probe: 520 nodes, depth 9
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
@@ -38,7 +42,7 @@ import "./index.css";
 import Sidebar from "@/components/Sidebar";
 import { ConnectionIndicator } from "@/components/connection-indicator";
 import { ModelPicker } from "@/components/ModelPicker";
-import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
 import { SelfSurface } from "@/components/surfaces/SelfSurface";
@@ -48,9 +52,11 @@ import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
-import type { BackgroundJob, Rpc, ToolInfo } from "@/lib/protocol";
-import type { AgentStatus } from "@/hooks/use-proteus";
+import type { BackgroundJob, MCTSNode, Rpc, ToolInfo } from "@/lib/protocol";
+import { buildTree, type AgentStatus, type MctsRow } from "@/hooks/use-proteus";
 import type { ModelMenuEntry } from "@/lib/user-api";
+
+const frame = new URLSearchParams(location.search).get("frame");
 
 /* ── /api/user stub ─────────────────────────────────────────────── */
 
@@ -106,6 +112,102 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof window.fetch;
 
 
+/* ── A search worth photographing ───────────────────────────────── */
+
+/**
+ * A real MCTS tree, at the size the tree view has to survive: 106 nodes over
+ * seven depths, one deep winning line, and the losing majority the engine
+ * pruned on the way. The five-node mock this frame used to carry is exactly
+ * why nobody ever saw that the labels collide.
+ *
+ * Rows, not a tree: the mock enters the app through `buildTree`, the same
+ * fold the socket payload goes through, so the frame cannot photograph a
+ * shape the server can't produce.
+ */
+const MCTS_ACTIONS = [
+  "Backfill coupon.kind from the discount table",
+  "Add a NOT NULL default and re-run the migration",
+  "Patch applyCoupon to tolerate a null kind",
+  "Reject null-kind coupons at the API edge",
+  "Recompute kind from percentage vs fixed amount",
+  "Roll the Tuesday migration back",
+  "Dual-write kind on the next checkout",
+  "Infer kind lazily in the cart serializer",
+  "Guard the 500 with a try/catch and log",
+  "Re-seed the coupon fixtures in staging",
+  "Split the migration into two deploys",
+  "Cache the resolved kind per coupon id",
+];
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
+  const rnd = mulberry32(0x5EA4C4);
+  const rows: MctsRow[] = [];
+  const push = (row: MctsRow): MctsRow => { rows.push(row); return row; };
+  const root = push({
+    id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028,
+    status: "open", action: "Find why the SAVE20 coupon 500s",
+    task: "Find why the SAVE20 coupon 500s and fix it.",
+    observation: "Four candidate fixes explored; one line survived to depth 6.",
+    created_at: NOW - 36e5,
+  });
+  // `winner` walks one line down the tree — the branch the search kept paying
+  // for — so the render has a real principal variation to find.
+  let winner = root;
+  const frontier: MctsRow[] = [root];
+  while (frontier.length > 0 && rows.length < target) {
+    const parent = frontier.shift()!;
+    if (parent.depth >= maxDepth || parent.status === "failed") continue;
+    // A pruned branch was expanded before it was cut, so it keeps the children
+    // it had — the dense low-value clusters a real tree carries at the bottom.
+    const fanout = parent.status === "pruned" ? 2 : parent.depth === 0 ? 4 : 2 + Math.floor(rnd() * 3);
+    for (let i = 0; i < fanout && rows.length < target; i++) {
+      const onWinningLine = parent.id === winner.id && i === 0 && parent.status !== "pruned";
+      const value = onWinningLine
+        ? Math.min(0.97, 0.42 + parent.depth * 0.09 + rnd() * 0.06)
+        : Math.max(0, (parent.value * 0.4 + rnd() * 0.5) - parent.depth * 0.06);
+      const visits = onWinningLine ? Math.max(2, 9 - parent.depth) : rnd() < 0.35 ? 0 : 1 + Math.floor(rnd() * 2);
+      const status = onWinningLine ? "open"
+        : rnd() < 0.08 ? "failed"
+        : value < 0.22 ? "pruned"
+        : "open";
+      // The engine scores a failed branch 0 and backpropagates that; a mock
+      // that hands one a mid score photographs a state production cannot reach.
+      const score = status === "failed" ? 0 : value;
+      const child = push({
+        id: `n${String(rows.length).padStart(3, "0")}`,
+        parent_id: parent.id, depth: parent.depth + 1, visits, value: score, status,
+        action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length]!,
+        observation: status === "failed"
+          ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
+          : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
+        code_used: onWinningLine ? "await db.exec(`UPDATE coupons SET kind = ...`)" : null,
+        created_at: NOW - 36e5 + rows.length * 9e3,
+      });
+      if (onWinningLine) { winner = child; frontier.unshift(child); } else frontier.push(child);
+    }
+  }
+  // The search converged on the deepest node of the line it kept paying for.
+  winner.status = "terminal";
+  return rows;
+}
+
+/** `mctsbig` is the scale probe — the same search shape five times over and
+ *  three levels deeper, so the claim that this view survives a few hundred
+ *  nodes is something the harness photographs rather than something a comment
+ *  asserts. */
+const MCTS_ROWS = frame === "mctsbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
+const MCTS_TREE = buildTree(MCTS_ROWS);
+
 /* ── Agent socket stub ──────────────────────────────────────────── */
 
 /**
@@ -124,12 +226,15 @@ const AGENT_RPC: Record<string, unknown> = {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
       displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
       soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
-      createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 12,
+      createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
       craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null,
     },
-    tools: { tools: [], crafted: [] },
+    tools: { builtIn: [], crafted: [] },
     memoryContent: "",
-    mcts: [], timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
+    // The full-screen explorer reads its tree off the snapshot, so the same
+    // 106-node search the `mcts` frame renders has to arrive through here.
+    mcts: MCTS_ROWS,
+    timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
@@ -291,6 +396,14 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   return {} as unknown as T;
 };
 
+/** `getMctsNodeDetail` legitimately answers null for a node the server has
+ *  retired; the view then falls back to the row it already holds. stubRpc's
+ *  blanket `[]` for a `get*` is not that shape and crashes the inspector. */
+const mctsRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getMctsNodeDetail") return null as T;
+  return stubRpc<T>(method, args);
+};
+
 /* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
 
 function ChatHeader() {
@@ -341,7 +454,7 @@ function ChatMessages() {
   );
 }
 
-function Shell() {
+function Shell({ surface = "Output", mctsTree = null }: { surface?: SurfaceKind; mctsTree?: MCTSNode | null }) {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
@@ -364,10 +477,11 @@ function Shell() {
             </div>
             <div className="flex-1 min-w-0">
               <WorkSurface
-                surface="Output" onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
-                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+                surface={surface} onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
+                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={mctsTree} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={[]} runningJobCount={2} onRefreshJobs={() => {}} changelogUnseen={3} rpc={stubRpc}
+                backgroundJobs={[]} runningJobCount={2} onRefreshJobs={() => {}} changelogUnseen={3}
+                rpc={mctsTree ? mctsRpc : stubRpc}
               />
             </div>
           </div>
@@ -1177,12 +1291,16 @@ function SelfFrame() {
   );
 }
 
-const frame = new URLSearchParams(location.search).get("frame");
-
 async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
   if (frame === "shell") node = <Shell />;
+  else if (frame === "mcts") node = <Shell surface="Exploration" mctsTree={MCTS_TREE} />;
+  else if (frame === "mctsfull" || frame === "mctsbig") {
+    const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
+    entries = ["/mcts/checkout-fixes"];
+    node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
+  }
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "palette") node = <Palette />;
   else if (frame === "landing2") node = <LandingV2 />;

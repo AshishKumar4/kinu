@@ -18,6 +18,7 @@ import {
   type HeadStep, type ScoreInterval,
 } from "@proteus/core";
 import { MCTSTree } from "@/components/mcts-tree";
+import { cleanNodeLabel, treeStats } from "@/components/mcts-tree-model";
 import type { MCTSNode, MCTSNodeDetail, MCTSNodeSummary, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
@@ -107,23 +108,25 @@ function MctsView({ mctsTree, rpc }: { mctsTree: MCTSNode | null; rpc: Rpc }) {
   }, [rpc, selectedNode?.id]);
 
   if (!mctsTree) return <EmptyState icon={<GitBranchIcon size={28} />} title="No exploration history" hint={EMPTY_HINTS.mcts} />;
-  const countN = (n: MCTSNode): number => 1 + n.children.reduce((s, c) => s + countN(c), 0);
-  const maxD = (n: MCTSNode): number => n.children.length === 0 ? n.depth : Math.max(...n.children.map(maxD));
   const fallbackDetail = selectedNode ? mctsNodeToDetail(selectedNode) : null;
   const openNodeById = (id: string) => {
     const next = findMctsNode(mctsTree, id);
     if (next) setSelectedNode(next);
   };
+  const stats = treeStats(mctsTree);
   return (
-    <div className="animate-fade-in h-full min-h-0 grid gap-3 xl:grid-cols-[minmax(0,1fr)_440px]">
+    // Container-, not viewport-width: `xl:` split this panel the moment the
+    // WINDOW passed 1280px, and Column C is barely 600px there — the tree got
+    // ~100px beside a 440px inspector, which is most of why it was unreadable.
+    <div className="animate-fade-in min-h-0 @4xl:h-full grid gap-3 @4xl:grid-cols-[minmax(0,1fr)_minmax(340px,400px)]">
       <div className="min-h-0 flex flex-col">
         <div className="flex flex-wrap items-center gap-4 mb-2 text-xs p-text-2 shrink-0">
-          <span>Nodes: <span className="p-text font-mono">{countN(mctsTree)}</span></span>
-          <span>Depth: <span className="p-text font-mono">{maxD(mctsTree)}</span></span>
+          <span>Nodes: <span className="p-text font-mono">{stats.nodes}</span></span>
+          <span>Depth: <span className="p-text font-mono">{stats.depth}</span></span>
           <span>Root score: <span className="p-text font-mono">{mctsTree.value.toFixed(3)}</span></span>
           {selectedNode && <span>Selected: <span className="p-text font-mono">{selectedNode.id.slice(0, 8)}</span></span>}
         </div>
-        <div ref={graphRef} className="flex-1 min-h-[420px] overflow-hidden rounded-lg border p-border p-surface">
+        <div ref={graphRef} className="flex-1 min-h-[460px] overflow-hidden rounded-lg border p-border p-surface">
           {dims.w > 0 && <MCTSTree root={mctsTree} width={dims.w} height={dims.h} onNodeClick={setSelectedNode} selectedNode={selectedNode} />}
         </div>
       </div>
@@ -200,18 +203,6 @@ function formatScore(value: number): string {
   return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
 }
 
-function cleanBranchTitle(value: string | null | undefined, fallback: string): string {
-  const raw = (value || fallback || "").split("\n").find((line) => line.trim().length > 0) ?? fallback;
-  const cleaned = raw
-    .replace(/^\s{0,3}#{1,6}\s*/, "")
-    .replace(/^\s*[-*>]+\s*/, "")
-    .replace(/\*\*/g, "")
-    .replace(/`/g, "")
-    .replace(/\s+/g, " ")
-    .trim();
-  return cleaned.length > 0 ? cleaned : fallback;
-}
-
 function statusLabel(status: string): string {
   if (status === "terminal") return "winner";
   if (status === "pruned") return "pruned";
@@ -259,7 +250,7 @@ function MctsBranchInspector({
     ? branch.value + Math.SQRT2 * Math.sqrt(Math.log(parentVisits) / branch.visits)
     : Infinity;
   const branchAnswer = branch.observation || branch.action || "(no branch output captured)";
-  const title = cleanBranchTitle(branch.action || branch.observation, branch.task || branch.id);
+  const title = cleanNodeLabel(branch.action || branch.observation, branch.task || branch.id);
   const label = statusLabel(branch.status);
 
   return (
@@ -331,7 +322,7 @@ function MctsBranchInspector({
               >
                 <span className="text-[9px] p-text-3 font-mono w-5 text-right shrink-0">{i}</span>
                 <div className="min-w-0 flex-1">
-                  <div className="text-[10px] p-text-2 truncate" title={cleanBranchTitle(p.action, p.id)}>{cleanBranchTitle(p.action, "(root)")}</div>
+                  <div className="text-[10px] p-text-2 truncate" title={cleanNodeLabel(p.action, p.id)}>{cleanNodeLabel(p.action, "(root)")}</div>
                   <div className="text-[9px] p-text-3 font-mono">{p.id.slice(0, 12)} · {formatScore(p.value)} · {statusLabel(p.status)}</div>
                 </div>
               </button>
@@ -351,7 +342,7 @@ function MctsBranchInspector({
                 >
                   <span className={`mt-1 size-1.5 rounded-full shrink-0 ${c.status === "terminal" ? "p-dot-success" : c.status === "failed" ? "p-dot-danger" : c.status === "pruned" ? "p-dot-neutral" : "p-dot-warning"}`} />
                   <div className="min-w-0 flex-1">
-                    <div className="text-[10px] p-text-2 truncate" title={cleanBranchTitle(c.action, c.id)}>{cleanBranchTitle(c.action, "(branch)")}</div>
+                    <div className="text-[10px] p-text-2 truncate" title={cleanNodeLabel(c.action, c.id)}>{cleanNodeLabel(c.action, "(branch)")}</div>
                     <div className="text-[9px] p-text-3 font-mono">{c.id.slice(0, 12)} · {formatScore(c.value)} · {c.visits} visits</div>
                   </div>
                 </button>

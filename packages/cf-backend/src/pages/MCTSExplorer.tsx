@@ -1,14 +1,13 @@
 import { useState, useRef, useEffect } from "react";
 import { useParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
-import { ArrowLeftIcon, TreeStructureIcon, ArrowsOutIcon, MagnifyingGlassPlusIcon, MagnifyingGlassMinusIcon } from "@phosphor-icons/react";
-import { MCTSTree, type MCTSTreeHandle } from "@/components/mcts-tree";
+import { ArrowLeftIcon, TreeStructureIcon } from "@phosphor-icons/react";
+import { MCTSTree } from "@/components/mcts-tree";
+import { cleanNodeLabel, treeStats } from "@/components/mcts-tree-model";
 import { EmptyState, EMPTY_HINTS } from "@/components/surfaces/shared";
 import { useProteus } from "@/hooks/use-proteus";
 import type { MCTSNode } from "@/lib/protocol";
 
-function countNodes(node: MCTSNode): number { return 1 + node.children.reduce((s, c) => s + countNodes(c), 0); }
-function maxDepth(node: MCTSNode): number { return node.children.length === 0 ? node.depth : Math.max(...node.children.map(maxDepth)); }
 function findWinner(node: MCTSNode): MCTSNode {
   let best = node;
   for (const child of node.children) { const cb = findWinner(child); if (cb.value > best.value) best = cb; }
@@ -19,7 +18,6 @@ export default function MCTSExplorer() {
   const { agentId } = useParams();
   const state = useProteus(agentId);
   const containerRef = useRef<HTMLDivElement>(null);
-  const treeRef = useRef<MCTSTreeHandle>(null);
   const [dims, setDims] = useState({ w: 1200, h: 700 });
   const [selected, setSelected] = useState<MCTSNode | null>(null);
 
@@ -31,13 +29,12 @@ export default function MCTSExplorer() {
   }, []);
 
   const tree = state.mctsTree;
-  const total = tree ? countNodes(tree) : 0;
-  const depth = tree ? maxDepth(tree) : 0;
+  const stats = tree ? treeStats(tree) : null;
   const winner = tree ? findWinner(tree) : null;
 
   return (
     <div className="h-full flex flex-col p-bg">
-      <div className="flex items-center justify-between px-5 py-3.5 border-b p-border">
+      <div className="flex items-center gap-3 px-5 py-3.5 border-b p-border">
         <div className="flex items-center gap-3">
           <Link to={`/workspace/${agentId}`}><Button variant="ghost" size="sm" icon={<ArrowLeftIcon size={14} />}>Back</Button></Link>
           <div className="h-4 w-px bg-[var(--c-border)]" />
@@ -45,21 +42,8 @@ export default function MCTSExplorer() {
           <span className="font-semibold text-sm p-text">MCTS Explorer</span>
           {state.agentStatus && <span className="text-xs p-text-2">- {state.agentStatus.name}</span>}
         </div>
-        <div className="flex items-center gap-1">
-          <Button variant="ghost" shape="square" size="sm" icon={<MagnifyingGlassMinusIcon size={16} />} aria-label="Zoom out" disabled={!tree} onClick={() => treeRef.current?.zoomOut()} />
-          <Button variant="ghost" shape="square" size="sm" icon={<MagnifyingGlassPlusIcon size={16} />} aria-label="Zoom in" disabled={!tree} onClick={() => treeRef.current?.zoomIn()} />
-          <Button variant="ghost" shape="square" size="sm" icon={<ArrowsOutIcon size={16} />} aria-label="Fit" disabled={!tree} onClick={() => treeRef.current?.fit()} />
-        </div>
       </div>
-      <div className="flex items-center gap-4 px-5 py-2 border-b p-border text-xs p-text-2">
-        <span className="font-medium p-text">Legend:</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-success" />High</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-warning" />Medium</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-danger" />Low</span>
-        <span className="flex items-center gap-1.5"><span className="size-3 rounded-full p-dot-neutral opacity-40" />Pruned</span>
-        <span className="ml-auto p-text-3">Node size = visit count</span>
-      </div>
-      <div ref={containerRef} className="flex-1 relative overflow-hidden">
+      <div ref={containerRef} className="flex-1 relative overflow-hidden p-surface">
         {!tree ? (
           // The workspace snapshot resolves agentStatus — once it's here with
           // no tree, the agent genuinely has no MCTS data (not still loading).
@@ -70,12 +54,12 @@ export default function MCTSExplorer() {
           ) : (
             <div className="flex items-center justify-center h-full"><div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree...</div></div>
           )
-        ) : dims.w > 0 && <MCTSTree ref={treeRef} root={tree} width={dims.w} height={dims.h} onNodeClick={setSelected} selectedNode={selected} />}
+        ) : dims.w > 0 && <MCTSTree root={tree} width={dims.w} height={dims.h} onNodeClick={setSelected} selectedNode={selected} />}
       </div>
       <div className="flex items-center justify-between px-5 py-2.5 border-t p-border">
         <div className="flex items-center gap-6 text-xs">
-          <span className="p-text-2">Nodes: <span className="p-text font-medium">{total}</span></span>
-          <span className="p-text-2">Depth: <span className="p-text font-medium">{depth}</span></span>
+          <span className="p-text-2">Nodes: <span className="p-text font-medium">{stats?.nodes ?? 0}</span></span>
+          <span className="p-text-2">Depth: <span className="p-text font-medium">{stats?.depth ?? 0}</span></span>
           {winner && (
             <>
               <span className="p-text-2">Winner: <span className="p-success font-medium">{winner.value.toFixed(3)}</span></span>
@@ -89,7 +73,7 @@ export default function MCTSExplorer() {
         {selected && (
           <div className="flex items-center gap-4 text-xs animate-fade-in">
             <span className="p-text-2">Selected:</span>
-            <span className="font-mono p-text">{selected.action}</span>
+            <span className="p-text truncate max-w-[28rem]" title={selected.action}>{cleanNodeLabel(selected.action, "(root)")}</span>
             <span className="p-text-2">v={selected.value.toFixed(3)} n={selected.visits}</span>
           </div>
         )}
