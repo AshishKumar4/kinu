@@ -21,6 +21,7 @@ import type { ToolCallRecord } from '../evolution/types.js';
 import type { MissionBudgetRefusal, MissionScope } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
+import { HeadFileChanges } from './file-changes.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 
 /**
@@ -36,6 +37,10 @@ export class HeadCapture {
   readonly artifacts: ArtifactRef[] = [];
   readonly toolCalls: ToolCallRecord[] = [];
   readonly childHeadIds: HeadId[] = [];
+  /** What this head changed on the shared file planes. The backend installs it
+   *  on the head's own CompositeVFS (`observeWrites`) when it builds the head's
+   *  runtime; unwired, it simply stays empty. */
+  readonly files = new HeadFileChanges();
   /** Gross provider spend — what the report carries and the mission budget
    *  governor debits. Nothing meters a head against a private ceiling, so this
    *  is the only token figure there is. */
@@ -277,6 +282,7 @@ function exhaustedMissionReport(
     evidence: [...capture.evidence],
     decisions: [...capture.decisions],
     artifactRefs: [...capture.artifacts],
+    fileChanges: capture.files.snapshot(),
     childHeadIds: [...capture.childHeadIds],
     toolCalls: [...capture.toolCalls],
     steps: extractHeadSteps(steps),
@@ -419,6 +425,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       evidence: [...capture.evidence],
       decisions: [...capture.decisions],
       artifactRefs: [...capture.artifacts],
+      fileChanges: capture.files.snapshot(),
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
       steps: extractHeadSteps(result.steps),
@@ -433,6 +440,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
       evidence: [...capture.evidence],
       decisions: [...capture.decisions],
       artifactRefs: [...capture.artifacts],
+      fileChanges: capture.files.snapshot(),
       childHeadIds: [...capture.childHeadIds],
       toolCalls: [...capture.toolCalls],
       steps: [],

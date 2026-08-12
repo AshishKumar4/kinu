@@ -25,6 +25,10 @@
  */
 
 import type { ToolCallRecord } from '../evolution/types.js';
+import type { HeadFileChange } from './file-changes.js';
+
+/** What a head did to the shared filesystem — see heads/file-changes.ts. */
+export type { HeadFileChange };
 
 /** Opaque head identifier — kebab-case string, globally unique within a turn. */
 export type HeadId = string;
@@ -123,6 +127,14 @@ export interface Decision {
   readonly supportingEvidence?: readonly string[];
 }
 
+/** One head's change set as the merge payload carries it. Heads that changed
+ *  nothing are absent rather than present-and-empty: a fork that touched no
+ *  files has nothing to report, and an empty row would still print a heading. */
+export interface HeadFileChangeSet {
+  readonly id: HeadId;
+  readonly changes: readonly HeadFileChange[];
+}
+
 /** Pointer to a tangible side-effect the head produced. */
 export interface ArtifactRef {
   readonly kind: 'file' | 'port' | 'memory' | 'note';
@@ -155,6 +167,11 @@ export interface HeadReport {
   readonly evidence: readonly Evidence[];
   readonly decisions: readonly Decision[];
   readonly artifactRefs: readonly ArtifactRef[];
+  /** Files this head created, changed or deleted on the SHARED planes, with
+   *  line counts — the review a parent gets of what its child actually did.
+   *  Attributed at the head's own file plane, which is why a concurrent sibling
+   *  cannot appear here; see heads/file-changes.ts for what that leaves out. */
+  readonly fileChanges: readonly HeadFileChange[];
   /** Heads this one spawned (already merged before returning). */
   readonly childHeadIds: readonly HeadId[];
   /** Tool calls the head made — for telemetry. */
@@ -234,6 +251,10 @@ export interface MergeResult {
    *  neutral 0.5 (no grounding seam wired). A failed/unresolved head scores below
    *  a head whose work ran and held up. */
   readonly headScores: readonly HeadScore[];
+  /** Which files each head created, changed or deleted — the review of the
+   *  split's actual effect on the shared workspace, per head, with line counts.
+   *  Only heads that changed something appear. */
+  readonly fileChanges: readonly HeadFileChangeSet[];
   /** True when headScores carry a real grounded verdict (the controller had a
    *  grounding seam); false when they are neutral placeholders. */
   readonly grounded: boolean;

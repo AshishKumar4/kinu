@@ -14,7 +14,7 @@ function fakeMergeResult(over?: Partial<MergeResult['costSummary']>): MergeResul
   return {
     mergedNarrative: 'ok', selectedDecisions: [], unresolvedQuestions: [],
     recommendations: [], evidenceAggregate: [], headIds: ['h'],
-    headScores: [], grounded: false,
+    headScores: [], fileChanges: [], grounded: false,
     costSummary: {
       headCount: 1, headsWithFindings: 1, totalTokens: 0, totalWallClockMs: 0, maxDepth: 3, ...over,
     },

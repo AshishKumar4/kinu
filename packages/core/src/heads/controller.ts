@@ -101,7 +101,10 @@ export type SplitPhaseEvent =
   | { kind: 'split'; rootId: HeadId; headIds: readonly HeadId[]; rationale: string }
   /** Carries the whole cost summary rather than a copied-out head count, so a
    *  new outcome figure reaches the run-event ledger without a second edit. */
-  | { kind: 'merge'; rootId: HeadId; cost: MergeResult['costSummary']; mergedNarrative: string };
+  | { kind: 'merge'; rootId: HeadId; cost: MergeResult['costSummary']; mergedNarrative: string;
+      /** Per-head file changes — carried so the run-event ledger records what a
+       *  split actually did to the workspace, not only what it spent. */
+      fileChanges: MergeResult['fileChanges'] };
 
 export class HeadController {
   constructor(
@@ -208,6 +211,7 @@ export class HeadController {
             evidence: [],
             decisions: [],
             artifactRefs: [],
+            fileChanges: [],
             childHeadIds: [],
             toolCalls: [],
             steps: [],
@@ -242,6 +246,7 @@ export class HeadController {
       rootId,
       cost: mergeResult.costSummary,
       mergedNarrative: mergeResult.mergedNarrative,
+      fileChanges: mergeResult.fileChanges,
     });
     return mergeResult;
   }
@@ -306,6 +311,7 @@ export class HeadController {
   ): Promise<MergeResult> {
     const grounded = this.runtime.grounding != null;
     const costSummary = summarizeCost(reports, parentBudget);
+    const fileChanges = collectFileChanges(reports);
 
     // Nothing to synthesize: every head stopped without banking a finding.
     // Asking an LLM to narrate that makes it invent a cause it cannot know — a
@@ -321,6 +327,7 @@ export class HeadController {
         evidenceAggregate: [],
         headIds,
         headScores,
+        fileChanges,
         grounded,
         costSummary,
       };
@@ -335,6 +342,7 @@ export class HeadController {
       evidenceAggregate: reports.flatMap((r) => r.evidence),
       headIds,
       headScores,
+      fileChanges,
       grounded,
       costSummary,
     });
@@ -350,6 +358,7 @@ export class HeadController {
       evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
       headIds,
       headScores,
+      fileChanges,
       grounded,
       costSummary,
     };
@@ -431,6 +440,15 @@ export async function raceWithTimeout(h: SpawnedHead, timeoutMs: number | undefi
   } finally {
     if (timeoutHandle) clearTimeout(timeoutHandle);
   }
+}
+
+/** Each head's change set, heads that changed nothing omitted. A report arrives
+ *  over a DO RPC boundary, so tolerate a missing array exactly as the journal's
+ *  step recording does. */
+function collectFileChanges(reports: readonly HeadReport[]): MergeResult['fileChanges'] {
+  return reports
+    .filter((r) => (r.fileChanges?.length ?? 0) > 0)
+    .map((r) => ({ id: r.id, changes: r.fileChanges }));
 }
 
 function summarizeCost(reports: readonly HeadReport[], parentBudget: HeadBudget): MergeResult['costSummary'] {

@@ -16,6 +16,8 @@ export type {
   ArtifactRef,
   SplitRequest,
   MergeResult,
+  HeadFileChange,
+  HeadFileChangeSet,
   HeadScore,
   MergeStrategy,
   SerializedMessage,
@@ -28,6 +30,9 @@ export {
   budgetExhausted,
 } from './types.js';
 
+export {
+  HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
+} from './file-changes.js';
 export { initHeadsTables } from './schema.js';
 export { HeadJournal, type HeadJournalRow, type LiveHeadRun } from './journal.js';
 export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';

@@ -17,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
-  CompositeVFS, type MountPolicy,
+  CompositeVFS, type MountPolicy, type CompositeWriteObserver,
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
@@ -328,17 +328,24 @@ export function createCLIRuntime(
  * commands against it, exactly what the doctrine promises a fork.
  *
  * What is PRIVATE (a scratch overlay, not an empty world): the head's own
- * in-memory SqliteFS `/local`, its Memory + CraftStore, and the emulated
- * `workspace` shell (`run` with runtime omitted). Sibling heads share the real
- * workspace but never each other's scratch — the same isolation the cf head gets
- * from its own facet storage.
+ * SqliteFS `/local`, its Memory + CraftStore, and the emulated `workspace` shell
+ * (`run` with runtime omitted). Sibling heads share the real workspace but never
+ * each other's scratch — the same isolation the cf head gets from its own facet
+ * storage. The caller owns that store's lifetime (head-runtime.ts backs it with
+ * a per-head file, as the cf head is backed by its facet's SQLite).
  */
 export function buildCLIHeadRuntime(
   db: {
     prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
     exec(sql: string): void;
   },
-  opts: { parentRuntime: AgentRuntime; cwd: string; agentId: string; agentName: string },
+  opts: {
+    parentRuntime: AgentRuntime; cwd: string; agentId: string; agentName: string;
+    /** Watches every write through THIS head's plane, so the split can report
+     *  which files this head changed. Its own plane is what makes the answer
+     *  exact under concurrency. */
+    writeObserver?: CompositeWriteObserver;
+  },
 ): AgentRuntime {
   const { parentRuntime: parent, cwd } = opts;
   const sql = makeSql(db);
@@ -347,6 +354,7 @@ export function buildCLIHeadRuntime(
   const sqliteFs = new SqliteFS(sql);
   sqliteFs.init();
   const vfs = new CompositeVFS({ local: sqliteFs });
+  if (opts.writeObserver) vfs.observeWrites(opts.writeObserver);
 
   // /workspace and /pc are windows onto the REAL host — the same planes the
   // parent reaches — snapshotting into the parent's shadow-git checkpoints so a

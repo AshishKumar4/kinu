@@ -45,8 +45,14 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
     artifacts_json TEXT,
     tool_calls_json TEXT,
     child_head_ids_json TEXT,
+    file_changes_json TEXT,
     merge_strategy TEXT NOT NULL DEFAULT 'synthesize'
   )`);
+
+  // Journals created before heads reported their file changes predate the
+  // column, and CREATE TABLE IF NOT EXISTS will not add it to them.
+  // ADD COLUMN is idempotent-by-catch (SQLite errors on a duplicate column).
+  try { execRaw(`ALTER TABLE head_journal ADD COLUMN file_changes_json TEXT`); } catch { /* exists */ }
 
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_root ON head_journal(root_id)`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_head_journal_parent ON head_journal(parent_id)`);

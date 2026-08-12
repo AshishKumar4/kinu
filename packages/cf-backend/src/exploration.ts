@@ -375,6 +375,10 @@ export class ExplorationAgent extends Agent<Env> {
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture) {
     const rt = this.headRuntime();
+    // Attribute this head's file writes to this head. The plane is this facet's
+    // own, so a sibling head writing the same file at the same moment lands in
+    // ITS capture and never in this one.
+    rt.compositeVfs.observeWrites(capture.files);
     return buildHeadToolSet({
       input,
       capture,

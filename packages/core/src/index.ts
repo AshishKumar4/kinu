@@ -704,7 +704,8 @@ export {
   createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
   createParentRpcMountVFS,
   type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type VfsError, type VfsErrorCode, type DeviceMountConsent,
+  type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
+  type VfsError, type VfsErrorCode, type DeviceMountConsent,
   type ParentRpcFileHandle, type ParentRpcWrite, type ParentRpcResult, type ParentRpcError,
 } from './vfs/index.js';
 
@@ -889,6 +890,7 @@ export type {
   HeadStep, HeadStepToolCall, HeadRunView, HeadRunHeadView,
   Evidence, Decision, ArtifactRef,
   SplitRequest, MergeResult, HeadScore, MergeStrategy,
+  HeadFileChange, HeadFileChangeSet,
   SerializedMessage,
 } from './heads/index.js';
 export {
@@ -905,6 +907,7 @@ export {
   type HeadInferenceDeps,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
+  HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
 } from './heads/index.js';
 
 // Background-job system — auto-background long tool calls + wake-on-completion.

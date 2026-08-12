@@ -6,7 +6,7 @@
 // that the caffe fork lacked — all without a network LLM.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { mkdtempSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
@@ -17,6 +17,17 @@ import {
 } from '@proteus/core';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime.js';
+
+// A local head's scratch is a real store under PROTEUS_HOME (home.ts is the
+// isolation boundary), so point that boundary at a temp dir before anything
+// reads it: a test run must never write into the real home.
+process.env.PROTEUS_HOME = mkdtempSync(join(tmpdir(), 'proteus-home-'));
+const HEAD_SCRATCH_DIR = join(process.env.PROTEUS_HOME, 'heads');
+
+/** Scratch stores present right now — [] before any head has ever run. */
+function scratchStores(): string[] {
+  return existsSync(HEAD_SCRATCH_DIR) ? readdirSync(HEAD_SCRATCH_DIR).filter((f) => f.endsWith('.db')) : [];
+}
 
 /** A never-called web provider — the surface tests only inspect tool NAMES. */
 const stubWeb: WebSearchProvider = {
@@ -229,6 +240,167 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
 
     const out = await tools.run!.execute({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' }, {});
     expect(String(out)).toContain('real file content');
+  });
+});
+
+/** Releases every caller only once `n` of them have arrived, running `onRelease`
+ *  first. Lets a test assert on a moment when every concurrent head is mid-run. */
+function barrier(n: number, onRelease: () => void): () => Promise<void> {
+  let arrived = 0;
+  let open!: () => void;
+  const gate = new Promise<void>((resolve) => { open = resolve; });
+  return async () => {
+    if (++arrived === n) { onRelease(); open(); }
+    await gate;
+  };
+}
+
+/**
+ * A head model that scripts three steps against the `file` tool: write its own
+ * marker into /local, wait until every sibling has written, then read it back.
+ * The barrier is what makes the isolation assertion deterministic — both heads
+ * have written before either reads, so a SHARED scratch would hand one of them
+ * the other's marker.
+ */
+function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
+  const stepsByHead = new Map<string, number>();
+  const envelope = (content: unknown[], finishReason: 'tool-calls' | 'stop') => ({
+    content,
+    finishReason,
+    usage: { inputTokens: 1, outputTokens: 1 },
+    response: { id: 'r', modelId: 'fake-scratch', timestamp: new Date(0) },
+    warnings: [],
+  });
+  return {
+    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-scratch', supportedUrls: {},
+    doGenerate: async (opts: { prompt?: unknown }) => {
+      // Which head this is: its own system prompt names its task, and every
+      // later step re-sends it.
+      const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
+      const step = (stepsByHead.get(marker) ?? 0) + 1;
+      stepsByHead.set(marker, step);
+      const fileCall = (input: unknown) => envelope([{
+        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
+        input: JSON.stringify(input),
+      }], 'tool-calls');
+      if (step === 1) return fileCall({ action: 'write', path: '/local/note.txt', content: `scratch-of-${marker}` });
+      if (step === 2) { await arrive(); return fileCall({ action: 'read', path: '/local/note.txt' }); }
+      return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
+    },
+  } as unknown as LanguageModel;
+}
+
+/** What a head's `file` read returned, from its own step trace. */
+function readBack(report: { steps: ReadonlyArray<{ toolCalls: ReadonlyArray<{ name: string; output?: unknown }> }> }): string {
+  return report.steps
+    .flatMap((s) => s.toolCalls)
+    .filter((c) => c.name === 'file')
+    .map((c) => JSON.stringify(c.output ?? ''))
+    .join('\n');
+}
+
+describe("a local head's scratch is a real store, private to it, and swept when it finishes", () => {
+  test('two concurrent heads each get their own durable scratch, and neither sees the other', async () => {
+    const before = scratchStores();
+    let midRun: string[] = [];
+    const runtime = createCLIHeadRuntime(headDeps(scratchProbeModel(barrier(2, () => { midRun = scratchStores(); }))));
+
+    const [alpha, beta] = await Promise.all([
+      (await runtime.spawnHead(aHeadInput({ id: 'alpha', task: 'alpha' }))).run(),
+      (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
+    ]);
+
+    // Durable: while both heads were running, each had a real store on disk —
+    // not a `new Database(':memory:')` living in this process's heap.
+    expect(midRun.sort()).toEqual(['alpha.db', 'beta.db']);
+
+    // Private: each head read back its OWN marker, and the sibling's is absent.
+    expect(readBack(alpha)).toContain('scratch-of-alpha');
+    expect(readBack(alpha)).not.toContain('scratch-of-beta');
+    expect(readBack(beta)).toContain('scratch-of-beta');
+    expect(readBack(beta)).not.toContain('scratch-of-alpha');
+
+    // Swept: a finished head leaves nothing behind, so scratch never accumulates.
+    expect(scratchStores()).toEqual(before);
+  });
+
+  test('a head that throws still leaves no scratch behind', async () => {
+    const before = scratchStores();
+    const exploding = {
+      specificationVersion: 'v2', provider: 'fake', modelId: 'boom', supportedUrls: {},
+      doGenerate: async () => { throw new Error('provider exploded'); },
+    } as unknown as LanguageModel;
+    const report = await (await createCLIHeadRuntime(headDeps(exploding)).spawnHead(aHeadInput())).run();
+    expect(report.status).toBe('errored');
+    expect(scratchStores()).toEqual(before);
+  });
+});
+
+/**
+ * A head model that writes its own file into the SHARED /workspace, waits until
+ * every sibling has done the same, and then extends it. The barrier is the whole
+ * point: at the moment either head extends its file, BOTH heads' files exist on
+ * the shared plane, so a design that answered "what did this head change?" by
+ * diffing the workspace would hand each head the other's work too.
+ */
+function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
+  const stepsByHead = new Map<string, number>();
+  const envelope = (content: unknown[], finishReason: 'tool-calls' | 'stop') => ({
+    content,
+    finishReason,
+    usage: { inputTokens: 1, outputTokens: 1 },
+    response: { id: 'r', modelId: 'fake-shared', timestamp: new Date(0) },
+    warnings: [],
+  });
+  return {
+    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-shared', supportedUrls: {},
+    doGenerate: async (opts: { prompt?: unknown }) => {
+      const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
+      const step = (stepsByHead.get(marker) ?? 0) + 1;
+      stepsByHead.set(marker, step);
+      const write = (content: string) => envelope([{
+        type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
+        input: JSON.stringify({ action: 'write', path: `/workspace/${marker}.ts`, content }),
+      }], 'tool-calls');
+      if (step === 1) return write('one\n');
+      if (step === 2) { await arrive(); return write('one\ntwo\nthree\n'); }
+      return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
+    },
+  } as unknown as LanguageModel;
+}
+
+describe('a head reports the files IT changed, with concurrent siblings on the same plane', () => {
+  test('two heads writing at the same time do not smear into each other', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'proteus-shared-'));
+    const runtime = createCLIHeadRuntime(headDeps(
+      sharedWorkspaceProbeModel(barrier(2, () => {})),
+      { cwd: dir },
+    ));
+
+    const [alpha, beta] = await Promise.all([
+      (await runtime.spawnHead(aHeadInput({ id: 'alpha', task: 'alpha' }))).run(),
+      (await runtime.spawnHead(aHeadInput({ id: 'beta', task: 'beta' }))).run(),
+    ]);
+
+    // Both files really are on the shared plane, both written while the other
+    // head was still running — this is the smear scenario, not a sequential one.
+    expect(existsSync(join(dir, 'alpha.ts'))).toBe(true);
+    expect(existsSync(join(dir, 'beta.ts'))).toBe(true);
+
+    // Each head reports exactly its own file, at its NET line count (two writes
+    // to that path, one entry, three lines).
+    expect(alpha.fileChanges).toEqual([
+      { path: '/workspace/alpha.ts', status: 'added', added: 3, removed: 0 },
+    ]);
+    expect(beta.fileChanges).toEqual([
+      { path: '/workspace/beta.ts', status: 'added', added: 3, removed: 0 },
+    ]);
+  });
+
+  test('a head that touched no file reports none', async () => {
+    const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel('nothing to change', () => {})));
+    const report = await (await runtime.spawnHead(aHeadInput())).run();
+    expect(report.fileChanges).toEqual([]);
   });
 });
 

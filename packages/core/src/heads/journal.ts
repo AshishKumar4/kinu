@@ -14,7 +14,7 @@
 import type { SqlExecutor } from '../types/primitives.js';
 import type {
   HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, Decision, ArtifactRef,
-  MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
+  HeadFileChange, HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types.js';
 import { headProducedFindings } from './head-summary.js';
 
@@ -82,7 +82,8 @@ export class HeadJournal {
       decisions_json = ${JSON.stringify(report.decisions)},
       artifacts_json = ${JSON.stringify(report.artifactRefs)},
       tool_calls_json = ${JSON.stringify(report.toolCalls)},
-      child_head_ids_json = ${JSON.stringify(report.childHeadIds)}
+      child_head_ids_json = ${JSON.stringify(report.childHeadIds)},
+      file_changes_json = ${JSON.stringify(report.fileChanges ?? [])}
       WHERE id = ${report.id}`;
     for (const ev of report.evidence) {
       this.insertEvidence(report.id, ev);
@@ -257,6 +258,18 @@ export class HeadJournal {
     return { rootId, task, rationale, status, spawnedAt, heads, merge };
   }
 
+  /** What each head in this tree changed on the shared planes, heads that
+   *  changed nothing omitted. The queryable form of MergeResult.fileChanges —
+   *  rebuilt from the journal rather than cached beside the merge, so a replay
+   *  can never disagree with the live run. */
+  readFileChanges(rootId: HeadId): HeadFileChangeSet[] {
+    return this.sql<{ id: string; file_changes_json: string | null }>`
+      SELECT id, file_changes_json FROM head_journal
+      WHERE root_id = ${rootId} ORDER BY depth, spawned_at`
+      .map((r) => ({ id: r.id, changes: parseArray<HeadFileChange>(r.file_changes_json) }))
+      .filter((set) => set.changes.length > 0);
+  }
+
   readCachedMerge(rootId: HeadId): MergeResult | null {
     type Row = {
       merged_narrative: string;
@@ -291,6 +304,7 @@ export class HeadJournal {
       // Per-head grounded scores are a live-run signal, not persisted as columns;
       // the cached read (UI replay) carries none.
       headScores: [],
+      fileChanges: this.readFileChanges(rootId),
       grounded: false,
       costSummary: {
         headCount: r.cost_head_count,

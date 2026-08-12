@@ -11,6 +11,7 @@ import type {
   HeadBudget, SerializedMessage, SplitRequest, MergeStrategy, MergeResult,
 } from '../heads/types.js';
 import { DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY } from '../heads/types.js';
+import { formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE } from '../heads/file-changes.js';
 import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
 
 interface HeadsStrategyOptions {
@@ -110,6 +111,11 @@ export function createHeadsStrategy(): ExplorationStrategy {
           tokens: merge.costSummary.totalTokens,
           durationMs: Date.now() - t0,
           iterations: merge.costSummary.headCount,
+          // What the delegation cost the WORKSPACE, not the ledger: distinct
+          // files the split's heads changed between them.
+          ...(merge.fileChanges.length > 0
+            ? { filesChanged: new Set(merge.fileChanges.flatMap((h) => h.changes.map((c) => c.path))).size }
+            : {}),
           // Each head debited its own steps as it ran (head-inference.ts), so
           // the caller must not charge the total a second time.
           ...(ctx.mission ? { selfMetered: true } : {}),
@@ -142,6 +148,20 @@ function formatMergeResult(result: MergeResult, strategy: MergeStrategy): string
     lines.push('');
     lines.push('### Recommendations');
     for (const r of result.recommendations) lines.push(`- ${r}`);
+  }
+  // Deterministic, not synthesized: the merge model narrates the findings, but
+  // what each head DID to the filesystem is a record, and a record that a model
+  // paraphrases is a record you cannot act on. Absent entirely when no head
+  // changed anything.
+  if (result.fileChanges.length > 0) {
+    lines.push('');
+    lines.push('### Files changed');
+    for (const head of result.fileChanges) {
+      lines.push(`Head ${head.id}`);
+      lines.push(...formatHeadFileChanges(head.changes));
+    }
+    lines.push('');
+    lines.push(`_${HEAD_FILE_CHANGE_PROVENANCE}_`);
   }
   lines.push('');
   lines.push(

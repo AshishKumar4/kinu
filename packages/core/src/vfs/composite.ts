@@ -102,8 +102,39 @@ export type ResolvedPath =
   | { kind: 'rootEntry'; name: string }
   /** A reserved/registered mount that is not currently available. */
   | { kind: 'unavailable'; name: string; reason: string }
-  /** A path inside a mount; `sub` is the environment-native path. */
-  | { kind: 'mount'; name: string; vfs: VFS; policy: MountPolicy; sub: string; isMountRoot: boolean };
+  /** A path inside a mount; `sub` is the environment-native path and `abs` the
+   *  canonical composite path (compat routes normalize to their /local alias,
+   *  so one file has one name however it was addressed). */
+  | { kind: 'mount'; name: string; vfs: VFS; policy: MountPolicy; sub: string; abs: string; isMountRoot: boolean };
+
+/** A write or delete that landed on the composite, reported to an observer. */
+export interface CompositeWriteEvent {
+  /** Mount it landed on. 'local' is the agent's own base (and every compat
+   *  route into it). */
+  readonly mount: string;
+  /** Canonical composite path — what the agent addresses the file by. */
+  readonly path: string;
+  /** Content before this write, or null when the path did not exist. Absent
+   *  when the observer declined it (see {@link CompositeWriteObserver}). */
+  readonly before?: string | Uint8Array | null;
+  /** Content after. null for a delete. */
+  readonly after: string | Uint8Array | null;
+}
+
+/**
+ * Notified of every write and delete through this composite.
+ *
+ * The pre-write content is fetched only when `needsBaseline` says so, which is
+ * what keeps this from costing a second read on every write: an observer that
+ * accumulates a net change per path wants the content only the first time a
+ * path is touched. When the read fails for any reason other than the file not
+ * existing, nothing is reported for that write at all — an unknown baseline is
+ * not a change of unknown size, it is a change this observer cannot describe.
+ */
+export interface CompositeWriteObserver {
+  needsBaseline(path: string): boolean;
+  record(event: CompositeWriteEvent): void;
+}
 
 const NAME_RE = /^[a-z][a-z0-9_-]*$/;
 
@@ -111,6 +142,7 @@ export class CompositeVFS implements VFS {
   /** The actor's working directory — composite-addressed, default '/local'. */
   readonly cwd: string;
   private readonly rows = new Map<string, MountRow>();
+  private observer: CompositeWriteObserver | null = null;
 
   constructor(opts: { local: VFS; cwd?: string }) {
     this.rows.set('local', {
@@ -121,6 +153,16 @@ export class CompositeVFS implements VFS {
       workingDir: '',
     });
     this.cwd = opts.cwd ?? '/local';
+  }
+
+  /**
+   * Watch every write and delete through this plane. One observer, set by
+   * whoever owns the plane's lifetime — a head's runtime installs its own so
+   * the split can report which files that head changed, and nothing is watching
+   * otherwise, which is what makes this free on the ordinary path.
+   */
+  observeWrites(observer: CompositeWriteObserver | null): void {
+    this.observer = observer;
   }
 
   /** Attach (or replace a reservation for) a dynamic mount. */
@@ -191,7 +233,7 @@ export class CompositeVFS implements VFS {
       }
       return {
         kind: 'mount', name: seg0, vfs: row.vfs, policy: row.policy,
-        sub: envPath(row.policy.rootPath, rest), isMountRoot: rest === '',
+        sub: envPath(row.policy.rootPath, rest), abs, isMountRoot: rest === '',
       };
     }
     if (rest === '') return { kind: 'rootEntry', name: seg0 };
@@ -205,7 +247,7 @@ export class CompositeVFS implements VFS {
     const local = this.rows.get('local') as Extract<MountRow, { kind: 'mount' }>;
     return {
       kind: 'mount', name: 'local', vfs: local.vfs, policy: local.policy,
-      sub: envPath(local.policy.rootPath, abs), isMountRoot: false,
+      sub: envPath(local.policy.rootPath, abs), abs: `/local${abs}`, isMountRoot: false,
     };
   }
 
@@ -225,7 +267,9 @@ export class CompositeVFS implements VFS {
     if (r.isMountRoot) throw makeVfsError('EISDIR', `illegal operation on a directory, open '${path}'`, path);
     this.assertWritable(r, path);
     this.assertNameNotReserved(r, 'open', path);
-    return r.vfs.writeFile(r.sub, data);
+    const baseline = await this.baselineFor(r);
+    await r.vfs.writeFile(r.sub, data);
+    this.report(r, baseline, data);
   }
 
   async readdir(path: string): Promise<string[]> {
@@ -260,7 +304,9 @@ export class CompositeVFS implements VFS {
     if (r.kind === 'rootEntry') throw this.rootTableError(path);
     if (r.isMountRoot) throw makeVfsError('EPERM', `cannot unlink the /${r.name} mount, unlink '${path}'`, path);
     this.assertWritable(r, path);
-    return r.vfs.unlink(r.sub);
+    const baseline = await this.baselineFor(r);
+    await r.vfs.unlink(r.sub);
+    this.report(r, baseline, null);
   }
 
   async mkdir(path: string, opts?: { recursive?: boolean }): Promise<void> {
@@ -288,6 +334,40 @@ export class CompositeVFS implements VFS {
   }
 
   // ── internals ─────────────────────────────────────────────────────
+
+  /**
+   * What the observer should be told about the state before a mutation, or
+   * null for "tell it nothing about this one".
+   *
+   * Null covers both the ordinary case (nobody is watching) and the honest
+   * failure: the observer asked for a baseline and the read failed for a reason
+   * other than the file not existing, so the mutation still happens and simply
+   * goes unreported rather than being reported against a baseline we invented.
+   */
+  private async baselineFor(
+    r: Extract<ResolvedPath, { kind: 'mount' }>,
+  ): Promise<{ before?: string | Uint8Array | null } | null> {
+    const observer = this.observer;
+    if (!observer) return null;
+    if (!observer.needsBaseline(r.abs)) return {};
+    try {
+      return { before: (await r.vfs.readFile(r.sub, { encoding: 'utf8' })) ?? null };
+    } catch (err) {
+      if (isVfsError(err) && err.code === 'ENOENT') return { before: null };
+      return null;
+    }
+  }
+
+  /** Hand a landed mutation to the observer. Called only AFTER the mount
+   *  accepted it, so a failed write is never reported as a change. */
+  private report(
+    r: Extract<ResolvedPath, { kind: 'mount' }>,
+    baseline: { before?: string | Uint8Array | null } | null,
+    after: string | Uint8Array | null,
+  ): void {
+    if (!baseline) return;
+    this.observer?.record({ mount: r.name, path: r.abs, ...baseline, after });
+  }
 
   private demandResolved(path: string, op: string): Exclude<ResolvedPath, { kind: 'unavailable' }> {
     const r = this.resolve(path);

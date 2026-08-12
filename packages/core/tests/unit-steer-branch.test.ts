@@ -279,15 +279,18 @@ describe('headPhaseRunEvent — one row shape for both backends', () => {
   test('a merge carries the whole cost summary, not just a head count', () => {
     // headsWithFindings is the productivity figure: 4-of-5 empty forks were
     // invisible until it was recorded, and a backend transcribing the row by
-    // hand is exactly how it goes missing again.
+    // hand is exactly how it goes missing again. fileChanges is the same
+    // argument for the split's EFFECT: what it did, not only what it spent.
     expect(headPhaseRunEvent({
       kind: 'merge',
       rootId: 'run-7',
       cost: { headCount: 3, headsWithFindings: 1, totalTokens: 900 },
       mergedNarrative: 'one lead held up',
+      fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
     })).toEqual({
       type: 'head_merge', rootId: 'run-7', headCount: 3, headsWithFindings: 1,
       totalTokens: 900, mergedNarrative: 'one lead held up',
+      fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
     });
   });
 });

@@ -77,6 +77,13 @@ export interface StrategyResult {
      * leaves this unset and is charged the lump.
      */
     selfMetered?: boolean;
+    /**
+     * Distinct files the exploration changed — what it cost the WORKSPACE
+     * rather than the ledger. Absent when the strategy changed no files or
+     * cannot attribute the ones it did (see heads/file-changes.ts), which is
+     * not the same claim as zero.
+     */
+    filesChanged?: number;
   };
 }
 
