@@ -15,6 +15,8 @@ import {
   type SubordinateReportStatus,
   // Read models — the same control-plane implementations the orchestrator uses.
   cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome,
+  // report.* — codemode projection of the native `report` tool.
+  createReportCodemodeProvider, type CodemodeProvider,
 } from '@proteus/core';
 import {
   ActorAgent,
@@ -88,6 +90,13 @@ export class SubordinateAgent extends ActorAgent {
         },
       },
     };
+  }
+
+  /** `report.*` — the same ReportToolDeps the native `report` tool holds, so
+   *  a codemode-scripted report and a direct tool call reach the SAME
+   *  sendReport path. Unconditional here: every subordinate has one. */
+  protected extraCodemodeProviders(): CodemodeProvider[] {
+    return [createReportCodemodeProvider(() => this.actorToolDeps().report!)];
   }
 
   protected isClientRpcMethodDenied(method: string): boolean {

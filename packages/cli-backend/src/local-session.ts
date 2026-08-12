@@ -22,7 +22,7 @@ import type {
   ChatOptions,
   AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
+  SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
   ShellApprovalRequest, ShellApprovalOutcome,
   AgentsForkDeps, AgentsToolDeps,
@@ -63,7 +63,8 @@ import {
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
-  createAgentsCodemodeProvider, type CodemodeProvider,
+  createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
+  createMemoryCodemodeProvider, createTasksCodemodeProvider,
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
   type DynamicContext,
@@ -355,10 +356,6 @@ export class LocalAgentSession implements BackendHost {
   private readonly compactionState: CompactionStateStore;
   private readonly compactionExtension: ProteusExtension;
 
-  /** Skills invoked this turn (explicit/auto-activation + the skills tool's
-   *  `invoke` action). Cleared at turn start; the skills tool's closures mutate
-   *  this stable Set, so the cached toolset never needs rebuilding. */
-  private readonly turnInvokedSkills = new Set<string>();
   private skillsVfs: SkillsVfs | null = null;
 
   /** Tools from connected MCP servers, merged into the turn surface. Connected
@@ -1298,7 +1295,6 @@ export class LocalAgentSession implements BackendHost {
     // A one-shot task turn is graded by whatever it leaves on disk, with nobody
     // to push back — so it arms the completion gate. Nothing else does.
     if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
-    this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
     // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
@@ -1308,7 +1304,7 @@ export class LocalAgentSession implements BackendHost {
     // trip the prompt-hash telemetry with no real agent event.
     const memoryTail = await readMemoryTail(this.rt.memory);
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
-    const activeSkills = await this.resolveTurnSkills(item.text);
+    const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text);
     // Skill-filtered built-ins + the connected MCP tools (always available).
     const filteredBuiltins = this.filterToolsBySkills(activeSkills);
     const turnTools = { ...filteredBuiltins, ...this.extraTools };
@@ -1337,6 +1333,7 @@ export class LocalAgentSession implements BackendHost {
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
+      ...(availableSkills.length > 0 ? { availableSkills } : {}),
       ...(activeSkills ? { activeSkills } : {}),
     });
     this.recordSystemPromptHash(systemPrompt);
@@ -1769,14 +1766,13 @@ export class LocalAgentSession implements BackendHost {
     return this._webSearchProvider;
   }
 
-  /** Resolve the skills active for this turn (core turn-surface — the SAME
+  /** Resolve this turn's skill surface (core turn-surface — the SAME
    *  resolution the DO's beforeTurn runs). */
-  private resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
+  private resolveTurnSkills(userText: string): Promise<TurnSkillSurface> {
     return resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
       userText,
-      invoked: this.turnInvokedSkills,
     });
   }
 
@@ -2213,6 +2209,20 @@ export class LocalAgentSession implements BackendHost {
           // the same deps the top-level tool holds. Locally that is fork only.
           createAgentsCodemodeProvider(() => this.agentsToolDeps()),
           createWebCodemodeProvider(this.getWebSearchProvider()),
+          // `memory.*` / `tasks.*` — unconditional codemode projections of
+          // the same-named native tools (tools/memory-tool.ts, tools/tasks-
+          // tool.ts); `this.taskList` is the SAME TaskListStore instance the
+          // dynamic-context snapshot reads.
+          // No vectorStore: Vectorize hybrid search is CF-only, same as the
+          // native `memory` tool's wiring below (search stays FTS5-only here).
+          createMemoryCodemodeProvider(() => ({
+            memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
+          })),
+          createTasksCodemodeProvider(this.taskList),
+          // `release.*` — left the native surface for codemode-only reach
+          // (tools/release-codemode.ts); deps read live so a rebind lands
+          // without rebuilding this toolset.
+          createReleaseCodemodeProvider(() => this.releaseToolDeps()),
           // llm.query (RLM) — CLI parity with the cf backend. Needs a real
           // resolver to spawn sub-calls; static-model sessions have none.
           ...(this.modelResolver
@@ -2223,12 +2233,6 @@ export class LocalAgentSession implements BackendHost {
       codemodeLoader: { __cli: true },
       agents: this.agentsToolDeps(),
       facts: this.factsStore,
-      skills: {
-        vfs: this.getSkillsVfs(),
-        recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
-        currentlyInvoked: () => Array.from(this.turnInvokedSkills),
-      },
-      releases: this.releaseToolDeps(),
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;

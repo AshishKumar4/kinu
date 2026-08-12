@@ -13,13 +13,11 @@ export const BUILTIN_TOOLS = [
   'execute_tools',
   'run',
   'file',
-  'skills',
   'agents',
   'memory',
   'tasks',
   'web',
   'report',
-  'release',
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
@@ -176,9 +174,11 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
 // their results from real command output, and the ledger's record_* twins are
 // refused as assertions of what was never run. Where no engine is wired, the
 // agent runs the commands itself and the record_* actions are the only way the
-// ledger learns what happened. Advertising the union made every actor read the
-// other half's schema and be refused by it, so the surface gates on the same
-// dep the runtime does — the `memoryToolSpec(hasFacts)` pattern.
+// ledger learns what happened. This gate lives on in tools/release-codemode.ts,
+// which projects the SAME action set into the sandbox — release left the
+// model's top-level surface (a governed, high-blast-radius, occasional lane
+// costs a standing choice every turn it is not the answer to), but the
+// gate-on-engine-presence policy did not move.
 
 /** The governance ledger — wherever the release lane exists at all. */
 export const RELEASE_LEDGER_ACTIONS = [
@@ -204,47 +204,37 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
 }
 
 /**
- * The release spec for a runtime that does (or does not) drive the working
- * copy itself. `BUILTIN_TOOL_SPECS.release` is the engine surface — the
- * representative full lane — and buildBuiltinTools renders the ledger-only one
- * where no engine is wired.
- */
-export function releaseToolSpec(hasEngine: boolean): BuiltinToolSpec {
-  return {
-    name: 'release',
-    summary: hasEngine
-      ? 'Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.'
-      : 'Governed release ledger over a bound source repo — plan a change, store its patch, take owner approval, and record the checks and deployments you ran yourself.',
-    whenToUse:
-      'Use when the user asks Proteus to change its own app, UI, prompts, or deployment. '
-      + (hasEngine
-        ? 'Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.'
-        : 'Flow: bind_source → create → update (store the unified diff) → transition → record_check → request_approval → record_deployment; this backend has no execution engine, so run the commands yourself with `run` in the working copy and record what they returned.'),
-    whenNotToUse: 'Not for ordinary project work, and not for adding a workspace dashboard — that is workspace.createView, which needs no deploy.',
-    result: hasEngine
-      ? 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.'
-      : 'Returns the board/ledger records: the change, its stored patch, and the checks, approvals and deployments recorded against it.',
-    example: hasEngine
-      ? "release({action:'run_checks', changeId:'chg_4f2'})"
-      : "release({action:'record_check', changeId:'chg_4f2', check:{name:'tests', status:'passed'}})",
-  };
-}
-
-/**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
  * what the UI shows in the Tools tab.
  *
  * Namespace contract (preamble-injection pattern — see docs/CRAFT-ARCHITECTURE.md):
- *   - `workspace.*` — filesystem / shell / memory primitives.
+ *   - `workspace.*` — filesystem / shell / memory primitives, including
+ *     `editFile` — the exact-match edit reachable natively as `file`'s `edit`
+ *     action (tools/file-tool.ts's createFileDispatcher, shared by both).
  *   - `codemode.*` — every provider exposed via createCodeTool, including
  *     crafted tools once they have been type-declared at construction time.
  *   - `tools.<name>` — crafted tools are ALSO reachable as local object
  *     properties inside the execute_tools async arrow, injected by the
  *     preamble. Crafted-tool bodies may call `workspace.*`, `codemode.*`,
  *     and `tools.<other>` interchangeably.
- *   - `agents.*` — the delegation tool projected into the sandbox, gated to the
- *     same actions (tools/agents-codemode.ts). It is what makes a crafted tool
- *     able to BE a workflow: plain control flow over delegated steps.
+ *   - `agents.*` / `memory.*` / `tasks.*` / `report.*` — the same-named
+ *     native tool, projected into the sandbox over its own dispatcher
+ *     (tools/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,
+ *     report-codemode.ts), gated to the same deps/actions the native tool
+ *     is. `agents.*` is what makes a crafted tool able to BE a workflow:
+ *     plain control flow over delegated steps.
+ *   - `release.*` — the governed release lane's ONLY reach (tools/release-
+ *     codemode.ts): no native `release` tool exists. Same reasoning as
+ *     `skills`, below, applied to a lane occasional and high-blast-radius
+ *     enough that it should not cost a standing top-level choice either.
+ *
+ * `skills` has no tool AND no codemode namespace: SKILL.md files are
+ * ordinary paths under /workspace/skills/ on the SAME VFS `workspace.*`
+ * already addresses (readFile/writeFile/readdir/exec('rm …')) — a dedicated
+ * surface would have been a third path to the same bytes. Discovery is
+ * ambient (renderSkillsIndexSection in the system prompt); activation is
+ * resolved once at turn start (orchestrator/turn-surface.ts), never by a
+ * tool call.
  */
 export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   execute_tools: {
@@ -306,14 +296,6 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       + 'edit returns the line each replacement landed on, or one failure naming what was wrong. '
       + 'write returns the size written and whether the file was created or replaced.',
     example: "file({action:'edit', path:'/local/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
-  },
-  skills: {
-    name: 'skills',
-    summary: 'SKILL.md workflow instructions stored for this agent — list, read, invoke, create, edit, delete.',
-    whenToUse: 'Use when the task matches a workflow worth following step by step, or when the user invokes a skill by name. Write one with create once a workflow has proven itself.',
-    whenNotToUse: 'Do not load broad skills speculatively; they consume context and can over-constrain unrelated work.',
-    result: 'Returns the skill catalogue, one skill\'s content, or mutation status.',
-    example: "skills({action:'invoke', name:'release-checklist'})",
   },
   // The agents spec is the SINGLE SOURCE of delegation doctrine: it composes
   // the DELEGATION_RUNGS + DELEGATION_CONVERSE constants above, which the
@@ -379,7 +361,6 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
   },
-  release: releaseToolSpec(true),
 };
 
 /** Render a spec into the JSON-schema tool docstring. Providers weight the

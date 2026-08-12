@@ -116,9 +116,13 @@ Everything else — the CF runtime assembly, the `BackendHost`, the shared
 prompt/model/tool caches, and the whole Think hook bridge — you inherit.
 
 The one thing to understand before adding an actor is that **the tool surface
-follows from `actorToolDeps()` alone**. `DEPS_GATED_TOOLS` is
-`['team', 'peers', 'report', 'release']`, and `actorActiveTools()` drops
-any of those whose deps you did not wire. There is no flag and no allowlist to
+follows from `actorToolDeps()` alone**. `DEPS_GATED_TOOLS` is `['report']` —
+the one native tool name whose presence depends on which deps group an actor
+wires — and `actorActiveTools()` drops it when you did not wire `report`.
+(`team`/`peers` gate `agents`' ACTIONS, not a separate tool name, via
+`actorAgentsActions`; `release` moved off the native surface entirely, so
+`deps.releases` now only feeds the `release.*` codemode namespace and gates
+nothing in `actorActiveTools()`.) There is no flag and no allowlist to
 edit: `SubordinateAgent` cannot spawn subordinates because it returns
 `{ report }` and nothing else.
 
@@ -285,16 +289,23 @@ an output-token cap, is the cheapness lever for most of these paths.
 
 ## The agent's runtime surface
 
-The top-level tools are the 10 in `BUILTIN_TOOLS` (`core/src/tools/registry.ts`)
-— `execute_tools`, `run`, `file`, `skills`, `agents`, `memory`, `experience`,
-`web`, `report`, `release` — narrowed per actor by
-`actorActiveTools()`. See [TOOLS.md](./TOOLS.md).
+The top-level tools are the 8 in `BUILTIN_TOOLS` (`core/src/tools/registry.ts`)
+— `execute_tools`, `run`, `file`, `agents`, `memory`, `web`, `tasks`, `report`
+— narrowed per actor by `actorActiveTools()`. See [TOOLS.md](./TOOLS.md) for
+the full list and for what moved to codemode-only reach instead of staying a
+top-level tool (`skills`, over `workspace.*`; `release`, as `release.*`) and
+what became an owner-facing RPC instead of agent-facing at all (`experience`).
 
 Inside `execute_tools`, the LLM additionally sees:
 
-- `workspace.*` — VFS + shell + memory + `createTool` / `createView` (always available)
+- `workspace.*` — VFS (including `editFile`, the exact-match edit) + shell +
+  memory + `createTool` / `createView` (always available)
 - `sandbox.*` — Linux container exec + port preview (when bound)
 - `codemode.*` — every crafted tool, dispatched through the preamble
+- `agents.*` / `memory.*` / `tasks.*` / `report.*` / `release.*` —
+  codemode projections of the same-named native tool (or, for `release`,
+  its only reach at all), sharing one dispatcher each so a script and a
+  direct tool call see identical state
 - `llm.query(text, opts?)` — Recursive Language Models. Sub-call has no
   `llm.query` in scope, so depth is bounded at 1 by construction.
 - Crafted tools as `tools.<name>(...)` literals in lexical scope (preamble

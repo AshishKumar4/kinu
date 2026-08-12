@@ -693,19 +693,23 @@ function LandingV2() {
    exposure badge, at the width Column C actually gets. */
 /* The real docstrings, from the registry the orchestrator serves them from.
    Mocking short ones is how the Tools list shipped as a wall of prose without
-   anyone seeing it: nine builtins carry ~2,400 tokens of contract between
-   them, and a harness that photographs one-liners photographs a surface the
-   app does not have. */
+   anyone seeing it: eight builtins carry real contract text between them, and
+   a harness that photographs one-liners photographs a surface the app does
+   not have. `release` (and `agent.*` self-steering, `skills` CRUD) left
+   BUILTIN_TOOLS for codemode-only reach — getToolDescriptions() only lists
+   BUILTIN_TOOLS, the same reason `agent.*` has never appeared here either, so
+   this row is illustrative mock, not a live readout. */
 const BRAIN_TOOLS: ToolInfo[] = [
   ...BUILTIN_TOOLS.map((name) => ({
     name,
     summary: BUILTIN_TOOL_SPECS[name].summary,
     description: BUILTIN_TOOL_DESCRIPTIONS[name],
     learned: false,
-    exposure: (name === "release" ? "codemode" : "native") as ToolInfo["exposure"],
+    exposure: "native" as ToolInfo["exposure"],
     qualityScore: 1,
     usageCount: 0,
   })),
+  { name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", qualityScore: 1, usageCount: 0 },
   { name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 },
   { name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 },
 ];

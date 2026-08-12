@@ -14,6 +14,7 @@ import {
   modelSupportsTools,
   promptModeForTurnEvent,
   splitPromptSections,
+  type ParsedSkill,
 } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
 
@@ -438,17 +439,39 @@ describe('buildSystemPromptSync', () => {
     expect(memory).toMatch(/sessions reads what past sessions said, before re-deriving/);
   });
 
-  test('the release flow is stated once, in the schema, plus the mode overlay', () => {
-    // It used to be stated three times: the schema whenToUse, a standalone
-    // `## Proteus release changes` section, and the release mode
-    // overlay. The overlay stays — it is mode-gated and adds the approval
-    // constraint — and the standalone section is gone.
+  test('the release mode overlay points at release.* (codemode, not a native tool)', () => {
+    // `release` left the native surface for the release.* codemode
+    // namespace (tools/release-codemode.ts); the mode overlay's wording
+    // follows it there, and there is no standalone `## Proteus release
+    // changes` section duplicating the flow.
     const { rt } = createTestRuntime();
     expect(buildSystemPromptSync(rt)).not.toContain('## Proteus release changes');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.release)
-      .toMatch(/bind_source → create → update .* → apply → run_checks → preview → request_approval → deploy/);
+    expect(buildSystemPromptSync(rt, { mode: 'release' }))
+      .toContain('`release.*` inside execute_tools');
     expect(buildSystemPromptSync(rt, { mode: 'release' }))
       .toContain('Never deploy Proteus release changes without an explicit approval record');
+  });
+
+  test('the ambient skills index renders name + description for every available skill, active or not', () => {
+    // The discovery gap this closes: without this, a skill that never
+    // auto-activates is invisible to the model — nothing in the prompt names
+    // it, and there is no tool call left that lists it either.
+    const { rt } = createTestRuntime();
+    const dormant: ParsedSkill = {
+      name: 'dormant-skill', description: 'Not active this turn, but the model should still know it exists.',
+      allowed_tools: [], keywords: [], auto_activate: false, disable_model_invocation: false,
+      user_invocable: true, body: 'DORMANT-BODY-MUST-NOT-APPEAR', ext: {}, source: 'vfs',
+    };
+    const prompt = buildSystemPromptSync(rt, { availableSkills: [dormant] });
+    expect(prompt).toContain('## Skills');
+    expect(prompt).toContain('**dormant-skill** — Not active this turn');
+    // Progressive disclosure: index carries the description, never the body.
+    expect(prompt).not.toContain('DORMANT-BODY-MUST-NOT-APPEAR');
+  });
+
+  test('omitting availableSkills renders no Skills section (no regression for callers that do not pass it)', () => {
+    const { rt } = createTestRuntime();
+    expect(buildSystemPromptSync(rt)).not.toContain('## Skills');
   });
 
   test('renders executor section when registeredExecutors supplied', () => {

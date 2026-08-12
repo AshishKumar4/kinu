@@ -406,7 +406,7 @@ export {
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,
-  type BuiltinToolDeps, type ReleaseToolDeps,
+  type BuiltinToolDeps,
   type CraftedToolSet, type CreateExecuteToolFactory,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
@@ -417,6 +417,23 @@ export {
 export * from './web/index.js';
 // Recursive Language Models — the llm.query codemode provider (both backends).
 export { createRLMProvider, type CodemodeProvider, type RLMModelResolver, type RLMOptions } from './rlm.js';
+// The release lane — codemode-only (release.* inside execute_tools). No
+// native tool: see tools/builtins.ts's header for why.
+export {
+  createReleaseCodemodeProvider, runReleaseAction,
+  type ReleaseToolDeps, type ReleaseActionInput,
+} from './tools/release-codemode.js';
+// memory.* / tasks.* / report.* — codemode projections of the same-named
+// native tools, sharing one dispatcher each (memory-tool.ts / tasks-tool.ts /
+// the native `report` tool's ReportToolDeps).
+export { createMemoryCodemodeProvider } from './tools/memory-codemode.js';
+export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool.js';
+export { createTasksCodemodeProvider } from './tools/tasks-codemode.js';
+export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool.js';
+export { createReportCodemodeProvider } from './tools/report-codemode.js';
+// The file plane's dispatcher, shared by the native `file` tool and
+// workspace.editFile (execution/inline.ts) — see tools/file-tool.ts.
+export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool.js';
 export {
   clampToolResult,
   clampSerializedToolResult,
@@ -974,7 +991,7 @@ export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-
 export { createDurableMctsSession } from './orchestrator/mcts-session.js';
 export {
   skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
-  renderFactsForTurn, type TurnSkillsConfig,
+  renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface.js';
 export { ModelCatalogSession } from './orchestrator/model-catalog.js';
 export {
@@ -988,19 +1005,20 @@ export { recordGroundedHeadsTake } from './mcts/takes.js';
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
 // instructions + a tool-surface restriction (allowed_tools). Distinct from
 // CraftedTools (executable JS): a skill steers the LLM; a crafted tool runs.
+// No LLM-facing tool and no codemode namespace — read/create/edit/delete are
+// ordinary workspace.readFile/writeFile/readdir/exec calls over the same VFS.
 export {
   parseSkillFile, stringifySkillFile, validateSkillName,
   discoverSkills, skillPath, BUILTIN_SKILLS,
   resolveActiveSkills, extractExplicitInvocations,
-  renderActiveSkillsSection, unionAllowedTools, toolAllowedBySkills,
-  ACTIVE_SKILLS_MAX_CHARS,
-  runSkillsAction, SkillError, SKILLS_DIR,
+  renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
+  ACTIVE_SKILLS_MAX_CHARS, SKILLS_INDEX_MAX_CHARS,
+  SkillError, SKILLS_DIR,
 } from './skills/index.js';
 export type {
-  ParsedSkill, SkillSource, SkillIndexEntry, ActiveSkillSet,
-  ActivationReason, SkillsAction, SkillParseResult, SkillErrorCode,
+  ParsedSkill, SkillSource, ActiveSkillSet,
+  ActivationReason, SkillParseResult, SkillErrorCode,
   SkillsVfs, DiscoverOpts, LoadActiveSkillsOpts,
-  SkillsToolDeps, SkillsToolOutcome,
 } from './skills/index.js';
 
 // ── GEPA (Genetic-Pareto Prompt Evolution) ──

@@ -119,6 +119,8 @@ import {
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
   uiMessageText,
+  // memory.* / tasks.* — codemode projections of the same-named native tools
+  createMemoryCodemodeProvider, createTasksCodemodeProvider,
 } from "@proteus/core";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
@@ -245,8 +247,11 @@ export interface ActorToolDeps {
 /** The deps-gated builtins: names dropped from the advertised tool surface
  *  when the actor profile wires no deps for them. The `agents` tool is never
  *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
- *  on the same profile (see actorAgentsActions). */
-const DEPS_GATED_TOOLS = ['report', 'release'] as const;
+ *  on the same profile (see actorAgentsActions). `release` is not a native
+ *  tool anymore (release.* is codemode-only — see extraCodemodeProviders
+ *  above), so `deps.releases` no longer gates anything here; it still feeds
+ *  that codemode namespace directly. */
+const DEPS_GATED_TOOLS = ['report'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
@@ -254,7 +259,6 @@ const DEPS_GATED_TOOLS = ['report', 'release'] as const;
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
     report: !!deps.report,
-    release: !!deps.releases,
   };
   return ACTIVE_TOOLS.filter((name) =>
     !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
@@ -1091,9 +1095,6 @@ export abstract class ActorAgent extends Think<Env> {
   protected _currentRunId = '';
 
   // ── Skills (turn-scoped) ───────────────────────────────────────
-  /** Skill names invoked this turn (via /name or skills({action:'invoke'})).
-   *  Cleared at beforeTurn; closures from the skills tool mutate via .add(). */
-  private readonly _turnInvokedSkills = new Set<string>();
   /** Resolved active set for the current turn. Built in beforeTurn, read by
    *  the system-prompt assembly via TurnConfig.system override. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
@@ -1223,6 +1224,21 @@ export abstract class ActorAgent extends Think<Env> {
    * and must not re-enter `this.rt`. */
   protected configureRuntime(_runtime: CFRuntime): void {}
 
+  /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator
+   *  and subordinate alike), the same way the native `memory` and `tasks`
+   *  tools are. Deps read live per provider's own convention (memory's facts/
+   *  vectorStore can rebind; tasks reuses `this.taskList`, the same
+   *  TaskListStore instance the dynamic-context snapshot reads). */
+  private baseCodemodeProviders(): CodemodeProvider[] {
+    return [
+      createMemoryCodemodeProvider(() => ({
+        memory: this.rt.memory, vectorStore: this.rt.vectorStore,
+        facts: this.facts, sql: this.rt.storage.sql,
+      })),
+      createTasksCodemodeProvider(this.taskList),
+    ];
+  }
+
   /** Build (or return cached) this DO's execute_tools tool. Construction (see
    *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
    *  still become callable because the executor re-reads craftStore per call. */
@@ -1238,7 +1254,7 @@ export abstract class ActorAgent extends Think<Env> {
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
         agents: () => this.getAgentsToolDeps(),
-        extraProviders: () => this.extraCodemodeProviders(),
+        extraProviders: () => [...this.baseCodemodeProviders(), ...this.extraCodemodeProviders()],
         // Record which executor the agent actually works in, so the UI (diff /
         // file manager) defaults to where work happened. One upsert per executor
         // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
@@ -1486,8 +1502,6 @@ export abstract class ActorAgent extends Think<Env> {
     this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
 
     try {
-      const orchestrator = this;
-
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
 
@@ -1518,19 +1532,10 @@ export abstract class ActorAgent extends Think<Env> {
         shellApprovalMode,
         // Typed, keyed world-model store — exposes the `fact` tool.
         facts: this.facts,
-        // Single `skills` tool — list/read/invoke/create/edit/delete actions.
-        // Per-turn invocation state lives on the orchestrator; closures here
-        // mutate / read it without ever recreating the Set, so the binding
-        // stays stable across the cached toolset.
-        skills: {
-          vfs: orchestrator.getSkillsVfs(),
-          recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
-          currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
-        },
-        // The remaining actor-profile deps (subordinate report spine,
-        // release lane).
+        // The remaining actor-profile dep: the subordinate report spine.
+        // The release lane is codemode-only now (release.* — see
+        // getExecuteToolsTool below), not a BuiltinToolDeps field.
         ...(actorDeps.report ? { report: actorDeps.report } : {}),
-        ...(actorDeps.releases ? { releases: actorDeps.releases } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       });
@@ -1859,22 +1864,17 @@ export abstract class ActorAgent extends Think<Env> {
     });
 
     // ── Skills resolution for this turn (core turn-surface) ──────────────
-    // Reset per-turn invocation set (don't reassign — closures from the
-    // skills tool hold a stable reference).
-    this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
-    // The actor's REAL tool surface: deps-gated builtins (report/
-    // release) are advertised only when this actor class wires them,
-    // and the agents ladder renders only the actions this profile supports —
-    // then restricted to the active skills' allowed union (skills tool kept,
-    // core turn-surface).
+    // The actor's REAL tool surface: deps-gated builtins (report) are
+    // advertised only when this actor class wires them, and the agents
+    // ladder renders only the actions this profile supports — then
+    // restricted to the active skills' allowed union (core turn-surface).
     const turnActorDeps = this.actorToolDeps();
     let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
-    const activeSetForPrompt = await resolveTurnSkills({
+    const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
       userText: extractLastUserText(ctx.messages),
-      invoked: this._turnInvokedSkills,
     });
     if (activeSetForPrompt) {
       this._turnActiveSkills = activeSetForPrompt;
@@ -1936,6 +1936,7 @@ export abstract class ActorAgent extends Think<Env> {
       executors: execs,
       availableTools: activeTools,
       agentsActions: actorAgentsActions(turnActorDeps),
+      ...(availableSkills.length > 0 ? { availableSkills } : {}),
       ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),

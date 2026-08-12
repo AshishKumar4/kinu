@@ -70,9 +70,11 @@ describe('subordinate wiring', () => {
     expect(source('orchestrator.ts')).toContain('async experienceAction(input: ExperienceActionInput)');
     expect(source('actor-agent.ts')).not.toContain('experience');
     // …and absence is structural: a deps-gated name is dropped from the
-    // advertised surface too, not just from the ToolSet.
+    // advertised surface too, not just from the ToolSet. `release` is not a
+    // native tool at all anymore (release.* is codemode-only), so it no
+    // longer needs a gate here.
     expect(source('actor-agent.ts'))
-      .toContain("const DEPS_GATED_TOOLS = ['report', 'release'] as const;");
+      .toContain("const DEPS_GATED_TOOLS = ['report'] as const;");
   });
 
   test('browser subordinate callables reuse the team policy and are not exposed by the facet', () => {

@@ -5,7 +5,10 @@
 import { describe, test, expect } from 'bun:test';
 import type { ToolSet } from 'ai';
 import { createTestRuntime } from '@proteus/test-utils';
-import { buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS } from '../src/index.ts';
+import {
+  buildBuiltinTools, initAllTables, initTaskListTable, BUILTIN_TOOL_SPECS,
+  createTasksCodemodeProvider, TaskListStore,
+} from '../src/index.ts';
 
 type Exec = (args: Record<string, unknown>) => Promise<unknown>;
 
@@ -96,5 +99,47 @@ describe('tasks tool', () => {
     const tasks = setup();
     const res = await tasks(args) as { added: Array<{ id: string }> };
     expect(res.added.map((t) => t.id)).toEqual(['t1', 't2', 't3']);
+  });
+});
+
+describe('tasks.* codemode — the SAME dispatcher and store the native tool uses', () => {
+  test('tasks.add/update/list share state with the native tool over the same TaskListStore', async () => {
+    const { rt, testSql } = createTestRuntime();
+    initAllTables(testSql.execRaw);
+    initTaskListTable(testSql.execRaw);
+    const taskList = new TaskListStore(rt.storage.sql);
+    const provider = createTasksCodemodeProvider(taskList);
+
+    const added = await provider.tools.add!.execute(['Reproduce the bug', 'Write the fix']) as {
+      added: Array<{ id: string }>;
+    };
+    expect(added.added.length).toBe(2);
+
+    // The native tool's own dispatcher, over the SAME store, sees it —
+    // one implementation, two callers, not a shadow copy.
+    const nativeTasks = (buildBuiltinTools({ rt }).tasks!.execute) as unknown as
+      (args: Record<string, unknown>) => Promise<{ tasks: Array<{ id: string; title: string; status: string }> }>;
+    const listed = await nativeTasks({ action: 'list' });
+    expect(listed.tasks.map((t) => t.title)).toEqual(['Reproduce the bug', 'Write the fix']);
+
+    await provider.tools.update!.execute(added.added[0]!.id, 'done');
+    const after = await nativeTasks({ action: 'list' });
+    expect(after.tasks.find((t) => t.id === added.added[0]!.id)?.status).toBe('done');
+  });
+
+  test('tasks.list reads the whole list back with subtasks, closed items included', async () => {
+    const { rt, testSql } = createTestRuntime();
+    initAllTables(testSql.execRaw);
+    initTaskListTable(testSql.execRaw);
+    const taskList = new TaskListStore(rt.storage.sql);
+    const provider = createTasksCodemodeProvider(taskList);
+    await provider.tools.add!.execute(['Parent task']);
+    await provider.tools.add!.execute(['Child task'], 't1');
+    await provider.tools.update!.execute('t2', 'dropped');
+    const result = await provider.tools.list!.execute() as {
+      tasks: Array<{ id: string; subtasks?: Array<{ id: string; title: string; status: string }> }>;
+    };
+    expect(result.tasks.length).toBe(1);
+    expect(result.tasks[0]!.subtasks).toEqual([{ id: 't2', title: 'Child task', status: 'dropped' }]);
   });
 });

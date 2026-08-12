@@ -23,6 +23,7 @@
  */
 
 import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types.js';
+import { skillPath } from './discover.js';
 
 /** Char cap shared by all active skill bodies in one prompt. Skill bodies are
  *  agent-authored and uncapped at the store, so without this a single big
@@ -33,6 +34,65 @@ export const ACTIVE_SKILLS_MAX_CHARS = 16_000;
 /** Minimum budget worth spending on a truncated body — below this the body is
  *  omitted with a read pointer instead of contributing a useless fragment. */
 const MIN_TRUNCATED_CHARS = 500;
+
+/** Char cap for the ambient skills index (name + description for EVERY
+ *  available skill, not just active ones). Bounded the same way
+ *  renderActiveSkillsSection is — an honest elision count under pressure
+ *  rather than a silent cut — but the per-entry cost here is small (progressive
+ *  disclosure: only name + description, never a body), so the budget is a
+ *  fraction of ACTIVE_SKILLS_MAX_CHARS. */
+export const SKILLS_INDEX_MAX_CHARS = 4_000;
+
+/** Per-description clip so one verbose skill can't crowd out the rest of the
+ *  index — the frontmatter cap (1024 chars) is 10x looser than what a
+ *  one-line index entry needs. */
+const INDEX_DESCRIPTION_MAX_CHARS = 200;
+
+/**
+ * The ambient skills catalogue: every available skill's name + description
+ * (built-ins + VFS), rendered unconditionally so the model can discover what
+ * exists without spending a turn on a list call. Only ACTIVE skills' bodies
+ * expand below (renderActiveSkillsSection) — this section is the index, not
+ * the content, matching the Agent Skills spec's progressive disclosure: name
+ * + description resident at all times, body loaded on activation, nothing
+ * else read until asked for.
+ */
+export function renderSkillsIndexSection(
+  available: ReadonlyArray<ParsedSkill>,
+  maxChars = SKILLS_INDEX_MAX_CHARS,
+): string {
+  if (available.length === 0) return '';
+
+  const sorted = [...available].sort((a, b) => a.name.localeCompare(b.name));
+  const lines: string[] = [];
+  let spent = 0;
+  let shown = 0;
+  for (const skill of sorted) {
+    const description = skill.description.length > INDEX_DESCRIPTION_MAX_CHARS
+      ? `${skill.description.slice(0, INDEX_DESCRIPTION_MAX_CHARS)}…`
+      : skill.description;
+    const line = `- **${skill.name}** — ${description}`;
+    if (spent + line.length + 1 > maxChars) break;
+    lines.push(line);
+    spent += line.length + 1;
+    shown += 1;
+  }
+  const omitted = sorted.length - shown;
+
+  return [
+    '',
+    '## Skills',
+    '',
+    'Workflow instructions this agent has stored. Read a full body with '
+      + '`workspace.readFile` over its VFS path (agent-authored skills only — built-ins have '
+      + 'none) or by letting it activate (explicit `/name`, an auto-activate keyword match, or '
+      + 'an operator pin); author one with workspace.writeFile under /workspace/skills/<name>.md.',
+    '',
+    lines.join('\n'),
+    ...(omitted > 0 ? ['', `… and ${omitted} more skill${omitted === 1 ? '' : 's'} not shown (index capped at ${maxChars} chars).`] : []),
+    '',
+  ].join('\n');
+}
 
 export function renderActiveSkillsSection(
   activeSet: ActiveSkillSet,
@@ -61,7 +121,7 @@ export function renderActiveSkillsSection(
     const r = reasonByName.get(s.name);
     const header = `### ${s.name} (${describeReason(r)})`;
     const body = s.body.trimEnd();
-    const readPointer = `read the full body with skills({action:"read", name:"${s.name}"})`;
+    const readPointer = `read the full body with workspace.readFile("${skillPath(s.name)}")`;
     if (body.length <= remaining) {
       remaining -= body.length;
       blockByName.set(s.name, `${header}\n\n${body}`);

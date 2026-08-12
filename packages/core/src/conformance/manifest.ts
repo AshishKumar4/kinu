@@ -85,7 +85,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     execute_tools: EVERYWHERE,
     run: EVERYWHERE,
     file: EVERYWHERE,
-    skills: EVERYWHERE,
     agents: EVERYWHERE,
     memory: EVERYWHERE,
     tasks: EVERYWHERE,
@@ -94,11 +93,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
       'cf-subordinate': WIRED,
       cli: { absent: `${ORCHESTRATOR_IS_SINK}, and ${CLI_HAS_NO_STAFF}` },
-    },
-    release: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
-      cli: WIRED,
     },
   },
 

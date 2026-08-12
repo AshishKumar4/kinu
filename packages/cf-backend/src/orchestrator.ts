@@ -157,6 +157,7 @@ import {
   type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
   createAgentSelfProvider,
+  createReleaseCodemodeProvider,
   DeviceConsentRegistry,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
@@ -708,6 +709,21 @@ export class OrchestratorAgent extends ActorAgent {
     return runExperienceAction(deps, input);
   }
 
+  /** release.* (tools/release-codemode.ts) is constructed once per DO
+   *  lifetime along with execute_tools, so it cannot re-check ownership on
+   *  every call the way a callable RPC does. An unclaimed workspace gets a
+   *  deps object whose every method rejects with the same honest reason,
+   *  rather than a namespace that silently vanished or crashed on first use. */
+  private unclaimedReleaseDeps(): ReleaseToolDeps {
+    const reject = async (): Promise<never> => {
+      throw new Error('This agent has no owner yet, so there is no release lane to reach. Open it through the authenticated app or CLI first.');
+    };
+    return {
+      board: reject, bindSource: reject, create: reject, update: reject,
+      transition: reject, recordCheck: reject, requestApproval: reject, recordDeployment: reject,
+    };
+  }
+
   private getReleaseToolDeps(): ReleaseToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
@@ -767,9 +783,15 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  /** `agent.*` — the agent steers itself (curriculum + self-scheduling). */
+  /** `agent.*` (self-steering) and `release.*` (the governed release lane —
+   *  left the native surface; see tools/release-codemode.ts). Both read
+   *  their deps lazily so a claimOwner mid-DO-lifetime lands without
+   *  rebuilding execute_tools. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
-    return [createAgentSelfProvider(this)];
+    return [
+      createAgentSelfProvider(this),
+      createReleaseCodemodeProvider(() => this.getReleaseToolDeps() ?? this.unclaimedReleaseDeps()),
+    ];
   }
 
   /** Mission Inbox: owner notifications go out as email. */

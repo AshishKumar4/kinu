@@ -1121,7 +1121,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(arms).toBe(1);
   });
 
-  test('a /skill activation filters the turn toolset to allowed_tools (+ skills)', async () => {
+  test('a /skill activation filters the turn toolset to allowed_tools', async () => {
     let captured: string[] = [];
     const { rt, session } = setup('ok', capturingModel('ok', (t) => { captured = t; }));
     await rt.storage.vfs.mkdir('/workspace/skills', { recursive: true });
@@ -1130,9 +1130,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n',
     );
     await session.send('/focused remember this');
-    // The active skill restricts to memory; the skills tool stays reachable so
-    // the agent can list/invoke more mid-turn.
-    expect(new Set(captured)).toEqual(new Set(['memory', 'skills']));
+    // The active skill restricts to memory. No tool is exempted from its own
+    // restriction: there is no `skills` tool left to protect, and
+    // execute_tools (the only remaining path to a skill's own VFS bytes) is
+    // restricted the same as any other tool a skill's allowed_tools omits.
+    expect(new Set(captured)).toEqual(new Set(['memory']));
   });
 
   test('recoverBackgroundJobs fails + wakes an orphaned job of a non-resumable kind, clears stale fibers', async () => {
@@ -1349,8 +1351,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('toolNames exposes the full surface (agents/memory parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    // Full parity with the DO surface: execution + durable state + delegation + skills.
-    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'skills']) expect(names).toContain(t);
+    // Full parity with the DO surface: execution + durable state + delegation.
+    // No `skills` — read/create/edit/delete are workspace.readFile/writeFile/
+    // readdir/exec calls now, not a separate tool.
+    for (const t of ['run', 'execute_tools', 'memory', 'agents']) expect(names).toContain(t);
+    expect(names).not.toContain('skills');
     // ...and the keyed-fact actions ride the one durable-state tool.
     expect(names).not.toContain('fact');
     await session.send('hi');

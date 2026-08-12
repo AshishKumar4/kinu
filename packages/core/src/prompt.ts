@@ -9,8 +9,8 @@ import {
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
 } from './tools/registry.js';
-import { renderActiveSkillsSection } from './skills/render.js';
-import type { ActiveSkillSet } from './skills/types.js';
+import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/render.js';
+import type { ActiveSkillSet, ParsedSkill } from './skills/types.js';
 import {
   compilePromptSurface,
   executorIsSelectable,
@@ -40,6 +40,10 @@ export type {
 export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Override the SOUL.md lookup. Tests and head runtimes use this for isolated prompt construction. */
   soulOverride?: string;
+  /** Every available skill (built-ins + VFS) — renders as an ambient
+   *  name+description index every turn, resolved by the backend from
+   *  resolveTurnSkills. */
+  availableSkills?: ReadonlyArray<ParsedSkill>;
   /** Active skills for this turn, resolved by the backend at turn start. */
   activeSkills?: ActiveSkillSet;
   /** Optional working directory hint for local/cloud execution surfaces. */
@@ -96,7 +100,7 @@ function renderOperatingGuidance(surface: PromptSurface): string {
   if (mode === 'plan') {
     lines.push('- Planning mode: leave state as you found it and produce a concrete plan with affected files and verification.');
   } else if (mode === 'release') {
-    lines.push('- Release mode: use release to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
+    lines.push('- Release mode: use `release.*` inside execute_tools to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
     lines.push('- Never deploy Proteus release changes without an explicit approval record.');
   } else if (mode === 'cron') {
     lines.push('- Scheduled wake mode: identify why you were woken, do only the scheduled work, persist any durable outcome, then stop.');
@@ -457,6 +461,7 @@ export function buildSystemPromptSync(
     renderExecutorSection(surface),
     renderAgentStateSection(surface),
     opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
+    opts.availableSkills?.length ? renderSkillsIndexSection(opts.availableSkills).trim() : '',
     opts.activeSkills ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills)).trim() : '',
   ].filter(Boolean).join('\n\n');
 }

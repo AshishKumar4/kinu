@@ -116,7 +116,7 @@ fi
 # surface, and every backend builds its tools from @proteus/core's
 # buildBuiltinTools — no backend-local tool factory, no legacy buildAgentTools.
 REGISTRY_PROBE="import { BUILTIN_TOOLS } from './packages/core/src/tools/registry.ts'; console.log([...BUILTIN_TOOLS].sort().join(','))"
-EXPECTED_TOOLS='agents,execute_tools,file,memory,release,report,run,skills,tasks,web'
+EXPECTED_TOOLS='agents,execute_tools,file,memory,report,run,tasks,web'
 REGISTRY_TOOLS=$(bun -e "$REGISTRY_PROBE" 2>/dev/null | tail -n 1)
 # Each actor composition root consumes the shared factory. The HEAD toolset
 # builder now lives in core (packages/core/src/heads/head-tools.ts) so both

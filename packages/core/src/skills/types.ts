@@ -81,20 +81,6 @@ export type SkillSource =
    *  written, but the loader tags it so the UI can distinguish. */
   | 'agent';
 
-/** Light index entry — what `skills({action:'list'})` returns. */
-export interface SkillIndexEntry {
-  name: string;
-  description: string;
-  allowed_tools: string[];
-  keywords: string[];
-  auto_activate: boolean;
-  disable_model_invocation: boolean;
-  user_invocable: boolean;
-  source: SkillSource;
-  /** Byte size of the body — useful so the LLM knows the cost. */
-  body_size: number;
-}
-
 /** Outcome of resolving which skills are active for a given turn. */
 export interface ActiveSkillSet {
   active: ParsedSkill[];
@@ -107,34 +93,12 @@ export type ActivationReason =
   | { kind: 'keyword'; matched_keyword: string }
   | { kind: 'always_active'; via: 'config' };
 
-/** Action discriminator for the single `skills` LLM tool. */
-export type SkillsAction =
-  | { action: 'list' }
-  | { action: 'read'; name: string }
-  | { action: 'invoke'; name: string }   // explicit activation for this turn
-  | {
-      action: 'create';
-      name: string;
-      description: string;
-      body: string;
-      allowed_tools?: string[];
-      keywords?: string[];
-      auto_activate?: boolean;
-      disable_model_invocation?: boolean;
-      user_invocable?: boolean;
-    }
-  | {
-      action: 'edit';
-      name: string;
-      description?: string;
-      body?: string;
-      allowed_tools?: string[];
-      keywords?: string[];
-      auto_activate?: boolean;
-      disable_model_invocation?: boolean;
-      user_invocable?: boolean;
-    }
-  | { action: 'delete'; name: string };
+// There is no SkillsAction type anymore: skill CRUD (read/create/edit/
+// delete) is ordinary workspace.readFile/writeFile/readdir/exec('rm …')
+// inside execute_tools — no dispatcher takes a discriminated action union
+// for it. `list`/`invoke` are gone outright: discovery is the ambient index
+// (renderSkillsIndexSection), and activation is resolved once at turn start
+// (resolveTurnSkills), never by a mid-turn call.
 
 export class SkillError extends Error {
   constructor(public readonly code: SkillErrorCode, message: string) {

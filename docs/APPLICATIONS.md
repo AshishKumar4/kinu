@@ -104,7 +104,7 @@ The CLI version runs locally with bun:sqlite, providing the same core capabiliti
 ```bash
 proteus create dev-helper --purpose "A TypeScript development assistant"
 proteus chat dev-helper
-# Agent has access to execute_tools, run, skills, agents, memory, web
+# Agent has access to execute_tools, run, file, agents, memory, tasks, web
 # Evolution happens locally — crafted tools persist in ~/.proteus/dev-helper/agent.db
 ```
 

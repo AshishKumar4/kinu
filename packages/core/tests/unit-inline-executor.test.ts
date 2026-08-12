@@ -15,6 +15,10 @@ import { DefaultExecutionRouter } from '../src/execution/router.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
 import { CRAFT_NEUTRAL_PRIOR } from '../src/craft/in-episode.js';
 import { VIEW_DATA_SOURCES, initViewTables, listViews, readView } from '../src/views/index.js';
+import { createFileTool } from '../src/tools/file-tool.js';
+import { TurnFileLedger } from '../src/tools/file-ledger.js';
+import { TurnContextBudget } from '../src/context-budget.js';
+import { toolExecute } from '@proteus/test-utils';
 
 function buildExec(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return createInlineExecutor({
@@ -223,6 +227,102 @@ describe('workspace.writeFile over the CompositeVFS — the file plane both back
     await exec.tools.writeFile.execute('notes/todo.md', 'b');
     expect(await vfs.readFile('/local/src/main.ts', { encoding: 'utf8' })).toBe('a');
     expect(await vfs.readFile('/local/notes/todo.md', { encoding: 'utf8' })).toBe('b');
+  });
+});
+
+/**
+ * workspace.editFile — the codemode reach for the native `file` tool's
+ * exact-match, read-before-write-enforced edit (createFileDispatcher, core
+ * tools/file-tool.ts). Same gate, and — when a ledger thunk is shared — the
+ * SAME state a native `file` call would see, so a read/write on one surface
+ * is known to the other.
+ */
+describe('workspace.editFile — the same gate the native `file` tool enforces', () => {
+  test('refuses to edit a file never read or written in this scope', async () => {
+    const { rt } = createTestRuntime();
+    await rt.storage.vfs.writeFile('/local/blind.md', 'original');
+    const exec = buildExec(rt);
+    const result = await exec.tools.editFile.execute('/local/blind.md', [
+      { old_text: 'original', new_text: 'changed' },
+    ]) as { ok?: boolean; error?: string };
+    expect(result.ok).toBeUndefined();
+    expect(result.error).toContain('has not been read here yet');
+    expect(await rt.storage.vfs.readFile('/local/blind.md', { encoding: 'utf8' })).toBe('original');
+  });
+
+  test('readFile then editFile: the read counts, the edit lands', async () => {
+    const { rt } = createTestRuntime();
+    await rt.storage.vfs.writeFile('/local/notes.md', 'Hello world');
+    const exec = buildExec(rt);
+    await exec.tools.readFile.execute('/local/notes.md');
+    const result = await exec.tools.editFile.execute('/local/notes.md', [
+      { old_text: 'world', new_text: 'proteus' },
+    ]) as { ok?: boolean; error?: string };
+    expect(result.ok).toBe(true);
+    expect(await rt.storage.vfs.readFile('/local/notes.md', { encoding: 'utf8' })).toBe('Hello proteus');
+  });
+
+  test('writeFile then editFile in the same script: the write counts as having read it', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+    await exec.tools.writeFile.execute('/local/fresh.md', 'v1 content');
+    const result = await exec.tools.editFile.execute('/local/fresh.md', [
+      { old_text: 'v1', new_text: 'v2' },
+    ]) as { ok?: boolean; error?: string };
+    expect(result.ok).toBe(true);
+    expect(await rt.storage.vfs.readFile('/local/fresh.md', { encoding: 'utf8' })).toBe('v2 content');
+  });
+
+  test('refuses a non-unique old_text, touching nothing', async () => {
+    const { rt } = createTestRuntime();
+    const exec = buildExec(rt);
+    await exec.tools.writeFile.execute('/local/dup.md', 'foo\nfoo\n');
+    const result = await exec.tools.editFile.execute('/local/dup.md', [
+      { old_text: 'foo', new_text: 'bar' },
+    ]) as { ok?: boolean; error?: string };
+    expect(result.ok).toBeUndefined();
+    expect(result.error).toBeTruthy();
+    expect(await rt.storage.vfs.readFile('/local/dup.md', { encoding: 'utf8' })).toBe('foo\nfoo\n');
+  });
+
+  test('a shared ledger thunk makes workspace.readFile and the native `file` tool see the SAME read state', async () => {
+    const { rt } = createTestRuntime();
+    await rt.storage.vfs.writeFile('/local/shared.md', 'shared content');
+    const ledger = new TurnFileLedger();
+    const exec = createInlineExecutor({
+      vfs: rt.storage.vfs, memory: rt.memory, craftStore: rt.craftStore,
+      shell: { exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }) },
+      sql: rt.storage.sql,
+      ledger: () => ledger,
+    });
+    // Read via workspace.*...
+    await exec.tools.readFile.execute('/local/shared.md');
+    // ...then edit via the NATIVE `file` tool, over the SAME shared ledger.
+    const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger, budget: new TurnContextBudget(), memory: rt.memory });
+    const execute = toolExecute<Record<string, unknown>, { ok?: boolean; error?: string }>(fileTool);
+    const result = await execute({
+      action: 'edit', path: '/local/shared.md',
+      edits: [{ old_text: 'shared', new_text: 'REPLACED' }],
+    });
+    expect(result.ok).toBe(true);
+    expect(await rt.storage.vfs.readFile('/local/shared.md', { encoding: 'utf8' })).toBe('REPLACED content');
+  });
+
+  test('without a shared ledger, workspace.* and the native `file` tool have INDEPENDENT read state', async () => {
+    // Documents the fallback: omitting `ledger` gives workspace.* its own
+    // private ledger, so a workspace.readFile does not satisfy the native
+    // `file` tool's read-before-edit gate.
+    const { rt } = createTestRuntime();
+    await rt.storage.vfs.writeFile('/local/unshared.md', 'content');
+    const exec = buildExec(rt); // no ledger thunk
+    await exec.tools.readFile.execute('/local/unshared.md');
+    const fileTool = createFileTool({ vfs: rt.storage.vfs, ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory: rt.memory });
+    const execute = toolExecute<Record<string, unknown>, { ok?: boolean; error?: string }>(fileTool);
+    const result = await execute({
+      action: 'edit', path: '/local/unshared.md',
+      edits: [{ old_text: 'content', new_text: 'changed' }],
+    });
+    expect(result.error).toContain('has not been read here yet');
   });
 });
 

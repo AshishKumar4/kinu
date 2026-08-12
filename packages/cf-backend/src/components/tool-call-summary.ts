@@ -232,16 +232,17 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
   file: summarizeFile,
-  skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   agents: summarizeAgents,
   memory: summarizeMemory,
   tasks: summarizeTasks,
   web: summarizeWeb,
   // think/team/peers were unified into `agents`, fact into `memory`,
-  // web_search/web_fetch into `web`, `experience` became an owner-driven
-  // RPC rather than a tool, and `product_change` was renamed `release`;
-  // their summarizers remain so tool calls in STORED transcripts keep
-  // rendering under the name they were recorded with.
+  // web_search/web_fetch into `web`, `experience` became an owner-driven RPC
+  // rather than a tool, `product_change` was renamed `release`, and `skills`
+  // (list/invoke, both dead weight — invoke never restricted the turn that
+  // called it) and `release` itself left the model's tool surface for
+  // codemode/workspace.* reach; their summarizers remain so tool calls in
+  // STORED transcripts keep rendering under the name they were recorded with.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
@@ -251,6 +252,7 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   web_search: (input) => quoted(str(input, "query")),
   web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
+  skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   release: summarizeRelease,
   product_change: summarizeRelease,
 };

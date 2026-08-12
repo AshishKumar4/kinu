@@ -302,7 +302,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const base = {
             soulOverride: 'You are Proteus.',
-            availableTools: ['skills'] as const,
+            // Arbitrary valid tool — this probe exercises activation-reason
+            // stability, not the tool it happens to advertise. `skills` left
+            // the native surface; `memory` fills the same placeholder role.
+            availableTools: ['memory'] as const,
             backend: 'cli-local' as const,
             currentDate: '2026-01-01',
           };

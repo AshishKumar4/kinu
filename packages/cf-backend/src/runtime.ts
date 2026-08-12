@@ -19,6 +19,7 @@ import type {
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
+  TurnAccumulator,
 } from "@proteus/core";
 import {
   CompositeVFS, type MountPolicy,
@@ -72,6 +73,13 @@ import {
 type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'> & {
   readonly env: Env;
   readonly ctx: DurableObjectState;
+  /** The turn's ledger + budget, when this actor has one — ActorAgent
+   *  (orchestrator, subordinate) does; ExplorationAgent (a head/fork) does
+   *  not, so the `workspace` provider's editFile/readFile/writeFile fall
+   *  back to a private ledger there. Optional, not narrowed further than
+   *  TurnAccumulator's own two turn-scoped fields, so this stays the same
+   *  "bare surface" the type's own docstring commits to. */
+  readonly acc?: Pick<TurnAccumulator, 'files' | 'context'>;
 };
 
 /**
@@ -218,6 +226,18 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
     sql,
     // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
+    // Shares the native `file` tool's turn ledger/budget with workspace.*
+    // (editFile's gate, readFile/writeFile's observe). The thunks are passed
+    // unconditionally and read `agent.acc` only when actually CALLED (a tool
+    // execution, always well after this runtime finished constructing) —
+    // never here, synchronously, inside this lazy getter's own body, where
+    // touching `agent.acc` (ActorAgent only) could recurse back into
+    // `this.rt` through `this.orch`'s own dependency chain before `_rt` is
+    // cached. Undefined for a head (ExplorationAgent has no `acc`) — the
+    // executor falls back to a private ledger there, same as before this
+    // existed.
+    ledger: () => agent.acc?.files,
+    budget: () => agent.acc?.context,
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed

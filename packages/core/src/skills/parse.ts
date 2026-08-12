@@ -173,8 +173,18 @@ function asString(v: unknown): string {
   return typeof v === 'string' ? v : v == null ? '' : String(v);
 }
 
+/**
+ * Our own skills (and Hermes's) write `allowed-tools`/`keywords` as a YAML
+ * list. The Agent Skills spec (agentskills.io) writes `allowed-tools` as ONE
+ * space-separated scalar string — `Bash(git:*) Read` is two tools, not one.
+ * Treating the whole string as a single pattern (the bug this replaces)
+ * produces a pattern that matches nothing, so a spec-conformant skill that
+ * restricts the surface at all collapses it to nothing: every real tool name
+ * fails to match the one bogus giant pattern. Splitting on whitespace handles
+ * both dialects with one rule, since our own values never contain spaces.
+ */
 function asStringArray(v: unknown): string[] {
   if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
-  if (typeof v === 'string' && v.trim()) return [v.trim()];
+  if (typeof v === 'string' && v.trim()) return v.trim().split(/\s+/).filter(Boolean);
   return [];
 }
