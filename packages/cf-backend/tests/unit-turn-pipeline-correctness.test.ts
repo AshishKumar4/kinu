@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { memberBody } from '@proteus/test-utils';
 
 // The turn pipeline is split across the actor substrate (actor-agent.ts —
 // beforeTurn assembly, the BackendHost, the event-injection machinery) and
@@ -213,7 +214,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('activation runs one stale-delivery sweep and schedules the standard drain when it recovers rows', () => {
-    const onStart = source.slice(source.indexOf('async onStart()'), source.indexOf('// ── DO alarm'));
+    const onStart = memberBody(source, 'async onStart()', 'orchestrator.ts');
     expect(onStart).toContain('this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS)');
     expect(onStart).toContain('this.orch.scheduleDrain()');
   });

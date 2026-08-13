@@ -13,6 +13,7 @@ NC='\033[0m'
 PASS=0
 FAIL=0
 SKIP=0
+INFO=0
 RESULTS=()
 
 check() {
@@ -45,6 +46,14 @@ skip() {
   local name="$1"; local reason="$2"
   RESULTS+=("${YELLOW}⏭  SKIP${NC}: $name ($reason)")
   ((SKIP++))
+}
+
+# A measurement with no pass/fail criterion. It is NOT counted as a pass — a
+# line that says PASS whatever the number is inflates the score and hides the
+# number it was added to surface.
+info() {
+  RESULTS+=("${BOLD}ℹ  INFO${NC}: $1")
+  ((INFO++))
 }
 
 cd "$(dirname "$0")/.." || exit 1
@@ -165,10 +174,13 @@ else
   ((FAIL++))
 fi
 
-# Lean sorry count (informational, not a failure)
-SORRY_COUNT=$(grep -rn '\bsorry\b' lean/Proteus/ --include='*.lean' 2>/dev/null | grep -v '^[[:space:]]*--' | wc -l)
-RESULTS+=("${GREEN}✅ PASS${NC}: Lean sorry count: $SORRY_COUNT (informational)")
-((PASS++))
+# Lean sorry count. Reported, never scored: nothing in this repo gates the
+# count (verify-lean.sh does not), so there is no criterion to pass. It used to
+# print PASS unconditionally, which is how 11 open proofs read as a green line.
+SORRY_HITS=$(grep -rn '\bsorry\b' lean/Proteus/ --include='*.lean' 2>/dev/null | grep -v '^[[:space:]]*--' || true)
+SORRY_COUNT=$(printf '%s' "$SORRY_HITS" | grep -c . || true)
+SORRY_MODULES=$(printf '%s' "$SORRY_HITS" | cut -d: -f1 | sort -u | grep -c . || true)
+info "Lean sorry count: $SORRY_COUNT across $SORRY_MODULES module(s) — ungated"
 
 echo ""
 
@@ -290,13 +302,12 @@ echo -e "${BOLD}§7. Web E2E (live agent tests)${NC}"
 
 WEB_E2E="$(dirname "$0")/e2e-web.sh"
 if [ -x "$WEB_E2E" ]; then
-  if bash "$WEB_E2E"; then
-    RESULTS+=("${GREEN}✅ PASS${NC}: Web E2E tests passed")
-    ((PASS++))
-  else
-    RESULTS+=("${RED}❌ FAIL${NC}: Web E2E tests failed")
-    ((FAIL++))
-  fi
+  bash "$WEB_E2E"; WEB_CODE=$?
+  case "$WEB_CODE" in
+    0) RESULTS+=("${GREEN}✅ PASS${NC}: Web E2E tests passed"); ((PASS++)) ;;
+    2) skip "Web E2E tests" "dev server not reachable on :5173" ;;
+    *) RESULTS+=("${RED}❌ FAIL${NC}: Web E2E tests failed (exit $WEB_CODE)"); ((FAIL++)) ;;
+  esac
 else
   skip "Web E2E tests" "scripts/e2e-web.sh not found or not executable"
 fi
@@ -338,7 +349,7 @@ done
 
 TOTAL=$((PASS + FAIL + SKIP))
 echo ""
-echo -e "${BOLD}SUMMARY: ${PASS}/${TOTAL} passed, ${FAIL} failed, ${SKIP} skipped${NC}"
+echo -e "${BOLD}SUMMARY: ${PASS}/${TOTAL} passed, ${FAIL} failed, ${SKIP} skipped, ${INFO} informational${NC}"
 echo ""
 
 if [ "$FAIL" -gt 0 ]; then

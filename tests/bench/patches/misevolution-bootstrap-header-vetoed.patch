@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/scaffold/misevolution.ts b/packages/core/src/scaffold/misevolution.ts
-index a77dca4..2db6c24 100644
+index 79bf7111..a312ffe9 100644
 --- a/packages/core/src/scaffold/misevolution.ts
 +++ b/packages/core/src/scaffold/misevolution.ts
-@@ -67,7 +67,7 @@ const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
+@@ -72,7 +72,7 @@ const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
    },
    {
      id: 'version-machinery-tamper',
--    pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|['"`]scaffold\/agent\.js|agent\.js\.v\d/,
-+    pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|scaffold\/agent\.js|agent\.js\.v\d/,
+-    pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|\bscaffold_trial_queue\b|['"`]scaffold\/agent\.js|agent\.js\.v\d/,
++    pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|\bscaffold_trial_queue\b|scaffold\/agent\.js|agent\.js\.v\d/,
      reason: 'touches the scaffold version files or shadow-eval tables — promotion happens only through the gated pipeline',
    },
    {

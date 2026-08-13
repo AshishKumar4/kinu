@@ -1,8 +1,8 @@
 diff --git a/packages/core/src/evolution/engine.ts b/packages/core/src/evolution/engine.ts
-index e480aad..cb55ec1 100644
+index f9f85f9d..b150ca26 100644
 --- a/packages/core/src/evolution/engine.ts
 +++ b/packages/core/src/evolution/engine.ts
-@@ -427,7 +427,7 @@ export class EvolutionEngine {
+@@ -628,7 +628,7 @@ export class EvolutionEngine {
      // (including anything the reflection/evolution above just landed) and
      // emit it through the normal event stream — the CLI prints it live, the
      // web timeline carries it. Pure read over the ledgers; never blocks.
@@ -10,4 +10,4 @@ index e480aad..cb55ec1 100644
 +    this.emitChangelogDigest(session.endedAt);
    }
  
-   /** Emit one "what I changed about myself" line for the closed window. */
+   // ── The promotion gate's shadow rollout, both halves ────────────

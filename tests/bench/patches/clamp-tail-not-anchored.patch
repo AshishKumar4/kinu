@@ -1,10 +1,11 @@
 diff --git a/packages/core/src/tools/clamp.ts b/packages/core/src/tools/clamp.ts
+index 39c67e4c..7d3a462f 100644
 --- a/packages/core/src/tools/clamp.ts
 +++ b/packages/core/src/tools/clamp.ts
-@@ -76,7 +76,7 @@
+@@ -85,7 +85,7 @@ export async function clampToolResult(
        'read or filter it with workspace.readFile inside execute_tools ' +
-       '(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]'
-     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]`;
+       `(oversize: slice + llm.query each slice, aggregate), or rerun with a filter]${reason}`
+     : `[output truncated: ${omitted} chars omitted; rerun with a filter (grep/head/tail) to see the rest]${reason}`;
 -  const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(-tailLen)}`;
 +  const clamped = `${text.slice(0, headLen)}\n\n${marker}\n\n${text.slice(tailLen)}`;
    if (opts.budget) {

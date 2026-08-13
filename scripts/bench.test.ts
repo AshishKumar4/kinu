@@ -5,6 +5,7 @@ import { describe, test, expect, afterAll } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
   encodeLongHorizonSpec, renderLongHorizonAnswerFile, splitOf,
@@ -450,6 +451,42 @@ describe('the task corpus stays applicable to HEAD', () => {
         { cwd: repo, stdout: 'pipe', stderr: 'pipe' },
       ).exitCode !== 0);
     expect(stale).toEqual([]);
+  });
+
+  // The only sanctioned answer to a patch that can never apply again: the code
+  // it was data about is gone. Recording it keeps that indistinguishable-by-
+  // inspection case apart from dropping a task the tree got worse at, and keeps
+  // the dev/sealed accounting reconstructable from the ledger alone.
+  const RetiredEntry = v.object({
+    id: v.pipe(v.string(), v.minLength(1)),
+    split: v.picklist(['dev', 'sealed']),
+    retiredAt: v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/)),
+    /** The code the task was data about, named precisely enough to check. */
+    subject: v.pipe(v.string(), v.minLength(1)),
+    /** The commit that removed that code — the claim, made checkable. */
+    removedBy: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/)),
+    reason: v.pipe(v.string(), v.minLength(1)),
+  });
+
+  test('every retired task is recorded, gone, and honestly split', () => {
+    const dir = join(import.meta.dir, '..', 'tests', 'bench');
+    const entries = readFileSync(join(dir, 'retired.jsonl'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim() && !l.startsWith('#'))
+      .map((l) => v.parse(RetiredEntry, JSON.parse(l)));
+    expect(entries.length).toBeGreaterThan(0);
+    expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
+
+    const live = new Set(loadBenchCorpus(join(import.meta.dir, '..')).patches.keys());
+    for (const e of entries) {
+      // A retired id must be absent from the corpus AND leave no orphan patch,
+      // or `loadBenchCorpus` would still be carrying it.
+      expect(live.has(e.id)).toBe(false);
+      expect(existsSync(join(dir, 'patches', `${e.id}.patch`))).toBe(false);
+      // Re-derived, never trusted: a misreported split would silently rewrite
+      // how much held-out evidence the corpus is claimed to have had.
+      expect(e.split).toBe(splitOf(e.id));
+    }
   });
 });
 

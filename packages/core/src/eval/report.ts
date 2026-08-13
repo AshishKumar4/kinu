@@ -87,11 +87,25 @@ export interface GateResult {
 
 /** CI quality floor: the candidate's aggregate judge score must clear the
  *  committed threshold. A run with zero cases fails — an empty corpus proves
- *  nothing and must not silently pass the gate. */
+ *  nothing and must not silently pass the gate. Neither does a run whose
+ *  strategies errored. */
 export function evaluateGate(report: EvalReport, threshold: number): GateResult {
   const score = report.aggregateScore;
   if (report.summary.total === 0) {
     return { pass: false, aggregateScore: score, threshold, reason: 'no eval cases ran — nothing to gate on' };
+  }
+  // A case whose strategy errored produced no answer, so the judge scored the
+  // absence of one — typically as a tie at 0.5. With a corpus of those the
+  // aggregate lands exactly on a 0.5 floor and passes, which is how a run where
+  // every single model call failed returned a green gate.
+  const errored = report.cases.filter((c) => c.errorA !== undefined || c.errorB !== undefined).length;
+  if (errored > 0) {
+    return {
+      pass: false,
+      aggregateScore: score,
+      threshold,
+      reason: `${errored}/${report.cases.length} case(s) errored — the run is not a measurement`,
+    };
   }
   const pass = score >= threshold;
   return {

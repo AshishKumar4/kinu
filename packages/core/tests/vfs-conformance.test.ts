@@ -128,9 +128,12 @@ function nimbusHandle(fs: MemFs): NimbusHandle {
   } as unknown as NimbusHandle;
 }
 
-function deviceTransport(fs: MemFs): DeviceTransport {
+/** `calls` records every method that actually reached the device, so a test can
+ *  assert a denial happened locally rather than at the far end. */
+function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
   return {
     async rpc(method: string, params: unknown[]) {
+      calls.push(method);
       const p = String(params[0] ?? '');
       if (method === 'readFile') {
         const b = fs.read(p);
@@ -245,3 +248,43 @@ for (const c of cases) {
     });
   });
 }
+
+// ── the device consent scope ────────────────────────────────────────────────
+
+// The path-scope layer over the hub's action consent: the only thing between an
+// agent granted one directory and the rest of the user's machine. Asserted
+// directly because the shared contract above runs the device view at the
+// full-filesystem tier, where the guard is deliberately inert.
+describe('device file view — the consented subtree is a boundary', () => {
+  function scoped(root: string) {
+    const calls: string[] = [];
+    const consent = { consentedRoot: () => root, hasFullFilesystem: async () => false };
+    return { vfs: deviceFiles(deviceTransport(new MemFs(), calls), consent), calls };
+  }
+
+  test('SECURITY: escaping the consented subtree is denied without the full-fs tier', async () => {
+    const { vfs, calls } = scoped('/home/me/proj');
+    expect(await code(() => vfs.readFile('/etc/passwd'))).toBe('EACCES');
+    await expect(vfs.readFile('/etc/passwd')).rejects.toThrow(
+      /outside the consented device directory '\/home\/me\/proj'[\s\S]*full-filesystem consent tier/,
+    );
+    // A sibling whose name merely BEGINS with the consented one is outside it.
+    expect(await code(() => vfs.readFile('/home/me/projects/x'))).toBe('EACCES');
+    // Every op is guarded, not just reads.
+    expect(await code(() => vfs.writeFile('/etc/cron.d/evil', 'x'))).toBe('EACCES');
+    expect(await code(() => vfs.readdir('/etc'))).toBe('EACCES');
+    expect(await code(() => vfs.stat('/etc/passwd'))).toBe('EACCES');
+    expect(await code(() => vfs.exists('/etc/passwd'))).toBe('EACCES');
+    expect(await code(() => vfs.unlink('/etc/passwd'))).toBe('EACCES');
+    expect(await code(() => vfs.mkdir('/opt/x'))).toBe('EACCES');
+    // The denial happened locally — nothing was ever sent to the device.
+    expect(calls).toEqual([]);
+  });
+
+  test('the consented root itself, and everything under it, stays reachable', async () => {
+    const { vfs } = scoped('/home/me/proj');
+    await vfs.writeFile('/home/me/proj/notes.md', 'ok');
+    expect(await vfs.readFile('/home/me/proj/notes.md', { encoding: 'utf8' })).toBe('ok');
+    expect(await code(() => vfs.readdir('/home/me/proj'))).toBeUndefined();
+  });
+});

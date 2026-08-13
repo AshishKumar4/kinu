@@ -15,7 +15,7 @@
   ],
   "scripts": {
     "test": "bun test --cwd packages/agent-utils && bun test --cwd packages/core && bun test --cwd packages/compaction",
-    "check": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p scripts/tsconfig.bench.json && node --check packages/pc-agent/src/index.js",
+    "check": "tsc --noEmit -p packages/agent-utils && tsc --noEmit -p packages/core && tsc --noEmit -p packages/compaction && tsc --noEmit -p packages/cf-backend && tsc --noEmit -p packages/cli-backend && tsc --noEmit -p packages/cli && tsc --noEmit -p packages/test-utils && tsc --noEmit -p scripts/tsconfig.scripts.json && node --check packages/pc-agent/src/index.js",
     "lint": "oxlint",
     "deploy": "bash scripts/deploy.sh",
     "dev": "bun run --cwd packages/cf-backend start",

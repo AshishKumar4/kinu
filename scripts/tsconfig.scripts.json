@@ -1,0 +1,17 @@
+{
+  "//": "Typecheck for the standalone scripts that gate CI. scripts/ is a folder of runnable scripts, not a package: the ones that are not ES modules declare the same top-level names and would collide if compiled as one program, so this lists the files rather than globbing the folder.",
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+    "rootDir": "..",
+    "allowImportingTsExtensions": true
+  },
+  "include": [
+    "bench.ts", "bench.test.ts", "bench-corpus.ts", "bench-sandbox.ts", "bench-solvers.ts",
+    "bench-agent-worker.ts", "bench-longhorizon.ts", "bench-longhorizon-check.ts",
+    "secret-scan.ts", "secret-scan.test.ts"
+  ]
+}

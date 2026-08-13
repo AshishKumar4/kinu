@@ -1,17 +1,26 @@
 name: Quality Eval
 
-# Runs the seed-corpus benchmark (runEvalPair + judge) as a regression gate.
-# This makes REAL model calls, so it never runs on every push — only:
-#   - manually (workflow_dispatch),
-#   - nightly (schedule), or
-#   - on a PR labelled `run-eval`.
-# The credential-free gate LOGIC (report + threshold) is verified on every push
-# by the main CI workflow; this job adds the live-model measurement on top.
+# Two jobs with different costs, so they get different triggers.
+#
+# `benchmark` makes REAL model calls. It runs only when someone asks for it —
+# manual dispatch, or a PR labelled `run-eval`. It used to run nightly with the
+# baseline defaulting to the candidate model, i.e. it paid every night to have
+# one model judged against itself, against an uncalibrated floor, on a corpus
+# containing tasks a no-tools single-shot cannot perform. The script now refuses
+# that configuration; the schedule is gone with it.
+#
+# `validate-corpus` needs no credentials and no model, so it keeps the nightly
+# cadence. It is the measurement instrument's own integrity check: every bench
+# task's defect must break this repo's checks and reversing it must restore
+# them.
 on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Model spec (provider/model). Blank = repo default (vars.EVAL_MODEL).'
+        description: 'Candidate model spec (provider/model). Blank = vars.EVAL_MODEL.'
+        required: false
+      baseline_model:
+        description: 'Baseline model spec. Must differ from the candidate. Blank = vars.EVAL_BASELINE_MODEL.'
         required: false
       min_score:
         description: 'Quality floor [0..1]. Blank = committed DEFAULT_QUALITY_THRESHOLD.'
@@ -23,9 +32,11 @@ on:
 
 jobs:
   benchmark:
-    # On PRs, only when explicitly labelled — otherwise skip so no one pays for
-    # model calls by accident. Dispatch + schedule always run.
-    if: github.event_name != 'pull_request' || github.event.label.name == 'run-eval'
+    # Never on the schedule — this one costs money. Dispatch, or an explicit
+    # `run-eval` label on a PR.
+    if: >-
+      github.event_name == 'workflow_dispatch'
+      || (github.event_name == 'pull_request' && github.event.label.name == 'run-eval')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -43,9 +54,10 @@ jobs:
       - name: Verify gate logic (no model calls)
         run: bun test scripts/eval.test.ts packages/core/tests/unit-eval-report.test.ts
 
-      # The live benchmark. Provider auth comes from repo secrets/vars; with none
-      # configured the script fails with an honest message (never a hardcoded key).
-      - name: Run quality benchmark
+      # The live A/B. Provider auth comes from repo secrets/vars; with none
+      # configured the script fails with an honest message (never a hardcoded
+      # key). It also refuses to run when the baseline is not a different model.
+      - name: Run model A/B
         env:
           PROTEUS_BASE_URL: ${{ secrets.EVAL_BASE_URL }}
           PROTEUS_AUTH: ${{ secrets.EVAL_AUTH }}
@@ -53,13 +65,9 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.EVAL_OPENAI_API_KEY }}
           PROTEUS_MODEL: ${{ github.event.inputs.model || vars.EVAL_MODEL }}
           EVAL_MIN_SCORE: ${{ github.event.inputs.min_score || vars.EVAL_MIN_SCORE }}
-        run: bun scripts/eval.ts --out eval-report.json
-
-      # Corpus validity: every bench task's defect must break this repo's own
-      # checks and reversing it must restore them. Needs no credentials, but
-      # runs the suite ~34 times, so it lives here rather than on every push.
-      - name: Validate bench corpus
-        run: bun scripts/bench.ts validate --run-root "$RUNNER_TEMP/bench"
+        run: >-
+          bun scripts/eval.ts --out eval-report.json
+          --baseline-model "${{ github.event.inputs.baseline_model || vars.EVAL_BASELINE_MODEL }}"
 
       - name: Upload benchmark report
         if: always()
@@ -68,3 +76,24 @@ jobs:
           name: eval-report
           path: eval-report.json
           if-no-files-found: ignore
+
+  validate-corpus:
+    # Free: no model, no credentials. Runs the repo suite ~160 times, which is
+    # why it is nightly rather than per-push — the per-push half (every defect
+    # patch still applies) lives in the CI workflow's bench harness step.
+    if: github.event_name != 'pull_request' || github.event.label.name == 'run-eval'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Validate bench corpus
+        run: bun scripts/bench.ts validate --run-root "$RUNNER_TEMP/bench"
