@@ -98,34 +98,60 @@ describe('MCTS evict-resume (B6)', () => {
 // the checkpoint (mcts_search_runs.updated_at) is the one real heartbeat this
 // backend has, but nothing reached console output. Gated on `search` being
 // present, same as the checkpoint call itself.
-/** Manual console.log capture — bun:test's spyOn(console, 'log') does not
- *  intercept calls made from inside the async work `await`ed here (its own
- *  reporter appears to hold a pre-mock reference), verified against a direct
- *  count. A plain reassignment is what actually observes the calls. */
-async function captureConsoleLog(fn: () => Promise<unknown>): Promise<string[]> {
-  const original = console.log;
-  const calls: string[] = [];
-  console.log = (...args: unknown[]) => { calls.push(String(args[0])); };
+/** Manual console capture — bun:test's spyOn(console, …) does not intercept
+ *  calls made from inside the async work `await`ed here (its own reporter
+ *  appears to hold a pre-mock reference), verified against a direct count. A
+ *  plain reassignment is what actually observes the calls. Both channels are
+ *  captured because WHICH one carries the heartbeat is the contract under
+ *  test. */
+async function captureConsole(fn: () => Promise<unknown>): Promise<{ stdout: string[]; stderr: string[] }> {
+  const originalLog = console.log;
+  const originalError = console.error;
+  const stdout: string[] = [];
+  const stderr: string[] = [];
+  console.log = (...args: unknown[]) => { stdout.push(String(args[0])); };
+  console.error = (...args: unknown[]) => { stderr.push(String(args[0])); };
   try {
     await fn();
   } finally {
-    console.log = original;
+    console.log = originalLog;
+    console.error = originalError;
   }
-  return calls;
+  return { stdout, stderr };
+}
+
+const isCheckpointLine = (line: string): boolean => line.startsWith('[proteus] mcts checkpoint');
+
+/** A runtime plus the durable search store — the only configuration that
+ *  heartbeats at all, so both channel assertions run against it. */
+function checkpointedRuntime() {
+  const { rt, db } = createTestRuntime();
+  initTables(rt);
+  return { rt, store: new MctsSearchStore(makeSql(db as unknown as Database)) };
 }
 
 describe('MCTS per-iteration checkpoint logging', () => {
   test('a durably-checkpointed search logs iteration/total/remaining every iteration', async () => {
-    const { rt, db } = createTestRuntime();
-    initTables(rt);
-    const store = new MctsSearchStore(makeSql(db as unknown as Database));
-    const lines = await captureConsoleLog(() =>
+    const { rt, store } = checkpointedRuntime();
+    const { stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 3, branches: 1, search: store }),
     );
-    const checkpointLines = lines.filter((line) => line.startsWith('[proteus] mcts checkpoint'));
+    const checkpointLines = stderr.filter(isCheckpointLine);
     expect(checkpointLines).toHaveLength(3);
     expect(checkpointLines[0]).toContain('iteration=1/3 remaining=2');
     expect(checkpointLines[2]).toContain('iteration=3/3 remaining=0');
+  });
+
+  // Regression: the heartbeat used to go to stdout, which under
+  // `proteus exec --json` IS the NDJSON event stream — four corrupt,
+  // unparseable lines per run for any CI consumer. Workers Logs capture stderr
+  // just the same, so one channel serves both surfaces.
+  test('the heartbeat never touches stdout, which is the CLI machine channel', async () => {
+    const { rt, store } = checkpointedRuntime();
+    const { stdout } = await captureConsole(() =>
+      runMCTS(rt, createMockSession(), TASK, { budget: 3, branches: 1, search: store }),
+    );
+    expect(stdout.filter(isCheckpointLine)).toHaveLength(0);
   });
 
   test('the fiber-snapshot-only path (no search store) stays silent', async () => {
@@ -133,9 +159,9 @@ describe('MCTS per-iteration checkpoint logging', () => {
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
     initCraftScoreTables(rt.storage.execRaw);
-    const lines = await captureConsoleLog(() =>
+    const { stdout, stderr } = await captureConsole(() =>
       runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),
     );
-    expect(lines.filter((line) => line.startsWith('[proteus] mcts checkpoint'))).toHaveLength(0);
+    expect([...stdout, ...stderr].filter(isCheckpointLine)).toHaveLength(0);
   });
 });

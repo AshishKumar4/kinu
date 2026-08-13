@@ -12,7 +12,7 @@ import {
 } from '../src/jobs/index.js';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
-import type { Schedule } from '../src/types/primitives.js';
+import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
 /** A fiber that runs the body inline + captures each ctx.stash + exposes the
@@ -50,10 +50,23 @@ function fakeHost() {
   };
 }
 
-function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
-  const db = new Database(':memory:');
+/** One process's view of the lifecycle. `db` is threaded when a test needs a
+ *  SECOND process over the same durable rows — a restart, which is the only
+ *  place orphan recovery can happen. */
+function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy; db?: Database } = {}) {
+  const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
-  const store = new BackgroundJobStore(makeSql(db));
+  // The registry behind a switchable fault, so a test can reproduce the one
+  // failure the in-process settlement path cannot survive: teardown closing the
+  // database out from under a fiber that is still running ("Cannot use a closed
+  // database"), and then a LATER process opening the same durable rows.
+  const realSql = makeSql(db);
+  const storeFault = { closed: false };
+  const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+    if (storeFault.closed) throw new Error('Cannot use a closed database');
+    return realSql<T>(strings, ...values);
+  }) satisfies SqlExecutor;
+  const store = new BackgroundJobStore(sql);
   const hubSql = {
     exec(query: string, ...bindings: unknown[]) {
       const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
@@ -79,6 +92,7 @@ function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
   return {
     runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
     setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
+    storeFault, db,
   };
 }
 
@@ -285,10 +299,18 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   });
 });
 
+// Recovery always runs against rows a DEAD executor left behind, so these
+// start from the durable row alone — an evicted runner's in-memory cancel
+// handles went with the process that held them.
 describe('BackgroundJobRunner.recover — evict mid-flight', () => {
+  const orphanRow = (store: BackgroundJobStore, id: string): string => {
+    store.create({ id, kind: 'think', input: '{}', now: 1 });
+    return id;
+  };
+
   test('a job stashed running is failed + woken', async () => {
     const { runner, store, enqueued } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'je');
     await runner.recover({ jobId: id, phase: 'running' });
 
     expect(store.get(id)?.status).toBe('failed');
@@ -299,7 +321,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 
   test('a job already stashed settled is NOT re-failed or re-woken', async () => {
     const { runner, store, enqueued } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'js');
     store.settle(id, 0, '"x"', 123);
     await runner.recover({ jobId: id, phase: 'settled' });
 
@@ -309,7 +331,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 
   test('an outcome persisted before the settled checkpoint is re-woken without duplicate notification', async () => {
     const { runner, store, enqueued, notified } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'jp');
     store.settle(id, 0, '"saved"', Date.now());
 
     await runner.recover({ jobId: id, phase: 'running' });
@@ -321,7 +343,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 
   test('a cancelled outcome with a running checkpoint stays silent on recovery', async () => {
     const { runner, store, enqueued } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'jx');
     store.cancel(id, 0, Date.now());
 
     await runner.recover({ jobId: id, phase: 'running' });
@@ -369,17 +391,104 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
   test('a job that evicts on every activation is failed after the resume-attempt cap', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ evicted again
-    const { runner, store, enqueued } = setup({ resume });
-    store.create({ id: 'jc', kind: 'think', input: '{}', now: 1 });
+    const first = setup({ resume });
+    first.store.create({ id: 'jc', kind: 'think', input: '{}', now: 1 });
 
-    // Five recoveries re-drive; the sixth exceeds the cap and fails the job.
-    for (let i = 0; i < 6; i++) await runner.recover({ jobId: 'jc', phase: 'running' });
+    // One activation per recovery — a re-drive lives in the activation that
+    // started it, and the next eviction brings up a new one.
+    let last = first;
+    for (let activation = 0; activation < 6; activation++) {
+      last = setup({ resume, db: first.db });
+      await last.runner.recover({ jobId: 'jc', phase: 'running' });
+    }
 
-    const job = store.get('jc');
+    const job = first.store.get('jc');
     expect(job?.status).toBe('failed');
     expect(job?.error).toContain('gave up');
     expect(job?.resumeAttempts).toBe(6);
-    expect(enqueued.at(-1)?.metadata?.status).toBe('failed');
+    expect(last.enqueued.at(-1)?.metadata?.status).toBe('failed');
+  });
+
+  test('a job this runner is already driving is never re-driven out from under itself', async () => {
+    // A resume leaves a fiber row of its own, so one cold start can hand the
+    // SAME job to recover() twice — and the registry sweep names it as well.
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const { runner, store } = setup({ resume });
+    store.create({ id: 'jd', kind: 'agents', input: '{}', now: 1 });
+
+    await runner.recover({ jobId: 'jd', phase: 'running' });
+    await runner.recover({ jobId: 'jd', phase: 'running' });
+    await runner.recoverOrphans();
+
+    expect(store.get('jd')?.resumeAttempts).toBe(1);
+    expect(store.get('jd')?.epoch).toBe(1);
+  });
+});
+
+// The field failure this sweep exists for: a one-shot CLI run detached a job,
+// gave up waiting on it, and closed its database — after which the fiber's
+// settle write AND its last-resort force-fail both failed against the same dead
+// handle ("background-job settlement failed" / "force-fail failed", verbatim).
+// The row stayed 'running' with no fiber row left pointing at it, so a
+// fiber-keyed recovery never looked at it again: never resumed to a result,
+// never failed, and permanently holding one of the detach slots.
+describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forever', () => {
+  test('a settlement whose store closed under it strands the row — and the next start settles it', async () => {
+    const { runner, store, storeFault, settled, enqueued, db } = setup();
+    const id = runner.create('run', { command: 'sleep 1' }, new AbortController());
+    let finish: () => void = () => {};
+    runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('done'); }));
+
+    // Teardown: the process gave up on the fiber and closed the database.
+    storeFault.closed = true;
+    finish();
+    await settled();
+
+    // Reproduction: neither the outcome nor the force-fail could be written.
+    storeFault.closed = false;
+    expect(store.get(id)?.status).toBe('running');
+
+    // A later process over the same rows: nothing in memory owns this job, and
+    // no fiber row survived to announce it — the registry sweep is the only
+    // thing that can still reach it.
+    const next = setup({ db });
+    await next.runner.recoverOrphans();
+
+    expect(next.store.get(id)?.status).toBe('failed');
+    expect(next.store.get(id)?.error).toContain('eviction');
+    expect(next.enqueued.at(-1)?.metadata?.status).toBe('failed');
+    expect(enqueued).toHaveLength(0); // the stranded process woke nobody
+  });
+
+  test('resuming is bounded: repeated restarts end in a terminal status, not another re-drive', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ orphaned again
+    const first = setup({ resume });
+    first.store.create({ id: 'jz', kind: 'agents', input: '{}', now: 1 });
+
+    // Each restart finds the row, reclaims it, and re-drives — until the cap.
+    for (let start = 0; start < 6; start++) {
+      await setup({ resume, db: first.db }).runner.recoverOrphans();
+    }
+
+    const job = first.store.get('jz');
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toContain('gave up');
+    expect(first.store.runningIds()).toEqual([]);
+  });
+
+  test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {
+    const resume: JobResumer = async () => 'should not run';
+    const { runner, store, settled } = setup({ resume });
+    let finish: () => void = () => {};
+    const id = runner.create('run', {}, new AbortController());
+    runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('real result'); }));
+
+    await runner.recoverOrphans();
+    expect(store.get(id)?.resumeAttempts).toBe(0);
+
+    finish();
+    await settled();
+    expect(store.get(id)?.result).toBe('"real result"');
   });
 });
 

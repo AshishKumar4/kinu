@@ -2327,6 +2327,11 @@ export abstract class ActorAgent extends Think<Env> {
       // evolution_events INSERT that the user-facing recovery path emits.
       if (ctx.name.startsWith('bg:')) {
         await this.jobRunner.recover(ctx.snapshot);
+        // A cold start is also the moment to settle jobs whose fiber row did
+        // NOT survive with them: nothing in this isolate owns a job yet, so any
+        // other row still marked `running` is an orphan no recovery callback
+        // will ever arrive for.
+        await this.jobRunner.recoverOrphans();
         return;
       }
       // Persist for the UI's evolution-events stream.

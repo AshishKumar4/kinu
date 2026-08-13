@@ -329,8 +329,14 @@ export async function runMCTS(
         // life at all. Gated on `search` (only durably-checkpointed runs,
         // matching the checkpoint call itself) so the fiber-snapshot-only /
         // test path stays silent.
+        //
+        // stderr, not stdout, and for one reason that holds on both surfaces:
+        // on the CLI stdout IS the machine channel (`proteus exec --json`
+        // writes NDJSON there, and a heartbeat interleaved into it is a corrupt
+        // line a CI consumer cannot parse), while Workers Logs capture every
+        // console channel alike, so `wrangler tail` still shows this.
         if (search) {
-          console.log(`[proteus] mcts checkpoint rootId=${rootId} iteration=${phase.iteration}/${phase.iteration + phase.budget} remaining=${phase.budget}`);
+          console.error(`[proteus] mcts checkpoint rootId=${rootId} iteration=${phase.iteration}/${phase.iteration + phase.budget} remaining=${phase.budget}`);
         }
 
         report({

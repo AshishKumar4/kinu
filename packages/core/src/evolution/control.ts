@@ -279,7 +279,10 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
       dropQueuedShadowTrial(control.sql, trial.id);
       if (applied) {
         purgeQueuedShadowTrials(control.sql, null);
-        console.log(`[proteus] promotion gate chose ${applied} for scaffold v${pending.version} after ${trials} trial(s)`);
+        // stderr for the same reason as every other core diagnostic: stdout is
+        // the CLI's machine channel (`proteus exec --json`), and Workers Logs
+        // capture stderr just the same.
+        console.error(`[proteus] promotion gate chose ${applied} for scaffold v${pending.version} after ${trials} trial(s)`);
         return { trials, applied };
       }
     }

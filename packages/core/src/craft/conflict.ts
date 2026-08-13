@@ -38,9 +38,43 @@ export function checkConflictsBeforeAdding(
   return { conflicting: highSimilarity.map(t => t.name) };
 }
 
+/**
+ * Compile the candidate exactly the way the runtime will, and require a
+ * callable back.
+ *
+ * A crafted tool is invoked by compiling its stored source into a function and
+ * calling it (CLI: `new Function('return (' + code + ')')`; CF: the same
+ * expression spliced into the sandbox). Until this gate existed the ONLY
+ * admission test was "has a name, and does not start with `//`" — so an LLM
+ * that answered the extraction prompt with a statement fragment, prose, or an
+ * expression that throws the moment it is evaluated got that stored as a tool,
+ * seeded with a score, and offered to every later turn. Observed in production:
+ * a stored "tool" whose body was `await ({ runtime })(command)`.
+ *
+ * The probe runs through the execution seam rather than in core, for the same
+ * reason the scaffold parse gate does: codegen is unavailable in the Workers
+ * isolate but available inside every executor, so this is the one place the
+ * check can run on both backends. Evaluating the candidate expression is not a
+ * new exposure — it is the identical evaluation the first call would do, moved
+ * ahead of the write, in the same sandbox.
+ *
+ * What it proves: the source parses, and it denotes a function. What it cannot
+ * prove is that calling that function does anything useful — that is what the
+ * invocation-grounded fitness in craft/in-episode.ts is for.
+ */
+async function compilesToCallable(rt: AgentRuntime, code: string): Promise<string | null> {
+  const probe =
+    `async () => { const candidate = (${code});` +
+    ` if (typeof candidate !== 'function') throw new Error('crafted tool code is not a function');` +
+    ' return true; }';
+  const { error } = await rt.executor.execute(probe, []);
+  return error ?? null;
+}
+
 /** Upsert: update existing if conflict found and new score is better, else create.
- *  Extracted tool code passes the fixed misevolution criteria before any write —
- *  a veto rejects the candidate outright (existing tools stay untouched). */
+ *  Candidate code passes the fixed misevolution criteria AND compiles to a
+ *  callable before any write — either rejection drops the candidate outright
+ *  (existing tools stay untouched). */
 export async function upsertCraftedTool(
   rt: AgentRuntime,
   candidate: CraftCandidate,
@@ -51,6 +85,11 @@ export async function upsertCraftedTool(
       surface: 'craft', violation: misevolution, detail: `extracted tool "${candidate.name}" rejected`,
     });
     return { accepted: false, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
+  }
+
+  const compileError = await compilesToCallable(rt, candidate.code);
+  if (compileError) {
+    return { accepted: false, vetoReason: `Unusable tool code for "${candidate.name}": ${compileError}` };
   }
 
   const { conflicting } = checkConflictsBeforeAdding(rt, candidate);

@@ -1120,12 +1120,7 @@ export class LocalAgentSession implements BackendHost {
     while (this.backgroundFibers.size > 0) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        this.emit({
-          type: 'evolution', event: 'bg_jobs_abandoned',
-          message:
-            `${this.backgroundFibers.size} background job(s) did not finish in time and were left running; ` +
-            'their results are not part of this run.',
-        });
+        this.announceAbandonedJobs();
         return false;
       }
       await raceDeadline(Promise.allSettled([...this.backgroundFibers]), remaining);
@@ -1134,22 +1129,62 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Recover background jobs orphaned by a previous CLI exit (durable detach). An
-   * interrupted bg:* fiber leaves a row stashed phase 'running': a checkpoint-
-   * backed kind is re-driven under a fresh lease epoch, anything else fails +
-   * wakes (DO onFiberRecovered parity). Then clear all stale fiber rows from the
-   * prior run — a resume runs in a NEW fiber row, so this never deletes it.
-   * Call once at startup (no fibers are live yet, so every row is an orphan).
+   * Say plainly what is being left behind, because the answer is not "nothing".
+   *
+   * The in-flight work dies with this process, but the job rows stay `running`
+   * and are checkpoint-backed, so the next start of this workspace re-drives
+   * them — and one of the things that starts this workspace is the local
+   * scheduler daemon, with nobody watching. A resumed job runs the agent's own
+   * tools: it executes commands and writes files here, minutes after the
+   * command that started it returned. That is a thing an operator has to be
+   * told BEFORE it happens, so the notice goes to stderr as well as to the
+   * event stream — stderr is the one channel every surface shows and no
+   * machine-readable stdout stream can be corrupted by.
+   */
+  private announceAbandonedJobs(): void {
+    const interrupted = this.jobs.listRunning();
+    const roster = interrupted
+      .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
+      .join(', ');
+    const message =
+      `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
+      'exit. They are checkpointed, so this workspace resumes them the next time it starts — including ' +
+      'unattended, under the local scheduler daemon — and a resumed job runs commands and writes files on ' +
+      `this machine. Cancel with: proteus jobs ${this.agentName()} cancel <id>.` +
+      (roster ? ` Interrupted: ${roster}.` : '');
+    this.emit({ type: 'evolution', event: 'bg_jobs_abandoned', message });
+    console.warn(`[proteus] ${message}`);
+  }
+
+  /**
+   * Recover background jobs orphaned by a previous CLI exit (durable detach).
+   *
+   * Two passes, because the fiber rows and the job registry each know something
+   * the other does not. An interrupted bg:* fiber row says its job's executor
+   * died AFTER settling, which is the only way a lost wake can be re-delivered
+   * (DO onFiberRecovered parity); the registry says which jobs are still
+   * `running` at all, including the ones whose fiber row did not survive. Stale
+   * fiber rows from the prior run are cleared as they are read — a resume runs
+   * in a NEW fiber row, so this never deletes it.
+   *
+   * Call once at startup: no fibers are live yet, so every row is an orphan.
    */
   async recoverBackgroundJobs(): Promise<void> {
-    let orphans: ReturnType<typeof detectOrphanedFibers>;
-    try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { return; }
+    let orphans: ReturnType<typeof detectOrphanedFibers> = [];
+    try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { /* no fibers table yet */ }
     for (const o of orphans) {
       if (o.name.startsWith('bg:')) {
         try { await this.jobRunner.recover(o.snapshot); } catch { /* best effort */ }
       }
       try { this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`; } catch { /* nop */ }
     }
+    // Fiber rows are not the source of truth for job liveness. A settlement
+    // whose database was closed under it at teardown writes neither its outcome
+    // nor its force-fail, and its fiber row dies with the process — leaving a
+    // `running` row no orphan fiber points at, which the loop above can never
+    // reach. Nothing in this process owns a job yet, so every remaining
+    // `running` row is an orphan too.
+    try { await this.jobRunner.recoverOrphans(); } catch { /* best effort */ }
   }
 
   /** Re-drive a background job interrupted by a previous process exit — the
@@ -1311,6 +1346,18 @@ export class LocalAgentSession implements BackendHost {
     return listRuns(this.eventRecorder, limit);
   }
 
+  /**
+   * Run one queued turn under the guarantee every surface above depends on: a
+   * turn that starts always terminates — exactly one `turn-end`, and a run that
+   * is always closed.
+   *
+   * The turn's own stream has a failure path that emits `error`, flags the
+   * accumulator and finalizes normally. Everything BEFORE that stream exists —
+   * resolving the model, the skills, the system prompt — had no such path and
+   * threw straight out of the method, past an opened run and before any
+   * `turn-end`. The pump then logged it to stderr and resolved the caller, so a
+   * turn that never ran a step was reported as a turn that succeeded.
+   */
   private async processTurn(item: QueueItem): Promise<void> {
     const event = typeof item.metadata?.proteusEvent === 'string' ? item.metadata.proteusEvent : undefined;
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
@@ -1329,6 +1376,32 @@ export class LocalAgentSession implements BackendHost {
       userMessage: item.text,
       turnIndex: this.orch.sessionTurnIndex,
     });
+    try {
+      await this.runTurn(item, event, startedAt);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      this.orch.acc.hadError = true;
+      this.closeRun(message.slice(0, 500));
+      this.emit({ type: 'error', message });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+    }
+  }
+
+  /** The turn as it stands — the one shape the normal end and both failure
+   *  paths report. */
+  private snapshotTurn(item: QueueItem, assistantResponse: string, turnId?: string | null): CompletedTurn {
+    return snapshotCompletedTurn(this.orch.acc, {
+      userMessage: item.text,
+      assistantResponse,
+      ...(turnId ? { turnId } : {}),
+      sessionId: this.sessionId,
+      origin: item.kind,
+    });
+  }
+
+  /** The turn itself: assemble it, stream it, finalize it. Everything here may
+   *  throw; processTurn owns what that means. */
+  private async runTurn(item: QueueItem, event: string | undefined, startedAt: number): Promise<void> {
     // Shadow-git checkpoints: arm the per-turn dedup so the first host-FS
     // mutation of this turn snapshots its working directory (invisible /undo
     // substrate — see core checkpoints/types.ts).
@@ -1593,13 +1666,6 @@ export class LocalAgentSession implements BackendHost {
     this.orch.signals.settle({ completed: runError === null });
 
     let assistantMsgId: string | null = null;
-    const snapshotTurn = (): CompletedTurn => snapshotCompletedTurn(this.orch.acc, {
-      userMessage: item.text,
-      assistantResponse: fullText,
-      ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
-      sessionId: this.sessionId,
-      origin: item.kind,
-    });
 
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
@@ -1652,7 +1718,7 @@ export class LocalAgentSession implements BackendHost {
         this.completionGate.settle({ toolCalls: this.orch.acc.toolCalls.length });
       }
 
-      const turn = snapshotTurn();
+      const turn = this.snapshotTurn(item, fullText, assistantMsgId);
       this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
       await this.orch.completeTurn(turn, this.turnContinuity);
@@ -1673,7 +1739,7 @@ export class LocalAgentSession implements BackendHost {
       // potentially partial side effects, and failed persistence cannot survive
       // a restart, so surface both the failure and a terminal turn event.
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: snapshotTurn() });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, fullText, assistantMsgId) });
     }
   }
 

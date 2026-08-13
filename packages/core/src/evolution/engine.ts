@@ -1004,7 +1004,9 @@ export class EvolutionEngine {
 
     try {
       const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string; params?: unknown };
-      if (!parsed.name || !parsed.code || parsed.code.startsWith('//')) return;
+      // Shape only — whether the code is usable is decided by upsertCraftedTool,
+      // which compiles it the way the runtime will before storing anything.
+      if (!parsed.name || !parsed.code) return;
 
       const acceptance = await upsertCraftedTool(this.rt, {
         name: parsed.name,

@@ -130,7 +130,10 @@ function systemCapturingModel(answer: string, sink: (system: string) => void): L
   } as unknown as LanguageModel;
 }
 
-function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
+/** A workspace database and its runtime — the substrate every session in this
+ *  file is built on, and the only place the bun:sqlite handle is widened to the
+ *  runtime factory's parameter. */
+function workspaceRuntime() {
   const db = new Database(':memory:');
   // The agent DB carries a messages table in production (created on `proteus
   // create`); the runtime factory doesn't, so provision it for the test.
@@ -139,6 +142,11 @@ function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<Lo
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
   const rt = createCLIRuntime(db as never, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+  return { db, rt };
+}
+
+function setup(answer = 'hello there', model?: LanguageModel, extra?: Partial<LocalAgentSessionOpts>) {
+  const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
     rt, db, model: model ?? fakeModel(answer), onEvent: (e) => events.push(e), noAutoEvolve: true,
@@ -225,12 +233,7 @@ function forkingModel(): LanguageModel {
 }
 
 function setupWithResolver(resolver: LocalModelResolver) {
-  const db = new Database(':memory:');
-  db.exec(`CREATE TABLE IF NOT EXISTS messages (
-    id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
-    role TEXT NOT NULL, content TEXT NOT NULL,
-    created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db as never, { dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM });
+  const { db, rt } = workspaceRuntime();
   const events: SessionEvent[] = [];
   const session = new LocalAgentSession({
     rt, db, model: fakeModel('fallback'), modelResolver: resolver, onEvent: (e) => events.push(e), noAutoEvolve: true,
@@ -1259,6 +1262,44 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(jobStatus(db, 'bgjob-hang')).toBe('running');
     // Not silent about it either.
     expect(events.some((e) => e.type === 'evolution' && e.event === 'bg_jobs_abandoned')).toBe(true);
+  });
+
+  test('abandoning work says it will be resumed on this machine, unattended, and how to stop it', async () => {
+    // The regression this pins: a run exited silently at 11:55 with its target
+    // file untouched, and the file appeared at 12:02:20 — written by the job
+    // the local scheduler daemon resumed, which runs the agent's own tools on
+    // the host. Nothing said that would happen. The old notice claimed the work
+    // was "left running" and that its "results are not part of this run", both
+    // of which are false: the process is exiting, and the work comes back.
+    const { db, session, events } = setup('unused', hangingModel(), {
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 50, detachSpawnOnStart: true },
+    });
+    const input = JSON.stringify({ strategy: 'single-shot', task: 'edit the target file' });
+    db.exec(`INSERT INTO background_jobs (id, kind, label, status, input_json, created_at)
+      VALUES ('bgjob-quiet', 'think', 'mcts: edit the target file', 'running', '${input}', 1)`);
+    db.exec(`INSERT INTO fibers (id, name, snapshot, created_at) VALUES ('fq', 'bg:think', '{"phase":"running","jobId":"bgjob-quiet","kind":"think"}', 1)`);
+    await session.recoverBackgroundJobs();
+
+    const warnings: string[] = [];
+    const originalWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(' ')); };
+    try {
+      await session.settleBackgroundWork();
+    } finally {
+      console.warn = originalWarn;
+    }
+
+    const notice = events.find((e) => e.type === 'evolution' && e.event === 'bg_jobs_abandoned');
+    const message = notice?.type === 'evolution' ? notice.message : '';
+    expect(message).toContain('bgjob-quiet');
+    expect(message).toContain('mcts: edit the target file');
+    expect(message).toContain('local scheduler daemon');
+    expect(message).toContain('writes files');
+    expect(message).toMatch(/proteus jobs \S+ cancel <id>/);
+    // The event stream alone is not enough: `proteus exec`'s human renderer
+    // drops evolution events, so the operator has to hear it on stderr — the
+    // one channel every surface shows and no NDJSON consumer parses.
+    expect(warnings.some((line) => line.includes('bgjob-quiet'))).toBe(true);
   });
 
   test('end() releases the session when a fiber will never settle', async () => {
@@ -2355,6 +2396,55 @@ describe('LocalAgentSession — the durable run-event log', () => {
     expect(merge!.headCount).toBe(2);
     expect(merge!.headsWithFindings).toBe(2);
     expect(merge!.totalTokens).toBeGreaterThan(0);
+
+    await session.end();
+  });
+
+  test('a turn that dies before its stream exists still terminates: error, turn-end, run_end', async () => {
+    // The regression this pins: 2 of ~7 `proteus exec` runs ended mid-turn with
+    // no error event, no turn_end, no run_end and no final message, correlating
+    // with heavy provider 429s — and exited 0. Everything before the turn's own
+    // stream (model resolution, skills, the system prompt) sat OUTSIDE any
+    // failure path, so a throw there escaped past an already-opened run, was
+    // logged to stderr by the pump, and resolved the caller as if the turn had
+    // simply produced nothing.
+    const { db, rt } = workspaceRuntime();
+    // Fails where the real runs did: in the per-turn setup, before the turn's
+    // stream (and so before any failure path) exists. Which specific setup call
+    // failed in production was never isolated; that the region had no failure
+    // path at all is what this pins.
+    const failing = {
+      ...rt,
+      memory: {
+        ...rt.memory,
+        read: async () => { throw new Error('Failed after 3 attempts. Last error: Too Many Requests'); },
+      },
+    };
+    const events: SessionEvent[] = [];
+    const session = new LocalAgentSession({
+      rt: failing, db, model: fakeModel('never reached'),
+      onEvent: (e) => events.push(e), noAutoEvolve: true,
+    });
+
+    await session.send('write the target file');
+
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    expect(errors[0]!.type === 'error' && errors[0].message).toContain('Too Many Requests');
+
+    const ends = events.filter((e) => e.type === 'turn-end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.type === 'turn-end' && ends[0].turn.hadError).toBe(true);
+
+    // The durable ledger has to agree — an open run is a run nothing can read
+    // back as finished.
+    const runs = session.listRuns();
+    expect(runs).toHaveLength(1);
+    const runEvents = session.getRunEvents(runs[0]!.runId);
+    expect(runEvents.at(-1)?.type).toBe('run_end');
+    const end = runEvents.find((e) => e.type === 'run_end');
+    expect(end?.reason).toBe('error');
+    expect(end?.error).toContain('Too Many Requests');
 
     await session.end();
   });

@@ -174,7 +174,27 @@ export interface LocalAgentClientDeps {
 }
 
 interface PendingLocalTurn {
-  result: AgentTurnResult;
+  /** Null until the turn's own `turn-end` arrives — see `unfinishedTurn`. */
+  result: AgentTurnResult | null;
+}
+
+/**
+ * What a turn that never reported an end is worth.
+ *
+ * `send()` resolves when the pump lets go of the queued item, which it also
+ * does when the turn died in a way that produced no `turn-end` at all. Seeding
+ * the pending turn with a zeroed SUCCESS made that indistinguishable from a
+ * clean empty answer, and `proteus exec` exited 0 on a turn that never ran —
+ * the one thing a CI consumer cannot recover from.
+ *
+ * The turn lifecycle itself is now total (LocalAgentSession.processTurn), so
+ * nothing in this process can reach this state; it is kept because the exit
+ * code has to stay honest for causes that are NOT in this process, and because
+ * "no completion" must never again be spelled the same way as "completed with
+ * nothing to say".
+ */
+function unfinishedTurn(): AgentTurnResult {
+  return { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: true };
 }
 
 export class LocalAgentClient implements AgentClient {
@@ -250,13 +270,11 @@ export class LocalAgentClient implements AgentClient {
       backend: 'local',
       ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
     });
-    const pending: PendingLocalTurn = {
-      result: { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false },
-    };
+    const pending: PendingLocalTurn = { result: null };
     this.pending = pending;
     try {
       await this.session.send(files.length > 0 ? { text, files } : text);
-      return pending.result;
+      return pending.result ?? unfinishedTurn();
     } finally {
       if (this.pending === pending) this.pending = null;
     }

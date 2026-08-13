@@ -134,7 +134,7 @@ async function importedRows(ws: Workspace) {
 describe('publishing is gated on local evidence', () => {
   test('an unused crafted tool is refused, a proven one qualifies with its record', () => {
     const ws = workspace('alpha', ownerLibrary());
-    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.rt.craftStore.create({ name: 'untried', description: 'never run', params: null, code: 'return 2;', scope: 'local' });
 
     const proven = findPublishable(
@@ -182,7 +182,7 @@ describe('publishing is gated on local evidence', () => {
 
   test('the publish action with no target answers with exactly what qualifies', async () => {
     const ws = workspace('alpha', ownerLibrary());
-    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.facts.upsert('deploy.guess', 'maybe-here', { confidence: 0.4 });
     ws.facts.upsert('deploy.target', 'proteus.workers.dev', { confidence: 1 });
     recordLesson(ws.rt.storage.sql, {
@@ -202,7 +202,7 @@ describe('the owner library moves experience between workspaces', () => {
     const library = ownerLibrary();
     const alpha = workspace('alpha', library);
     const beta = workspace('beta', library);
-    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
 
     const published = await alpha.call({ action: 'publish', kind: 'craft', key: 'fetch_changelog' });
     expect((published.published as { source_workspace: string }).source_workspace).toBe('alpha');
@@ -284,14 +284,14 @@ describe('every import passes the misevolution gate', () => {
     const library = ownerLibrary();
     const alpha = workspace('alpha', library);
     const beta = workspace('beta', library);
-    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     await alpha.call({ action: 'publish', kind: 'craft', key: 'fetch_changelog' });
     const hit = ((await beta.call({ action: 'search', query: 'changelog' })).hits as Array<{ id: string }>)[0];
 
     const result = await beta.call({ action: 'import', id: hit.id });
 
     expect(result.status).toBe('provisional');
-    expect(result.payload).toMatchObject({ kind: 'craft', name: 'fetch_changelog', code: 'return 1;' });
+    expect(result.payload).toMatchObject({ kind: 'craft', name: 'fetch_changelog', code: 'async (args) => args.url' });
     expect((await importedRows(beta)).map((r) => [r.kind, r.key, r.status]))
       .toEqual([['craft', 'fetch_changelog', 'provisional']]);
   });
@@ -318,7 +318,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
       library.publish({
         kind: 'craft', key: 'fetch_changelog', title: 'fetch a project changelog',
         evidence: 'effective score 0.90 after 4 real uses',
-        payload: { kind: 'craft', name: 'fetch_changelog', description: 'fetch a project changelog', params: { url: 'string' }, code: 'return 1;', score: 0.9 },
+        payload: { kind: 'craft', name: 'fetch_changelog', description: 'fetch a project changelog', params: { url: 'string' }, code: 'async (args) => args.url', score: 0.9 },
       }, 'alpha'),
       library.publish({
         kind: 'lesson', key: 'lsn-1', title: 'Read the error before rerunning.',
@@ -354,7 +354,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     await gradeTurn(beta, 'turn-1', 'positive');
 
     const craft = beta.rt.craftStore.get('fetch_changelog');
-    expect(craft).toMatchObject({ name: 'fetch_changelog', code: 'return 1;', params: { url: 'string' } });
+    expect(craft).toMatchObject({ name: 'fetch_changelog', code: 'async (args) => args.url', params: { url: 'string' } });
     expect(beta.facts.recall('deploy.target')).toMatchObject({
       value: 'proteus.workers.dev', source: 'experience:alpha',
     });

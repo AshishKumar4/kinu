@@ -4,8 +4,8 @@
  * V8 on Node/Bun permits `new Function()` codegen, so the CLI adapter compiles
  * stored crafted-tool code directly in-process. The code convention is an
  * expression that evaluates to an async function (arrow or function
- * expression) — the same convention the CF LOADER path uses, and the same
- * convention the store-time normalizer enforces.
+ * expression) — the same convention the CF LOADER path uses, and the one the
+ * craft admission gate (core craft/conflict.ts) enforces at the write.
  *
  * The factory is idempotent: each call to craftedToolExecute(tool) returns a
  * fresh closure. The crafted set is resolved once per `execute_tools` call, so
@@ -30,7 +30,8 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
       // `tool.code` is expected to be an expression form like
       //   async (x) => x * 2
       //   async function(x) { return x * 2 }
-      // The store-time normalizer guarantees one of these forms.
+      // upsertCraftedTool runs this exact compilation before storing, so a tool
+      // that reaches here has already produced a callable once.
       // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const factory = new Function('return (' + tool.code + ')');
       const fn = factory();

@@ -179,6 +179,15 @@ export class BackgroundJobStore {
     return rows[0]?.n ?? 0;
   }
 
+  /** Every job still in flight, oldest first — the startup recovery sweep's
+   *  input. Deliberately unbounded, unlike `listRunning`: a display limit that
+   *  silently dropped rows would skip exactly the stuck jobs the sweep exists
+   *  to settle. Ids only — the sweep re-reads each row under its own claim. */
+  runningIds(): string[] {
+    return this.sql<{ id: string }>`SELECT id FROM background_jobs
+      WHERE status='running' ORDER BY created_at ASC`.map((r) => r.id);
+  }
+
   /** Only the jobs still in flight, newest first — the dynamic-context roster.
    *  Narrower than `list`, which a settled backlog can crowd out entirely. */
   listRunning(limit = 20): BackgroundJob[] {

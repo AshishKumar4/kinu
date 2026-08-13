@@ -201,9 +201,12 @@ export class BackgroundJobRunner {
       } catch (err) {
         // The settlement path itself threw — a store write, or the undeliverable
         // wake's durable retry breadcrumb. Letting the fiber reject here would
-        // strand the job: both fiber implementations DELETE their recovery row in
-        // a `finally`, so a rejected body is never handed to onFiberRecovered and
-        // the job would sit at 'running' forever — never resumed, never failed.
+        // lose the force-fail below: both fiber implementations DELETE their
+        // recovery row in a `finally`, so a rejected body is never handed to
+        // onFiberRecovered. When the store is gone entirely (teardown closed it
+        // under us) neither write lands and the row stays `running` — which is
+        // recoverable, but only because recoverOrphans() sweeps the registry at
+        // the next start rather than trusting a fiber row to survive.
         console.warn('[proteus] background-job settlement failed:',
           err instanceof Error ? err.message : err);
         this.failUnsettled(jobId, err);
@@ -351,19 +354,57 @@ export class BackgroundJobRunner {
   }
 
   /** Recover an orphaned job after its fiber was evicted mid-flight (called from
-   *  the backend's onFiberRecovered for bg:* fibers).
-   *
-   *  A job whose outcome was already persisted (settled/failed) before the fiber
-   *  died just gets its wake re-delivered. A job still `running` was interrupted
-   *  mid-flight: if a resumer is wired AND the kind is checkpoint-backed, it is
-   *  reclaimed under a fresh lease epoch (fencing the dead executor) and re-driven
-   *  in a new durable fiber from its durable checkpoint (MCTS continues its
-   *  remaining search budget; heads re-run). Without a resumer — or past the
-   *  resume-attempt cap — it is failed with the eviction message (legacy). */
+   *  the backend's onFiberRecovered for bg:* fibers). The fiber row carries one
+   *  fact the registry does not — that this job's executor is dead — which is
+   *  what lets a job that already settled get its lost wake re-delivered. */
   async recover(snapshot: unknown): Promise<void> {
     const snap = (snapshot ?? {}) as { jobId?: unknown; phase?: unknown };
     const jobId = typeof snap.jobId === 'string' ? snap.jobId : '';
     if (!jobId || snap.phase !== 'running') return;
+    await this.recoverJob(jobId);
+  }
+
+  /**
+   * Recover every job the registry still shows as `running` — the start-of-life
+   * sweep, run once per process/isolate start.
+   *
+   * Nothing in memory owns a job at that point, so a `running` row IS an orphan
+   * whatever became of the fiber that was driving it. Keying recovery off the
+   * JOB rows rather than off surviving fiber rows is what makes the lifecycle
+   * total: a settlement whose store closed under it during teardown writes
+   * nothing (neither the outcome nor the force-fail), and a fiber row can die
+   * with the process that owned it — either way the row is left `running` with
+   * no fiber pointing at it, and a fiber-keyed recovery never looks at it
+   * again. It would then never resume, never fail, and never stop consuming one
+   * of the MAX_CONCURRENT_DETACHED_JOBS slots.
+   *
+   * Every recovery here goes through the same reclaim, so MAX_RESUME_ATTEMPTS
+   * bounds it: at most that many re-drives, then a terminal `failed`.
+   */
+  async recoverOrphans(): Promise<void> {
+    for (const jobId of this.deps.store.runningIds()) await this.recoverJob(jobId);
+  }
+
+  /**
+   * Settle or re-drive one orphaned job.
+   *
+   * A job whose outcome was already persisted (settled/failed) before its
+   * executor died just gets its wake re-delivered. A job still `running` was
+   * interrupted mid-flight: if a resumer is wired AND the kind is
+   * checkpoint-backed, it is reclaimed under a fresh lease epoch (fencing the
+   * dead executor) and re-driven in a new durable fiber from its durable
+   * checkpoint (MCTS continues its remaining search budget; heads re-run).
+   * Without a resumer — or past the resume-attempt cap — it is failed with the
+   * eviction message.
+   *
+   * A job THIS runner is already driving is left alone. Both entry points can
+   * name the same job in one activation — a resume leaves its own fiber row, so
+   * a cold start can recover two fibers for one job, and the registry sweep
+   * names every running row besides — and re-driving one twice would reclaim it
+   * out from under the executor that is making progress on it.
+   */
+  private async recoverJob(jobId: string): Promise<void> {
+    if (this.controllers.has(jobId)) return;
     const job = this.deps.store.get(jobId);
     if (!job || job.status === 'cancelled') return;
     // Outcome already persisted before the settle checkpoint landed → just deliver
