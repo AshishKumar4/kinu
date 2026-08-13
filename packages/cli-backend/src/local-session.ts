@@ -401,9 +401,10 @@ export class LocalAgentSession implements BackendHost {
       // machine and can block on shell approvals — so CLI replay measures the
       // prompt/model config, not tool trajectories.
       replayTaskRunner: (task) => this.runReplayTask(task),
-      // The promotion gate's evidence, on the cadence lane. A resolved gate
-      // changes the live scaffold under us, so the session's model-bound state
-      // is dropped and the decision is surfaced like any other self-change.
+      shadowTrialQueue: (turn) => queueTurnShadowTrial(this.scaffoldControl, turn),
+      // The trial itself runs on the cadence lane. A resolved gate changes the
+      // live scaffold under us, so the session's model-bound state is dropped
+      // and the decision is surfaced like any other self-change.
       shadowTrialRunner: async () => {
         const drain = await runQueuedShadowTrials(this.scaffoldControl);
         if (drain.applied) {
@@ -1660,11 +1661,7 @@ export class LocalAgentSession implements BackendHost {
       // pays for runs on the cadence lane, which is why this is not tracked —
       // a `proteus exec` process no longer waits out a candidate turn before
       // it can exit.
-      queueTurnShadowTrial(this.scaffoldControl, {
-        task: item.text,
-        currentOutput: fullText,
-        context: liveTurnOpts.history,
-      });
+      this.engine.queueShadowTrial(turn, liveTurnOpts.history);
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

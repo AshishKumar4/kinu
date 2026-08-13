@@ -347,13 +347,6 @@ export class AgentOrchestrator {
   /**
    * The pass itself. Trials first, because the window pass may want to propose
    * a new scaffold and the engine refuses to while one is still pending.
-   *
-   * They also run with auto-evolution OFF, which the window pass does not: a
-   * proposal a previous run already made has to stay resolvable or the
-   * workspace is stuck with it forever, and resolving one opens no new
-   * evolution state (whether a resolution is APPLIED is the operator's own
-   * `auto_promote_scaffold` switch). This is what the shadow eval did when it
-   * ran on the turn.
    */
   private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
     await this.drainDueShadowTrials();

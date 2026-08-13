@@ -53,7 +53,7 @@ import {
   // supplies the surface they run against).
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
-  runQueuedShadowTrials, runScaffoldOnce,
+  runScaffoldOnce,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
   getPendingScaffold,
@@ -518,10 +518,10 @@ export class OrchestratorAgent extends ActorAgent {
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
-        // The promotion gate's evidence, gathered here rather than on the
-        // turn: a DO under keepAlive can afford a candidate rollout, Think's
-        // TurnQueue cannot.
-        shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
+        // The promotion gate's evidence is gathered on the cadence lane rather
+        // than on the turn: a DO under keepAlive can afford a candidate
+        // rollout, Think's TurnQueue cannot.
+        ...this.shadowTrialPorts,
       });
       // Mission Inbox: the session-end changelog digest also goes to the
       // owner's inbox — the "what I changed about myself" email.
@@ -1003,9 +1003,10 @@ export class OrchestratorAgent extends ActorAgent {
     // AgentOrchestrator's cadence — session-reflection counter (firing
     // engine.onSessionComplete every N turns) + this turn buffered for its
     // outcome review, which the NEXT user message grades — plus the keepAlive
-    // that outlives Think's turn wrapper, plus the sampled shadow eval that
-    // scores and promotes whatever scaffold that cadence proposed.
-    this.settleCompletedTurn(turn, { userText, assistantText });
+    // that outlives Think's turn wrapper, plus the sampled shadow trial that
+    // gives the promotion gate its evidence about whatever that cadence
+    // proposed.
+    this.settleCompletedTurn(turn);
 
     // Sleep-time compute — between-turn background memory compression.
     // Reads recent turn, asks a judge to upsert/decay the agent_facts world

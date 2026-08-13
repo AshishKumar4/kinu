@@ -77,8 +77,12 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
       VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
   }
   const events: SessionEvent[] = [];
+  // Auto-evolution ON, exactly as a real session has it. The promotion gate IS
+  // auto-evolution: a `--no-auto-evolve` session queues no trial and runs none,
+  // so turning it off here to quieten the classifier would leave the deadlock
+  // tests below proving nothing.
   const session = new LocalAgentSession({
-    rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => events.push(e), noAutoEvolve: true,
+    rt, db, model: fakeModel(defaultAnswer), onEvent: (e) => events.push(e),
   });
   return { db, rt, session, events };
 }

@@ -41,7 +41,7 @@ import {
   decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
   purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
 } from '../scaffold/shadow.js';
-import type { ShadowTrialDrain } from './types.js';
+import type { ShadowTrialDrain, ShadowTrialTurn } from './types.js';
 import {
   DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
 } from '../scaffold/auto-judge.js';
@@ -187,19 +187,14 @@ export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 
  *
  * Synchronous and total: a lost trial must never fail the turn that produced
  * it, so every failure is absorbed and named in the return value.
+ *
+ * Whether this runs at all is not decided here: both halves of the loop are
+ * reached through the EvolutionEngine, which holds the one auto-evolution gate
+ * (`queueShadowTrial` / `runDueShadowTrials`).
  */
 export function queueTurnShadowTrial(
   control: ScaffoldControl,
-  turn: {
-    task: string;
-    /** What the live turn actually answered — the trial's comparand. */
-    currentOutput: string;
-    /** The live turn's prepared conversation, read synchronously by the caller
-     *  so a later turn's state can never bleed into this one. A delegating
-     *  candidate replays it as its own default loop; empty when the host held
-     *  none, and then the surface reconstructs one from the task. */
-    context: ScaffoldReplayContext;
-  },
+  turn: ShadowTrialTurn,
 ): ShadowTrialQueueOutcome {
   try {
     const sampleRate = control.config.getShadowSampleRate();

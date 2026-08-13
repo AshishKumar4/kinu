@@ -2,6 +2,8 @@
  * Evolution engine types — the three timescales of self-evolution.
  */
 
+import type { ModelMessage } from 'ai';
+
 import type { MCTSProgressEvent } from '../types/mcts.js';
 
 /** A tool call as reported by the AI SDK's structured result */
@@ -87,6 +89,18 @@ export interface ShadowTrialDrain {
   readonly applied: 'promote' | 'rollback' | null;
 }
 
+/** What a completed turn offers the promotion gate. */
+export interface ShadowTrialTurn {
+  readonly task: string;
+  /** What the live turn actually answered — the trial's comparand. */
+  readonly currentOutput: string;
+  /** The live turn's prepared conversation, read synchronously by the caller
+   *  so a later turn's state can never bleed into this one. A delegating
+   *  candidate replays it as its own default loop; empty when the host held
+   *  none, and then the surface reconstructs one from the task. */
+  readonly context: readonly ModelMessage[];
+}
+
 /** Evolution engine configuration. The every-N-turns session-reflection
  *  cadence is NOT here — AgentOrchestrator owns it (sessionReflectionInterval
  *  on its deps) and calls onSessionComplete. Turn-level reflection/extraction
@@ -102,6 +116,10 @@ export interface EvolutionConfig {
    *  backend seam the replay-eval harness rolls out through. Absent = the
    *  periodic replay eval is skipped. */
   replayTaskRunner?: (task: string) => Promise<string>;
+  /** Record a completed turn as evidence the promotion gate may draw on — one
+   *  row, no inference (evolution/control.ts `queueTurnShadowTrial`). Absent =
+   *  this host queues none. */
+  shadowTrialQueue?: (turn: ShadowTrialTurn) => void;
   /** Run the shadow trials a turn queued for the pending scaffold — the
    *  promotion gate's evidence, gathered on the cadence lane instead of on the
    *  user's turn (evolution/control.ts `runQueuedShadowTrials`). Absent = this

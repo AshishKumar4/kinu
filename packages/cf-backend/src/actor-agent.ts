@@ -38,13 +38,13 @@ import type {
   StreamableResult,
 } from "@cloudflare/think";
 import {
-  EvolutionEngine,
+  EvolutionEngine, type EvolutionConfig,
   resolveMaxSteps,
   // Scaffold loop closure — the evolved inference loop + its sampled
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
-  queueTurnShadowTrial, createJsonJudge, type ScaffoldControl,
+  queueTurnShadowTrial, runQueuedShadowTrials, createJsonJudge, type ScaffoldControl,
   SCAFFOLD_TURN_TIMEOUT_MS,
   effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
@@ -345,6 +345,18 @@ export abstract class ActorAgent extends Think<Env> {
 
   /** The evolution engine the shared AgentOrchestrator drives. */
   protected abstract get engine(): EvolutionEngine;
+
+  /** The promotion gate's two ports, over this actor's control plane — the
+   *  engine config every actor's engine must carry. Here rather than in each
+   *  subclass's constructor for the same reason `settleCompletedTurn` is:
+   *  a facet that queues trials but wires no runner stalls on the first
+   *  proposal it makes, and one that wires neither scores none at all. */
+  protected get shadowTrialPorts(): Pick<EvolutionConfig, 'shadowTrialQueue' | 'shadowTrialRunner'> {
+    return {
+      shadowTrialQueue: (turn) => queueTurnShadowTrial(this.scaffoldControl, turn),
+      shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
+    };
+  }
 
   /** Out-of-band owner notification (mission-inbox email on the
    *  orchestrator). Fired when a background job settles. */
@@ -701,16 +713,12 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * `orch.recordTurn` opens the outcome review + session cadence (which is
    * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, and core's
-   * `queueTurnShadowTrial` records this turn as evidence the promotion gate
-   * may draw on. Split across subclasses these drift: a facet that recorded
-   * turns but never settled or queued them proposes exactly one scaffold and
-   * then stalls forever on it.
+   * holds the DO open for that detached work, and `engine.queueShadowTrial`
+   * records this turn as evidence the promotion gate may draw on. Split across
+   * subclasses these drift: a facet that recorded turns but never settled or
+   * queued them proposes exactly one scaffold and then stalls forever on it.
    */
-  protected settleCompletedTurn(
-    turn: CompletedTurn,
-    texts: { userText: string; assistantText: string },
-  ): void {
+  protected settleCompletedTurn(turn: CompletedTurn): void {
     // Evolution hooks make 5-30s LLM calls and onChatResponse runs INSIDE
     // Think's TurnQueue — everything here is detached so the next message is
     // never blocked, and held open by the keepAlive heartbeat instead.
@@ -719,11 +727,7 @@ export abstract class ActorAgent extends Think<Env> {
     // One row, no inference: the trial itself runs on the cadence lane. The
     // turn's prepared messages are read synchronously (before any await) so a
     // later turn's stash can never bleed into this one's replay.
-    queueTurnShadowTrial(this.scaffoldControl, {
-      task: texts.userText,
-      currentOutput: texts.assistantText,
-      context: (this._lastTurnOpts?.messages ?? []) as ModelMessage[],
-    });
+    this.engine.queueShadowTrial(turn, (this._lastTurnOpts?.messages ?? []) as ModelMessage[]);
   }
 
   /**

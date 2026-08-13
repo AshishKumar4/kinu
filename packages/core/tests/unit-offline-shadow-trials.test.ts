@@ -14,11 +14,12 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, SHADOW_TRIAL_CONTEXT_CHARS,
+  DEFAULT_SHADOW_CONFIG, EvolutionEngine, MAX_QUEUED_SHADOW_TRIALS, SHADOW_TRIAL_CONTEXT_CHARS,
   applyScaffoldDecision, decidePromotion, getPendingScaffold, getShadowStatus,
   initScaffoldTables, initShadowTables, listQueuedShadowTrials, queueTurnShadowTrial,
   runQueuedShadowTrials,
-  type AgentConfigStore, type JudgeOutput, type ScaffoldControl, type ScaffoldReplayContext,
+  type AgentConfigStore, type CompletedTurn, type JudgeOutput, type ScaffoldControl,
+  type ScaffoldReplayContext,
 } from '../src/index.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { Executor } from '../src/types/primitives.js';
@@ -270,6 +271,77 @@ describe('the offline drain is what executes trials', () => {
     expect(drain.applied).toBeNull();
     expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
     expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+  });
+});
+
+describe('auto-evolution off runs no trial and leaves no trial to run', () => {
+  /** Both halves of the loop as a host wires them — the ports the backends
+   *  supply, over the counted control plane. */
+  function hostEngine(rt: AgentRuntime, control: ScaffoldControl, enabled: boolean): EvolutionEngine {
+    return new EvolutionEngine(rt, {
+      enabled,
+      shadowTrialQueue: (turn) => { queueTurnShadowTrial(control, turn); },
+      shadowTrialRunner: () => runQueuedShadowTrials(control),
+    });
+  }
+
+  const completedTurn = (): CompletedTurn => ({
+    userMessage: TASK, assistantResponse: LIVE_ANSWER,
+    toolCalls: [], steps: 1, durationMs: 1, feedback: null, hadError: false,
+  });
+
+  test('a `--no-auto-evolve` turn writes no queue row, and its host drains none', async () => {
+    const rt = await setup();
+    const { control, counts } = countedControl(rt);
+    const engine = hostEngine(rt, control, false);
+
+    engine.queueShadowTrial(completedTurn(), CONTEXT);
+    // No evolution state: nothing recorded for a later evolution-enabled host
+    // to evolve on this run's behalf. Asserted before the drain as well as
+    // after it, or a drain that ran would hide a turn that queued.
+    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue`).toHaveLength(0);
+
+    await engine.runDueShadowTrials();
+
+    expect(rt.storage.sql`SELECT id FROM scaffold_trial_queue`).toHaveLength(0);
+    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+    // No evolution compute: no candidate rollout, no judge call.
+    expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
+    // The candidate an earlier run left pending is untouched, not lost — the
+    // next host that does evolve resolves it.
+    expect(getPendingScaffold(rt.storage.sql)?.version).toBe(1);
+  });
+
+  test('such a host does not drain what an earlier evolution-enabled run queued', async () => {
+    const rt = await setup();
+    const { control, counts } = countedControl(rt);
+    // The row an interactive session or the daemon left in this workspace.
+    hostEngine(rt, control, true).queueShadowTrial(completedTurn(), CONTEXT);
+
+    await hostEngine(rt, control, false).runDueShadowTrials();
+
+    // The candidate rollout and its two judge calls are evolution compute, and
+    // this run was told to spend none.
+    expect(counts).toEqual({ surface: 0, judge: 0, defaultInference: 0 });
+    expect(rt.storage.sql`SELECT id FROM scaffold_evaluations`).toHaveLength(0);
+    // Deferred, not dropped: the queue is durable, so the evidence waits for a
+    // host that does evolve rather than being consumed by one that does not.
+    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(1);
+  });
+
+  test('the same turn on an evolution-enabled host queues one row and drains it', async () => {
+    const rt = await setup();
+    const { control, counts } = countedControl(rt);
+    const engine = hostEngine(rt, control, true);
+
+    engine.queueShadowTrial(completedTurn(), CONTEXT);
+    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(1);
+
+    await engine.runDueShadowTrials();
+
+    expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
+    expect(counts.judge).toBe(2);
+    expect(getPendingScaffold(rt.storage.sql)?.trialsSoFar).toBe(1);
   });
 });
 

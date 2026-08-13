@@ -299,12 +299,17 @@ describe('turn-pipeline correctness wiring', () => {
     // dispatched — for EVERY actor, not just the orchestrator.
     const spine = actor.slice(
       actor.indexOf('protected settleCompletedTurn('),
-      actor.indexOf('protected async runShadowEvalSampled'),
+      actor.indexOf('protected get scaffoldControl()'),
     );
     const recordTurn = spine.indexOf('this.orch.recordTurn(turn, this._turnContinuity);');
     const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
     expect(recordTurn).toBeGreaterThan(-1);
     expect(settleCall).toBeGreaterThan(recordTurn);
+    // The promotion gate's trial is queued THROUGH the engine, which holds the
+    // one auto-evolution gate. Calling core's queueTurnShadowTrial from here
+    // instead is how a `--no-auto-evolve` run came to leave trial rows behind.
+    expect(spine).toContain('this.engine.queueShadowTrial(turn,');
+    expect(spine).not.toContain('queueTurnShadowTrial(');
   });
 
   test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {

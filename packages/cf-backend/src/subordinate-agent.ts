@@ -7,7 +7,6 @@ import {
   bootstrapScaffold,
   createParentExecutor, createParentWorkspaceVfs,
   initWorkspaceSchema,
-  runQueuedShadowTrials,
   seedSoul,
   snapshotCompletedTurn,
   type CompletedTurn,
@@ -80,10 +79,7 @@ export class SubordinateAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        // A subordinate queues shadow trials like any actor, so it must also
-        // be able to run them; without this its pending scaffold would sit
-        // unresolved forever.
-        shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
+        ...this.shadowTrialPorts,
       });
     }
     return this._engine;
@@ -342,7 +338,7 @@ export class SubordinateAgent extends ActorAgent {
       sessionId: 'default',
       origin: ownerDriven ? 'user' : 'programmatic',
     });
-    this.settleCompletedTurn(turn, { userText, assistantText });
+    this.settleCompletedTurn(turn);
 
     if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
       void this.sendReport('progress', assistantText, 'turn_end').catch((error: unknown) => {

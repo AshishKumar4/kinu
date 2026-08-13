@@ -31,6 +31,8 @@
  *   re-executes, for a curve no decision reads. It runs on demand instead.
  */
 
+import type { ModelMessage } from 'ai';
+
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
 import type { SessionWriter } from '../mcts/record-node.js';
@@ -629,9 +631,25 @@ export class EvolutionEngine {
     this.emitChangelogDigest(session.startedAt);
   }
 
+  // ── The promotion gate's shadow rollout, both halves ────────────
+
   /**
-   * The expensive half of the shadow-rollout loop, on the lane that can afford
-   * it: run whatever trials the turns queued for the pending scaffold.
+   * The turn-bound half: record a completed turn as evidence the promotion
+   * gate may draw on. ONE row and no inference — the candidate rollout it pays
+   * for runs on the cadence lane below.
+   */
+  queueShadowTrial(turn: CompletedTurn, context: readonly ModelMessage[]): void {
+    if (!this.config.enabled) return;
+    this.config.shadowTrialQueue?.({
+      task: turn.userMessage,
+      currentOutput: turn.assistantResponse,
+      context,
+    });
+  }
+
+  /**
+   * The expensive half, on the lane that can afford it: run whatever trials
+   * the turns queued for the pending scaffold.
    *
    * Due whenever a capable host asks — NOT on the session-reflection window,
    * which is a different clock. Gating it there would leave a candidate
@@ -641,11 +659,15 @@ export class EvolutionEngine {
    * the window pass that may want to propose.
    *
    * Absorbs its own failures: a trial that cannot be scored must not stop the
-   * pass it rides on. Not gated on `enabled` — see AgentOrchestrator's cadence
-   * pass for why a proposal must stay resolvable with auto-evolution off.
+   * pass it rides on. Gated on `enabled` like every other entry point here,
+   * and with the queue above for the same reason: a `--no-auto-evolve` run
+   * records no evolution state and spends no evolution compute. Nothing stalls
+   * on that — such a run proposes nothing to stall over, and the queue is
+   * durable, so a candidate an earlier run left pending is resolved by the next
+   * evolution-enabled host.
    */
   async runDueShadowTrials(): Promise<void> {
-    if (!this.config.shadowTrialRunner) return;
+    if (!this.config.enabled || !this.config.shadowTrialRunner) return;
     try {
       await this.config.shadowTrialRunner();
     } catch (err) {
