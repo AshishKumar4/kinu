@@ -307,16 +307,22 @@ export function initTurnOutcomeTables(execRaw: RawSqlExec, sql: SqlExecutor): vo
   // Lessons ledger — reflection prose with provenance. Self-scored lessons
   // (no real user signal behind them) stay 'provisional' and OUT of
   // MEMORY.md until a real negative outcome on one of their turns
-  // corroborates them (the audit's net-negative-lessons fix).
-  execRaw(`CREATE TABLE IF NOT EXISTS lessons (
-    id TEXT PRIMARY KEY,
-    turn_ids TEXT NOT NULL,
-    text TEXT NOT NULL,
-    source TEXT NOT NULL CHECK (source IN ('turn_reflection','session_reflection')),
-    status TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
-    created_at INTEGER NOT NULL,
-    corroborated_at INTEGER
-  )`);
+  // corroborates them (the audit's net-negative-lessons fix). Same
+  // CHECK-widening discipline as turn_outcomes above: the probe is the source
+  // LIST, the resume branch finishes an interrupted rebuild.
+  if (tableDdl('lessons_legacy') !== null) {
+    execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
+    execRaw(`INSERT OR IGNORE INTO lessons SELECT * FROM lessons_legacy`);
+    execRaw(`DROP TABLE lessons_legacy`);
+  }
+  execRaw(`CREATE TABLE IF NOT EXISTS lessons ${LESSONS_DDL}`);
+  const lessonsDdl = tableDdl('lessons');
+  if (lessonsDdl !== null && LESSON_SOURCES.some((source) => !lessonsDdl.includes(`'${source}'`))) {
+    execRaw(`ALTER TABLE lessons RENAME TO lessons_legacy`);
+    execRaw(`CREATE TABLE lessons ${LESSONS_DDL}`);
+    execRaw(`INSERT OR IGNORE INTO lessons SELECT * FROM lessons_legacy`);
+    execRaw(`DROP TABLE lessons_legacy`);
+  }
   // Gold labels — turns a HUMAN judged directly, the calibration set that
   // measures how far the classifier's verdicts are from the truth
   // (calibration.ts). Append-only: a re-label inserts a new row and the newest
@@ -803,8 +809,33 @@ export function buildOutcomeEvalSplit(sql: SqlExecutor, budget: number): Outcome
 
 // ── Lessons ledger (provisional → corroborated) ──────────────────
 
-export type LessonSource = 'turn_reflection' | 'session_reflection';
+/** Where a lesson came from, in the ledger's canonical order — the one list
+ *  the table's CHECK constraint and its widening migration both derive from:
+ *    turn_reflection     — the one-sentence reflection on a turn that went
+ *                          wrong (engine.reviewTurn).
+ *    session_reflection  — the window-close reflection over recent lessons.
+ *    execution_recovery  — the step clock's machine observation: a failure
+ *                          streak broken by a changed call that ran clean
+ *                          (evolution/recovery.ts). Bound to no turn, so the
+ *                          corroboration gate structurally never admits it to
+ *                          MEMORY.md — it lives in the dynamic-context
+ *                          injection window and nowhere wider. */
+export const LESSON_SOURCES = ['turn_reflection', 'session_reflection', 'execution_recovery'] as const;
+export type LessonSource = (typeof LESSON_SOURCES)[number];
 export type LessonStatus = 'provisional' | 'corroborated';
+
+/** The lessons DDL, with its CHECK derived from the source list — referenced
+ *  by `initTurnOutcomeTables` (declared above; function bodies evaluate after
+ *  module init, so the order is safe). */
+const LESSONS_DDL = `(
+    id TEXT PRIMARY KEY,
+    turn_ids TEXT NOT NULL,
+    text TEXT NOT NULL,
+    source TEXT NOT NULL CHECK (source IN (${LESSON_SOURCES.map((s) => `'${s}'`).join(',')})),
+    status TEXT NOT NULL CHECK (status IN ('provisional','corroborated')),
+    created_at INTEGER NOT NULL,
+    corroborated_at INTEGER
+  )`;
 
 export interface LessonRow {
   id: string;
@@ -850,13 +881,15 @@ function toLessonRow(r: RawLessonRow): LessonRow {
 
 export function listLessons(
   sql: SqlExecutor,
-  opts: { status?: LessonStatus; limit?: number } = {},
+  opts: { status?: LessonStatus; source?: LessonSource; limit?: number } = {},
 ): LessonRow[] {
+  const status = opts.status ?? null;
+  const source = opts.source ?? null;
   try {
-    const rows = opts.status
-      ? sql<RawLessonRow>`SELECT * FROM lessons WHERE status = ${opts.status}
-          ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`
-      : sql<RawLessonRow>`SELECT * FROM lessons ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
+    const rows = sql<RawLessonRow>`SELECT * FROM lessons
+      WHERE (${status} IS NULL OR status = ${status})
+        AND (${source} IS NULL OR source = ${source})
+      ORDER BY created_at DESC LIMIT ${opts.limit ?? 100}`;
     return rows.map(toLessonRow);
   } catch {
     return [];

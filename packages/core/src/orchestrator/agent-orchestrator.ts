@@ -12,11 +12,12 @@
 //
 // Evolution never blocks a turn mid-flight: every dispatch is detached. But a
 // process that exits kills whatever it detached, so `end()` has to decide what
-// to wait for. Two lanes, with different answers — plus the IN-EPISODE loop
-// (`craft`, orchestrator/craft-cycle.ts), which is in neither because it makes
-// no model call: it writes one synchronous row as an execute block settles, so
-// there is nothing to detach and nothing to join, and it is the only evolution
-// clock that ticks inside a single long autonomous turn.
+// to wait for. Two lanes, with different answers — plus the IN-EPISODE clock,
+// which is in neither because it makes no model call: the craft loop (`craft`,
+// orchestrator/craft-cycle.ts) and the recovery findings (`recordRecovery`,
+// evolution/recovery.ts) each write one synchronous row as a tool call
+// settles, so there is nothing to detach and nothing to join. That clock is
+// the only evolution that ticks inside a single long autonomous turn.
 //
 //   TURN LANE — the outcome review (classifier → reflection/extraction/lesson)
 //     and the sampled scaffold shadow eval. Seconds to ~a minute, and the
@@ -49,9 +50,11 @@ import { DrainScheduler } from './drain-scheduler.js';
 import { SignalDelivery, readSignalId } from './signals.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
+import type { ExecutionRecoveryRecord } from '../events/types.js';
 import type { PrepareStepContext, ProteusExtension } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
+import type { RecoveryFinding } from '../evolution/recovery.js';
 import type { CompletedTurn } from '../evolution/types.js';
 import {
   MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
@@ -134,12 +137,27 @@ export class AgentOrchestrator {
   readonly turnExtension: ProteusExtension = {
     name: 'proteus.signals',
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
-    onToolResult: (ctx) => { this.steering.onToolResult(ctx); this.craft.onToolResult(ctx); },
+    onToolResult: (ctx) => {
+      const recovery = this.steering.onToolResult(ctx);
+      this.craft.onToolResult(ctx);
+      if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
+    },
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
       const steer = this.steering.steerFor(ctx.stepNumber);
       return this.signals.prepareStep(ctx, steer ? [steer] : []);
     },
   };
+  /** The turn's execution recoveries — failure streaks the steering ledger saw
+   *  broken by a changed call that ran clean (evolution/recovery.ts). Recorded
+   *  through the engine at the MOMENT of observation, because an episode can
+   *  outlive this instance (DO eviction, continuation turns) and a finding
+   *  held for turn end dies with the process that held it; collected here only
+   *  for the turn's `execution_recovery` run event. */
+  private turnRecoveries: RecoveryFinding[] = [];
+  /** Decided once per turn, exactly like the craft cycle's reset: a
+   *  `--no-auto-evolve` run records no evolution state, and a recovery finding
+   *  is evolution state. */
+  private observeRecoveries = false;
   private readonly reflectionInterval: number;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -193,8 +211,28 @@ export class AgentOrchestrator {
     // evolution state — so a bench arm with evolution off measures the
     // in-episode loop's absence along with the rest of it.
     this.craft.reset(this.deps.engine.enabled);
+    this.turnRecoveries = [];
+    this.observeRecoveries = this.deps.engine.enabled;
     this.signals.beginTurn(continuation, readSignalId(metadata));
     this.deps.budget?.activate(readMissionLabels(metadata));
+  }
+
+  /** One recovery observed: hand it to the engine's ledger now (durable
+   *  mid-episode) and keep it for the turn's run event. */
+  private recordRecovery(finding: RecoveryFinding): void {
+    this.turnRecoveries.push(finding);
+    this.deps.engine.recordRecovery(finding);
+  }
+
+  /** The turn's in-episode recovery record, or null when no streak broke — no
+   *  row, `turn_end` being the denominator, exactly as the steering and craft
+   *  records read. */
+  recoverySnapshot(): ExecutionRecoveryRecord | null {
+    if (this.turnRecoveries.length === 0) return null;
+    return {
+      recoveries: this.turnRecoveries.map(({ tool, failures, failedSignature }) =>
+        ({ tool, failures, failedSignature })),
+    };
   }
 
   /**

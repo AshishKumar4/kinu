@@ -1,5 +1,5 @@
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@proteus/core';
@@ -97,7 +97,11 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   // (not the real CLI), spawning a daemon child would re-execute the test,
   // which would call ensureLocalDaemonRunning() again, creating an infinite
   // fork loop.  Refuse silently in quiet mode, throw loudly otherwise.
-  if (/test|spec|e2e/i.test(entry)) {
+  // The FILE is what decides — a checkout whose path merely contains
+  // "test"/"spec"/"e2e" (a worktree name, a user's directory) is not a test
+  // script, and matching the whole path made the real CLI refuse its daemon
+  // from such a checkout.
+  if (/test|spec|e2e/i.test(basename(entry))) {
     if (!opts.quiet) throw new Error(`Refusing to start daemon from a test script: ${entry}`);
     return null;
   }

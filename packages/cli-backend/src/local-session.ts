@@ -67,6 +67,7 @@ import {
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
+  listRecoveryFindings,
   type DynamicContext,
   type MediaModality,
   createReleaseStore, initReleaseTables, releaseSqlFromExec, initWorkspaceSchema,
@@ -1275,6 +1276,7 @@ export class LocalAgentSession implements BackendHost {
       steering: this.orch.steering.snapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
+      recoveries: this.orch.recoverySnapshot(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
       ...(error ? { error } : {}),
     });
@@ -1974,6 +1976,7 @@ export class LocalAgentSession implements BackendHost {
     return agentDynamicContext({
       factsBlock: this.renderFactsForTurn(),
       memoryTail,
+      recoveryFindings: listRecoveryFindings(this.rt.storage.sql),
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
       openTasks: this.taskList.listOpen(),

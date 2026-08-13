@@ -55,6 +55,7 @@ import {
   currentDateForPrompt,
   promptModeForTurnEvent,
   DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
+  listRecoveryFindings,
   type DynamicContext, type MissingCapability,
   // Public extension seam — the SAME host contract runChat drives on the CLI
   ExtensionHost, composePrepareStep,
@@ -492,6 +493,7 @@ export abstract class ActorAgent extends Think<Env> {
         files: this.acc.files,
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
+        recoveries: this.orch.recoverySnapshot(),
         reason: result.status,
         error: errorText,
       });
@@ -2151,6 +2153,7 @@ export abstract class ActorAgent extends Think<Env> {
     return agentDynamicContext({
       factsBlock: this.renderFactsForTurn(),
       memoryTail: this._turnMemoryTail,
+      recoveryFindings: listRecoveryFindings(this.rt.storage.sql),
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
       openTasks: this.taskList.listOpen(),

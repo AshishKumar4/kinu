@@ -13,7 +13,7 @@ import { tool, type ModelMessage } from 'ai';
 import type { ModelStreamPart } from '@proteus/test-utils';
 import { z } from 'zod';
 import {
-  AgentOrchestrator, isFailingToolResult, runChat,
+  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
   TURN_STEERING_HEADER, ExtensionHost, type BackendHost,
 } from '../src/index.js';
@@ -315,6 +315,57 @@ describe('long-turn trigger', () => {
     // Long and undelegated as well — still one line in the conversation.
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 1, [user('q')]))).toHaveLength(1);
     expect(orch.steering.snapshot()?.trigger).toBe('repeated_failure');
+  });
+});
+
+describe('execution-recovery detection (the failure ledger\'s second reader)', () => {
+  const failing = (s: TurnSteering, args: Record<string, unknown>) =>
+    s.onToolResult({ toolName: 'run', args, result: 'Error: boom', success: false });
+  const clean = (s: TurnSteering, args: Record<string, unknown>) =>
+    s.onToolResult({ toolName: 'run', args, result: 'ok', success: true });
+
+  test('a steer-worthy streak broken by a CHANGED call reports the recovery, echoes bounded', () => {
+    const steering = new TurnSteering();
+    const long = 'x'.repeat(500);
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) {
+      expect(failing(steering, { command: `npm test ${long} ${i}` })).toBeNull();
+    }
+    const recovery = clean(steering, { command: 'bun test' })!;
+    expect(recovery.tool).toBe('run');
+    expect(recovery.failures).toBe(CONSECUTIVE_FAILURES_BEFORE_STEER);
+    expect(recovery.failedArgs).toContain('npm test');
+    expect(recovery.failedArgs.length).toBeLessThanOrEqual(201); // echo cap + ellipsis
+    expect(recovery.succeededArgs).toContain('bun test');
+    expect(recovery.failedSignature.startsWith('run')).toBe(true);
+    // The streak is spent: the next clean call has nothing to recover from.
+    expect(clean(steering, { command: 'bun lint' })).toBeNull();
+  });
+
+  test('below the steer threshold there is nothing to write down', () => {
+    const steering = new TurnSteering();
+    failing(steering, { command: 'a' });
+    failing(steering, { command: 'b' });
+    expect(clean(steering, { command: 'c' })).toBeNull();
+  });
+
+  test('the SAME call finally working is a lucky retry, not a recovery', () => {
+    const steering = new TurnSteering();
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: 'make' });
+    expect(clean(steering, { command: 'make' })).toBeNull();
+  });
+
+  test('another tool\'s success neither claims nor clears the streak', () => {
+    const steering = new TurnSteering();
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: `try ${i}` });
+    expect(steering.onToolResult({ toolName: 'web_fetch', args: { url: 'x' }, result: 'page', success: true })).toBeNull();
+    expect(clean(steering, { command: 'the fix' })).not.toBeNull();
+  });
+
+  test('reset drops a streak with the rest of the turn state', () => {
+    const steering = new TurnSteering();
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: `try ${i}` });
+    steering.reset();
+    expect(clean(steering, { command: 'unrelated' })).toBeNull();
   });
 });
 

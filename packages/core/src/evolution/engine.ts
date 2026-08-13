@@ -50,6 +50,7 @@ import { periodicCraftConsolidation } from '../craft/consolidation.js';
 import { updateCraftScores } from '../craft/ema.js';
 import { initCraftScoreTables } from '../craft/schemas.js';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode.js';
+import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
@@ -263,6 +264,35 @@ export class EvolutionEngine {
     }
     for (const listener of this.listeners) {
       listener(event);
+    }
+  }
+
+  // ── Timescale 0: In-episode (the step clock) ────────────────────
+
+  /**
+   * The step clock's knowledge observation: an execution recovery the
+   * orchestrator's failure ledger saw mid-episode (a failure streak broken by
+   * a changed call that ran clean — evolution/recovery.ts, where its worth
+   * and its ceiling are stated). Synchronous, no model call: one lessons row,
+   * so it rides neither evolution lane and ticks inside a single long
+   * autonomous turn, exactly like the craft ledger above. Provisional forever
+   * by construction (bound to no turn), which keeps machine-observed prose
+   * out of MEMORY.md; its one consumer is the dynamic-context injection that
+   * carries the newest findings for the rest of the episode.
+   */
+  recordRecovery(finding: RecoveryFinding): void {
+    if (!this.config.enabled) return;
+    let recorded = false;
+    try {
+      recorded = recordRecoveryFinding(this.rt.storage.sql, finding);
+    } catch {
+      return; // lessons ledger unavailable on a bare runtime — never fail the turn
+    }
+    if (recorded) {
+      this.emit({
+        type: 'reflection',
+        message: `[execution recovery] ${recoveryFindingText(finding)}`,
+      });
     }
   }
 

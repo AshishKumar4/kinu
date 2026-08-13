@@ -33,8 +33,12 @@ export {
   type OutcomeClassification, type RecordTurnOutcomeInput, type RealOutcomeRate,
   type OutcomeEvalExpectation, type OutcomeEvalInstance, type OutcomeEvalSplit,
   type OutcomeSplitDegeneracy,
-  type LessonRow, type LessonSource, type LessonStatus,
+  type LessonRow, type LessonSource, type LessonStatus, LESSON_SOURCES,
 } from './outcomes.js';
+export {
+  recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
+  MAX_RECOVERY_FINDINGS, type RecoveryFinding,
+} from './recovery.js';
 // C8/C11 — the hand-labeled calibration set and the bias-corrected estimates
 // it buys. Without it every rate this system reports about itself is a
 // classifier's opinion of the truth rather than the truth.

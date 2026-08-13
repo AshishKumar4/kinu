@@ -300,6 +300,7 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
   const sources = {
     factsBlock: undefined,
     memoryTail: undefined,
+    recoveryFindings: [] as string[],
     executors: [] as PromptExecutorInfo[],
     runningJobs: [] as Array<{ id: string; kind: string; label: string | null }>,
     openTasks: [] as Array<{
@@ -336,6 +337,18 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
       { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: 'two ways in' },
     ]);
     expect(ctx.missingCapabilities).toEqual([{ source: 'linear', reason: 'startup timeout' }]);
+  });
+
+  test('execution-recovery findings reach the block, and an empty list is omitted', () => {
+    const finding = '`run` failed 3x in a row with {"command":"npm test"}; the first `run` call that then ran clean was {"command":"bun test"}';
+    const ctx = agentDynamicContext({ ...sources, recoveryFindings: [finding] });
+    expect(ctx.recoveries).toEqual([finding]);
+    const block = renderDynamicContextBlock(ctx)!;
+    expect(block).toContain('## Proven by execution');
+    expect(block).toContain('bun test');
+    // The header states the ceiling: evidence, not a verdict on correctness.
+    expect(block).toContain('not a verdict');
+    expect('recoveries' in agentDynamicContext(sources)).toBe(false);
   });
 
   test('an absent plane is omitted, not rendered empty', () => {

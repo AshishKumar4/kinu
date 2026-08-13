@@ -46,6 +46,16 @@
  * the delegation steers ask for a fork, the repeat steer asks for anything
  * other than the call it named.
  *
+ * The failure ledger has a second reader: {@link TurnSteering.onToolResult}
+ * reports the moment a steer-worthy streak is BROKEN by a changed call that
+ * ran clean — an execution recovery (evolution/recovery.ts), the one thing
+ * about the episode's own learning the runtime can prove. Detection lives
+ * here because the streaks live here; what the observation is worth, and its
+ * ceiling, is that module's business. A streak broken by the SAME call
+ * finally working reports nothing: that is a retry that got lucky, and
+ * durable "keep grinding" advice is the exact misevolution the steer above
+ * exists to prevent.
+ *
  * Thresholds are constants, not configuration: a knob would make every bench
  * run a different experiment, and there is no per-agent answer to "how many
  * failures is too many". Their rationale is above; changing them is a code
@@ -63,6 +73,7 @@ import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types.js
 import type { ToolCallContext, ToolResultContext } from '../extension.js';
 import type { AgentSignal } from '../types/signals.js';
 import type { BuiltinToolName } from '../tools/registry.js';
+import type { RecoveryFinding } from '../evolution/recovery.js';
 import { fnv1a64 } from '../prompting/volatile-context.js';
 
 /** Identical calls answered identically before the turn is told it is looping.
@@ -183,9 +194,18 @@ interface RepeatedCall {
   count: number;
 }
 
+/** One tool's failure streak, with the LAST failing call kept — signature so a
+ *  recovery can tell a changed call from a lucky retry, echo so the finding
+ *  can say what was failing. */
+interface FailureStreak {
+  count: number;
+  signature: string;
+  args: string;
+}
+
 export class TurnSteering {
-  /** Failures per tool since that tool last succeeded. */
-  private readonly failures = new Map<string, number>();
+  /** Failure streaks per tool since that tool last succeeded. */
+  private readonly failures = new Map<string, FailureStreak>();
   /** Identical calls with an unchanged answer, by call signature. */
   private readonly repeats = new Map<string, RepeatedCall>();
   private delegated = false;
@@ -211,25 +231,52 @@ export class TurnSteering {
     if (this.fired && this.answersTheSteer(ctx)) this.converted = true;
   }
 
-  onToolResult(ctx: ToolResultContext): void {
+  /**
+   * A tool result settled. Returns the execution recovery this result just
+   * proved, or null on the overwhelmingly common path: a steer-worthy failure
+   * streak of this tool, broken by THIS call — a different call of the same
+   * tool that ran clean. The same-signature break (the identical call finally
+   * worked) is deliberately not a recovery: nothing about the approach
+   * changed, so there is nothing to write down.
+   */
+  onToolResult(ctx: ToolResultContext): RecoveryFinding | null {
+    const signature = callSignature(ctx.toolName, ctx.args);
+    let recovery: RecoveryFinding | null = null;
     if (isFailingToolResult(ctx)) {
-      this.failures.set(ctx.toolName, (this.failures.get(ctx.toolName) ?? 0) + 1);
+      const streak = this.failures.get(ctx.toolName);
+      if (streak) {
+        streak.count += 1;
+        streak.signature = signature;
+        streak.args = echoArgs(ctx.args);
+      } else {
+        this.failures.set(ctx.toolName, { count: 1, signature, args: echoArgs(ctx.args) });
+      }
     } else {
+      const streak = this.failures.get(ctx.toolName);
+      if (streak && streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER && signature !== streak.signature) {
+        recovery = {
+          tool: ctx.toolName,
+          failures: streak.count,
+          failedArgs: streak.args,
+          succeededArgs: echoArgs(ctx.args),
+          failedSignature: streak.signature,
+        };
+      }
       this.failures.delete(ctx.toolName);
     }
 
     // A repeat is only a repeat while the answer stays the same: a call whose
     // output changed taught the model something, so its streak restarts.
-    const signature = callSignature(ctx.toolName, ctx.args);
     const resultHash = fnv1a64(ctx.result);
     const seen = this.repeats.get(signature);
     if (seen && seen.resultHash === resultHash) {
       seen.count += 1;
-      return;
+      return recovery;
     }
     this.repeats.set(signature, {
       tool: ctx.toolName, args: echoArgs(ctx.args), resultHash, count: 1,
     });
+    return recovery;
   }
 
   /** The turn's steer and whether it converted, or null when none fired. */
@@ -250,10 +297,10 @@ export class TurnSteering {
       this.fired = { trigger: 'repeated_call', step, tool: call.tool };
       return signal(repeatedCallText(call.tool, call.args, call.count));
     }
-    const stuck = [...this.failures].find(([, count]) => count >= CONSECUTIVE_FAILURES_BEFORE_STEER);
+    const stuck = [...this.failures].find(([, streak]) => streak.count >= CONSECUTIVE_FAILURES_BEFORE_STEER);
     if (stuck) {
       this.fired = { trigger: 'repeated_failure', step, tool: stuck[0] };
-      return signal(repeatedFailureText(stuck[0], stuck[1]));
+      return signal(repeatedFailureText(stuck[0], stuck[1].count));
     }
     if (step >= LONG_TURN_STEPS_BEFORE_STEER && !this.delegated) {
       this.fired = { trigger: 'long_turn_no_delegation', step };

@@ -47,6 +47,7 @@ export type RunEventType =
   | 'turn_steering'
   | 'completion_gate'
   | 'craft_cycle'
+  | 'execution_recovery'
   | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
@@ -171,6 +172,23 @@ export type RunEvent =
       /** Crafted tools this turn's execution evidence pushed below the
        *  injection floor — retirement, in-episode. */
       dropped: string[] })
+  /** The step clock's knowledge channel fired: failure streaks the turn's own
+   *  ledger saw broken by a CHANGED call that ran clean, each recorded as a
+   *  durable finding and injected for the rest of the episode
+   *  (evolution/recovery.ts). Written once per turn by the settle spine like
+   *  `craft_cycle`, with `turn_end` as the denominator. Declared here rather
+   *  than imported from the producer for the same reason the other turn
+   *  records are. */
+  | (RunEventBase & { type: 'execution_recovery';
+      recoveries: Array<{
+        /** The tool whose streak broke. */
+        tool: string;
+        /** Consecutive failures before the changed call. */
+        failures: number;
+        /** Stable signature of the failing call — the SAME signature failing
+         *  again in a later turn is the direct falsifier that the finding
+         *  did not take. */
+        failedSignature: string }> })
   /** A mission budget ran out and a host seam declined the work. Written once
    *  per label by the governor (mission-budget.ts), so the durable trail says
    *  which cap stopped which run rather than leaving an unexplained short turn. */
@@ -203,6 +221,11 @@ export type CompletionGateRecord =
  *  declaration. */
 export type CraftCycleRecord =
   Omit<Extract<RunEvent, { type: 'craft_cycle' }>, keyof RunEventBase | 'type'>;
+
+/** One turn's execution recoveries — derived from the durable schema for the
+ *  same reason as the records above: one declaration, no drift. */
+export type ExecutionRecoveryRecord =
+  Omit<Extract<RunEvent, { type: 'execution_recovery' }>, keyof RunEventBase | 'type'>;
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {

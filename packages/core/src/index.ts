@@ -91,6 +91,12 @@ export {
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes.js';
+// The step clock's knowledge channel — execution recoveries observed by the
+// turn's own failure ledger, injected for the rest of the episode.
+export {
+  recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
+  MAX_RECOVERY_FINDINGS, type RecoveryFinding,
+} from './evolution/recovery.js';
 // C8/C11 — the hand-labeled calibration set, and the bias-corrected view of
 // every rate the classifier feeds. Uncalibrated is reported as such, never
 // approximated away.
@@ -811,6 +817,7 @@ export {
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepUsage,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
+  ExecutionRecoveryRecord,
   CacheHitStats, StepTelemetry,
 } from './events/index.js';
 export {
