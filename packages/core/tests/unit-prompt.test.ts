@@ -829,8 +829,10 @@ describe('buildSystemPromptSync', () => {
       // 2318); the tool's own when-to-use doctrine is schema-only, as every
       // other tool's is, so none of it lands in this section.
       'Tools available this turn': 2350,
-      // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
-      // /pc file plane; exec stays target-native) — deliberate (2026-07).
+      // +2 lines of file doctrine: the workspace filesystem is named by where
+      // it is, and every other environment is a separate machine in its own
+      // native paths — stated once here for all of them, which is why the
+      // per-executor lines never repeat it — deliberate (2026-07).
       'Execution environments': 2450,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active

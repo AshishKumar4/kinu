@@ -102,6 +102,17 @@ const RETRY_MAX_MS = 30_000;
  *  query rather than issuing an RPC per keystroke. */
 const MEMORY_SEARCH_DEBOUNCE_MS = 200;
 
+/**
+ * The cadence every surface-level read the server never pushes runs at.
+ *
+ * Exported because a surface that renders TWO of those reads side by side has
+ * to poll both on the same clock or it will contradict itself: the needs-you
+ * queue and the journal below it are the same ledger seen twice, and the
+ * journal reading once at mount while the queue re-read every tick is exactly
+ * how "1 self-change you have not seen" ended up over "nothing has settled".
+ */
+export const LIVE_DATA_REFRESH_MS = 5_000;
+
 interface CallableAgent {
   call(method: string, args: unknown[]): Promise<unknown>;
 }
@@ -374,7 +385,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // the run timeline for near-real-time spans — not all seven RPCs.
   useEffect(() => {
     if (!isConnected || isSubordinate) return;
-    const interval = setInterval(refreshLiveData, 5000);
+    const interval = setInterval(refreshLiveData, LIVE_DATA_REFRESH_MS);
     return () => clearInterval(interval);
   }, [isConnected, isSubordinate]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -392,6 +403,14 @@ export function useProteus(target?: string | ProteusActorAddress) {
       setChangelogUnseen(unseen ? 1 : 0);
     }).catch(() => {});
   }, [rpc]);
+
+  // Stable identity: it is an effect dependency in the changelog hook, which
+  // re-reads on a timer now — an inline arrow re-armed that effect on every
+  // render and fired a markChangelogSeen RPC with it.
+  const clearChangelogUnseen = useCallback(() => {
+    setChangelogUnseen(0);
+    setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
+  }, []);
 
   const abortChat = useCallback(() => {
     stop();
@@ -741,10 +760,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     /** Whether unseen self-changes remain — the sidebar roster's dot. Work
      *  marks them seen server-side, then calls the clear. */
     changelogUnseen,
-    clearChangelogUnseen: () => {
-      setChangelogUnseen(0);
-      setPendingActions((prev) => prev.filter((a) => a.kind !== "unseen_changes"));
-    },
+    clearChangelogUnseen,
     /** Steer-as-Branch chips (running → settled/error) + the dismiss. */
     branchRuns,
     dismissBranchRun: (branchId: string) =>

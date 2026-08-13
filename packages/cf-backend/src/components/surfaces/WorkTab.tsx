@@ -50,14 +50,25 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
   { id: "self", label: "Self-changes" },
 ];
 
-/** Where each kind of pending thing is actually decided. The mapping lives
- *  here, not in the read model: core has no business knowing tab names. */
-const PENDING_HOME: Record<PendingActionKind, { surface: SurfaceKind | null; where: string }> = {
-  release_approval: { surface: "Releases", where: "Releases" },
-  scaffold_version: { surface: "Agent", where: "Agent → Evolution" },
-  failed_job: { surface: null, where: "the journal below" },
-  unseen_changes: { surface: null, where: "the journal below" },
-  curriculum_task: { surface: null, where: "Supervise" },
+/**
+ * Where each kind of pending thing is actually decided, and the words that
+ * send the reader there. The mapping lives here, not in the read model: core
+ * has no business knowing tab names.
+ *
+ * The verb is part of the mapping rather than a fixed "decide in", because it
+ * is not always a decision. The unseen digest is a READ — several of its entry
+ * kinds are measurements with no keep and no revert — and a row promising a
+ * decision over a card that offers none is the same lie as pointing at the
+ * wrong tab. That row is also the one with no cta of its own: what it says to
+ * do and where to do it is the whole of its detail line, and printing the
+ * destination twice on one card reads as a stutter.
+ */
+const PENDING_HOME: Record<PendingActionKind, { surface: SurfaceKind | null; cta: string | null }> = {
+  release_approval: { surface: "Releases", cta: "decide in Releases" },
+  scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
+  failed_job: { surface: null, cta: "retry or dismiss it in the journal below" },
+  unseen_changes: { surface: null, cta: null },
+  curriculum_task: { surface: null, cta: "decide in Supervise" },
 };
 
 const PENDING_ICON: Record<PendingActionKind, typeof ClockIcon> = {
@@ -99,7 +110,10 @@ export function WorkTab({
   const { resource: taskResource, reload: reloadTasks } = useAsyncResource(loadTasks, revalidate);
   const tasks = lastValue(taskResource);
 
-  const { view: changelog, resource: changelogResource, reload: reloadChangelog } = useChangelog(rpc, onChangelogSeen);
+  const {
+    view: changelog, seenAt: changelogSeenAt,
+    resource: changelogResource, reload: reloadChangelog,
+  } = useChangelog(rpc, onChangelogSeen);
 
   const openTasks = (tasks ?? []).filter((task) => !isClosedTree(task));
   const closedTasks = (tasks ?? []).filter(isClosedTree);
@@ -181,16 +195,22 @@ export function WorkTab({
             ))}
           </div>
 
-          {changelog === null && changelogResource.status === "error" && (
+          {/* Spinner until the digest has loaded once, and the failure on every
+              read that breaks after — including a revalidation over a snapshot
+              still on screen, which would otherwise go stale in silence. */}
+          {(changelog === null || changelogResource.status === "error") && (
             <ChangelogFailure resource={changelogResource} reload={reloadChangelog} />
           )}
 
           {visible.length === 0 ? (
-            <p className="text-xs p-text-3">
-              {journal.length === 0
-                ? "Nothing has settled yet — finished jobs, closed plan items and the agent's own changes land here."
-                : "Nothing under this filter."}
-            </p>
+            // Never claimed while a third of this feed is still unread.
+            changelog !== null && (
+              <p className="text-xs p-text-3">
+                {journal.length === 0
+                  ? "Nothing has settled yet — finished jobs, closed plan items and the agent's own changes land here."
+                  : "Nothing under this filter."}
+              </p>
+            )
           ) : (
             <div className="space-y-2">
               {visible.map((row) => (
@@ -198,7 +218,7 @@ export function WorkTab({
                   {row.kind === "job" && <JobCard job={row.job} onRefresh={onRefreshJobs} rpc={rpc} />}
                   {row.kind === "task" && <TaskTree task={row.task} />}
                   {row.kind === "self" && (
-                    <ChangelogEntryCard entry={row.entry} seenAt={changelog?.seenAt ?? 0}
+                    <ChangelogEntryCard entry={row.entry} seenAt={changelogSeenAt}
                       rpc={rpc} onReverted={reloadChangelog} />
                   )}
                 </div>
@@ -226,7 +246,9 @@ function PendingRow(
         {action.detail && (
           <div className="text-[10px] p-text-3 mt-0.5 line-clamp-2 break-words">{action.detail}</div>
         )}
-        <div className="text-[10px] p-text-3 mt-0.5">{timeAgo(action.at)} · decide in {home.where}</div>
+        <div className="text-[10px] p-text-3 mt-0.5">
+          {timeAgo(action.at)}{home.cta === null ? "" : ` · ${home.cta}`}
+        </div>
       </div>
     </>
   );

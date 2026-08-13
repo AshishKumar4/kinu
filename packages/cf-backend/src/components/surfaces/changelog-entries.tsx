@@ -13,7 +13,7 @@
  * with the rest of the feed by timestamp; each card owns its own kept / busy /
  * diff state, which is per-entry anyway.
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import type { ComponentType } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
 import {
@@ -23,6 +23,7 @@ import {
 } from "@phosphor-icons/react";
 import type { ChangelogEntry, ChangelogEntryKind, DiffLine } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
+import { LIVE_DATA_REFRESH_MS } from "@/hooks/use-proteus";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
 import { DiffLines, timeAgo } from "./shared";
@@ -41,21 +42,48 @@ const KIND_ICON: Record<ChangelogEntryKind, ComponentType<{ size?: number; class
 };
 
 /**
- * The changelog, loaded once for the surface that shows it, and marked seen by
- * the act of showing it — seeing the digest IS the acknowledgement, never a
- * blocking modal. `onSeen` zeroes the tab badge upstream.
+ * How often the digest re-reads while the surface showing it is open.
+ *
+ * It is the surface-wide cadence deliberately, not a number of its own. The
+ * needs-you queue polls the SAME ledger through `listPendingActions` at that
+ * rate; reading the entries any slower means the queue can announce a
+ * self-change the journal beneath it has not fetched yet, and "1 self-change
+ * you have not seen" sits above "Nothing has settled yet" until something else
+ * remounts the tab. Loading once at mount — which is what this did — made that
+ * window permanent for anyone who left Work open, i.e. everyone: Work is the
+ * surface a workspace opens on.
+ */
+export const CHANGELOG_REVALIDATE_MS = LIVE_DATA_REFRESH_MS;
+
+/** Never stand down: unlike a plan or a fork run, a digest has no settled
+ *  state to infer from what loaded — a scaffold promotion, a crafted tool or a
+ *  graded turn can land on an idle workspace at any time. */
+const changelogRevalidate = (): number => CHANGELOG_REVALIDATE_MS;
+
+/**
+ * The changelog for the surface that shows it, marked seen by the act of
+ * showing it — seeing the digest IS the acknowledgement, never a blocking
+ * modal. `onSeen` zeroes the tab badge upstream.
  */
 export function useChangelog(rpc: Rpc, onSeen?: () => void) {
   const load = useCallback(() => rpc<ChangelogView>("getEvolutionChangelog", [{ limit: 30 }]), [rpc]);
-  const { resource, reload } = useAsyncResource(load);
+  const { resource, reload } = useAsyncResource(load, changelogRevalidate);
   const view = lastValue(resource);
+
+  // Freshness is judged against the marker as it stood when this surface
+  // opened, pinned on the first read. Showing the digest marks it seen, so
+  // every later read answers with a marker newer than every entry — and
+  // rendering against THAT would blank the new-entry dots seconds after the
+  // reader arrived, on the surface whose whole job is showing what is new.
+  const openedSeenAt = useRef<number | null>(null);
+  if (openedSeenAt.current === null && view !== null) openedSeenAt.current = view.seenAt;
 
   useEffect(() => {
     if (!view || view.unseenCount === 0) return;
     rpc("markChangelogSeen", []).then(() => onSeen?.()).catch(() => {});
   }, [view, rpc, onSeen]);
 
-  return { view, resource, reload };
+  return { view, seenAt: openedSeenAt.current ?? 0, resource, reload };
 }
 
 /** The failure state, so a broken read is never indistinguishable from a build

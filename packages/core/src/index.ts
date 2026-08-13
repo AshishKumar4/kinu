@@ -139,7 +139,7 @@ export {
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {
-  buildChangelog, countUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
@@ -1149,6 +1149,6 @@ export type {
   EvolutionConfigView, MctsConfigView, SetModelDeps,
 } from './read-models/config-plane.js';
 export {
-  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views.js';
 export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views.js';

@@ -1,26 +1,32 @@
 /**
  * Environment surface — WHERE the agent can act. The merge of the old
- * "Workspace" and "Devices" tabs: the CompositeVFS mount table is the spine
- * (one chip per environment: liveness, policy, consistency) and Files and
- * Terminal are the panes over the selected mount.
+ * "Workspace" and "Devices" tabs: one chip per environment (liveness, policy,
+ * consistency), with Files and Terminal as the panes over the selected one.
  *
- * Two things left here. The Agents chips were an inert roster — informational
- * only, duplicating chat's SubordinateTabs, which is the roster that can
- * actually spawn and dismiss; they existed because `getWorkspaceAgents` was
- * loaded alongside `listMounts`. And previews left with their auto-focus
- * effect: Output owns looking at a running thing, and TWO rules racing to
- * steer where a new port lands was never a design, it was a bug.
+ * There is no mount table and no composite filesystem — those went with
+ * CompositeVFS. Each environment is its OWN filesystem addressed in its own
+ * native paths, listed straight off the executor router
+ * (core/src/read-models/files.ts listEnvironments), and the chip's namespace
+ * (`sandbox.*`) is how the agent reaches it. The workspace is one of these
+ * rows, not a base the others hang off: Nimbus over this Durable Object's own
+ * SQLite, durable, with a real shell. The row named `nimbus.*` is a DIFFERENT
+ * machine — a separate Nimbus session in its own NimbusSession DO — which is
+ * why it is not called "Nimbus" here (lib/executors.ts).
  *
- * Liveness renders here ONCE: each mount chip's dot fuses the polled executor
- * status (exec plane) with the mount's own live flag (file plane). Files
- * browse through the ONE FilesPane entry point over the composite ('workspace'
- * executor, keyed at the mount prefix), so /local, /sandbox, /nimbus and /pc
- * — including consented /pc descent — share a single browser.
+ * Two things left. The Agents chips were an inert roster — informational only,
+ * duplicating chat's SubordinateTabs, which is the roster that can actually
+ * spawn and dismiss; they existed because `getWorkspaceAgents` was loaded
+ * alongside `listMounts`. And previews left with their auto-focus effect:
+ * Output owns looking at a running thing, and TWO rules racing to steer where a
+ * new port lands was never a design, it was a bug.
+ *
+ * Liveness renders here ONCE: each chip's dot fuses the polled executor status
+ * (exec plane) with the row's own live flag (file plane).
  *
  * Device registration/consent are settings, not work surfaces: registering or
  * revoking a PC lives in Account settings → Devices; the per-agent file-access
- * tier lives in Workspace settings. The offline /pc mount keeps only a
- * connect call-to-action pointing there.
+ * tier lives in Workspace settings. The offline PC row keeps only a connect
+ * call-to-action pointing there.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
@@ -118,7 +124,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           <div className="flex items-center gap-2 mb-2">
             <HardDrivesIcon size={14} className="p-accent" />
             <span className="text-xs font-semibold p-text">Environments</span>
-            <span className="text-[10px] p-text-3">every environment as one filesystem — /local is the durable base</span>
+            <span className="text-[10px] p-text-3">each one its own filesystem, in its own paths — the workspace is the durable one</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {mounts.map((m) => {
@@ -182,8 +188,16 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
           <div className="flex-1 min-h-0">
             {pane.kind === "files" && (
-              /* ONE browser over the CompositeVFS, keyed at the mount prefix. */
-              <FilesPane key={selectedMount.prefix} execName="workspace" rpc={rpc} initialPath={selectedMount.prefix} />
+              /* The SELECTED environment's own file view, opened at its own
+                 working directory. It used to browse the `workspace` executor
+                 at `selectedMount.prefix` — correct while one CompositeVFS
+                 addressed every mount under `/sandbox`, `/nimbus`, …; since
+                 that went, `prefix` is a display string (`sandbox.*`), not a
+                 path, so every row listed the workspace at a directory that
+                 does not exist. `cwd` is the read model's answer to exactly
+                 this question (core/src/read-models/files.ts). */
+              <FilesPane key={selectedMount.name} execName={executorForMount(selectedMount.name)}
+                rpc={rpc} initialPath={selectedMount.cwd ?? "."} />
             )}
             {pane.kind === "terminal" && selectedExec && (
               <ExecutorTerminal
@@ -223,11 +237,13 @@ function PaneTabButton({ icon: Icon, label, active, badge, onClick }: {
 /* ── Unavailable environments ────────────────────────────────────── */
 
 function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
-  if (mount.name === "pc") return <PcConnectCta />;
+  // `laptop`, not `pc`: rows are named by their EXECUTOR now, and the old
+  // mount name left this branch — the whole connect call-to-action — dead.
+  if (mount.name === "laptop") return <PcConnectCta />;
   const docs = mount.name === "nimbus"
-    ? { text: "Nimbus is a lightweight Linux environment that runs inside Proteus. It isn't enabled on this deployment. Your agent can still use the Sandbox or its built-in workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
+    ? { text: "A lightweight Linux machine of its own, separate from this workspace, for package installs and anything that needs real binaries. It isn't enabled on this deployment — your agent can still use the Sandbox, or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
     : mount.name === "sandbox"
-      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use Nimbus (if available) or its built-in workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment — your agent can still use a Linux session (if available), or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">

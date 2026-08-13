@@ -182,7 +182,7 @@ function DiffView({ executors, lastActiveExecutor, rpc }: { executors: ExecutorI
         <div className="text-xs p-notice-danger rounded-md px-3 py-2">{result.error}</div>
       ) : result.notGitRepo ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="Not a git repository"
-          hint={`${executorLabel(exec)}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to Agent state.`} />
+          hint={`${executorLabel(exec)}'s /workspace isn't a git repo, so changes can't be tracked here. Have the agent run "git init" there, or switch to ${executorLabel("workspace")}.`} />
       ) : files.length === 0 ? (
         <EmptyState icon={<GitDiffIcon size={28} />} title="No changes"
           hint={result.mode === "vfs-baseline"

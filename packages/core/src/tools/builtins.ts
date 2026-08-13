@@ -393,8 +393,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   // ── 2. run ───────────────────────────────────────────────────────────────
   // Shell command tool. The `runtime` parameter dispatches through the
-  // ExecutionRouter — workspace (default) hits the in-VFS virtual shell;
-  // anything else is provisioned-on-demand via ExecutorProvider. No fallback
+  // ExecutionRouter — workspace (default) hits the workspace's own Nimbus
+  // shell, over the same bytes the `file` tool addresses; every other runtime
+  // is a different machine, provisioned on demand via ExecutorProvider (the
+  // `nimbus` one is a separate Nimbus session, not this shell). No fallback
   // chain: if you ask for "sandbox" and sandbox isn't ready, you get a
   // structured error pointing at the install card, not silently routed
   // somewhere else.

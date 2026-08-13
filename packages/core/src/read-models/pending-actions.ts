@@ -51,8 +51,15 @@ export interface PendingActionInputs {
   }>;
   readonly jobs: readonly BackgroundJob[];
   /** Evolution Changelog entries the owner has not seen, and the newest one's
-   *  timestamp — one queue row, because the digest is one thing to go read. */
-  readonly unseenChanges: { count: number; latestAt: number };
+   *  timestamp — one queue row, because the digest is one thing to go read.
+   *
+   *  `revertable` is how many of them actually offer keep/revert. The digest
+   *  also carries measurements (a graded turn, a replay eval, a GEPA pass),
+   *  which are read and not decided — a brand-new workspace's very first
+   *  unseen entry is usually one of those, so a row that says "keep or revert
+   *  them" over a card with no keep and no revert is the common case, not the
+   *  edge one. */
+  readonly unseenChanges: { count: number; revertable: number; latestAt: number };
   readonly curriculum: ReadonlyArray<{
     id: string; task: string; status: string; proposedAt: number;
   }>;
@@ -102,12 +109,15 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
     });
   }
 
-  if (input.unseenChanges.count > 0) {
+  const { count: unseenCount, revertable } = input.unseenChanges;
+  if (unseenCount > 0) {
     actions.push({
       id: 'unseen-changes',
       kind: 'unseen_changes',
-      title: `${input.unseenChanges.count} self-change${input.unseenChanges.count === 1 ? '' : 's'} you have not seen`,
-      detail: 'Keep or revert them in the journal below.',
+      title: `${unseenCount} self-change${unseenCount === 1 ? '' : 's'} you have not seen`,
+      detail: revertable > 0
+        ? `Keep or revert ${revertable === unseenCount ? 'them' : `${revertable} of them`} in the journal below.`
+        : 'Read them in the journal below.',
       at: input.unseenChanges.latestAt,
     });
   }

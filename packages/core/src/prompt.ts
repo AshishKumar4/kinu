@@ -172,8 +172,12 @@ function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): 
         return backend === 'cli-local'
           ? '- **workspace.*** / `runtime: "workspace"`: your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.'
           : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable filesystem, with a real POSIX shell over it — pipes, redirection, variables, loops, `cd`, and the usual coreutils (grep/sed/awk/sort/find/tar/diff/xargs/curl...). No NATIVE binaries live here: node, python, git, package managers and builds have no executable to run and belong in the runtimes above.';
+      // "machine", not "workspace": Nimbus runs the workspace itself now, and
+      // this executor is a SEPARATE Nimbus session. Calling both a workspace
+      // invited the agent to look for a file it wrote on the wrong filesystem.
+      // The separateness itself is stated once, below, for all of them.
       case 'nimbus':
-        return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
+        return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux machine for quick commands, scripts, package installs, and file work.';
       case 'sandbox':
         return '- **sandbox.*** / `runtime: "sandbox"`: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.';
       case 'laptop':

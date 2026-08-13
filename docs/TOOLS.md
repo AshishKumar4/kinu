@@ -68,11 +68,12 @@ rather than from a comparison it has to make. The action names mirror the
 codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
 across the tool surface and the sandbox.
 
-Everything goes through `rt.storage.vfs` — which **is** the `CompositeVFS` — so
-one implementation reaches `/local`, `/workspace`, `/sandbox`, `/nimbus` and
-`/pc` on both backends. There is deliberately no second filesystem path and no
-per-runtime variant: a mount that is reserved or offline answers with its own
-`ENXIO` reason.
+Everything goes through `rt.storage.vfs` — the workspace filesystem, Nimbus
+over the host's SQLite — so one implementation serves both backends. There is
+deliberately no second filesystem path and no per-runtime variant. It addresses
+the workspace and only the workspace: every other environment is an executor
+with its own filesystem in its own native paths, reached through its namespace
+(`sandbox.*`, `nimbus.*`, `laptop.*`) rather than through a mount of this one.
 
 ### Why it exists
 
@@ -352,28 +353,25 @@ without saying how to continue it — with faults that model each being lost.
 
 ## run — Shell Command
 
-Direct POSIX shell execution over the workspace **file plane** — the same
-`CompositeVFS` the `file` tool and `workspace.*` address, mounts included, so
-`ls /` is the mount table and a path means the same thing on every surface.
+Direct POSIX shell execution over the workspace **file plane** — Nimbus's own
+shell over the same bytes the `file` tool and `workspace.*` address, so a path
+means the same thing on every surface. Pipelines, redirects, chaining,
+variables, loops, a persistent working directory, and ~95 coreutils.
 
-**Supported commands** (17): `cat`, `head`, `tail`, `ls`, `tree`, `find`, `grep`, `echo`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `sed`, `stat`, `wc`, `pwd`
-
-**Features**: Pipelines (`|`), redirects (`>`, `>>`), chaining (`&&`, `||`, `;`)
-
-There are no other binaries and no processes: it is emulated in-process, so
-anything that has to RUN (a build, a test, a package manager) belongs in an
-executor that has a real shell. A command it does not implement says so, names
-what it does implement, and points at those executors.
+What it does NOT have is native binaries: node, python, git, package managers
+and builds have no executable to run here and belong in an executor that
+supplies one.
 
 **Runtime routing**: the `runtime` parameter takes `workspace` (the default —
-the emulated shell above on the hosted backend, the real machine shell at the
+the workspace shell above on the hosted backend, the real machine shell at the
 process cwd on cli-local), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
-via the pc-agent daemon and a consent prompt on first use). Anything other than
-`workspace` dispatches through the `ExecutionRouter`. There is no fallback
-chain: asking for a runtime that isn't provisioned returns a structured
-`runtime_not_provisioned` error the UI turns into an install card, rather than
-silently routing elsewhere and letting the model believe it has more access than
-it does.
+via the pc-agent daemon and a consent prompt on first use). Each of those is a
+DIFFERENT machine with its own filesystem — `nimbus` is a separate Nimbus
+session, not the shell above — and anything other than `workspace` dispatches
+through the `ExecutionRouter`. There is no fallback chain: asking for a runtime
+that isn't provisioned returns a structured `runtime_not_provisioned` error the
+UI turns into an install card, rather than silently routing elsewhere and
+letting the model believe it has more access than it does.
 
 **Approval gate**: every command is pre-flighted through
 `core/src/safety/approval-gate.ts` before it runs, on every runtime. A `deny`

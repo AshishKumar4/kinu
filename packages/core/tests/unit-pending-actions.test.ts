@@ -25,7 +25,7 @@ function job(over: Partial<BackgroundJob>): BackgroundJob {
 
 const EMPTY: PendingActionInputs = {
   approvals: [], changes: [], scaffoldVersions: [], jobs: [],
-  unseenChanges: { count: 0, latestAt: 0 }, curriculum: [],
+  unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [],
 };
 
 describe('buildPendingActions', () => {
@@ -88,15 +88,38 @@ describe('buildPendingActions', () => {
   });
 
   test('unseen self-changes are ONE row that points at the digest, not N rows', () => {
-    const actions = buildPendingActions({ ...EMPTY, unseenChanges: { count: 3, latestAt: 6000 } });
+    const actions = buildPendingActions({
+      ...EMPTY, unseenChanges: { count: 3, revertable: 3, latestAt: 6000 },
+    });
     expect(actions).toHaveLength(1);
     expect(actions[0]!.kind).toBe('unseen_changes');
     expect(actions[0]!.title).toBe('3 self-changes you have not seen');
+    expect(actions[0]!.detail).toBe('Keep or revert them in the journal below.');
   });
 
   test('one unseen change is singular', () => {
-    const [action] = buildPendingActions({ ...EMPTY, unseenChanges: { count: 1, latestAt: 1 } });
+    const [action] = buildPendingActions({
+      ...EMPTY, unseenChanges: { count: 1, revertable: 1, latestAt: 1 },
+    });
     expect(action!.title).toBe('1 self-change you have not seen');
+  });
+
+  // The row a brand-new workspace gets after its very first turn: the digest's
+  // first entry is a graded turn, which is a measurement with no keep and no
+  // revert. Promising a decision over a card that offers none is the same lie
+  // as pointing at the wrong tab.
+  test('an unseen window of pure measurements is offered as a read, not a decision', () => {
+    const [action] = buildPendingActions({
+      ...EMPTY, unseenChanges: { count: 1, revertable: 0, latestAt: 1 },
+    });
+    expect(action!.detail).toBe('Read them in the journal below.');
+  });
+
+  test('a mixed window says how many of them can actually be decided', () => {
+    const [action] = buildPendingActions({
+      ...EMPTY, unseenChanges: { count: 4, revertable: 1, latestAt: 1 },
+    });
+    expect(action!.detail).toBe('Keep or revert 1 of them in the journal below.');
   });
 
   test('only pending curriculum proposals are the owner\'s call', () => {
@@ -116,7 +139,7 @@ describe('buildPendingActions', () => {
       changes: [{ id: 'c', userPrompt: 'a change' }],
       scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
       jobs: [job({ id: 'bgjob-bad', status: 'failed', error: 'boom', settledAt: 1000 })],
-      unseenChanges: { count: 2, latestAt: 4000 },
+      unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
       curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
     });
     expect(actions.map((a) => a.kind)).toEqual([

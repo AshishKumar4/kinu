@@ -22,6 +22,8 @@
  *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
  *                                  running jobs, and the settled journal
  *   /gallery.html?frame=workempty → the same column before anything has happened
+ *   /gallery.html?frame=environment → the Environment surface: every place the
+ *                                  agent can act, as one row set
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
  *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
@@ -59,7 +61,8 @@ import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@p
 import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
-import type { ForkRunSummary, HeadRunView, PendingAction } from "@proteus/core";
+import type { ExecutorInfo } from "@/lib/executors";
+import type { DirEntry, ForkRunSummary, HeadRunView, MountInfo, PendingAction } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
 
 const frame = new URLSearchParams(location.search).get("frame");
@@ -1295,6 +1298,87 @@ function WorkEmptyFrame() {
   );
 }
 
+/* ── Environment ────────────────────────────────────────────────── */
+
+/**
+ * The four places the agent can act, as the surface lists them.
+ *
+ * Photographed with every environment reachable, because the defect this frame
+ * exists to catch is a naming one: two rows that describe the same thing read
+ * as a duplicate, and only a picture of the row set together shows it.
+ */
+const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
+  {
+    name: "laptop", kind: "laptop", available: true, configured: true, active: true, status: "active",
+    capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
+  },
+  {
+    name: "nimbus", kind: "nimbus", available: true, configured: true, active: false, status: "idle",
+    capabilities: ["shell", "npm", "git", "python", "native_binary", "fs_owned", "net_inbound", "process_spawn"],
+  },
+  {
+    name: "sandbox", kind: "sandbox", available: true, configured: true, active: true, status: "active",
+    capabilities: ["shell", "npm", "git", "docker", "fs_owned", "net_inbound", "process_long"],
+  },
+  {
+    name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
+    capabilities: ["javascript", "typescript", "shell", "fs_shared"],
+  },
+];
+
+const ENVIRONMENT_MOUNTS: MountInfo[] = ENVIRONMENT_EXECUTORS.map((exec) => ({
+  name: exec.name,
+  prefix: `${exec.name}.*`,
+  live: true,
+  policy: {
+    readOnly: false,
+    rootPath: "/",
+    consistency: exec.name === "workspace" ? "durable"
+      : exec.name === "laptop" ? "live-shared" : "ephemeral",
+  },
+  cwd: ".",
+  reason: null,
+}));
+
+const ENVIRONMENT_FILES: DirEntry[] = [
+  { name: "memory", type: "dir" },
+  { name: "skills", type: "dir" },
+  { name: "AGENTS.md", type: "file", size: 2_148 },
+  { name: "SOUL.md", type: "file", size: 913 },
+  { name: "notes.md", type: "file", size: 4_402 },
+];
+
+function EnvironmentFrame() {
+  // Answers only for the executor that actually owns these files. A stub that
+  // returned the same listing for every argument would photograph a pane
+  // asking the wrong environment as though it worked.
+  const envRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "listMounts") return ENVIRONMENT_MOUNTS as unknown as T;
+    if (method === "getExecutorFiles") {
+      const [execName, path] = (args ?? []) as [string, string];
+      return (execName === "workspace"
+        ? { entries: ENVIRONMENT_FILES }
+        : { error: `Executor "${execName}" has no listing for ${path} in this frame` }) as unknown as T;
+    }
+    return stubRpc<T>(method, args);
+  };
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="Environment" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={ENVIRONMENT_EXECUTORS} executorOutputs={new Map()}
+          onExecute={async () => ({})} lastActiveExecutor="workspace"
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
+          rpc={envRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
 /* ── Supervise ──────────────────────────────────────────────────── */
 
 // The SUPERVISE altitude — the agent over time. Every block is fed so the type
@@ -1500,6 +1584,7 @@ async function mount() {
   else if (frame === "releases") node = <ReleasesFrame />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
+  else if (frame === "environment") node = <EnvironmentFrame />;
   else if (frame === "supervise") node = <SuperviseFrame />;
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");

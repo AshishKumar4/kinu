@@ -146,7 +146,7 @@ import {
   getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
-  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from "@proteus/core";
 import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
@@ -1516,15 +1516,21 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable() async listPendingActions(): Promise<PendingAction[]> {
     const board = await this.getReleaseBoard(20).catch(() => null);
-    const changelog = await this.getEvolutionChangelog({ limit: 1 }).catch(() => null);
+    // The unseen window itself, not the whole digest: the queue row needs the
+    // count, the newest entry's time, and how many of those entries actually
+    // offer keep/revert rather than being measurements to read.
+    let unseen: ChangelogEntry[] = [];
+    try { unseen = getUnseenChangelog(this.config, this.boundSql); }
+    catch { /* a digest that will not assemble must not hide a failed job */ }
     return buildPendingActions({
       approvals: board?.approvals ?? [],
       changes: board?.changes ?? [],
       scaffoldVersions: listScaffoldVersions(this.boundSql, 20),
       jobs: listBackgroundJobs(this.jobs, 50),
       unseenChanges: {
-        count: changelog?.unseenCount ?? 0,
-        latestAt: changelog?.entries[0]?.at ?? Date.now(),
+        count: unseen.length,
+        revertable: unseen.filter((entry) => entry.revert !== undefined).length,
+        latestAt: unseen[0]?.at ?? Date.now(),
       },
       curriculum: listProposedTasks(this.rt, 'pending'),
     });

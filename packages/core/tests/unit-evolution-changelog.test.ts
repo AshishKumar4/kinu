@@ -5,7 +5,9 @@
  *   - buildChangelog assembles every entry kind from the REAL seeded ledgers
  *     (scaffold archive + shadow record, crafted tools + EMA, facts, GEPA
  *     runs, replay evals, turn-outcome aggregate) with evidence numbers
- *   - since-window filtering + countUnseenChangelog (the badge logic)
+ *   - since-window filtering + countUnseenChangelog (the badge logic), and
+ *     that the unseen window is always a SUBSET of what the digest renders —
+ *     the needs-you queue and the journal are one ledger read twice
  *   - renderChangelogText (the one CLI/TUI text form)
  *   - reverts go through the real machinery: scaffold rollback round-trip
  *     (pending discard AND promoted-version rollback), craft retire,
@@ -14,7 +16,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import {
-  buildChangelog, countUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   initScaffoldTables, initShadowTables, initTurnOutcomeTables, initReplayTables,
   initCraftScoreTables, initFactsTable, createFactsStore, initGepaTables, initRunEventTables,
@@ -315,6 +317,46 @@ describe('unseen-count logic (the badge)', () => {
     const agg = windowed.find((e) => e.kind === 'outcomes');
     expect(agg!.summary).toContain('Graded 1 turn');
     expect(agg!.evidence).toBe('1 corrected');
+  });
+
+  /**
+   * The needs-you queue announces the unseen window; the journal renders the
+   * digest. They are one ledger read twice, so the queue must never be able to
+   * count something the journal would not show — a queue row saying "1
+   * self-change you have not seen" over a journal saying nothing is settled is
+   * a contradiction the reader cannot resolve.
+   */
+  test('every unseen entry is one the digest itself renders', () => {
+    const { rt, facts } = setup();
+    const sql = rt.storage.sql;
+    recordTurnOutcome(sql, {
+      outcome: 'accepted', confidence: 1, source: 'execution',
+      userMessage: 'hi', assistantResponse: 'hello',
+    });
+    facts.upsert('sandbox.node_version', 'v22');
+
+    const unseen = listUnseenChangelog(sql, 0);
+    const rendered = new Set(buildChangelog(sql, { limit: 30 }).map((entry) => entry.id));
+    expect(unseen.length).toBeGreaterThan(0);
+    expect(unseen.filter((entry) => !rendered.has(entry.id))).toEqual([]);
+    expect(countUnseenChangelog(sql, 0)).toBe(unseen.length);
+  });
+
+  /**
+   * A brand-new workspace's very first unseen entry is the execution verdict on
+   * its first turn — real, but a measurement: it carries no revert, so the
+   * queue must not offer a decision over it.
+   */
+  test('the first turn of a fresh workspace produces an unseen entry with nothing to decide', () => {
+    const { rt } = setup();
+    recordTurnOutcome(rt.storage.sql, {
+      outcome: 'accepted', confidence: 1, source: 'execution',
+      userMessage: 'hi', assistantResponse: 'hello',
+    });
+
+    const unseen = listUnseenChangelog(rt.storage.sql, 0);
+    expect(unseen.map((entry) => entry.kind)).toEqual(['outcomes']);
+    expect(unseen.filter((entry) => entry.revert !== undefined)).toEqual([]);
   });
 });
 
