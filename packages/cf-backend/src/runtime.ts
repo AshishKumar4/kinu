@@ -286,7 +286,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const sandboxId = `proteus-${actor.workspaceName}`;
   // Every remote mount exposes the environment's REAL root ('/'); the
   let sandboxHandle: SandboxHandle | null = null;
-  if (env.Sandbox && previewSuffix) {
+  if (env.Sandbox) {
     try {
       const rawHandle = getSandbox(
         env.Sandbox as Parameters<typeof getSandbox>[0],
@@ -297,15 +297,17 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       // The executor carries its own file view over this same (restoring) raw
-      // handle, for the file manager's sandbox pane.
+      // handle, for the file manager's sandbox pane. An unset
+      // PREVIEW_HOST_SUFFIX turns off previews alone: exec, files and the
+      // release engine keep working, and port exposure refuses with the
+      // preview-specific reason.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      console.log(`[proteus] SandboxExecutor registered (previews=*.${previewSuffix} id=${sandboxId})`);
+      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
     }
   } else {
-    if (!previewSuffix) console.warn("[proteus] PREVIEW_HOST_SUFFIX not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
   }
 

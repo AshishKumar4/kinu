@@ -91,8 +91,7 @@ import {
   // Steer-as-Branch — a mid-turn redirect run as a parallel head
   initAlternateTakesTable, startBranchHead, settlePendingBranches, newBranchId,
   type PendingBranch, type BranchStatusEvent,
-  type ReleaseApproval, type ReleaseStatus,
-  type ReleaseToolDeps, type ReleaseSourceInput,
+  type ReleaseStatus, type ReleaseToolDeps,
   runExperienceAction,
   type ExperienceActionDeps,
   type ExperienceActionInput,
@@ -1500,12 +1499,6 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   @callable()
-  async upsertReleaseSource(input: ReleaseSourceInput & { id?: string }) {
-    const { stub, caller } = await this.userHub();
-    return stub.upsertReleaseSource(caller, input);
-  }
-
-  @callable()
   async createReleaseChange(input: { bindingId: string; userPrompt: string; plan?: string | null }) {
     const { stub, caller } = await this.userHub();
     return stub.createReleaseChange(caller, this.name, input);
@@ -1514,12 +1507,6 @@ export class OrchestratorAgent extends ActorAgent {
   async transitionReleaseChange(changeId: string, status: ReleaseStatus) {
     const { stub, caller } = await this.userHub();
     return stub.transitionReleaseChange(caller, changeId, status);
-  }
-
-  @callable()
-  async requestReleaseApproval(changeId: string, approvalType: ReleaseApproval['approvalType']) {
-    const { stub, caller } = await this.userHub();
-    return stub.requestReleaseApproval(caller, changeId, approvalType);
   }
 
   @callable()

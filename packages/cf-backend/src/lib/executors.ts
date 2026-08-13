@@ -86,6 +86,30 @@ export interface ExecutorAvailability {
   status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
 }
 
+/**
+ * What the release lane can actually do here. The release engine executes in
+ * the agent's sandbox container (core/src/release/engine.ts adapts its raw
+ * handle), so the sandbox row IS the substrate verdict: absent or unavailable
+ * means changes can be drafted and approved and never applied, checked,
+ * previewed or deployed. `unknown` while the executor list has not loaded —
+ * the surface says nothing rather than guessing either way. An available
+ * sandbox may still carry a note (previews off until PREVIEW_HOST_SUFFIX is
+ * set); the note rides the executor's own status reason.
+ */
+export type ReleaseSubstrate =
+  | { state: "unknown" }
+  | { state: "unavailable"; reason: string }
+  | { state: "ready"; note: string | null };
+
+export function releaseSubstrate(executors: ExecutorInfo[]): ReleaseSubstrate {
+  if (executors.length === 0) return { state: "unknown" };
+  const sandbox = executors.find((e) => e.name === "sandbox");
+  if (!sandbox?.available) {
+    return { state: "unavailable", reason: sandbox?.reason ?? "the sandbox executor is unavailable on this deployment" };
+  }
+  return { state: "ready", note: sandbox.reason ?? null };
+}
+
 const STATIC_PRIORITY = ["laptop", "nimbus", "sandbox"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {

@@ -162,6 +162,57 @@ describe("executor lifecycle state", () => {
     expect(handle.calls).toEqual(["exec:echo ok"]);
   });
 
+  test("sandbox without a preview suffix stays fully available for exec and files", async () => {
+    const handle = sandboxHandle();
+    const executor = createSandboxExecutor(handle);
+
+    expect(executor.isAvailable()).toBe(true);
+    expect(executor.getStatus?.()).toMatchObject({
+      configured: true,
+      available: true,
+      status: "idle",
+    });
+    // The status carries the preview gap so surfaces can say so up front.
+    expect(executor.getStatus?.().reason).toContain("PREVIEW_HOST_SUFFIX");
+
+    const result = await executor.tools.exec.execute("echo ok");
+    expect(result).toBe("ok");
+    expect(handle.calls).toEqual(["exec:echo ok"]);
+  });
+
+  test("sandbox without a preview suffix refuses port exposure with the preview reason", async () => {
+    const handle = sandboxHandle();
+    const executor = createSandboxExecutor(handle);
+
+    const toolResult = await executor.tools.exposePort.execute(3000);
+    expect(toolResult).toContain("PREVIEW_HOST_SUFFIX");
+    const listResult = await executor.tools.listPorts.execute();
+    expect(listResult).toContain("PREVIEW_HOST_SUFFIX");
+
+    const provided = await executor.exposePort!(3000);
+    expect(provided.supported).toBe(false);
+    if (!provided.supported) expect(provided.reason).toContain("PREVIEW_HOST_SUFFIX");
+
+    // A refusal must never touch the container — no probe, no SDK call.
+    expect(handle.calls).toEqual([]);
+  });
+
+  test("sandbox with no handle is the not-configured stub on every surface", async () => {
+    const executor = createSandboxExecutor();
+
+    expect(executor.isAvailable()).toBe(false);
+    expect(executor.getStatus?.()).toMatchObject({
+      configured: false,
+      available: false,
+      status: "not_configured",
+    });
+    expect(await executor.tools.exec.execute("echo ok")).toContain("not configured");
+    expect(await executor.tools.exposePort.execute(3000)).toContain("not configured");
+    const provided = await executor.exposePort!(3000);
+    expect(provided.supported).toBe(false);
+    if (!provided.supported) expect(provided.reason).toContain("not configured");
+  });
+
   test("sandbox exec strips AbortSignal before remote SDK calls", async () => {
     const handle = sandboxHandle();
     const executor = createSandboxExecutor(handle, "proteus.example.test");

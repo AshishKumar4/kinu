@@ -1125,16 +1125,17 @@ const RELEASE_BOARD = {
   changes: [{
     id: "chg_4f2", bindingId: "src_1", agentName: "jarvis",
     userPrompt: "Warm up the empty-state copy", plan: "Rewrite the six EMPTY_HINTS in the owner's voice.",
+    summary: null,
     patch: "--- a/packages/cf-backend/src/components/surfaces/shared.tsx\n+++ b/packages/cf-backend/src/components/surfaces/shared.tsx\n@@\n-  memory: \"Your agent will remember important information here.\",\n+  memory: \"Anything worth keeping lands here. Ask me to remember something.\",",
-    status: "awaiting_approval", previewUrl: null, commitSha: "a8d02b4f", createdAt: NOW - 36e5, updatedAt: NOW - 12e5,
+    status: "awaiting_approval", previewUrl: null, createdAt: NOW - 36e5, updatedAt: NOW - 12e5,
   }],
   checks: [
-    { id: "chk_1", changeId: "chg_4f2", name: "typecheck", status: "passed", exitCode: 0, output: null, createdAt: NOW - 30e5 },
-    { id: "chk_2", changeId: "chg_4f2", name: "bun test", status: "passed", exitCode: 0, output: null, createdAt: NOW - 28e5 },
+    { id: "chk_1", changeId: "chg_4f2", name: "typecheck", status: "passed", stdout: null, stderr: null, durationMs: 41_000, createdAt: NOW - 30e5, updatedAt: NOW - 30e5 },
+    { id: "chk_2", changeId: "chg_4f2", name: "bun test", status: "passed", stdout: "920 pass, 0 fail", stderr: null, durationMs: 9_300, createdAt: NOW - 28e5, updatedAt: NOW - 28e5 },
   ],
   approvals: [{
     id: "apr_1", changeId: "chg_4f2", approvalType: "deploy_production", decision: "pending",
-    decidedBy: null, decidedAt: null, argumentDigest: "9f2c…", createdAt: NOW - 12e5,
+    approvedBy: null, note: null, decidedAt: null, argumentDigest: "9f2c…", createdAt: NOW - 12e5,
   }],
   deployments: [],
 };
@@ -1144,11 +1145,25 @@ const releaseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T>
   return stubRpc<T>(method, args);
 };
 
-function ReleasesFrame() {
+const RELEASE_EXECUTORS: ExecutorInfo[] = [
+  { name: "sandbox", kind: "sandbox", capabilities: [], available: true, configured: true, status: "idle" },
+];
+
+/** The same board with the engine's substrate missing — the surface's honest
+ *  word when nothing on the pipeline can actually run. */
+const RELEASE_EXECUTORS_OFFLINE: ExecutorInfo[] = [
+  {
+    name: "sandbox", kind: "sandbox", capabilities: [], available: false, configured: false,
+    status: "not_configured",
+    reason: "Sandbox executor not configured. Add the @cloudflare/sandbox binding and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).",
+  },
+];
+
+function ReleasesFrame({ executors = RELEASE_EXECUTORS }: { executors?: ExecutorInfo[] }) {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[1100px] min-h-screen border-x p-border p-5">
-        <ReleasesSurface rpc={releaseRpc} />
+        <ReleasesSurface rpc={releaseRpc} executors={executors} />
       </div>
     </div>
   );
@@ -1582,6 +1597,7 @@ async function mount() {
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
+  else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
   else if (frame === "environment") node = <EnvironmentFrame />;

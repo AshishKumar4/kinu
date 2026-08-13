@@ -143,8 +143,9 @@ export type RollbackResult =
 // ── Internals ──────────────────────────────────────────────────────────────
 
 const NOT_CONFIGURED =
-  'No execution substrate: the sandbox executor is not configured, so release changes cannot be applied, ' +
-  'checked, previewed, or deployed for real. Configure the Sandbox binding + PREVIEW_HOST_SUFFIX first.';
+  'No execution substrate: this deployment has no sandbox container, so release changes cannot be applied, ' +
+  'checked, previewed, or deployed for real. Add the @cloudflare/sandbox binding and Container to ' +
+  'wrangler.jsonc first (see docs/EXECUTION-LAYER-SPEC.md).';
 
 const DEFAULT_WORK_ROOT = '/workspace/releases';
 const GIT = `git -c user.name=Proteus -c user.email=proteus@agent -c core.hooksPath=/dev/null`;

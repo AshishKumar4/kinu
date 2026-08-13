@@ -294,7 +294,7 @@ describe('engine.apply', () => {
       await engine.rollback(change.id),
     ]) {
       expect(result.ok).toBe(false);
-      if (!result.ok) expect(result.error).toContain('sandbox executor is not configured');
+      if (!result.ok) expect(result.error).toContain('no sandbox container');
     }
   });
 });

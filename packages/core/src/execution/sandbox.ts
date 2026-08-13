@@ -128,6 +128,11 @@ const NOT_CONFIGURED =
   'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
   'and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
 
+const PREVIEWS_NOT_CONFIGURED =
+  'Sandbox previews are off: PREVIEW_HOST_SUFFIX is unset, so there is no zone to mint preview ' +
+  'hostnames on. Turning them on takes a proxied wildcard DNS record and a matching route on a zone; ' +
+  'the PREVIEW_HOST_SUFFIX note in wrangler.jsonc has both steps. Exec and files still work.';
+
 /**
  * Substring markers (lower-cased) for transient sandbox/RPC errors that the
  * SDK either auto-retries via 503 or does NOT retry at all (mid-request 500
@@ -185,15 +190,17 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
  *
  * @param handle             SDK `getSandbox()` result.
  * @param previewHostSuffix  `env.PREVIEW_HOST_SUFFIX` — the zone previews are
- *                           served under. Required when handle is supplied;
- *                           the SDK builds every preview URL on it.
+ *                           served under; the SDK builds every preview URL on
+ *                           it. Optional: without it exec/files work in full
+ *                           and only the port-exposure surface refuses, with
+ *                           the preview-specific reason.
  */
 export function createSandboxExecutor(
   handle?: SandboxHandle,
   previewHostSuffix?: string,
 ): ExecutorProvider {
-  const connected = handle != null
-    && typeof previewHostSuffix === 'string' && previewHostSuffix.length > 0;
+  const connected = handle != null;
+  const previews = typeof previewHostSuffix === 'string' && previewHostSuffix.length > 0;
   let active = false;
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
     active = true;
@@ -301,7 +308,8 @@ export function createSandboxExecutor(
         '(e.g. `nohup python3 -m http.server <port> --directory /workspace/<app> > /tmp/srv.log 2>&1 &` ' +
         'for static sites, or `nohup node server.js > /tmp/srv.log 2>&1 &` for Node) and retry.',
       execute: async (port: unknown, name?: unknown): Promise<string> => {
-        if (!handle || !previewHostSuffix) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED;
+        if (!previewHostSuffix) return PREVIEWS_NOT_CONFIGURED;
         const p = Number(port);
         if (!Number.isFinite(p) || p <= 0 || p > 65535) {
           return `expose error: invalid port ${port}`;
@@ -367,7 +375,8 @@ export function createSandboxExecutor(
     listPorts: {
       description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
       execute: async (): Promise<string> => {
-        if (!handle || !previewHostSuffix) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED;
+        if (!previewHostSuffix) return PREVIEWS_NOT_CONFIGURED;
         try {
           // SDK method is getExposedPorts — the tool we expose is still
           // named listPorts for backward compat with the codemode namespace.
@@ -414,7 +423,9 @@ declare namespace sandbox {
       available: connected,
       active,
       status: connected ? (active ? 'active' : 'idle') : 'not_configured',
-      ...(connected ? {} : { reason: NOT_CONFIGURED }),
+      // An available sandbox with previews off carries the preview reason so
+      // surfaces that hand out preview URLs can say so before anyone tries.
+      ...(connected ? (previews ? {} : { reason: PREVIEWS_NOT_CONFIGURED }) : { reason: NOT_CONFIGURED }),
     }),
     connect: async () => { /* sandbox starts on first RPC */ },
     disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
@@ -431,9 +442,8 @@ declare namespace sandbox {
     // the ExecutorProvider abstraction so any caller can ask any executor
     // to expose a port without knowing it's "sandbox" specifically.
     async exposePort(port, opts) {
-      if (!handle || !previewHostSuffix) {
-        return { supported: false, reason: 'sandbox not configured (no handle / preview host suffix)' };
-      }
+      if (!handle) return { supported: false, reason: NOT_CONFIGURED };
+      if (!previewHostSuffix) return { supported: false, reason: PREVIEWS_NOT_CONFIGURED };
       if (!Number.isFinite(port) || port <= 0 || port > 65535) {
         return { supported: false, reason: `invalid port ${port}` };
       }

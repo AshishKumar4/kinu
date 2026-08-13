@@ -181,7 +181,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
               rpc={props.rpc}
             />
           )}
-          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} />}
+          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
           {surface === "Exploration" && <ExplorationSurface liveTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
           {surface === "Agent" && (
             <AgentSurface

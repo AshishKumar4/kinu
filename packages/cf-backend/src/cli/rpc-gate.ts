@@ -175,7 +175,6 @@ export const AGENT_RPC_ACCESS = {
   proposeCurriculumTasks: 'interactive',
   readExecutorFile: 'interactive',
   recordOutcomeLabeling: 'interactive',
-  requestReleaseApproval: 'interactive',
   resetWorkspaceBaseline: 'interactive',
   resolveDeviceConsent: 'interactive',
   restoreFileCheckpoint: 'interactive',
@@ -194,7 +193,6 @@ export const AGENT_RPC_ACCESS = {
   setSoul: 'interactive',
   setTurnFeedback: 'interactive',
   spawnSubordinate: 'interactive',
-  upsertReleaseSource: 'interactive',
 
   // ── Never remotely invokable (documented denial, same as off-table) ──
   destroyAgent: 'never',

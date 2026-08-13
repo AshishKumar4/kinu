@@ -73,7 +73,7 @@ describe('view data sources', () => {
     // real method on the surface; their absence here is the containment.
     const withheld = [
       'listPendingConsents', 'getEvolutionChangelog', 'sampleOutcomeLabeling',
-      'decideReleaseApproval', 'requestReleaseApproval', 'getAuthHeaders',
+      'decideReleaseApproval', 'getAuthHeaders',
       // The needs-you queue: what an owner reads immediately before
       // authorising a deploy. A view able to draw it could counterfeit it.
       'listPendingActions',
