@@ -157,7 +157,7 @@ Create a new workspace.
 
 | Option | What it does |
 | --- | --- |
-| `--purpose <text>` | Workspace purpose |
+| `--purpose <text>` | Mission — what this workspace is for (seeds SOUL.md) |
 | `--mode <mode>` | Workspace mode: cloud or local |
 | `--alias <name>` | Create an executable alias command |
 | `--origin <url>` | Proteus app origin for first-use sign-in |

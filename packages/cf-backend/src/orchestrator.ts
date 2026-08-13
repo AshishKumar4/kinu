@@ -103,10 +103,10 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
-  readSoul, summarizeSoul, writeSoul,
+  readSoul, readMission, summarizeSoul, writeSoul,
   // Automatic workspace titling (first turn + legacy slug heal)
-  applyWorkspaceTitle, isPlaceholderWorkspaceTitle, parseWorkspaceIdentityOutput,
-  WORKSPACE_IDENTITY_SYSTEM_PROMPT, workspaceIdentityPrompt,
+  applyWorkspaceTitle, isPlaceholderMission, isPlaceholderWorkspaceTitle, parseWorkspaceTitle,
+  WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
@@ -1003,10 +1003,12 @@ export class OrchestratorAgent extends ActorAgent {
     // Evolution Changelog and are revertable).
     void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
-    // On the first turn, replace the creation-time slug with a concise
-    // AI-generated title derived from the opening request. Fire-and-forget;
-    // once-only (persisting an auto title marks name_origin).
-    void this.maybeAutoTitleWorkspace(userText);
+    // Title the workspace from what it is FOR — its mission — not from
+    // whatever it was asked to do first. A workspace with no mission of its
+    // own has only the opening request to go on. Fire-and-forget; once-only
+    // (persisting an auto title marks name_origin).
+    const mission = readMission(this.boundSql);
+    void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!);
 
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
     // work survives the container sleeping. Debounced + fire-and-forget.
@@ -1057,7 +1059,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  that was never titled, and the wake of a legacy workspace still showing
    *  its raw slug (created before mission-derived titling existed). The shared
    *  policy decides; a title the operator chose is never touched, and persisting
-   *  an auto title marks name_origin='auto', so this runs at most once. */
+   *  an auto title marks name_origin='auto', so this runs at most once.
+   *  The slug is NOT part of this: it is fixed at creation and permanent. */
   private async maybeAutoTitleWorkspace(mission: string): Promise<void> {
     try {
       const title = await applyWorkspaceTitle({
@@ -1080,13 +1083,13 @@ export class OrchestratorAgent extends ActorAgent {
   private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
     const { text } = await generateText({
       model: await this.getModelForReview(),
-      system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
-      prompt: workspaceIdentityPrompt(mission),
+      system: WORKSPACE_TITLE_SYSTEM_PROMPT,
+      prompt: workspaceTitlePrompt(mission),
       // No output cap: reasoning models spend their budget thinking before the
       // JSON, and a cap starves them into empty text.
       ...effortFor('judge'),
     });
-    return parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null;
+    return parseWorkspaceTitle(text);
   }
 
   /** Push a display name to all three homes: agent_config (source of truth),

@@ -120,8 +120,18 @@ export function resolveWorkspaceTitle(opts: {
     || opts.slug;
 }
 
-export function createWorkspaceNameFromMission(mission: string, id: string): string {
-  return fallbackWorkspaceIdentity(mission, id).name;
+/**
+ * The workspace's permanent address — its URL segment and, on the cloud
+ * backend, the Durable Object name. Nothing can ever change it.
+ *
+ * So it is derived from the id and NOTHING else. A slug cut from the creating
+ * prompt is a name chosen before anyone knows the good one: the title the
+ * workspace settles on arrives a model call later, leaving `my-personal-jarvis-830c2d`
+ * addressing a workspace called "Jarvis" forever — and pinning whatever the
+ * operator happened to type into a URL they may go on to share.
+ */
+export function workspaceSlug(id: string): string {
+  return memorableFallbackIdentity(id).name;
 }
 
 /** Deterministic title for a mission: a stated persona name wins, then the
@@ -131,16 +141,17 @@ export function workspaceTitleFromMission(mission: string): string {
   return (persona && cleanTitle(persona)) || cleanTitle(deriveWorkspaceTitle(mission));
 }
 
-/** Deterministic identity when LLM titling is unavailable: a title from the
- *  mission itself; the random adjective-noun pair is the last resort for an
+/** Deterministic identity for a new workspace: a neutral permanent slug, and
+ *  the best title the mission alone yields — which the generated title then
+ *  upgrades. The adjective-noun display name is the last resort for an
  *  empty/unusable mission. */
 export function fallbackWorkspaceIdentity(mission: string, id: string): SuggestedWorkspaceIdentity {
-  const title = workspaceTitleFromMission(mission);
-  const slug = cleanSlug(title);
-  if (title && slug) {
-    return { name: `${slug}-${id.slice(0, 6)}`, displayName: title, nameOrigin: 'auto' };
-  }
-  return { ...memorableFallbackIdentity(id), nameOrigin: 'auto' };
+  const memorable = memorableFallbackIdentity(id);
+  return {
+    name: memorable.name,
+    displayName: workspaceTitleFromMission(mission) || memorable.displayName,
+    nameOrigin: 'auto',
+  };
 }
 
 /** A workspace's stored naming state, as both backends keep it: the raw slug
@@ -212,17 +223,16 @@ export async function applyWorkspaceTitle(
   return title;
 }
 
-/** System prompt paired with workspaceIdentityPrompt — shared by the CLI's
+/** System prompt paired with workspaceTitlePrompt — shared by the CLI's
  *  local naming call and the server's cloud display-name generation. */
-export const WORKSPACE_IDENTITY_SYSTEM_PROMPT = 'You create short, useful names for persistent agent workspaces.';
+export const WORKSPACE_TITLE_SYSTEM_PROMPT = 'You create short, useful names for persistent agent workspaces.';
 
-export function workspaceIdentityPrompt(mission: string): string {
+export function workspaceTitlePrompt(mission: string): string {
   return [
-    'Name a Proteus workspace from this opening mission.',
+    'Title a Proteus workspace from the mission it was created for.',
     '',
     'Return a concise JSON object with:',
     '- title: 1-5 words, Title Case, specific to the mission or persona.',
-    '- slug: 1-5 lowercase words joined with hyphens.',
     '- Prefer a stated persona name such as "Jarvis" over copying the whole sentence.',
     '- Do not include generic suffixes like agent, assistant, ai, bot, or helper unless they are part of a proper name.',
     '',
@@ -232,7 +242,10 @@ export function workspaceIdentityPrompt(mission: string): string {
   ].join('\n');
 }
 
-export function parseWorkspaceIdentityOutput(raw: string, id: string): SuggestedWorkspaceIdentity | null {
+/** The title out of a {@link workspaceTitlePrompt} response, or null when the
+ *  model returned nothing usable. Only a title: the slug is not the model's to
+ *  choose (see {@link workspaceSlug}). */
+export function parseWorkspaceTitle(raw: string): string | null {
   let parsed: unknown;
   try {
     parsed = extractJsonObject(raw);
@@ -240,14 +253,7 @@ export function parseWorkspaceIdentityOutput(raw: string, id: string): Suggested
     return null;
   }
   if (!isRecord(parsed)) return null;
-  const title = cleanTitle(typeof parsed.title === 'string' ? parsed.title : '');
-  const slug = cleanSlug(typeof parsed.slug === 'string' ? parsed.slug : title);
-  if (!title || !slug) return null;
-  return {
-    name: `${slug}-${id.slice(0, 6)}`,
-    displayName: title,
-    nameOrigin: 'auto',
-  };
+  return cleanTitle(typeof parsed.title === 'string' ? parsed.title : '') || null;
 }
 
 function extractPersonaName(mission: string): string | null {
@@ -277,10 +283,6 @@ function cleanTitle(value: string): string {
     .replace(/\s+/g, ' ')
     .slice(0, 60)
     .trim();
-}
-
-function cleanSlug(value: string): string {
-  return slugifyName(value.replace(/\b(agent|assistant|ai|bot|helper)\b/gi, '')) || slugifyName(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -35,7 +35,6 @@ import {
 
 export interface ChatLoopOpts {
   client: AgentClient;
-  initialPrompt?: string;
 }
 
 export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
@@ -243,10 +242,6 @@ export async function runChatLoop(opts: ChatLoopOpts): Promise<void> {
     console.log(`\n${DIM('Forked')} ${ACCENT(result.label)} ${DIM('— edit the message and press Enter to resend.')}\n`);
     pendingPrefill = picked.text;
   };
-
-  if (opts.initialPrompt?.trim()) {
-    await runTurn(opts.initialPrompt.trim());
-  }
 
   while (!exiting) {
     // Drain messages queued during the previous turn, in order.

@@ -1,13 +1,11 @@
 import { generateText } from 'ai';
 import {
-  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
+  WORKSPACE_TITLE_SYSTEM_PROMPT,
   DEFAULT_WORKERS_AI_MODEL_SPEC,
   effortFor,
-  workspaceIdentityPrompt,
-  createWorkspaceNameFromMission,
-  deriveWorkspaceTitle,
+  workspaceTitlePrompt,
   fallbackWorkspaceIdentity,
-  parseWorkspaceIdentityOutput,
+  parseWorkspaceTitle,
   renderSoulMarkdown,
   isReasoningEffort,
   type ReasoningEffort,
@@ -90,12 +88,10 @@ function createInitialCloudAgentIdentity(
       nameOrigin: 'user',
     };
   }
-  const id = crypto.randomUUID();
-  const name = createWorkspaceNameFromMission(purpose ?? '', id);
+  const fallback = fallbackWorkspaceIdentity(purpose ?? '', crypto.randomUUID());
   return {
-    name,
-    displayName: input.displayName?.trim()
-      || (purpose ? deriveWorkspaceTitle(purpose) : fallbackWorkspaceIdentity('', id).displayName),
+    name: fallback.name,
+    displayName: input.displayName?.trim() || fallback.displayName,
     nameOrigin: 'auto',
   };
 }
@@ -143,17 +139,16 @@ async function suggestCloudAgentDisplayName(
   mission: string,
   modelSpec: string,
 ): Promise<string | null> {
-  const id = crypto.randomUUID();
   const provider = createAgentProviderRegistry({ env, userDO: { stub: userDO, caller }, fetch });
   const result = await generateText({
     model: provider.resolveModel(modelSpec),
-    system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
-    prompt: workspaceIdentityPrompt(mission),
+    system: WORKSPACE_TITLE_SYSTEM_PROMPT,
+    prompt: workspaceTitlePrompt(mission),
     // No output cap: reasoning models spend budget on thinking before the
     // JSON, so a cap starves them into empty text and the generic name wins.
     ...effortFor('reflection'),
   });
-  return parseWorkspaceIdentityOutput(result.text, id)?.displayName ?? null;
+  return parseWorkspaceTitle(result.text);
 }
 
 async function initializeOrchestrator(input: {

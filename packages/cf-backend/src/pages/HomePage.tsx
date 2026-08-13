@@ -40,7 +40,7 @@ export default function HomePage() {
             <div className="min-w-0">
               <p className="text-xs font-medium uppercase tracking-[0.18em] p-accent">Proteus</p>
               <h1 className="mt-1 text-3xl font-semibold leading-tight tracking-normal p-text sm:text-4xl">
-                Start with a mission.
+                What is this workspace for?
               </h1>
             </div>
           </div>
@@ -49,16 +49,20 @@ export default function HomePage() {
             onSubmit={submit}
             className="mt-8 rounded-lg border p-border p-elevated p-3 shadow-[0_18px_70px_rgba(0,0,0,0.18)] sm:p-4"
           >
+            <label htmlFor="workspace-mission" className="mb-1.5 block text-xs font-medium p-text-2">
+              Mission — what this workspace is for
+            </label>
             <textarea
+              id="workspace-mission"
               value={mission}
               onChange={(event) => setMission(event.currentTarget.value)}
-              placeholder="Ask Proteus to investigate a bug, build a feature, audit the app, automate a workflow, or improve its own UI."
+              placeholder={'A standing brief, not a task. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."'}
               rows={6}
               className="block min-h-36 w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]"
             />
 
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs p-text-3">Proteus will create a workspace with its own agent, seed SOUL.md, and send this as the first turn.</p>
+              <p className="text-xs p-text-3">This becomes the workspace's SOUL.md and its name. Nothing runs until you send the first message.</p>
 
               <button
                 type="submit"

@@ -423,6 +423,20 @@ describe('CLI TUI layout', () => {
     expect(source).not.toContain('1-9');
   });
 
+  // The mission is what the workspace IS — it seeds SOUL.md and names the
+  // workspace server-side. Replaying it as the opening turn hands a standing
+  // brief over as a task, which is what "My personal assistant, Jarvis" being
+  // answered as a request came from. The CLI opens the new workspace with an
+  // empty conversation, exactly as the web app does.
+  test('creating a workspace from a mission opens it without sending the mission', () => {
+    const home = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
+    const chat = readFileSync(resolve(repoRoot, 'packages/cli/src/commands/chat.ts'), 'utf8');
+    const chatLoop = readFileSync(resolve(repoRoot, 'packages/cli/src/chat-loop.ts'), 'utf8');
+
+    expect(home).toContain("finishHome?.({ type: 'open-agent', name: created.name })");
+    for (const source of [home, chat, chatLoop]) expect(source).not.toContain('initialPrompt');
+  });
+
   test('home model and effort selections persist as global defaults', () => {
     const proteusHome = mkdtempSync(resolve(tmpdir(), 'proteus-home-tui-'));
     try {

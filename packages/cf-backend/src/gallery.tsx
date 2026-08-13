@@ -6,6 +6,8 @@
  *   /gallery.html            → all sections stacked
  *   /gallery.html?frame=shell    → full workspace shell (hero shot)
  *   /gallery.html?frame=chat     → chat column inventory
+ *   /gallery.html?frame=chatempty → a workspace before its first turn: the
+ *                                  mission it was created for, not a message
  *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
  *                                    (quiet failure, protocol failure, a
  *                                    multi-line `run`, an MCP tool, a failing
@@ -38,12 +40,12 @@ import type { UIMessage } from "ai";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
-  PaperPlaneRightIcon, PaperclipIcon, GearSixIcon, TrashIcon, BrainIcon,
+  PaperPlaneRightIcon, PaperclipIcon, TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
 import Sidebar from "@/components/Sidebar";
-import { ConnectionIndicator } from "@/components/connection-indicator";
 import { ModelPicker } from "@/components/ModelPicker";
+import { WorkspaceBar } from "@/components/WorkspaceBar";
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
@@ -51,7 +53,7 @@ import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
+import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
 import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
@@ -534,23 +536,33 @@ const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise
 
 /* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
 
-function ChatHeader() {
+/* The one identity row, as the app renders it — the real component, not a
+   copy of it: the whole point of the row is that there is exactly one. */
+function GalleryWorkspaceBar() {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 @[26rem]:py-3.5 border-b p-border">
-      <div className="flex min-w-0 basis-full @[26rem]:basis-0 @[26rem]:flex-1 items-center gap-3">
-        <ConnectionIndicator status="connected" />
-        <span className="font-medium text-sm p-text truncate">Checkout coupon bug</span>
-        <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
-          <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-          <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
-        </span>
-      </div>
-      <div className="flex shrink-0 items-center gap-2 ml-auto">
-        <ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-32 @[30rem]:w-36 @[42rem]:w-44" />
-        <Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />
-        <span className="p-text-2"><GearSixIcon size={14} /></span>
-      </div>
-    </div>
+    <WorkspaceBar
+      title="Checkout coupon bug"
+      onRename={async (name) => name}
+      connectionStatus="connected"
+      working
+      settingsHref="/settings/checkout-fixes"
+      altitude="run"
+      onAltitude={() => {}}
+      modelPicker={<ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-32 @[34rem]:w-36 @[46rem]:w-44" />}
+    />
+  );
+}
+
+/* The chat column's only chrome: the tab strip, carrying the controls that act
+   on the conversation it has open. Clearing is one of them, and like the app
+   it is absent until there is a transcript to clear. */
+function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
+  return (
+    <SubordinateTabs
+      workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
+      onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+      trailing={clearable && <Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
+    />
   );
 }
 
@@ -593,16 +605,10 @@ function Shell(
       <aside className="hidden w-64 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
-          <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
-            <span className="text-xs p-text-2 font-medium truncate">Checkout coupon bug</span>
-            <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
-              <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-fill p-text font-medium">run</button>
-              <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-text-3 hover:p-text-2">supervise</button>
-            </div>
-          </div>
+          <GalleryWorkspaceBar />
           <div className="flex-1 flex min-h-0">
             <div className="@container flex flex-col h-full border-r p-border" style={{ width: "42%" }}>
-              <ChatHeader />
+              <GalleryChatTabs />
               <ChatMessages />
               <Composer />
             </div>
@@ -679,12 +685,25 @@ function ChatFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <SubordinateTabs
-          workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-          onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
-        />
-        <ChatHeader />
+        <GalleryChatTabs />
         <ChatMessages />
+        <Composer />
+      </div>
+    </div>
+  );
+}
+
+/* What every new workspace opens on. The mission is shown as the standing
+   brief it is — it is deliberately NOT sent as an opening message, so this
+   state is the first thing anyone sees after creating a workspace. */
+function ChatEmptyFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs clearable={false} />
+        <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
+          <EmptyConversation mission={BRAIN_STATUS.purpose} />
+        </div>
         <Composer />
       </div>
     </div>
@@ -694,7 +713,7 @@ function ChatFrame() {
 function All() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><ChatHeader /><ChatMessages /><Composer /></div></Section>
+      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><GalleryWorkspaceBar /><GalleryChatTabs /><ChatMessages /><Composer /></div></Section>
       <Section title="Controls">{<Controls />}</Section>
     </div>
   );
@@ -1472,6 +1491,7 @@ async function mount() {
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
+  else if (frame === "chatempty") node = <ChatEmptyFrame />;
   else if (frame === "toolcalls") node = <ToolCallsFrame />;
   else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "views") node = <ViewsFrame />;

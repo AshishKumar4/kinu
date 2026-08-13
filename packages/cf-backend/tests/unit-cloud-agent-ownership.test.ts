@@ -82,7 +82,12 @@ describe('cloud agent ownership safety', () => {
         suggestDisplayName: async () => 'React Hello World',
       });
 
-      expect(entry.name).toMatch(/^build-a-hello-world-app-[0-9a-f]{6}$/);
+      // The slug is the DO name and the URL — permanent, and chosen before any
+      // title exists. So it is the id's memorable pair and carries none of the
+      // mission; the mission shows up in the display name, which titling then
+      // upgrades.
+      expect(entry.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
+      expect(entry.name).not.toContain('hello');
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
       expect(calls).toContain('provisional-title:Build a hello world app in react');

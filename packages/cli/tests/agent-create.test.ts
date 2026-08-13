@@ -1,48 +1,41 @@
 import { describe, expect, test } from 'bun:test';
+import { workspaceSlug } from '@proteus/core';
 import {
   createCloudAgentFromMission,
-  createWorkspaceNameFromMission,
   suggestAgentIdentityFromMission,
 } from '../src/agent-create';
 import type { CreateCloudAgentInput } from '../src/cloud-api';
 
 describe('CLI mission workspace names', () => {
-  test('derives the name from the mission, memorable pair only for unusable missions', () => {
-    expect(createWorkspaceNameFromMission('Research Rust web frameworks', 'abcdef123456'))
-      .toBe('research-rust-web-framew-abcdef');
-    expect(createWorkspaceNameFromMission('!!!', '123456abcdef'))
-      .toBe('ironwood-elm-1234');
-  });
-
-  test('uses model-proposed title and slug for mission-created agents', async () => {
+  test('uses the model-proposed title, over a slug the model never chose', async () => {
     const identity = await suggestAgentIdentityFromMission(
       'Build a benchmark for Rust web frameworks',
       {
         id: 'abcdef123456',
-        generate: async () => JSON.stringify({
-          title: 'Rust Framework Benchmark',
-          slug: 'rust-framework-benchmark',
-        }),
+        generate: async () => JSON.stringify({ title: 'Rust Framework Benchmark' }),
       },
     );
 
     expect(identity).toEqual({
-      name: 'rust-framework-benchmark-abcdef',
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       nameOrigin: 'auto',
     });
   });
 
-  test('derives the fallback from the mission when model naming is unavailable', async () => {
-    // Owner-reversed contract (2026-07-15): fallback names must come from the
-    // prompt/context, never a random pair, whenever the mission has words.
+  test('derives the DISPLAY name from the mission when model naming is unavailable', async () => {
+    // The 2026-07-15 contract — a fallback name must come from the mission,
+    // never a random pair — is about the name a person reads. The slug is the
+    // workspace's permanent address and stays out of it (2026-08-12): it is
+    // chosen before any title exists, so cutting it from the raw prompt is how
+    // `my-personal-jarvis-830c2d` ends up addressing a workspace called Jarvis.
     const identity = await suggestAgentIdentityFromMission(
       'Review the OAuth callback flow',
       { id: '123456abcdef', generate: async () => { throw new Error('offline'); } },
     );
 
     expect(identity).toEqual({
-      name: 'review-the-oauth-callbac-123456',
+      name: 'ironwood-elm-1234',
       displayName: 'Review the OAuth callback flow',
       nameOrigin: 'auto',
     });
@@ -58,10 +51,7 @@ describe('CLI mission workspace names', () => {
       },
       {
         id: 'abcdef123456',
-        generate: async () => JSON.stringify({
-          title: 'Rust Framework Benchmark',
-          slug: 'rust-framework-benchmark',
-        }),
+        generate: async () => JSON.stringify({ title: 'Rust Framework Benchmark' }),
         create: async (input) => {
           createdInput = input;
           return {
@@ -76,14 +66,14 @@ describe('CLI mission workspace names', () => {
     );
 
     expect(createdInput).toEqual({
-      name: 'rust-framework-benchmark-abcdef',
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
       purpose: 'Build a benchmark for Rust web frameworks',
       model: 'openai/gpt-5-mini',
       reasoningEffort: 'high',
     });
     expect(created).toMatchObject({
-      name: 'rust-framework-benchmark-abcdef',
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Rust Framework Benchmark',
     });
   });

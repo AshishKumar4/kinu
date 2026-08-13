@@ -130,7 +130,7 @@ export function buildProgram(): Command {
       .command('create [name]')
       .helpGroup(WORKSPACES)
       .description('Create a new workspace')
-      .option('--purpose <text>', 'Workspace purpose')
+      .option('--purpose <text>', 'Mission — what this workspace is for (seeds SOUL.md)')
       .option('--mode <mode>', 'Workspace mode: cloud or local')
       .option('--alias <name>', 'Create an executable alias command')
       .option('--origin <url>', 'Proteus app origin for first-use sign-in')

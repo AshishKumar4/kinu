@@ -1,8 +1,11 @@
 /**
  * The single agent-creation flow, shared by the home-screen mission composer
  * and the sidebar's CreateWorkspaceModal: models-connected gate, busy/error
- * state, createWorkspaceFromMission, and navigation into the new agent with the
- * mission riding along as the opening message.
+ * state, createWorkspaceFromMission, and navigation into the new workspace.
+ *
+ * The mission does not ride along as a chat message. It is what the workspace
+ * IS — its SOUL.md and its title — so the server owns it and the conversation
+ * opens empty, waiting for the first thing to do.
  */
 import { useCallback, useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -35,7 +38,7 @@ export function useCreateWorkspace() {
     try {
       const created = await createWorkspaceFromMission(m);
       onBeforeNavigate?.();
-      navigate(`/workspace/${created.name}`, { state: { initialPrompt: created.mission } });
+      navigate(`/workspace/${created.name}`);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
       setBusy(false);

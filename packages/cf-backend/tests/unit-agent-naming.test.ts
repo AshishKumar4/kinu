@@ -70,8 +70,14 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
     expect(onStart).toContain("void readSoul(this.rt.storage.vfs).then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))");
   });
 
-  test("the first turn drives the same one titling path, fire-and-forget", () => {
-    expect(orchestrator).toContain("void this.maybeAutoTitleWorkspace(userText)");
+  // A workspace is titled after what it is FOR. Titling it from the first
+  // thing it was asked to do is how a workspace whose mission is "My personal
+  // assistant, Jarvis" ends up named after an unrelated errand.
+  test("the first turn titles from the MISSION, falling back to the opening request", () => {
+    expect(orchestrator).toContain("const mission = readMission(this.boundSql)");
+    expect(orchestrator).toContain(
+      "void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!)",
+    );
     expect(orchestrator.match(/maybeAutoTitleWorkspace\(/g)).toHaveLength(3);
   });
 
@@ -91,9 +97,9 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
       orchestrator.indexOf("private async suggestWorkspaceTitle"),
       orchestrator.indexOf("/** Push a display name to all three homes"),
     );
-    expect(suggest).toContain("system: WORKSPACE_IDENTITY_SYSTEM_PROMPT");
-    expect(suggest).toContain("prompt: workspaceIdentityPrompt(mission)");
-    expect(suggest).toContain("parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null");
+    expect(suggest).toContain("system: WORKSPACE_TITLE_SYSTEM_PROMPT");
+    expect(suggest).toContain("prompt: workspaceTitlePrompt(mission)");
+    expect(suggest).toContain("parseWorkspaceTitle(text)");
     expect(suggest).not.toContain("maxOutputTokens");
   });
 });
