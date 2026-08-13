@@ -454,6 +454,11 @@ export class LocalAgentSession implements BackendHost {
     this._headRuntime = createCLIHeadRuntime({
       model: this.fallbackModel,
       providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
+      // Per-fork models only mean something where a resolver exists; a static
+      // model session has one model and every fork inherits it, as before.
+      ...(this.modelResolver
+        ? { resolveModel: (spec: string) => this.modelResolver!.resolveModel(spec) }
+        : {}),
       parentRuntime: this.rt,
       cwd: this.cwd,
       webSearch: this.getWebSearchProvider(),

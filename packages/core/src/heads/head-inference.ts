@@ -221,9 +221,13 @@ export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: rea
     ``,
     ...renderHeadToolConventions(input, availableToolNames),
     ``,
-    input.budget.maxWallClockMs === undefined
-      ? `Take the time the task needs — there is no time or token limit on this run. You may split ${input.budget.maxDepth} more level(s) deep.`
-      : `Deadline: ${input.budget.maxWallClockMs}ms wall-clock (the caller asked for one). You may split ${input.budget.maxDepth} more level(s) deep.`,
+    // The depth clause is dropped rather than reading "you may split 0 more
+    // level(s)": at zero the tool is not on the surface at all (head-tools.ts),
+    // and the conventions above already say so.
+    (input.budget.maxWallClockMs === undefined
+      ? 'Take the time the task needs — there is no time or token limit on this run.'
+      : `Deadline: ${input.budget.maxWallClockMs}ms wall-clock (the caller asked for one).`)
+    + (input.budget.maxDepth > 0 ? ` You may split ${input.budget.maxDepth} more level(s) deep.` : ''),
   ].join('\n');
 }
 

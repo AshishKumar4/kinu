@@ -241,6 +241,13 @@ export interface MergeResult {
   readonly unresolvedQuestions: readonly string[];
   /** Concrete next-step suggestions. */
   readonly recommendations: readonly string[];
+  /** Ground NO head covered — the negative space of the split. Distinct from
+   *  unresolvedQuestions, which the heads themselves raised: a blind spot is
+   *  something none of them thought to look at, so nothing in their reports
+   *  points at it. Empty when the heads between them covered the task, and
+   *  empty on the deterministic empty-split and merge-fallback paths, which
+   *  have no synthesis to draw it from. */
+  readonly blindSpots: readonly string[];
   /** Aggregate of every head's evidence — for memory writeback. */
   readonly evidenceAggregate: readonly Evidence[];
   /** The ids of every head spawned in this split (root-level only — not recursive). */

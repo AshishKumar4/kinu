@@ -156,12 +156,13 @@ export class HeadJournal {
   cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
     this.sql`INSERT OR REPLACE INTO head_merge_results
       (root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
-       recommendations_json, cost_head_count, cost_total_tokens, cost_total_wall_ms,
-       cost_max_depth, merged_at, merge_strategy)
+       recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
+       cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
       VALUES (${rootId}, ${result.mergedNarrative},
               ${JSON.stringify(result.selectedDecisions)},
               ${JSON.stringify(result.unresolvedQuestions)},
               ${JSON.stringify(result.recommendations)},
+              ${JSON.stringify(result.blindSpots)},
               ${result.costSummary.headCount},
               ${result.costSummary.totalTokens},
               ${result.costSummary.totalWallClockMs},
@@ -276,6 +277,7 @@ export class HeadJournal {
       selected_decisions_json: string | null;
       unresolved_questions_json: string | null;
       recommendations_json: string | null;
+      blind_spots_json: string | null;
       cost_head_count: number;
       cost_total_tokens: number;
       cost_total_wall_ms: number;
@@ -283,7 +285,7 @@ export class HeadJournal {
     };
     const rows = this.sql<Row>`
       SELECT merged_narrative, selected_decisions_json, unresolved_questions_json,
-             recommendations_json, cost_head_count, cost_total_tokens,
+             recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
              cost_total_wall_ms, cost_max_depth
       FROM head_merge_results WHERE root_id = ${rootId}`;
     const r = rows[0];
@@ -299,6 +301,7 @@ export class HeadJournal {
       selectedDecisions: r.selected_decisions_json ? JSON.parse(r.selected_decisions_json) : [],
       unresolvedQuestions: r.unresolved_questions_json ? JSON.parse(r.unresolved_questions_json) : [],
       recommendations: r.recommendations_json ? JSON.parse(r.recommendations_json) : [],
+      blindSpots: r.blind_spots_json ? JSON.parse(r.blind_spots_json) : [],
       evidenceAggregate: evidence,
       headIds: ids,
       // Per-head grounded scores are a live-run signal, not persisted as columns;

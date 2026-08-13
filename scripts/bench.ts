@@ -10,6 +10,11 @@
 //       Paired comparison. Same tasks, both variants, order randomized per task
 //       from the seed, every attempt in its own throwaway sandbox and home.
 //
+//   bun scripts/bench.ts compare --a panel:self --b panel:mixed
+//       The panel-composition experiment: a fork panel of copies of one model
+//       against one member per vendor family, scored by the repo's own checks.
+//       Pre-registered decision rule at panelArm() below. Needs BENCH_PANEL.
+//
 //   bun scripts/bench.ts gain --stateful <variant> --stateless <variant>
 //       CL-Bench's stateful-vs-stateless primitive: one identical sequence run
 //       twice, once with evolution state live and once from a fresh v0.
@@ -18,7 +23,7 @@
 // in this repo) and `longhorizon` (a generated corpus, digested in one ask or
 // carried across episodes through forced compaction).
 //
-// Variants: null | oracle | noisy:<rate> | agent | agent-evolving
+// Variants: null | oracle | noisy:<rate> | agent | agent-evolving | panel:self | panel:mixed
 // The first three make no model calls and exist to validate the instrument.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -35,8 +40,8 @@ import {
   applyPatch, budgetSignal, createAttemptSandbox, ensureRunRoot, scoreSandbox,
 } from './bench-sandbox.js';
 import {
-  createAgentSolver, createNoisyOracleSolver, createOracleSolver, nullSolver,
-  type PatchLookup,
+  createAgentSolver, createNoisyOracleSolver, createOracleSolver, createPanelSolver,
+  nullSolver, type PatchLookup, type PanelSolverOptions,
 } from './bench-solvers.js';
 import {
   createLongHorizonAgentSolver, createLongHorizonNoisySolver, createLongHorizonOracleSolver,
@@ -156,7 +161,81 @@ function agentVariant(spec: string): { id: string; description: string; state: '
 }
 
 function unknownVariant(spec: string): never {
-  throw new Error(`unknown variant "${spec}" (expected null | oracle | noisy:<rate> | agent | agent-evolving)`);
+  throw new Error(`unknown variant "${spec}" (expected null | oracle | noisy:<rate> | agent | agent-evolving | panel:self | panel:mixed)`);
+}
+
+/**
+ * The panel arms — a mixed-model fork panel against copies of one model.
+ *
+ * PRE-REGISTERED, and written down before any run so the reading of the result
+ * cannot move afterwards:
+ *
+ *   H0  panel composition does not change how often a defect is actually fixed.
+ *   Primary outcome: pass rate on the repo's own checks (tests + typecheck),
+ *   paired per task, dev split first, sealed split for the reported number.
+ *   Decision:
+ *     • mixed beats self, CI excludes 0  → per-fork model diversity is real for
+ *       agentic coding, and the implementation is to reuse selectEnsembleJudges
+ *       (judge-model.ts), NOT a second family selector.
+ *     • self beats mixed, CI excludes 0  → Self-MoA replicates WITH execution
+ *       ground truth. The current inherit-the-parent default is correct on
+ *       evidence rather than by accident, and the question is closed.
+ *     • CI includes 0 → underpowered or no effect; report the interval and
+ *       change NOTHING. A null result is a result and it is the likely one.
+ *   Either way the default does not change on this script's say-so alone: it
+ *   changes when the sealed split says so.
+ *
+ * Cost per full run, at n tasks × r repeats × p panel members:
+ *   n·r·(p+1) agent trajectories per arm, both arms → 2·n·r·(p+1). The 12-task
+ *   dev split at r=1, p=3 is 96 trajectories plus 2·n·r merges and the grounded
+ *   judge calls the heads path makes per fork. Budget it as ~100–150 full
+ *   agentic attempts per arm pair, and note the mixed arm pays whatever its
+ *   most expensive vendor charges. This is why the run needs the owner's
+ *   approval and why this script ships unrun.
+ */
+export function panelArm(spec: string, analyst: LLMProviderConfig): PanelSolverOptions | null {
+  const mixed = spec === 'panel:mixed';
+  if (!mixed && spec !== 'panel:self') return null;
+  const size = Number(process.env.BENCH_PANEL_SIZE ?? 3);
+  if (!Number.isInteger(size) || size < 2 || size > 6) {
+    throw new Error(`BENCH_PANEL_SIZE must be an integer in [2,6], got ${process.env.BENCH_PANEL_SIZE}`);
+  }
+  // The mixed arm needs real cross-vendor configs; there is no way to synthesize
+  // them from one credential, and quietly running one model under N names would
+  // make the whole comparison a lie.
+  const panel = mixed ? panelProviders(size) : Array.from({ length: size }, () => analyst);
+  return {
+    id: spec,
+    description: mixed
+      ? `fork panel of ${size}, one model per vendor family`
+      : `fork panel of ${size}, every member the same model (today's default)`,
+    panel,
+    analyst,
+    repoRoot: REPO_ROOT,
+  };
+}
+
+/** `BENCH_PANEL` — `<baseURL>|<auth>|<model>` per member, separated by `;`. */
+export function panelProviders(size: number): LLMProviderConfig[] {
+  const raw = (process.env.BENCH_PANEL ?? '').split(';').map((s) => s.trim()).filter(Boolean);
+  if (raw.length !== size) {
+    throw new Error(
+      `panel:mixed needs BENCH_PANEL with ${size} entries (got ${raw.length}). `
+      + 'Format: "<baseURL>|<auth>|<model>;<baseURL>|<auth>|<model>;…", one per vendor family.',
+    );
+  }
+  return raw.map((entry, i) => {
+    const [baseURL, auth, model] = entry.split('|').map((s) => s.trim());
+    if (!baseURL || !auth || !model) {
+      throw new Error(`BENCH_PANEL entry ${i + 1} must be "<baseURL>|<auth>|<model>", got "${entry}"`);
+    }
+    return {
+      name: model.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
+      baseURL,
+      headers: { Authorization: auth },
+      model,
+    };
+  });
 }
 
 function noisyRate(spec: string): number | null {
@@ -180,6 +259,8 @@ function loadFamily(id: BenchFamilyId): BenchFamily {
             ...(opts.sharedHome ? { sharedHome: opts.sharedHome } : {}),
           });
         }
+        const panel = panelArm(spec, benchLLM());
+        if (panel) return createPanelSolver(panel);
         return unknownVariant(spec);
       },
     };

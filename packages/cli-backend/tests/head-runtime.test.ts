@@ -240,7 +240,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       input: aHeadInput(), capture, rt,
       executeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
-      split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }),
+      split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
     }) as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
 
     const out = await tools.run!.execute({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' }, {});
@@ -465,5 +465,70 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
     expect(report.status).toBe('budget_exceeded');
     expect(report.errorMessage).toContain('Mission budget "sweep" is spent');
     expect(calls).toBe(0);
+  });
+});
+
+/**
+ * Per-fork models — `agents fork` advertises a per-fork `model` and the cf
+ * backend honours it (exploration.ts resolves `input.model` per head). The CLI
+ * ran `deps.model` for every head, so the field was a silent no-op here: a panel
+ * asked for three vendors got three copies of one, and any measurement of panel
+ * diversity on this backend would have compared a mixed panel against itself.
+ */
+describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
+  /** Answers like a head and reports which model id served the call. */
+  function labelledModel(id: string, seen: string[]): LanguageModel {
+    return {
+      specificationVersion: 'v2', provider: 'fake', modelId: id, supportedUrls: {},
+      doGenerate: async () => {
+        seen.push(id);
+        return {
+          content: [{ type: 'text', text: `${id} looked at its angle.` }],
+          finishReason: 'stop' as const,
+          usage: { inputTokens: 1, outputTokens: 1 },
+          response: { id: 'r', modelId: id, timestamp: new Date(0) },
+          warnings: [],
+        };
+      },
+    } as unknown as LanguageModel;
+  }
+
+  test('each head resolves its OWN spec; a head that named none inherits the session model', async () => {
+    const seen: string[] = [];
+    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
+      resolveModel: (spec: string) => labelledModel(spec, seen),
+    }));
+
+    for (const input of [
+      aHeadInput({ id: 'h-a', model: 'vendor-a/big' }),
+      aHeadInput({ id: 'h-b', model: 'vendor-b/big' }),
+      aHeadInput({ id: 'h-c' }),
+    ]) {
+      await (await runtime.spawnHead(input)).run();
+    }
+
+    expect(seen).toEqual(['vendor-a/big', 'vendor-b/big', 'session']);
+  });
+
+  test('a session with no resolver still runs every fork on its own model', async () => {
+    const seen: string[] = [];
+    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen)));
+
+    await (await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'vendor-a/big' }))).run();
+
+    expect(seen).toEqual(['session']);
+  });
+
+  test('an unresolvable spec degrades to the session model instead of failing the fork', async () => {
+    const seen: string[] = [];
+    const runtime = createCLIHeadRuntime(headDeps(labelledModel('session', seen), {
+      resolveModel: (spec: string) => { throw new Error(`no such provider for ${spec}`); },
+    }));
+
+    // One fork's bad model must not take down a split the siblings are running.
+    const report = await (await runtime.spawnHead(aHeadInput({ id: 'h-a', model: 'nope/nope' }))).run();
+
+    expect(report.status).toBe('completed');
+    expect(seen).toEqual(['session']);
   });
 });

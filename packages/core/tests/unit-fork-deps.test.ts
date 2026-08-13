@@ -62,7 +62,8 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
     options1.heads.onPhase({ kind: 'split', rootId: 'r1', headIds: ['h1', 'h2'], rationale: 'x' });
     options1.heads.onPhase({
       kind: 'merge', rootId: 'r1', mergedNarrative: 'done',
-      cost: { headCount: 2, headsWithFindings: 2, totalTokens: 10, totalWallClockMs: 500, maxDepth: 1 }, fileChanges: [],
+      cost: { headCount: 2, headsWithFindings: 2, totalTokens: 10, totalWallClockMs: 500, maxDepth: 1 },
+      fileChanges: [], blindSpots: [],
     });
     expect(calls).toBe(1);
   });
@@ -95,7 +96,8 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
     // live value.
     options.heads.onPhase({
       kind: 'merge', rootId: 'r1', mergedNarrative: 'done',
-      cost: { headCount: 2, headsWithFindings: 2, totalTokens: 10, totalWallClockMs: 500, maxDepth: 1 }, fileChanges: [],
+      cost: { headCount: 2, headsWithFindings: 2, totalTokens: 10, totalWallClockMs: 500, maxDepth: 1 },
+      fileChanges: [], blindSpots: [],
     });
 
     expect(seen).toEqual([

@@ -422,6 +422,7 @@ export class ExplorationAgent extends Agent<Env> {
     narrative: string;
     decisions: readonly Decision[];
     unresolvedQuestions: readonly string[];
+    blindSpots: readonly string[];
     childHeadIds: readonly HeadId[];
     headCount: number;
   }> {
@@ -470,6 +471,7 @@ export class ExplorationAgent extends Agent<Env> {
       narrative: result.mergedNarrative,
       decisions: result.selectedDecisions,
       unresolvedQuestions: result.unresolvedQuestions,
+      blindSpots: result.blindSpots,
       childHeadIds: result.headIds,
       headCount: result.costSummary.headCount,
     };

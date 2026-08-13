@@ -104,7 +104,10 @@ export type SplitPhaseEvent =
   | { kind: 'merge'; rootId: HeadId; cost: MergeResult['costSummary']; mergedNarrative: string;
       /** Per-head file changes — carried so the run-event ledger records what a
        *  split actually did to the workspace, not only what it spent. */
-      fileChanges: MergeResult['fileChanges'] };
+      fileChanges: MergeResult['fileChanges'];
+      /** Ground no head covered — carried so whether the field earns its tokens
+       *  is a query over the ledger rather than a re-read of merges by hand. */
+      blindSpots: MergeResult['blindSpots'] };
 
 export class HeadController {
   constructor(
@@ -247,6 +250,7 @@ export class HeadController {
       cost: mergeResult.costSummary,
       mergedNarrative: mergeResult.mergedNarrative,
       fileChanges: mergeResult.fileChanges,
+      blindSpots: mergeResult.blindSpots,
     });
     return mergeResult;
   }
@@ -324,6 +328,10 @@ export class HeadController {
         selectedDecisions: [],
         unresolvedQuestions: [],
         recommendations: [],
+        // No head observed anything, so there is no negative space to report —
+        // naming one here would be the same invention the empty split exists to
+        // prevent.
+        blindSpots: [],
         evidenceAggregate: [],
         headIds,
         headScores,
@@ -339,6 +347,7 @@ export class HeadController {
       selectedDecisions: reports.flatMap((r) => r.decisions),
       unresolvedQuestions: [],
       recommendations: [],
+      blindSpots: [],
       evidenceAggregate: reports.flatMap((r) => r.evidence),
       headIds,
       headScores,
@@ -355,6 +364,7 @@ export class HeadController {
       selectedDecisions: merged.output.selected_decisions as readonly Decision[],
       unresolvedQuestions: merged.output.unresolved_questions,
       recommendations: merged.output.recommendations,
+      blindSpots: merged.output.blind_spots,
       evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
       headIds,
       headScores,
@@ -615,9 +625,11 @@ JSON object shape with EXACTLY these keys and types (use [] for empty lists):
   "narrative": "<coherent unified narrative — the response the parent head writes back to the user>",
   "selected_decisions": [{ "question": "<question>", "choice": "<final answer>", "rationale": "<why>" }],
   "unresolved_questions": ["<open question>"],
-  "recommendations": ["<short imperative next step>"]
+  "recommendations": ["<short imperative next step>"],
+  "blind_spots": ["<aspect of the task NO head addressed>"]
 }
-selected_decisions, unresolved_questions, and recommendations MUST be JSON arrays (never objects).
+selected_decisions, unresolved_questions, recommendations and blind_spots MUST be JSON arrays (never objects).
 The narrative should be specific and grounded in the heads' evidence; do not reference the merge process itself.
+blind_spots is the one field you cannot fill by summarizing the reports: re-read the split rationale, consider what a complete answer to it would have to cover, and name the parts NO head looked at. A question a head RAISED is an unresolved_question; a blind spot is ground none of them thought to check, so nothing in their reports points at it — heads given adjacent tasks tend to share an assumption, and that shared assumption is what to look for. Return [] if the heads covered the task between them: an empty list is the honest answer, and a generic entry is worse than none.
 ${jsonObjectOnlyInstruction()}`;
 }

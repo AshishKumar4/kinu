@@ -58,7 +58,7 @@ function report(id: string, o: Partial<HeadReport> = {}): HeadReport {
 }
 
 function mergeOut(narrative: string): MergeOutput {
-  return { narrative, selected_decisions: [], unresolved_questions: [], recommendations: [] };
+  return { narrative, selected_decisions: [], unresolved_questions: [], recommendations: [], blind_spots: [] };
 }
 
 /** A runtime returning canned reports keyed by task, a scripted merge LLM, and

@@ -57,6 +57,7 @@ export function headPhaseRunEvent(event: SplitPhaseEvent): RunEventInput {
       totalTokens: event.cost.totalTokens,
       mergedNarrative: event.mergedNarrative,
       fileChanges: [...event.fileChanges],
+      blindSpots: [...event.blindSpots],
     };
 }
 

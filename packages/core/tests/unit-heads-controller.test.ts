@@ -62,6 +62,7 @@ function fakeMergeOutput(narrative: string): MergeOutput {
     selected_decisions: [{ question: 'Final Q?', choice: 'Final A', rationale: 'Synthesized' }],
     unresolved_questions: ['What about edge case X?'],
     recommendations: ['Take action Y.'],
+    blind_spots: [],
   };
 }
 
@@ -550,5 +551,118 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     // Fan-out does not divide a child's working room: two siblings each get the
     // parent's envelope, not half of it.
     expect(observed!.budget.maxWallClockMs).toBe(60_000);
+  });
+});
+
+/**
+ * blind_spots — the merge's negative-space field.
+ *
+ * Every other merge output is a function of what the heads SAID, so a framing
+ * all N heads shared has no field to surface in and gets synthesized into a
+ * confident narrative. These lock the carriage rather than the wording: the
+ * field's own value is unmeasured and settled by reading `head_merge` rows
+ * across real splits — the query and the revert rule are stated with the field
+ * itself, in heads/merge-schema.ts.
+ */
+describe('merge blind spots', () => {
+  const withBlindSpots = (...spots: string[]): MergeOutput => ({
+    ...fakeMergeOutput('Synthesis.'),
+    blind_spots: spots,
+  });
+
+  const bankedNothing = (id: string): HeadReport => fakeReport(id, {
+    status: 'budget_exceeded',
+    summary: `Head ${id} did not complete.`,
+    evidence: [], decisions: [], artifactRefs: [],
+  });
+
+  test('reaches the MergeResult, the journal and the merge phase event', async () => {
+    const { journal } = newJournal();
+    const spots = ['no head checked whether the endpoint is rate-limited'];
+    const runtime = buildRuntime({ mergeOutput: withBlindSpots(...spots) });
+    const events: string[][] = [];
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null,
+      rootId: 'root-bs',
+      inheritedContext: baseContext,
+      request: baseRequest,
+      onPhase: (e) => { if (e.kind === 'merge') events.push([...e.blindSpots]); },
+    });
+
+    expect(result.blindSpots).toEqual(spots);
+    // The row the falsification query reads.
+    expect(events).toEqual([spots]);
+    // And it survives the cache, so a replayed merge does not quietly lose it.
+    expect(journal.readCachedMerge('root-bs')!.blindSpots).toEqual(spots);
+  });
+
+  test('degrades to [] when the merge model omits the key, exactly like the other list fields', async () => {
+    const { journal } = newJournal();
+    // A model that answers with only a narrative — the documented degradation.
+    const runtime: HeadRuntime = {
+      ...buildRuntime({}),
+      mergeLLM: async () => ({ narrative: 'Just a narrative.' } as unknown as MergeOutput),
+    };
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(result.mergedNarrative).toBe('Just a narrative.');
+    expect(result.blindSpots).toEqual([]);
+    expect(result.recommendations).toEqual([]);
+  });
+
+  test('an empty split reports no blind spots — nothing was observed to have a negative space', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({
+      reports: {
+        'angle A': bankedNothing('h-A'),
+        'angle B': bankedNothing('h-B'),
+      },
+      mergeOutput: withBlindSpots('invented'),
+    });
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    // The merge never reached a model, so it cannot have produced a blind spot.
+    expect(result.costSummary.headsWithFindings).toBe(0);
+    expect(result.blindSpots).toEqual([]);
+  });
+
+  test('a merge that fails reports no blind spots rather than a stale or invented list', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({ mergeThrows: new Error('merge model unreachable') });
+
+    const result = await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(result.mergedNarrative).toContain('Merge synthesis unavailable');
+    expect(result.blindSpots).toEqual([]);
+  });
+
+  test('the merge prompt asks the negative-space question and separates it from open questions', async () => {
+    const { journal } = newJournal();
+    let prompt = '';
+    const base = buildRuntime({ mergeOutput: withBlindSpots() });
+    const runtime: HeadRuntime = {
+      spawnHead: base.spawnHead,
+      mergeLLM: async (p, schema) => { prompt = p; return base.mergeLLM(p, schema); },
+    };
+
+    await new HeadController(runtime, journal).run({
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(prompt).toContain('blind_spots');
+    // The distinction is the whole point: without it the model refiles the
+    // heads' own open questions here and the field measures nothing.
+    expect(prompt).toContain('A question a head RAISED is an unresolved_question');
+    // And an honest empty answer must be reachable, or the field becomes filler.
+    expect(prompt).toContain('Return []');
   });
 });

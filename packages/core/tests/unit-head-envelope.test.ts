@@ -271,4 +271,23 @@ describe('buildHeadSystemPrompt — the head is told the truth about its envelop
     const prompt = buildHeadSystemPrompt(loopInput({ maxWallClockMs: 90_000 }));
     expect(prompt).toContain('90000ms wall-clock');
   });
+
+  test('remaining recursion depth is stated as the number it actually is', async () => {
+    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference.js');
+    const prompt = buildHeadSystemPrompt(loopInput({ maxDepth: 2 }));
+    expect(prompt).toContain('split 2 more level(s) deep');
+  });
+
+  test('a head with no depth left is not told it may split zero levels', async () => {
+    const { buildHeadSystemPrompt } = await import('../src/heads/head-inference.js');
+    // The tool is off the surface entirely at depth 0 (head-tools.ts), so the
+    // prompt must not advertise a recursion allowance of 0 beside it — and the
+    // tool-derived conventions say plainly that recursion is unavailable.
+    const prompt = buildHeadSystemPrompt(
+      loopInput({ maxDepth: 0 }),
+      ['record_evidence', 'record_decision', 'run'],
+    );
+    expect(prompt).not.toContain('more level(s) deep');
+    expect(prompt).toContain('split_subheads is not available in this run');
+  });
 });

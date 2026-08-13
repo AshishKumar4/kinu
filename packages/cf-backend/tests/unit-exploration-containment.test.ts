@@ -26,7 +26,7 @@ import {
   type SqlExecutor,
   type WebSearchProvider,
 } from '@proteus/core';
-import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest } from '@proteus/core';
+import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult } from '@proteus/core';
 
 function makeSql(db: Database): SqlExecutor {
   return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {
@@ -60,6 +60,7 @@ const mergeOutput: MergeOutput = {
   selected_decisions: [],
   unresolved_questions: [],
   recommendations: [],
+  blind_spots: [],
 };
 
 const noopWebSearch: WebSearchProvider = {
@@ -80,9 +81,7 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
 
 function buildSurface(opts?: {
   input?: HeadInput;
-  split?: (request: HeadSplitRequest) => Promise<{
-    narrative: string; decisions: []; unresolvedQuestions: []; childHeadIds: string[]; headCount: number;
-  }>;
+  split?: (request: HeadSplitRequest) => Promise<HeadSplitResult>;
 }) {
   const { rt } = createTestRuntime();
   const capture = new HeadCapture();
@@ -94,7 +93,7 @@ function buildSurface(opts?: {
     executeTool,
     webSearch: noopWebSearch,
     split: opts?.split ?? (async () => ({
-      narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0,
+      narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),
   });
   return { tools, capture };
@@ -134,35 +133,48 @@ describe('head tool surface — containment', () => {
     }
   });
 
-  test('split_subheads refuses once the depth budget is spent', async () => {
-    let splits = 0;
+  test('split_subheads is not on the surface at all once the depth budget is spent', async () => {
+    // Depth is fixed for the whole run, so the tool could only ever refuse.
+    // Offering it anyway spent a step to learn a limit the surface already knew.
     const { tools } = buildSurface({
       input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
-      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
-    const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
-      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
-    expect(result).toContain('budget exhausted (max-depth)');
-    expect(splits).toBe(0);
+    expect(tools.split_subheads).toBeUndefined();
+    // The work tools are untouched — this removes a dead option, not capability.
+    for (const name of HEAD_BUILTIN_TOOLS) expect(tools[name]).toBeDefined();
   });
 
-  test('split_subheads refuses once a caller-requested deadline has passed', async () => {
-    let splits = 0;
+  test('the surface states the depth that is actually left', async () => {
     const { tools } = buildSurface({
+      input: headInput({ budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
+    });
+    expect((tools.split_subheads as { description: string }).description).toContain('2 more level(s)');
+  });
+
+  test('split_subheads refuses once a caller-requested deadline has passed, and records the refusal', async () => {
+    // Wall-clock stays a runtime check: unlike depth it can pass mid-run, so the
+    // tool is present and refuses when called.
+    let splits = 0;
+    const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
-      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
+      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }; },
     });
     const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
       .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
     expect(result).toContain('budget exhausted (wall-clock)');
     expect(splits).toBe(0);
+    // Unrecorded, this refusal left no trace in the journal — so how often a
+    // head is stopped mid-plan could not be asked of the ledger.
+    expect(capture.toolCalls).toHaveLength(1);
+    expect(capture.toolCalls[0]!.name).toBe('split_subheads');
+    expect(capture.toolCalls[0]!.result).toContain('wall-clock');
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
     let splits = 0;
     const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, spawnedAt: Date.now() - 60 * 60_000 } }),
-      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 2 }; },
+      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 2 }; },
     });
     // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
     capture.recordStepUsage(2_000_000, 500_000);

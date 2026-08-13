@@ -149,6 +149,15 @@ function formatMergeResult(result: MergeResult, strategy: MergeStrategy): string
     lines.push('### Recommendations');
     for (const r of result.recommendations) lines.push(`- ${r}`);
   }
+  // Rendered apart from unresolved questions, not folded into them: an open
+  // question is one the forks raised and the reader can weigh, while this is
+  // ground none of them checked — so the narrative above is silent about it
+  // for a reason the reader would otherwise never learn.
+  if (result.blindSpots.length > 0) {
+    lines.push('');
+    lines.push('### Not covered by any fork');
+    for (const b of result.blindSpots) lines.push(`- ${b}`);
+  }
   // Deterministic, not synthesized: the merge model narrates the findings, but
   // what each head DID to the filesystem is a record, and a record that a model
   // paraphrases is a record you cannot act on. Absent entirely when no head

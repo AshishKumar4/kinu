@@ -13,7 +13,7 @@ import type { StrategyContext, StrategyBudget } from '../src/strategy/types.js';
 function fakeMergeResult(over?: Partial<MergeResult['costSummary']>): MergeResult {
   return {
     mergedNarrative: 'ok', selectedDecisions: [], unresolvedQuestions: [],
-    recommendations: [], evidenceAggregate: [], headIds: ['h'],
+    recommendations: [], blindSpots: [], evidenceAggregate: [], headIds: ['h'],
     headScores: [], fileChanges: [], grounded: false,
     costSummary: {
       headCount: 1, headsWithFindings: 1, totalTokens: 0, totalWallClockMs: 0, maxDepth: 3, ...over,

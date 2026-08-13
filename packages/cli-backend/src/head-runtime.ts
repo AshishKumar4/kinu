@@ -33,6 +33,14 @@ export interface CLIHeadRuntimeDeps {
   model: LanguageModel;
   /** Provider prefix from the normalized model spec. */
   providerFamily?: string;
+  /** Resolve a per-fork model spec (`HeadInput.model`) to a model. Without it
+   *  every head runs `model` above, which made the per-fork `model` field —
+   *  advertised on the `agents` fork schema and honoured by the cf backend —
+   *  a silent no-op here: a panel asked for three vendors got three copies of
+   *  one. Absent (no resolver on the session) the fallback is still `model`,
+   *  and so is an unresolvable spec, because a fork that cannot honour its
+   *  model should still run rather than fail the whole split. */
+  resolveModel?: (spec: string) => LanguageModel;
   /** The parent session's runtime — the real execution surface every head forks
    *  (host executor, files, llm/executor/schedule, checkpoints). */
   parentRuntime: AgentRuntime;
@@ -111,6 +119,21 @@ function openHeadScratch(headId: string): { db: Database; dispose(): void } {
 }
 
 /** Run one head in-process over a fork of the parent runtime. */
+/** The model THIS head runs — its own spec when it named one and the session can
+ *  resolve it, else the session's. A bad spec degrades to the session model
+ *  rather than failing the head: one fork's unresolvable model must not take
+ *  down a split the other forks are already running. */
+function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
+  if (!input.model || !deps.resolveModel) return deps.model;
+  try {
+    return deps.resolveModel(input.model);
+  } catch (err) {
+    console.warn(`[proteus] head ${input.id} could not resolve model "${input.model}": `
+      + `${err instanceof Error ? err.message : String(err)} — running the session's model instead.`);
+    return deps.model;
+  }
+}
+
 async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: AbortFlag): Promise<HeadReport> {
   const scratch = openHeadScratch(input.id);
   const db = scratch.db;
@@ -141,7 +164,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
     });
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
     return await runHeadInference(input, {
-      model: deps.model, tools, capture,
+      model: headModel(input, deps), tools, capture,
       // The same envelope the parent session's turn runs to — local-session
       // reads this identical shell variable. A fork of a turn gets the turn's room.
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
@@ -183,6 +206,7 @@ async function runLocalSplit(
     narrative: result.mergedNarrative,
     decisions: result.selectedDecisions,
     unresolvedQuestions: result.unresolvedQuestions,
+    blindSpots: result.blindSpots,
     childHeadIds: result.headIds,
     headCount: result.costSummary.headCount,
   };

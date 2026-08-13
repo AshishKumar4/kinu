@@ -58,6 +58,7 @@ export interface HeadSplitResult {
   narrative: string;
   decisions: readonly Decision[];
   unresolvedQuestions: readonly string[];
+  blindSpots: readonly string[];
   childHeadIds: readonly HeadId[];
   headCount: number;
 }
@@ -100,10 +101,20 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     // self-recording, so deliberately outside the wrapper.
     ...buildHeadAccumulatorTools(capture),
 
-    split_subheads: tool({
+    // Recursion depth is fixed for a head's whole run — nothing decrements
+    // `input.budget.maxDepth` in place — so a head with none left cannot split
+    // at any moment of it, and is not offered the tool rather than being handed
+    // one whose only possible outcome is a refusal. Same structural containment
+    // as the rest of this surface (absent, not guarded), and the prompt follows
+    // for free: buildHeadSystemPrompt reads Object.keys of this very set, so a
+    // head without the tool is told not to propose recursion instead of being
+    // told it may split zero levels. The wall clock stays a RUNTIME check inside
+    // execute — it can pass mid-run, which build time cannot know.
+    ...(input.budget.maxDepth <= 0 ? {} : { split_subheads: tool({
       description:
-        'Spawn 2-4 child heads recursively to explore narrower sub-questions. ' +
-        'Children\'s findings merge into a single narrative. May fail if depth exhausted.',
+        `Spawn 2-4 child heads recursively to explore narrower sub-questions. ` +
+        `Children's findings merge into a single narrative. ` +
+        `You may nest ${input.budget.maxDepth} more level(s).`,
       inputSchema: jsonSchema<{
         rationale: string;
         heads: Array<{ task: string; rationale: string }>;
@@ -123,9 +134,16 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
         },
       }),
       execute: async ({ rationale, heads, merge_strategy }): Promise<string> => {
-        // Depth, plus a caller-requested deadline if one was set.
+        // Only the caller-requested deadline can still be spent here; depth was
+        // settled when this tool was built. Recorded, not just returned: an
+        // unrecorded refusal leaves no trace in the journal, so how often heads
+        // are stopped mid-plan was unanswerable from the ledger.
         const exhausted = budgetExhausted(input.budget);
-        if (exhausted.exhausted) return `Cannot split: budget exhausted (${exhausted.reason}).`;
+        if (exhausted.exhausted) {
+          const refusal = `Cannot split: budget exhausted (${exhausted.reason}).`;
+          capture.recordToolCall('split_subheads', { rationale, heads }, refusal);
+          return refusal;
+        }
         try {
           const result = await deps.split({
             rationale, heads, mergeStrategy: merge_strategy ?? input.mergeStrategy,
@@ -141,13 +159,17 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
             lines.push('', 'Open questions:');
             for (const q of result.unresolvedQuestions) lines.push(`- ${q}`);
           }
+          if (result.blindSpots.length) {
+            lines.push('', 'Not covered by any child:');
+            for (const b of result.blindSpots) lines.push(`- ${b}`);
+          }
           return lines.join('\n');
         } catch (err) {
           capture.recordToolCall('split_subheads', { rationale, heads }, 'error');
           return `split_subheads failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
-    }),
+    }) }),
   };
 
   if (input.allowedTools === undefined) return all;

@@ -99,7 +99,13 @@ export type RunEvent =
        *  so "what did that delegation actually do to the workspace" is a query
        *  over the ledger rather than a re-read of the narrative. Heads that
        *  changed nothing are absent. */
-      fileChanges: HeadFileChangeSet[] })
+      fileChanges: HeadFileChangeSet[];
+      /** Ground the merge says NO head covered. Recorded because the field's
+       *  own value is unmeasured: whether it reports real negative space or
+       *  degenerates into filler is settled by reading these rows across real
+       *  splits, not by argument. Empty on the deterministic empty-split and
+       *  merge-fallback paths, which never reach a model. */
+      blindSpots: string[] })
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })

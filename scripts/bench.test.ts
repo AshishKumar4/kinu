@@ -9,7 +9,7 @@ import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
   encodeLongHorizonSpec, renderLongHorizonAnswerFile, splitOf,
 } from '../packages/core/src/index.js';
-import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, parseArgv, parseCommon } from './bench.js';
+import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench.js';
 import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus.js';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon.js';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox.js';
@@ -450,5 +450,60 @@ describe('the task corpus stays applicable to HEAD', () => {
         { cwd: repo, stdout: 'pipe', stderr: 'pipe' },
       ).exitCode !== 0);
     expect(stale).toEqual([]);
+  });
+});
+
+/**
+ * The panel arms. Both arms must take the same code path with the same panel
+ * size — if `self` and `mixed` differed in anything but the provider list, the
+ * comparison would measure that difference instead of panel composition.
+ */
+describe('panel arms — only the provider list may differ', () => {
+  const analyst = { name: 'openai-compat', baseURL: 'http://a', headers: { Authorization: 'x' }, model: 'parent' };
+  const withEnv = <T>(env: Record<string, string | undefined>, fn: () => T): T => {
+    const prior = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try { return fn(); } finally { Object.assign(process.env, prior); }
+  };
+
+  test('a non-panel spec is not claimed, so it falls through to the other variants', () => {
+    expect(panelArm('agent', analyst)).toBeNull();
+    expect(panelArm('oracle', analyst)).toBeNull();
+  });
+
+  test('self runs the analyst model in every seat — today\'s inherit-the-parent default', () => {
+    const arm = withEnv({ BENCH_PANEL_SIZE: '3' }, () => panelArm('panel:self', analyst));
+    expect(arm!.panel).toHaveLength(3);
+    for (const member of arm!.panel) expect(member.model).toBe('parent');
+    // The analyst is held constant across arms, so it is the parent here too.
+    expect(arm!.analyst.model).toBe('parent');
+  });
+
+  test('mixed runs one distinct model per seat, and the analyst stays the parent', () => {
+    const arm = withEnv({
+      BENCH_PANEL_SIZE: '3',
+      BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b;http://c|k3|vendor-c',
+    }, () => panelArm('panel:mixed', analyst));
+    expect(arm!.panel.map((m) => m.model)).toEqual(['vendor-a', 'vendor-b', 'vendor-c']);
+    expect(arm!.analyst.model).toBe('parent');
+  });
+
+  test('both arms are the same size, so the comparison is not confounded by panel width', () => {
+    const env = { BENCH_PANEL_SIZE: '2', BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b' };
+    const self = withEnv(env, () => panelArm('panel:self', analyst));
+    const mixed = withEnv(env, () => panelArm('panel:mixed', analyst));
+    expect(self!.panel).toHaveLength(mixed!.panel.length);
+  });
+
+  test('a mixed panel that cannot be built refuses rather than quietly running one model N times', () => {
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '3', BENCH_PANEL: 'http://a|k1|only-one' },
+      () => panelArm('panel:mixed', analyst))).toThrow(/needs BENCH_PANEL with 3 entries/);
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '2', BENCH_PANEL: 'http://a|k1|a;malformed' },
+      () => panelProviders(2))).toThrow(/must be "<baseURL>\|<auth>\|<model>"/);
+  });
+
+  test('panel size is bounded by what a fork panel actually accepts', () => {
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '1' }, () => panelArm('panel:self', analyst))).toThrow(/\[2,6\]/);
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '7' }, () => panelArm('panel:self', analyst))).toThrow(/\[2,6\]/);
   });
 });

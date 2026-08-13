@@ -21,7 +21,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 function mergeWith(fileChanges: readonly HeadFileChangeSet[]): MergeResult {
   return {
     mergedNarrative: 'Both heads landed their part of the router change.',
-    selectedDecisions: [], unresolvedQuestions: [], recommendations: [],
+    selectedDecisions: [], unresolvedQuestions: [], recommendations: [], blindSpots: [],
     evidenceAggregate: [], headIds: ['h-lexer', 'h-grammar'],
     headScores: [], fileChanges, grounded: false,
     costSummary: {

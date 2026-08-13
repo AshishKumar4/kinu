@@ -116,17 +116,71 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
     sessionId: opts.state === 'shared' ? 'bench' : ctx.task.id,
   };
 
-  const proc = Bun.spawn(
-    ['bun', join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts')],
-    {
-      cwd: ctx.sandboxDir,
-      env: sandboxEnv(home),
-      stdin: Buffer.from(JSON.stringify(input)),
-      stdout: 'pipe',
-      stderr: 'pipe',
-      signal: ctx.signal,
+  return spawnWorker({
+    script: join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts'),
+    home, ctx, input,
+  });
+}
+
+export interface PanelSolverOptions {
+  id: string;
+  description: string;
+  /** One provider config per fork. All identical is the self-MoA arm; one per
+   *  vendor family is the mixed arm. */
+  panel: readonly LLMProviderConfig[];
+  /** The merge model, held constant across arms so a difference is the panel's. */
+  analyst: LLMProviderConfig;
+  repoRoot: string;
+}
+
+/**
+ * A fork PANEL against the sandbox — the mixed-vs-self MoA arms.
+ *
+ * Deliberately not an agent turn: the panel is the treatment, so nothing
+ * upstream of it may vary between arms. Both arms run the identical worker with
+ * the identical task and differ only in the provider list.
+ */
+export function createPanelSolver(opts: PanelSolverOptions): Solver {
+  return {
+    id: opts.id,
+    description: opts.description,
+    async solve(ctx: SolverContext): Promise<SolverResult> {
+      return spawnWorker({
+        script: join(opts.repoRoot, 'scripts', 'bench-panel-worker.ts'),
+        home: ctx.proteusHome,
+        ctx,
+        input: {
+          dbPath: join(ctx.proteusHome, `panel-${ctx.task.id}`, 'agent.db'),
+          workspaceName: `panel-${ctx.task.id}`,
+          purpose: 'Fix defects in a TypeScript repository so its own test suite and typecheck pass.',
+          ask: ctx.task.prompt,
+          panel: opts.panel,
+          analyst: opts.analyst,
+          maxTokens: ctx.budget.maxTokens,
+        },
+      });
     },
-  );
+  };
+}
+
+/** Spawn a worker script over the attempt's sandbox + throwaway home and read
+ *  its single JSON result line. Shared by the agent and panel solvers — the
+ *  isolation contract (cwd, pruned env, one JSON line on stdout) is the same
+ *  for both and must not drift between them. */
+async function spawnWorker(opts: {
+  script: string;
+  home: string;
+  ctx: SolverContext;
+  input: unknown;
+}): Promise<SolverResult> {
+  const proc = Bun.spawn(['bun', opts.script], {
+    cwd: opts.ctx.sandboxDir,
+    env: sandboxEnv(opts.home),
+    stdin: Buffer.from(JSON.stringify(opts.input)),
+    stdout: 'pipe',
+    stderr: 'pipe',
+    signal: opts.ctx.signal,
+  });
 
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -136,13 +190,13 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
 
   const line = stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) {
-    return { error: `agent worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
+    return { error: `worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
   }
   let parsed: WorkerOutput;
   try {
     parsed = JSON.parse(line) as WorkerOutput;
   } catch {
-    return { error: `agent worker emitted unparseable output: ${line.slice(0, 400)}` };
+    return { error: `worker emitted unparseable output: ${line.slice(0, 400)}` };
   }
   return {
     tokens: parsed.tokens,

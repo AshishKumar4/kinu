@@ -117,6 +117,7 @@ describe('v2 e2e: branching heads → merge', () => {
           ],
           unresolved_questions: ['back-off curve?'],
           recommendations: ['Implement X pattern minimal struct + retry-on-init.'],
+          blind_spots: [],
         };
       },
     };
