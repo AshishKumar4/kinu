@@ -483,7 +483,7 @@ export function ReleasesSurface({ rpc }: { rpc: Rpc }) {
           </section>
 
           <section>
-            <SectionTitle icon={<PlusIcon size={14} />} title="New Change" />
+            <SectionTitle icon={<PlusIcon size={14} />} title="New change" />
             {(board?.bindings.length ?? 0) === 0 ? (
               <div className="text-xs p-text-3 rounded-lg border p-border p-3">No source saved</div>
             ) : (

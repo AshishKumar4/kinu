@@ -773,7 +773,7 @@ function MessageFeedback({
         }`}
         title="Mark this response as poor (feeds evolution scoring)"
       >👎</button>
-      {failed && <span className="text-[10px] p-danger">couldn't save — try again</span>}
+      {failed && <span className="text-[10px] p-danger">couldn't save, try again</span>}
     </div>
   );
 }
@@ -820,7 +820,7 @@ function ForkModal({
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
-        <p>Create a new workspace that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+        <p>Create a new workspace that branches off <span className="font-mono p-text">{sourceName}</span> at this message.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
           <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
           <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
@@ -1001,7 +1001,7 @@ export default function WorkspacePage() {
       else rejected.push(f.name);
     }
     setAttachError(rejected.length > 0
-      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
+      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message. ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
       : null);
     if (accepted.length === 0) return;
     const dt = new DataTransfer();
@@ -1164,7 +1164,7 @@ export default function WorkspacePage() {
       const entries = await state.rpc<FileCheckpointEntry[]>('listFileCheckpoints', [200]);
       const matches = entries.filter((e) => e.turnId === mid);
       if (matches.length === 0) {
-        setRestoreNotice('No file checkpoint for this turn — it changed no device files.');
+        setRestoreNotice('No file checkpoint for this turn. It changed no device files.');
         return;
       }
       const plans: FileRestorePlan[] = [];
@@ -1173,7 +1173,7 @@ export default function WorkspacePage() {
       }
       const files = plans.flatMap((p) => p.files);
       if (files.length === 0) {
-        setRestoreNotice('Files already match the state before this turn — nothing to restore.');
+        setRestoreNotice('Files already match the state before this turn. Nothing to restore.');
         return;
       }
       setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
@@ -1392,7 +1392,7 @@ export default function WorkspacePage() {
                         <button onClick={handleBranch}
                           className="p-text-2 hover:p-text transition-colors p-2 mb-0.5 rounded-lg border p-border cursor-pointer"
                           aria-label="Run as a parallel branch"
-                          title="Branch: run this as a parallel take without interrupting the live turn — compare answers when both finish">
+                          title="Branch: run this as a parallel take without interrupting the live turn. Compare answers when both finish.">
                           <GitBranchIcon size={16} />
                         </button>
                       )}
@@ -1519,7 +1519,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       <div className="space-y-2">
         <p className="text-xs p-text-2 leading-relaxed">
           This rewrites files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
-          device — {counts}. A safety snapshot is taken first, so restoring again undoes the undo.
+          device: {counts}. A safety snapshot is taken first, so restoring again undoes the undo.
         </p>
         <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto text-[11px] font-mono">
           {shown.map((f) => (

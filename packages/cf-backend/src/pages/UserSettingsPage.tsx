@@ -272,7 +272,7 @@ function DevicesCard() {
     <div ref={anchorRef} id="devices">
       <Card title="Devices" icon={DesktopTowerIcon}>
         <p className="text-xs p-text-2">
-          Link a laptop or PC to your account — once connected, every one of your agents can use it
+          Link a laptop or PC to your account. Once connected, every one of your agents can use it
           (with your consent). The daemon opens one outbound WebSocket; no inbound ports, runs as
           your user, never root.
         </p>
@@ -297,8 +297,8 @@ function DevicesCard() {
         )}
         {lapsingDevices(devices).length > 0 && (
           <p className="p-meta p-text-3">
-            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon
-            — connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
+            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon.
+            Connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
           </p>
         )}
 
@@ -403,7 +403,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
           disabled={saving}
           className={inputCls}
         >
-          <option value="">(none — pick a gateway)</option>
+          <option value="">(no gateway selected)</option>
           {status.gateways.map((gw) => (
             <option key={gw.id} value={gw.id}>{gw.id}</option>
           ))}
@@ -513,7 +513,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
     <div className="space-y-3">
       <p className="text-xs p-text-2">
         Use your ChatGPT subscription as Proteus's chat backend.
-        Authorize a device once — every agent you create can pick a Codex model afterward.
+        Authorize a device once. Every agent you create can pick a Codex model afterward.
       </p>
       <button
         onClick={start}
@@ -611,7 +611,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       <div className="space-y-2">
         <div className="text-xs font-medium">Connect a provider</div>
         <p className="p-meta p-text-3">
-          Paste an API key for any of the {catalog.length} supported providers — every agent you own can use its models.
+          Paste an API key for any of the {catalog.length} supported providers. Every agent you own can use its models.
         </p>
         <Combobox
           items={catalog}
@@ -622,7 +622,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         >
           <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
           <Combobox.Content>
-            <Combobox.Empty>No matching provider — add it below as an OpenAI-compatible endpoint.</Combobox.Empty>
+            <Combobox.Empty>No matching provider. Add it below as an OpenAI-compatible endpoint.</Combobox.Empty>
             <Combobox.List>
               {(item: ProviderCatalogEntry) => (
                 <Combobox.Item key={item.id} value={item}>
@@ -650,7 +650,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={selected.connected ? '••••••• (stored — paste to replace)' : `${selected.name} API key`}
+                placeholder={selected.connected ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
                 className={inputCls}
               />
               <button

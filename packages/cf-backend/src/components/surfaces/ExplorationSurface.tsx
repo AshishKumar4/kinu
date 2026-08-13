@@ -220,7 +220,7 @@ function ForkRunDetail(
           : resource.status === "loading"
             ? <div className="flex justify-center py-8"><Loader size="sm" /></div>
             : <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
-                hint="The run is in the ledger but its branches were never written — it was interrupted before the first one landed." />}
+                hint="The run is in the ledger but its branches were never written. It was interrupted before the first one landed." />}
       </div>
     );
   }

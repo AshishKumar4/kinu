@@ -142,7 +142,7 @@ export function WorkTab({
   if (nothingAtAll) {
     return (
       <EmptyState icon={<PulseIcon size={28} />} title="Nothing has happened yet"
-        hint="The plan the agent writes for itself, the work it detaches, and the changes it makes to itself all land here — with anything waiting on you at the top." />
+        hint="The plan the agent writes for itself, the work it detaches, and the changes it makes to itself all land here, with anything waiting on you at the top." />
     );
   }
 
@@ -219,7 +219,7 @@ export function WorkTab({
             changelog !== null && (
               <p className="text-xs p-text-3">
                 {journal.length === 0
-                  ? "Nothing has settled yet — finished jobs, closed plan items and the agent's own changes land here."
+                  ? "Nothing has settled yet. Finished jobs, closed plan items and the agent's own changes land here."
                   : "Nothing under this filter."}
               </p>
             )
@@ -303,7 +303,7 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
             {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
           </div>
           <div className="text-[10px] p-text-3 mt-0.5">
-            None of these have run. The agent was told they are queued and carried on — approving lets it
+            None of these have run. The agent was told they are queued and carried on. Approving lets it
             run them when it picks the decision up.
           </div>
         </div>

@@ -137,7 +137,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     // Minting a long-lived credential is step-up gated exactly like webhook
     // creation: the session token itself must come from a fresh `proteus auth`.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `proteus auth` again — minting access tokens needs a sign-in within the last 5 minutes');
+      return err(401, 'step-up auth required: run `proteus auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
     }
     const body = await safeJson<{ name?: string; scopes?: string[] }>(request);
     if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
@@ -210,7 +210,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     // interactive-auth timestamp is its token mint time (minting requires
     // a live browser approval), so a fresh `proteus auth` satisfies it.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `proteus auth` again — webhook creation needs a sign-in within the last 5 minutes');
+      return err(401, 'step-up auth required: run `proteus auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
     }
     const body = await safeJson<{
       label?: string;
@@ -666,7 +666,7 @@ function installPageResponse(origin: string): Response {
       <section class="grid" aria-label="What the installer sets up">
         <div class="cell"><strong>Account connection</strong><span>The setup flow opens browser approval and stores the CLI session under your local Proteus home directory.</span></div>
         <div class="cell"><strong>Cloud or local agents</strong><span>Create persistent cloud agents or fully local agents from the same command line, then add aliases for the agents you use often.</span></div>
-        <div class="cell"><strong>Your computer as execution</strong><span>Connect this machine as the desktop execution engine so agents can operate on local files and processes with your approval model.</span></div>
+        <div class="cell"><strong>Desktop execution</strong><span>Connect this machine so agents can run commands, read files, and serve previews on it, with your approval.</span></div>
       </section>
 
       <div class="notes">

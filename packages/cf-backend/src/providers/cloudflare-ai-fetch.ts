@@ -84,7 +84,7 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
     friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
   } else if (res.status === 401) {
     // Still 401 AFTER the forced-refresh retry → the Cloudflare login is dead.
-    friendly = 'Your Cloudflare login is no longer valid — reconnect Cloudflare in User settings.';
+    friendly = 'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
   }
   if (!friendly) {
     // Unknown failure — keep the original payload intact for the caller.

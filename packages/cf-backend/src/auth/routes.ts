@@ -85,7 +85,7 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
     : `<p>No OAuth providers are configured yet.</p>`;
 
   return html('Sign in to Proteus', `
-    <p class="lede">Choose a configured sign-in method.</p>
+    <p class="lede">Choose a sign-in method.</p>
     <div class="providers">${body}</div>
   `, { headers: { 'cache-control': 'no-store' } });
 }

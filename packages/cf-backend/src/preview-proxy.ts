@@ -102,9 +102,9 @@ function renderNotReadyPage(host: string): Response {
 <div class="card">
   <h1><span class="dot"></span> Preview not ready</h1>
   <p>Port <code>${safePort}</code> is exposed publicly but the container did not accept the connection.</p>
-  <p>Usually that means <strong>nothing is listening on it yet</strong> — the agent exposed the port before starting a server. Ask the agent:</p>
+  <p>Usually that means nothing is listening on it yet: the agent exposed the port before starting a server. Ask the agent:</p>
   <pre>You exposed port ${safePort} but the container isn't serving anything on it. Please start a server first (e.g. <code>nohup python3 -m http.server ${safePort} --directory /workspace/&lt;app&gt; &gt; /tmp/srv.log 2>&amp;1 &amp;</code> for static sites, or <code>nohup node server.js &gt; /tmp/srv.log 2&gt;&amp;1 &amp;</code> for Node), wait ~1s for it to bind, then verify with <code>sandbox.listPorts()</code>.</pre>
-  <p class="hint">If a server was running, the sandbox may have restarted — re-run it and call <code>sandbox.exposePort(${safePort})</code> again. Once something is listening, refresh this page.</p>
+  <p class="hint">If a server was running, the sandbox may have restarted. Re-run it, call <code>sandbox.exposePort(${safePort})</code> again, and refresh this page once something is listening.</p>
   <button onclick="location.reload()">Reload preview</button>
   <div class="meta">sandbox=${safeSandboxId} · port=${safePort}</div>
 </div>

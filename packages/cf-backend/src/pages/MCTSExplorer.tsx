@@ -59,7 +59,7 @@ export default function MCTSExplorer() {
         <div className="h-4 w-px bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent" />
         <span className="font-semibold text-sm p-text">Fork explorer</span>
-        {run && <span className="text-xs p-text-2 truncate" title={run.task}>— {run.task}</span>}
+        {run && <span className="text-xs p-text-2 truncate" title={run.task}>{run.task}</span>}
       </div>
       {run ? (
         <ExplorerBody run={run} state={state} containerRef={containerRef} dims={dims}

@@ -69,7 +69,7 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
         <div className="flex items-center gap-1 shrink-0">
           {job.status === "running" ? (
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("cancelBackgroundJob")}
-              title="Hard-cancel — aborts the underlying work">
+              title="Hard-cancel, aborting the underlying work">
               <XCircleIcon size={13} /><span className="ml-1">Cancel</span>
             </Button>
           ) : (

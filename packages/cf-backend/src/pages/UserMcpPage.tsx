@@ -99,7 +99,7 @@ export default function UserMcpPage() {
             <div>
               <h1 className="text-2xl font-semibold">MCP servers</h1>
               <p className="text-xs p-text-3 mt-1">
-                Model Context Protocol servers — extend every agent's tool surface with hosted
+                Model Context Protocol servers add hosted
                 tools (GitHub, Notion, your own internal MCP, …). Connect once; every agent you
                 own picks them up automatically.
               </p>

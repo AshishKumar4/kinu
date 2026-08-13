@@ -96,8 +96,8 @@ function Source({ kind }: { kind: "API" | "est" }) {
     <span
       className={`text-[9px] px-1 py-px rounded uppercase tracking-wide ${kind === "API" ? "p-badge-info" : "p-badge-neutral"}`}
       title={kind === "API"
-        ? "Reported by the provider for this step — authoritative."
-        : "Measured locally from the composed request — an estimate, not the provider's count."}
+        ? "The provider's authoritative count for this step."
+        : "Measured locally from the composed request. It is an estimate, not the provider's count."}
     >{kind}</span>
   );
 }
@@ -148,7 +148,7 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
         </>
       ) : (
         <p className="text-[10px] p-text-3 mt-1">
-          Context window unknown — the model catalog has not answered, so no share is shown.
+          Context window unknown. The model catalog has not answered, so no share is shown.
         </p>
       )}
 
@@ -323,7 +323,7 @@ function Reconciliation({ reported, estimated, residual }: { reported: number; e
       </div>
       <p className="text-[10px] p-text-3 leading-relaxed mt-0.5">
         {over
-          ? "The local estimate exceeds what the provider charged — this prompt packs more characters into each token than the divisor assumes, so dividing by it over-counts."
+          ? "The local estimate exceeds what the provider charged. This prompt packs more characters into each token than the divisor assumes, so dividing by it over-counts."
           : "No provider reports which parts of a prompt its tokens came from, so the breakdown is measured locally and the remainder is left named rather than spread across the rows."}
       </p>
     </div>
@@ -439,7 +439,7 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
             <Stat label="p95" value={fmtPct(cacheHit.p95, 1)} />
           </dl>
           <p className="text-[10px] p-text-3 mt-2 leading-relaxed">
-            Cached input over total input, per step — the cached tokens are a subset of the input the
+            Cached input over total input, per step. The cached tokens are a subset of the input the
             provider billed. The EMA weights recent steps at α={cacheHit.emaAlpha}; the mean and p95
             are over the {cacheHit.samples} step{cacheHit.samples === 1 ? "" : "s"} retained in the
             run-event log, not all time.

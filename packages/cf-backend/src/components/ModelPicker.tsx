@@ -125,7 +125,7 @@ export function ConnectedModelPicker({
         type="button"
         onClick={fetchModels}
         className="inline-flex items-center gap-1 rounded-md border p-border px-2 py-1 text-[11px] p-text-3 hover:p-text-2"
-        title="Couldn't load the model list — click to retry"
+        title="Couldn't load the model list. Click to retry."
       >
         <ArrowsClockwiseIcon size={11} />
         models unavailable

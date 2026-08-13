@@ -505,7 +505,7 @@ export function ForkTree({ root, width = 800, height = 600, onNodeClick, selecte
 						/* Nothing was ranked here, so the key says what the picture
 						   actually encodes: lifecycle, and only lifecycle. */
 						<>
-							<span>every branch fed the merge — none was ranked</span>
+							<span>every branch fed the merge · none was ranked</span>
 							{width >= 470 && (
 								<span className="opacity-70">amber = running · hollow = failed</span>
 							)}
@@ -574,8 +574,8 @@ const STATUS_NOTE: Record<"competed" | "merged", Record<string, string>> = {
 		running: "still running",
 	},
 	merged: {
-		open: "finished — its findings went into the merge",
-		terminal: "finished — its findings went into the merge",
+		open: "finished, its findings went into the merge",
+		terminal: "finished, its findings went into the merge",
 		pruned: "abandoned",
 		failed: "this branch errored",
 		running: "still running",

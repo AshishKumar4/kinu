@@ -24,7 +24,7 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
       ))}
       {truncated && (
         <div className="p-text-3 px-3 italic">
-          … diff truncated at {MAX_LINES_PER_FILE} lines — the +/− totals above cover the whole file.
+          … diff truncated at {MAX_LINES_PER_FILE} lines. The +/− totals above cover the whole file.
         </div>
       )}
     </pre>
@@ -109,9 +109,9 @@ export function EmptyState({ icon, title, hint, children }: {
 
 /** Default hints for empty surfaces. */
 export const EMPTY_HINTS: Record<string, string> = {
-  memory: "Your agent will remember important information here. Ask it to remember something!",
-  tools: "Tools your agent learns will appear here — extracted from successful conversations.",
-  forks: "When the agent forks itself to try more than one approach, each fork appears here as a tree — one branch per approach, however it settled them.",
+  memory: "Ask your agent to remember something and it keeps it here.",
+  tools: "Tools your agent learns appear here, extracted from successful conversations.",
+  forks: "When the agent forks itself to try more than one approach, each fork appears here as a tree, one branch per approach.",
   preview: "When the agent exposes a port (sandbox.exposePort), the running app appears here as a live preview.",
 };
 

@@ -50,9 +50,9 @@ import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
 
 const CONSISTENCY_HINT: Record<MountInfo["policy"]["consistency"], string> = {
-  durable: "durable — survives everything",
-  ephemeral: "ephemeral — dies with the container",
-  "live-shared": "live — the user's own machine",
+  durable: "durable, survives everything",
+  ephemeral: "ephemeral, dies with the container",
+  "live-shared": "live, your own machine",
 };
 
 export interface EnvironmentSurfaceProps {
@@ -124,7 +124,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           <div className="flex items-center gap-2 mb-2">
             <HardDrivesIcon size={14} className="p-accent" />
             <span className="text-xs font-semibold p-text">Environments</span>
-            <span className="text-[10px] p-text-3">each one its own filesystem, in its own paths — the workspace is the durable one</span>
+            <span className="text-[10px] p-text-3">each one its own filesystem, in its own paths</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {mounts.map((m) => {
@@ -241,9 +241,9 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
   // mount name left this branch — the whole connect call-to-action — dead.
   if (mount.name === "laptop") return <PcConnectCta />;
   const docs = mount.name === "nimbus"
-    ? { text: "A lightweight Linux machine of its own, separate from this workspace, for package installs and anything that needs real binaries. It isn't enabled on this deployment — your agent can still use the Sandbox, or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
+    ? { text: "A lightweight Linux machine of its own, separate from this workspace, for package installs and anything that needs real binaries. It isn't enabled on this deployment. Your agent can still use the Sandbox, or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
     : mount.name === "sandbox"
-      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment — your agent can still use a Linux session (if available), or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use a Linux session (if available), or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">
@@ -285,7 +285,7 @@ function PcConnectCta() {
               {labels} {devices.length > 1 ? "are" : "is"} registered but the daemon is not running.
               Restart it on that machine with <code className="font-mono p-fill px-1 rounded">proteus connect</code>.
             </>
-          : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it — with your consent, one device for all your agents."}
+          : "Link a laptop or PC to your account so your agents can run commands, read files, and serve previews on it, with your consent. One device serves all your agents."}
       >
         <Link to="/user/settings#devices"
           className="mt-4 inline-flex items-center gap-1.5 px-3 py-2 rounded-md p-accent-bg p-accent text-xs font-medium hover:opacity-90">

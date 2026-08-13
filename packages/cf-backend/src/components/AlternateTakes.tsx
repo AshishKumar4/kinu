@@ -30,7 +30,7 @@ export function TakesChip({ set, onPick }: {
         type="button"
         onClick={() => setOpen(true)}
         className="inline-flex items-center gap-1 text-[11px] p-text-3 hover:p-text px-1.5 py-0.5 rounded border p-border hover:p-card-hover transition-colors"
-        title="The agent explored near-tied approaches for this answer — compare and pick"
+        title="The agent explored near-tied approaches for this answer. Compare and pick."
       >
         <GitBranchIcon size={11} />
         {takeChipLabel(set)}
@@ -75,7 +75,7 @@ function TakesComparison({ set, onPick, onClose }: {
     try {
       const result = await onPick(set.id, candidate.nodeId);
       if (result.continuationQueued) {
-        setNotice("Preference recorded — the agent will continue with this take.");
+        setNotice("Preference recorded. The agent will continue with this take.");
       } else {
         onClose();
       }
@@ -103,7 +103,7 @@ function TakesComparison({ set, onPick, onClose }: {
         {set.source === "branch" ? (
           <>You redirected mid-turn with{" "}
             <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>{" "}
-            and it ran as a parallel branch — compare both answers.</>
+            and it ran as a parallel branch. Compare both answers.</>
         ) : (
           <>The agent explored {count} near-tied approaches for{" "}
             <span className="p-text-2">{set.task.length > 120 ? `${set.task.slice(0, 120)}…` : set.task}</span>.</>
@@ -177,20 +177,20 @@ export function BranchRunChip({ run, takes, onPick, onDismiss }: {
           <>
             <Loader size="sm" />
             <GitBranchIcon size={12} className="p-accent shrink-0" />
-            <span className="truncate">Branching: <span className="p-text">{task}</span> — the live turn continues</span>
+            <span className="truncate">Branching: <span className="p-text">{task}</span> · the live turn continues</span>
           </>
         )}
         {run.status === "settled" && (
           <>
             <GitBranchIcon size={12} className="p-success shrink-0" weight="fill" />
-            <span className="truncate">Branch settled —</span>
+            <span className="truncate">Branch settled</span>
             {takes ? <TakesChip set={takes} onPick={onPick} /> : <span className="p-text-3">loading the comparison…</span>}
           </>
         )}
         {run.status === "error" && (
           <>
             <WarningCircleIcon size={12} className="p-warning shrink-0" weight="fill" />
-            <span className="truncate">Branch discarded — {run.message ?? "no comparison available"}</span>
+            <span className="truncate">Branch discarded: {run.message ?? "no comparison available"}</span>
           </>
         )}
         {run.status !== "running" && (

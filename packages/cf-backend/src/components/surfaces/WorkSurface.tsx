@@ -161,7 +161,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         <button
           onClick={() => onSurface(ACTIVITY_SURFACE)}
           aria-label="Activity"
-          title="Activity — context, cost and cache"
+          title="Activity: context, cost and cache"
           className={`${tabCls} px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>

@@ -102,7 +102,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
         <Button size="sm" variant="secondary" className="ml-auto" disabled={busy} onClick={propose}
           icon={busy ? <Loader size="sm" /> : undefined}>Propose tasks</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style) — predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
+      <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style). Predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
       {actionErr && <div className="p-meta p-danger mb-2">{actionErr}</div>}
       {tasks === null ? (
         resource.status === "error"
@@ -225,7 +225,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">External systems that can wake this agent — webhooks (GitHub, Stripe, your CI) and timers.</p>
+      <p className="text-xs p-text-3 mb-3">External systems that can wake this agent: webhooks (GitHub, Stripe, your CI) and timers.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null ? (
@@ -233,7 +233,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
           ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
           : <div className="flex justify-center py-6"><Loader size="sm" /></div>
         )
-        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered — create a webhook to let external systems wake this agent.</p>
+        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered. Create a webhook to let external systems wake this agent.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {triggers.map((t) => (
@@ -315,7 +315,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
         <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
       </div>
       <p className="text-xs p-text-2">
-        Save the secret now — it's shown only once. The URL is permanent until you revoke the trigger.
+        Save the secret now: it's shown only once. The URL is permanent until you revoke the trigger.
       </p>
       <div className="space-y-2">
         <div>

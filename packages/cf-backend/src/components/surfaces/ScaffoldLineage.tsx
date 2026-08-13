@@ -144,7 +144,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
       ) : lineage.status === "loading" ? (
         <div className="flex justify-center py-4"><Loader size="sm" /></div>
       ) : versions.length === 0 ? (
-        <p className="text-xs p-text-3">Only the bootstrap scaffold (v0) so far — no rewrites yet.</p>
+        <p className="text-xs p-text-3">Only the bootstrap scaffold (v0) so far.</p>
       ) : (
         <div className="space-y-2">
           {/* Version lineage */}

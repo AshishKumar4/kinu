@@ -135,7 +135,7 @@ async function forwardUpstream(
 
   const auth = await userDO.getAuthHeaders(owner, credKey);
   if (!auth) {
-    return errorResponse(401, `No usable credential is connected for "${credKey}" — connect it in your Proteus user settings.`);
+    return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Proteus user settings.`);
   }
 
   const headers = new Headers(request.headers);

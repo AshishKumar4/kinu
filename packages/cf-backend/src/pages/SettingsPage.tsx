@@ -201,7 +201,7 @@ export default function SettingsPage() {
           <><Loader size="base" /><span>Connecting to {agentId}…</span></>
         ) : (
           <>
-            <span className="p-danger">Not connected to this workspace — settings can't be read or saved.</span>
+            <span className="p-danger">Not connected to this workspace. Settings can't be read or saved.</span>
             <Link to={`/workspace/${agentId}`} className="text-xs p-accent underline">Back to chat</Link>
           </>
         )}
@@ -470,8 +470,8 @@ function WorkspaceBackupCard({
   return (
     <Card title="Backup" icon={DownloadSimpleIcon}>
       <p className="p-meta p-text-3">
-        Download everything this workspace holds — transcripts, memory, files, evolution
-        history — as a portable archive. Restore it on any machine with{" "}
+        Download everything this workspace holds (transcripts, memory, files, evolution
+        history) as a portable archive. Restore it on any machine with{" "}
         <code className="font-mono">proteus import &lt;file&gt;</code>. Take one before you
         delete a workspace: deletion is permanent. The archive contains your workspace's
         full contents, so keep it somewhere you'd keep a password.
@@ -519,7 +519,7 @@ function GepaOptimizationCard({
 
   const run = useCallback(async () => {
     setRunning(true);
-    setMsg('Optimising — running candidate scaffolds against recent tasks (this can take a few minutes)…');
+    setMsg('Optimising: running candidate scaffolds against recent tasks (this can take a few minutes)…');
     try {
       // No evalSize override — the agent's configured budget is the one
       // tuned against cost, and a smaller one cannot resolve a winner.
@@ -537,7 +537,7 @@ function GepaOptimizationCard({
       const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}) — it will shadow-eval, then you can promote it from the agent's Self surface.${scoredOn}${caveat}`);
+        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}). It will shadow-eval, then you can promote it from the agent's Self surface.${scoredOn}${caveat}`);
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }

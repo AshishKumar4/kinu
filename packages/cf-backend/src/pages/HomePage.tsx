@@ -11,7 +11,13 @@ import {
 } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { useCreateWorkspace } from "@/hooks/use-create-workspace";
+import {
+  CONNECT_AI_MESSAGE,
+  MISSION_HELP,
+  MISSION_LABEL,
+  MISSION_PLACEHOLDER,
+  useCreateWorkspace,
+} from "@/hooks/use-create-workspace";
 import { listWorkspaces, type WorkspaceEntry } from "@/lib/user-api";
 
 export default function HomePage() {
@@ -50,19 +56,19 @@ export default function HomePage() {
             className="mt-8 rounded-lg border p-border p-elevated p-3 shadow-[0_18px_70px_rgba(0,0,0,0.18)] sm:p-4"
           >
             <label htmlFor="workspace-mission" className="mb-1.5 block text-xs font-medium p-text-2">
-              Mission — what this workspace is for
+              {MISSION_LABEL}
             </label>
             <textarea
               id="workspace-mission"
               value={mission}
               onChange={(event) => setMission(event.currentTarget.value)}
-              placeholder={'A standing brief, not a task. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."'}
+              placeholder={MISSION_PLACEHOLDER}
               rows={6}
               className="block min-h-36 w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]"
             />
 
             <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <p className="text-xs p-text-3">This becomes the workspace's SOUL.md and its name. Nothing runs until you send the first message.</p>
+              <p className="text-xs p-text-3">{MISSION_HELP}</p>
 
               <button
                 type="submit"
@@ -79,7 +85,7 @@ export default function HomePage() {
             <div className="mt-3">
               <CloudflareAIConnectNotice
                 returnTo="/"
-                message="Connect Cloudflare Workers AI before creating a workspace."
+                message={CONNECT_AI_MESSAGE}
               />
             </div>
           )}

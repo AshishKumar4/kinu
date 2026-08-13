@@ -227,7 +227,7 @@ export default function Sidebar() {
           <button
             onClick={() => refreshWorkspaces()}
             className="w-full text-left px-2 py-2 text-xs p-warning rounded-md hover:p-card-hover transition-colors"
-          >Couldn't load workspaces — tap to retry</button>
+          >Couldn't load workspaces. Tap to retry.</button>
         )}
         <ul className="space-y-0.5">
           {workspaces.map((a) => {

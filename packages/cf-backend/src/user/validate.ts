@@ -46,7 +46,7 @@ export function validateCredential(input: unknown): Credential {
  *  underscore, dash. No path traversal characters, no slashes. */
 export function validateCredentialKey(key: string): void {
   if (!/^[a-zA-Z0-9._-]{1,128}$/.test(key)) {
-    throw new Error('Invalid credential key — alphanumerics, dot, underscore, dash only (max 128 chars).');
+    throw new Error('Invalid credential key. Use alphanumerics, dot, underscore and dash only (max 128 chars).');
   }
 }
 
@@ -54,6 +54,6 @@ export function validateCredentialKey(key: string): void {
  *  printable ascii; this is just an extra-strict guard at our API boundary. */
 export function validateWorkspaceName(name: string): void {
   if (!/^[a-zA-Z0-9._-]{1,64}$/.test(name)) {
-    throw new Error('Invalid workspace name — alphanumerics, dot, underscore, dash only (max 64 chars).');
+    throw new Error('Invalid workspace name. Use alphanumerics, dot, underscore and dash only (max 64 chars).');
   }
 }

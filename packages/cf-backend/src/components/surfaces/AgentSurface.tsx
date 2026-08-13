@@ -55,8 +55,8 @@ function ExposureBadge({ exposure }: { exposure: ToolInfo["exposure"] }) {
     <span
       className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-mono ${native ? "p-badge-neutral" : "p-accent-subtle p-accent"}`}
       title={native
-        ? "Native — passed to the model as a tool definition"
-        : "Code mode — reachable only from inside an execute_tools program"}
+        ? "Passed to the model as a tool definition."
+        : "Reachable only from inside an execute_tools program."}
     >
       {native ? "native" : "code mode"}
     </span>
