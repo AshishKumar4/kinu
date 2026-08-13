@@ -100,8 +100,8 @@ Consent is asked once per workspace and remembered. By default the agent sees
 the folder you consented to; the wider grant (whole filesystem) is a deliberate
 switch in the web app's workspace settings, under Device access.
 
-`proteus executors <name>` lists the places a workspace can run commands — your
-machine, a sandbox container, a Nimbus sandbox — and
+`proteus executors <name>` lists the places a workspace can run commands (your
+machine, a sandbox container, a Nimbus sandbox), and
 `proteus executors <name> <executor> <command…>` runs one directly.
 
 ## 5. Making it work while you're away
@@ -137,18 +137,18 @@ proteus jobs jarvis       # background jobs, and cancel them
 The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
 has the same information, split across six surfaces named for what you go there
 to find out: **Output** (what it produced), **Work** (what it is working
-through — the plan it wrote for itself, the jobs still running, everything
+through: the plan it wrote for itself, the jobs still running, everything
 that has settled, and anything waiting on you at the top), **Releases** (what
 it is shipping, and what you have to approve), **Exploration** (every time it
 forked itself to try more than one approach, each fork drawn as the tree it
-is), **Agent** (what this agent is — identity, memory, learned tools, and
+is), **Agent** (what this agent is: identity, memory, learned tools, and
 whether it is measurably getting better), **Environment** (every executor it
 can reach, its files and its terminal). The gauge at the far right of the strip
 is the run's own instrument panel: context, cost and cache-hit rate.
 
-Two things worth knowing. Anything the agent needs a decision on — a release
+Two things worth knowing. Anything the agent needs a decision on (a release
 awaiting approval, a rewrite of its own scaffold sitting under trial, a failed
-job, changes to itself you have not read — is counted on the **Work** tab and
+job, changes to itself you have not read) is counted on the **Work** tab and
 listed at the top of it, and each row takes you to where the decision is
 actually made. And a fork is one list whatever the agent chose to do with it:
 a merge is a tree one level deep, a competition is the same tree deeper with

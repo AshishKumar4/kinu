@@ -1,6 +1,6 @@
 # Proteus
 
-Self-evolving agent workspaces: you create a workspace — a durable container with its own filesystem, execution environments, and sessions — and its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. It runs in the cloud on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, or entirely on your own machine — the same agent either way. There is also a CI-gated Lean 4 corpus of abstract models covering selected core algorithms.
+A Proteus workspace is a durable container with its own filesystem, execution environments, and sessions. Its agent improves itself through Monte Carlo Tree Search, learns reusable tool patterns, and rewrites its own execution logic. It runs in the cloud on Cloudflare's [Think](https://github.com/cloudflare/agents) framework with Durable Objects for persistent state, or entirely on your own machine — the same agent either way. There is also a CI-gated Lean 4 corpus of abstract models covering selected core algorithms.
 
 > Docs in this repo are edited & maintained by Claude and presented as-is; verify against the code when precision matters.
 
@@ -8,32 +8,32 @@ Self-evolving agent workspaces: you create a workspace — a durable container w
 
 ## Architecture
 
-Everything the agent decides lives in `packages/core`, which is platform-clean: one workspace dependency, and no import of `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces — `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
+Everything the agent decides lives in `packages/core`, which is platform-clean: one workspace dependency, and no import of `agents`, `@cloudflare/*` or `cloudflare:workers`. Under it sits a seam of two interfaces: `AgentRuntime` for resource primitives (storage, memory, llm, schedule, …) and `BackendHost` for the few loop capabilities that are genuinely platform-shaped. Two backends implement that seam: Cloudflare Durable Objects, one per workspace, built on [Think](https://github.com/cloudflare/agents); and your own machine, on `bun:sqlite` and real processes. Both drive the same orchestrator, so the cloud and the CLI cannot drift into two pipelines.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/seam-dark.svg">
   <img alt="Clients and autonomous ingress feed packages/core, which owns the turn pipeline, tools, delegation, evolution, context, the VFS mount plane, the execution router and the event log. Below it, the AgentRuntime and BackendHost interfaces form the backend seam, implemented twice: by cf-backend on Cloudflare Durable Objects and by cli-backend on your own machine." src="docs/diagrams/seam.svg" width="900">
 </picture>
 
-The turn pipeline itself is `core/orchestrator`. A turn arrives either from a person or from the reactor — a drained event, a finished background job — and is assembled once: a system prompt of eight parts in a fixed order, then the durable history passed through the extension chain, which is where the compaction ladder fires. After that it is a step loop, and the interesting work happens at the step boundary: a dynamic-context block is re-rendered from live state and appended only when its bytes actually change, the cache tail is marked last so no earlier breakpoint moves, and anything asynchronous splices in through one seam rather than N.
+The turn pipeline itself is `core/orchestrator`. A turn arrives either from a person or from the reactor (a drained event, a finished background job) and is assembled once: a system prompt of eight parts in a fixed order, then the durable history passed through the extension chain, which is where the compaction ladder fires. After that it is a step loop, and the interesting work happens at the step boundary: a dynamic-context block is re-rendered from live state and appended only when its bytes actually change, the cache tail is marked last so no earlier breakpoint moves, and anything asynchronous splices in through one seam rather than N.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/turn-dark.svg">
   <img alt="A turn arrives from a user message or a programmatic wake and is queued one at a time. It is assembled once — system prompt plus transformed history, where the compaction ladder fires — then runs a step loop that re-weaves dynamic context, marks the cache tail and calls tools. Signals splice into the running step or queue the next turn. On settle the turn is snapshotted, recorded and reviewed, and pending events wake the next turn." src="docs/diagrams/turn.svg" width="900">
 </picture>
 
-Delegation is one tool with one question behind it: how long does the helper need to live? `fork` spawns ephemeral copies that settle back into the same turn; `staff` creates a subordinate that outlives it; the rest talk to what already exists. MCTS lives *inside* the fork rung as a settle policy — the one that scores rival approaches by executing their proposed code — rather than standing beside it as a third kind of helper.
+Delegation is one tool, and its actions are ordered by how long the helper needs to live. `fork` spawns ephemeral copies that settle back into the same turn; `staff` creates a subordinate that outlives it; the rest talk to what already exists. MCTS lives *inside* the fork rung as a settle policy (the one that scores rival approaches by executing their proposed code) rather than standing beside it as a third kind of helper.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/diagrams/delegation-dark.svg">
   <img alt="One agents tool with seven actions. Fork creates ephemeral copies of the agent that settle back into the same turn under a policy from the strategy registry — heads by default, MCTS to score rival approaches by executing their code. Staff creates a persistent subordinate that outlives the turn and reports back as an event. Ask, send, reply, list and dismiss address agents that already exist: subordinates here, or the owner's other workspaces as peers." src="docs/diagrams/delegation.svg" width="900">
 </picture>
 
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detail these leave out — the workspace object model, message flow, events and ingress, and the Think lifecycle.
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) has the detail these leave out: the workspace object model, message flow, events and ingress, and the Think lifecycle.
 
 ## Key Features
 
-- **Delegation as one ladder** — the `agents` tool covers all of it: `fork` for 2–6 ephemeral copies that merge back into this turn, `staff` for durable subordinates that outlive it, and `ask`/`send`/`reply`/`list`/`dismiss` for agents that already exist — subordinates here, or the owner's *other* workspaces as peers. A busy agent is never blocked on; the message is spliced into the turn it is already running.
+- **Delegation as one ladder** — the `agents` tool covers all of it: `fork` for 2–6 ephemeral copies that merge back into this turn, `staff` for durable subordinates that outlive it, and `ask`/`send`/`reply`/`list`/`dismiss` for agents that already exist (subordinates here, or the owner's *other* workspaces as peers). A busy agent is never blocked on; the message is spliced into the turn it is already running.
 - **MCTS parallel exploration** — score-based selection, backpropagation, pruning and winner selection, with each branch scored by executing the code it proposed rather than by rating itself. A branch is an isolated Durable Object facet in the cloud, a child process with its own SQLite file locally.
 - **3-timescale evolution** — turn-level (quality → reflection), session-level (pattern consolidation → scaffold mutation), lifetime (full MCTS exploration)
 - **CraftStore** — learns reusable tools from conversations. EMA scoring with time decay. FTS5-indexed for search.
@@ -69,7 +69,7 @@ and can also configure local provider keys for fully local workspaces.
 
 `proteus exec` is the non-interactive face of the CLI: it runs one task and
 exits 0 only when the turn completed cleanly (nonzero on errors or denied
-device consents — it never prompts). Mint a scoped access token from an
+device consents; it never prompts). Mint a scoped access token from an
 interactive session (sign in within the last 5 minutes), store it as a CI
 secret, and pipe the line-delimited JSON events wherever you need them:
 
@@ -80,7 +80,7 @@ export PROTEUS_TOKEN=pta_…                                       # from CI sec
 proteus exec --workspace jarvis --json "triage the failing tests" | tee events.jsonl
 ```
 
-Access tokens are scoped, not godmode: `workspace.exec` runs tasks,
+Access tokens are scoped: `workspace.exec` runs tasks,
 `workspace.read` inspects state, and everything else (webhooks, device
 registration, workspace creation, consent decisions) stays interactive-only
 and is enforced server-side. `proteus tokens list` shows last use; `proteus tokens revoke ci`
@@ -90,12 +90,12 @@ kills one immediately.
 
 I wanted model choice to be flexible without forcing anyone into a single vendor, so a workspace can run on any of these:
 
-- **Your own Cloudflare account** — one browser sign-in (`proteus auth`) attaches your Cloudflare account, and from that single login you get both **Workers AI** and your **AI Gateway**. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `proteus auth` again to re-grant it.
-- **Signed-in local workspaces — free Workers AI** — if you're signed in, a *local* workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with **no key at all**. New local workspaces default to `workers-ai/@cf/moonshotai/kimi-k2.6`.
+- **Your own Cloudflare account** — one browser sign-in (`proteus auth`) attaches your Cloudflare account, and from that single login you get both Workers AI and your AI Gateway. Workers AI models resolve as `workers-ai/<model>` and your gateway as `my-gateway/{author}/{model}`. The OAuth consent needs the `aig.write` scope for AI Gateway; if you connected before that was added, run `proteus auth` again to re-grant it.
+- **Free Workers AI in signed-in local workspaces** — if you're signed in, a *local* workspace you create gets Workers AI through the `/api/user/ai/v1` proxy with no key at all. New local workspaces default to `workers-ai/@cf/moonshotai/kimi-k2.6`.
 - **Bring your own keys** — OpenAI, Anthropic, OpenRouter, and your ChatGPT Codex subscription, plus any OpenAI-compatible endpoint (Ollama, vLLM, …). Connect with `proteus providers connect <name>`.
-- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly — the binary is the auth boundary, which is what keeps this compliant. It is **local only**: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
+- **Local Claude subscription** — if you use Claude Code, `proteus create --model claude/claude-opus-4-x` (or `-sonnet-`/`-haiku-`) drives the official `claude` binary with your own Claude Code login. Proteus never reads your credentials or calls the API directly; the binary is the auth boundary, which is what keeps this compliant. It is local only: cloud workspaces must use an Anthropic API key (`proteus providers connect anthropic`), not the subscription.
 
-`proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort — low, medium, high — with `/effort` or `proteus effort`, mapped to each provider's native knob.
+`proteus providers list` shows what's connected and each provider's status inline. Pick a model per workspace with `--model`, or switch mid-conversation from the `/model` picker (searchable); a chosen model persists as your default for new workspaces. Set reasoning effort (low, medium, high) with `/effort` or `proteus effort`, mapped to each provider's native knob.
 
 ## Documentation
 
@@ -134,7 +134,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 | `cf-backend/` | Cloudflare Workers: OrchestratorAgent (thin Think adapter), ExplorationAgent + SubordinateAgent (Facets), UserDO, React UI |
 | `cli/` | CLI commands: create, chat, exec, evolve, status, list, export, import |
 | `cli-backend/` | Local runtime: `LocalAgentSession`, bun:sqlite, subprocess sandbox, child_process MCTS branches |
-| `pc-agent/` | The device agent that mounts a user's own machine as `/pc` (connect + consent) |
+| `pc-agent/` | The device agent that attaches a user's own machine as the `laptop` executor (connect + consent) |
 | `test-utils/` | Shared test fakes and fixtures |
 
 ## Development

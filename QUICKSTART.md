@@ -17,8 +17,8 @@ browser login and optional local model-provider credentials.
 
 Use `--mode cloud` for a persistent cloud workspace that uses your desktop daemon
 as the local execution engine, or `--mode local` for a fully local bun:sqlite
-workspace. Either way you get a workspace — the container that owns the files,
-execution environments, and sessions — with its default agent inside.
+workspace. Either way you get a workspace (the container that owns the files, execution
+environments, and sessions) with its default agent inside.
 
 From here, [docs/USER-GUIDE.md](docs/USER-GUIDE.md) covers daily use,
 [docs/CLI.md](docs/CLI.md) is the full command reference, and
@@ -49,7 +49,7 @@ Proteus drives the official `claude` binary, which owns its own login — it nev
 reads your credentials. Cloud workspaces can't use the subscription; give them an
 Anthropic API key (`proteus providers connect anthropic`) instead.
 
-**Web search** just works: the `web` tool's `search` and `fetch` actions need no setup
+**Web search**: the `web` tool's `search` and `fetch` actions need no setup
 (DuckDuckGo + Cloudflare's markdown service). For ranked, answer-augmented
 search, store a Tavily key as the `tavily` credential.
 

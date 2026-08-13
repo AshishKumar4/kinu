@@ -31,9 +31,9 @@ or on the user's laptop. This works for trivial cases but breaks down when:
 - The agent needs to access the user's local git repo (requires the user's machine)
 - Different tasks within the same conversation need different execution environments
 
-The solution: a formal **Execution Layer** that sits between the persistence
-layer (DO SQLite) and the actual execution environment, with a capability-based
-routing system that selects the right executor for each task.
+A formal **Execution Layer** sits between the persistence layer (DO SQLite) and
+the actual execution environment, with a capability-based routing system that
+selects the right executor for each task.
 
 ```mermaid
 graph TB

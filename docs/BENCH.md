@@ -2,8 +2,8 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus has roughly 34k lines of self-evolution machinery — three timescales,
-MCTS, a mutable scaffold, a Lean corpus — and until now no number attached to
+Proteus has roughly 34k lines of self-evolution machinery (three timescales,
+MCTS, a mutable scaffold, a Lean corpus) and until now no number attached to
 any of it. An independent review put it bluntly: ahead of the published frontier
 on safety engineering for self-modification, at parity on mechanism, **at zero on
 demonstrated effect**.
@@ -448,8 +448,8 @@ Model access comes from `PROTEUS_BASE_URL` (default OpenRouter),
 
 Two properties the adapter enforces rather than assumes.
 
-**`PROTEUS_HOME` is set, always.** Everything durable a local run writes —
-config, the workspace database, sessions, shadow-git checkpoints — lands under
+**`PROTEUS_HOME` is set, always.** Everything durable a local run writes
+(config, the workspace database, sessions, shadow-git checkpoints) lands under
 `$PROTEUS_HOME`, and an unset one means `~/.proteus`. The adapter points it at
 `/installed-agent/proteus-home`, created per container and destroyed with it, and
 puts that path through `bench/isolation.py` — the Python counterpart of

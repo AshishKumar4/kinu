@@ -2,13 +2,13 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus evolves across four timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`; the shortest timescale — the only one that ticks INSIDE a single long autonomous turn — has two channels: crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`) and execution-recovery findings (`core/src/evolution/recovery.ts`, detected by the failure ledger in `core/src/orchestrator/turn-steering.ts`).
+Proteus evolves across four timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`; the shortest timescale (the only one that ticks INSIDE a single long autonomous turn) has two channels: crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`) and execution-recovery findings (`core/src/evolution/recovery.ts`, detected by the failure ledger in `core/src/orchestrator/turn-steering.ts`).
 
 ## In-Episode Evolution (the step clock)
 
 The other three timescales are conversational: the next user message grades a
 turn, five turns close a window, twenty-five close a lifetime. One long agentic
-episode — one prompt, hours of steps, nobody watching — is ONE turn, so none of
+episode (one prompt, hours of steps, nobody watching) is ONE turn, so none of
 them fire inside it. The in-episode loop is the one that does.
 
 | | |

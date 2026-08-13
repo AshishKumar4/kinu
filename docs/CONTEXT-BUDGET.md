@@ -36,7 +36,7 @@ A per-result cap is not the whole policy: eight in-budget results still bury the
 
 The system prompt's `## Delegation` section states the mechanism, because a model that knows *why* a late read came back short reaches for a rung of the ladder instead of re-running the command.
 
-This is RLMEnv's "the root sees a bounded slice of REPL output per iteration" made deterministic at the seam Proteus already owned — not a new subsystem, no mode, no flag.
+This is RLMEnv's "the root sees a bounded slice of REPL output per iteration" made deterministic at the seam Proteus already owned, with no new subsystem, mode or flag.
 
 ## The counters
 

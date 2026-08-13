@@ -4,7 +4,7 @@
 
 ## 1. What Proteus Is
 
-Proteus is a general-purpose AI agent that improves itself over time. Unlike stateless LLMs that forget everything between conversations, or fixed-tool agents that can only use pre-defined capabilities, Proteus:
+Proteus is a general-purpose AI agent that improves itself over time. It:
 
 - **Learns reusable tools** from successful conversations and applies them in future ones
 - **Explores multiple strategies** in parallel via Monte Carlo Tree Search
@@ -14,11 +14,6 @@ Proteus is a general-purpose AI agent that improves itself over time. Unlike sta
 
 ```mermaid
 graph LR
-    subgraph "Traditional Agent"
-        A1[Fixed Tools] --> A2[Stateless LLM]
-        A2 --> A3[Single Strategy]
-    end
-
     subgraph "Proteus"
         B1[Learned Tools<br/>CraftStore + EMA scoring] --> B2[Persistent Memory<br/>FTS5 search + reflections]
         B2 --> B3[MCTS Exploration<br/>Parallel strategies]
@@ -26,11 +21,10 @@ graph LR
         B4 --> B5[Lean 4 Models<br/>CI-gated traceability]
     end
 
-    style A3 fill:#533483
     style B5 fill:#0f3460
 ```
 
-The key insight: evolution happens at three timescales simultaneously, each feeding into the next:
+Evolution happens at three timescales simultaneously, each feeding into the next:
 
 | Timescale | Frequency | What Evolves |
 |-----------|-----------|-------------|
@@ -55,7 +49,7 @@ graph TB
     end
 ```
 
-The web UI exposes the agent's internal state across 6 tabs: Identity, Tools, Memory, MCTS Tree, Evolution timeline, and Logs. This makes Proteus a transparent research platform where you can observe self-evolution as it happens — not just the final output.
+The web UI exposes the agent's internal state across six surfaces: Output, Work, Releases, Exploration, Agent, and Environment. You can watch self-evolution as it happens.
 
 ### Personal AI Assistant That Learns
 
@@ -65,7 +59,7 @@ Each workspace is a Durable Object with its own SQLite database, hosting its def
 - **Crafted tools** — reusable code patterns extracted from successful problem-solving
 - **Scaffold improvements** — the agent's own execution logic gets better over time
 
-Unlike ChatGPT or Claude (which start fresh each conversation), a Proteus agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
+A Proteus agent that helped you debug TypeScript yesterday remembers the patterns it learned and applies them today.
 
 ### Multi-Model Comparison
 
@@ -93,7 +87,7 @@ family's native knob, so the same model can be run cheap or deep.
 - `vite` — serve web apps with HMR
 - `wrangler dev` — run Cloudflare Workers on the actual runtime
 
-This would transform Proteus from a tool-calling agent into a genuine software development agent that can build, test, and deploy real applications.
+With that, an agent could build, test, and deploy real applications instead of only calling tools.
 
 ## 3. CLI Version Applications
 
@@ -199,13 +193,13 @@ graph TB
 | **Tree of Thoughts** (Yao 2023) | No | BFS/DFS | No | No | No |
 | **Proteus** | CraftStore + EMA | MCTS + Facets | Scaffold mutation | 84 theorems over abstract models; 1 documented SQLite assumption | DO SQLite |
 
-### What's Genuinely Novel
+### Design choices
 
 1. **Three-timescale evolution with machine-checked abstract models.** The Lean corpus checks selected properties of hand-maintained models; it does not prove the deployed TypeScript implementation. CI gates compilation, consistency, axiom closure, and traceability, while model-to-code differential fixtures remain planned.
 
 2. **Scaffold mutation with structural validation.** The agent rewrites its own agentic loop (the async generator that controls how it processes tasks). This is genuine self-modifying code, but guarded by 4 validation gates that prevent syntax errors, forbidden patterns, and data loss.
 
-3. **CraftStore with automatic lifecycle management.** Tools aren't just learned — they're scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful. No other tool-learning system has this lifecycle.
+3. **CraftStore with automatic lifecycle management.** Learned tools are scored via exponential moving average, time-decayed for relevance, and automatically retired when they stop being useful.
 
 4. **MCTS branches as isolated Durable Objects.** Each exploration branch has its own Durable Object and SQLite storage. Lean proves a `StorageIsolated` invariant over an abstract transition model; implementation correspondence is tracked but still needs a covering branch-storage integration assertion.
 

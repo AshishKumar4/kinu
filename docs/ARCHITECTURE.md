@@ -2,12 +2,12 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus is a self-evolving agent **workspace**. You create a workspace — a durable
-container with its own filesystem, execution environments, and sessions — and its
+Proteus is a self-evolving agent **workspace**. You create a workspace (a durable
+container with its own filesystem, execution environments, and sessions) and its
 agent answers chat, runs tools, explores strategies with Monte Carlo Tree Search,
 learns reusable tools, and can rewrite its own agentic loop.
 
-The design has one rule that keeps it honest: **one shared brain, thin adapters.**
+The design has one rule: **one shared brain, thin adapters.**
 Everything platform-independent lives in `packages/core`. The cloud backend
 (`packages/cf-backend`, a Durable Object over Cloudflare's [Think](https://github.com/cloudflare/agents))
 and the local backend (`packages/cli-backend`) are thin shells that give the same
@@ -19,8 +19,8 @@ paths are cited so you can jump to the source.
 A workspace is the container; agents are the actors inside it. The workspace is
 1:1 with an `OrchestratorAgent` Durable Object on the cloud backend
 (`cf-backend/src/orchestrator.ts`). Its file plane is the workspace filesystem
-(`core/src/vfs/nimbus-workspace.ts`) — Nimbus over that DO's own SQLite, with a
-real shell over the same bytes — and its execution plane is an
+(`core/src/vfs/nimbus-workspace.ts`), Nimbus over that DO's own SQLite with a
+real shell over the same bytes, and its execution plane is an
 `ExecutionRouter` (`core/src/execution/router.ts`) that dispatches to whichever
 OTHER environment is asked for, running commands target-native rather than
 emulating them. There is no mount table: every other environment is its own
@@ -46,17 +46,19 @@ graph TB
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
-The mount table is the source of truth: `listMounts()` (an orchestrator RPC over
-`compositeVfs.listMounts()`) returns each live mount plus its declared policy
-(`readOnly`, `durable | ephemeral | live-shared`, credentials-stay-in-host). The
-`/pc` mount is served by the `pc-agent` reverse-WebSocket daemon
-(`packages/pc-agent`) running on the user's machine. See
+The environment list is the source of truth: `listMounts()` (an orchestrator RPC
+over `listEnvironments(executionRouter)`, `core/src/read-models/files.ts`)
+returns one row per executor that has a filesystem, with its namespace prefix,
+whether it is live, and its declared policy (`readOnly`, `rootPath`, and a
+`durable | ephemeral | live-shared` consistency). The `laptop` environment is
+served by the `pc-agent` reverse-WebSocket daemon (`packages/pc-agent`) running
+on the user's machine. See
 [WORKSPACES.md](./WORKSPACES.md) for the full noun model.
 
 ## The actor hierarchy
 
 Three DO classes act inside a workspace, and their inheritance is the security
-model, not an implementation detail:
+model:
 
 ```mermaid
 graph TB
@@ -94,9 +96,9 @@ because there is no `team` tool in its ToolSet to call.
 `ActorAgent` and never inherits the actor tool surface. Its ToolSet is
 hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`,
 `execute_tools`, `run`, `file`, `web`, and the depth-budgeted `split_subheads`.
-No `agents`, so it cannot delegate. Its file plane is genuinely its own — a
+No `agents`, so it cannot delegate. Its file plane is genuinely its own (a
 private workspace filesystem in its own facet's SQLite that siblings cannot
-see — and the parent workspace is reached the way every other environment is,
+see), and the parent workspace is reached the way every other environment is,
 as an executor: `parent.*` / `run { runtime: 'parent' }` over the parent RPC
 handle (`core/src/execution/parent.ts`), which runs the parent's REAL shell in
 its own native paths rather than walking it a file at a time.
@@ -122,10 +124,10 @@ worker-held parent stub can create one.
 A subordinate is a *durable* teammate, not a one-shot call. It has its own
 SQLite, runs the full turn loop, keeps its own evolution engine and history, and
 survives hibernation. Its own filesystem is its own; the parent workspace is
-reached as an EXECUTOR — `createParentExecutor` registers a `parent.*` namespace
-over the parent stub (`subordinate-agent.ts` `registerParentWorkspace`) — rather
-than as a directory of this facet, because the parent is another Durable Object
-behind async RPC exactly like the sandbox and the user's machine. The six
+reached as an EXECUTOR rather than as a directory of this facet, because the
+parent is another Durable Object behind async RPC exactly like the sandbox and
+the user's machine. `createParentExecutor` registers a `parent.*` namespace over
+the parent stub (`subordinate-agent.ts` `registerParentWorkspace`). The six
 parent-side methods it calls (`readWorkspaceFile`, `writeWorkspaceFile`,
 `listWorkspaceFiles`, `statWorkspaceFile`, `deleteWorkspaceFile`,
 `execWorkspaceCommand`) deliberately carry no `@callable`, so nothing but a
@@ -148,7 +150,7 @@ everything inline.
 
 ## The turn pipeline
 
-Every turn — cloud or local — flows through the same `ExtensionHost`
+Every turn, cloud or local, flows through the same `ExtensionHost`
 (`core/src/extension.ts`), the one small, stable seam both backends fire. On the
 cloud the `OrchestratorAgent` bridges Think's subclass hooks onto that host;
 on the CLI, `LocalAgentSession` (`cli-backend/src/local-session.ts`) drives
@@ -207,14 +209,14 @@ The two default registrants attach at construction on both backends:
   reasoning → remaining tool output → assistant runs → prefix summary. The first
   rung is Proteus's own (`relieveEphemeralPressure`): a superseded
   `<dynamic_context>` block is stale by definition and re-derivable from live
-  state, so it is the cheapest thing in the request to give up — and, being
-  woven per model step, it is the one thing a ladder stage can never see. What
+  state, so it is the cheapest thing in the request to give up. Being woven per
+  model step, it is also the one thing a ladder stage can never see. What
   it frees is subtracted from the pressure the engine is told about, so relief
   here can stand the rest of the ladder down.
 - **Signal delivery** (`proteus.signals`, a `prepareStep` hook) is the ONE way
   anything asynchronous reaches the agent, at the ONE time anything reaches it
-  (`core/src/orchestrator/signals.ts`). A producer — the event-hub drain, a
-  settled background job, an overflow retry, a take pick, an MCP task — states
+  (`core/src/orchestrator/signals.ts`). A producer (the event-hub drain, a
+  settled background job, an overflow retry, a take pick, an MCP task) states
   intent and nothing else; the signal is spliced into the live turn's next step
   using the `StepInjections` math (`core/src/prompting/step-injections.ts`).
   When no turn is running there is no next step, so delivery starts one
@@ -284,8 +286,8 @@ loop through `LocalAgentSession` instead of the WebSocket transport.
 
 ## Events and ingress
 
-The workspace is not only chat-driven — it wakes on external events through a
-durable `EventLog` (`core/src/events/hub/log.ts`, schema in
+The workspace wakes on external events as well as on chat, through a durable
+`EventLog` (`core/src/events/hub/log.ts`, schema in
 `core/src/events/hub/schema.ts`). Delivery uses a **lease**: the `consumed_at`
 column on the `agent_log` table is set when an event is bound to a turn
 (`markConsumed`), cleared on completion (`markTurnCompleted`), released on
@@ -309,8 +311,8 @@ each backend supplies only the transport in front of one: the Worker's HTTP and
 `email()` routes and the DO alarm on cf, the process timer locally.
 
 The full `IngressKind` union in `core/src/events/hub/types.ts` is wider than
-this — it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
-`mcp_streamable`, `self_emit`, and `reply_request` — but the five above are the
+this (it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
+`mcp_streamable`, `self_emit`, and `reply_request`), but the five above are the
 paths that wake a sleeping workspace from outside its own turn.
 
 ## MCP — user-level once-auth, zero token transfer
@@ -340,8 +342,8 @@ update.
 
 Neither kind is an attestation of who is calling: Cloudflare gives a Durable
 Object no way to learn that, so a sibling DO sharing `env` can derive the owner
-capability too. What the boundary buys is that the tool surface — the part an
-injected prompt can steer — reaches the UserDO only through code presenting a
+capability too. What the boundary buys is that the tool surface (the part an
+injected prompt can steer) reaches the UserDO only through code presenting a
 workspace token, and is attenuated by tier whichever tool gate someone forgets.
 
 Today every workspace is registered `full` — the whole user surface, exactly as
@@ -390,7 +392,7 @@ graph TB
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
         CLI["cli/<br/>proteus create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
-        PC["pc-agent/<br/>reverse-WS device daemon → /pc"]
+        PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
     end
 

@@ -8,8 +8,8 @@ Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@proteus/core/tools`. The registry and descriptions
 live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
-`memory` and `tasks` are unconditional; every other tool is registered when — and only
-when — the backend wires its deps. That gating is structural rather than
+`memory` and `tasks` are unconditional; every other tool is registered only when
+the backend wires its deps. That gating is structural rather than
 flagged, and it is how a subordinate gets `report` and never gets the `staff`
 action of `agents`.
 
@@ -19,7 +19,7 @@ action of `agents`.
 |------|---------|
 | `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
-| `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same CompositeVFS every other surface addresses |
+| `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same workspace filesystem every other surface addresses |
 | `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
 | `tasks` | The agent's own task list — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
@@ -32,7 +32,7 @@ instead — neither earned a standing choice on every turn:
 
 - **Skills** (`SKILL.md` workflow instructions) were never really a separate
   instrument: they are ordinary files under `/workspace/skills/`, on the same
-  `CompositeVFS` `file`/`workspace.*` already address. `read`/`create`/`edit`/
+  workspace filesystem `file`/`workspace.*` already address. `read`/`create`/`edit`/
   `delete` are `workspace.readFile`/`writeFile`/`readdir`/`exec('rm …')` calls
   — a dedicated tool would have been a third path to the same bytes.
   Discovery no longer needs a tool call either: every available skill's
@@ -68,8 +68,8 @@ rather than from a comparison it has to make. The action names mirror the
 codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
 across the tool surface and the sandbox.
 
-Everything goes through `rt.storage.vfs` — the workspace filesystem, Nimbus
-over the host's SQLite — so one implementation serves both backends. There is
+Everything goes through `rt.storage.vfs` (the workspace filesystem, Nimbus over
+the host's SQLite), so one implementation serves both backends. There is
 deliberately no second filesystem path and no per-runtime variant. It addresses
 the workspace and only the workspace: every other environment is an executor
 with its own filesystem in its own native paths, reached through its namespace
@@ -348,8 +348,8 @@ missing `new_text` is refused, while an explicit `""` deletes.
 The engine is pure string math in `packages/core/src/tools/file-edit.ts` (no
 I/O), the per-turn state is `tools/file-ledger.ts`, and the tool itself is
 `tools/file-tool.ts`. The `file-plane` layergate layer locks the two properties
-that matter — an anchor lands exactly once or not at all, and no read is clipped
-without saying how to continue it — with faults that model each being lost.
+that matter (an anchor lands exactly once or not at all, and no read is clipped
+without saying how to continue it) with faults that model each being lost.
 
 ## run — Shell Command
 
@@ -366,8 +366,8 @@ supplies one.
 the workspace shell above on the hosted backend, the real machine shell at the
 process cwd on cli-local), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
 via the pc-agent daemon and a consent prompt on first use). Each of those is a
-DIFFERENT machine with its own filesystem — `nimbus` is a separate Nimbus
-session, not the shell above — and anything other than `workspace` dispatches
+DIFFERENT machine with its own filesystem (`nimbus` is a separate Nimbus
+session, not the shell above), and anything other than `workspace` dispatches
 through the `ExecutionRouter`. There is no fallback chain: asking for a runtime
 that isn't provisioned returns a structured `runtime_not_provisioned` error the
 UI turns into an install card, rather than silently routing elsewhere and
@@ -441,7 +441,7 @@ Crafted tools are discovered, scored, and retired automatically:
 
 ## Why so few tools
 
-The tool roster is deliberately small — and the reason is the **decision
+The tool roster is deliberately small, and the reason is the **decision
 surface**, not token cost. Every native tool is a standing choice the model
 weighs on every turn it is not the answer to, and selection accuracy degrades
 with choice count; that is the whole argument, independent of what anything

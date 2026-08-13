@@ -72,7 +72,7 @@ agents are the actors that work inside it.
   - **Subordinates** (`team`: `list | spawn | assign | status | message |
     dismiss`) are durable. Each is a `SubordinateAgent` facet with its own
     SQLite and its own full turn loop, sharing the workspace's files through a
-    parent-RPC mount at `/workspace` and the parent's sandbox and `/pc` exec
+    parent-RPC mount at `/workspace` and the parent's sandbox and `laptop` exec
     planes. Their tasks and reports ride the `subordinate` ingress. A
     subordinate has no `team` tool of its own, so the tree cannot deepen —
     that confinement is structural, from which deps its profile wires.

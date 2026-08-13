@@ -180,7 +180,7 @@ export function buildProgram(): Command {
   program
     .command('export <name>')
     .helpGroup(WORKSPACES)
-    .description('Back up a workspace — local or cloud — to a portable archive')
+    .description('Back up a workspace (local or cloud) to a portable archive')
     .option('-o, --output <file>', 'Output file path')
     .action(wrapAction(exportCommand));
 
@@ -384,8 +384,8 @@ export function buildProgram(): Command {
   program
     .command('debug <name>')
     .helpGroup(INSPECT)
-    .description('Fetch everything about a workspace — identity, messages, runs and their events, ' +
-      'heads, MCTS searches, background jobs, evolution state, memory and facts — into one bundle')
+    .description('Fetch everything about a workspace into one bundle: identity, messages, runs and ' +
+      'their events, heads, MCTS searches, background jobs, evolution state, memory and facts')
     .option('-o, --out <file>', 'Bundle output path (default: <name>.debug.jsonl)')
     .option('--runs <n>', 'How many recent runs/head-runs/searches to page through')
     .option('--limit <n>', 'Row limit for the smaller sections (messages, jobs, facts, ...)')
