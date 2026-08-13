@@ -9,13 +9,17 @@ export { initWorkspaceSchema, type WorkspaceSchemaSql } from './identity/workspa
 export {
   DEFAULT_SOUL_MD,
   SOUL_PATH,
+  isPlaceholderMission,
   readSoul,
+  readMission,
   renderSoulMarkdown,
   seedSoul,
   summarizeSoul,
   writeSoul,
 } from './identity/soul.js';
 export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
+export { WORKSPACE_IDENTITY_DDL } from './identity/schema.js';
+export { createInlineWorkspace } from './identity/inline-primitives.js';
 export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
 export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
@@ -32,17 +36,18 @@ export {
   type ArchiveRestoreResult,
 } from './identity/archive.js';
 export {
-  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
-  workspaceIdentityPrompt,
+  WORKSPACE_TITLE_SYSTEM_PROMPT,
+  workspaceTitlePrompt,
   applyWorkspaceTitle,
-  createWorkspaceNameFromMission,
   deriveWorkspaceTitle,
   fallbackWorkspaceIdentity,
   isPlaceholderWorkspaceTitle,
-  parseWorkspaceIdentityOutput,
+  parseWorkspaceTitle,
   planWorkspaceTitle,
   resolveWorkspaceTitle,
   slugifyName,
+  workspaceSlug,
+  workspaceTitleFromMission,
   type SuggestedWorkspaceIdentity,
   type WorkspaceTitlePlan,
   type WorkspaceTitleState,
@@ -134,7 +139,7 @@ export {
 // Evolution Changelog — the "what I changed about myself" digest over the
 // durable ledgers, with real revert dispatch (the autonomy-flip transparency).
 export {
-  buildChangelog, countUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,
@@ -406,7 +411,7 @@ export {
 export {
   buildBuiltinTools, PEER_REPLY_TOPIC,
   type AgentsToolDeps, type AgentsForkDeps,
-  type BuiltinToolDeps, type ReleaseToolDeps,
+  type BuiltinToolDeps,
   type CraftedToolSet, type CreateExecuteToolFactory,
   type TeamToolDeps, type SubordinateRosterEntry, type SubordinateStatus,
   type SubordinateDelivery, type SubordinatePhase, type SubordinateHandoff,
@@ -417,6 +422,23 @@ export {
 export * from './web/index.js';
 // Recursive Language Models — the llm.query codemode provider (both backends).
 export { createRLMProvider, type CodemodeProvider, type RLMModelResolver, type RLMOptions } from './rlm.js';
+// The release lane — codemode-only (release.* inside execute_tools). No
+// native tool: see tools/builtins.ts's header for why.
+export {
+  createReleaseCodemodeProvider, runReleaseAction,
+  type ReleaseToolDeps, type ReleaseActionInput,
+} from './tools/release-codemode.js';
+// memory.* / tasks.* / report.* — codemode projections of the same-named
+// native tools, sharing one dispatcher each (memory-tool.ts / tasks-tool.ts /
+// the native `report` tool's ReportToolDeps).
+export { createMemoryCodemodeProvider } from './tools/memory-codemode.js';
+export { createMemoryDispatcher, type MemoryToolDeps, type MemoryToolInput } from './tools/memory-tool.js';
+export { createTasksCodemodeProvider } from './tools/tasks-codemode.js';
+export { createTasksDispatcher, type TasksToolInput } from './tools/tasks-tool.js';
+export { createReportCodemodeProvider } from './tools/report-codemode.js';
+// The file plane's dispatcher, shared by the native `file` tool and
+// workspace.editFile (execution/inline.ts) — see tools/file-tool.ts.
+export { createFileDispatcher, type FileToolDeps, type FileToolInput } from './tools/file-tool.js';
 export {
   clampToolResult,
   clampSerializedToolResult,
@@ -508,6 +530,7 @@ export {
   type DynamicApproval,
   type DynamicContext,
   type DynamicDelegate,
+  type DynamicJob,
   type DynamicTask,
   type MissingCapability,
   type TurnLocalContext,
@@ -584,7 +607,7 @@ export {
 // Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
-  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId,
+  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId, isSteerBranchRunId,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type PendingBranch,
@@ -598,6 +621,7 @@ export {
   persistableMCTSConfig,
   type PersistedMCTSConfig,
   type ResumableSearch,
+  type MctsSearchRunSummary,
 } from './mcts/search-store.js';
 export { initScaffoldTables } from './scaffold/schemas.js';
 export { initCraftScoreTables } from './craft/schemas.js';
@@ -683,11 +707,13 @@ export { migrateCraftedToolDuplicates, type MigrationReport } from './craft/migr
 export {
   DefaultExecutionRouter,
   createInlineExecutor,
+  withApprovalGatedShell, gateProviderExec,
   createSandboxExecutor, type SandboxHandle,
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
   shouldBackupWorkspace, workspaceBackupOptions, BACKUP_MIN_INTERVAL_MS, BACKUP_TTL_SECONDS,
   isSandboxTransientError,
   createDeviceTunnelExecutor, type DeviceTransport,
+  explainNativeToolReferenceError,
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
@@ -697,18 +723,18 @@ export {
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
   formatExecResult, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
+  type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
+  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index.js';
 
-// File plane — CompositeVFS mount table + raw-handle mount adapters
+// The workspace filesystem — Nimbus, with nothing layered over it.
 export {
-  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
-  makeVfsError, isVfsError, ERRNO,
-  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
-  createParentRpcMountVFS,
-  type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
-  type VfsError, type VfsErrorCode, type DeviceMountConsent,
-  type ParentRpcFileHandle, type ParentRpcWrite, type ParentRpcResult, type ParentRpcError,
+  createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration, workspacePath, WORKSPACE_ROOT,
+  makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
+  observeWrites,
+  type WorkspaceBundle, type WorkspaceOptions, type WorkspaceVFS,
+  type VfsError, type VfsErrorCode, type WriteEvent, type WriteObserver,
 } from './vfs/index.js';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
@@ -753,6 +779,7 @@ export {
 // Memory write primitive — single canonical "save a note to MEMORY.md".
 // Used by workspace.saveNote, the `memory` builtin tool, and MCP saveNoteFromMcp.
 // readMemoryTail is the shared bounded-tail read both backends weave per turn.
+export { memoryBytes } from './memory/note.js';
 export { appendMemoryNote, readMemoryTail, MEMORY_TAIL_MAX_CHARS } from './memory/note.js';
 
 // Zero-LLM transcript search over the canonical `messages` table (FTS5).
@@ -846,11 +873,14 @@ export {
   formatApproval,
   withApprovalGate,
   approvalGrants,
+  gateExec,
+  STRICT_NO_CHANNEL_POLICY,
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
+  type ShellApprovalPolicy,
   argumentDigest,
   sha256Hex,
   stableStringify,
@@ -914,12 +944,21 @@ export {
 
 // Background-job system — auto-background long tool calls + wake-on-completion.
 export {
-  BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, isBackgroundHandle,
+  BackgroundJobStore, initBackgroundJobsTable, serializeJobResult, withBackgroundThreshold, withSpawnDetach,
+  isBackgroundHandle, SPAWN_STARTED_OPTION, readSpawnStarted,
   BackgroundJobRunner, JobNotResumable, EVICTION_INTERRUPT_ERROR, BACKGROUND_POLICY, MAX_CONCURRENT_DETACHED_JOBS,
   type BackgroundJob, type BackgroundJobStatus, type BackgroundHandle, type BackgroundRefusal, type ThresholdDeps,
   type BackgroundPolicy, type DetachOutcome, type SessionSurface,
   type BackgroundJobRunnerDeps, type JobResumer, type JobClaim,
 } from './jobs/index.js';
+
+// The agent's own task list — what the `tasks` tool writes and the Tasks
+// surface reads.
+export {
+  TaskListStore, initTaskListTable, TASK_STATUSES, MAX_TASK_TITLE_CHARS,
+  type AgentTask, type AgentTaskTree, type TaskStatus,
+  type TaskAddResult, type TaskAddRejection,
+} from './tasks/store.js';
 
 // Backend-agnostic orchestration — per-turn accounting shared by both backends.
 export {
@@ -963,7 +1002,7 @@ export { buildStrategyForkDeps, type ForkDepsWiring } from './orchestrator/fork-
 export { createDurableMctsSession } from './orchestrator/mcts-session.js';
 export {
   skillsVfsOver, resolveTurnSkills, filterToolNamesBySkills, filterToolSetBySkills,
-  renderFactsForTurn, type TurnSkillsConfig,
+  renderFactsForTurn, type TurnSkillsConfig, type TurnSkillSurface,
 } from './orchestrator/turn-surface.js';
 export { ModelCatalogSession } from './orchestrator/model-catalog.js';
 export {
@@ -977,19 +1016,20 @@ export { recordGroundedHeadsTake } from './mcts/takes.js';
 // VFS-backed under /workspace/skills/. A skill is natural-language workflow
 // instructions + a tool-surface restriction (allowed_tools). Distinct from
 // CraftedTools (executable JS): a skill steers the LLM; a crafted tool runs.
+// No LLM-facing tool and no codemode namespace — read/create/edit/delete are
+// ordinary workspace.readFile/writeFile/readdir/exec calls over the same VFS.
 export {
   parseSkillFile, stringifySkillFile, validateSkillName,
   discoverSkills, skillPath, BUILTIN_SKILLS,
   resolveActiveSkills, extractExplicitInvocations,
-  renderActiveSkillsSection, unionAllowedTools, toolAllowedBySkills,
-  ACTIVE_SKILLS_MAX_CHARS,
-  runSkillsAction, SkillError, SKILLS_DIR,
+  renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
+  ACTIVE_SKILLS_MAX_CHARS, SKILLS_INDEX_MAX_CHARS,
+  SkillError, SKILLS_DIR,
 } from './skills/index.js';
 export type {
-  ParsedSkill, SkillSource, SkillIndexEntry, ActiveSkillSet,
-  ActivationReason, SkillsAction, SkillParseResult, SkillErrorCode,
+  ParsedSkill, SkillSource, ActiveSkillSet,
+  ActivationReason, SkillParseResult, SkillErrorCode,
   SkillsVfs, DiscoverOpts, LoadActiveSkillsOpts,
-  SkillsToolDeps, SkillsToolOutcome,
 } from './skills/index.js';
 
 // ── GEPA (Genetic-Pareto Prompt Evolution) ──
@@ -1077,9 +1117,18 @@ export {
 } from './vfs/diff.js';
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff.js';
 export {
-  getExecutorFiles, readExecutorFile, sortDirEntries, toCompositePath, writeExecutorFileOp,
+  getExecutorFiles, readExecutorFile, sortDirEntries, executorFiles, writeExecutorFileOp,
+  listEnvironments,
 } from './read-models/files.js';
-export type { DirEntry, ExecutorWriteDeps, ExecutorWriteResult } from './read-models/files.js';
+export type {
+  DirEntry, ExecutorFileLookup, ExecutorRowLookup, ExecutorWriteResult,
+  EnvironmentInfo, MountInfo,
+} from './read-models/files.js';
+export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
+export { listForkRuns } from './read-models/fork-runs.js';
+export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
+export { buildPendingActions } from './read-models/pending-actions.js';
+export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';
 export { getAgentStatus, getChatHistory, getToolList, uiMessageText } from './read-models/status.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
@@ -1100,6 +1149,6 @@ export type {
   EvolutionConfigView, MctsConfigView, SetModelDeps,
 } from './read-models/config-plane.js';
 export {
-  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from './read-models/evolution-views.js';
 export type { EvolutionChangelogView, TakePickDeps } from './read-models/evolution-views.js';

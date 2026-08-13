@@ -20,7 +20,7 @@
  */
 
 import type { CodemodeProvider } from '@proteus/core';
-import { BUILTIN_TOOL_DESCRIPTIONS } from '@proteus/core';
+import { BUILTIN_TOOL_DESCRIPTIONS, explainNativeToolReferenceError } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor.js';
 
@@ -119,8 +119,12 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           if (logs.length > 0) payload.logs = logs;
           return payload;
         } catch (e) {
+          // A bare `run(...)` etc. inside the model's code throws a plain V8
+          // ReferenceError here (no dispatcher involved — `run` was simply
+          // never one of the bound argNames above); rewrite that one shape
+          // into an actionable correction, same as the CF codemode sandbox.
           const payload: { result: undefined; error: string; logs?: string[] } = {
-            result: undefined, error: (e as Error).message,
+            result: undefined, error: explainNativeToolReferenceError((e as Error).message),
           };
           if (logs.length > 0) payload.logs = logs;
           return payload;

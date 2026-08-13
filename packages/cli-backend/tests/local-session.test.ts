@@ -1,5 +1,5 @@
 // LocalAgentSession — the local backend's agent loop (re-arch P5). Driven by the
-// authentic createCLIRuntime (real SqliteFS / shell / durable fiber) + a fake
+// authentic createCLIRuntime (real filesystem / shell / durable fiber) + a fake
 // streaming model, so it exercises the orchestrator + BackendHost wiring without
 // a network LLM. Tool-call accounting is covered by the core TurnAccumulator
 // tests; here we verify the loop: turns stream + persist, programmatic turns run
@@ -370,12 +370,12 @@ describe('LocalAgentSession.send — a user turn', () => {
 
     // The replacement text carries the content-addressed path…
     const referenced = observed.find((m) =>
-      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+      m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
     expect(referenced).toBeDefined();
     const referencedJson = JSON.stringify(referenced!.content);
     expect(referencedJson).toContain('resume.pdf');
     const path = /saved to (\S+) — read/.exec(referencedJson)?.[1];
-    expect(path).toStartWith('/local/attachments/');
+    expect(path).toStartWith('attachments/');
 
     // …and the exact payload bytes are readable back through the agent's VFS.
     const stored = await rt.storage.vfs.readFile(path!);
@@ -385,7 +385,7 @@ describe('LocalAgentSession.send — a user turn', () => {
     // reference — byte-stable, so the prompt-cache prefix holds.
     await session.send('continue');
     const again = captures[1]!.find((m) =>
-      m.role === 'user' && JSON.stringify(m.content).includes('/local/attachments/'));
+      m.role === 'user' && JSON.stringify(m.content).includes('attachments/'));
     expect(again).toBeDefined();
     expect(JSON.stringify(again!.content)).toBe(referencedJson);
   });
@@ -1121,7 +1121,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     expect(arms).toBe(1);
   });
 
-  test('a /skill activation filters the turn toolset to allowed_tools (+ skills)', async () => {
+  test('a /skill activation filters the turn toolset to allowed_tools', async () => {
     let captured: string[] = [];
     const { rt, session } = setup('ok', capturingModel('ok', (t) => { captured = t; }));
     await rt.storage.vfs.mkdir('/workspace/skills', { recursive: true });
@@ -1130,9 +1130,11 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
       '---\nname: focused\ndescription: a memory-only skill\nallowed_tools: [memory]\n---\nFocus on memory only.\n',
     );
     await session.send('/focused remember this');
-    // The active skill restricts to memory; the skills tool stays reachable so
-    // the agent can list/invoke more mid-turn.
-    expect(new Set(captured)).toEqual(new Set(['memory', 'skills']));
+    // The active skill restricts to memory. No tool is exempted from its own
+    // restriction: there is no `skills` tool left to protect, and
+    // execute_tools (the only remaining path to a skill's own VFS bytes) is
+    // restricted the same as any other tool a skill's allowed_tools omits.
+    expect(new Set(captured)).toEqual(new Set(['memory']));
   });
 
   test('recoverBackgroundJobs fails + wakes an orphaned job of a non-resumable kind, clears stale fibers', async () => {
@@ -1235,7 +1237,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // that never settles — 6.4 of 16.2 agent-hours of dead idle across a
     // benchmark run, every trial of it ended by the harness SIGKILL.
     const { db, session, events } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 },
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, detachSpawnOnStart: true },
     });
     const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-hang', 'think', 'running', '${input}', 1)`);
@@ -1261,7 +1263,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
 
   test('end() releases the session when a fiber will never settle', async () => {
     const { db, session } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 },
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, detachSpawnOnStart: true },
     });
     const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-e', 'think', 'running', '${input}', 1)`);
@@ -1279,7 +1281,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     // back, on the same never-settling job. Two independent graces would double
     // the idle tail this whole change exists to remove.
     const { db, session } = setup('unused', hangingModel(), {
-      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200 },
+      backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 200, detachSpawnOnStart: true },
     });
     const input = JSON.stringify({ strategy: 'single-shot', task: 'start the server' });
     db.exec(`INSERT INTO background_jobs (id, kind, status, input_json, created_at) VALUES ('bgjob-2x', 'think', 'running', '${input}', 1)`);
@@ -1302,7 +1304,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session, events } = setup(
       'unused',
       executeToolsModel('await new Promise(r => setTimeout(r, 120));\n"computed inline"'),
-      { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150 } },
+      { backgroundPolicy: { detachAfterMs: 10_000, settleGraceMs: 150, detachSpawnOnStart: true } },
     );
     await session.send('do the long thing');
 
@@ -1316,7 +1318,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session, events } = setup(
       'unused',
       executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"computed late"'),
-      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000 } },
+      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 5_000, detachSpawnOnStart: true } },
     );
     await session.send('do the long thing');
     await session.settleBackgroundWork();
@@ -1329,7 +1331,7 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
     const { db, session, events } = setup(
       'unused',
       executeToolsModel('await new Promise(r => setTimeout(r, 200));\n"never detached"'),
-      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500 } },
+      { backgroundPolicy: { detachAfterMs: 20, settleGraceMs: 500, detachSpawnOnStart: true } },
     );
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
       db.exec(`INSERT INTO background_jobs (id, kind, status, created_at) VALUES ('busy-${i}', 'run', 'running', 1)`);
@@ -1349,12 +1351,92 @@ describe('LocalAgentSession — BackendHost + lifecycle', () => {
   test('toolNames exposes the full surface (agents/memory parity); end() resolves', async () => {
     const { session } = setup();
     const names = session.toolNames();
-    // Full parity with the DO surface: execution + durable state + delegation + skills.
-    for (const t of ['run', 'execute_tools', 'memory', 'agents', 'skills']) expect(names).toContain(t);
+    // Full parity with the DO surface: execution + durable state + delegation.
+    // No `skills` — read/create/edit/delete are workspace.readFile/writeFile/
+    // readdir/exec calls now, not a separate tool.
+    for (const t of ['run', 'execute_tools', 'memory', 'agents']) expect(names).toContain(t);
+    expect(names).not.toContain('skills');
     // ...and the keyed-fact actions ride the one durable-state tool.
     expect(names).not.toContain('fact');
     await session.send('hi');
     await session.end();   // flush partial session — no-op with auto-evolve off, must not throw
+  });
+
+  test('a background job that settles WHILE the same multi-step turn is still running reaches the model at its next step — no polling required', async () => {
+    // Defect B's reliability question, answered against the REAL pipeline: the
+    // owner reported the agent polling agent.jobResult in a loop despite the
+    // detach message already promising a wake. This proves (or disproves) that
+    // the wake mechanism itself delivers, independent of what the model does
+    // with it — three real steps of the SAME streamText multi-step turn
+    // (matching the shape of the caffe-cifar-10 bench trial: one continuous
+    // turn, background jobs detaching and settling mid-flight), with the third
+    // step's actual model-bound messages captured and inspected.
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    const capturedSteps: ModelMessage[][] = [];
+    let step = 0;
+    const model: LanguageModel = {
+      specificationVersion: 'v2',
+      provider: 'fake',
+      modelId: 'fake-model',
+      supportedUrls: {},
+      doStream: async (options: { messages?: ModelMessage[]; prompt?: ModelMessage[] }) => {
+        step += 1;
+        capturedSteps.push(options.messages ?? options.prompt ?? []);
+        if (step === 2) {
+          // Real wall-clock delay standing in for a slower model round trip —
+          // comfortably longer than the background job's own 60ms of work, so
+          // by the time step 3's prepareStep runs the job has genuinely
+          // settled and (if the wake fired) already delivered its signal.
+          await new Promise((r) => setTimeout(r, 150));
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              if (step === 1) {
+                controller.enqueue({
+                  toolCallId: 'call-1', type: 'tool-call', toolName: 'execute_tools',
+                  input: JSON.stringify({ code: 'await new Promise(r => setTimeout(r, 60)); return "slow-done";' }),
+                });
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              } else if (step === 2) {
+                controller.enqueue({
+                  toolCallId: 'call-2', type: 'tool-call', toolName: 'execute_tools',
+                  input: JSON.stringify({ code: '"noop"' }),
+                });
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              } else {
+                controller.enqueue({ type: 'text-start', id: '0' });
+                controller.enqueue({ type: 'text-delta', id: '0', delta: 'done' });
+                controller.enqueue({ type: 'text-end', id: '0' });
+                controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              }
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    } as unknown as LanguageModel;
+
+    const { session } = setup('unused', model, { backgroundPolicy: { detachAfterMs: 10, settleGraceMs: 5_000, detachSpawnOnStart: true } });
+    await session.send('do the slow thing then finish');
+
+    expect(step).toBeGreaterThanOrEqual(3);
+    const thirdStepMessages = capturedSteps[2]!;
+    const injectedTexts = thirdStepMessages
+      .filter((m) => m.role === 'user')
+      .map((m) => (typeof m.content === 'string' ? m.content : JSON.stringify(m.content)));
+    const wakeText = injectedTexts.find((t) => t.includes('Background') && t.includes('completed'));
+
+    // The wake reached the THIRD step's own request — the model was handed the
+    // settled result without ever calling agent.jobResult. This is the
+    // mechanism the owner's polling complaint doubted; here it is proven, not
+    // asserted.
+    expect(wakeText).toBeDefined();
+    expect(wakeText).toContain('execute_tools');
+    expect(wakeText).toContain("agent.jobResult('");
+    await session.end();
   });
 });
 
@@ -2248,11 +2330,24 @@ describe('LocalAgentSession — the durable run-event log', () => {
     // local run — and therefore every benchmark trial — left no durable trace of
     // a fork at all: that a run's forks came back empty could only be found by
     // reading trajectories by hand.
+    //
+    // A fork on the interactive surface now detaches the instant it spawns
+    // (defect A), so 'head_merge' — which only fires once the WHOLE
+    // exploration finishes — always arrives after the calling ('go') turn's
+    // own run has already closed and a second (wake) run may already be open.
+    // settleBackgroundWork() drains both; the fork's phase events are looked
+    // up by which run actually carries them (head_split, captured at
+    // dispatch — see emitHeadPhase), not by run recency, since a wake turn's
+    // run can easily be the newer one.
     const { session } = setup('unused', forkingModel());
     await session.send('go');
+    await session.settleBackgroundWork();
 
-    const events = session.getRunEvents(session.listRuns()[0]!.runId);
-    expect(events.some((e) => e.type === 'head_split')).toBe(true);
+    const forkRun = session.listRuns()
+      .map((r) => session.getRunEvents(r.runId))
+      .find((evs) => evs.some((e) => e.type === 'head_split'));
+    expect(forkRun).toBeDefined();
+    const events = forkRun!;
 
     const merge = events.find((e): e is Extract<typeof events[number], { type: 'head_merge' }> =>
       e.type === 'head_merge');

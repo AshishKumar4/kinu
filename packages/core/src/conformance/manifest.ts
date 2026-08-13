@@ -71,6 +71,16 @@ const NO_USER_PLANE = (what: string): string =>
   `${what} rides the owner's UserDO; a local session has no user plane to serve it`;
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
 const CLI_HAS_NO_STAFF = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
+
+/** The cloud workspace's durable base. The CLI works on the real machine, so
+ *  it provisions no emulated filesystem and none of its bookkeeping. */
+/** The workspace filesystem — the same component on every root now that there
+ *  is only one of them. */
+const NIMBUS_BASE: RootStatuses = {
+  'cf-orchestrator': WIRED,
+  'cf-subordinate': WIRED,
+  cli: WIRED,
+};
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
 const RELEASE_TABLE: RootStatuses = {
   'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
@@ -85,19 +95,14 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     execute_tools: EVERYWHERE,
     run: EVERYWHERE,
     file: EVERYWHERE,
-    skills: EVERYWHERE,
     agents: EVERYWHERE,
     memory: EVERYWHERE,
+    tasks: EVERYWHERE,
     web: EVERYWHERE,
     report: {
       'cf-orchestrator': { absent: ORCHESTRATOR_IS_SINK },
       'cf-subordinate': WIRED,
       cli: { absent: `${ORCHESTRATOR_IS_SINK}, and ${CLI_HAS_NO_STAFF}` },
-    },
-    release: {
-      'cf-orchestrator': WIRED,
-      'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
-      cli: WIRED,
     },
   },
 
@@ -149,7 +154,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     workspace_identity: EVERYWHERE,
     messages: EVERYWHERE,
     conversation_history: EVERYWHERE,
-    vfs_files: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     craft_scores: EVERYWHERE,
     search_nodes: EVERYWHERE,
@@ -188,6 +192,10 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // ── durable state ──
     agent_facts: EVERYWHERE,
     agent_config: EVERYWHERE,
+    // The agent's own task list. A subordinate keeps its own rather than
+    // writing into its parent's: it is given its own assignment, and one plan
+    // per actor is what makes the list mean anything.
+    agent_tasks: EVERYWHERE,
     background_jobs: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,
@@ -215,6 +223,25 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     release_checks: RELEASE_TABLE,
     release_approvals: RELEASE_TABLE,
     release_deployments: RELEASE_TABLE,
+
+    // ── the workspace filesystem ──
+    // Nimbus, on every root — one filesystem, one shell, one set of paths. The
+    // generation counter is what stops a re-created Durable Object from
+    // reissuing write authority a dead process still holds.
+    proteus_workspace_generation: NIMBUS_BASE,
+    // The filesystem itself. This is the exact set NimbusWorkspace.destroy()
+    // drops — the namespace the library commits to owning inside a host's
+    // database — so an addition here is a signal that the dependency changed
+    // its storage contract, which is worth failing a gate over.
+    inodes: NIMBUS_BASE,
+    file_chunks: NIMBUS_BASE,
+    content_lifecycle: NIMBUS_BASE,
+    vfs_schema_migrations: NIMBUS_BASE,
+    vfs_append_receipts: NIMBUS_BASE,
+    vfs_append_writer_state: NIMBUS_BASE,
+    vfs_append_module_state: NIMBUS_BASE,
+    vfs_append_pid_revocations: NIMBUS_BASE,
+    vfs_append_acked_gaps: NIMBUS_BASE,
 
     // ── cf-orchestrator-local planes ──
     workspace_subordinates: {

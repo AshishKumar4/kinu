@@ -1,20 +1,71 @@
 /**
- * The executor file plane — one read/write surface over every executor.
+ * The file manager's read/write surface — one executor at a time.
  *
- * ONE plane for both directions: every executor's files are reached through
- * the CompositeVFS. Workspace paths are composite-addressed already; other
- * executors' env-native paths map onto their mount prefix
- * (EXECUTOR_MOUNT_PREFIX), landing on the same raw handle the executor's tools
- * use — structured bytes and entries, never the executors' lossy LLM tool
- * strings. Unavailable mounts surface the composite's honest reservation
- * error.
+ * Each executor carries its OWN file view over its OWN raw handle
+ * (`ExecutorProvider.files`), in that environment's native paths: the workspace
+ * is Nimbus, the sandbox is its container, `laptop` is the user's machine. They
+ * are separate filesystems and are addressed as such — there is no mount table
+ * and no rewriting of one environment's paths into another's namespace.
  *
- * Errors are values here, not throws: a file browser asking for a path on an
- * offline mount wants the reason rendered in the pane, not a failed RPC.
+ * Errors are values here, not throws: a browser asking for a path on an offline
+ * environment wants the reason rendered in the pane, not a failed RPC.
  */
 
-import { EXECUTOR_MOUNT_PREFIX } from '../vfs/composite.js';
 import type { VFS } from '../types/primitives.js';
+
+/** Just enough of the router to find one executor's files. */
+export interface ExecutorFileLookup {
+  getProvider(name: string): { files?: VFS } | undefined;
+}
+
+/**
+ * One environment as the file browser lists it — the executor's own row, with
+ * live state and how durable its filesystem is.
+ *
+ * `consistency` is the property a user has to know before writing anywhere:
+ * `durable` survives everything, `ephemeral` dies with the container,
+ * `live-shared` IS the user's own machine.
+ */
+export interface EnvironmentInfo {
+  name: string;
+  /** How the environment is addressed in its own namespace, e.g. `sandbox.*`. */
+  prefix: string;
+  live: boolean;
+  policy: { readOnly: boolean; rootPath: string; consistency: 'durable' | 'ephemeral' | 'live-shared' };
+  /** Working directory to open the browser at, or null when unavailable. */
+  cwd: string | null;
+  /** Why it is listed but not reachable; null when it is. */
+  reason: string | null;
+}
+
+/** The name the workspace UI imports this row set by. */
+export type MountInfo = EnvironmentInfo;
+
+const CONSISTENCY: Record<string, EnvironmentInfo['policy']['consistency']> = {
+  workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', laptop: 'live-shared',
+};
+
+/** Enough of the router to list environments. */
+export interface ExecutorRowLookup {
+  listExecutors(): Array<{
+    name: string; available: boolean; configured: boolean; reason?: string;
+  }>;
+  getProvider(name: string): { files?: VFS } | undefined;
+}
+
+/** One row per executor that HAS a filesystem — what the file browser lists. */
+export function listEnvironments(router: ExecutorRowLookup): EnvironmentInfo[] {
+  return router.listExecutors()
+    .filter((exec) => router.getProvider(exec.name)?.files !== undefined || !exec.available)
+    .map((exec) => ({
+      name: exec.name,
+      prefix: `${exec.name}.*`,
+      live: exec.available && router.getProvider(exec.name)?.files !== undefined,
+      policy: { readOnly: false, rootPath: '/', consistency: CONSISTENCY[exec.name] ?? 'ephemeral' },
+      cwd: exec.available ? '.' : null,
+      reason: exec.available ? null : (exec.reason ?? 'this environment is not available right now'),
+    }));
+}
 
 /** One directory entry, normalized across executors (each provider's readdir
  *  has its own format). */
@@ -24,27 +75,15 @@ export interface DirEntry {
   size?: number;
 }
 
-/** What a write needs — the composite VFS, binary-safe on every mount. */
-export interface ExecutorWriteDeps {
-  vfs: { writeFile(path: string, data: Uint8Array | string): Promise<void> };
-}
-
 export type ExecutorWriteResult = { ok: true } | { error: string };
 
 /** Read cap for the file viewer — past this the content is carried truncated. */
 const MAX_VIEWABLE_BYTES = 512 * 1024;
 
-/**
- * Map an (executorId, environment-native path) to its CompositeVFS address.
- * The workspace executor IS the composite, so its paths pass through; every
- * other executor maps through its mount prefix. Returns null for an executor
- * with no file plane (unknown id).
- */
-export function toCompositePath(executorId: string, path: string): string | null {
-  if (executorId === 'workspace') return path;
-  const prefix = EXECUTOR_MOUNT_PREFIX[executorId];
-  if (!prefix) return null;
-  return `${prefix}${path.startsWith('/') ? path : `/${path}`}`;
+/** The named executor's file view, or null when it has none (unknown id, or an
+ *  environment with no browsable filesystem). */
+export function executorFiles(router: ExecutorFileLookup, executorId: string): VFS | null {
+  return router.getProvider(executorId)?.files ?? null;
 }
 
 /** Directories first, then files; alphabetical within each group. */
@@ -55,24 +94,22 @@ export function sortDirEntries(entries: DirEntry[]): DirEntry[] {
   });
 }
 
-/** Typed directory listing for a file manager — straight off the CompositeVFS
- *  for every executor (accurate types + sizes). */
+/** Typed directory listing — off the executor's own raw handle, so types and
+ *  sizes are the environment's real ones. */
 export async function getExecutorFiles(
-  vfs: VFS,
+  router: ExecutorFileLookup,
   executorId: string,
   path: string,
 ): Promise<{ entries?: DirEntry[]; error?: string }> {
-  const dir = toCompositePath(executorId, path || '/');
-  if (dir === null) return { error: `Executor "${executorId}" not found` };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  const dir = path || '.';
   try {
     const names = await vfs.readdir(dir);
     const entries: DirEntry[] = [];
     for (const name of names) {
       const full = dir.endsWith('/') ? `${dir}${name}` : `${dir}/${name}`;
-      // Entries of the composite root are mounts — directories by
-      // construction, even when the environment behind one can't answer a
-      // stat right now.
-      let type: DirEntry['type'] = dir === '/' ? 'dir' : 'file';
+      let type: DirEntry['type'] = 'file';
       let size: number | undefined;
       try { const s = await vfs.stat(full); if (s) { type = s.isDir ? 'dir' : 'file'; size = s.size; } }
       catch { /* unstattable — keep the default */ }
@@ -86,13 +123,14 @@ export async function getExecutorFiles(
 
 /** One file's text content for the viewer. Caps size and refuses binary. */
 export async function readExecutorFile(
-  vfs: VFS,
+  router: ExecutorFileLookup,
   executorId: string,
   path: string,
 ): Promise<{ content?: string; truncated?: boolean; error?: string }> {
   if (!path) return { error: 'path required' };
-  const target = toCompositePath(executorId, path);
-  if (target === null) return { error: `Executor "${executorId}" not found` };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
+  const target = path;
   try {
     const stat = await vfs.stat(target);
     if (stat?.isDir) return { error: 'path is a directory' };
@@ -107,8 +145,8 @@ export async function readExecutorFile(
 }
 
 /**
- * Write one uploaded file into an executor — binary-safe through the same
- * composite plane the reads use.
+ * Write one uploaded file into an executor — binary-safe through the same raw
+ * handle the reads use.
  *
  * Raw bytes, and no size cap. Uploads arrive over a transport with no frame
  * ceiling and need no encoding, and the workspace VFS chunks what it stores —
@@ -116,16 +154,16 @@ export async function readExecutorFile(
  * used to be here sat ABOVE the transport's real ceiling anyway.
  */
 export async function writeExecutorFileOp(
-  deps: ExecutorWriteDeps,
+  router: ExecutorFileLookup,
   executorId: string,
   path: string,
   bytes: Uint8Array,
 ): Promise<ExecutorWriteResult> {
   if (!path || path.endsWith('/')) return { error: 'file path required' };
-  const target = toCompositePath(executorId, path);
-  if (target === null) return { error: `Executor "${executorId}" not found` };
+  const vfs = executorFiles(router, executorId);
+  if (!vfs) return { error: `Executor "${executorId}" has no file plane` };
   try {
-    await deps.vfs.writeFile(target, bytes);
+    await vfs.writeFile(path, bytes);
     return { ok: true };
   } catch (err) {
     return { error: err instanceof Error ? err.message : String(err) };

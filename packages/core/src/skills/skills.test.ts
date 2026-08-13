@@ -1,15 +1,21 @@
 /**
  * Skills module — behavior tests through the public surface.
  *
- * Asserts the contract the orchestrator + tool surface depend on:
+ * Asserts the contract the orchestrator + prompt depend on:
  *   - SKILL.md round-trips through parse → stringify → parse.
  *   - Front-matter validation rejects what the LLM might accidentally generate.
  *   - Active-skill resolution picks explicit > keyword > always_active.
  *   - VFS-stored skills shadow built-ins of the same name.
- *   - The single `skills` tool's six actions behave like a typed CRUD verb.
+ *   - The ambient index (renderSkillsIndexSection) and the active-set render
+ *     (renderActiveSkillsSection) cover discovery and activation respectively.
+ *
+ * No `skills` tool and no `skills.*` codemode namespace: read/create/edit/
+ * delete are ordinary VFS operations, already reachable via
+ * workspace.readFile/writeFile/readdir/exec inside execute_tools — a
+ * dedicated CRUD dispatcher would have been a second path to the same bytes.
  *
  * No mocking of internal helpers — uses an in-memory SkillsVfs that's the
- * same shape SqliteFS exposes. Built-in skills come from BUILTIN_SKILLS,
+ * same shape the workspace filesystem exposes. Built-in skills come from BUILTIN_SKILLS,
  * not stubs.
  */
 
@@ -18,9 +24,8 @@ import {
   parseSkillFile, stringifySkillFile, validateSkillName,
   discoverSkills, BUILTIN_SKILLS,
   resolveActiveSkills, extractExplicitInvocations,
-  renderActiveSkillsSection, unionAllowedTools, toolAllowedBySkills,
+  renderActiveSkillsSection, renderSkillsIndexSection, unionAllowedTools, toolAllowedBySkills,
   ACTIVE_SKILLS_MAX_CHARS,
-  runSkillsAction,
   SkillError, SKILLS_DIR,
   type SkillsVfs, type ParsedSkill,
 } from './index.js';
@@ -99,6 +104,22 @@ body
       expect(hyphen.skill.allowed_tools).toEqual(snake.skill.allowed_tools);
       expect(hyphen.skill.allowed_tools).toEqual(['run', 'memory']);
     }
+  });
+
+  test('accepts the Agent Skills spec\'s space-separated `allowed-tools` string', () => {
+    // agentskills.io/specification's own example value: ONE scalar string of
+    // space-separated tools, not a YAML list. Treating the whole string as a
+    // single pattern (the bug this guards) produces a pattern that matches no
+    // real tool name, collapsing the restricted surface to nothing.
+    const r = parseSkillFile(`---
+name: a
+description: x
+allowed-tools: Bash(git:*) Read
+---
+body
+`);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.skill.allowed_tools).toEqual(['Bash(git:*)', 'Read']);
   });
 
   test('rejects non-kebab-case name', () => {
@@ -473,7 +494,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
     });
     expect(out.length).toBeLessThan(ACTIVE_SKILLS_MAX_CHARS + 1_000); // body capped + framing
     expect(out).toContain('### giant');
-    expect(out).toMatch(/\[truncated: 5000 more chars — read the full body with skills\(\{action:"read", name:"giant"\}\)\]/);
+    expect(out).toMatch(/\[truncated: 5000 more chars — read the full body with workspace\.readFile\("\/workspace\/skills\/giant\.md"\)\]/);
   });
 
   test('budget spends in activation order: earlier skills keep their bodies', () => {
@@ -494,7 +515,7 @@ describe('renderActiveSkillsSection + tool gating', () => {
     expect(out).toContain('[truncated:');
     expect(out).not.toContain('LAST-BODY');
     expect(out).toContain('### last (keyword "last")');
-    expect(out).toContain('(body omitted by the size cap — read the full body with skills({action:"read", name:"last"}))');
+    expect(out).toContain('(body omitted by the size cap — read the full body with workspace.readFile("/workspace/skills/last.md"))');
     expect(out).toContain('restricted to: memory');
   });
 
@@ -507,6 +528,52 @@ describe('renderActiveSkillsSection + tool gating', () => {
     expect(out).toContain('short body');
     expect(out).not.toContain('[truncated:');
     expect(out).not.toContain('omitted by the size cap');
+  });
+});
+
+describe('renderSkillsIndexSection', () => {
+  test('returns empty string when nothing is available', () => {
+    expect(renderSkillsIndexSection([])).toBe('');
+  });
+
+  test('lists every skill by name + description, sorted, with no body', () => {
+    const a = fakeSkill('zeta', { body: 'ZETA-BODY-SHOULD-NOT-APPEAR' });
+    const b = fakeSkill('alpha', { body: 'ALPHA-BODY-SHOULD-NOT-APPEAR' });
+    const out = renderSkillsIndexSection([a, b]);
+    expect(out).toContain('## Skills');
+    expect(out).toContain('**alpha** — desc alpha');
+    expect(out).toContain('**zeta** — desc zeta');
+    // Sorted alphabetically regardless of input order.
+    expect(out.indexOf('alpha')).toBeLessThan(out.indexOf('zeta'));
+    // Progressive disclosure: the index is name + description only.
+    expect(out).not.toContain('ZETA-BODY-SHOULD-NOT-APPEAR');
+    expect(out).not.toContain('ALPHA-BODY-SHOULD-NOT-APPEAR');
+  });
+
+  test('clips an oversized description per entry', () => {
+    const withLongDesc: ParsedSkill = { ...fakeSkill('a'), description: 'x'.repeat(500) };
+    const out = renderSkillsIndexSection([withLongDesc]);
+    expect(out).toContain('…');
+    expect(out.length).toBeLessThan(600);
+  });
+
+  test('elides under budget pressure with an honest count, never a silent cut', () => {
+    const skills = Array.from({ length: 50 }, (_, i) =>
+      fakeSkill(`skill-${String(i).padStart(2, '0')}`, { description: 'd'.repeat(150) }));
+    const out = renderSkillsIndexSection(skills, 1_000);
+    expect(out).toContain('more skill');
+    expect(out).toMatch(/… and \d+ more skills? not shown/);
+    // At least one entry survives, and the omitted count is honest (not "0").
+    const shown = (out.match(/^- \*\*/gm) ?? []).length;
+    expect(shown).toBeGreaterThan(0);
+    expect(shown).toBeLessThan(skills.length);
+  });
+
+  test('fits comfortably under the default budget with a handful of skills', () => {
+    const skills = Array.from({ length: 5 }, (_, i) => fakeSkill(`skill-${i}`));
+    const out = renderSkillsIndexSection(skills);
+    expect(out).not.toContain('more skill');
+    for (const s of skills) expect(out).toContain(`**${s.name}**`);
   });
 });
 
@@ -571,184 +638,3 @@ ${overrideBody}`;
   });
 });
 
-// ── tool actions ─────────────────────────────────────────────────
-
-function makeDeps() {
-  const invoked = new Set<string>();
-  return {
-    invoked,
-    deps: {
-      vfs: memoryVfs(),
-      recordInvoke: (name: string) => { invoked.add(name); },
-      currentlyInvoked: () => Array.from(invoked),
-    },
-  };
-}
-
-describe('runSkillsAction', () => {
-  test('list returns the catalogue with the built-in audit skill', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, { action: 'list' });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    const list = r.result as Array<{ name: string; source: string }>;
-    expect(list.some(e => e.name === 'audit-implementation' && e.source === 'builtin')).toBe(true);
-  });
-
-  test('read returns a built-in skill body', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, { action: 'read', name: 'audit-implementation' });
-    expect(r.ok).toBe(true);
-    if (!r.ok) return;
-    expect((r.result as ParsedSkill).body.length).toBeGreaterThan(0);
-  });
-
-  test('read on unknown name fails with not_found code', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, { action: 'read', name: 'does-not-exist' });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('not_found');
-  });
-
-  test('invoke records the name and returns a preview', async () => {
-    const { deps, invoked } = makeDeps();
-    const r = await runSkillsAction(deps, { action: 'invoke', name: 'audit-implementation' });
-    expect(r.ok).toBe(true);
-    expect(invoked.has('audit-implementation')).toBe(true);
-  });
-
-  test('create writes a new VFS skill', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, {
-      action: 'create',
-      name: 'my-workflow',
-      description: 'A skill the agent authored.',
-      body: '# my-workflow\n\nSteps go here.\n',
-      allowed_tools: ['run'],
-      keywords: ['workflow'],
-      auto_activate: true,
-    });
-    expect(r.ok).toBe(true);
-    // Verify it's discoverable.
-    const list = await runSkillsAction(deps, { action: 'list' });
-    expect(list.ok).toBe(true);
-    if (list.ok) {
-      const entry = (list.result as Array<{ name: string }>).find(e => e.name === 'my-workflow');
-      expect(entry).toBeTruthy();
-    }
-  });
-
-  test('create defaults user_invocable=true so /name invocation is honored after reload', async () => {
-    // Regression: the create literal once omitted user_invocable, so
-    // stringifySkillFile wrote `user-invocable: false` for every agent-authored
-    // skill, silently killing /skill-name invocation on reload.
-    const { deps } = makeDeps();
-    await runSkillsAction(deps, {
-      action: 'create', name: 'authored', description: 'x', body: 'y',
-    });
-    const read = await runSkillsAction(deps, { action: 'read', name: 'authored' });
-    expect(read.ok).toBe(true);
-    if (read.ok) {
-      const s = read.result as ParsedSkill;
-      expect(s.user_invocable).toBe(true);
-      expect(s.disable_model_invocation).toBe(false);
-    }
-    // And it actually activates via /name through the loader.
-    const all = (await runSkillsAction(deps, { action: 'list' }));
-    expect(all.ok).toBe(true);
-  });
-
-  test('create honors explicit disable_model_invocation + user_invocable', async () => {
-    const { deps } = makeDeps();
-    await runSkillsAction(deps, {
-      action: 'create', name: 'ops-runbook', description: 'x', body: 'y',
-      keywords: ['deploy'], auto_activate: true,
-      disable_model_invocation: true, user_invocable: false,
-    });
-    const read = await runSkillsAction(deps, { action: 'read', name: 'ops-runbook' });
-    if (read.ok) {
-      const s = read.result as ParsedSkill;
-      expect(s.disable_model_invocation).toBe(true);
-      expect(s.user_invocable).toBe(false);
-      // disable_model_invocation coerces auto_activate off.
-      expect(s.auto_activate).toBe(false);
-    }
-  });
-
-  test('create on an existing skill returns duplicate error', async () => {
-    const { deps } = makeDeps();
-    await runSkillsAction(deps, {
-      action: 'create', name: 'dup', description: 'x', body: 'y',
-    });
-    const r = await runSkillsAction(deps, {
-      action: 'create', name: 'dup', description: 'x', body: 'y',
-    });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('duplicate');
-  });
-
-  test('edit updates fields and preserves untouched ones', async () => {
-    const { deps } = makeDeps();
-    await runSkillsAction(deps, {
-      action: 'create', name: 'editme', description: 'old', body: 'original body',
-      keywords: ['k1'],
-    });
-    const r = await runSkillsAction(deps, {
-      action: 'edit', name: 'editme', description: 'new',
-    });
-    expect(r.ok).toBe(true);
-    const read = await runSkillsAction(deps, { action: 'read', name: 'editme' });
-    if (read.ok) {
-      const s = read.result as ParsedSkill;
-      expect(s.description).toBe('new');
-      expect(s.body).toBe('original body');
-      expect(s.keywords).toEqual(['k1']);
-    }
-  });
-
-  test('delete removes a VFS skill', async () => {
-    const { deps } = makeDeps();
-    await runSkillsAction(deps, {
-      action: 'create', name: 'goner', description: 'x', body: 'y',
-    });
-    const r = await runSkillsAction(deps, { action: 'delete', name: 'goner' });
-    expect(r.ok).toBe(true);
-    const after = await runSkillsAction(deps, { action: 'read', name: 'goner' });
-    expect(after.ok).toBe(false);
-  });
-
-  test('delete of an un-overridden built-in is rejected', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, { action: 'delete', name: 'audit-implementation' });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('forbidden_action');
-  });
-
-  test('edit on a built-in writes a VFS override (forks the built-in)', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, {
-      action: 'edit', name: 'audit-implementation', description: 'forked',
-    });
-    expect(r.ok).toBe(true);
-    const read = await runSkillsAction(deps, { action: 'read', name: 'audit-implementation' });
-    if (read.ok) expect((read.result as ParsedSkill).description).toBe('forked');
-    // Now delete should succeed (it removes the override, restoring built-in).
-    const del = await runSkillsAction(deps, { action: 'delete', name: 'audit-implementation' });
-    expect(del.ok).toBe(true);
-    const restored = await runSkillsAction(deps, { action: 'read', name: 'audit-implementation' });
-    if (restored.ok) {
-      const s = restored.result as ParsedSkill;
-      expect(s.source).toBe('builtin');
-      expect(s.description).not.toBe('forked');
-    }
-  });
-
-  test('invalid kebab-case name is rejected on create', async () => {
-    const { deps } = makeDeps();
-    const r = await runSkillsAction(deps, {
-      action: 'create', name: 'BadName', description: 'x', body: 'y',
-    });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.code).toBe('invalid_name');
-  });
-});

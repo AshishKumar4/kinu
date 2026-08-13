@@ -8,8 +8,9 @@
  * array instead, split by nature:
  *
  * DYNAMIC CONTEXT (facts world model, MEMORY.md tail, live executor
- * availability, running background work, the open delegate roster, decisions
- * parked on the user) — the DynamicContextLedger. At EVERY model step the
+ * availability, the agent's own open task list, running background work, the
+ * open delegate roster, decisions parked on the user) — the
+ * DynamicContextLedger. At EVERY model step the
  * current state is rendered into one `<dynamic_context fingerprint="…">`
  * block; a new block is appended at the tail ONLY when that render differs
  * from the newest block's. Every block freezes at the position where it was
@@ -49,11 +50,21 @@ import type { ActiveSkillSet, ActivationReason } from '../skills/types.js';
 
 /** Detached work the agent started and has not collected yet — one row of the
  *  background-job registry (jobs/store.ts), never a second copy of it. */
-export interface DynamicTask {
+export interface DynamicJob {
   readonly id: string;
   /** The producing tool surface — `think_heads`, `execute_tools`, … */
   readonly kind: string;
   readonly label: string | null;
+}
+
+/** One item of the agent's own task list, flattened for rendering: a subtask
+ *  follows its parent and names it. One row of agent_tasks (tasks/store.ts). */
+export interface DynamicTask {
+  readonly id: string;
+  readonly title: string;
+  readonly status: string;
+  /** The task this is a subtask of, or null when it is a task itself. */
+  readonly parentId: string | null;
 }
 
 /** An agent the agent has working for it right now: a spawned subordinate
@@ -90,6 +101,11 @@ export interface DynamicContext {
    *  doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
   /** Background work still running (newest first). */
+  jobs?: readonly DynamicJob[];
+  /** The agent's own open task list, in write order, each task followed by its
+   *  open subtasks. Settled items are omitted — they are read back with
+   *  `tasks({action:'list'})`, and carrying them here would grow the block for
+   *  the life of the workspace. */
   tasks?: readonly DynamicTask[];
   /** Subordinates and forked head runs still open (most recent first). */
   delegates?: readonly DynamicDelegate[];
@@ -125,6 +141,24 @@ export function forkDelegates(
   }));
 }
 
+/** The nested task list as render rows: each task, then its subtasks. Flat
+ *  because the cap below counts ROWS, which is what actually rides the
+ *  request — and because both backends reach it through `agentDynamicContext`,
+ *  so neither can flatten it its own way. */
+function flattenTaskList(
+  tasks: ReadonlyArray<{
+    id: string; title: string; status: string;
+    subtasks: ReadonlyArray<{ id: string; title: string; status: string }>;
+  }>,
+): DynamicTask[] {
+  return tasks.flatMap((task) => [
+    { id: task.id, title: task.title, status: task.status, parentId: null },
+    ...task.subtasks.map((sub) => ({
+      id: sub.id, title: sub.title, status: sub.status, parentId: task.id,
+    })),
+  ]);
+}
+
 /** Where a backend reads each plane of its live state. Typed structurally —
  *  how a backend journals a head run or registers a job is not this layer's
  *  business, only that it can be asked. */
@@ -136,6 +170,11 @@ export interface DynamicContextSources {
   readonly memoryTail: string | undefined;
   readonly executors: readonly PromptExecutorInfo[];
   readonly runningJobs: ReadonlyArray<{ id: string; kind: string; label: string | null }>;
+  /** The open half of the agent's task list — TaskListStore.listOpen(). */
+  readonly openTasks: ReadonlyArray<{
+    id: string; title: string; status: string;
+    subtasks: ReadonlyArray<{ id: string; title: string; status: string }>;
+  }>;
   readonly liveHeadRuns: ReadonlyArray<{ rootId: string; rationale: string; running: number; total: number }>;
   readonly missingCapabilities: readonly MissingCapability[];
 }
@@ -158,7 +197,8 @@ export function agentDynamicContext(sources: DynamicContextSources): DynamicCont
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
     executors: sources.executors,
-    tasks: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
+    jobs: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
+    tasks: flattenTaskList(sources.openTasks),
     delegates: forkDelegates(sources.liveHeadRuns),
     ...(sources.missingCapabilities.length > 0
       ? { missingCapabilities: sources.missingCapabilities }
@@ -237,7 +277,12 @@ function describeActivationReason(r: ActivationReason): string {
 /** Per-list caps. The block rides every request of every step, so each roster
  *  states its head and an honest count of the tail rather than growing without
  *  bound. */
-const MAX_TASKS = 8;
+const MAX_JOBS = 8;
+/** Rows, not tasks — a task and its subtasks each cost a line. Larger than the
+ *  other rosters because this one is the agent's own plan: the rest are things
+ *  it can re-read on demand, and a plan cut off at its fourth step stops being
+ *  a plan. Anything past this is still in `tasks({action:'list'})`. */
+const MAX_TASK_ROWS = 15;
 const MAX_DELEGATES = 8;
 const MAX_APPROVALS = 5;
 const MAX_MISSING_CAPABILITIES = 8;
@@ -292,9 +337,15 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
   }
 
   sections.push(rosterSection(
+    '## Your task list — what is still open (you keep this with the `tasks` tool)',
+    ctx.tasks ?? [], MAX_TASK_ROWS,
+    (task) => `${task.parentId ? '  - ' : '- '}${task.id} [${task.status}] ${clip(task.title)}`,
+  ));
+
+  sections.push(rosterSection(
     '## Background work still running (collect it before you finish)',
-    ctx.tasks ?? [], MAX_TASKS,
-    (task) => `- ${task.id} (${task.kind})${task.label ? `: ${clip(task.label)}` : ''}`,
+    ctx.jobs ?? [], MAX_JOBS,
+    (job) => `- ${job.id} (${job.kind})${job.label ? `: ${clip(job.label)}` : ''}`,
   ));
 
   sections.push(rosterSection(

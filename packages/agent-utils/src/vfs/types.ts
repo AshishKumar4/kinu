@@ -26,14 +26,25 @@ export interface VFSStat {
 	isSymbolicLink(): boolean;
 }
 
-export interface VFS {
+/**
+ * What a store here actually reads and writes.
+ *
+ * Narrow on purpose: MemoryStore indexes markdown out of the workspace
+ * filesystem, and those three methods are all it has ever called. Asking for a
+ * whole Node-shaped fs forced every caller to build an adapter over the real
+ * filesystem just to satisfy methods nothing invoked.
+ */
+export interface ReadWriteVFS {
+	readFile(path: string, options?: { encoding?: "utf8" }): Promise<Uint8Array | string>;
+	writeFile(path: string, data: Uint8Array | string): Promise<void>;
+	readdir(path: string): Promise<string[]>;
+}
+
+export interface VFS extends ReadWriteVFS {
 	/** Self-reference for Node FS compat (isomorphic-git). */
 	promises: VFS;
 
-	readFile(path: string, options?: { encoding?: "utf8" }): Promise<Uint8Array | string>;
-	writeFile(path: string, data: Uint8Array | string): Promise<void>;
 	write(path: string, data: Uint8Array | string): Promise<void>;
-	readdir(path: string): Promise<string[]>;
 	stat(path: string): Promise<VFSStat>;
 	lstat(path: string): Promise<VFSStat>;
 	unlink(path: string): Promise<void>;

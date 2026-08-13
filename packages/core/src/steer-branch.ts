@@ -36,8 +36,20 @@ export type BranchStatusEvent =
   | { type: 'branch_status'; status: 'settled'; branchId: string; task: string; takeSetId: string; turnId: string }
   | { type: 'branch_status'; status: 'error'; branchId: string; task: string; message: string };
 
+/** The id prefix that marks a journaled run as a user redirect rather than an
+ *  agent fork. This module is its only writer, so the prefix and the predicate
+ *  that reads it stay together. */
+const BRANCH_RUN_ID_PREFIX = 'branch-';
+
 export function newBranchId(): string {
-  return `branch-${nanoid(8)}`;
+  return `${BRANCH_RUN_ID_PREFIX}${nanoid(8)}`;
+}
+
+/** Whether a head-run root id belongs to Steer-as-Branch. The fork-run read
+ *  model asks this so a mid-turn redirect never lists as a fork the agent
+ *  chose to make. */
+export function isSteerBranchRunId(rootId: string): boolean {
+  return rootId.startsWith(BRANCH_RUN_ID_PREFIX);
 }
 
 export interface BranchStartInput {
@@ -64,7 +76,7 @@ export interface SteerBranchHandle {
 
 /**
  * Spawn + run the redirect as a single head. Journaled like any head run (its
- * trace shows up on the Reasoning surface). Throws only when the runtime cannot
+ * trace shows up on the Exploration surface). Throws only when the runtime cannot
  * spawn at all.
  */
 export async function startBranchHead(

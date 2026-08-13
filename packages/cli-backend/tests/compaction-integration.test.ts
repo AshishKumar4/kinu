@@ -2,7 +2,7 @@
  * The default compaction path end-to-end over the REAL storage plane both
  * backends share: an overflowing history driven through runChat with the
  * better-compact extension wired exactly as LocalAgentSession (and the DO's
- * beforeTurn) wires it — real CompositeVFS over SqliteFS in agent.db, real
+ * beforeTurn) wires it — the real workspace filesystem in agent.db, real
  * compaction_state rows, a real DynamicContextLedger.
  *
  * Proves the four 2B guarantees:
@@ -206,7 +206,7 @@ describe('default compaction over the real storage plane', () => {
     // The reference message cites the transcript path the plan persisted.
     const snapshot = await state.plans.load(SESSION);
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
-    expect(snapshot.transcriptRelativePath.startsWith('/local/.proteus/compaction/')).toBe(true);
+    expect(snapshot.transcriptRelativePath.startsWith('.proteus/compaction/')).toBe(true);
     expect(plannedJson).toContain(snapshot.transcriptRelativePath);
 
     // Durable persistence is a real row in agent.db, not memory.

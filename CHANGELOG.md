@@ -47,6 +47,31 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Changed
 
+- **The box you type into when you create a workspace is its MISSION, and only
+  that.** It seeds SOUL.md and names the workspace, as it always did — and it is
+  no longer also replayed as the workspace's opening chat turn. Creating a
+  workspace for "My personal assistant, Jarvis" used to be answered with "this
+  is a very short, ambiguous statement", because a standing brief was being
+  handed over as a task. The new workspace now opens on an empty conversation
+  showing that brief, and waits for the first thing you actually want done. Both
+  creation surfaces say so.
+- **A workspace's URL no longer carries the prompt that created it.** The slug is
+  permanent — it is the URL and, on the cloud backend, the Durable Object name —
+  and it has to be picked before the workspace has a good name, so cutting it
+  from the raw text produced `my-personal-jarvis-830c2d` for a workspace that
+  called itself "Jarvis" a moment later, and pinned whatever you typed into a
+  link you might share. Auto-named workspaces now get a neutral memorable slug
+  (`brisk-heron-7f15`); the display name is still derived from the mission and
+  still upgraded to a generated title, and renaming is unchanged. Existing
+  workspaces keep the slugs they have.
+- Automatic titling reads the workspace's mission rather than its first chat
+  message. A workspace with no mission of its own still titles from the opening
+  request.
+- One workspace title on screen instead of three. Identity moved to the
+  full-width workspace bar — the only row present at both altitudes — which now
+  also carries the connection state, the model picker, settings and the
+  Run/Supervise switch; the chat header row is gone, and clearing the transcript
+  moved to the chat column's tab strip, beside the tabs it acts on.
 - Chat attachments on a LOCAL agent are capped at 8 MiB per message instead of
   1 MiB. The 1 MiB number was a Cloudflare fact — a chat message is one Durable
   Object SQLite row — that a shared constant had turned into a universal rule,

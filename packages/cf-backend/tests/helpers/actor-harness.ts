@@ -43,6 +43,10 @@ function makeCtx(db: Database): unknown {
   return {
     storage: {
       sql: { exec: sqlExec },
+      // Real, not a callback passthrough: the durable filesystem's atomicity
+      // rests on this, and a fake turns every atomic write into a torn one
+      // that still reports success. Nimbus refuses to boot without it.
+      transactionSync: <T>(closure: () => T): T => db.transaction(closure)(),
       get: async () => undefined,
       put: async () => {},
       setAlarm: async () => {},

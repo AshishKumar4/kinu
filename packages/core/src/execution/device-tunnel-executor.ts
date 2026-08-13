@@ -17,6 +17,11 @@
  */
 
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
+import type { VFS } from '../types/primitives.js';
+import { makeVfsError } from '../vfs/errno.js';
+import { shellQuote } from '../utils/shell.js';
+import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
+import { parseStatLine } from './exec-result.js';
 import type { ExecutorProvider, ExecutorCapability, ExecutorStatus } from './types.js';
 import type { DeviceStatus } from './device-status.js';
 import { isDeviceNotConnectedError } from './device-tunnel.js';
@@ -52,7 +57,12 @@ export interface DeviceTransport {
  * Create the laptop (`laptop.*`) executor over a device transport. The transport
  * forwards to the user's device hub; this executor just shapes the tool surface.
  */
-export function createDeviceTunnelExecutor(transport: DeviceTransport): ExecutorProvider {
+export function createDeviceTunnelExecutor(
+  transport: DeviceTransport,
+  /** Path-scope for the file view. Omitted leaves the view unscoped, which is
+   *  correct only where the caller has already scoped the transport. */
+  consent: DeviceFileConsent = ALWAYS_CONSENTED,
+): ExecutorProvider {
   const rpc = (method: string, params: unknown[], opts?: { timeoutMs?: number }): Promise<unknown> =>
     transport.rpc(method, params, opts);
 
@@ -158,6 +168,7 @@ export function createDeviceTunnelExecutor(transport: DeviceTransport): Executor
 
   const provider: ExecutorProvider = {
     name: 'laptop',
+    files: deviceFiles(transport, consent),
     kind: 'laptop',
     capabilities: new Set<ExecutorCapability>([
       'javascript', 'typescript', 'python', 'native_binary',
@@ -212,4 +223,128 @@ export function createDeviceTunnelExecutor(transport: DeviceTransport): Executor
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Consent boundary of the device file view. The view exposes the device's REAL
+ * root — a faithful window, not a lossy rewrite — but by default only the
+ * consented subtree (the device connect dir, falling back to the device home)
+ * is reachable. Anything outside it needs the stronger 'full_filesystem' tier.
+ */
+export interface DeviceFileConsent {
+  /** The consented subtree, or null to fall back to the device's home. */
+  consentedRoot(): string | null;
+  /** Whether this agent holds the full-filesystem consent tier. */
+  hasFullFilesystem(): Promise<boolean>;
+}
+
+const ALWAYS_CONSENTED: DeviceFileConsent = {
+  consentedRoot: () => '/',
+  hasFullFilesystem: async () => true,
+};
+
+/**
+ * The user's machine, in the machine's own absolute paths.
+ *
+ * The daemon speaks readFile/writeFile/listFiles/exists natively; stat, mkdir
+ * and unlink are synthesized through `exec` (GNU stat, falling back to BSD).
+ * Every call still crosses the hub's per-(agent, device) action-consent
+ * chokepoint; this view adds the path-scope layer on top.
+ */
+export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent): VFS {
+  const exec = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
+    await transport.rpc('exec', [command]) as { stdout: string; stderr: string; exitCode: number };
+
+  let cachedHome: string | null = null;
+  const effectiveRoot = async (): Promise<string> => {
+    const explicit = consent.consentedRoot();
+    if (explicit) return explicit.length > 1 ? explicit.replace(/\/+$/, '') : explicit;
+    if (cachedHome === null) {
+      const r = await exec('printf %s "$HOME"');
+      const home = r.exitCode === 0 ? r.stdout.trim() : '';
+      if (!home.startsWith('/')) {
+        throw makeVfsError('EACCES', 'cannot determine the consented device directory', '/');
+      }
+      cachedHome = home.length > 1 ? home.replace(/\/+$/, '') : home;
+    }
+    return cachedHome;
+  };
+
+  const guard = async (path: string, op: string): Promise<void> => {
+    if (await consent.hasFullFilesystem()) return;
+    const root = await effectiveRoot();
+    if (path === root || root === '/' || path.startsWith(`${root}/`)) return;
+    throw makeVfsError(
+      'EACCES',
+      `'${path}' is outside the consented device directory '${root}' — `
+      + `grant this agent the full-filesystem consent tier to reach it, ${op} '${path}'`,
+      path,
+    );
+  };
+
+  /** Bytes that survive a utf-8 decode→encode round-trip byte-exactly may ride
+   *  the text protocol; anything else must go base64 or it corrupts. */
+  const asLosslessText = (bytes: Uint8Array): string | null => {
+    try { return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes); }
+    catch { return null; }
+  };
+
+  return {
+    async readFile(path, opts) {
+      await guard(path, 'open');
+      const raw = await transport.rpc('readFile', [path, { encoding: 'base64' }]);
+      if (typeof raw === 'object' && raw !== null && (raw as { encoding?: unknown }).encoding === 'base64') {
+        const bytes = base64ToBytes(String((raw as { content?: unknown }).content ?? ''));
+        return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
+      }
+      const text = String(raw);
+      return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
+    },
+
+    async writeFile(path, data) {
+      await guard(path, 'open');
+      const text = typeof data === 'string' ? data : asLosslessText(data);
+      const result = text !== null
+        ? await transport.rpc('writeFile', [path, text])
+        : await transport.rpc('writeFile', [path, bytesToBase64(data as Uint8Array), { encoding: 'base64' }]);
+      const ok = result === 'ok'
+        || (typeof result === 'object' && result !== null && (result as { success?: unknown }).success === true);
+      if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
+    },
+
+    async readdir(path) {
+      await guard(path, 'scandir');
+      const entries = await transport.rpc('listFiles', [path]);
+      if (!Array.isArray(entries)) throw new Error(`unexpected device listFiles result: ${JSON.stringify(entries)}`);
+      return entries.map((e) =>
+        typeof e === 'object' && e !== null && typeof (e as { name?: unknown }).name === 'string'
+          ? (e as { name: string }).name
+          : String(e));
+    },
+
+    async stat(path) {
+      await guard(path, 'stat');
+      const q = shellQuote(path);
+      const r = await exec(`stat -c '%s %Y %F' ${q} 2>/dev/null || stat -f '%z %m %HT' ${q}`);
+      if (r.exitCode !== 0) return null;
+      return parseStatLine(r.stdout);
+    },
+
+    async unlink(path) {
+      await guard(path, 'unlink');
+      const r = await exec(`rm -- ${shellQuote(path)}`);
+      if (r.exitCode !== 0) throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, unlink '${path}'`, path);
+    },
+
+    async mkdir(path, opts) {
+      await guard(path, 'mkdir');
+      const r = await exec(`mkdir ${opts?.recursive ? '-p ' : ''}-- ${shellQuote(path)}`);
+      if (r.exitCode !== 0) throw makeVfsError('EIO', `${r.stderr.trim() || 'operation failed'}, mkdir '${path}'`, path);
+    },
+
+    async exists(path) {
+      await guard(path, 'stat');
+      return Boolean(await transport.rpc('exists', [path]));
+    },
+  };
 }

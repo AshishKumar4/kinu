@@ -37,7 +37,7 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
     name: 'proteus',
     version: VERSION,
     // Each ACP session is its own recorded conversation on this workspace.
-    openClient: async () => createAgentClient(target, {
+    openClient: async () => await createAgentClient(target, {
       model: opts.model,
       baseUrl: opts.baseUrl,
       auth: opts.auth,

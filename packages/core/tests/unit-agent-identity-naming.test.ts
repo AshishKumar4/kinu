@@ -1,68 +1,76 @@
 import { describe, expect, test } from 'bun:test';
 import {
   DEFAULT_SOUL_MD,
-  workspaceIdentityPrompt,
+  workspaceTitlePrompt,
   applyWorkspaceTitle,
-  createWorkspaceNameFromMission,
   fallbackWorkspaceIdentity,
-  parseWorkspaceIdentityOutput,
+  parseWorkspaceTitle,
   planWorkspaceTitle,
   renderSoulMarkdown,
   summarizeSoul,
+  workspaceSlug,
   type WorkspaceTitleState,
 } from '../src/index.ts';
 
-describe('shared workspace identity naming', () => {
+// The slug is the workspace's PERMANENT address (its URL, and the Durable
+// Object name on the cloud backend); the display name is what anyone reads and
+// can be regenerated or renamed at will. So they come from different places:
+// the slug from the id alone, the title from the mission.
+describe('the permanent slug', () => {
+  const JARVIS = 'My personal assistant, Jarvis';
+
+  test('is a memorable pair fixed by the id alone', () => {
+    expect(workspaceSlug('abcdef123456')).toBe('evergreen-birch-abcd');
+    expect(workspaceSlug('7f159a00-1234-4567-89ab-cdef01234567')).toBe('brisk-heron-7f15');
+  });
+
+  test('a mission cannot leak into it, however it is worded', () => {
+    for (const mission of [JARVIS, 'You are Jarvis, my personal assistant', 'Build a durable benchmark runner', '']) {
+      const { name } = fallbackWorkspaceIdentity(mission, 'abcdef123456');
+      expect(name).toBe(workspaceSlug('abcdef123456'));
+      expect(name).not.toContain('jarvis');
+      expect(name).not.toContain('personal');
+      expect(name).not.toContain('benchmark');
+    }
+  });
+});
+
+describe('the mission-derived title', () => {
   test('prefers a stated persona over copying the whole prompt', () => {
-    expect(createWorkspaceNameFromMission('You are Jarvis, my personal assistant', 'abcdef123456'))
-      .toBe('jarvis-abcdef');
     expect(fallbackWorkspaceIdentity('You are Jarvis, my personal assistant', 'abcdef123456')).toEqual({
-      name: 'jarvis-abcdef',
+      name: workspaceSlug('abcdef123456'),
       displayName: 'Jarvis',
       nameOrigin: 'auto',
     });
   });
 
-  test('fallback identity derives from the mission text, not a random pair', () => {
+  test('falls back to the mission text, and to a memorable pair only when there is none', () => {
     const id = '7f159a00-1234-4567-89ab-cdef01234567';
 
-    expect(fallbackWorkspaceIdentity('Build a durable benchmark runner', id)).toEqual({
-      name: 'build-a-durable-benchmar-7f159a',
-      displayName: 'Build a durable benchmark runner',
+    expect(fallbackWorkspaceIdentity('Build a durable benchmark runner', id).displayName)
+      .toBe('Build a durable benchmark runner');
+    expect(fallbackWorkspaceIdentity('', id)).toEqual({
+      name: 'brisk-heron-7f15',
+      displayName: 'Brisk Heron',
       nameOrigin: 'auto',
     });
-    expect(createWorkspaceNameFromMission('Build a durable benchmark runner', id))
-      .toBe('build-a-durable-benchmar-7f159a');
   });
 
-  test('blank missions never fall back to a generic workspace slug', () => {
-    const identity = fallbackWorkspaceIdentity('', '7f159a00-1234-4567-89ab-cdef01234567');
-
-    expect(identity.name).toBe('brisk-heron-7f15');
-    expect(identity.name.startsWith('workspace-')).toBe(false);
-  });
-
-  test('parses the model JSON title and slug through one shared parser', () => {
-    expect(parseWorkspaceIdentityOutput(
-      '```json\n{"title":"OAuth Flow Auditor","slug":"oauth-flow-auditor"}\n```',
-      '123456abcdef',
-    )).toEqual({
-      name: 'oauth-flow-auditor-123456',
-      displayName: 'OAuth Flow Auditor',
-      nameOrigin: 'auto',
-    });
+  test('parses the model JSON title through one shared parser', () => {
+    expect(parseWorkspaceTitle('```json\n{"title":"OAuth Flow Auditor"}\n```')).toBe('OAuth Flow Auditor');
   });
 
   test('invalid model naming output returns null', () => {
-    expect(parseWorkspaceIdentityOutput('hello world', '123456abcdef')).toBe(null);
+    expect(parseWorkspaceTitle('hello world')).toBe(null);
+    expect(parseWorkspaceTitle('{"title":"   "}')).toBe(null);
   });
 
-  test('naming prompt asks for JSON instead of an ad hoc string format', () => {
-    const prompt = workspaceIdentityPrompt('Build a durable benchmark runner');
+  test('the naming prompt asks for a JSON title, and no longer for a slug', () => {
+    const prompt = workspaceTitlePrompt('Build a durable benchmark runner');
 
     expect(prompt).toContain('Return a concise JSON object');
     expect(prompt).toContain('title');
-    expect(prompt).toContain('slug');
+    expect(prompt).not.toContain('slug');
     expect(prompt).toContain('Mission:');
   });
 });

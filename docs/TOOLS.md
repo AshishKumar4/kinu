@@ -2,13 +2,13 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 10 names). Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
+The agent exposes a small set of **built-in top-level tools** to the LLM (the canonical list is `BUILTIN_TOOLS` in `packages/core/src/tools/registry.ts` — 8 names). The surface is deliberately this small not to save tokens but to keep the model's *decision surface* small: every native tool is a standing choice weighed on every turn it is not the answer to, and selection accuracy degrades with choice count. Files are read and changed through the `file` tool; the same operations are also available as `workspace.*` APIs inside the `execute_tools` codemode sandbox. Crafted tools from the CraftStore are injected into the same sandbox as `codemode.*` (the default namespace exposed by `@cloudflare/codemode`'s `createCodeTool`) and, via the preamble, as `tools.<name>`.
 
 Both surfaces (Cloudflare Workers and CLI) consume the same factory
 `buildBuiltinTools` from `@proteus/core/tools`. The registry and descriptions
 live in `packages/core/src/tools/registry.ts`; neither the CF orchestrator nor
 the CLI chat loop hand-builds tools anymore. Only `execute_tools`, `run`, `file`,
-and `memory` are unconditional; every other tool is registered when — and only
+`memory` and `tasks` are unconditional; every other tool is registered when — and only
 when — the backend wires its deps. That gating is structural rather than
 flagged, and it is how a subordinate gets `report` and never gets the `staff`
 action of `agents`.
@@ -17,18 +17,39 @@ action of `agents`.
 
 | Tool | Purpose |
 |------|---------|
-| `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, and `tools.<name>` crafted-tool APIs |
+| `execute_tools` | Codemode sandbox — LLM writes JS with `workspace.*`, `codemode.*`, `agents.*`, `memory.*`, `tasks.*`, `report.*`, `release.*`, and `tools.<name>` crafted-tool APIs |
 | `run` | One shell command in one explicitly selected runtime |
 | `file` | The one file plane — `read` a file, `edit` exact text inside it, `write` it whole — over the same CompositeVFS every other surface addresses |
-| `skills` | List/read/invoke/create/edit/delete `SKILL.md` workflow instructions |
 | `agents` | The whole delegation surface — `fork \| staff \| ask \| send \| reply \| list \| dismiss` |
 | `memory` | The one durable-state tool — `save \| search` prose memory, `remember \| recall \| forget` typed keyed facts, `sessions` to recall past session transcripts |
-| `experience` | Share and reuse proven crafts, lessons and facts across the owner's workspaces — `publish \| search \| import` |
+| `tasks` | The agent's own task list — `add` titles (with a `parent` for subtasks), `update` one item's status, `list` it back. One row per item in `agent_tasks`; the open half renders into the live context block every step, and into the Tasks tab |
 | `web` | Live web access — `search` returns ranked results (title, url, snippet, date), `fetch` returns one URL as clean, citation-ready markdown. Key-less via DuckDuckGo + the Cloudflare markdown service; a stored `tavily` credential upgrades search |
 | `report` | A subordinate's progress spine back to its orchestrator — `progress \| completed \| blocked` |
-| `release` | Governed release pipeline over a bound source repo — patch, check, preview, owner approval, deploy, rollback |
 
-Not every self-change is a tool. Two of them live on the codemode `workspace.*`
+Two capabilities that used to be top-level tools are gone from this list on
+purpose, with their machinery intact and reachable from `execute_tools`
+instead — neither earned a standing choice on every turn:
+
+- **Skills** (`SKILL.md` workflow instructions) were never really a separate
+  instrument: they are ordinary files under `/workspace/skills/`, on the same
+  `CompositeVFS` `file`/`workspace.*` already address. `read`/`create`/`edit`/
+  `delete` are `workspace.readFile`/`writeFile`/`readdir`/`exec('rm …')` calls
+  — a dedicated tool would have been a third path to the same bytes.
+  Discovery no longer needs a tool call either: every available skill's
+  name + description renders as an ambient index in the system prompt
+  (`renderSkillsIndexSection`), and activation (explicit `/name`,
+  `always_active` config, or an `auto_activate` keyword match) is resolved
+  once at turn start, before any tool call — a mid-turn "invoke" action never
+  restricted anything, because the turn's system prompt and tool surface are
+  already fixed by the time a tool call could run.
+- **`release`** (the governed release/deploy pipeline) is a `release.*`
+  codemode namespace (`tools/release-codemode.ts`) — occasional and
+  high-blast-radius enough that it should not cost a standing choice on every
+  turn it is not the answer to. Same dispatcher (`runReleaseAction`,
+  `tools/release-tool.ts`), same engine-presence gating, same ledger; only the
+  caller changed.
+
+Not every self-change is a tool. Some live on the codemode `workspace.*`
 surface inside `execute_tools`, because they are artifacts the agent writes for
 itself rather than instruments it reaches for:
 
@@ -36,6 +57,7 @@ itself rather than instruments it reaches for:
 | --- | --- |
 | `workspace.createTool(name, description, code)` | a reusable crafted tool, callable the same turn |
 | `workspace.createView(name, spec)` | a dashboard tab in the web UI, drawn by the host from declarative JSON |
+| `workspace.editFile(path, edits)` | an exact-match edit — the SAME gate and, where the backend shares a turn ledger, the SAME read-before-write state as the native `file` tool's `edit` action |
 
 ## file — the file plane
 
@@ -46,11 +68,12 @@ rather than from a comparison it has to make. The action names mirror the
 codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
 across the tool surface and the sandbox.
 
-Everything goes through `rt.storage.vfs` — which **is** the `CompositeVFS` — so
-one implementation reaches `/local`, `/workspace`, `/sandbox`, `/nimbus` and
-`/pc` on both backends. There is deliberately no second filesystem path and no
-per-runtime variant: a mount that is reserved or offline answers with its own
-`ENXIO` reason.
+Everything goes through `rt.storage.vfs` — the workspace filesystem, Nimbus
+over the host's SQLite — so one implementation serves both backends. There is
+deliberately no second filesystem path and no per-runtime variant. It addresses
+the workspace and only the workspace: every other environment is an executor
+with its own filesystem in its own native paths, reached through its namespace
+(`sandbox.*`, `nimbus.*`, `laptop.*`) rather than through a mount of this one.
 
 ### Why it exists
 
@@ -143,7 +166,9 @@ and `list` address agents by name, and the name decides the transport:
   does not wait, `reply` answers an agent message event by its `event_id`, and
   `staff` with `scope: workspace` creates or reuses a whole specialist
   workspace.
-- **`report`** is a separate tool, registered only on subordinates. It is how a
+- **`report`** is a separate tool, registered only on subordinates (also
+  reachable as `report.*` in `execute_tools` — same `ReportToolDeps.report`
+  either way). It is how a
   subordinate's findings reach the orchestrator between turns; the answer of an
   assigned turn is relayed automatically at turn end, so `report` is for
   milestones, not per-step noise.
@@ -181,6 +206,7 @@ The primary tool. The LLM writes JavaScript code that runs in an isolated Worker
 |-----|-----------|-------------|
 | `workspace.readFile` | `(path: string) → string` | Read file contents from SqliteFS |
 | `workspace.writeFile` | `(path: string, content: string) → "ok"` | Write file to SqliteFS (auto-creates parents) |
+| `workspace.editFile` | `(path: string, edits: [{old_text, new_text}]) → {ok, applied} \| {error}` | Exact-match edit — the SAME dispatcher (`createFileDispatcher`) and gate the native `file` tool's `edit` action uses |
 | `workspace.readdir` | `(path: string) → string[]` | List directory entries |
 | `workspace.exists` | `(path: string) → boolean` | Check if a path exists |
 | `workspace.exec` | `(command: string) → string` | Run POSIX shell command (cat, grep, find, sed, ls, etc.) |
@@ -189,7 +215,25 @@ The primary tool. The LLM writes JavaScript code that runs in an isolated Worker
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
 | `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create/update a crafted tool in CraftStore; callable on the next `execute_tools` call in the same turn |
 
-These come from `InlineExecutor` in `packages/core/src/execution/inline.ts`, registered as the `workspace` provider in the `ExecutionRouter`.
+These come from `InlineExecutor` in `packages/core/src/execution/inline.ts`, registered as the `workspace` provider in the `ExecutionRouter`. `readFile`/`writeFile` observe into the SAME `TurnFileLedger` `editFile` gates against (a read/write on either surface is known to the other) — on CF, shared with the native `file` tool's own turn ledger via a live thunk; on the CLI backend, workspace.* currently uses its own private ledger (shared among `workspace.*` calls, not yet with the native tool's).
+
+`/workspace/skills/*.md` is an ordinary path on this same VFS — `workspace.readFile`/`writeFile`/`readdir`/`exec('rm …')` are how skill CRUD happens now that there is no `skills` tool.
+
+### memory.* / tasks.* / report.* / release.* APIs (codemode projections)
+
+Every remaining native tool is also reachable from `execute_tools`, projecting
+onto the SAME dispatcher the native tool calls — one implementation, two
+callers, the same pattern `agents.*`/`web.*` established:
+
+| Namespace | Members | Shared with |
+|---|---|---|
+| `memory.*` | `save`, `search`, `sessions`, and (when a FactsStore is wired) `remember`/`recall`/`forget` | `createMemoryDispatcher` (`tools/memory-tool.ts`) |
+| `tasks.*` | `add`, `update`, `list` | `createTasksDispatcher` over the same `TaskListStore` instance (`tools/tasks-tool.ts`) |
+| `report.*` | `send(status, content)` | the native `report` tool's `ReportToolDeps.report` |
+| `release.*` | `board`/`bindSource`/`create`/`update`/`transition`/`requestApproval`, plus `apply`/`runChecks`/`preview`/`deploy`/`rollback` (engine backends) or `recordCheck`/`recordDeployment` (ledger-only backends) | `runReleaseAction` (`tools/release-tool.ts`) — release has no native tool at all; this is its only reach |
+
+`memory.*`/`tasks.*` are unconditional (every ActorAgent); `report.*` is
+subordinate-only.
 
 ### codemode.* APIs (dynamically learned)
 
@@ -309,20 +353,25 @@ without saying how to continue it — with faults that model each being lost.
 
 ## run — Shell Command
 
-Direct POSIX shell execution over the agent's virtual filesystem (SqliteFS).
+Direct POSIX shell execution over the workspace **file plane** — Nimbus's own
+shell over the same bytes the `file` tool and `workspace.*` address, so a path
+means the same thing on every surface. Pipelines, redirects, chaining,
+variables, loops, a persistent working directory, and ~95 coreutils.
 
-**Supported commands** (16): `cat`, `head`, `tail`, `ls`, `tree`, `find`, `grep`, `echo`, `mkdir`, `touch`, `rm`, `cp`, `mv`, `sed`, `stat`, `wc`
+What it does NOT have is native binaries: node, python, git, package managers
+and builds have no executable to run here and belong in an executor that
+supplies one.
 
-**Features**: Pipelines (`|`), redirects (`>`, `>>`), chaining (`&&`, `||`, `;`)
-
-**Runtime routing**: the `runtime` parameter takes `workspace` (the default,
-the in-VFS virtual shell), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
-via the pc-agent daemon and a consent prompt on first use). Anything other than
-`workspace` dispatches through the `ExecutionRouter`. There is no fallback
-chain: asking for a runtime that isn't provisioned returns a structured
-`runtime_not_provisioned` error the UI turns into an install card, rather than
-silently routing elsewhere and letting the model believe it has more access than
-it does.
+**Runtime routing**: the `runtime` parameter takes `workspace` (the default —
+the workspace shell above on the hosted backend, the real machine shell at the
+process cwd on cli-local), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
+via the pc-agent daemon and a consent prompt on first use). Each of those is a
+DIFFERENT machine with its own filesystem — `nimbus` is a separate Nimbus
+session, not the shell above — and anything other than `workspace` dispatches
+through the `ExecutionRouter`. There is no fallback chain: asking for a runtime
+that isn't provisioned returns a structured `runtime_not_provisioned` error the
+UI turns into an install card, rather than silently routing elsewhere and
+letting the model believe it has more access than it does.
 
 **Approval gate**: every command is pre-flighted through
 `core/src/safety/approval-gate.ts` before it runs, on every runtime. A `deny`
@@ -348,7 +397,13 @@ search algorithm.
 The owner's workspaces each earn their own crafted tools, lessons and facts, and
 `experience` is the one path between them: `publish` offers what THIS workspace
 proved, `search` retrieves what the owner's others proved, `import` stages one
-entry here. The library itself is owner-level state in the UserDO
+entry here. This is **not** agent-facing: sharing proven work across
+workspaces is a rare, deliberate, owner-shaped decision, not something an
+agent should weigh on every turn, so it is the owner-facing
+`experienceAction` RPC (`cf-backend/orchestrator.ts`) — no `experience` tool
+and no `experience.*` codemode namespace — driven by the web UI, over the same
+`runExperienceAction` dispatcher (`core/src/experience/actions.ts`). The
+library itself is owner-level state in the UserDO
 (`core/src/experience/library.ts`), reached through the capability gate — the
 two `experience.*` capabilities are `full`-tier, so a shared workspace keeps
 everything inside itself and reaches neither.
@@ -386,12 +441,50 @@ Crafted tools are discovered, scored, and retired automatically:
 
 ## Why so few tools
 
-The tool roster is deliberately small: file work is one tool with three
-actions rather than three tools, the rest of filesystem work folds into the
-`execute_tools` codemode sandbox rather than living as a dozen flat
-per-operation tools, and delegation folds into `agents` rather than one tool per
-delegation shape. The whole schema surface the model sees is the 10 names plus
-their docstrings — 9,777 characters of description text
-(`BUILTIN_TOOL_DESCRIPTIONS`), ~2.4k tokens at the chars/4 estimate — and that
-stays flat as the CraftStore grows, because crafted tools live inside the
+The tool roster is deliberately small — and the reason is the **decision
+surface**, not token cost. Every native tool is a standing choice the model
+weighs on every turn it is not the answer to, and selection accuracy degrades
+with choice count; that is the whole argument, independent of what anything
+costs to render. File work is one tool with three actions rather than three
+tools, the rest of filesystem work folds into the `execute_tools` codemode
+sandbox rather than living as a dozen flat per-operation tools, and delegation
+folds into `agents` rather than one tool per delegation shape. Two former
+top-level tools (`skills`, `release`) moved entirely to codemode reach for the
+same reason: neither is frequent or important enough to occupy a standing
+choice. The redundancy test applied to each candidate: *if this tool did not
+exist, could the agent still accomplish the thing via `run` or
+`execute_tools`?* — and for these two, yes, with the machinery either already
+reachable (`skills`, over `workspace.*`) or moved intact behind a namespace
+(`release.*`). `run`, `execute_tools`, `file`, `agents`, `memory`, `tasks`,
+`web`, and `report` stayed native because the owner judged them frequent and
+important enough to earn native availability even where a shell or a script
+could technically substitute — several of them (`agents` most of all)
+genuinely cannot be done any other way (spawning is not something a shell can
+do), and `file`'s exact-match edit is enforcement no shell command performs.
+
+The schema surface the model sees natively is the 8 names plus their
+docstrings — 9,034 characters of description text (`BUILTIN_TOOL_DESCRIPTIONS`),
+~2.26k tokens at the chars/4 estimate, down from 10,201 chars / ~2.55k tokens
+across the 10 names this replaced. That is a **side effect** of shrinking the
+surface, not the goal: the codemode namespaces that replaced `release`
+(`release.*`, 13 members with per-member JSDoc) render into `execute_tools`'s
+own description at ~2,000 chars / ~500 tokens — MORE than the 704-char flat
+schema it replaced, because per-member TypeScript JSDoc is a more verbose
+format than one action-enum plus prose. The `memory.*`/`tasks.*`/`report.*`
+projections (all of which kept their native tool too — these are pure
+additions, reachable a second way) cost roughly 1,118 / 565 / 382 chars
+respectively. None of this is hidden from the measurement; it is the honest
+price of "reachable from code" over "one schema," paid because the owner
+values the smaller decision surface over the byte count.
+
+That stays flat as the CraftStore grows, because crafted tools live inside the
 sandbox namespace instead of the top-level schema.
+
+`tasks` is the one place that argument was re-opened and answered the other way.
+It could have been three more actions on `memory`, and it is not, because
+`memory` answers "what will I want to look up later" — its own docstring rules
+out temporary task progress — while a task list answers "what is still in front
+of me": live plan state, re-read every step out of the dynamic-context block and
+closed out as the work lands. Folding it in would have made `memory`'s summary
+untrue and put four more properties on the schema the model reads for every
+durable-state decision.

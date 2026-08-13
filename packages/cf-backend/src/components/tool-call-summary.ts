@@ -7,6 +7,7 @@
  * detail the arguments do not carry: when they say nothing the summary is
  * empty and the card falls back to the tool name alone.
  */
+import { isFailingToolResult } from "@proteus/core";
 
 /** Chip budget — long enough for a command or a short task, short enough to
  *  stay on one line next to the name, runtime badge and duration. */
@@ -14,6 +15,30 @@ const MAX = 72;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Whether a tool call is a failure, as the agent itself would read it — not
+ * just as the transport does.
+ *
+ * The `run` tool (and every built-in) catches its own failure and RETURNS it
+ * as an ordinary, successful result — `Error (exit 1)…` or `{"error": "…"}`
+ * (execution/exec-result.ts, tools/builtins.ts) — because that text is what
+ * steers the model's next step. A card that only checks the transport state
+ * renders that exact case as a plain success: the curl that came back
+ * `HTTP 500` looks identical to the one that came back `HTTP 200`. This reuses
+ * the SAME predicate core's turn-steering already keys the agent's own
+ * self-correction hints on, so the UI and the agent see failure the same way.
+ */
+export function isToolCallFailed(toolName: string, input: unknown, output: unknown, protocolFailed: boolean): boolean {
+  if (protocolFailed) return true;
+  if (output == null) return false;
+  const result = typeof output === "string" ? output : jsonOrString(output);
+  return isFailingToolResult({ toolName, args: isRecord(input) ? input : {}, result, success: true });
+}
+
+function jsonOrString(value: unknown): string {
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 function str(input: Record<string, unknown>, key: string): string {
@@ -147,6 +172,21 @@ function summarizePeers(input: Record<string, unknown>): string {
   }
 }
 
+/** The task list — an add reads by what it wrote, an update by which item it
+ *  moved and where to. */
+function summarizeTasks(input: Record<string, unknown>): string {
+  const action = str(input, "action");
+  if (action === "add") {
+    const titles = Array.isArray(input.titles) ? input.titles.filter((t) => typeof t === "string") : [];
+    const parent = str(input, "parent");
+    const head = titles.length > 1 ? `add ${titles.length} tasks` : "add";
+    const target = parent ? `${head} under ${parent}` : head;
+    return titles.length === 1 ? actionOn(target, undefined, titles[0] as string) : target;
+  }
+  if (action === "update") return actionOn(action, str(input, "id"), str(input, "status"));
+  return action;
+}
+
 function summarizeRelease(input: Record<string, unknown>): string {
   const action = str(input, "action");
   const changeId = str(input, "changeId").slice(0, 8);
@@ -192,15 +232,17 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
   file: summarizeFile,
-  skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   agents: summarizeAgents,
   memory: summarizeMemory,
+  tasks: summarizeTasks,
   web: summarizeWeb,
   // think/team/peers were unified into `agents`, fact into `memory`,
-  // web_search/web_fetch into `web`, `experience` became an owner-driven
-  // RPC rather than a tool, and `product_change` was renamed `release`;
-  // their summarizers remain so tool calls in STORED transcripts keep
-  // rendering under the name they were recorded with.
+  // web_search/web_fetch into `web`, `experience` became an owner-driven RPC
+  // rather than a tool, `product_change` was renamed `release`, and `skills`
+  // (list/invoke, both dead weight — invoke never restricted the turn that
+  // called it) and `release` itself left the model's tool surface for
+  // codemode/workspace.* reach; their summarizers remain so tool calls in
+  // STORED transcripts keep rendering under the name they were recorded with.
   think: summarizeThink,
   team: summarizeTeam,
   peers: summarizePeers,
@@ -210,6 +252,7 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   web_search: (input) => quoted(str(input, "query")),
   web_fetch: (input) => clip(str(input, "url")),
   report: (input) => actionOn(str(input, "status"), undefined, str(input, "content")),
+  skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   release: summarizeRelease,
   product_change: summarizeRelease,
 };
@@ -275,6 +318,10 @@ const FILE_VERBS: Record<string, string> = {
   delete: "Deleted", list: "Listed", search: "Searched", move: "Moved", copy: "Copied",
 };
 
+const TASK_VERBS: Record<string, string> = {
+  add: "Planned the work", update: "Updated the task list", list: "Read the task list",
+};
+
 const MEMORY_VERBS: Record<string, string> = {
   save: "Saved to memory", search: "Searched memory", get: "Recalled",
   set: "Recorded a fact", delete: "Forgot", list: "Listed memory",
@@ -318,6 +365,7 @@ const DESCRIBERS: Record<string, (input: Record<string, unknown>) => string> = {
   },
   agents: describeAgents,
   memory: (input) => MEMORY_VERBS[str(input, "action")] ?? "",
+  tasks: (input) => TASK_VERBS[str(input, "action")] ?? "",
   web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",

@@ -2,10 +2,11 @@
  * Create-workspace dialog — opened by the sidebar "New workspace" button. Shares the
  * creation pipeline (useCreateWorkspace) with the home-screen mission composer.
  *
- * One prompt box: the mission. It seeds SOUL.md server-side and becomes
- * the opening message. The display title is derived automatically — a
- * deterministic provisional from the mission, replaced by an AI-generated title
- * on the first turn — so there is no name field to fill in.
+ * One box: the mission — what the workspace is FOR. It seeds SOUL.md
+ * server-side and titles the workspace; it is not a chat turn. The display
+ * title is derived automatically — a deterministic provisional from the
+ * mission, replaced by a generated title moments later — so there is no name
+ * field to fill in.
  */
 import { useCallback, useState } from "react";
 import { Button, Loader } from "@cloudflare/kumo";
@@ -50,19 +51,19 @@ export function CreateWorkspaceModal({ onClose }: CreateWorkspaceModalProps) {
       )}
 
       <div className="space-y-1">
-        <label htmlFor="workspace-mission" className="text-xs font-medium p-text-2 block">Mission</label>
+        <label htmlFor="workspace-mission" className="text-xs font-medium p-text-2 block">Mission — what this workspace is for</label>
         <textarea
           id="workspace-mission"
           value={mission}
           onChange={(e) => setMission(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
-          placeholder="Ask the workspace's agent to investigate, build, automate, audit, or improve something."
+          placeholder={'A standing brief, not a task. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."'}
           rows={7}
           autoFocus
           disabled={busy}
           className="w-full min-h-40 resize-y rounded-lg border p-border p-bg px-3 py-2.5 text-sm leading-relaxed p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)] disabled:opacity-60"
         />
-        <p className="text-[11px] p-text-3">This seeds SOUL.md and is sent as the first message.</p>
+        <p className="text-[11px] p-text-3">This becomes the workspace's SOUL.md and its name. Nothing runs until you send the first message.</p>
       </div>
 
       {err && (

@@ -1,13 +1,13 @@
 /**
  * Inline primitive implementations over a raw bun:sqlite-style database,
- * shared by createAgent and openAgent. The production backends replace
+ * shared by createWorkspace and openWorkspace. The production backends replace
  * Memory/Executor/Schedule with richer adapters (FTS5 MemoryStore, sandboxed
- * executors), but the VFS here is the same canonical SqliteFS the backends
- * use, so the on-disk vfs_files encoding never diverges.
+ * executors); the filesystem is already the production one, so nothing about
+ * how bytes are stored differs between this path and a deployed agent.
  */
 
-import { SqliteFS } from '@proteus/agent-utils/vfs';
-import type { VFSError } from '@proteus/agent-utils/vfs';
+import { createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration } from '../vfs/nimbus-workspace.js';
+import type { WorkspaceBundle } from '../vfs/nimbus-workspace.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import type {
   Executor, FiberCtx, Memory, RawSqlExec, Schedule, SqlExecutor, VFS,
@@ -30,7 +30,7 @@ export function wrapDatabase(db: AgentDatabase): { sql: SqlExecutor; execRaw: Ra
     ...values: unknown[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // SqliteFS encodes BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
+    // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
     // native type); bun:sqlite only binds TypedArrays — coerce.
     const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
@@ -44,27 +44,32 @@ export function wrapDatabase(db: AgentDatabase): { sql: SqlExecutor; execRaw: Ra
   return { sql, execRaw };
 }
 
-/** Canonical SqliteFS adapted to core's (simpler) VFS interface. */
-export function createInlineVFS(sql: SqlExecutor): VFS {
-  const fs = new SqliteFS(sql);
-  fs.init();
-  return {
-    readFile: (path, opts) => fs.readFile(path, opts?.encoding === 'utf8' ? { encoding: 'utf8' } : undefined),
-    writeFile: (path, data) => fs.writeFile(path, data),
-    readdir: (path) => fs.readdir(path),
-    async stat(path) {
-      try {
-        const s = await fs.stat(path);
-        return { size: s.size, mtimeMs: s.mtimeMs, isDir: s.isDirectory() };
-      } catch (err) {
-        if ((err as VFSError).code === 'ENOENT') return null;
-        throw err;
-      }
+/**
+ * The workspace filesystem over a bun:sqlite-style database — Nimbus, the same
+ * component a deployed agent runs, so this path and a Durable Object store
+ * bytes identically and run the same shell over them.
+ */
+export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
+  const sql = {
+    exec(query: string, ...bindings: unknown[]) {
+      const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
+      const stmt = db.prepare(query);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound) as never[];
+      stmt.run(...bound);
+      return [] as never[];
     },
-    unlink: (path) => fs.unlink(path),
-    mkdir: (path, opts) => fs.mkdir(path, { recursive: opts?.recursive ?? true }),
-    exists: (path) => fs.exists(path),
   };
+  const tx = (db as { transaction?: (fn: () => unknown) => () => unknown }).transaction;
+  return createWorkspaceFilesystem({
+    sql,
+    transactions: {
+      storage: {
+        transactionSync: <T,>(cb: () => T): T =>
+          typeof tx === 'function' ? (tx.call(db, cb) as () => T)() : cb(),
+      },
+    },
+    generation: nextWorkspaceGeneration(sql),
+  });
 }
 
 /** LIKE-based memory over a simplified memory_chunks table. The production

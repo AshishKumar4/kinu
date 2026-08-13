@@ -71,7 +71,6 @@ export interface ChatAppOpts {
   client: AgentClient;
   /** Seed the message list from client.history() before accepting input. */
   hydrateHistory?: boolean;
-  initialPrompt?: string;
   onExit?: () => void;
   /** A cloud walk-back fork swaps in a sibling client; the host needs the
    *  current one so exit cleanup closes the right connection. */
@@ -82,7 +81,7 @@ const STATUS_VIEW = 'STATUS_VIEW';
 
 let globalExit: (() => void) | null = null;
 
-export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, onExit, onClientChange }: ChatAppOpts) {
+export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClientChange }: ChatAppOpts) {
   const { width, height } = useTerminalDimensions();
   // The client can be swapped mid-session: a cloud walk-back fork returns a
   // sibling client pointed at the forked agent.
@@ -113,7 +112,6 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   // reassert focus imperatively — a click moves OpenTUI's native focus without
   // re-rendering React, so the declarative prop alone never wins it back.
   const inputShouldFocusRef = useRef(false);
-  const initialPromptSentRef = useRef(false);
   const machineRef = useRef(initialInputState);
   /** A fork swap re-points the message list itself — skip the next hydration. */
   const skipHydrationRef = useRef(false);
@@ -670,14 +668,6 @@ export function ChatApp({ client: initialClient, hydrateHistory, initialPrompt, 
   }, []);
 
   const overlayOpen = Boolean(modelPicker || sessionPicker || changelogView || takesView || inputState.walkbackOpen);
-
-  useEffect(() => {
-    if (!ready || initialPromptSentRef.current) return;
-    const prompt = initialPrompt?.trim();
-    if (!prompt) return;
-    initialPromptSentRef.current = true;
-    void handleSubmit(prompt);
-  }, [handleSubmit, initialPrompt, ready]);
 
   // Auto-copy selected text to clipboard (OSC 52) on mouse release.
   const rendererInstance = useRenderer();

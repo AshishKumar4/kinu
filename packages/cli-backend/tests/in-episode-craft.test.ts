@@ -5,7 +5,7 @@
 // no turn boundary crossed, the agent builds itself a tool, calls it, the call
 // is scored by whether it actually ran, and a tool that keeps failing stops
 // being callable before the same turn is over. Real createCLIRuntime (real
-// SqliteFS, real CraftStore, real execute_tools sandbox), fake streaming model.
+// filesystem, real CraftStore, real execute_tools sandbox), fake streaming model.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';

@@ -2,8 +2,10 @@
  * The canonical built-in tool factory. Both CF and CLI surfaces call this —
  * the single source of truth for the LLM's capability surface.
  *
- * The agent's tool surface is deliberately SMALL (fewer tools → better LLM
- * selection). Tools emitted (in registration order):
+ * The agent's tool surface is deliberately SMALL: not for token cost, but
+ * because every native tool is a standing choice the model weighs on EVERY
+ * turn it is not the answer to, and selection accuracy degrades with choice
+ * count. Tools emitted (in registration order):
  *   1. execute_tools  — requires a createExecuteTool factory (CF: codemode;
  *                       CLI: Node in-process sandbox from cli-backend).
  *                       Absent → returns a 'NOT CONFIGURED' error. Core
@@ -12,31 +14,39 @@
  *                       chooses workspace / nimbus / sandbox / laptop, with
  *                       workspace (rt.shell) as the conservative default.
  *   3. file           — the ONE file plane: read / edit / write over the same
- *                       CompositeVFS every other surface addresses. The edit is
+ *                       workspace filesystem every other surface addresses. The edit is
  *                       exact-match, atomic and unique-or-refused; the read is
  *                       capped and names the offset that continues it.
  *                       Unconditional — every runtime has rt.storage.vfs.
- *   4. skills         — Claude-Code / Hermes SKILL.md store; one tool, six
- *                       actions. Gated on deps.skills.
- *   5. agents         — the ONE delegation tool: ephemeral forks (heads /
+ *   4. agents         — the ONE delegation tool: ephemeral forks (heads /
  *                       mcts settle), persistent subordinates, and peer
  *                       workspace messaging behind a single action surface.
  *                       Gated on deps.agents; each ACTION is further gated on
  *                       the deps group that powers it (fork / team / peers),
  *                       so a CLI session gets fork only and a subordinate
  *                       actor never sees staff. See tools/agents-tool.ts.
- *   6. memory         — the ONE durable-state tool: prose notes (save / search,
+ *   5. memory         — the ONE durable-state tool: prose notes (save / search,
  *                       auto-hybrid FTS5 + Vectorize when a VectorStore is
  *                       wired), the typed keyed world model (remember / recall
  *                       / forget, gated on deps.facts) and past session
  *                       transcripts (sessions).
+ *   6. tasks          — the agent's own task list: add / update / list over
+ *                       one workspace table. Unconditional; every runtime has
+ *                       rt.storage.sql.
  *   7. web            — live web access: search / fetch. Gated on
  *                       deps.webSearch.
  *   8. report         — the subordinate's progress spine back to its parent
  *                       workspace orchestrator. Gated on deps.report
  *                       (subordinate-only).
- *   9. release — governed product/UI self-customization lane.
- *                       Gated on deps.releases.
+ *
+ * `skills` (list/read/create/edit/delete SKILL.md files) and `release`
+ * (the governed product/UI self-customization lane) are NOT native tools:
+ * skills are ordinary files under /workspace/skills/, already reachable via
+ * `workspace.readFile`/`writeFile`/`readdir` in execute_tools — a dedicated
+ * tool would have been a third path to the same bytes. `release`'s machinery
+ * (ledger + engine) is untouched and reachable as the `release.*` codemode
+ * namespace (tools/release-codemode.ts) — occasional and high-blast-radius
+ * enough that it does not earn a standing top-level choice.
  *
  * Platform specifics (codemode loader, craftedToolExecute, the prebuilt
  * execute_tools, the agents fork substrate) are injected through
@@ -48,8 +58,10 @@ import type { ToolSet } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
-  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, type MemoryToolAction,
+  MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, TASKS_TOOL_ACTIONS,
+  type MemoryToolAction, type TasksToolAction,
 } from './registry.js';
+import { TaskListStore, TASK_STATUSES } from '../tasks/store.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
 import { createFileToolSteer } from './run-file-steer.js';
 import { createFileTool } from './file-tool.js';
@@ -60,26 +72,11 @@ import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executo
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { appendMemoryNote } from '../memory/note.js';
-import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
-import { SessionSearchStore } from '../memory/session-search.js';
-import {
-  reviewCommand, formatApproval, approvalGrants,
-  type ShellApprovalRequest, type ShellApprovalOutcome,
-} from '../safety/approval-gate.js';
 import { formatExecResult } from '../execution/exec-result.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
-import { runSkillsAction, type SkillsToolDeps, type SkillsAction } from '../skills/index.js';
+import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
+import { createTasksDispatcher, type TasksToolInput } from './tasks-tool.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
-import {
-  isEngineOwnedTransitionTarget,
-  type ReleaseApproval,
-  type ReleaseCheck,
-  type ReleaseEngine,
-  type ReleaseStatus,
-  type ReleaseDeployment,
-  type ReleaseSource,
-} from '../release/index.js';
 
 /** The crafted tools a sandbox may call, keyed by name. */
 export type CraftedToolSet =
@@ -147,23 +144,6 @@ export interface BuiltinToolDeps {
    * when the underlying binding is unavailable.
    */
   vectorStore?: import('../memory/vector-store.js').VectorStore;
-  /**
-   * How to handle 'gate' decisions from the approval-gate review.
-   *   'strict'    — ask `requestShellApproval`; reject when no channel is wired (default)
-   *   'allow_all' — treat gate as warn (logged but executed). Use for trusted
-   *                 dev environments only. Set per-agent via the
-   *                 setShellApprovalMode RPC.
-   *   'deny_all'  — reject everything that isn't 'allow' (max safety)
-   */
-  shellApprovalMode?: 'strict' | 'allow_all' | 'deny_all';
-  /**
-   * The interactive approval channel consulted for a 'gate' decision under
-   * 'strict'. Resolves 'allow'/'deny' when a surface can ask the user, or null
-   * when none is connected — the caller then gets the same message it has
-   * always got. Surfaces that own a user (ACP's session/request_permission)
-   * install one; headless runs leave it unset.
-   */
-  requestShellApproval?: (req: ShellApprovalRequest) => Promise<ShellApprovalOutcome | null>;
   /** agent_facts world model. When provided, the `memory` tool also exposes
    *  the keyed-fact actions (remember / recall / forget). */
   facts?: import('../memory/facts.js').FactsStore;
@@ -182,14 +162,6 @@ export interface BuiltinToolDeps {
    *  model + host-injected infra) and/or subordinate + peer transports. The
    *  tool is registered when ANY group is wired; actions gate per group. */
   agents?: AgentsToolDeps;
-  /** Skills store wiring. When provided, exposes the single `skills` tool
-   *  (list/read/invoke/create/edit/delete actions). The orchestrator owns the
-   *  per-turn invocation state and passes it back via `recordInvoke` /
-   *  `currentlyInvoked`. */
-  skills?: SkillsToolDeps;
-  /** Product self-customization lane. Backend-supplied because persistence,
-   *  source bindings, approval identity, and deployments are platform-owned. */
-  releases?: ReleaseToolDeps;
   /** Subordinate → parent progress reporting (the `report` tool). Wired only
    *  on subordinate actors. */
   report?: ReportToolDeps;
@@ -234,41 +206,8 @@ export interface ReportToolDeps {
   }): Promise<unknown>;
 }
 
-export interface ReleaseToolDeps {
-  board(): Promise<unknown>;
-  bindSource(input: {
-    kind: 'local' | 'github';
-    label: string;
-    repoUrl?: string | null;
-    defaultBranch?: string | null;
-    localDeviceId?: string | null;
-    localRoot?: string | null;
-    deployTarget?: string | null;
-  }): Promise<ReleaseSource>;
-  create(input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<unknown>;
-  update(changeId: string, patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null }): Promise<unknown>;
-  transition(changeId: string, status: ReleaseStatus): Promise<unknown>;
-  recordCheck(changeId: string, input: {
-    name: string;
-    status: ReleaseCheck['status'];
-    stdout?: string | null;
-    stderr?: string | null;
-    durationMs?: number | null;
-  }): Promise<ReleaseCheck>;
-  requestApproval(changeId: string, approvalType: ReleaseApproval['approvalType']): Promise<ReleaseApproval>;
-  recordDeployment(changeId: string, input: {
-    environment: ReleaseDeployment['environment'];
-    workerVersionId?: string | null;
-    deploymentId?: string | null;
-    rollbackTarget?: string | null;
-  }): Promise<ReleaseDeployment>;
-  /** Execution engine beneath the ledger (apply/run_checks/preview/deploy/
-   *  rollback grounded in real sandbox execution). When wired, the tool
-   *  refuses manual transitions into engine-owned states and refuses
-   *  record_deployment — those results are EARNED via the engine actions.
-   *  Absent on backends without an execution substrate. */
-  engine?: Pick<ReleaseEngine, 'apply' | 'runChecks' | 'preview' | 'deploy' | 'rollback'>;
-}
+// ReleaseToolDeps lives in tools/release-tool.ts now — the release lane's
+// only caller is the release.* codemode namespace, not this file.
 
 /**
  * Build the crafted-tool map using a platform-correct executor factory.
@@ -359,22 +298,6 @@ function memoizeCraftedExecute(factory: CraftedToolExecute): CraftedToolExecute 
     compiled.set(tool.name, { code: tool.code, execute });
     return execute;
   };
-}
-
-/** The durable-state tool's one input shape. `key` names a fact, `content` /
- *  `query` address prose, and the rest scope a session read — which of them the
- *  call needs follows from its action. */
-interface MemoryToolInput {
-  action: MemoryToolAction;
-  key?: string;
-  value?: unknown;
-  confidence?: number;
-  content?: string;
-  query?: string;
-  around_message_id?: string;
-  window?: number;
-  limit?: number;
-  max_chars?: number;
 }
 
 interface WebToolInput {
@@ -470,8 +393,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
 
   // ── 2. run ───────────────────────────────────────────────────────────────
   // Shell command tool. The `runtime` parameter dispatches through the
-  // ExecutionRouter — workspace (default) hits the in-VFS virtual shell;
-  // anything else is provisioned-on-demand via ExecutorProvider. No fallback
+  // ExecutionRouter — workspace (default) hits the workspace's own Nimbus
+  // shell, over the same bytes the `file` tool addresses; every other runtime
+  // is a different machine, provisioned on demand via ExecutorProvider (the
+  // `nimbus` one is a separate Nimbus session, not this shell). No fallback
   // chain: if you ask for "sandbox" and sandbox isn't ready, you get a
   // structured error pointing at the install card, not silently routed
   // somewhere else.
@@ -486,7 +411,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
           enum: ['workspace', 'nimbus', 'sandbox', 'laptop'],
           description:
             'Execution runtime. Use one of the environments listed in the system prompt — that list is live for this turn; check it instead of assuming availability. ' +
-            'workspace is the internal Proteus VFS shell and the default only when runtime is omitted. ' +
+            'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
             "laptop is the user's own PC, available when their device is connected; its first use may pause for a user consent prompt (expected, not an error). " +
             'Choose nimbus, sandbox, or laptop explicitly when that environment is the right execution target.',
         },
@@ -495,40 +420,14 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     }),
     execute: async (args: { command: string; runtime?: string }, options?: unknown) => {
       const signal = readAbortSignal(options);
-      // Approval-gate pre-flight — same ruleset across every runtime.
-      // 'gate' behavior depends on shellApprovalMode (strict / allow_all /
-      // deny_all). See safety/approval-gate.ts.
-      const mode = deps.shellApprovalMode ?? 'strict';
-      const review = reviewCommand(args.command);
-      if (review.decision === 'deny') {
-        return `Denied by approval gate:\n${formatApproval(review)}`;
-      }
-      if (review.decision === 'gate') {
-        if (mode === 'allow_all') {
-          console.warn(`[proteus] approval-gate gate→allow (allow_all mode): ${formatApproval(review)}`);
-        } else {
-          // 'deny_all' never asks. Under 'strict' a connected surface gets to
-          // put the decision to the user; null means nobody is listening.
-          const outcome = mode === 'strict' && deps.requestShellApproval
-            ? await deps.requestShellApproval({ command: args.command, review })
-            : null;
-          if (outcome === null) {
-            // Actionable for the MODEL: setShellApprovalMode is a backend RPC
-            // it cannot call — the user changes the mode in agent settings.
-            return `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
-                   `or change the shell approval mode in agent settings.\n${formatApproval(review)}`;
-          }
-          if (!approvalGrants(outcome)) {
-            return `Denied by the user.\n${formatApproval(review)}`;
-          }
-        }
-      }
-      if (review.decision === 'warn') {
-        if (mode === 'deny_all') {
-          return `Denied by approval gate (deny_all mode):\n${formatApproval(review)}`;
-        }
-        console.warn(`[proteus] approval-gate warn: ${formatApproval(review)}`);
-      }
+      // No gate here — the approval ladder (reviewCommand / shellApprovalMode
+      // / the interactive channel) lives at the execution seam this tool
+      // dispatches to: the `shell` a workspace command runs through, and
+      // every ExecutionRouter provider's `exec` for everything else (see
+      // execution/approval.ts). That is also where codemode's
+      // `workspace.exec()` / `nimbus.exec()` / `sandbox.exec()` /
+      // `laptop.exec()` land, so the same command answers to the identical
+      // decision whichever path reached it — not a check re-derived here.
 
       // Restorable result budget — full stdout/stderr is offloaded to the
       // workspace VFS before clamping (see clamp.ts), so big outputs never
@@ -579,7 +478,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   });
 
   // ── 3. file ─────────────────────────────────────────────────────────────
-  // The file plane: read / edit / write over the same CompositeVFS `run` and
+  // The file plane: read / edit / write over the same filesystem `run` and
   // execute_tools address, so one tool serves every mount on both backends.
   // Unconditional — every runtime has rt.storage.vfs, and a model without an
   // exact-match editor falls back to sed -i and heredocs, which is what this
@@ -591,40 +490,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     memory,
   });
 
-  // ── 4. skills ──────────────────────────────────────────────────────────
-  // Single LLM-facing tool, six actions. Only registered when the
-  // orchestrator wires SkillsToolDeps (VFS + per-turn invoke tracker).
-  if (deps.skills) {
-    const skillsDeps = deps.skills;
-    tools.skills = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.skills,
-      inputSchema: jsonSchema<SkillsAction>({
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: ['list', 'read', 'invoke', 'create', 'edit', 'delete'],
-            description: 'What to do.',
-          },
-          name: { type: 'string', description: 'Skill name (kebab-case). Required for everything except list.' },
-          description: { type: 'string', description: 'For create/edit: one-line summary surfaced in the catalogue.' },
-          body: { type: 'string', description: 'For create/edit: the natural-language workflow body (markdown).' },
-          allowed_tools: {
-            type: 'array', items: { type: 'string' },
-            description: 'Optional tool surface restriction (e.g. ["run","memory"]). Empty = no restriction.',
-          },
-          keywords: { type: 'array', items: { type: 'string' }, description: 'Optional auto-activation keywords.' },
-          auto_activate: { type: 'boolean', description: 'Whether keyword matches auto-activate (default false).' },
-          disable_model_invocation: { type: 'boolean', description: 'For create/edit: block the LLM from auto-invoking this skill (keyword/description match). Default false.' },
-          user_invocable: { type: 'boolean', description: 'For create/edit: whether the user can invoke via /skill-name. Default true.' },
-        },
-        required: ['action'],
-      }),
-      execute: async (args: SkillsAction) => runSkillsAction(skillsDeps, args),
-    });
-  }
-
-  // ── 5. agents — the ONE delegation tool ──────────────────────────────────
+  // ── agents — the ONE delegation tool ──────────────────────────────────
   // Fork dispatch (heads / mcts settle), subordinate staffing and peer
   // messaging behind a single action surface. Registered when any deps group
   // is wired; per-action gating lives in createAgentsTool.
@@ -632,97 +498,19 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     tools.agents = createAgentsTool(deps.agents);
   }
 
-  // ── 6. memory — the ONE durable-state tool ────────────────────────────────
+  // ── 5. memory — the ONE durable-state tool ────────────────────────────────
   // Prose notes (save / search), the typed keyed world model (remember /
   // recall / forget) and past session transcripts (sessions) are one concept —
   // state written down now to be read back later — so they are actions here
   // rather than separate tools the model must choose between by storage shape.
   // search auto-hybridises: Vectorize-backed semantic + FTS5 lexical merged via
   // RRF when a VectorStore is wired + available; pure FTS5 otherwise.
-  const vs = deps.vectorStore;
-  const searchMemory = async (query: string): Promise<string> => {
-    if (vs && vs.available) {
-      const lexicalFn = async (q: string, k: number): Promise<LexicalHit[]> => {
-        const results = await memory.search(q, k);
-        return results.map((r) => ({
-          // Canonical chunk id (`path:start-end`) — matches the id the vector
-          // store returns, so RRF fuses the lexical and semantic hits.
-          id: `${r.path}:${r.startLine}-${r.endLine}`,
-          path: r.path, startLine: r.startLine, endLine: r.endLine,
-          score: r.score, snippet: r.snippet,
-        }));
-      };
-      const hits = await hybridSearch(query, lexicalFn, vs, {
-        finalK: 10, rehydrate: memorySnippetRehydrator(memory),
-      });
-      if (hits.length === 0) return 'No results found.';
-      return hits.map((h) =>
-        `[${h.path}:${h.startLine}-${h.endLine}] ` +
-        `(rrf ${h.rrfScore.toFixed(3)}, sources: ${h.sources.join('+')})\n${h.snippet}`,
-      ).join('\n\n');
-    }
-    const results = await memory.search(query, 10);
-    if (results.length === 0) return 'No results found.';
-    return results
-      .map((r) => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`)
-      .join('\n\n');
-  };
-  // `sessions` action — zero-LLM FTS5 transcript recall over the canonical
-  // messages table (one store, both backends). Mode inferred Hermes-style:
-  // around_message_id → scroll, query → search, neither → browse.
-  const sessionSearch = new SessionSearchStore(rt.storage.sql);
-  const runSessionsAction = (args: {
-    query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number;
-  }): unknown => {
-    try {
-      if (args.around_message_id) {
-        const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
-        if (!view) return { error: `no message with id ${args.around_message_id}` };
-        return { mode: 'scroll', ...view };
-      }
-      if (args.query?.trim()) {
-        const hits = sessionSearch.search(args.query, args.limit ?? 5);
-        return {
-          mode: 'search', query: args.query, hits,
-          hint: hits.length > 0
-            ? 'Pass a hit\'s messageId as around_message_id to read the surrounding window.'
-            : 'No matches. Multi-word queries require all terms; try fewer or different keywords.',
-        };
-      }
-      return { mode: 'browse', sessions: sessionSearch.browse(args.limit ?? 10) };
-    } catch (err) {
-      return { error: `session search unavailable: ${err instanceof Error ? err.message : String(err)}` };
-    }
-  };
+  // Dispatch lives in memory-tool.ts, shared verbatim with the `memory.*`
+  // codemode namespace (memory-codemode.ts) — one implementation, two callers.
   const facts = deps.facts;
-  const runFactAction = (
-    action: (typeof MEMORY_FACT_ACTIONS)[number],
-    args: MemoryToolInput,
-  ): unknown => {
-    if (!facts) return { error: 'the keyed-fact actions are not available on this runtime' };
-    if (typeof args.key !== 'string' || args.key.length === 0) {
-      return { error: 'key must be a non-empty string' };
-    }
-    if (action === 'remember') {
-      // Pre-flight serialize so circular refs / non-serializable values
-      // surface as a clean tool error instead of crashing the turn.
-      try { JSON.stringify(args.value); }
-      catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
-      facts.upsert(args.key, args.value, { confidence: args.confidence });
-      return { ok: true, key: args.key };
-    }
-    if (action === 'recall') {
-      const f = facts.recall(args.key);
-      if (!f) return { found: false, key: args.key };
-      return {
-        found: true, key: f.key, value: f.value, confidence: f.confidence,
-        source: f.source, lastObservedAt: f.lastObservedAt,
-      };
-    }
-    const existed = facts.recall(args.key) !== null;
-    facts.forget(args.key);
-    return { ok: true, key: args.key, existed };
-  };
+  const runMemoryAction = createMemoryDispatcher({
+    memory, vectorStore: deps.vectorStore, facts, sql: rt.storage.sql,
+  });
   tools.memory = tool({
     description: renderToolSchemaDescription(memoryToolSpec(!!facts)),
     inputSchema: jsonSchema<MemoryToolInput>({
@@ -762,27 +550,46 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       },
       required: ['action'],
     }),
-    execute: async (args: MemoryToolInput) => {
-      switch (args.action) {
-        case 'save':
-          if (!args.content) return 'memory.save requires `content`.';
-          return appendMemoryNote(memory, args.content);
-        case 'search':
-          if (!args.query) return 'memory.search requires `query`.';
-          return searchMemory(args.query);
-        case 'sessions':
-          return runSessionsAction(args);
-        case 'remember':
-        case 'recall':
-        case 'forget':
-          return runFactAction(args.action, args);
-        default:
-          // Only a model that ignored the enum gets here. Naming the action
-          // back is what lets it correct itself; falling through to a
-          // neighbouring branch would mutate state it never asked to touch.
-          return { error: `unknown memory action '${String(args.action)}'` };
-      }
-    },
+    execute: async (args: MemoryToolInput) => runMemoryAction(args),
+  });
+
+  // ── 6. tasks — the agent's own task list ──────────────────────────────────
+  // Unconditional, like `file` and `memory`: it needs one SQL handle and every
+  // runtime has one. The store is constructed here rather than injected for
+  // the same reason SessionSearchStore is — it holds no state of its own.
+  // Dispatch lives in tasks-tool.ts, shared verbatim with the `tasks.*`
+  // codemode namespace (tasks-codemode.ts).
+  const taskList = new TaskListStore(rt.storage.sql);
+  const runTasksAction = createTasksDispatcher(taskList);
+  tools.tasks = tool({
+    description: BUILTIN_TOOL_DESCRIPTIONS.tasks,
+    inputSchema: jsonSchema<TasksToolInput>({
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: [...TASKS_TOOL_ACTIONS],
+          description: 'add tasks, update one task\'s status, or list the whole task list',
+        },
+        titles: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'For action=add: one title per task, in the order you plan to do them. Write the whole plan in one call.',
+        },
+        parent: {
+          type: 'string',
+          description: 'For action=add: the id of the task these are subtasks of (e.g. "t2"). Omit for top-level tasks. Subtasks nest one level only.',
+        },
+        id: { type: 'string', description: 'For action=update: the task id, as `add` or `list` returned it (e.g. "t3").' },
+        status: {
+          type: 'string',
+          enum: [...TASK_STATUSES],
+          description: 'For action=update: active when you start the item, done when it is finished, dropped when it is no longer needed, open to reopen it.',
+        },
+      },
+      required: ['action'],
+    }),
+    execute: async (args: TasksToolInput) => runTasksAction(args),
   });
 
   // ── 7. web — live web research (search / fetch) ───────────────────────────
@@ -840,7 +647,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
     });
   }
 
-  // ── 9. report — subordinate → parent progress spine ────────────────────────
+  // ── 8. report — subordinate → parent progress spine ───────────────────────
   if (deps.report) {
     const report = deps.report;
     tools.report = tool({
@@ -861,233 +668,6 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         if (!args.content?.trim()) return { error: 'report requires non-empty content' };
         try {
           return await report.report({ status: args.status, content: args.content });
-        } catch (err) {
-          return { error: err instanceof Error ? err.message : String(err) };
-        }
-      },
-    });
-  }
-
-  // ── 10. release — governed product/UI self-customization lane ───────
-  if (deps.releases) {
-    const releases = deps.releases;
-    tools.release = tool({
-      description: BUILTIN_TOOL_DESCRIPTIONS.release,
-      inputSchema: jsonSchema<{
-        action:
-          | 'board'
-          | 'bind_source'
-          | 'create'
-          | 'update'
-          | 'transition'
-          | 'record_check'
-          | 'request_approval'
-          | 'record_deployment'
-          | 'apply'
-          | 'run_checks'
-          | 'preview'
-          | 'deploy'
-          | 'rollback';
-        binding?: {
-          kind?: 'local' | 'github';
-          label?: string;
-          repoUrl?: string | null;
-          defaultBranch?: string | null;
-          localDeviceId?: string | null;
-          localRoot?: string | null;
-          deployTarget?: string | null;
-        };
-        changeId?: string;
-        bindingId?: string;
-        userPrompt?: string;
-        plan?: string | null;
-        summary?: string | null;
-        patch?: string | null;
-        previewUrl?: string | null;
-        status?: ReleaseStatus;
-        check?: { name?: string; status?: ReleaseCheck['status']; stdout?: string | null; stderr?: string | null; durationMs?: number | null };
-        approvalType?: ReleaseApproval['approvalType'];
-        deployment?: {
-          environment?: ReleaseDeployment['environment'];
-          workerVersionId?: string | null;
-          deploymentId?: string | null;
-          rollbackTarget?: string | null;
-          command?: string;
-        };
-        checks?: Array<{ name?: string; command?: string }>;
-        port?: number;
-        startCommand?: string;
-      }>({
-        type: 'object',
-        properties: {
-          action: {
-            type: 'string',
-            enum: [
-              'board', 'bind_source', 'create', 'update', 'transition', 'record_check', 'request_approval', 'record_deployment',
-              'apply', 'run_checks', 'preview', 'deploy', 'rollback',
-            ],
-            description:
-              'apply/run_checks/preview/deploy/rollback DRIVE the change for real in the sandbox ' +
-              '(patch applied + committed, checks = real exit codes, preview = live URL, deploy/rollback verified).',
-          },
-          binding: {
-            type: 'object',
-            properties: {
-              kind: { type: 'string', enum: ['local', 'github'] },
-              label: { type: 'string' },
-              repoUrl: { type: 'string' },
-              defaultBranch: { type: 'string' },
-              localDeviceId: { type: 'string' },
-              localRoot: { type: 'string' },
-              deployTarget: { type: 'string' },
-            },
-          },
-          changeId: { type: 'string' },
-          bindingId: { type: 'string' },
-          userPrompt: { type: 'string' },
-          plan: { type: 'string' },
-          summary: { type: 'string' },
-          patch: { type: 'string', description: 'Unified diff for display. The backend redacts sensitive-looking lines before storage.' },
-          previewUrl: { type: 'string' },
-          status: {
-            type: 'string',
-            enum: ['draft', 'planning', 'patching', 'validating', 'preview_ready', 'awaiting_approval', 'applying', 'deployed', 'rejected', 'rolled_back', 'failed'],
-          },
-          check: {
-            type: 'object',
-            properties: {
-              name: { type: 'string' },
-              status: { type: 'string', enum: ['pending', 'running', 'passed', 'failed', 'skipped'] },
-              stdout: { type: 'string' },
-              stderr: { type: 'string' },
-              durationMs: { type: 'number' },
-            },
-          },
-          approvalType: { type: 'string', enum: ['apply', 'deploy_staging', 'deploy_production', 'rollback'] },
-          deployment: {
-            type: 'object',
-            properties: {
-              environment: { type: 'string', enum: ['local', 'staging', 'production'] },
-              workerVersionId: { type: 'string' },
-              deploymentId: { type: 'string' },
-              rollbackTarget: { type: 'string' },
-              command: { type: 'string', description: 'Deploy (or rollback-redeploy) command run in the working copy, e.g. "bunx wrangler deploy". Defaults to the binding deployTarget when that reads like a command.' },
-            },
-          },
-          checks: {
-            type: 'array',
-            description: 'For action=run_checks: build/test/lint commands run in the working copy; pass/fail comes from real exit codes.',
-            items: {
-              type: 'object',
-              properties: { name: { type: 'string' }, command: { type: 'string' } },
-              required: ['name', 'command'],
-            },
-          },
-          port: { type: 'number', description: 'For action=preview: the port your server listens on inside the sandbox.' },
-          startCommand: { type: 'string', description: 'For action=preview: optional server start command run in the working copy before exposing the port.' },
-        },
-        required: ['action'],
-      }),
-      execute: async (args) => {
-        try {
-          switch (args.action) {
-            case 'board':
-              return await releases.board();
-            case 'bind_source': {
-              const b = args.binding ?? {};
-              if (b.kind !== 'local' && b.kind !== 'github') return { error: 'binding.kind must be local or github' };
-              if (!b.label) return { error: 'binding.label is required' };
-              return await releases.bindSource({
-                kind: b.kind,
-                label: b.label,
-                repoUrl: b.repoUrl,
-                defaultBranch: b.defaultBranch,
-                localDeviceId: b.localDeviceId,
-                localRoot: b.localRoot,
-                deployTarget: b.deployTarget,
-              });
-            }
-            case 'create':
-              if (!args.bindingId || !args.userPrompt) return { error: 'create requires bindingId and userPrompt' };
-              return await releases.create({ bindingId: args.bindingId, userPrompt: args.userPrompt, plan: args.plan });
-            case 'update':
-              if (!args.changeId) return { error: 'update requires changeId' };
-              return await releases.update(args.changeId, {
-                plan: args.plan,
-                summary: args.summary,
-                patch: args.patch,
-                previewUrl: args.previewUrl,
-              });
-            case 'transition':
-              if (!args.changeId || !args.status) return { error: 'transition requires changeId and status' };
-              if (releases.engine && isEngineOwnedTransitionTarget(args.status)) {
-                return {
-                  error:
-                    `status '${args.status}' is earned by execution, not asserted — ` +
-                    `use action=apply / run_checks / deploy / rollback to get there for real`,
-                };
-              }
-              return await releases.transition(args.changeId, args.status);
-            case 'record_check':
-              if (!args.changeId || !args.check?.name || !args.check.status) return { error: 'record_check requires changeId, check.name, and check.status' };
-              return await releases.recordCheck(args.changeId, {
-                name: args.check.name,
-                status: args.check.status,
-                stdout: args.check.stdout,
-                stderr: args.check.stderr,
-                durationMs: args.check.durationMs,
-              });
-            case 'request_approval':
-              if (!args.changeId || !args.approvalType) return { error: 'request_approval requires changeId and approvalType' };
-              return await releases.requestApproval(args.changeId, args.approvalType);
-            case 'record_deployment':
-              if (!args.changeId || !args.deployment?.environment) return { error: 'record_deployment requires changeId and deployment.environment' };
-              if (releases.engine) {
-                return {
-                  error:
-                    'deployments are recorded from REAL deploy results — use action=deploy; ' +
-                    'the version id and rollback target come from the actual command output',
-                };
-              }
-              return await releases.recordDeployment(args.changeId, {
-                environment: args.deployment.environment,
-                workerVersionId: args.deployment.workerVersionId,
-                deploymentId: args.deployment.deploymentId,
-                rollbackTarget: args.deployment.rollbackTarget,
-              });
-            case 'apply':
-            case 'run_checks':
-            case 'preview':
-            case 'deploy':
-            case 'rollback': {
-              const engine = releases.engine;
-              if (!engine) {
-                return { error: `action=${args.action} needs the execution engine, which this backend does not provide — the ledger actions (update/transition/record_check) remain available` };
-              }
-              if (!args.changeId) return { error: `${args.action} requires changeId` };
-              switch (args.action) {
-                case 'apply':
-                  return await engine.apply(args.changeId);
-                case 'run_checks':
-                  if (!args.checks?.length) return { error: 'run_checks requires checks: [{ name, command }]' };
-                  return await engine.runChecks(
-                    args.changeId,
-                    args.checks.map((c) => ({ name: c.name ?? '', command: c.command ?? '' })),
-                  );
-                case 'preview':
-                  if (args.port == null) return { error: 'preview requires port (the port your server listens on)' };
-                  return await engine.preview(args.changeId, { port: args.port, ...(args.startCommand ? { startCommand: args.startCommand } : {}) });
-                case 'deploy':
-                  if (!args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
-                  return await engine.deploy(args.changeId, {
-                    environment: args.deployment.environment,
-                    ...(args.deployment.command ? { command: args.deployment.command } : {}),
-                  });
-                case 'rollback':
-                  return await engine.rollback(args.changeId, args.deployment?.command ? { command: args.deployment.command } : undefined);
-              }
-            }
-          }
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }

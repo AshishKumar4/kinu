@@ -2,7 +2,7 @@
  * Per-agent settings page. Credentials + defaults live in /user/settings;
  * this page covers concerns scoped to ONE agent: identity, model choice,
  * MCTS knobs, shell-approval mode, GEPA optimisation, pinned skills.
- * (Scaffold promote/rollback + the per-trial verdict live on the Brain surface.)
+ * (Scaffold promote/rollback + the per-trial verdict live on the Self surface.)
  */
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, Link } from "react-router-dom";
@@ -320,7 +320,7 @@ export default function SettingsPage() {
         </Card>
 
         {/* Scaffold shadow rollout — promote/rollback + per-trial verdict now
-            live on the agent's Brain surface (single source of truth). */}
+            live on the agent's Self surface (single source of truth). */}
 
         {/* Per-agent device file-access tier */}
         {agentId && <DeviceAccessCard agentName={agentId} />}
@@ -537,7 +537,7 @@ function GepaOptimizationCard({
       const caveat = r.selectionWarning ? ` Caveat: ${r.selectionWarning}.` : '';
       if (!r.ok) setMsg(`No run: ${r.error}`);
       else if (r.proposed) {
-        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}) — it will shadow-eval, then you can promote it from the agent's Brain surface.${scoredOn}${caveat}`);
+        setMsg(`Improved scaffold proposed as v${r.pendingVersion} (${scores}) — it will shadow-eval, then you can promote it from the agent's Self surface.${scoredOn}${caveat}`);
       } else {
         setMsg(`No improvement found (${r.skipReason ?? 'seed already best'}; ${scores}).${scoredOn}${caveat}`);
       }

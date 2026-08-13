@@ -177,7 +177,7 @@ export interface HeadReport {
   /** Tool calls the head made — for telemetry. */
   readonly toolCalls: readonly ToolCallRecord[];
   /** Ordered per-step trace (text + reasoning + tool calls) — drives the live
-   *  expandable head timeline in the Reasoning surface. */
+   *  expandable head timeline in the Exploration surface. */
   readonly steps: readonly HeadStep[];
   readonly tokenUsage: { input: number; output: number; total: number };
   readonly wallClockMs: number;
@@ -185,7 +185,7 @@ export interface HeadReport {
   readonly errorMessage?: string;
 }
 
-/** One head as the Reasoning surface renders it — lifecycle + the ordered
+/** One head as the Exploration surface renders it — lifecycle + the ordered
  *  trace. Assembled by HeadJournal.listRuns; returned verbatim by getHeadRuns. */
 export interface HeadRunHeadView {
   readonly id: HeadId;

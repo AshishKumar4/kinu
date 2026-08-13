@@ -13,6 +13,9 @@ export type NodeStatus = 'open' | 'terminal' | 'failed' | 'pruned';
 export interface SearchNode {
   id: string;
   parent_id: string | null;
+  /** The search run this node belongs to (the root's id, itself included).
+   *  NULL only on legacy rows written before the column existed. */
+  root_id: string | null;
   task: string;
   action: string;
   observation: string;

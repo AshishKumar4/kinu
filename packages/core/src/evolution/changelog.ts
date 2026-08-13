@@ -348,9 +348,25 @@ export function buildChangelog(sql: SqlExecutor, opts: BuildChangelogOptions = {
   return entries.slice(0, limit);
 }
 
+/** How deep the unseen window is read. Past this the badge stops counting, so
+ *  it is generous: a workspace left alone for a week is not "99 unseen". */
+const UNSEEN_WINDOW_LIMIT = 99;
+
+/**
+ * Entries newer than the seen marker, newest first.
+ *
+ * The badge counts these; the needs-you queue also reads WHICH of them carry a
+ * `revert`, because the digest holds measurements (a graded turn, a replay
+ * eval, a GEPA pass) as well as changes, and only the changes can be kept or
+ * reverted.
+ */
+export function listUnseenChangelog(sql: SqlExecutor, seenAt: number): ChangelogEntry[] {
+  return buildChangelog(sql, { since: seenAt, limit: UNSEEN_WINDOW_LIMIT });
+}
+
 /** Entries newer than the seen marker — the badge count. */
 export function countUnseenChangelog(sql: SqlExecutor, seenAt: number): number {
-  return buildChangelog(sql, { since: seenAt, limit: 99 }).length;
+  return listUnseenChangelog(sql, seenAt).length;
 }
 
 // ── The one text renderer (TUI overlay + classic print + tests) ──

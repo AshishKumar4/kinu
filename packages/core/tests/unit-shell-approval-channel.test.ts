@@ -2,11 +2,19 @@
 // always returned an explanatory message because no approval channel existed.
 // These tests pin the wired channel — who gets asked, what the answer does,
 // and that the old message still stands when nobody is listening.
+//
+// The gate itself now lives at the execution seam (withApprovalGatedShell —
+// see execution/approval.ts), not inside `run`'s own executor, so the
+// harness wraps a mock `Shell` with the policy under test and hands it to
+// `rt.shell`, exactly as a backend's runtime.ts does at construction.
 import { describe, test, expect } from 'bun:test';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { ShellApprovalRequest, ShellApprovalOutcome } from '../src/index.js';
+import {
+  withApprovalGatedShell,
+  type ShellApprovalRequest, type ShellApprovalOutcome, type ShellApprovalPolicy,
+} from '../src/index.js';
 
 type RunTool = { execute: (args: { command: string; runtime?: string }) => Promise<string> };
 
@@ -19,25 +27,26 @@ function harness(opts: {
 }) {
   const { rt } = createTestRuntime();
   const executed: string[] = [];
-  const shell = {
+  const rawShell = {
     exec: async (command: string) => {
       executed.push(command);
       return { stdout: 'ran', stderr: '', exitCode: 0 };
     },
   };
   const asked: ShellApprovalRequest[] = [];
-  const tools = buildBuiltinTools({
-    rt: { ...rt, shell } as AgentRuntime,
-    ...(opts.mode ? { shellApprovalMode: opts.mode } : {}),
+  const policy: ShellApprovalPolicy = {
+    mode: () => opts.mode ?? 'strict',
     ...(opts.approve
       ? {
-          requestShellApproval: async (req: ShellApprovalRequest) => {
+          requestApproval: async (req: ShellApprovalRequest) => {
             asked.push(req);
             return opts.approve!(req);
           },
         }
       : {}),
-  });
+  };
+  const shell = withApprovalGatedShell(rawShell, policy);
+  const tools = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime });
   return { run: tools.run as unknown as RunTool, executed, asked };
 }
 

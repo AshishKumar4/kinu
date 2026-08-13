@@ -8,7 +8,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { CompositeVFS } from '../src/vfs/composite.js';
+import { observeWrites } from '../src/vfs/observe.js';
 import { HeadFileChanges, formatHeadFileChanges } from '../src/heads/file-changes.js';
 import type { VFS } from '../src/types/primitives.js';
 import { makeVfsError } from '../src/vfs/errno.js';
@@ -40,49 +40,48 @@ function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files
   return self;
 }
 
-/** A composite with a real mount at /workspace and a watched write plane. */
+/** A head's view of its PARENT's workspace, watched. The head's own filesystem
+ *  is a different object entirely and is deliberately not observed — it is
+ *  private scratch that dies with the head. */
 function watched(seed: Record<string, string> = {}) {
   const local = memVfs();
   const workspace = memVfs(seed);
-  const vfs = new CompositeVFS({ local });
-  vfs.mount('workspace', { vfs: workspace, policy: { readOnly: false, rootPath: '', consistency: 'durable' } });
   const changes = new HeadFileChanges();
-  vfs.observeWrites(changes);
-  return { vfs, changes, local, workspace };
+  return { vfs: observeWrites(workspace, changes), changes, local, workspace };
 }
 
 describe('HeadFileChanges — the review a parent gets', () => {
   test('a created file is added, with every line counted', async () => {
     const { vfs, changes } = watched();
-    await vfs.writeFile('/workspace/new.ts', 'a\nb\nc\n');
+    await vfs.writeFile('new.ts', 'a\nb\nc\n');
     expect(changes.snapshot()).toEqual([
-      { path: '/workspace/new.ts', status: 'added', added: 3, removed: 0 },
+      { path: 'new.ts', status: 'added', added: 3, removed: 0 },
     ]);
   });
 
   test('an edited file reports the lines a diff would', async () => {
     const { vfs, changes } = watched({ 'keep.ts': 'one\ntwo\nthree\n' });
-    await vfs.writeFile('/workspace/keep.ts', 'one\nTWO\nthree\nfour\n');
+    await vfs.writeFile('keep.ts', 'one\nTWO\nthree\nfour\n');
     expect(changes.snapshot()).toEqual([
-      { path: '/workspace/keep.ts', status: 'changed', added: 2, removed: 1 },
+      { path: 'keep.ts', status: 'changed', added: 2, removed: 1 },
     ]);
   });
 
   test('a deleted file reports its lines as removed', async () => {
     const { vfs, changes } = watched({ 'gone.ts': 'x\ny\n' });
-    await vfs.unlink('/workspace/gone.ts');
+    await vfs.unlink('gone.ts');
     expect(changes.snapshot()).toEqual([
-      { path: '/workspace/gone.ts', status: 'removed', added: 0, removed: 2 },
+      { path: 'gone.ts', status: 'removed', added: 0, removed: 2 },
     ]);
   });
 
   test('repeated writes report the NET change, against what the head first found', async () => {
     const { vfs, changes, workspace } = watched({ 'f.ts': 'base\n' });
-    await vfs.writeFile('/workspace/f.ts', 'base\nstep one\n');
-    await vfs.writeFile('/workspace/f.ts', 'base\nstep one\nstep two\n');
-    await vfs.writeFile('/workspace/f.ts', 'base\nfinal\n');
+    await vfs.writeFile('f.ts', 'base\nstep one\n');
+    await vfs.writeFile('f.ts', 'base\nstep one\nstep two\n');
+    await vfs.writeFile('f.ts', 'base\nfinal\n');
     expect(changes.snapshot()).toEqual([
-      { path: '/workspace/f.ts', status: 'changed', added: 1, removed: 0 },
+      { path: 'f.ts', status: 'changed', added: 1, removed: 0 },
     ]);
     // And the baseline was read once, not once per write.
     expect(workspace.reads).toBe(1);
@@ -90,53 +89,55 @@ describe('HeadFileChanges — the review a parent gets', () => {
 
   test('a file written back to what it was is not a change', async () => {
     const { vfs, changes } = watched({ 'f.ts': 'same\n' });
-    await vfs.writeFile('/workspace/f.ts', 'different\n');
-    await vfs.writeFile('/workspace/f.ts', 'same\n');
+    await vfs.writeFile('f.ts', 'different\n');
+    await vfs.writeFile('f.ts', 'same\n');
     expect(changes.snapshot()).toEqual([]);
   });
 
   test('a file created and then deleted is not a change', async () => {
     const { vfs, changes } = watched();
-    await vfs.writeFile('/workspace/tmp.ts', 'scratch\n');
-    await vfs.unlink('/workspace/tmp.ts');
+    await vfs.writeFile('tmp.ts', 'scratch\n');
+    await vfs.unlink('tmp.ts');
     expect(changes.snapshot()).toEqual([]);
   });
 
   test('binary content is reported as changed without inventing a line count', async () => {
     const { vfs, changes } = watched();
-    await vfs.writeFile('/workspace/logo.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+    await vfs.writeFile('logo.png', new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
     expect(changes.snapshot()).toEqual([
-      { path: '/workspace/logo.png', status: 'added', added: 0, removed: 0, binary: true },
+      { path: 'logo.png', status: 'added', added: 0, removed: 0, binary: true },
     ]);
   });
 
-  test("the head's private /local scratch is not reported — the parent cannot address it", async () => {
-    const { vfs, changes } = watched();
-    await vfs.writeFile('/local/notes.md', 'thinking out loud\n');
-    // Including the compat route, which IS /local under another spelling.
-    await vfs.writeFile('/scratch/plan.md', 'also mine\n');
+  test("the head's own workspace is not reported — the parent cannot address it", async () => {
+    const { local, changes } = watched();
+    // The head's private scratch is a DIFFERENT filesystem, and nothing wraps
+    // it: writing there cannot reach this ledger even by accident.
+    await local.writeFile('notes.md', 'thinking out loud\n');
+    await local.writeFile('plan.md', 'also mine\n');
     expect(changes.snapshot()).toEqual([]);
   });
 
-  test('a write that the mount refused is not reported as a change', async () => {
-    const { vfs, changes } = watched();
-    vfs.reserve('sandbox', 'not configured here', { readOnly: false, rootPath: '/', consistency: 'ephemeral' });
-    await expect(vfs.writeFile('/sandbox/x.ts', 'nope')).rejects.toThrow();
+  test('a write the plane refused is not reported as a change', async () => {
+    const changes = new HeadFileChanges();
+    const refusing = observeWrites({
+      ...memVfs(),
+      async writeFile() { throw makeVfsError('EROFS', 'read-only', 'x.ts'); },
+    }, changes);
+    await expect(refusing.writeFile('x.ts', 'nope')).rejects.toThrow();
     expect(changes.snapshot()).toEqual([]);
   });
 
   test('changes are sorted by path', async () => {
     const { vfs, changes } = watched();
-    await vfs.writeFile('/workspace/z.ts', 'z\n');
-    await vfs.writeFile('/workspace/a.ts', 'a\n');
-    expect(changes.snapshot().map((c) => c.path)).toEqual(['/workspace/a.ts', '/workspace/z.ts']);
+    await vfs.writeFile('z.ts', 'z\n');
+    await vfs.writeFile('a.ts', 'a\n');
+    expect(changes.snapshot().map((c) => c.path)).toEqual(['a.ts', 'z.ts']);
   });
 
-  test('nothing is watching by default, so an unwired plane costs no extra read', async () => {
+  test('an unwatched plane costs no extra read', async () => {
     const workspace = memVfs({ 'f.ts': 'x\n' });
-    const vfs = new CompositeVFS({ local: memVfs() });
-    vfs.mount('workspace', { vfs: workspace, policy: { readOnly: false, rootPath: '', consistency: 'durable' } });
-    await vfs.writeFile('/workspace/f.ts', 'y\n');
+    await workspace.writeFile('f.ts', 'y\n');
     expect(workspace.reads).toBe(0);
   });
 });
@@ -145,15 +146,15 @@ describe('formatHeadFileChanges', () => {
   test('renders status, path and counts; empty in, empty out', () => {
     expect(formatHeadFileChanges([])).toEqual([]);
     expect(formatHeadFileChanges([
-      { path: '/workspace/a.ts', status: 'added', added: 12, removed: 0 },
-      { path: '/workspace/b.ts', status: 'changed', added: 3, removed: 9 },
-      { path: '/workspace/c.ts', status: 'removed', added: 0, removed: 40 },
-      { path: '/workspace/d.png', status: 'added', added: 0, removed: 0, binary: true },
+      { path: 'a.ts', status: 'added', added: 12, removed: 0 },
+      { path: 'b.ts', status: 'changed', added: 3, removed: 9 },
+      { path: 'c.ts', status: 'removed', added: 0, removed: 40 },
+      { path: 'd.png', status: 'added', added: 0, removed: 0, binary: true },
     ])).toEqual([
-      '  A  /workspace/a.ts  +12 −0',
-      '  M  /workspace/b.ts  +3 −9',
-      '  D  /workspace/c.ts  +0 −40',
-      '  A  /workspace/d.png  (binary)',
+      '  A  a.ts  +12 −0',
+      '  M  b.ts  +3 −9',
+      '  D  c.ts  +0 −40',
+      '  A  d.png  (binary)',
     ]);
   });
 });

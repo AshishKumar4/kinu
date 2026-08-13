@@ -3,12 +3,23 @@
  */
 
 import type { ExecutionRouter, ExecutorProvider, ExecutorInfo } from './types.js';
+import { gateProviderExec } from './approval.js';
+import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate.js';
 
 export class DefaultExecutionRouter implements ExecutionRouter {
   private providers = new Map<string, ExecutorProvider>();
 
+  /**
+   * Every provider this router hands out — to `run`'s dispatch via
+   * `getProvider` and to codemode via `getProviders` — answers to the SAME
+   * approval policy, applied once here rather than by each caller. Backends
+   * with no live policy to thread (heads, tests) fall back to the safe
+   * default: strict, nobody to ask. See execution/approval.ts.
+   */
+  constructor(private readonly approvalPolicy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY) {}
+
   register(provider: ExecutorProvider): void {
-    this.providers.set(provider.name, provider);
+    this.providers.set(provider.name, gateProviderExec(provider, this.approvalPolicy));
   }
 
   unregister(name: string): void {

@@ -3,7 +3,7 @@
 // head runs IN-PROCESS over a FORK of the parent runtime (buildCLIHeadRuntime):
 // the parent's real host executor (`run laptop` / codemode `laptop.*`), the
 // parent's files at /workspace + /pc, and a PRIVATE durable scratch (its own
-// SqliteFS /local, Memory, CraftStore, and emulated `workspace` shell) so
+// own workspace filesystem, Memory, CraftStore and shell) so
 // siblings can't corrupt each other. Heads are LLM-bound, so the
 // HeadController's Promise.all gives real concurrency without subprocesses; the
 // merge LLM runs in this process.
@@ -82,7 +82,7 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  *
  * A cf head's `/local` is its FACET's own SQLite — real storage, sized by the
  * DO's quota rather than by whatever is left of a process. The local head's was
- * `new Database(':memory:')`, which put the whole scratch — SqliteFS pages, the
+ * `new Database(':memory:')`, which put the whole scratch — filesystem pages, the
  * FTS5 memory index, the CraftStore — in the CLI process heap, shared with the
  * parent session and with every sibling head running concurrently in that same
  * process. A file gives both backends the same answer: SQLite pages to disk, so

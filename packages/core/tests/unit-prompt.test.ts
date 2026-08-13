@@ -14,6 +14,7 @@ import {
   modelSupportsTools,
   promptModeForTurnEvent,
   splitPromptSections,
+  type ParsedSkill,
 } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
 
@@ -438,17 +439,39 @@ describe('buildSystemPromptSync', () => {
     expect(memory).toMatch(/sessions reads what past sessions said, before re-deriving/);
   });
 
-  test('the release flow is stated once, in the schema, plus the mode overlay', () => {
-    // It used to be stated three times: the schema whenToUse, a standalone
-    // `## Proteus release changes` section, and the release mode
-    // overlay. The overlay stays — it is mode-gated and adds the approval
-    // constraint — and the standalone section is gone.
+  test('the release mode overlay points at release.* (codemode, not a native tool)', () => {
+    // `release` left the native surface for the release.* codemode
+    // namespace (tools/release-codemode.ts); the mode overlay's wording
+    // follows it there, and there is no standalone `## Proteus release
+    // changes` section duplicating the flow.
     const { rt } = createTestRuntime();
     expect(buildSystemPromptSync(rt)).not.toContain('## Proteus release changes');
-    expect(BUILTIN_TOOL_DESCRIPTIONS.release)
-      .toMatch(/bind_source → create → update .* → apply → run_checks → preview → request_approval → deploy/);
+    expect(buildSystemPromptSync(rt, { mode: 'release' }))
+      .toContain('`release.*` inside execute_tools');
     expect(buildSystemPromptSync(rt, { mode: 'release' }))
       .toContain('Never deploy Proteus release changes without an explicit approval record');
+  });
+
+  test('the ambient skills index renders name + description for every available skill, active or not', () => {
+    // The discovery gap this closes: without this, a skill that never
+    // auto-activates is invisible to the model — nothing in the prompt names
+    // it, and there is no tool call left that lists it either.
+    const { rt } = createTestRuntime();
+    const dormant: ParsedSkill = {
+      name: 'dormant-skill', description: 'Not active this turn, but the model should still know it exists.',
+      allowed_tools: [], keywords: [], auto_activate: false, disable_model_invocation: false,
+      user_invocable: true, body: 'DORMANT-BODY-MUST-NOT-APPEAR', ext: {}, source: 'vfs',
+    };
+    const prompt = buildSystemPromptSync(rt, { availableSkills: [dormant] });
+    expect(prompt).toContain('## Skills');
+    expect(prompt).toContain('**dormant-skill** — Not active this turn');
+    // Progressive disclosure: index carries the description, never the body.
+    expect(prompt).not.toContain('DORMANT-BODY-MUST-NOT-APPEAR');
+  });
+
+  test('omitting availableSkills renders no Skills section (no regression for callers that do not pass it)', () => {
+    const { rt } = createTestRuntime();
+    expect(buildSystemPromptSync(rt)).not.toContain('## Skills');
   });
 
   test('renders executor section when registeredExecutors supplied', () => {
@@ -465,24 +488,21 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toMatch(/separate filesystems/i);
   });
 
-  test('the disjoint-filesystem warning is a fact about the backend, not the executor count', () => {
-    // It was rendered on `executors.length > 1` alone, and on cli-local that
-    // was false: cli-backend/runtime.ts hands createInlineExecutor and the
-    // laptop executor the SAME createHostShell(process.cwd()), so a command in
-    // either sees the same files. A model that believed the line would copy
-    // files between two views of one directory.
+  test('every runtime is its own filesystem, on every backend', () => {
+    // This used to be a backend conditional: on cli-local the workspace and
+    // laptop executors shared one host shell, so "separate filesystems" was
+    // false there. The workspace is its own durable filesystem on both
+    // backends now, so the fact is unconditional and the exception is gone.
     const { rt } = createTestRuntime();
     const executors = [
       { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
       { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
     ];
-    const local = buildSystemPromptSync(rt, { backend: 'cli-local', executors });
-    expect(local).not.toMatch(/separate filesystems/i);
-    expect(local).toContain('execute on the same machine and see the same files');
-
-    const cf = buildSystemPromptSync(rt, { backend: 'cf', executors });
-    expect(cf).toMatch(/separate filesystems/i);
-    expect(cf).not.toContain('the same machine and see the same files');
+    for (const backend of ['cli-local', 'cf'] as const) {
+      const prompt = buildSystemPromptSync(rt, { backend, executors });
+      expect(prompt).toMatch(/separate filesystems/i);
+      expect(prompt).not.toContain('the same machine and see the same files');
+    }
   });
 
   test('renders only selectable executors when lifecycle facts are supplied', () => {
@@ -498,7 +518,11 @@ describe('buildSystemPromptSync', () => {
 
     expect(prompt).toContain('nimbus.*');
     expect(prompt).toContain('workspace.*');
-    expect(prompt).toContain('internal Proteus state');
+    // The hosted workspace runtime is a real POSIX shell over the agent's own
+    // filesystem, but it has no native binaries — the model must read both
+    // halves, or it either under-uses the shell or tries to build in it.
+    expect(prompt).toContain('real POSIX shell');
+    expect(prompt).toContain('No NATIVE binaries');
     expect(prompt).not.toContain('laptop');
     expect(prompt).not.toContain('sandbox.*');
     expect(prompt).not.toMatch(/Showing a running app/);
@@ -560,7 +584,7 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).not.toMatch(/exposePort/);
   });
 
-  test('names the workspace mount table (/local + per-environment mounts) and keeps exec target-native', () => {
+  test('names the workspace filesystem and each environment by its own namespace', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',
@@ -571,19 +595,20 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
-    expect(prompt).toContain('mount table');
-    expect(prompt).toContain('/local is the durable base');
-    expect(prompt).toContain('/sandbox');
-    expect(prompt).toContain('/nimbus');
-    expect(prompt).toContain('/pc');
-    expect(prompt).toContain('target-native');
+    // The workspace filesystem is named by where it actually is, and the shell
+    // is said to run over exactly those bytes — the property the mount table
+    // used to assert about `/local`.
+    expect(prompt).toContain('/home/user');
+    expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
+    // Every other environment is a namespace, never a directory of this one.
+    expect(prompt).toContain('`sandbox.*`');
+    expect(prompt).toContain('`nimbus.*`');
+    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).toContain('THEIR native paths');
+    expect(prompt).not.toContain('mount table');
   });
 
-  test('the CLI-local VFS mounts its one remote plane, /pc, and says so', () => {
-    // The local backend used to mount /local alone, so the doctrine was gated
-    // off for cli-local entirely. It now mounts the host filesystem at the same
-    // /pc prefix the cloud backend reaches the user's machine through, so the
-    // doctrine follows the executor list on both backends.
+  test('the doctrine follows the executor list, not the backend', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cli-local',
@@ -592,10 +617,9 @@ describe('buildSystemPromptSync', () => {
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
-    expect(prompt).toContain('mount table');
-    expect(prompt).toContain('/local is the durable base, and /pc is a live window');
-    expect(prompt).not.toContain('/sandbox');
-    expect(prompt).not.toContain('/nimbus');
+    expect(prompt).toContain('`laptop.*`');
+    expect(prompt).not.toContain('`sandbox.*`');
+    expect(prompt).not.toContain('`nimbus.*`');
   });
 
   test('a workspace with no execution devices renders no mount doctrine', () => {
@@ -800,14 +824,25 @@ describe('buildSystemPromptSync', () => {
       // nested forks array is longer than staff's flat role/mission). It sits
       // close to this ceiling on purpose — the next example that grows should
       // be a reviewed decision, which is what this gate is for.
-      'Tools available this turn': 2100,
-      // +2 lines of workspace mount-table doctrine (/local + /sandbox,/nimbus,
-      // /pc file plane; exec stays target-native) — deliberate (2026-07).
+      // 2026-08-12: RAISED 2100 → 2350 for the `tasks` line. The index costs
+      // one summary + one example per tool (237 chars here, measured 2081 →
+      // 2318); the tool's own when-to-use doctrine is schema-only, as every
+      // other tool's is, so none of it lands in this section.
+      'Tools available this turn': 2350,
+      // +2 lines of file doctrine: the workspace filesystem is named by where
+      // it is, and every other environment is a separate machine in its own
+      // native paths — stated once here for all of them, which is why the
+      // per-executor lines never repeat it — deliberate (2026-07).
       'Execution environments': 2450,
       'Persistence': 700,
       // 2026-08: −1 line. `execute_tools runs JavaScript against the active
       // executor/codemode namespaces` was the tool's own summary, restated.
-      'Code execution and learned capabilities': 1600,
+      // 2026-08-12: +4 chars. Defect-B fix: the agent.jobResult bullet used to
+      // read as a generic "read status and results" call; it now says a
+      // settled job is what it reads, and that the wake already named the id
+      // — the same "you don't need to check, you'll be told" doctrine as the
+      // Background work section, stated where this tool is introduced.
+      'Code execution and learned capabilities': 1610,
       // 2026-08: the old Research (1049) + Team (1435) sections collapsed into
       // ONE lifetime-keyed ladder.
       // 2026-08: +1 line naming the turn-cumulative tool-output budget — the
@@ -840,7 +875,15 @@ describe('buildSystemPromptSync', () => {
       // rung's own 2+-angles trigger, and `workspace.createTool`'s output,
       // which the Code-execution section already describes.
       'Delegation': 2250,
-      'Background work': 260,
+      // 2026-08-12: RAISED 260 → 680. Defect-B fix (background polling): the
+      // section used to say only "stop the turn; the backend will wake you" —
+      // one clause the owner's bench evidence shows the model reads as
+      // optional and routes around (agent.jobResult polled in a loop despite
+      // that exact promise already being there). It now says the work KEEPS
+      // RUNNING unwatched (so starting it again is visibly wrong, not just
+      // wasteful), and states the wake's TWO landing shapes (mid-turn / fresh
+      // turn) so "you are woken" reads as a mechanism rather than a hope.
+      'Background work': 680,
       // 2026-08: new section. Two of five benchmark failures were a solved
       // problem with a fumbled deliverable, and the prompt had no doctrine
       // that would have caught either. 2026-08: −1 framing sentence, which the

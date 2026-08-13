@@ -193,7 +193,9 @@ async function testDbIntegrity() {
     const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
     const tableNames = tables.map(t => t.name);
 
-    const requiredTables = ["workspace_identity", "vfs_files", "search_nodes", "crafted_tools"];
+    // `inodes` is the workspace filesystem's own table (Nimbus). The agent's
+    // files live there; nothing else in this database stores them.
+    const requiredTables = ["workspace_identity", "inodes", "search_nodes", "crafted_tools"];
     const missing = requiredTables.filter(t => !tableNames.includes(t));
 
     if (missing.length === 0) {
@@ -202,15 +204,18 @@ async function testDbIntegrity() {
       fail("DB tables present", `missing: ${missing.join(", ")}`);
     }
 
-    // The soul lives as SOUL.md in the VFS (BLOB chunks), not an agent_soul table.
-    const soulChunks = db.query(
-      "SELECT data FROM vfs_files WHERE path = 'SOUL.md' AND is_dir = 0 ORDER BY chunk_index",
-    ).all() as Array<{ data: Uint8Array }>;
-    const soulText = soulChunks.map(c => new TextDecoder().decode(c.data)).join("");
-    if (soulText.includes("E2E test agent")) {
-      pass("DB SOUL.md", `${soulChunks.length} chunk(s), purpose present`);
+    // SOUL.md is a FILE in the workspace filesystem; the mission a read-only
+    // listing needs is a column on the identity row, maintained by writeSoul.
+    // Checking the column here is what this path can do without opening a
+    // filesystem — which is the whole reason the column exists.
+    const soulFile = db.query(
+      "SELECT COUNT(*) AS n FROM inodes WHERE path LIKE '%SOUL.md'",
+    ).get() as { n: number } | null;
+    const mission = db.query("SELECT mission FROM workspace_identity LIMIT 1").get() as { mission: string } | null;
+    if ((soulFile?.n ?? 0) > 0 && (mission?.mission ?? "").includes("E2E test agent")) {
+      pass("DB SOUL.md", `file present, mission: "${mission!.mission}"`);
     } else {
-      fail("DB SOUL.md", soulChunks.length === 0 ? "SOUL.md missing from vfs_files" : `purpose not found in: ${soulText.slice(0, 120)}`);
+      fail("DB SOUL.md", `soul file rows=${soulFile?.n ?? 0}, mission=${JSON.stringify(mission?.mission)}`);
     }
 
     const identity = db.query("SELECT name FROM workspace_identity LIMIT 1").get() as { name: string } | null;

@@ -45,15 +45,14 @@ export interface SqlExec {
 }
 
 /**
- * VFS interface — SqliteFS (agent-utils) implements it directly; the 3 mount
- * adapters and the CompositeVFS also satisfy it. `stat` names its time field
- * `mtimeMs` (Node fs.Stats convention) so SqliteFS's native stat is assignable
- * with no adapter. Backed by a single vfs_files table with 1.8 MB chunking.
+ * VFS interface — the workspace filesystem implements it, and so does each
+ * executor's own file view. `stat` names its time field `mtimeMs` (the Node
+ * fs.Stats convention).
  *
- * In production `Storage.vfs` is a CompositeVFS (vfs/composite.ts): the same
- * 7 methods over a mount table (/local = SqliteFS, plus /sandbox /nimbus /pc
- * raw-handle mounts). Bare and deeper-absolute paths compat-route to /local,
- * so implementations and consumers of this interface are unaffected.
+ * In production `Storage.vfs` is the workspace filesystem
+ * (vfs/nimbus-workspace.ts). Relative paths resolve at its root — the same
+ * directory the workspace shell starts in, so both address one set of bytes by
+ * one set of names.
  */
 export interface VFS {
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
@@ -172,7 +171,7 @@ export interface Identity {
 
 /**
  * 7. SHELL — POSIX command execution over a VFS.
- * Both `agent-utils/shell.createShell(vfs)` (structural match) and any other
+ * Both the workspace shell (structural match) and any other
  * host-native shell bridge satisfy this. Optional on AgentRuntime; tools that
  * need shell access (e.g. `run`) read it and fall back to the executionRouter.
  */

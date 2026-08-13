@@ -1,8 +1,13 @@
 /**
- * Scaffold lineage — the moat surface (inside Brain). The agent rewrites its
- * own inference loop; this makes that legible + tryable: a git-style version
- * lineage, the line diff of what changed, the shadow-eval per-trial verdict
- * grid that drives promotion, and Preview-live / Promote / Rollback actions.
+ * Scaffold lineage — the moat, as the first block of Agent → Evolution. The
+ * agent rewrites its own inference loop; this makes that legible + tryable: a
+ * git-style version lineage, the line diff of what changed, the shadow-eval
+ * per-trial verdict grid that drives promotion, and Preview-live / Promote /
+ * Rollback actions.
+ *
+ * Renders bare rather than in its own fold: it sits inside the Evolution
+ * section beside the passes that generate its candidates and the scoreboard
+ * that judges them, and three nested collapsibles is a fold to fight.
  *
  * Binds to wired RPCs: listScaffoldVersions, getScaffoldDiff, getShadowVerdict,
  * applyScaffoldDecision, previewScaffoldLive.
@@ -10,11 +15,11 @@
 import { useState, useCallback } from "react";
 import { Button, Badge, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
-import { GitBranchIcon, ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
+import { ScalesIcon, PlayIcon, CheckCircleIcon, ArrowUUpLeftIcon } from "@phosphor-icons/react";
 import type { Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
-import { DiffLines, Section } from "./shared";
+import { DiffLines } from "./shared";
 
 interface ScaffoldVersion { version: number; written_at: number; rationale: string; status: string }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: Array<{ kind: "add" | "del" | "ctx"; text: string }> }
@@ -129,9 +134,11 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
   const isPending = selectedV?.status === "pending";
 
   return (
-    <Section id="scaffold" title="Scaffold evolution" defaultOpen={false}
-      icon={<GitBranchIcon size={14} className="p-text-2" />}
-      badge={<Badge variant="secondary">v{currentVersion}</Badge>}>
+    <section className="space-y-1.5">
+      <div className="flex items-baseline gap-2">
+        <span className="text-[10px] uppercase tracking-normal p-text-3">Versions</span>
+        <Badge variant="secondary">live v{currentVersion}</Badge>
+      </div>
       {lineage.status === "error" && versions.length === 0 ? (
         <LoadFailure what="the scaffold lineage" message={lineage.message} onRetry={reload} />
       ) : lineage.status === "loading" ? (
@@ -201,6 +208,6 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
           )}
         </div>
       )}
-    </Section>
+    </section>
   );
 }

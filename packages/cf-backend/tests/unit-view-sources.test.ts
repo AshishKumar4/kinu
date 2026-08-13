@@ -74,6 +74,9 @@ describe('view data sources', () => {
     const withheld = [
       'listPendingConsents', 'getEvolutionChangelog', 'sampleOutcomeLabeling',
       'decideReleaseApproval', 'requestReleaseApproval', 'getAuthHeaders',
+      // The needs-you queue: what an owner reads immediately before
+      // authorising a deploy. A view able to draw it could counterfeit it.
+      'listPendingActions',
     ];
     for (const method of withheld) {
       expect(VIEW_DATA_SOURCES as readonly string[]).not.toContain(method);
@@ -102,6 +105,20 @@ describe('reserved view titles', () => {
     expect(activity).not.toBeNull();
 
     for (const name of [...surfaces, activity![1]!]) {
+      expect(RESERVED_VIEW_TITLES).toContain(normalizeViewTitle(name));
+    }
+  });
+
+  test('keep every RETIRED host name, forever', () => {
+    // A name the host has dropped is more dangerous than one it still uses:
+    // the returning user's muscle memory still reaches for it, so an
+    // agent-authored tab wearing it would inherit exactly the trust the
+    // retired surface earned. Nothing may be removed from that list — this is
+    // the assertion that stops a future rename from quietly doing it.
+    const retired = [
+      'Brain', 'Reasoning', 'Self', 'Tasks', 'Jobs', 'Changelog', 'Evolution Changelog',
+    ];
+    for (const name of retired) {
       expect(RESERVED_VIEW_TITLES).toContain(normalizeViewTitle(name));
     }
   });

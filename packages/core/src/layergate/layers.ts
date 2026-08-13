@@ -302,7 +302,10 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         observe: (s) => {
           const base = {
             soulOverride: 'You are Proteus.',
-            availableTools: ['skills'] as const,
+            // Arbitrary valid tool — this probe exercises activation-reason
+            // stability, not the tool it happens to advertise. `skills` left
+            // the native surface; `memory` fills the same placeholder role.
+            availableTools: ['memory'] as const,
             backend: 'cli-local' as const,
             currentDate: '2026-01-01',
           };
@@ -390,9 +393,13 @@ export const LAYERS: readonly Layer[] = Object.freeze([
       },
       {
         id: 'volatile-context/live-rosters-are-bounded',
-        asserts: 'running tasks, delegates and pending approvals render capped, with an honest elided count',
+        asserts: 'the task list, running jobs, delegates and pending approvals render capped, with an honest elided count',
         observe: (s) => s.renderDynamicContextBlock({
-          tasks: Array.from({ length: 10 }, (_, i) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` })),
+          jobs: Array.from({ length: 10 }, (_, i) => ({ id: `job-${i}`, kind: 'think_heads', label: `explore option ${i}` })),
+          tasks: Array.from({ length: 17 }, (_, i) => ({
+            id: `t${i + 1}`, title: `step ${i + 1}`, status: i === 0 ? 'active' : 'open',
+            parentId: i % 3 === 0 ? null : `t${i - (i % 3) + 1}`,
+          })),
           delegates: [
             { kind: 'subordinate', name: 'ana', phase: 'working', task: 'survey the prior art' },
             { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: null },
@@ -407,7 +414,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
           empty: s.renderDynamicContextBlock({}),
           blank: s.renderDynamicContextBlock({ factsBlock: '   ', memoryTail: '' }),
           unselectableOnly: s.renderDynamicContextBlock({ executors: [EXECUTORS[3]] }),
-          emptyRosters: s.renderDynamicContextBlock({ tasks: [], delegates: [], approvals: [] }),
+          emptyRosters: s.renderDynamicContextBlock({ jobs: [], tasks: [], delegates: [], approvals: [] }),
         }),
       },
       {

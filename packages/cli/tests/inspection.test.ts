@@ -26,28 +26,18 @@ function runCli(home: string, args: string[], extraEnv: Record<string, string> =
   });
 }
 
-const VFS_FILES_DDL = `
-  CREATE TABLE vfs_files (
-    path TEXT NOT NULL,
-    chunk_index INTEGER NOT NULL DEFAULT 0,
-    parent_path TEXT NOT NULL DEFAULT '',
-    data BLOB,
-    is_dir INTEGER NOT NULL DEFAULT 0,
-    size INTEGER NOT NULL DEFAULT 0,
-    mtime INTEGER NOT NULL DEFAULT 0,
-    PRIMARY KEY (path, chunk_index)
-  );`;
+
 
 function createLocalAgent(home: string, name: string): void {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
   const db = new Database(join(dir, "agent.db"));
   db.exec(`
-    CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL);
-    ${VFS_FILES_DDL}
+    CREATE TABLE workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, mission TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL);
     CREATE TABLE search_nodes (
       id TEXT PRIMARY KEY,
       parent_id TEXT,
+      root_id TEXT,
       task TEXT NOT NULL,
       action TEXT NOT NULL DEFAULT '',
       observation TEXT NOT NULL DEFAULT '',
@@ -78,19 +68,16 @@ function createLocalAgent(home: string, name: string): void {
       dedupe_key TEXT
     );
   `);
-  db.run("INSERT INTO workspace_identity (id, name, created_at) VALUES (?, ?, ?)", ["agent-1", name, 1]);
-  db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
-    "SOUL.md",
-    Buffer.from("# Test\n\n## Mission\n\nTest purpose\n"),
-    33,
-    1,
-  ]);
-  db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
-    "memory/MEMORY.md",
-    Buffer.from("# Memory\n\nhello local memory\n"),
-    28,
-    2,
-  ]);
+  db.run("INSERT INTO workspace_identity (id, name, mission, created_at) VALUES (?, ?, ?, ?)",
+    ["agent-1", name, "Test purpose", 1]);
+  // `proteus memory` reassembles the document from MemoryStore's index of it,
+  // which is a table this read-only path can open (see local-inspection.ts).
+  db.exec(`CREATE TABLE memory_chunks (
+    id TEXT PRIMARY KEY, path TEXT NOT NULL, start_line INTEGER, end_line INTEGER,
+    hash TEXT, text TEXT NOT NULL, updated_at INTEGER
+  )`);
+  db.run("INSERT INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+    ["c1", "memory/MEMORY.md", 0, 2, "h", "# Memory\n\nhello local memory\n", 2]);
   db.run("INSERT INTO search_nodes (id, parent_id, task, action, observation, visits, value, depth, status, created_at) VALUES (?, NULL, ?, ?, ?, ?, ?, ?, ?, ?)", [
     "root",
     "solve",
@@ -116,9 +103,9 @@ function createLocalAgent(home: string, name: string): void {
   db.close();
 }
 
-/** A workspace from before the workspace_identity rename and before the VFS
- *  BLOB-encoding fix: identity in `agent_identity`, SOUL.md bound as TEXT, and
- *  none of the tables added since (scaffold_versions, crafted_tools, ...). */
+/** A workspace from before the workspace_identity rename: identity in
+ *  `agent_identity`, and none of the tables added since (scaffold_versions,
+ *  crafted_tools, ...). */
 function createLegacyLocalAgent(home: string, name: string): void {
   const dir = join(home, name);
   mkdirSync(dir, { recursive: true });
@@ -128,18 +115,12 @@ function createLegacyLocalAgent(home: string, name: string): void {
       id TEXT NOT NULL,
       name TEXT NOT NULL,
       owner_user_id TEXT NOT NULL DEFAULT '',
+      mission TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL
     );
-    ${VFS_FILES_DDL}
   `);
-  db.run("INSERT INTO agent_identity (id, name, created_at) VALUES (?, ?, ?)", ["legacy-1", name, 1781042330894]);
-  const soul = "# jarvis\n\n## Mission\n\nRun the household and the lab.";
-  db.run("INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)", [
-    "SOUL.md",
-    soul,
-    soul.length,
-    1,
-  ]);
+  db.run("INSERT INTO agent_identity (id, name, mission, created_at) VALUES (?, ?, ?, ?)",
+    ["legacy-1", name, "Run the household and the lab.", 1781042330894]);
   db.close();
 }
 

@@ -22,8 +22,8 @@ import type {
 } from '../src/types/primitives.js';
 import type { AgentRuntime, CraftStore, BranchHandle } from '../src/types/agent-runtime.js';
 import type { CraftedTool } from '../src/types/craft.js';
-import { createInlineVFS } from '../src/identity/inline-primitives.js';
-import { writeVfsFileSync } from '@proteus/agent-utils/vfs';
+import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace.js';
+import { WORKSPACE_IDENTITY_DDL } from '../src/identity/schema.js';
 
 // ── SqlExecutor from bun:sqlite ──────────────────────────────────
 
@@ -53,10 +53,45 @@ export function makeExecRaw(db: Database): RawSqlExec {
 
 // ── In-memory VFS ────────────────────────────────────────────────
 
-/** Canonical SqliteFS-backed VFS over the test database — same schema and
- *  encoding as production, so tests catch writer/reader drift. */
+/** The production workspace filesystem over the test database — the same
+ *  Nimbus component both backends run, so tests catch real writer/reader
+ *  drift rather than a fixture's. */
 export function createMemoryVFS(db: Database): VFS {
-  return createInlineVFS(makeSql(db));
+  return createWorkspaceBundle(db).vfs;
+}
+
+/** `vfs`, with every call ordered after `seeded` — so a fixture's own seed can
+ *  never land on top of what a test wrote. */
+function afterSeed(vfs: VFS, seeded: Promise<unknown>): VFS {
+  const chain = <A extends unknown[], R>(fn: (...args: A) => Promise<R>) =>
+    async (...args: A): Promise<R> => { await seeded; return fn(...args); };
+  return {
+    readFile: chain((p: string, o?: { encoding?: string }) => vfs.readFile(p, o)),
+    writeFile: chain((p: string, d: string | Uint8Array) => vfs.writeFile(p, d)),
+    readdir: chain((p: string) => vfs.readdir(p)),
+    stat: chain((p: string) => vfs.stat(p)),
+    unlink: chain((p: string) => vfs.unlink(p)),
+    mkdir: chain((p: string, o?: { recursive?: boolean }) => vfs.mkdir(p, o)),
+    exists: chain((p: string) => vfs.exists(p)),
+  };
+}
+
+/** The workspace filesystem AND its shell over the test database. */
+export function createWorkspaceBundle(db: Database) {
+  const sql = {
+    exec(query: string, ...bindings: unknown[]) {
+      const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
+      const stmt = db.prepare(query);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(bound as SQLQueryBindings[])) as never[];
+      stmt.run(...(bound as SQLQueryBindings[]));
+      return [] as never[];
+    },
+  };
+  return createWorkspace({
+    sql,
+    transactions: { storage: { transactionSync: <T,>(cb: () => T): T => db.transaction(cb)() } },
+    generation: nextWorkspaceGeneration(sql),
+  });
 }
 
 // ── In-memory Memory ─────────────────────────────────────────────
@@ -230,7 +265,17 @@ export function createTestRuntime(opts?: {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  const vfs = createMemoryVFS(db);
+  // One workspace, so the shell and the VFS are two views of the SAME bytes —
+  // building a second bundle over the same database would be two filesystems
+  // again, which is the thing this design removed.
+  const workspace = createWorkspaceBundle(db);
+  // The scaffold seed is a real file write, so it is a promise. Every access
+  // chains behind it rather than racing it: a test that writes its own
+  // scaffold must not be overtaken by the seed landing afterwards.
+  const seeded = workspace.vfs.mkdir('scaffold', { recursive: true })
+    .then(() => workspace.vfs.writeFile('scaffold/agent.js', 'initial'))
+    .catch(() => {});
+  const vfs = afterSeed(workspace.vfs, seeded);
   const memory = createMemoryMemory(db, vfs);
   const craftStore = createMemoryCraftStore(db);
   const llm = createMockLLM(opts?.llmResponses);
@@ -243,12 +288,8 @@ export function createTestRuntime(opts?: {
     parent_id TEXT, role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`);
-  db.exec(`CREATE TABLE IF NOT EXISTS workspace_identity (
-    id TEXT NOT NULL, name TEXT NOT NULL, owner_user_id TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
-  )`);
+  db.exec(WORKSPACE_IDENTITY_DDL);
 
-  // Initialize scaffold in VFS (canonical encoding)
-  writeVfsFileSync(sql, 'scaffold/agent.js', 'initial');
 
   const identity: Identity = {
     id: 'test-agent-id',
@@ -275,6 +316,7 @@ export function createTestRuntime(opts?: {
     identity,
     craftStore,
     judgeModel: llm,
+    shell: workspace.shell,
     spawnBranch: async () => mockBranch,
     abortBranch: async () => {},
   };

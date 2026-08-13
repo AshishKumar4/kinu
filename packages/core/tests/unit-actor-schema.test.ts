@@ -19,7 +19,7 @@ describe('actor schema', () => {
     initActorTables((ddl) => db.exec(ddl));
 
     const tables = tableNames(db);
-    expect(tables).toContain('vfs_files');
+
     expect(tables).toContain('conversation_history');
     expect(tables).toContain('crafted_tools');
     expect(tables).not.toContain('workspace_identity');
@@ -33,7 +33,7 @@ describe('actor schema', () => {
 
     const tables = tableNames(db);
     expect(tables).toContain('workspace_identity');
-    expect(tables).toContain('vfs_files');
+
     expect(tables).toContain('fork_lineage');
   });
 

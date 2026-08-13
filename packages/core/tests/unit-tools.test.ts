@@ -2,14 +2,20 @@
  * Unit tests for the canonical tool surface.
  *
  * The agent's tool surface is deliberately SMALL (fewer tools → better LLM
- * selection). Always-on (no extra deps): execute_tools, run, memory — the ONE
- * durable-state tool, whose keyed-fact actions are themselves gated on `facts`.
+ * selection). Always-on (no extra deps): execute_tools, run, file, memory —
+ * the ONE durable-state tool, whose keyed-fact actions are themselves gated
+ * on `facts` — and tasks.
  * Conditional (needs a specific dep in BuiltinToolDeps):
- *   - skills           ← skills (SkillsToolDeps — vfs + invoke tracker)
  *   - agents           ← agents (fork substrate and/or team + peers deps;
  *                        the ONE delegation tool, actions gated per group)
  *   - web              ← webSearch (WebSearchProvider; search/fetch actions)
- *   - release   ← releases (source bindings + approvals store)
+ *   - report           ← report (subordinate → parent progress spine)
+ *
+ * `skills` and `release` are NOT part of BuiltinToolDeps at all — skills are
+ * ordinary VFS files reachable via workspace.readFile/writeFile/readdir, and
+ * release is reached ONLY through the release.* codemode namespace
+ * (createReleaseCodemodeProvider, tested below against runReleaseAction
+ * directly rather than through buildBuiltinTools).
  *
  * BUILTIN_TOOLS lists every canonical name so crafted-tool filtering
  * (BUILT_IN_TOOL_NAMES) excludes them all from craft suggestions, regardless
@@ -24,7 +30,14 @@ import {
   buildBuiltinTools,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS,
+  createReleaseCodemodeProvider,
+  runReleaseAction,
+  createMemoryCodemodeProvider,
+  createReportCodemodeProvider,
+  withApprovalGatedShell,
   type CraftedToolExecute,
+  type ReleaseActionInput,
+  type ReleaseToolDeps,
 } from '../src/index.js';
 
 // v2.1(E): core has no in-process fallback. Tests wire the same Node
@@ -75,9 +88,9 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   });
 }
 
-// skills, agents, web, and release are conditional on their deps. Base =
-// everything else. Full surface = all canonical tools.
-const CONDITIONAL_TOOLS = ['skills', 'agents', 'web', 'report', 'release'] as const;
+// agents, web and report are conditional on their deps. Base = everything
+// else. Full surface = all canonical tools.
+const CONDITIONAL_TOOLS = ['agents', 'web', 'report'] as const;
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
   (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
 );
@@ -98,67 +111,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const stubFacts = {
       upsert: () => 'created' as const, recall: () => null, forget: () => {},
       recentTopK: () => [], all: () => [],
-    };
-    const stubSkillsDeps = {
-      vfs: {
-        async exists() { return false; },
-        async readFile() { return ''; },
-        async writeFile() { /* nop */ },
-        async readdir() { return []; },
-        async unlink() { /* nop */ },
-        async mkdir() { /* nop */ },
-      },
-      recordInvoke() { /* nop */ },
-      currentlyInvoked: () => [],
-    };
-    const stubReleases = {
-      board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
-      bindSource: async () => ({
-        id: 'psb-test',
-        kind: 'local' as const,
-        label: 'test',
-        repoUrl: null,
-        defaultBranch: null,
-        localDeviceId: null,
-        localRoot: '/tmp/proteus',
-        deployTarget: null,
-        createdAt: 0,
-        updatedAt: 0,
-      }),
-      create: async () => ({ id: 'pc-test' }),
-      update: async () => ({ id: 'pc-test' }),
-      transition: async () => ({ id: 'pc-test' }),
-      recordCheck: async () => ({
-        id: 'pcc-test',
-        changeId: 'pc-test',
-        name: 'check',
-        status: 'passed' as const,
-        stdout: null,
-        stderr: null,
-        durationMs: null,
-        createdAt: 0,
-        updatedAt: 0,
-      }),
-      requestApproval: async () => ({
-        id: 'pca-test',
-        changeId: 'pc-test',
-        approvalType: 'apply' as const,
-        argumentDigest: 'digest',
-        decision: 'pending' as const,
-        approvedBy: null,
-        note: null,
-        createdAt: 0,
-        decidedAt: null,
-      }),
-      recordDeployment: async () => ({
-        id: 'pcd-test',
-        changeId: 'pc-test',
-        environment: 'staging' as const,
-        workerVersionId: null,
-        deploymentId: null,
-        rollbackTarget: null,
-        deployedAt: 0,
-      }),
     };
     const stubWebSearch = {
       search: async (query: string) => ({ query, results: [], source: 'duckduckgo' as const }),
@@ -192,8 +144,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       createExecuteTool: nodeExecFactory as never,
       codemodeLoader: { __test: true } as unknown,
       facts: stubFacts,
-      skills: stubSkillsDeps,
-      releases: stubReleases,
       webSearch: stubWebSearch,
       agents: { team: stubTeam, peers: stubPeers },
       report: stubReport,
@@ -304,12 +254,125 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect((t.memory as { description: string }).description).not.toContain('remember');
   });
 
+  // ── release.* codemode (not a native tool — see file header) ─────────────
+  // The release lane has two halves and no actor has both: an engine EARNS
+  // apply/run_checks/preview/deploy/rollback from real command output and
+  // refuses the record_* twins as assertions; without one the record_* actions
+  // are the only way the ledger learns what the agent ran itself. The
+  // codemode member set gates on the same dep the runtime does, so neither
+  // actor reads the other's.
+  const releaseLedgerDeps: ReleaseToolDeps = {
+    board: async () => ({}), bindSource: async () => ({} as never), create: async () => ({}),
+    update: async () => ({}), transition: async () => ({}), recordCheck: async () => ({} as never),
+    requestApproval: async () => ({} as never), recordDeployment: async () => ({} as never),
+  };
+
+  test('with an execution engine, release.* offers only what execution earns', () => {
+    const deps: ReleaseToolDeps = {
+      ...releaseLedgerDeps,
+      engine: {
+        apply: async () => ({} as never), runChecks: async () => ({} as never), preview: async () => ({} as never),
+        deploy: async () => ({} as never), rollback: async () => ({} as never),
+      },
+    };
+    const provider = createReleaseCodemodeProvider(() => deps);
+    expect(Object.keys(provider.tools).sort()).toEqual([
+      'apply', 'bindSource', 'board', 'create', 'deploy', 'preview',
+      'requestApproval', 'rollback', 'runChecks', 'transition', 'update',
+    ]);
+    // The record_* twins belong to the no-engine half only.
+    expect(provider.tools.recordCheck).toBeUndefined();
+    expect(provider.tools.recordDeployment).toBeUndefined();
+    expect(provider.types).toContain('apply(changeId: string)');
+    expect(provider.types).not.toContain('recordCheck(');
+  });
+
+  test('without an execution engine, release.* is the ledger, and the record_* twins are how it learns what ran', () => {
+    const provider = createReleaseCodemodeProvider(() => releaseLedgerDeps);
+    expect(Object.keys(provider.tools).sort()).toEqual([
+      'bindSource', 'board', 'create', 'recordCheck', 'recordDeployment',
+      'requestApproval', 'transition', 'update',
+    ]);
+    expect(provider.tools.apply).toBeUndefined();
+    expect(provider.tools.runChecks).toBeUndefined();
+    expect(provider.types).toContain('recordCheck(');
+    expect(provider.types).not.toContain('apply(');
+  });
+
+  test('release.* members dispatch through the SAME runReleaseAction the provider is built on', async () => {
+    let recorded: unknown = null;
+    const deps: ReleaseToolDeps = {
+      ...releaseLedgerDeps,
+      recordCheck: async (changeId, input) => { recorded = { changeId, input }; return { id: 'chk-1' } as never; },
+    };
+    const provider = createReleaseCodemodeProvider(() => deps);
+    const result = await provider.tools.recordCheck!.execute('chg-1', { name: 'tests', status: 'passed' });
+    expect(result).toEqual({ id: 'chk-1' });
+    expect(recorded).toEqual({ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } });
+    // The dispatcher's own validation still applies — a missing changeId
+    // refuses cleanly rather than throwing.
+    const refused = await runReleaseAction(deps, { action: 'apply' } as ReleaseActionInput);
+    expect(refused).toMatchObject({ error: expect.stringContaining('execution engine') });
+  });
+
+  // ── memory.* / tasks.* / report.* codemode (Part 2 — every remaining
+  // builtin reachable from execute_tools, sharing its dispatcher with the
+  // native tool: one implementation, two callers) ──────────────────────────
+
+  test('memory.* dispatches through the SAME store the native `memory` tool reads/writes', async () => {
+    const { rt } = createTestRuntime();
+    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql }));
+    // No facts wired: remember/recall/forget are absent, matching the native
+    // tool's own action-enum gating.
+    expect(Object.keys(provider.tools).sort()).toEqual(['save', 'search', 'sessions']);
+    const saved = await provider.tools.save!.execute('Remember: prefer snake_case');
+    expect(String(saved)).toContain('saved');
+    const found = await rt.memory.read('memory/MEMORY.md');
+    expect(found).toContain('snake_case');
+  });
+
+  test('memory.* exposes remember/recall/forget only when a FactsStore is wired, over the SAME store', async () => {
+    const { rt } = createTestRuntime();
+    const store = new Map<string, { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }>();
+    const facts = {
+      upsert: (key: string, value: unknown, opts?: { confidence?: number }) => {
+        store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
+        return 'created' as const;
+      },
+      recall: (key: string) => store.get(key) ?? null,
+      forget: (key: string) => { store.delete(key); },
+      recentTopK: () => [], all: () => [],
+    };
+    const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, facts }));
+    expect(Object.keys(provider.tools)).toContain('remember');
+    await provider.tools.remember!.execute('user.tz', 'UTC', 0.9);
+    expect(store.get('user.tz')?.value).toBe('UTC');
+    const recalled = await provider.tools.recall!.execute('user.tz') as Record<string, unknown>;
+    expect(recalled).toEqual({ found: true, key: 'user.tz', value: 'UTC', confidence: 0.9, source: 'tool', lastObservedAt: 7 });
+    await provider.tools.forget!.execute('user.tz');
+    expect(store.has('user.tz')).toBe(false);
+  });
+
+  // tasks.* codemode parity is tested in unit-tasks-tool.test.ts, next to the
+  // native tool's own tests (same table-init fixture).
+
+  test('report.* dispatches through the SAME ReportToolDeps.report the native `report` tool calls', async () => {
+    let captured: { status?: string; content?: string } = {};
+    const deps = { report: async (input: { status: 'progress' | 'completed' | 'blocked'; content: string }) => { captured = input; return { delivered: true }; } };
+    const provider = createReportCodemodeProvider(() => deps);
+    const result = await provider.tools.send!.execute('completed', 'Fix landed; tests added.');
+    expect(result).toEqual({ delivered: true });
+    expect(captured).toEqual({ status: 'completed', content: 'Fix landed; tests added.' });
+  });
+
   test('run in workspace mode falls back gracefully when no shell provided', async () => {
     // Test runtime has no rt.shell — `run` must return an error string rather
     // than throwing. This lets test harnesses exercise the tool shape without
     // providing a real shell dependency.
+    // A runtime with no shell at all: every real one has the workspace's, so
+    // this is the degraded case the fallback exists for.
     const { rt } = createTestRuntime();
-    const t = tools(rt);
+    const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'echo hi' });
     expect(typeof result).toBe('string');
@@ -338,8 +401,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // Regression: the gate message used to tell the model to call
     // setShellApprovalMode('allow_all') — a backend RPC the model cannot
     // reach. The actionable path is asking the user.
+    //
+    // The gate itself now lives at the execution seam (`shell`/the
+    // ExecutionRouter — see execution/approval.ts), not inside `run`'s own
+    // executor, so this needs a real (gated) shell to see the message —
+    // createTestRuntime() has none by default.
     const { rt } = createTestRuntime();
-    const t = tools(rt);
+    const shell = withApprovalGatedShell({ exec: async () => ({ stdout: 'ran', stderr: '', exitCode: 0 }) });
+    const t = tools({ ...rt, shell });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'sudo whoami' });
     expect(result).toContain('Requires user approval (mode=strict)');

@@ -16,6 +16,10 @@
  * Deliberately ABSENT, and not to be added without re-reading this note:
  *   • `listPendingConsents` — consent state is host-owned chrome. A view that
  *     can draw the consent queue can draw a plausible fake of it.
+ *   • `listPendingActions` — the same argument with more at stake. The
+ *     needs-you queue is what an owner reads immediately before authorising a
+ *     deploy or promoting a scaffold version; a view able to draw it could
+ *     draw a convincing counterfeit of it.
  *   • `sampleOutcomeLabeling` — takes a sampling budget and draws a set; it
  *     reads like a getter and is not one.
  *   • anything taking a caller-chosen string argument (`getMctsNodeDetail`,
@@ -46,20 +50,35 @@ export type ViewDataSource = (typeof VIEW_DATA_SOURCES)[number];
  * tabs already render in a marked group, but a tab reading "Releases" beside
  * the real Releases tab is a spoof the marker alone does not answer.
  *
+ * NOTHING IS EVER REMOVED FROM THIS LIST. A name the host has retired is more
+ * dangerous than one it still uses, not less: the returning user's muscle
+ * memory still reaches for it, and an agent-authored tab wearing it would be
+ * answered with exactly the trust the retired surface had earned. `tasks`,
+ * `jobs`, `changelog` and `self` are all retired host names kept here forever
+ * for that reason.
+ *
  * `cf-backend/tests/unit-view-sources.test.ts` asserts this covers every member
- * of the UI's `SURFACES` tuple, so a new host surface cannot quietly become
- * impersonable.
+ * of the UI's `SURFACES` tuple — so a new host surface cannot quietly become
+ * impersonable — and that every retired name is still here.
  */
 export const RESERVED_VIEW_TITLES: readonly string[] = [
+  // Live host surfaces.
   'output',
-  'brain',
-  'reasoning',
+  'work',
   'releases',
-  'tasks',
+  'exploration',
+  'agent',
   'environment',
   'activity',
+  // Retired host surface names. Kept forever — see the note above.
+  'self',
+  'tasks',
+  'jobs',
   'changelog',
   'evolutionchangelog',
+  'brain',
+  'reasoning',
+  // Host chrome an agent tab must never impersonate.
   'approvals',
   'approval',
   'consent',

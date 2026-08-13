@@ -4,8 +4,6 @@
 // through the real file surface, so nothing is irrecoverable.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
-import { createShell } from '@proteus/agent-utils/shell';
-import { SqliteFS } from '@proteus/agent-utils';
 import {
   clampToolResult,
   clampSerializedToolResult,
@@ -16,7 +14,7 @@ import {
 } from '../src/tools/clamp.js';
 import { TurnContextBudget } from '../src/context-budget.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime, makeSql } from './helpers.js';
+import { createTestRuntime, createWorkspaceBundle, makeSql } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { ToolSet } from 'ai';
 
@@ -50,7 +48,7 @@ describe('clampToolResult', () => {
 
     // Restorable: the marker path holds the FULL original output.
     const path = markerPath(clamped);
-    expect(path).toStartWith(`/${TOOL_OUTPUT_DIR}/`);
+    expect(path).toStartWith(`${TOOL_OUTPUT_DIR}/`);
     const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
     expect(restored).toBe(original);
   });
@@ -107,10 +105,8 @@ describe('run tool result budget (behavior through the public tool surface)', ()
       if (command.startsWith('grep ')) return realShell.exec(command);
       return { stdout: original, stderr: '', exitCode: 0 };
     };
-    // The shell takes the concrete filesystem, exactly as both backends build
-    // it — `rt.storage.vfs` is the narrowed agent-facing view, which has no
-    // directory surface for the shell to walk.
-    const realShell = createShell(new SqliteFS(makeSql(db)));
+    // The runtime's OWN shell, over the same bytes `rt.storage.vfs` reads.
+    const realShell = rt.shell!;
     const rtWithShell = { ...rt, shell: { exec: fakeShellExec } } as AgentRuntime;
     const tools = buildBuiltinTools({ rt: rtWithShell });
     const run = tools.run as unknown as RunTool;

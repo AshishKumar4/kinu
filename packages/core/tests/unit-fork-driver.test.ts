@@ -13,17 +13,18 @@ import {
   forkWorkspace, initAllTables, writeSoul, readForkLineage, writeForkSnapshot,
   type ForkSnapshot, type ForkTransport,
 } from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
 
-function sourceWorkspace() {
+async function sourceWorkspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initAllTables(makeExecRaw(db));
+  const vfs = createWorkspaceBundle(db).vfs;
   sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
-  writeSoul(sql, 'help with testing');
+  await writeSoul(vfs, sql, 'help with testing');
   sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
   sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;
-  return { db, sql };
+  return { db, sql, vfs };
 }
 
 /** A transport that records what it was asked to do. `taken` is the set of
@@ -43,10 +44,10 @@ function recordingTransport(taken: readonly string[] = []) {
 
 describe('forkWorkspace', () => {
   test('ships the snapshot to the requested name and reports where it landed', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const t = recordingTransport();
     const out = await forkWorkspace(
-      { sql: src.sql, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm1',
       { name: 'my-fork' },
     );
@@ -61,10 +62,10 @@ describe('forkWorkspace', () => {
   });
 
   test('an unnamed fork is named after its source and never pre-checked', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const t = recordingTransport();
     const out = await forkWorkspace(
-      { sql: src.sql, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm2',
     );
 
@@ -77,10 +78,10 @@ describe('forkWorkspace', () => {
   });
 
   test('a requested name that is already taken is refused', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const t = recordingTransport(['taken']);
     await expect(forkWorkspace(
-      { sql: src.sql, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm1',
       { name: 'taken' },
     )).rejects.toThrow('agent name already exists: "taken"');
@@ -89,10 +90,10 @@ describe('forkWorkspace', () => {
   });
 
   test('a malformed name is refused before anything is created', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const t = recordingTransport();
     await expect(forkWorkspace(
-      { sql: src.sql, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'm1',
       { name: 'has spaces' },
     )).rejects.toThrow('invalid agent name');
@@ -102,10 +103,10 @@ describe('forkWorkspace', () => {
   });
 
   test('an unknown cut point is refused before a workspace is addressed', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const t = recordingTransport();
     await expect(forkWorkspace(
-      { sql: src.sql, transport: t.transport, sourceName: 'atlas', busy: () => false },
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => false },
       'nope',
       { name: 'my-fork' },
     )).rejects.toThrow('fork point not found');
@@ -115,10 +116,10 @@ describe('forkWorkspace', () => {
   });
 
   test('a busy agent is not forked: a mid-turn cut snapshots half a turn', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const t = recordingTransport();
     await expect(forkWorkspace(
-      { sql: src.sql, transport: t.transport, sourceName: 'atlas', busy: () => true },
+      { sql: src.sql, vfs: src.vfs, transport: t.transport, sourceName: 'atlas', busy: () => true },
       'm1',
     )).rejects.toThrow('agent busy');
     expect(t.delivered).toEqual([]);
@@ -126,10 +127,11 @@ describe('forkWorkspace', () => {
   });
 
   test('a transport that cannot answer the pre-check does not block the fork', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const delivered: string[] = [];
     const out = await forkWorkspace({
       sql: src.sql,
+      vfs: src.vfs,
       sourceName: 'atlas',
       busy: () => false,
       transport: {
@@ -143,19 +145,21 @@ describe('forkWorkspace', () => {
   });
 
   test('the delivered snapshot lands a complete fork', async () => {
-    const src = sourceWorkspace();
+    const src = await sourceWorkspace();
     const tgtDb = new Database(':memory:');
     const tgt = makeSql(tgtDb);
     initAllTables(makeExecRaw(tgtDb));
+    const tgtVfs = createWorkspaceBundle(tgtDb).vfs;
 
     const out = await forkWorkspace({
       sql: src.sql,
+      vfs: src.vfs,
       sourceName: 'atlas',
       busy: () => false,
       transport: {
         async occupied() { return false; },
         async deliver(name, snapshot) {
-          writeForkSnapshot(tgt, snapshot, { workspaceId: 'TGT', workspaceName: name, now: 5000 });
+          await writeForkSnapshot(tgt, tgtVfs, snapshot, { workspaceId: 'TGT', workspaceName: name, now: 5000 });
           return { workspaceId: 'TGT' };
         },
       },

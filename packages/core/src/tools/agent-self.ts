@@ -96,10 +96,12 @@ const TYPES = `export declare const agent: {
    *  against when called with no argument. Returns [] when this run is
    *  uncapped, which is the default. */
   budget(label?: string): Promise<unknown>;
-  /** Read a background job's status + result. When a long tool call is
-   *  auto-backgrounded you get a { jobId }; you are woken on completion — call
-   *  this to fetch the result, then synthesize/continue. */
-  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed'; result: string | null; error: string | null } | null>;
+  /** Read a background job. A SETTLED job returns its full row — result or
+   *  error. When a job backgrounds you get a { jobId } and are woken with the
+   *  result when it settles: the wake is the delivery, so call this for the
+   *  job a wake named (or to re-read an old one), never in a loop — a job
+   *  still running has no result to read. */
+  jobResult(jobId: string): Promise<{ id: string; kind: string; status: 'running' | 'completed' | 'failed' | 'cancelled'; result?: string | null; error?: string | null; note?: string } | null>;
   /** List your recent background jobs (newest first). */
   backgroundJobs(limit?: number): Promise<unknown>;
   /** Fold the conversation NOW: arm the compaction ladder so your next turn is
@@ -128,11 +130,34 @@ const TYPES = `export declare const agent: {
  * hardcoded number was necessarily wrong on half the turns the agent serves.
  */
 const BACKGROUND_DESCRIPTION =
-  'Read a background job (status + result). A tool call that outruns this turn\'s background '
-  + `threshold (${BACKGROUND_POLICY.interactive.detachAfterMs / 1000}s on a chat turn a human is `
-  + `watching, ${BACKGROUND_POLICY['one-shot'].detachAfterMs / 1000}s on an autonomous turn woken `
-  + 'by an event, a timer or a job) hands back a { jobId } instead of its result; you are woken on '
-  + 'completion — call this to fetch it.';
+  'Read a background job\'s settled result. A fork backgrounds the moment it spawns on a live chat '
+  + 'session; other long tool calls background once they outrun this turn\'s threshold '
+  + `(${BACKGROUND_POLICY.interactive.detachAfterMs / 1000}s on a chat turn a human is watching, `
+  + `${BACKGROUND_POLICY['one-shot'].detachAfterMs / 1000}s on an autonomous turn woken by an event, `
+  + 'a timer or a job). Either way the call hands back { jobId } and you are WOKEN with the result '
+  + 'when the job settles — the wake is the delivery. Call this for the job a wake named, or to '
+  + 're-read an old result; a job still running has no result to read.';
+
+/** What a jobResult read hands the model. A SETTLED job is the row itself —
+ *  the result is there to read. A job still RUNNING is NOT an empty row to
+ *  re-poll: the read states the wake contract instead, so a poll loop has
+ *  nothing to spin on. (The measured lesson behind the shape: prose alone
+ *  converts at 0%, mechanisms do — this return value is the mechanism.) */
+function shapeJobRead(job: unknown): unknown {
+  if (typeof job !== 'object' || job === null) return job;
+  const row = job as { id?: unknown; kind?: unknown; label?: unknown; status?: unknown };
+  if (row.status !== 'running') return job;
+  return {
+    id: row.id,
+    kind: row.kind,
+    ...(row.label != null ? { label: row.label } : {}),
+    status: 'running',
+    note:
+      'Not settled yet — there is no result to read, and reading again will not make it finish. '
+      + 'You are woken automatically with the full result the moment this job settles. '
+      + 'Do other work if you have any; otherwise end your turn and let the wake bring the result.',
+  };
+}
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
   return {
@@ -240,7 +265,7 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
         execute: async (...args: unknown[]) => {
           const id = args[0];
           if (typeof id !== 'string' || !id) return { error: 'agent.jobResult: jobId must be a non-empty string' };
-          try { return await host.jobResult(id); }
+          try { return shapeJobRead(await host.jobResult(id)); }
           catch (err) { return { error: `agent.jobResult: ${(err as Error).message}` }; }
         },
       },

@@ -5,9 +5,10 @@
  * pane only re-reads when the path or executor changes; uploads go over HTTP
  * (PUT /api/workspaces/<name>/files), because the RPC transport is the chat
  * WebSocket and its 1 MiB frame ceiling sits below ordinary file sizes.
- * The Environment surface mounts it over the CompositeVFS (execName
- * "workspace", initialPath at a mount prefix), so /local, /sandbox, /nimbus
- * and /pc all browse through this single entry point.
+ * The Environment surface points it at whichever environment is selected —
+ * `execName` is that row's executor and `initialPath` its own working
+ * directory — so every environment browses through this single entry point in
+ * ITS OWN native paths. There is no shared address space to translate.
  */
 import { useCallback, useEffect, useRef, useState, type DragEvent as ReactDragEvent } from "react";
 import { Loader } from "@cloudflare/kumo";

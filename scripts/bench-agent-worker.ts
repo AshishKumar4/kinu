@@ -85,13 +85,13 @@ async function main(): Promise<void> {
   if (fresh) {
     // A v0 workspace: bootstrap scaffold, empty memory, empty CraftStore, no
     // lessons. This is the "stateless" arm's starting point, and it is one call.
-    createWorkspace(db as never, { name: input.workspaceName, purpose: input.purpose, llm: input.llm });
+    await createWorkspace(db as never, { name: input.workspaceName, purpose: input.purpose, llm: input.llm });
     initSearchTables((ddl: string) => db.exec(ddl));
     initScaffoldTables((ddl: string) => db.exec(ddl));
     initCraftScoreTables((ddl: string) => db.exec(ddl));
   }
 
-  const { rt } = openWorkspaceCLI(db as never, input.dbPath, { llm: input.llm });
+  const { rt } = await openWorkspaceCLI(db as never, input.dbPath, { llm: input.llm });
 
   let tokens = 0;
   let breach: 'tokens' | null = null;

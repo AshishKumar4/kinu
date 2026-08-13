@@ -1,4 +1,4 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent, type FormEvent } from "react";
+import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
@@ -6,14 +6,14 @@ import { btnSmCls } from "@/components/ui/form";
 import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
-  GearIcon, GearSixIcon, TimerIcon, ClockIcon,
+  GearIcon, TimerIcon, ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
-  ClockCounterClockwiseIcon, PencilSimpleIcon, CheckIcon, UserPlusIcon, LightningIcon,
+  ClockCounterClockwiseIcon, UserPlusIcon, LightningIcon,
   StackIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, summarizeRestorePlan } from "@proteus/core";
+import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, isPlaceholderMission, summarizeRestorePlan } from "@proteus/core";
 import type { AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan, TakePickOutcome } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
@@ -27,7 +27,7 @@ import { MarkdownContent, CodeBlock } from "@/components/surfaces/shared";
 import { extractPreviewUrl } from "@/lib/preview-origin";
 import { TakesChip, BranchRunChip } from "@/components/AlternateTakes";
 import { hasComparableTakes } from "@/components/alternate-takes-logic";
-import { describeToolCall, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
+import { describeToolCall, isToolCallFailed, summarizeToolCall, summarizeToolRun } from "@/components/tool-call-summary";
 import { groupMessageParts, type AnyToolPart } from "@/components/tool-call-grouping";
 import {
   classifyProgrammaticTurn, eventVariantLabel, messageSignalId, parseDrainedEvents,
@@ -36,6 +36,7 @@ import {
 import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { SupervisePage } from "./SupervisePage";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
+import { WorkspaceBar, type Altitude } from "@/components/WorkspaceBar";
 import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
 // The model picker reads /api/user/models (which unions the connected
 // providers' menus); the result is cached for the SPA session (see user-api).
@@ -67,73 +68,22 @@ function WorkspaceErrorBanner({ message, onRetry }: { message: string; onRetry: 
   );
 }
 
-function InlineWorkspaceTitle({ title, onRename }: {
-  title: string;
-  onRename: (displayName: string) => Promise<string>;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [value, setValue] = useState(title);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => { if (!editing) setValue(title); }, [editing, title]);
-
-  const save = async (event: FormEvent) => {
-    event.preventDefault();
-    const displayName = value.trim();
-    if (!displayName || saving) return;
-    setSaving(true);
-    setError(null);
-    try {
-      setValue(await onRename(displayName));
-      setEditing(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Rename failed");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  if (editing) {
-    return (
-      <form onSubmit={save} className="flex min-w-0 items-center gap-1">
-        <input
-          autoFocus
-          value={value}
-          maxLength={60}
-          onFocus={(event) => event.currentTarget.select()}
-          onChange={(event) => setValue(event.target.value)}
-          onKeyDown={(event) => { if (event.key === "Escape" && !saving) { setEditing(false); setError(null); } }}
-          className="w-44 rounded-md border p-border p-elevated px-2 py-1 text-sm p-text focus:outline-none focus:border-[var(--c-accent)] focus:ring-1 focus:ring-[var(--c-accent-subtle)]"
-          aria-label="Workspace display name"
-        />
-        <button
-          type="submit"
-          disabled={!value.trim() || saving}
-          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover disabled:opacity-40"
-          aria-label="Save workspace name"
-        ><CheckIcon size={13} /></button>
-        <button
-          type="button"
-          onClick={() => { setEditing(false); setError(null); }}
-          disabled={saving}
-          className="rounded p-1 p-text-3 hover:p-text hover:p-card-hover"
-          aria-label="Cancel rename"
-        ><XIcon size={13} /></button>
-        {error && <span role="alert" className="text-[10px] p-danger" title={error}>Rename failed</span>}
-      </form>
-    );
-  }
-
+/** A workspace before its first turn. The mission it was created for is what
+ *  the workspace IS, not something it was asked to do — so it is shown here as
+ *  the standing brief rather than sent as an opening message that the agent
+ *  would then try to carry out. */
+export function EmptyConversation({ mission }: { mission: string }) {
+  const brief = isPlaceholderMission(mission) ? null : mission.trim();
   return (
-    <div className="group/title flex min-w-0 items-center gap-1">
-      <span className="font-medium text-sm p-text truncate max-w-[180px]" title={title}>{title}</span>
-      <button
-        onClick={() => setEditing(true)}
-        className="shrink-0 rounded p-1 opacity-0 group-hover/title:opacity-60 focus-visible:opacity-100 hover:!opacity-100 p-text-3 hover:p-text transition-all"
-        title="Rename"
-        aria-label={`Rename workspace ${title}`}
-      ><PencilSimpleIcon size={12} /></button>
+    <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+      <BrainIcon size={36} className="mb-3 p-text-3" />
+      {brief && (
+        <>
+          <p className="text-[11px] font-medium uppercase tracking-[0.16em] p-text-3">Mission</p>
+          <p className="mt-1.5 max-w-md whitespace-pre-wrap text-sm leading-relaxed p-text-2">{brief}</p>
+        </>
+      )}
+      <p className="mt-3 text-sm p-text-3">Send the first message to start.</p>
     </div>
   );
 }
@@ -213,8 +163,12 @@ function parseProvisionError(output: unknown):
   return null;
 }
 
-function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
+function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText }: {
   toolName: string; input?: Record<string, unknown>; output?: unknown; isRunning: boolean; isError: boolean;
+  /** The transport's own reason for a protocol-level failure (a crashed
+   *  executor, a timeout) — distinct from `output`, which a tool that caught
+   *  its own failure returns as an ordinary result. Never present together. */
+  errorText?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const startTime = useRef<number | null>(null);
@@ -253,7 +207,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
   const failed = isError || !!provisionErr;
   return (
     <div className="my-0.5">
-      <button onClick={() => setExpanded(!expanded)} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
+      <button onClick={() => setExpanded(!expanded)} aria-expanded={expanded} className="group/tool flex w-full min-h-7 items-center gap-2 rounded-md px-1 text-left p-row-text p-text-2 hover:p-text transition-colors cursor-pointer">
         <span className="shrink-0 flex w-4 items-center justify-center" aria-hidden>
           {isRunning ? <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
             : failed ? <span className="size-1.5 rounded-full p-dot-danger" />
@@ -290,10 +244,28 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
       )}
       {expanded && (
         <div className="mt-1 ml-[7px] border-l p-border pl-4 space-y-2 animate-scale-in">
+          {/* A protocol-level failure (crashed executor, timeout) carries its
+              reason here, never in `output` — without this, expanding one of
+              these showed a red row and then nothing: the actual cause was
+              dropped on the floor. */}
+          {errorText && (
+            <div>
+              <div className="p-eyebrow mb-1 p-danger">Error</div>
+              <pre className="text-[12px] font-mono p-danger max-h-40 overflow-auto whitespace-pre-wrap m-0">{errorText}</pre>
+            </div>
+          )}
           {/* execute_tools is the agent's primary doing-mechanism: render the
-              LLM-authored JS program legibly, not as escaped JSON. */}
+              LLM-authored JS program legibly, not as escaped JSON. A `run`
+              command gets the same treatment — its args are just
+              {runtime, command}, and pretty-printed JSON turns every quote
+              and newline in the command into an escape sequence, which is
+              unreadable for exactly the multi-line commands worth expanding
+              to read. The runtime stays visible in the collapsed row's `@x`
+              badge, so nothing is lost by not repeating it here. */}
           {toolName === "execute_tools" && typeof input?.code === "string" ? (
             <CodeBlock className="language-js">{input.code}</CodeBlock>
+          ) : toolName === "run" && typeof input?.command === "string" ? (
+            <CodeBlock className="language-bash">{input.command}</CodeBlock>
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
@@ -323,9 +295,28 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError }: {
  * Only FINISHED calls are folded in; a call still running keeps its own row
  * so the count never changes under the reader's eye while the agent works.
  */
+/** The live output value of a finished part — undefined while it's still
+ *  running or never finished, which is exactly when there is nothing to read
+ *  a failure out of yet. Shared by the group's failure tally and the part's
+ *  own card so the two can never disagree about the same call. */
+function partOutput(part: AnyToolPart): unknown {
+  return part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+}
+
+/** Whether this part failed — protocol-level (`output-error`) or the quieter
+ *  kind a built-in catches and returns as a normal result (isToolCallFailed). */
+function partFailed(part: AnyToolPart): boolean {
+  return isToolCallFailed(getToolName(part), part.input, partOutput(part), part.state === "output-error");
+}
+
 function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
   const [expanded, setExpanded] = useState(false);
-  const failed = parts.some((p) => p.state === "output-error");
+  // Reads every call's own output, not just the transport state — a run of
+  // calls whose failure is a `run` tool's `Error (exit 1)` (caught and
+  // returned as a normal result) used to collapse into a group that looked
+  // exactly like a clean one; expanding it was the only way to find out which
+  // row, if any, was the problem.
+  const failed = parts.some(partFailed);
   const headline = summarizeToolRun(parts.map((p) => ({ toolName: getToolName(p), input: p.input })));
 
   return (
@@ -336,7 +327,10 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
           {failed ? <span className="size-1.5 rounded-full p-dot-danger" />
             : <StackIcon size={13} className="p-text-3 opacity-60" />}
         </span>
-        <span className="min-w-0 truncate">{headline}</span>
+        {/* title: the tally can run longer than the column and truncate —
+            every other row in this card offers the untruncated text on
+            hover, and this one didn't. */}
+        <span className="min-w-0 truncate" title={headline}>{headline}</span>
         <CaretRightIcon size={11} className={`ml-auto shrink-0 p-text-3 transition-transform duration-150 ${expanded ? "rotate-90 opacity-100" : "opacity-0 group-hover/tool:opacity-100"}`} />
       </button>
       {expanded && (
@@ -350,7 +344,7 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
 
 /** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part }: { part: AnyToolPart }) {
-  const output = part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+  const output = partOutput(part);
   const previewUrl = extractPreviewUrl(output);
   return (
     <div>
@@ -358,7 +352,8 @@ function ToolCallPart({ part }: { part: AnyToolPart }) {
         input={part.input as Record<string, unknown> | undefined}
         output={output}
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
-        isError={part.state === "output-error"} />
+        isError={partFailed(part)}
+        errorText={part.state === "output-error" ? (part as { errorText?: string }).errorText : undefined} />
       {/* Inline preview card — when a tool returns a /_preview/ URL, surface a
           live iframe under the tool block so the user sees the running app
           inline (also promoted to the Output surface). */}
@@ -447,7 +442,7 @@ function ShownCaption({ state }: { state: CardState }) {
   );
 }
 
-/** A background task returning into the conversation — rendered as a centered
+/** A background job returning into the conversation — rendered as a centered
  *  marker, not a chat bubble. The agent's synthesis reply follows as normal. */
 function BackgroundEventCard({ kind, status, state }: { kind: string; status: string; state: CardState }) {
   const meta = status === "completed" ? { Icon: CheckCircleIcon, tone: "p-success", verb: "completed" }
@@ -948,16 +943,17 @@ export default function WorkspacePage() {
   const onPickModel = useCallback((spec: string) => { void setModel(spec).catch(() => {}); }, [setModel]);
   // ?altitude=supervise deep-links straight to the Supervise altitude (the
   // /triggers/:id redirect and settings' Automations link use it).
-  const [altitude, setAltitude] = useState<"run" | "supervise">(
+  const [altitude, setAltitude] = useState<Altitude>(
     () => new URLSearchParams(location.search).get("altitude") === "supervise" ? "supervise" : "run",
   );
-  const [surface, setSurface] = useState<SurfaceKind>("Brain");
+  // A returning driver opens on status, not on the agent's own description.
+  // Output still takes over the moment there is something running to look at.
+  const [surface, setSurface] = useState<SurfaceKind>("Work");
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   const messagesRef = usePinToBottom<HTMLDivElement>(state.messages);
   const chatInputRef = useRef<HTMLTextAreaElement>(null);
-  const initialPromptSent = useRef(false);
   // Pending chat attachments — fed by the attach button, paste, and drag-drop
   // onto the chat column; rendered as removable chips above the input.
   const [pendingAttachments, setPendingAttachments] = useState<FileUIPart[]>([]);
@@ -1018,14 +1014,17 @@ export default function WorkspacePage() {
   // roster reflects status for workspaces visited this session.
   useEffect(() => {
     if (!agentId) return;
-    const running = state.isStreaming || state.runningTaskCount > 0;
+    const running = state.isStreaming || state.backgroundJobs.some((j) => j.status === "running");
     window.dispatchEvent(new CustomEvent("proteus:workspace-activity", {
       detail: { name: agentId, running, unseenChangelog: state.changelogUnseen },
     }));
-  }, [agentId, state.isStreaming, state.runningTaskCount, state.changelogUnseen]);
+  }, [agentId, state.isStreaming, state.backgroundJobs, state.changelogUnseen]);
 
-  // Auto-switch the work surface to the live Preview the moment a new sandbox
-  // port is exposed — the running app becomes the centre of attention.
+  // The ONE rule that steers the surface on its own: a newly exposed sandbox
+  // port switches to Output, where the running app is. Environment used to run
+  // a second, competing rule over the same signal — two owners of one decision,
+  // which is a bug however either of them behaves — and it went with the
+  // preview panes it drove.
   // (Port discovery itself lives in useProteus' live-data poll, so this fires
   // from any surface.)
   const prevPortCountRef = useRef(0);
@@ -1034,21 +1033,6 @@ export default function WorkspacePage() {
     if (n > prevPortCountRef.current) setSurface("Output");
     prevPortCountRef.current = n;
   }, [state.pinnedPorts.length]);
-
-  // Send the creation mission as the opening message — once, deterministically,
-  // the moment the socket is connected. The mission rides in via navigation
-  // state from CreateWorkspaceModal; we clear it (replace) right after sending so a
-  // refresh or back-nav never re-fires it.
-  useEffect(() => {
-    if (initialPromptSent.current) return;
-    const ns = location.state as { initialPrompt?: string } | null;
-    if (!ns?.initialPrompt || state.connectionStatus !== "connected") return;
-    initialPromptSent.current = true;
-    // No setDisplayName here: a user-origin name would suppress the agent's own
-    // AI auto-titling. The agent titles itself from this opening message.
-    state.sendChat(ns.initialPrompt);
-    navigate(location.pathname, { replace: true, state: null });
-  }, [state.connectionStatus, location.state, location.pathname, navigate]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleSend = useCallback(() => {
     const t = chatInput.trim();
@@ -1219,24 +1203,25 @@ export default function WorkspacePage() {
         </div>
       )}
 
-      {/* Altitude toggle: RUN (this run, mission-control) ⇄ SUPERVISE (the
-          agent over time — curriculum, runs, automations). */}
-      <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
-        <span className="text-xs p-text-2 font-medium truncate">{workspaceTitle}</span>
-        <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
-          {(["run", "supervise"] as const).map((a) => (
-            <button key={a} onClick={() => setAltitude(a)}
-              className={`px-2.5 py-1 text-[11px] rounded capitalize transition-colors ${altitude === a ? "p-fill p-text font-medium" : "p-text-3 hover:p-text-2"}`}>
-              {a}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* The one identity row, and the workspace-scoped controls that belong
+          with it — including the altitude switch: RUN (this run,
+          mission-control) ⇄ SUPERVISE (the agent over time). */}
+      <WorkspaceBar
+        title={workspaceTitle}
+        onRename={state.setDisplayName}
+        connectionStatus={state.connectionStatus}
+        working={state.isStreaming}
+        {...(as?.forkLineage ? { forkParent: { workspace: as.forkLineage.sourceWorkspaceName, forkedAt: as.forkLineage.forkedAt } } : {})}
+        settingsHref={`/settings/${agentId}`}
+        altitude={altitude}
+        onAltitude={setAltitude}
+        modelPicker={<ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-32 @[34rem]:w-36 @[46rem]:w-44" />}
+      />
 
       {altitude === "supervise" ? (
         <div className="flex-1 min-h-0">
           <ErrorBoundary label="Supervise">
-            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} onOpenTasks={() => { setAltitude("run"); setSurface("Tasks"); }} />
+            <SupervisePage rpc={state.rpc} onRunTask={(t) => { setAltitude("run"); state.sendChat(t); }} />
           </ErrorBoundary>
         </div>
       ) : (
@@ -1246,13 +1231,20 @@ export default function WorkspacePage() {
           <div className="flex flex-col h-full border-r p-border">
             {/* Agent tabs — the workspace's orchestrator + durable subordinates.
                 Roster + live status ride the parent socket; the CHAT below
-                switches per tab while Columns B/C stay workspace-scoped. */}
+                switches per tab while Columns B/C stay workspace-scoped. This
+                strip is the chat column's only chrome, so it also carries what
+                acts on ONE conversation: clearing the main transcript. */}
             <SubordinateTabs
               workspace={agentId}
               subordinates={state.subordinates}
               activeName={subName}
               onSpawn={state.spawnSubordinate}
               onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
+              trailing={!subName && state.messages.length > 0 && (
+                <Button variant="ghost" shape="square" size="sm"
+                  onClick={() => setShowClearConfirm(true)}
+                  icon={<TrashIcon size={12} />} aria-label="Clear history" />
+              )}
             />
             {subName ? (
               <SubordinateChatColumn key={subName} workspace={agentId} subName={subName} />
@@ -1267,56 +1259,13 @@ export default function WorkspacePage() {
                 </div>
               </div>
             )}
-            {/* Header. Below ~26rem the row cannot hold a title, a model picker
-                and two buttons at once — the title is what loses, and a
-                workspace called "Checkout co…" is the one thing on this bar
-                that has to survive. So the title takes a full row of its own
-                at phone widths and the controls drop beneath it, rather than
-                every element being squeezed until the name is unreadable. */}
-            <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 @[26rem]:py-3.5 border-b p-border">
-              <div className="flex min-w-0 basis-full @[26rem]:basis-0 @[26rem]:flex-1 items-center gap-3">
-                <ConnectionIndicator status={state.connectionStatus} />
-                <InlineWorkspaceTitle title={workspaceTitle} onRename={state.setDisplayName} />
-                {state.isStreaming && (
-                  <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
-                    <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-                    <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
-                  </span>
-                )}
-                {as?.forkLineage && (
-                  <Link
-                    to={`/workspace/${as.forkLineage.sourceWorkspaceName}`}
-                    className="shrink-0 flex items-center gap-1 text-[10px] p-text-3 hover:p-text transition-colors px-1.5 py-0.5 rounded border p-border"
-                    title={`Open parent workspace from ${new Date(as.forkLineage.forkedAt).toLocaleString()}`}
-                  >
-                    <GitBranchIcon size={10} />
-                    <span>Parent workspace</span>
-                  </Link>
-                )}
-              </div>
-              <div className="flex shrink-0 items-center gap-2 ml-auto">
-                <ConnectedModelPicker value={as?.model ?? ""} onChange={onPickModel} size="xs" className="shrink-0 w-32 @[30rem]:w-36 @[42rem]:w-44" />
-                {state.messages.length > 0 && (
-                  <Button variant="ghost" shape="square" size="sm"
-                    onClick={() => setShowClearConfirm(true)}
-                    icon={<TrashIcon size={12} />} aria-label="Clear history" />
-                )}
-                <Link to={`/settings/${agentId}`} className="p-text-2 hover:p-text transition-colors" title="Settings">
-                  <GearSixIcon size={14} />
-                </Link>
-              </div>
-            </div>
-
             {/* Messages — generous padding for spacious feel.
                 ErrorBoundary'd so a single malformed message doesn't
                 whitescreen the chat. (STABILITY-AUDIT §D2.) */}
             <ErrorBoundary label="Chat">
             <div ref={messagesRef} className="flex-1 overflow-y-auto px-6 py-5 space-y-5 lg:px-8">
               {state.messages.length === 0 && !state.isStreaming && (
-                <div className="flex flex-col items-center justify-center h-full">
-                  <BrainIcon size={36} className="p-text-3 mb-3" />
-                  <p className="text-sm p-text-3">Send a message to start</p>
-                </div>
+                <EmptyConversation mission={as?.purpose ?? ""} />
               )}
               {state.messages.map((msg, i) => (
                 <MessageView
@@ -1450,9 +1399,8 @@ export default function WorkspacePage() {
             lastActiveExecutor={state.lastActiveExecutor}
             onExecute={state.executeInExecutor}
             backgroundJobs={state.backgroundJobs}
-            runningTaskCount={state.runningTaskCount}
-            onRefreshTasks={state.refreshBackgroundJobs}
-            changelogUnseen={state.changelogUnseen}
+            onRefreshJobs={state.refreshBackgroundJobs}
+            pendingActions={state.pendingActions}
             onChangelogSeen={state.clearChangelogUnseen}
             agentViews={state.agentViews}
             rpc={state.rpc}

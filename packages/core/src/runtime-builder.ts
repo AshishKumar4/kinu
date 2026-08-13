@@ -19,7 +19,7 @@ import type {
   Shell,
   MemorySearchResult,
 } from './types/primitives.js';
-import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch } from './types/agent-runtime.js';
+import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellApproval } from './types/agent-runtime.js';
 import type { ExecutionRouter } from './execution/types.js';
 import type { FileCheckpoints } from './checkpoints/types.js';
 
@@ -58,6 +58,9 @@ export interface RuntimeComponents {
   shell?: Shell;
   /** Shadow-git file checkpoints over real filesystems (host backends only). */
   checkpoints?: FileCheckpoints;
+  /** See AgentRuntime.setShellApprovalChannel. Only a backend that owns a
+   *  live interactive surface (the CLI's ACP channel) supplies this. */
+  setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
 }
 
 /**
@@ -94,5 +97,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     executionRouter: components.executionRouter,
     shell: components.shell,
     checkpoints: components.checkpoints,
+    setShellApprovalChannel: components.setShellApprovalChannel,
   };
 }

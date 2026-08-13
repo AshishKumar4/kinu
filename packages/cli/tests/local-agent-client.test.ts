@@ -105,7 +105,7 @@ function setup(model: LanguageModel) {
     db,
     dbPath,
     info,
-    refreshInfo: () => info,
+    refreshInfo: async () => info,
     model: model as ReturnType<typeof resolveChatModel>,
     modelResolver: fakeResolver(model),
     mcpServers: {},

@@ -228,7 +228,7 @@ describe('renderForLLM', () => {
       const second = await spillEventContent(vfs, overBudget);
       expect(second).toBe(first!);
       expect([...files.keys()]).toEqual([first!]);
-      expect(first!.startsWith('/local/.proteus/event-content/')).toBe(true);
+      expect(first!.startsWith('.proteus/event-content/')).toBe(true);
     });
   });
 });

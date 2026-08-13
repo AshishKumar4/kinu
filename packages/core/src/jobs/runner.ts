@@ -93,13 +93,40 @@ export interface BackgroundJobRunnerDeps {
 function refusalMessage(kind: string, running: readonly BackgroundJob[]): string {
   const roster = running.map((j) => `${j.id} (${j.kind})`).join(', ');
   return (
-    `The "${kind}" call ran past the background threshold, but this workspace already has ` +
+    `The "${kind}" call needed to move to the background, but this workspace already has ` +
     `${running.length} background job(s) running — the maximum — so it was CANCELLED instead of ` +
     `being detached. Nothing was left running from this call. Already in flight: ${roster}. ` +
     `Wait for those to finish (you are woken as each one settles, and agent.jobResult('<id>') ` +
     `reads a settled one), or cancel the ones you no longer need, before starting more ` +
     `long-running work. Launching another copy will not make the running ones finish sooner.`
   );
+}
+
+/** A short, human-readable description of what a backgrounded call is
+ *  actually doing — read straight off the tool input, duck-typed rather than
+ *  importing each tool's own input type (this module stays generic over
+ *  every backgroundable kind). This is what turns "bgjob-3z agents running"
+ *  into something an operator can act on without decoding the stored
+ *  input_json themselves; `BackgroundJob.label` already existed for exactly
+ *  this and was never populated by the real runtime (only test fixtures set
+ *  it directly on the store). Truncated to match the short-snippet
+ *  convention every other debug summary line already uses (task.slice(0,60)
+ *  for head runs, etc.) — this is a label, not a payload dump. */
+function describeJobInput(kind: string, input: unknown): string | undefined {
+  if (typeof input !== 'object' || input === null) return undefined;
+  const rec = input as Record<string, unknown>;
+  if (kind === 'agents' && typeof rec.task === 'string') {
+    const settle = typeof rec.settle === 'string' ? rec.settle : 'merge';
+    return `fork(settle=${settle}): ${rec.task.slice(0, 80)}`;
+  }
+  if (kind === 'run' && typeof rec.command === 'string') {
+    const runtime = typeof rec.runtime === 'string' ? `${rec.runtime}: ` : '';
+    return `${runtime}${rec.command.slice(0, 80)}`;
+  }
+  if (kind === 'execute_tools' && typeof rec.code === 'string') {
+    return rec.code.trim().slice(0, 80);
+  }
+  return undefined;
 }
 
 export class BackgroundJobRunner {
@@ -114,7 +141,10 @@ export class BackgroundJobRunner {
    *  (threshold-detach logs 'bg_job_started'; retry logs 'bg_job_retry'). */
   create(kind: string, input: unknown, controller: AbortController): string {
     const id = `bgjob-${nanoid()}`;
-    this.deps.store.create({ id, kind, input: serializeJobResult(input), now: Date.now() });
+    this.deps.store.create({
+      id, kind, input: serializeJobResult(input), now: Date.now(),
+      label: describeJobInput(kind, input),
+    });
     this.controllers.set(id, controller);
     return id;
   }
@@ -204,6 +234,12 @@ export class BackgroundJobRunner {
     if (this.deps.store.get(jobId)?.status === 'cancelled') return;
     if (outcome.ok) this.deps.store.settle(jobId, epoch, serializeJobResult(outcome.result), Date.now());
     else this.deps.store.fail(jobId, epoch, outcome.error, Date.now());
+    // The lifecycle's OTHER end: start/refuse/cancel/resume already reach
+    // logActivity (console.log + the queryable activity_log table), but the
+    // terminal settle/fail never did — the one event that actually answers
+    // "is this job still running", silently missing from both `wrangler tail`
+    // and the activity log an operator would otherwise check.
+    this.deps.logActivity?.('bg_job_settled', outcome.ok ? `${jobId} completed` : `${jobId} failed — ${outcome.error}`);
     this.notifySettled(jobId);
     await this.wake(jobId);
   }

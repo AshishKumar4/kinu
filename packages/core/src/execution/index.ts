@@ -19,6 +19,7 @@ export {
 } from './exec-result.js';
 export { DefaultExecutionRouter } from './router.js';
 export { createInlineExecutor, type InlineExecutorDeps } from './inline.js';
+export { withApprovalGatedShell, gateProviderExec } from './approval.js';
 export {
   createSandboxExecutor, type SandboxHandle,
   type BackupOptions, type DirectoryBackup, type RestoreBackupResult,
@@ -26,6 +27,7 @@ export {
   isSandboxTransientError,
 } from './sandbox.js';
 export { createDeviceTunnelExecutor, type DeviceTransport } from './device-tunnel-executor.js';
+export { explainNativeToolReferenceError } from './sandbox-errors.js';
 export {
   devicePresence, parseDevicePresence, deviceChangeNotice, observeDevicePresence,
   DEVICE_PRESENCE_CONFIG_KEY,
@@ -45,3 +47,13 @@ export {
   type NimbusExecOptions,
   type NimbusExecResult,
 } from './nimbus.js';
+
+export {
+  createParentExecutor, createParentWorkspaceVfs,
+  type ParentWorkspaceHandle, type ParentExecResult,
+  type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
+} from './parent.js';
+export { sandboxFiles } from './sandbox.js';
+export { nimbusSessionFiles } from './nimbus.js';
+export { deviceFiles, type DeviceFileConsent } from './device-tunnel-executor.js';
+export { parseStatLine } from './exec-result.js';

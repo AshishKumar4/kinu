@@ -6,6 +6,12 @@
  *   /gallery.html            → all sections stacked
  *   /gallery.html?frame=shell    → full workspace shell (hero shot)
  *   /gallery.html?frame=chat     → chat column inventory
+ *   /gallery.html?frame=chatempty → a workspace before its first turn: the
+ *                                  mission it was created for, not a message
+ *   /gallery.html?frame=toolcalls → every tool-call render state, pre-expanded
+ *                                    (quiet failure, protocol failure, a
+ *                                    multi-line `run`, an MCP tool, a failing
+ *                                    group)
  *   /gallery.html?frame=modal    → modal open
  *   /gallery.html?frame=home     → HomePage
  *   /gallery.html?frame=tabs     → the agent tab strip, active + idle + working
@@ -13,37 +19,53 @@
  *   /gallery.html?frame=views    → an agent-authored View, in Column C's chrome
  *   /gallery.html?frame=viewfail → the same View when its spec stops validating
  *   /gallery.html?frame=releases → the Releases board with a pending approval
+ *   /gallery.html?frame=work     → the Work surface: needs-you, the plan and
+ *                                  running jobs, and the settled journal
+ *   /gallery.html?frame=workempty → the same column before anything has happened
+ *   /gallery.html?frame=environment → the Environment surface: every place the
+ *                                  agent can act, as one row set
  *   /gallery.html?frame=supervise → the Supervise altitude, every block populated
  *   /gallery.html?frame=settings → the per-agent Settings page
+ *   /gallery.html?frame=forks    → Exploration on a real 106-node, depth-6
+ *                                  competition, in Column C's actual width
+ *   /gallery.html?frame=forkmerge → the same surface on a MERGED fork: the same
+ *                                  tree at depth 1, with no score encodings
+ *   /gallery.html?frame=forkfull → the same competition in the full-screen explorer
+ *   /gallery.html?frame=forkbig  → the scale probe: 520 nodes, depth 9
  *
  * Network: /api/user/* GETs are stubbed in-page; everything else passes through.
  */
-import { StrictMode } from "react";
+import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
 import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
-  PaperPlaneRightIcon, PaperclipIcon, GearSixIcon, TrashIcon, BrainIcon,
+  PaperPlaneRightIcon, PaperclipIcon, TrashIcon, BrainIcon,
 } from "@phosphor-icons/react";
 import "./index.css";
 import Sidebar from "@/components/Sidebar";
-import { ConnectionIndicator } from "@/components/connection-indicator";
 import { ModelPicker } from "@/components/ModelPicker";
-import { WorkSurface } from "@/components/surfaces/WorkSurface";
+import { WorkspaceBar } from "@/components/WorkspaceBar";
+import { WorkSurface, type SurfaceKind } from "@/components/surfaces/WorkSurface";
 import { AgentViewSurface } from "@/components/surfaces/AgentViewSurface";
 import { ReleasesSurface } from "@/components/surfaces/ReleasesSurface";
-import { BrainSurface } from "@/components/surfaces/BrainSurface";
+import { AgentSurface } from "@/components/surfaces/AgentSurface";
 import { EmptyState, MarkdownContent } from "@/components/surfaces/shared";
 import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
-import { MessageView, DeviceConsentCard, ChatErrorCard } from "@/pages/WorkspacePage";
+import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { SupervisePage } from "@/pages/SupervisePage";
 import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
-import type { BackgroundJob, Rpc, ToolInfo } from "@/lib/protocol";
+import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
+import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
+import type { ExecutorInfo } from "@/lib/executors";
+import type { DirEntry, ForkRunSummary, HeadRunView, MountInfo, PendingAction } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
+
+const frame = new URLSearchParams(location.search).get("frame");
 
 /* ── /api/user stub ─────────────────────────────────────────────── */
 
@@ -99,6 +121,102 @@ window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
 }) as typeof window.fetch;
 
 
+/* ── A search worth photographing ───────────────────────────────── */
+
+/**
+ * A real MCTS tree, at the size the tree view has to survive: 106 nodes over
+ * seven depths, one deep winning line, and the losing majority the engine
+ * pruned on the way. The five-node mock this frame used to carry is exactly
+ * why nobody ever saw that the labels collide.
+ *
+ * Rows, not a tree: the mock enters the app through `buildTree`, the same
+ * fold the socket payload goes through, so the frame cannot photograph a
+ * shape the server can't produce.
+ */
+const MCTS_ACTIONS = [
+  "Backfill coupon.kind from the discount table",
+  "Add a NOT NULL default and re-run the migration",
+  "Patch applyCoupon to tolerate a null kind",
+  "Reject null-kind coupons at the API edge",
+  "Recompute kind from percentage vs fixed amount",
+  "Roll the Tuesday migration back",
+  "Dual-write kind on the next checkout",
+  "Infer kind lazily in the cart serializer",
+  "Guard the 500 with a try/catch and log",
+  "Re-seed the coupon fixtures in staging",
+  "Split the migration into two deploys",
+  "Cache the resolved kind per coupon id",
+];
+
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6D2B79F5) >>> 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function mctsSearchRows(target: number, maxDepth: number): MctsRow[] {
+  const rnd = mulberry32(0x5EA4C4);
+  const rows: MctsRow[] = [];
+  const push = (row: MctsRow): MctsRow => { rows.push(row); return row; };
+  const root = push({
+    id: "n000", parent_id: null, depth: 0, visits: 31, value: 0.028,
+    status: "open", action: "Find why the SAVE20 coupon 500s",
+    task: "Find why the SAVE20 coupon 500s and fix it.",
+    observation: "Four candidate fixes explored; one line survived to depth 6.",
+    created_at: NOW - 36e5,
+  });
+  // `winner` walks one line down the tree — the branch the search kept paying
+  // for — so the render has a real principal variation to find.
+  let winner = root;
+  const frontier: MctsRow[] = [root];
+  while (frontier.length > 0 && rows.length < target) {
+    const parent = frontier.shift()!;
+    if (parent.depth >= maxDepth || parent.status === "failed") continue;
+    // A pruned branch was expanded before it was cut, so it keeps the children
+    // it had — the dense low-value clusters a real tree carries at the bottom.
+    const fanout = parent.status === "pruned" ? 2 : parent.depth === 0 ? 4 : 2 + Math.floor(rnd() * 3);
+    for (let i = 0; i < fanout && rows.length < target; i++) {
+      const onWinningLine = parent.id === winner.id && i === 0 && parent.status !== "pruned";
+      const value = onWinningLine
+        ? Math.min(0.97, 0.42 + parent.depth * 0.09 + rnd() * 0.06)
+        : Math.max(0, (parent.value * 0.4 + rnd() * 0.5) - parent.depth * 0.06);
+      const visits = onWinningLine ? Math.max(2, 9 - parent.depth) : rnd() < 0.35 ? 0 : 1 + Math.floor(rnd() * 2);
+      const status = onWinningLine ? "open"
+        : rnd() < 0.08 ? "failed"
+        : value < 0.22 ? "pruned"
+        : "open";
+      // The engine scores a failed branch 0 and backpropagates that; a mock
+      // that hands one a mid score photographs a state production cannot reach.
+      const score = status === "failed" ? 0 : value;
+      const child = push({
+        id: `n${String(rows.length).padStart(3, "0")}`,
+        parent_id: parent.id, depth: parent.depth + 1, visits, value: score, status,
+        action: MCTS_ACTIONS[(rows.length * 7 + parent.depth) % MCTS_ACTIONS.length]!,
+        observation: status === "failed"
+          ? "Branch errored: the staging DB refused the ALTER while checkout held the lock."
+          : `Scored ${score.toFixed(2)} — ${status === "pruned" ? "below the prune floor, dropped" : "kept for the next round"}.`,
+        code_used: onWinningLine ? "await db.exec(`UPDATE coupons SET kind = ...`)" : null,
+        created_at: NOW - 36e5 + rows.length * 9e3,
+      });
+      if (onWinningLine) { winner = child; frontier.unshift(child); } else frontier.push(child);
+    }
+  }
+  // The search converged on the deepest node of the line it kept paying for.
+  winner.status = "terminal";
+  return rows;
+}
+
+/** `mctsbig` is the scale probe — the same search shape five times over and
+ *  three levels deeper, so the claim that this view survives a few hundred
+ *  nodes is something the harness photographs rather than something a comment
+ *  asserts. */
+const MCTS_ROWS = frame === "forkbig" ? mctsSearchRows(520, 9) : mctsSearchRows(106, 6);
+const MCTS_TREE = buildTree(MCTS_ROWS);
+
 /* ── Agent socket stub ──────────────────────────────────────────── */
 
 /**
@@ -117,12 +235,15 @@ const AGENT_RPC: Record<string, unknown> = {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
       displayName: "Checkout coupon bug", purpose: "Find why the SAVE20 coupon 500s and fix it.",
       soul: "# Checkout coupon bug\n\nI own the checkout coupon path. I read the migration before I guess.\n",
-      createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 12,
+      createdAt: NOW - 7 * 864e5, scaffoldVersion: 7, searchNodeCount: 106,
       craftedToolCount: 2, messageCount: 48, model: "anthropic/claude-opus-4", forkLineage: null,
     },
-    tools: { tools: [], crafted: [] },
+    tools: { builtIn: [], crafted: [] },
     memoryContent: "",
-    mcts: [], timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
+    // The full-screen explorer reads its tree off the snapshot, so the same
+    // 106-node search the `mcts` frame renders has to arrive through here.
+    mcts: MCTS_ROWS,
+    timeline: [], executors: [], executorOutputs: [], lastActiveExecutor: null,
   },
   getStoredModelSpec: "anthropic/claude-opus-4",
   getShellApprovalMode: "strict",
@@ -217,7 +338,13 @@ const MESSAGES: UIMessage[] = [
       // has to survive without becoming a wall of identical rows.
       { type: "tool-file", toolCallId: "t4", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
       { type: "tool-file", toolCallId: "t5", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
-      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: "ok" },
+      // Deliberately a QUIET failure: the transport reports success
+      // (state: output-available) but the tool caught its own failure and
+      // returned it as a normal result — the shape every built-in uses
+      // (tools/builtins.ts `{error: "…"}`). The migration file moved on since
+      // the read above, so the edit's old_text no longer matches uniquely.
+      // This is the case that used to make a whole 5-call group read as clean.
+      { type: "tool-file", toolCallId: "t6", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
       { type: "tool-file", toolCallId: "t7", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
       { type: "tool-agents", toolCallId: "t8", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], settle: "merge", task: "Check every other call site that indexes `rules` by kind" }, output: "3 forks merged" },
       { type: "tool-run", toolCallId: "t3", state: "input-available", input: { runtime: "sandbox", command: "bun test packages/checkout" } },
@@ -233,6 +360,43 @@ const MESSAGES: UIMessage[] = [
     metadata: { proteusEvent: "event_drain" },
     parts: [{ type: "text", text: "While you were idle:\n- [subordinate_report] from subordinate (coupon-tester): All 14 checkout regression tests green after the migration patch. [the sender awaits your answer]\n- [webhook] from github (AshishKumar4/shop): PR #212 review requested" }],
   }),
+  msg({
+    id: "a2", role: "assistant", createdAt: NOW - 3 * 60e3,
+    parts: [
+      { type: "text", text: "The edit above didn't take — re-reading before I retry, then confirming the migration is idempotent before I let it near staging." },
+      // A real multi-line command, kept as its OWN row (a lone text part on
+      // either side stops it folding into a 3+ run) so its expanded state is
+      // inspectable — the case that used to render as escaped-JSON instead
+      // of a readable script.
+      {
+        type: "tool-run", toolCallId: "t9", state: "output-available",
+        input: {
+          runtime: "sandbox",
+          command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone",
+        },
+        output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
+      },
+      { type: "text", text: "Migrations are clean. One more check before I loop back to the edit." },
+      // A genuine protocol-level failure (the executor itself crashed/timed
+      // out), distinct from the quiet t6 case above: no `output` at all, the
+      // reason lives in errorText.
+      {
+        type: "tool-run", toolCallId: "t10", state: "output-error",
+        input: { runtime: "nimbus", command: "curl -sf https://ci.internal/status/checkout-fixes" },
+        errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443",
+      },
+      { type: "text", text: "CI didn't answer — checking the PR directly instead." },
+      // An MCP tool the host has no summarizer contract for — the honest
+      // fallback (name + its one string argument, no invented annotation),
+      // and long enough to exercise the row's truncation + hover title.
+      {
+        type: "dynamic-tool", toolCallId: "t11", toolName: "gh__search_pull_requests", state: "output-available",
+        input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
+        output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+      },
+      { type: "text", text: "CI didn't answer — retrying after the migration lands. PR #212 is already up for review." },
+    ],
+  }),
 ];
 
 
@@ -241,25 +405,167 @@ const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
   return {} as unknown as T;
 };
 
+/**
+ * The two fork runs the Exploration frames list, and the stores behind them.
+ *
+ * Both settle policies are in the same list on purpose: that IS the change.
+ * `getMctsNodeDetail` legitimately answers null for a node the server has
+ * retired and the view falls back to the row it holds — stubRpc's blanket `[]`
+ * for a `get*` is not that shape and crashes the inspector.
+ */
+const FORK_RUNS: ForkRunSummary[] = [
+  {
+    id: "n000", task: "Find why the SAVE20 coupon 500s", startedAt: NOW - 36e5,
+    status: "completed", settle: "competed", branches: 105, winnerScore: 0.91,
+  },
+  {
+    id: "root-merge-1", task: "Check every other call site that indexes rules by kind",
+    startedAt: NOW - 52e5, status: "completed", settle: "merged", branches: 3, winnerScore: null,
+  },
+  {
+    id: "root-merge-0", task: "Audit the CLI surface", startedAt: NOW - 9 * 36e5,
+    status: "partial", settle: "merged", branches: 2, winnerScore: null,
+  },
+];
+
+const MERGED_RUN: HeadRunView = {
+  rootId: "root-merge-1",
+  task: "Check every other call site that indexes rules by kind",
+  rationale: "Three call sites, three readers — cheaper in parallel than in sequence.",
+  status: "completed",
+  spawnedAt: NOW - 52e5,
+  heads: [
+    {
+      id: "root-merge-1-h0", task: "packages/checkout/src/apply-coupon.ts", rationale: "the reported 500",
+      status: "completed", summary: "Two more reads of rules[kind]; both guarded by the same ?? inferKind fix.",
+      errorMessage: null, tokenInput: 8_420, tokenOutput: 610, wallClockMs: 14_200,
+      toolCalls: [{ name: "file", status: "ok" }, { name: "run", status: "exit=0" }],
+      decisions: [{ question: "Guard at the edge or at the reader?", choice: "at the reader", rationale: "the edge would still let a null through the cart serializer" }],
+      steps: [
+        { text: "Reading the handler and its two callers.", reasoning: "The 500 is a deref, so the fix has to be where the deref is.", toolCalls: [{ name: "file", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" }] },
+        { text: "Both call sites take the same shape. One guard covers them.", toolCalls: [] },
+      ],
+    },
+    {
+      id: "root-merge-1-h1", task: "packages/cart/src/serializer.ts", rationale: "the lazy path",
+      status: "completed", summary: "One read, already null-safe — no change needed here.",
+      errorMessage: null, tokenInput: 5_110, tokenOutput: 240, wallClockMs: 9_800,
+      toolCalls: [{ name: "file", status: "ok" }], decisions: [],
+      steps: [{ text: "Already uses the optional chain.", toolCalls: [] }],
+    },
+    {
+      id: "root-merge-1-h2", task: "packages/admin/src/coupon-report.ts", rationale: "the reporting path",
+      status: "errored", summary: null,
+      errorMessage: "the admin package is not checked out in this sandbox",
+      tokenInput: 1_020, tokenOutput: 0, wallClockMs: 2_100,
+      toolCalls: [{ name: "file", status: "error: ENOENT" }], decisions: [], steps: [],
+    },
+  ],
+  merge: {
+    narrative: "One real call site left, in apply-coupon.ts, and the same ?? inferKind guard covers both reads. The cart serializer is already null-safe. The admin report could not be checked — that package is not in this sandbox.",
+    headCount: 3, totalTokens: 15_400,
+  },
+};
+
+/**
+ * Agent → Evolution reads three shapes that are NOT arrays, so stubRpc's
+ * blanket `[]` for a `get*` is a lie the components then dereference — the
+ * same trap `getMctsNodeDetail` fell into. Real shapes, populated, so the frame
+ * photographs the panels rather than their empty states.
+ */
+const REPLAY_EVALS = [
+  { id: "rev_3", ranAt: NOW - 2 * 864e5, sampleSize: 24, acceptedCount: 19, negativeCount: 5, meanScore: 0.79, loss: 0.21, scaffoldVersion: 7, interval: { lo: 0.64, hi: 0.89, n: 24 } },
+  { id: "rev_2", ranAt: NOW - 9 * 864e5, sampleSize: 21, acceptedCount: 14, negativeCount: 7, meanScore: 0.67, loss: 0.33, scaffoldVersion: 6, interval: { lo: 0.51, hi: 0.80, n: 21 } },
+  { id: "rev_1", ranAt: NOW - 17 * 864e5, sampleSize: 18, acceptedCount: 10, negativeCount: 8, meanScore: 0.55, loss: 0.45, scaffoldVersion: 6, interval: { lo: 0.39, hi: 0.71, n: 18 } },
+];
+
+const ALIGNMENT = {
+  segments: [
+    { scaffoldVersion: 6, firstAt: NOW - 20 * 864e5, turns: 62, abandoned: 3, rate: { per100: 14.5, lowPer100: 8.1, highPer100: 24.4, reliable: true } },
+    { scaffoldVersion: 7, firstAt: NOW - 6 * 864e5, turns: 41, abandoned: 1, rate: { per100: 7.3, lowPer100: 2.8, highPer100: 17.6, reliable: true } },
+  ],
+  overall: { turns: 103, abandoned: 4, rate: { per100: 11.7, lowPer100: 7.0, highPer100: 18.9, reliable: true } },
+  trend: "improving",
+  deltaPer100: -7.2,
+  comparedVersions: { from: 6, to: 7 },
+  note: "Corrections per 100 graded turns, from the turn-outcomes ledger alone — no benchmark and no judge.",
+};
+
+const CALIBRATION = {
+  universe: 103, labeled: 0, unclear: 0, orphaned: 0, labelers: [], lastLabeledAt: null,
+  strata: [], accuracy: null, kappa: null, overall: null, segments: [],
+  gap: { kind: "no_labels", labeled: 0, needed: 100 },
+};
+
+const GEPA_RUNS = [
+  { runId: "gepa_2", target: "scaffold", startedAt: NOW - 3 * 864e5, status: "completed", winnerId: "cand_2b", iterations: 6, metricCalls: 48 },
+  { runId: "gepa_1", target: "scaffold", startedAt: NOW - 12 * 864e5, status: "completed", winnerId: "cand_1c", iterations: 4, metricCalls: 32 },
+];
+
+const GEPA_DETAIL = {
+  run: GEPA_RUNS[0],
+  candidates: [
+    { id: "cand_2a", parentId: null, aggregateScore: 0.61, scores: { i1: 0.6, i2: 0.55, i3: 0.68 }, createdAt: NOW - 3 * 864e5 },
+    { id: "cand_2b", parentId: "cand_2a", aggregateScore: 0.78, scores: { i1: 0.81, i2: 0.72, i3: 0.81 }, createdAt: NOW - 3 * 864e5 },
+    { id: "cand_2c", parentId: "cand_2a", aggregateScore: 0.44, scores: { i1: 0.4, i2: 0.51, i3: 0.41 }, createdAt: NOW - 3 * 864e5 },
+  ],
+  pareto: [{ candidateId: "cand_2b", instanceId: "i1", score: 0.81 }, { candidateId: "cand_2a", instanceId: "i3", score: 0.68 }],
+};
+
+const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "getReplayEvals") return REPLAY_EVALS as unknown as T;
+  if (method === "getAlignmentConvergence") return ALIGNMENT as unknown as T;
+  if (method === "getOutcomeCalibration") return CALIBRATION as unknown as T;
+  if (method === "getGepaRuns") return GEPA_RUNS as unknown as T;
+  if (method === "getGepaRun") return GEPA_DETAIL as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listForkRuns") return FORK_RUNS as unknown as T;
+  if (method === "getSearchTree") return MCTS_ROWS as unknown as T;
+  if (method === "getHeadRuns") return [MERGED_RUN] as unknown as T;
+  if (method === "getMctsNodeDetail") return null as T;
+  return stubRpc<T>(method, args);
+};
+
+/** The same surface with the MERGED run selected — a fork is a tree at depth 1,
+ *  and every score encoding has to be absent rather than drawn from a zero no
+ *  branch earned. This frame is where that claim is checked. */
+const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listForkRuns") return FORK_RUNS.slice(1) as unknown as T;
+  return forkRpc<T>(method, args);
+};
+
 /* ── Compositions (markup mirrors WorkspacePage) ────────────────── */
 
-function ChatHeader() {
+/* The one identity row, as the app renders it — the real component, not a
+   copy of it: the whole point of the row is that there is exactly one. */
+function GalleryWorkspaceBar() {
   return (
-    <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 px-5 py-3 @[26rem]:py-3.5 border-b p-border">
-      <div className="flex min-w-0 basis-full @[26rem]:basis-0 @[26rem]:flex-1 items-center gap-3">
-        <ConnectionIndicator status="connected" />
-        <span className="font-medium text-sm p-text truncate">Checkout coupon bug</span>
-        <span className="shrink-0 inline-flex items-center gap-1.5 px-1.5 @[34rem]:px-2 py-0.5 rounded-full p-accent-subtle" title="The agent is working">
-          <span className="size-1.5 rounded-full p-dot-accent animate-pulse" />
-          <span className="hidden @[34rem]:inline p-meta p-accent font-medium">working</span>
-        </span>
-      </div>
-      <div className="flex shrink-0 items-center gap-2 ml-auto">
-        <ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-32 @[30rem]:w-36 @[42rem]:w-44" />
-        <Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />
-        <span className="p-text-2"><GearSixIcon size={14} /></span>
-      </div>
-    </div>
+    <WorkspaceBar
+      title="Checkout coupon bug"
+      onRename={async (name) => name}
+      connectionStatus="connected"
+      working
+      settingsHref="/settings/checkout-fixes"
+      altitude="run"
+      onAltitude={() => {}}
+      modelPicker={<ModelPicker models={MODEL_STUBS()} value="anthropic/claude-opus-4" onChange={() => {}} size="xs" className="shrink-0 w-32 @[34rem]:w-36 @[46rem]:w-44" />}
+    />
+  );
+}
+
+/* The chat column's only chrome: the tab strip, carrying the controls that act
+   on the conversation it has open. Clearing is one of them, and like the app
+   it is absent until there is a transcript to clear. */
+function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
+  return (
+    <SubordinateTabs
+      workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
+      onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
+      trailing={clearable && <Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
+    />
   );
 }
 
@@ -291,7 +597,10 @@ function ChatMessages() {
   );
 }
 
-function Shell() {
+function Shell(
+  { surface = "Output", mctsTree = null, rpc = stubRpc, pendingActions = [] }:
+  { surface?: SurfaceKind; mctsTree?: ForkNode | null; rpc?: Rpc; pendingActions?: PendingAction[] },
+) {
   return (
     <div className="flex h-screen w-screen flex-col p-bg p-text overflow-hidden md:flex-row">
       {/* Mirrors components/layout.tsx — a harness that photographs a
@@ -299,25 +608,20 @@ function Shell() {
       <aside className="hidden w-64 shrink-0 h-full p-sidebar border-r p-border md:block"><Sidebar /></aside>
       <main className="min-h-0 flex-1 min-w-0 overflow-hidden">
         <div className="h-full flex flex-col">
-          <div className="flex items-center px-4 py-1.5 border-b p-border shrink-0">
-            <span className="text-xs p-text-2 font-medium truncate">Checkout coupon bug</span>
-            <div className="ml-auto flex items-center gap-0.5 p-recessed rounded-md p-0.5">
-              <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-fill p-text font-medium">run</button>
-              <button className="px-2.5 py-1 text-[11px] rounded capitalize transition-colors p-text-3 hover:p-text-2">supervise</button>
-            </div>
-          </div>
+          <GalleryWorkspaceBar />
           <div className="flex-1 flex min-h-0">
             <div className="@container flex flex-col h-full border-r p-border" style={{ width: "42%" }}>
-              <ChatHeader />
+              <GalleryChatTabs />
               <ChatMessages />
               <Composer />
             </div>
             <div className="flex-1 min-w-0">
               <WorkSurface
-                surface="Output" onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
-                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+                surface={surface} onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
+                memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={mctsTree} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
-                backgroundJobs={[]} runningTaskCount={2} onRefreshTasks={() => {}} changelogUnseen={3} rpc={stubRpc}
+                backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={pendingActions}
+                rpc={rpc}
               />
             </div>
           </div>
@@ -384,12 +688,25 @@ function ChatFrame() {
   return (
     <div className="flex h-screen justify-center p-bg p-text">
       <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
-        <SubordinateTabs
-          workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
-          onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
-        />
-        <ChatHeader />
+        <GalleryChatTabs />
         <ChatMessages />
+        <Composer />
+      </div>
+    </div>
+  );
+}
+
+/* What every new workspace opens on. The mission is shown as the standing
+   brief it is — it is deliberately NOT sent as an opening message, so this
+   state is the first thing anyone sees after creating a workspace. */
+function ChatEmptyFrame() {
+  return (
+    <div className="flex h-screen justify-center p-bg p-text">
+      <div className="@container flex w-full max-w-[560px] flex-col border-x p-border">
+        <GalleryChatTabs clearable={false} />
+        <div className="flex-1 overflow-y-auto px-6 py-5 lg:px-8">
+          <EmptyConversation mission={BRAIN_STATUS.purpose} />
+        </div>
         <Composer />
       </div>
     </div>
@@ -399,7 +716,7 @@ function ChatFrame() {
 function All() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><ChatHeader /><ChatMessages /><Composer /></div></Section>
+      <Section title="Chat column"><div className="@container max-w-3xl border p-border rounded-lg overflow-hidden"><GalleryWorkspaceBar /><GalleryChatTabs /><ChatMessages /><Composer /></div></Section>
       <Section title="Controls">{<Controls />}</Section>
     </div>
   );
@@ -639,23 +956,27 @@ function LandingV2() {
   );
 }
 
-/* The Brain surface: the collapsible sections and the native/code-mode
+/* The Agent surface: the collapsible sections and the native/code-mode
    exposure badge, at the width Column C actually gets. */
 /* The real docstrings, from the registry the orchestrator serves them from.
    Mocking short ones is how the Tools list shipped as a wall of prose without
-   anyone seeing it: nine builtins carry ~2,400 tokens of contract between
-   them, and a harness that photographs one-liners photographs a surface the
-   app does not have. */
+   anyone seeing it: eight builtins carry real contract text between them, and
+   a harness that photographs one-liners photographs a surface the app does
+   not have. `release` (and `agent.*` self-steering, `skills` CRUD) left
+   BUILTIN_TOOLS for codemode-only reach — getToolDescriptions() only lists
+   BUILTIN_TOOLS, the same reason `agent.*` has never appeared here either, so
+   this row is illustrative mock, not a live readout. */
 const BRAIN_TOOLS: ToolInfo[] = [
   ...BUILTIN_TOOLS.map((name) => ({
     name,
     summary: BUILTIN_TOOL_SPECS[name].summary,
     description: BUILTIN_TOOL_DESCRIPTIONS[name],
     learned: false,
-    exposure: (name === "release" ? "codemode" : "native") as ToolInfo["exposure"],
+    exposure: "native" as ToolInfo["exposure"],
     qualityScore: 1,
     usageCount: 0,
   })),
+  { name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", qualityScore: 1, usageCount: 0 },
   { name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 },
   { name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 },
 ];
@@ -750,7 +1071,7 @@ function ViewsFrame() {
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
-          backgroundJobs={[]} onRefreshTasks={() => {}}
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
           rpc={viewRpc}
         />
       </div>
@@ -834,6 +1155,230 @@ function ReleasesFrame() {
 }
 
 
+/* ── Work ───────────────────────────────────────────────────────── */
+
+// The agent's own plan, at the shape it actually reaches: several steps, one
+// item active, one task broken into subtasks, one dropped. Photographed inside
+// Column C's chrome, beside the jobs and self-changes it now shares a surface
+// with — the split that used to put each of those three in a room of its own.
+const AGENT_TASKS = [
+  {
+    id: "t1", parentId: null, title: "Reproduce the SAVE20 coupon 500", status: "done",
+    createdAt: NOW - 52e5, updatedAt: NOW - 44e5, subtasks: [],
+  },
+  {
+    id: "t2", parentId: null, title: "Patch the gateway timeout that swallows the coupon lookup",
+    status: "active", createdAt: NOW - 52e5, updatedAt: NOW - 8e5,
+    subtasks: [
+      { id: "t5", parentId: "t2", title: "Raise the upstream deadline to 60s", status: "done", createdAt: NOW - 30e5, updatedAt: NOW - 21e5 },
+      { id: "t6", parentId: "t2", title: "Stop retrying a request the client already abandoned", status: "active", createdAt: NOW - 30e5, updatedAt: NOW - 6e5 },
+      { id: "t7", parentId: "t2", title: "Check the same path in the checkout worker", status: "open", createdAt: NOW - 30e5, updatedAt: NOW - 30e5 },
+    ],
+  },
+  {
+    id: "t3", parentId: null, title: "Add a regression test for the expired-coupon branch",
+    status: "open", createdAt: NOW - 52e5, updatedAt: NOW - 52e5, subtasks: [],
+  },
+  {
+    id: "t4", parentId: null, title: "Rewrite the coupon docs page", status: "dropped",
+    createdAt: NOW - 52e5, updatedAt: NOW - 40e5, subtasks: [],
+  },
+];
+
+/** Both lifecycle halves in frame: one job still running (Now, cancel), two
+ *  settled (journal, retry / dismiss). */
+const BACKGROUND_JOBS = [
+  {
+    id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
+    status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
+  },
+  {
+    id: "bgjob-2f8b1d04", kind: "execute_tools", label: "bun test packages/core",
+    status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
+    createdAt: NOW - 42e5, settledAt: NOW - 33e5,
+  },
+  {
+    id: "bgjob-9d3c6e11", kind: "run", label: "wrangler deploy --dry-run",
+    status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+    createdAt: NOW - 61e5, settledAt: NOW - 58e5,
+  },
+];
+
+const CHANGELOG = {
+  seenAt: NOW - 30e5,
+  unseenCount: 2,
+  entries: [
+    {
+      id: "cl_1", kind: "scaffold", at: NOW - 10e5, scaffoldVersion: 8, revert: true,
+      summary: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
+      evidence: "shadow eval: 7 trials · 5 pending wins · 1 regression · 1 tie",
+    },
+    {
+      id: "cl_2", kind: "tool", at: NOW - 26e5, scaffoldVersion: null, revert: true,
+      summary: "Learned a tool: bisect_migration",
+      evidence: "extracted from 3 successful turns · quality 0.82",
+    },
+    {
+      id: "cl_3", kind: "fact", at: NOW - 50e5, scaffoldVersion: null, revert: true,
+      summary: "Remembered: percentage coupons carry kind:null after Tuesday's migration",
+      evidence: null,
+    },
+  ],
+};
+
+/** The queue that closes the badge gap: a release approval used to light
+ *  nothing at all while a running job — which needs nobody — carried a digit. */
+const PENDING_ACTIONS: PendingAction[] = [
+  {
+    id: "apr_1", kind: "release_approval", at: NOW - 12e5,
+    title: "Approve: deploy to production",
+    detail: "Warm up the empty-state copy",
+  },
+  {
+    id: "scaffold-v8", kind: "scaffold_version", at: NOW - 10e5,
+    title: "Scaffold v8 is waiting to be promoted or rolled back",
+    detail: "Rewrote the tool preamble — shorter, and it stops re-reading files it just wrote",
+  },
+  {
+    id: "bgjob-9d3c6e11", kind: "failed_job", at: NOW - 58e5,
+    title: "run failed",
+    detail: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+  },
+  {
+    id: "unseen-changes", kind: "unseen_changes", at: NOW - 10e5,
+    title: "2 self-changes you have not seen",
+    detail: "Keep or revert them in the journal below.",
+  },
+];
+
+const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+  if (method === "listAgentTasks") return AGENT_TASKS as unknown as T;
+  if (method === "getEvolutionChangelog") return CHANGELOG as unknown as T;
+  return stubRpc<T>(method, args);
+};
+
+function WorkFrame() {
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] min-h-screen border-x p-border">
+        <WorkSurface
+          surface="Work" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
+          rpc={workRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
+/** The same column before anything has happened — the state a fresh workspace
+ *  opens on, which is the one an empty-state has to earn its copy in. */
+function WorkEmptyFrame() {
+  const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "listAgentTasks") return [] as unknown as T;
+    if (method === "getEvolutionChangelog") return { entries: [], unseenCount: 0, seenAt: 0 } as unknown as T;
+    return stubRpc<T>(method, args);
+  };
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="Work" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
+          rpc={emptyRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ── Environment ────────────────────────────────────────────────── */
+
+/**
+ * The four places the agent can act, as the surface lists them.
+ *
+ * Photographed with every environment reachable, because the defect this frame
+ * exists to catch is a naming one: two rows that describe the same thing read
+ * as a duplicate, and only a picture of the row set together shows it.
+ */
+const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
+  {
+    name: "laptop", kind: "laptop", available: true, configured: true, active: true, status: "active",
+    capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
+  },
+  {
+    name: "nimbus", kind: "nimbus", available: true, configured: true, active: false, status: "idle",
+    capabilities: ["shell", "npm", "git", "python", "native_binary", "fs_owned", "net_inbound", "process_spawn"],
+  },
+  {
+    name: "sandbox", kind: "sandbox", available: true, configured: true, active: true, status: "active",
+    capabilities: ["shell", "npm", "git", "docker", "fs_owned", "net_inbound", "process_long"],
+  },
+  {
+    name: "workspace", kind: "workspace", available: true, configured: true, active: true, status: "active",
+    capabilities: ["javascript", "typescript", "shell", "fs_shared"],
+  },
+];
+
+const ENVIRONMENT_MOUNTS: MountInfo[] = ENVIRONMENT_EXECUTORS.map((exec) => ({
+  name: exec.name,
+  prefix: `${exec.name}.*`,
+  live: true,
+  policy: {
+    readOnly: false,
+    rootPath: "/",
+    consistency: exec.name === "workspace" ? "durable"
+      : exec.name === "laptop" ? "live-shared" : "ephemeral",
+  },
+  cwd: ".",
+  reason: null,
+}));
+
+const ENVIRONMENT_FILES: DirEntry[] = [
+  { name: "memory", type: "dir" },
+  { name: "skills", type: "dir" },
+  { name: "AGENTS.md", type: "file", size: 2_148 },
+  { name: "SOUL.md", type: "file", size: 913 },
+  { name: "notes.md", type: "file", size: 4_402 },
+];
+
+function EnvironmentFrame() {
+  // Answers only for the executor that actually owns these files. A stub that
+  // returned the same listing for every argument would photograph a pane
+  // asking the wrong environment as though it worked.
+  const envRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
+    if (method === "listMounts") return ENVIRONMENT_MOUNTS as unknown as T;
+    if (method === "getExecutorFiles") {
+      const [execName, path] = (args ?? []) as [string, string];
+      return (execName === "workspace"
+        ? { entries: ENVIRONMENT_FILES }
+        : { error: `Executor "${execName}" has no listing for ${path} in this frame` }) as unknown as T;
+    }
+    return stubRpc<T>(method, args);
+  };
+  return (
+    <div className="p-bg min-h-screen flex justify-center">
+      <div className="w-[720px] h-screen border-x p-border">
+        <WorkSurface
+          surface="Environment" onSurface={() => {}}
+          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
+          executors={ENVIRONMENT_EXECUTORS} executorOutputs={new Map()}
+          onExecute={async () => ({})} lastActiveExecutor="workspace"
+          backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
+          rpc={envRpc}
+        />
+      </div>
+    </div>
+  );
+}
+
 /* ── Supervise ──────────────────────────────────────────────────── */
 
 // The SUPERVISE altitude — the agent over time. Every block is fed so the type
@@ -904,42 +1449,142 @@ const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<
 function SuperviseFrame() {
   return (
     <div className="p-bg p-text min-h-screen">
-      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} onOpenTasks={() => {}} />
+      <SupervisePage rpc={superviseRpc} onRunTask={() => {}} />
     </div>
   );
 }
 
-function BrainFrame() {
+/* ── Tool-call rendering states ─────────────────────────────────── */
+
+/** One message per state that the `chat` frame either folds into a group or
+ *  can't show pre-expanded: a quiet failure (the tool caught it and returned
+ *  it as a normal result), a protocol-level failure (the executor itself
+ *  crashed — errorText, no output), a clean multi-line `run`, and an MCP tool
+ *  with no known summarizer contract. Auto-expanded on mount below so the
+ *  input/output panel is the thing the screenshot shows. */
+const TOOLCALL_MESSAGES: UIMessage[] = [
+  msg({
+    id: "tc-quiet", role: "assistant",
+    parts: [
+      { type: "text", text: "Quiet failure — the transport reports success, but the tool caught its own error and returned it as a normal result." },
+      { type: "tool-file", toolCallId: "tc1", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique — the file changed since the last read" } },
+    ],
+  }),
+  msg({
+    id: "tc-protocol", role: "assistant",
+    parts: [
+      { type: "text", text: "Protocol-level failure — the executor crashed before it could return anything; the reason lives in errorText, not output." },
+      { type: "tool-run", toolCallId: "tc2", state: "output-error", input: { runtime: "nimbus", command: "curl -sf https://ci.internal/status/checkout-fixes" }, errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443" },
+    ],
+  }),
+  msg({
+    id: "tc-run", role: "assistant",
+    parts: [
+      { type: "text", text: "A multi-line `run` command, expanded — a shell script, not an escaped JSON string." },
+      {
+        type: "tool-run", toolCallId: "tc3", state: "output-available",
+        input: { runtime: "sandbox", command: "for f in packages/checkout/migrations/*.sql; do\n  echo \"-- checking $f\"\n  sqlite3 :memory: < \"$f\" || exit 1\ndone" },
+        output: "-- checking packages/checkout/migrations/0041_coupons.sql\n-- checking packages/checkout/migrations/0042_coupon_kind.sql",
+      },
+    ],
+  }),
+  msg({
+    id: "tc-mcp", role: "assistant",
+    parts: [
+      { type: "text", text: "An MCP tool with no known summarizer contract — the honest fallback (name + its one argument), and long enough to test truncation." },
+      {
+        type: "dynamic-tool", toolCallId: "tc4", toolName: "gh__search_pull_requests", state: "output-available",
+        input: { query: "repo:AshishKumar4/shop is:open head:fix/coupon-kind base:main status:success review-requested:AshishKumar4" },
+        output: "1 open PR: #212 \"Fix SAVE20 coupon backfill\" — checks pending",
+      },
+    ],
+  }),
+  msg({
+    id: "tc-group", role: "assistant",
+    parts: [
+      { type: "text", text: "A run of 5 finished calls, one of them the same quiet failure as above — the group's own dot has to say so before anyone clicks in." },
+      { type: "tool-file", toolCallId: "tc5", state: "output-available", input: { action: "read", path: "packages/checkout/src/apply-coupon.ts" }, output: "…" },
+      { type: "tool-file", toolCallId: "tc6", state: "output-available", input: { action: "read", path: "packages/checkout/migrations/0042_coupon_kind.sql" }, output: "…" },
+      { type: "tool-file", toolCallId: "tc7", state: "output-available", input: { action: "edit", path: "packages/checkout/migrations/0042_coupon_kind.sql", edits: [{}, {}] }, output: { error: "old_text not found or not unique" } },
+      { type: "tool-file", toolCallId: "tc8", state: "output-available", input: { action: "write", path: "packages/checkout/tests/coupon-kind.test.ts" }, output: "ok" },
+      { type: "tool-agents", toolCallId: "tc9", state: "output-available", input: { action: "fork", forks: [{}, {}, {}], settle: "merge", task: "Check every other call site" }, output: "3 forks merged" },
+    ],
+  }),
+];
+
+/** Clicks open every collapsed tool-call row shortly after mount — the
+ *  expand/collapse toggle is local component state with no prop to preset
+ *  it, and simulating the one click an operator would make is simpler and
+ *  more honest than adding a gallery-only prop to the real component. */
+function useAutoExpandToolCalls(): void {
+  useEffect(() => {
+    const clickAll = () => {
+      document.querySelectorAll('button[aria-expanded="false"]').forEach((el) => (el as HTMLButtonElement).click());
+    };
+    const id = setTimeout(() => {
+      clickAll();
+      // A group's own toggle mounts its members' toggles a render later —
+      // one more pass after React commits catches those too.
+      requestAnimationFrame(() => requestAnimationFrame(clickAll));
+    }, 50);
+    return () => clearTimeout(id);
+  }, []);
+}
+
+function ToolCallsFrame() {
+  useAutoExpandToolCalls();
+  return (
+    <div className="flex justify-center p-bg p-text min-h-screen">
+      <div className="@container flex w-full max-w-[640px] flex-col gap-6 border-x p-border px-6 py-6">
+        {TOOLCALL_MESSAGES.map((m) => (
+          <MessageView key={m.id} message={m} isLast={false} isStreaming={false} onFork={() => {}} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AgentFrame() {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[740px] border-x p-border min-h-screen p-5">
-        <BrainSurface
+        <AgentSurface
           agentStatus={BRAIN_STATUS} tools={BRAIN_TOOLS} memory={[]}
           memoryContent={"## Checkout\n\n- The coupon path goes through `/api/cart/apply`.\n- Percentage coupons carry `kind: null` after Tuesday's migration.\n"}
-          onSearchMemory={() => {}} rpc={stubRpc}
+          onSearchMemory={() => {}} rpc={evolutionRpc}
         />
       </div>
     </div>
   );
 }
 
-const frame = new URLSearchParams(location.search).get("frame");
-
 async function mount() {
   let node: React.ReactNode;
   let entries = ["/"];
   if (frame === "shell") node = <Shell />;
+  else if (frame === "forks") node = <Shell surface="Exploration" mctsTree={MCTS_TREE} rpc={forkRpc} />;
+  else if (frame === "forkmerge") node = <Shell surface="Exploration" rpc={mergeFirstRpc} />;
+  else if (frame === "forkfull" || frame === "forkbig") {
+    const { default: MCTSExplorer } = await import("@/pages/MCTSExplorer");
+    entries = ["/mcts/checkout-fixes?run=n000"];
+    node = <Routes><Route path="/mcts/:agentId" element={<div className="h-screen p-bg p-text"><MCTSExplorer /></div>} /></Routes>;
+  }
   else if (frame === "modal") node = <GalleryModal />;
   else if (frame === "palette") node = <Palette />;
   else if (frame === "landing2") node = <LandingV2 />;
   else if (frame === "tabs") node = <TabsFrame />;
   else if (frame === "markdown") node = <MarkdownFrame />;
   else if (frame === "chat") node = <ChatFrame />;
-  else if (frame === "panels") node = <BrainFrame />;
+  else if (frame === "chatempty") node = <ChatEmptyFrame />;
+  else if (frame === "toolcalls") node = <ToolCallsFrame />;
+  else if (frame === "agent") node = <AgentFrame />;
   else if (frame === "views") node = <ViewsFrame />;
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
+  else if (frame === "work") node = <WorkFrame />;
+  else if (frame === "workempty") node = <WorkEmptyFrame />;
+  else if (frame === "environment") node = <EnvironmentFrame />;
   else if (frame === "supervise") node = <SuperviseFrame />;
   else if (frame === "settings") {
     const { default: SettingsPage } = await import("@/pages/SettingsPage");

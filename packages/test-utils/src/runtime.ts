@@ -7,7 +7,6 @@ import type {
   AgentRuntime, LLM, Memory, Executor, Schedule, Identity, ExecutionRouter,
   CraftStore, BranchHandle, FiberCtx,
 } from '@proteus/core';
-import { ensureVfsSchema } from '@proteus/agent-utils/vfs';
 import { createTestSql, type TestSql } from './sql.js';
 import { createEchoLLM } from './llm.js';
 
@@ -99,9 +98,6 @@ function emptyBranchHandle(): BranchHandle {
  *  fresh in-memory database. Override any field via `opts`. */
 export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const testSql = createTestSql();
-  // Real agent databases always carry the canonical vfs_files schema
-  // (initAllTables / SqliteFS.init); identity reads (SOUL.md) depend on it.
-  ensureVfsSchema(testSql.sql);
   const llm = opts.llm ?? createEchoLLM();
   const rt: AgentRuntime = {
     storage: {

@@ -25,7 +25,7 @@
  */
 
 import { DynamicWorkerExecutor } from '@cloudflare/codemode';
-import { craftFailureMarker, filterByEffectiveScore } from '@proteus/core';
+import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@proteus/core';
 import type { CraftStore, SqlExecutor } from '@proteus/core';
 
 /** Minimal WorkerLoader shape. Typed loosely — we hand it to DWE untouched. */
@@ -201,8 +201,15 @@ export class PreambleCraftedExecutor {
     const wrappedProviders = wrapProvidersWithStructuredErrors(providerArr);
 
     try {
-      const result = await this.#inner.execute(injected, wrappedProviders);
-      return result as { result: unknown; error?: string; logs?: string[] };
+      const result = await this.#inner.execute(injected, wrappedProviders) as
+        { result: unknown; error?: string; logs?: string[] };
+      // DWE never throws for sandbox-internal failures (a bare `ReferenceError:
+      // run is not defined` from code that reached for a native tool as if it
+      // were in codemode scope lands here as a string). Rewrite exactly that
+      // shape into the correction; every other error is untouched.
+      return result.error
+        ? { ...result, error: explainNativeToolReferenceError(result.error) }
+        : result;
     } catch (err) {
       // Outer executor-level failure (sandbox spawn, timeout, etc.).
       // Propagate as a string — createCodeTool's execute wrapper converts

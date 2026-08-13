@@ -12,12 +12,14 @@ agents are the actors that work inside it.
 │                                                                        │
 │   identity   workspace_identity(id, name, owner_user_id) — the        │
 │              ownership root, read on every model call                  │
-│   file plane CompositeVFS — one address space over every environment:  │
-│                /local    durable SqliteFS base (always mounted)        │
-│                /sandbox  container FS            (when configured)     │
-│                /nimbus   Nimbus sandbox FS       (when provisioned)    │
-│                /pc       the user's own machine  (connect + consent)   │
-│   exec plane ExecutionRouter — the same environments as executors      │
+│   file plane the workspace filesystem — Nimbus over this DO's own      │
+│              SQLite, durable, with a real shell over the same bytes.   │
+│              The ONLY one: there is no mount table.                    │
+│   exec plane ExecutionRouter — every OTHER environment, each its own   │
+│              filesystem in its own native paths:                       │
+│                sandbox.*   full Linux container   (when configured)    │
+│                nimbus.*    a separate Nimbus session (when provisioned)│
+│                laptop.*    the user's own machine  (connect + consent) │
 │   state      sessions · SOUL.md · memory · scaffold · craft store ·    │
 │              evolution ledgers · triggers · release changes            │
 │                                                                        │
@@ -30,7 +32,7 @@ agents are the actors that work inside it.
 │   │     independent workstream, seeing the workspace's files at     │  │
 │   │     /workspace and reporting back as events.                    │  │
 │   │   heads / branches / forks-in-flight — ephemeral actors with    │  │
-│   │     a bare per-head scratch VFS (no workspace mounts); their    │  │
+│   │     a bare per-head scratch filesystem; their                   │  │
 │   │     durable findings return through the merge.                  │  │
 │   │   peers — agents of the owner's OTHER workspaces; the `peers`   │  │
 │   │     tool lists, messages, awaits, and SPAWNS them (spawn        │  │
@@ -49,20 +51,24 @@ agents are the actors that work inside it.
   single ownership root; the UserDO `user_workspaces` table is the user's
   registry of workspaces (source of truth for the sidebar, CLI list, and the
   ownership check on every `/api/workspaces/<name>/*` request).
-- **The file plane is the workspace's.** `Storage.vfs` IS a `CompositeVFS`:
-  `readdir('/')` lists the live mounts, `/local/...` is the durable base,
-  bare and deeper-absolute paths compat-route to `/local`. `listMounts()` (an
-  orchestrator RPC) exposes the mount table — live state plus each mount's
-  declared policy (`readOnly`, `durable | ephemeral | live-shared`,
-  credentials-stay-in-host). The web UI renders this on the **Environment**
-  work surface (`EnvironmentSurface.tsx`) as the mount-table spine plus a
-  unified file browser; device (`/pc`) registration lives in Account settings.
+- **The file plane is the workspace's, and it is the only one.** `Storage.vfs`
+  is the workspace filesystem — Nimbus over the host's SQLite — with a real
+  shell over the same bytes and relative paths resolving at `/home/user`. There
+  is no mount table: every other environment is an executor with its own
+  filesystem in its own native paths. `listMounts()` (an orchestrator RPC)
+  lists those environments — live state plus each one's declared policy
+  (`readOnly`, `durable | ephemeral | live-shared`). The web UI renders them on
+  the **Environment** work surface (`EnvironmentSurface.tsx`), one chip each
+  plus a file browser; device registration lives in Account settings.
 - **One default agent, more on demand.** Three kinds of extra actor, and which
   one you get depends on whether the work is ephemeral, durable-in-workspace, or
   cross-workspace:
-  - **Heads** (`think(strategy:'heads')`) are ephemeral. Each gets a bare
-    per-head VFS and virtual shell — they do NOT see the workspace mounts —
-    and findings come back through the merge.
+  - **Heads** (`think(strategy:'heads')`) are ephemeral. Each gets its own
+    private workspace filesystem that siblings cannot see, and reaches the
+    parent workspace as an executor: `parent.*` / `run { runtime: 'parent' }`,
+    which runs the parent's real shell over the parent's real paths, so
+    `grep -rn X .` there is one call rather than a walk. Findings come back
+    through the merge.
   - **Subordinates** (`team`: `list | spawn | assign | status | message |
     dismiss`) are durable. Each is a `SubordinateAgent` facet with its own
     SQLite and its own full turn loop, sharing the workspace's files through a

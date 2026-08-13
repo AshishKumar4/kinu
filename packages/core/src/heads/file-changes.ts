@@ -2,39 +2,38 @@
  * What a head did to the filesystem — the per-head change set a parent reads
  * back out of a split.
  *
- * A fork shares its parent's real `/workspace` and `/pc`, so a child's writes
- * already land on a plane the parent can read; what was missing was anyone
- * saying which of them were whose. Diffing the shared plane once the split ends
- * cannot answer that: sibling heads run concurrently against the same files, so
- * an end-of-split diff smears every head's work into one pile and attributes all
- * of it to whoever is asked.
+ * A fork writes into its parent's workspace, so a child's changes already land
+ * where the parent can read them; what was missing was anyone saying which of
+ * them were whose. Diffing the shared workspace once the split ends cannot
+ * answer that: sibling heads run concurrently against the same files, so an
+ * end-of-split diff smears every head's work into one pile and attributes all of
+ * it to whoever is asked.
  *
  * So attribution happens where a head's own write lands, not where the work
- * ends. Each head runs over its OWN CompositeVFS instance — that is already true
- * on both backends, and it is what makes this exact: a write recorded here was
- * made through THIS head's file plane and no other's, whatever a sibling was
- * doing at the same moment.
+ * ends. Each head reaches its parent through its OWN `parent` executor, and this
+ * observer wraps THAT head's file view of it (`observeWrites`) — which is what
+ * makes the attribution exact whatever a sibling is doing at the same moment.
  *
- * What it therefore covers, and what it does not: every write and delete through
- * the head's file plane — the `file` tool, codemode `workspace.writeFile`, and
- * anything else addressing a mount. It does NOT cover files changed by a shell
- * command the head ran (`run laptop 'sed -i …'`): that plane reports an exit
- * code, not a file list, and recovering one would mean diffing a directory that
- * siblings are writing to at the same time — the smear this design exists to
- * avoid. Those changes are real, and they are left unattributed rather than
- * attributed to a guess; {@link HEAD_FILE_CHANGE_PROVENANCE} is the sentence
- * that says so wherever the set is rendered.
+ * What it therefore covers, and what it does not: every write and delete a head
+ * makes to the PARENT workspace — `parent.writeFile`, and the `file` tool when
+ * pointed there. It does NOT cover files changed by a shell command the head ran
+ * (`parent.exec 'sed -i …'`, `run laptop …`): that plane reports an exit code,
+ * not a file list, and recovering one would mean diffing a directory siblings
+ * are writing to at the same time — the smear this design exists to avoid. Those
+ * changes are real, and they are left unattributed rather than attributed to a
+ * guess; {@link HEAD_FILE_CHANGE_PROVENANCE} is the sentence that says so
+ * wherever the set is rendered.
  *
- * The head's private `/local` scratch is excluded: it dies with the head and the
- * parent cannot address it, so listing it would report noise as work.
+ * The head's own workspace is not observed at all: it is private scratch that
+ * dies with the head, so listing it would report noise as work.
  */
 
 import { diffLines, type FileStatus } from '../vfs/diff.js';
-import type { CompositeWriteEvent, CompositeWriteObserver } from '../vfs/composite.js';
+import type { WriteEvent, WriteObserver } from '../vfs/observe.js';
 
 /** One file a head changed, as a review would state it. */
 export interface HeadFileChange {
-  /** Composite path — what the parent addresses the file by. */
+  /** The parent workspace's own path — what the parent addresses the file by. */
   readonly path: string;
   readonly status: FileStatus;
   readonly added: number;
@@ -49,9 +48,6 @@ export interface HeadFileChange {
 export const HEAD_FILE_CHANGE_PROVENANCE =
   "Recorded at each head's file plane; files changed by shell commands a head ran are not attributed to a head.";
 
-/** The head's private scratch mount — real, but invisible to the parent. */
-const PRIVATE_MOUNT = 'local';
-
 interface Touched {
   baseline: string | null;
   current: string | null;
@@ -59,23 +55,22 @@ interface Touched {
 }
 
 /**
- * One head's accumulated file changes. Installed on that head's CompositeVFS
- * (`observeWrites`) and read once the head's report is assembled.
+ * One head's accumulated file changes. Wrapped around that head's view of the
+ * parent workspace (`observeWrites`) and read once its report is assembled.
  *
  * Net, not per-write: a path is diffed against what it held when this head FIRST
  * touched it, so a head that rewrote a file five times reports the one change a
  * reviewer would see, and a head that wrote a file back to its original contents
  * reports nothing for it.
  */
-export class HeadFileChanges implements CompositeWriteObserver {
+export class HeadFileChanges implements WriteObserver {
   private readonly touched = new Map<string, Touched>();
 
   needsBaseline(path: string): boolean {
     return !this.touched.has(path);
   }
 
-  record(event: CompositeWriteEvent): void {
-    if (event.mount === PRIVATE_MOUNT) return;
+  record(event: WriteEvent): void {
     const existing = this.touched.get(event.path);
     const after = asText(event.after);
     if (existing) {

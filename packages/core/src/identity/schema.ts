@@ -7,13 +7,11 @@
  * file plane, sessions, evolution state, and its default orchestrator agent).
  */
 
-import { VFS_SCHEMA_DDL } from '@proteus/agent-utils/vfs';
 import { initScaffoldTables } from '../scaffold/schemas.js';
 import { initViewTables } from '../views/store.js';
-import { migrateSoulStorage } from './soul.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 
-const WORKSPACE_IDENTITY_DDL =
+export const WORKSPACE_IDENTITY_DDL =
   // ── Workspace identity — the ownership root ────────────────────
   // Renamed from agent_identity; hosted deployments are recreated rather than
   // migrated (owner decision 2026-06-13), but a local ~/.proteus workspace is
@@ -23,6 +21,9 @@ const WORKSPACE_IDENTITY_DDL =
     id         TEXT NOT NULL,
     name       TEXT NOT NULL,
     owner_user_id TEXT NOT NULL DEFAULT '',
+    -- The one line a read-only listing needs. Maintained by writeSoul and
+    -- nothing else, so it cannot drift from SOUL.md (identity/soul.ts).
+    mission    TEXT NOT NULL DEFAULT '',
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
   )`;
 
@@ -77,8 +78,6 @@ const ACTOR_DDL = [
     created_at INTEGER NOT NULL
   )`,
 
-  // ── Virtual filesystem — canonical DDL owned by SqliteFS (agent-utils) ──
-  ...VFS_SCHEMA_DDL,
 
   // ── Conversation messages (simplified session tree) ────────────
   `CREATE TABLE IF NOT EXISTS messages (
@@ -190,7 +189,6 @@ export function initAllTables(execRaw: RawSqlExec): void {
  */
 export function migrateWorkspaceStorage(sql: SqlExecutor): void {
   adoptLegacyAgentIdentity(sql);
-  migrateSoulStorage(sql);
 }
 
 /** Move the pre-rename `agent_identity` row (identical columns) into

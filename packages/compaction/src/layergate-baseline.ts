@@ -3,7 +3,7 @@ import type { Baseline } from '@proteus/core';
 
 export const COMPACTION_LOCKED_BASELINE: Baseline = {
   'compaction-ladder/codec-roundtrip': '09371edea2792050',
-  'compaction-ladder/ladder-prunes-under-pressure': '873c8061bcb8bffe',
+  'compaction-ladder/ladder-prunes-under-pressure': '05a61befe05d3d8d',
   'compaction-ladder/no-pressure-no-plan': '5b9bc4ba528108e4',
   'compaction-ladder/replay-byte-stable': '6fc9cb27876a3945',
 };

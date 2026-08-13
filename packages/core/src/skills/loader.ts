@@ -13,8 +13,10 @@
  * No fuzzy/embedding matching by design — that's surprising and hard to
  * debug. Auto-activation is opt-in per skill via `auto_activate: true`.
  *
- * Caller passes the explicit-invocation set (extracted from message text
- * AND from the LLM's prior `skills({action:'invoke'})` calls in this turn).
+ * Caller passes the explicit-invocation set, extracted from the user's
+ * message text (extractExplicitInvocations). There is no model-driven
+ * activation path: the surface is resolved once at turn start, before any
+ * tool call, so nothing the model does mid-turn can join it.
  */
 
 import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types.js';
@@ -22,8 +24,8 @@ import type { ParsedSkill, ActiveSkillSet, ActivationReason } from './types.js';
 export interface LoadActiveSkillsOpts {
   /** Every skill the agent can see (built-ins + VFS). */
   available: ReadonlyArray<ParsedSkill>;
-  /** Skill names explicitly invoked this turn — either by `/name` in the
-   *  user message or by a prior `skills({action:'invoke', name})` tool call. */
+  /** Skill names explicitly invoked this turn via `/name` in the user
+   *  message (extractExplicitInvocations). */
   explicit: ReadonlyArray<string>;
   /** The user's plain-text message for keyword matching. */
   userMessage: string;

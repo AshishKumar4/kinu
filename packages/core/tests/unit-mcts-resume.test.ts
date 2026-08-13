@@ -92,3 +92,50 @@ describe('MCTS evict-resume (B6)', () => {
     expect(before).toBeNull();
   });
 });
+
+// The observability audit (2026-08-12): a durably-checkpointed search running
+// for hours produced NOTHING in Workers Logs / `wrangler tail` per iteration —
+// the checkpoint (mcts_search_runs.updated_at) is the one real heartbeat this
+// backend has, but nothing reached console output. Gated on `search` being
+// present, same as the checkpoint call itself.
+/** Manual console.log capture — bun:test's spyOn(console, 'log') does not
+ *  intercept calls made from inside the async work `await`ed here (its own
+ *  reporter appears to hold a pre-mock reference), verified against a direct
+ *  count. A plain reassignment is what actually observes the calls. */
+async function captureConsoleLog(fn: () => Promise<unknown>): Promise<string[]> {
+  const original = console.log;
+  const calls: string[] = [];
+  console.log = (...args: unknown[]) => { calls.push(String(args[0])); };
+  try {
+    await fn();
+  } finally {
+    console.log = original;
+  }
+  return calls;
+}
+
+describe('MCTS per-iteration checkpoint logging', () => {
+  test('a durably-checkpointed search logs iteration/total/remaining every iteration', async () => {
+    const { rt, db } = createTestRuntime();
+    initTables(rt);
+    const store = new MctsSearchStore(makeSql(db as unknown as Database));
+    const lines = await captureConsoleLog(() =>
+      runMCTS(rt, createMockSession(), TASK, { budget: 3, branches: 1, search: store }),
+    );
+    const checkpointLines = lines.filter((line) => line.startsWith('[proteus] mcts checkpoint'));
+    expect(checkpointLines).toHaveLength(3);
+    expect(checkpointLines[0]).toContain('iteration=1/3 remaining=2');
+    expect(checkpointLines[2]).toContain('iteration=3/3 remaining=0');
+  });
+
+  test('the fiber-snapshot-only path (no search store) stays silent', async () => {
+    const { rt } = createTestRuntime();
+    initSearchTables(rt.storage.execRaw);
+    initScaffoldTables(rt.storage.execRaw);
+    initCraftScoreTables(rt.storage.execRaw);
+    const lines = await captureConsoleLog(() =>
+      runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1 }),
+    );
+    expect(lines.filter((line) => line.startsWith('[proteus] mcts checkpoint'))).toHaveLength(0);
+  });
+});

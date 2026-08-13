@@ -12,7 +12,7 @@
 
 import type { AgentConfigStore } from '../config/store.js';
 import {
-  buildChangelog, countUnseenChangelog, type ChangelogEntry,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog, type ChangelogEntry,
 } from '../evolution/changelog.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
 import { proposeNextTasks, type ProposedTask } from '../curriculum/proposer.js';
@@ -43,6 +43,14 @@ export function getEvolutionChangelog(
     unseenCount: countUnseenChangelog(sql, seenAt),
     seenAt,
   };
+}
+
+/** The unseen window itself — the same digest the surface renders, cut to what
+ *  the owner has not read yet. The needs-you queue's one row is built from it,
+ *  so the queue and the journal below it can never disagree about what exists:
+ *  they are the same entries, filtered by the same marker. */
+export function getUnseenChangelog(config: AgentConfigStore, sql: SqlExecutor): ChangelogEntry[] {
+  return listUnseenChangelog(sql, config.getChangelogSeenAt());
 }
 
 /** The operator viewed the changelog — zero the unseen badge. */

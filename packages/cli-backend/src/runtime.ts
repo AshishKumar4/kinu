@@ -1,6 +1,6 @@
 /**
  * Linux CLI runtime factory — uses bun:sqlite with agent-utils for
- * FTS5 memory search, chunked SqliteFS, and proper CraftStore.
+ * FTS5 memory search, the Nimbus workspace filesystem, and proper CraftStore.
  *
  * Implements the same primitives as cf-backend via adapter wrappers
  * that bridge agent-utils types to @proteus/core's interfaces.
@@ -12,19 +12,22 @@ import type {
 } from '@proteus/core';
 import type { CraftedTool } from '@proteus/core';
 import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
+import type { RequestShellApproval, ShellApprovalPolicy } from '@proteus/core';
 import { spawn } from 'node:child_process';
 import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
-  CompositeVFS, type MountPolicy, type CompositeWriteObserver,
+  createWorkspaceFilesystem, nextWorkspaceGeneration, observeWrites, type WriteObserver,
+  WORKSPACE_IDENTITY_DDL,
+  createParentExecutor, createParentWorkspaceVfs,
+  type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
   DefaultExecutionRouter, createInlineExecutor, formatExecResult,
+  withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
-import { SqliteFS } from '@proteus/agent-utils';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
-import { createShell } from '@proteus/agent-utils/shell';
 import { createSandboxedExecutor } from './executor.js';
 import { createHostCheckpoints } from './checkpoints.js';
 import { hostResourceLimits } from './cgroup-limits.js';
@@ -62,8 +65,8 @@ export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]):
     ...values: SqlValue[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    // SqliteFS encodes BLOBs as ArrayBuffer (Cloudflare DO storage.sql's native
-    // type); bun:sqlite only binds TypedArrays, so coerce ArrayBuffer → Uint8Array.
+    // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
+    // native type); bun:sqlite only binds TypedArrays, so coerce.
     const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
     const stmt = db.prepare(query);
@@ -76,6 +79,44 @@ export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]):
 
 export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
   return (ddl: string) => db.exec(ddl);
+}
+
+/**
+ * The SQL port the workspace filesystem needs — positional bindings, rows
+ * returned by iteration. `makeSqlExec` already speaks this shape; Nimbus wants
+ * the iterable directly rather than a `toArray` cursor.
+ */
+export function nimbusSql(db: {
+  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
+}): { exec(query: string, ...bindings: unknown[]): Iterable<Record<string, never>> } {
+  return {
+    exec(query: string, ...bindings: unknown[]) {
+      const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
+      const stmt = db.prepare(query);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
+        return stmt.all(...bound) as Array<Record<string, never>>;
+      }
+      stmt.run(...bound);
+      return [] as Array<Record<string, never>>;
+    },
+  };
+}
+
+/**
+ * The workspace filesystem's atomicity primitive.
+ *
+ * `bun:sqlite` exposes `db.transaction(fn)`; a database that does not is run
+ * without one, which is stated rather than silently pretended — every atomic
+ * write becomes a torn write that reports success.
+ */
+export function localTransactions(db: unknown): { storage: { transactionSync<T>(cb: () => T): T } } {
+  const tx = (db as { transaction?: (fn: () => unknown) => () => unknown }).transaction;
+  return {
+    storage: {
+      transactionSync: <T,>(cb: () => T): T =>
+        typeof tx === 'function' ? (tx.call(db, cb) as () => T)() : cb(),
+    },
+  };
 }
 
 /** Positional-binding SQL — what the events hub, the release board and
@@ -186,8 +227,9 @@ export function createCLIRuntime(
     console.warn(`[agent] ${orphans.length} orphaned fiber(s) from previous run:`, orphans.map(o => o.name));
   }
 
-  // Stable identity
-  execRaw('CREATE TABLE IF NOT EXISTS workspace_identity (id TEXT NOT NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))');
+  // Stable identity — core's DDL, not a second spelling of it. The hand-rolled
+  // copy that used to be here silently lacked columns core had added.
+  execRaw(WORKSPACE_IDENTITY_DDL);
   const existing = sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity LIMIT 1`;
   let agentId: string;
   let agentName: string;
@@ -216,8 +258,13 @@ export function createCLIRuntime(
     codexAuthStore: config.codexAuthStore, onCodexRefresh: config.onCodexRefresh,
   });
   initAgentConfigTable(execRaw);
+  // Shared for every typed agent_config read/write this runtime needs at
+  // construction time — the fast-model lookup below, and the live shell-
+  // approval-mode getter the execution seam's gate reads on every command
+  // (see approvalPolicy below).
+  const agentConfig = createAgentConfigStore(sql);
   const fast = selectFastModel({
-    fastSpec: createAgentConfigStore(sql).getFastModel(),
+    fastSpec: agentConfig.getFastModel(),
     chatSpec: fastResolver.normalizeSpecSync(null),
     providers: fastResolver.fastModelCandidates(),
   });
@@ -251,24 +298,18 @@ export function createCLIRuntime(
     codexConfigPath: config.codexConfigPath,
   });
 
-  // Use agent-utils implementations (FTS5, chunked SqliteFS, proper CraftStore)
-  const sqliteFs = new SqliteFS(sql);
-  sqliteFs.init();
-  // Storage.vfs is the CompositeVFS mount table. /local (SqliteFS, which
-  // implements the core VFS directly) is the durable base; /pc is the host
-  // filesystem, mounted below once the checkpoint engine exists. /sandbox and
-  // /nimbus are Cloudflare bindings with no local equivalent, so they are
-  // RESERVED rather than absent — an agent addressing them gets the honest
-  // reason the cloud backend gives for an unconfigured binding, instead of a
-  // silent compat-route into /local.
-  const vfs = new CompositeVFS({ local: sqliteFs });
-  const remoteOnlyPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
-  vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
-  vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
+  // The workspace filesystem: Nimbus over this agent's own SQLite, the same
+  // component the cloud backend runs — a durable POSIX filesystem with a real
+  // shell over it. The user's actual machine is the `laptop` EXECUTOR, not a
+  // directory of this filesystem.
+  const workspace = createWorkspaceFilesystem({
+    sql: nimbusSql(db),
+    transactions: localTransactions(db),
+    generation: nextWorkspaceGeneration(nimbusSql(db)),
+  });
+  const vfs = workspace.vfs;
 
-  // MemoryStore consumes the full agent-utils VFS surface (FTS index walks).
-  const memoryStore = new MemoryStore(sqliteFs, sql);
+  const memoryStore = new MemoryStore(vfs, sql);
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, vfs);
 
@@ -284,8 +325,29 @@ export function createCLIRuntime(
   // run tool + laptop.exec — and laptop.writeFile) snapshots its target dir
   // before the first mutation of each turn. Invisible until /undo.
   const checkpoints = createHostCheckpoints({ agent: agentName, keep: config.checkpointKeep });
-  const shell: Shell = withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd());
-  const executionRouter = new DefaultExecutionRouter();
+  // The live shell-approval policy every gated exec boundary below consults:
+  // `mode` reads agent_config directly (no staleness — a setShellApprovalMode
+  // RPC takes effect on the very next command, no toolset rebuild needed);
+  // `requestApproval` is a mutable slot a surface that owns a live user (ACP)
+  // fills in later via AgentRuntime.setShellApprovalChannel — this runtime is
+  // built before that surface exists, so the channel can only be attached
+  // after the fact.
+  let approvalChannel: RequestShellApproval | null = null;
+  const approvalPolicy: ShellApprovalPolicy = {
+    mode: () => agentConfig.getShellApprovalMode(),
+    requestApproval: (req) => approvalChannel?.(req) ?? Promise.resolve(null),
+  };
+  // Gate is the OUTERMOST wrap: a denied/gated command never reaches
+  // checkpointing, so a refused `rm -rf /` doesn't spend a snapshot on a
+  // command that never ran.
+  // The `workspace` runtime is the workspace filesystem's own shell. The host
+  // machine's shell is the `laptop` executor, checkpointed and gated there.
+  const shell: Shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
+  const hostShell: Shell = withApprovalGatedShell(
+    withCheckpointedShell(createHostShell(process.cwd()), checkpoints, process.cwd()),
+    approvalPolicy,
+  );
+  const executionRouter = new DefaultExecutionRouter(approvalPolicy);
   // Both local executors run their commands in THIS process's container, so
   // both carry its measured cgroup limits — the truth `nproc` cannot tell the
   // model. Null off a cgroup, and then nothing is claimed.
@@ -296,43 +358,30 @@ export function createCLIRuntime(
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell, sql, ...(limits ? { resourceLimits: limits } : {}),
   }));
-  executionRouter.register(createLocalLaptopExecutor(process.cwd(), shell, checkpoints, limits));
-  // The laptop executor's FILE plane, at the same /pc prefix the cloud backend
-  // reaches the user's machine through (EXECUTOR_MOUNT_PREFIX.laptop). Live
-  // unconditionally: the machine is right here. Unscoped, like the `run` tool
-  // and laptop.writeFile that already address the host filesystem directly.
-  vfs.mount('pc', {
-    vfs: createHostMountVFS(checkpoints),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
-    workingDir: process.cwd(),
-  });
+  executionRouter.register(createLocalLaptopExecutor(process.cwd(), hostShell, checkpoints, limits));
 
   return buildRuntime({
     sql, execRaw, vfs, llm, executor: createSandboxedExecutor(), schedule,
     agentId, agentName, memory, craftStore, judgeModel, fastLlm,
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell, checkpoints,
+    setShellApprovalChannel: (fn) => { approvalChannel = fn; },
   });
 }
 
 /**
  * The runtime a single local head (a fork of the parent workspace) runs over.
  *
- * A head is the parent's execution surface with a PRIVATE durable scratch — the
- * local mirror of the cf head (own facet storage, parent exec planes, parent
- * files at /workspace). It shares the parent's REAL host executor (the `laptop`
- * provider → `run laptop` and codemode `laptop.*`), the parent's llm/executor/
- * schedule, and the parent's shadow-git checkpoints. Its /workspace and /pc
- * mounts are windows onto the real host — the cwd the CLI was invoked in and the
- * machine root — so a head can read the code it was spawned to study and run
- * commands against it, exactly what the doctrine promises a fork.
+ * The local mirror of the cloud head: its OWN durable workspace filesystem
+ * (private scratch a sibling cannot see), the parent's real execution surface,
+ * and the parent's workspace reachable as the `parent` EXECUTOR — `parent.exec`
+ * runs a command in the parent's real shell, `parent.readFile` reads its files.
+ * It is not a directory of the head's own filesystem, for the same reason the
+ * sandbox and the machine are not: it is a different workspace.
  *
- * What is PRIVATE (a scratch overlay, not an empty world): the head's own
- * SqliteFS `/local`, its Memory + CraftStore, and the emulated `workspace` shell
- * (`run` with runtime omitted). Sibling heads share the real workspace but never
- * each other's scratch — the same isolation the cf head gets from its own facet
- * storage. The caller owns that store's lifetime (head-runtime.ts backs it with
- * a per-head file, as the cf head is backed by its facet's SQLite).
+ * The head also inherits the parent's `laptop` provider unchanged, so `run
+ * laptop` and `laptop.*` reach the real machine at the parent's cwd — the fork's
+ * real execution, and what the doctrine promises a fork.
  */
 export function buildCLIHeadRuntime(
   db: {
@@ -341,55 +390,79 @@ export function buildCLIHeadRuntime(
   },
   opts: {
     parentRuntime: AgentRuntime; cwd: string; agentId: string; agentName: string;
-    /** Watches every write through THIS head's plane, so the split can report
-     *  which files this head changed. Its own plane is what makes the answer
-     *  exact under concurrency. */
-    writeObserver?: CompositeWriteObserver;
+    /** Watches every write this head makes to the PARENT workspace, so the
+     *  split can report which files this head changed. Its own view is what
+     *  makes the answer exact under concurrency. */
+    writeObserver?: WriteObserver;
   },
 ): AgentRuntime {
   const { parentRuntime: parent, cwd } = opts;
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
-  const sqliteFs = new SqliteFS(sql);
-  sqliteFs.init();
-  const vfs = new CompositeVFS({ local: sqliteFs });
-  if (opts.writeObserver) vfs.observeWrites(opts.writeObserver);
-
-  // /workspace and /pc are windows onto the REAL host — the same planes the
-  // parent reaches — snapshotting into the parent's shadow-git checkpoints so a
-  // head's host writes are covered by /undo too. /workspace roots at the cwd
-  // (where the task files live); /pc roots at the machine root, as the parent's.
-  const checkpoints = parent.checkpoints;
-  const livePolicy: MountPolicy = { readOnly: false, rootPath: cwd, consistency: 'live-shared' };
-  vfs.mount('workspace', { vfs: createHostMountVFS(checkpoints), policy: livePolicy, workingDir: cwd });
-  vfs.mount('pc', {
-    vfs: createHostMountVFS(checkpoints),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
-    workingDir: cwd,
+  const workspace = createWorkspaceFilesystem({
+    sql: nimbusSql(db),
+    transactions: localTransactions(db),
+    generation: nextWorkspaceGeneration(nimbusSql(db)),
   });
-  // Cloud-only planes stay reserved so a head addressing them gets the honest
-  // unavailability the parent gives, not a silent compat-route into /local.
-  const remoteOnlyPolicy: MountPolicy = { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
-  vfs.reserve('sandbox', 'the sandbox container is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
-  vfs.reserve('nimbus', 'the Nimbus sandbox is a Cloudflare binding — not available on the local backend', remoteOnlyPolicy);
+  const vfs = workspace.vfs;
 
-  const memoryStore = new MemoryStore(sqliteFs, sql);
+  const memoryStore = new MemoryStore(vfs, sql);
   memoryStore.ensureSchema();
   const memory = adaptMemory(memoryStore, vfs);
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
   const craftStore = adaptCraftStore(craftStoreImpl);
 
-  // The `workspace` run runtime + codemode `workspace.*` is the head's private
-  // emulated scratch shell (mirrors the cf head's createShell over its SqliteFS).
-  const shell = createShell(sqliteFs);
+  const shell = withApprovalGatedShell(workspace.shell);
   const executionRouter = new DefaultExecutionRouter();
   executionRouter.register(createInlineExecutor({ vfs, memory, craftStore, shell, sql }));
+
+  // The parent workspace, over the parent runtime in this same process — the
+  // same interface the cloud head satisfies with Durable Object RPC.
+  const parentVfs = parent.storage.vfs;
+  const ok = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
+  const fail = <T>(path: string, error: unknown): ParentRpcResult<T> => ({
+    ok: false,
+    error: {
+      code: (error as { code?: string })?.code === 'ENOENT' ? 'ENOENT' : 'EIO',
+      message: error instanceof Error ? error.message : String(error),
+      path,
+    },
+  });
+  const attempt = async <T>(path: string, fn: () => Promise<T>): Promise<ParentRpcResult<T>> => {
+    try { return ok(await fn()); } catch (error) { return fail<T>(path, error); }
+  };
+  const parentHandle: ParentWorkspaceHandle = {
+    read: (path) => attempt(path, async () => {
+      const content = await parentVfs.readFile(path);
+      return typeof content === 'string' ? new TextEncoder().encode(content) : content;
+    }),
+    write: (input: ParentRpcWrite) => attempt(input.path, async () => {
+      if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
+      else await parentVfs.mkdir(input.path, { recursive: input.recursive });
+      return null;
+    }),
+    list: (path) => attempt(path, () => parentVfs.readdir(path)),
+    stat: (path) => attempt(path, () => parentVfs.stat(path)),
+    delete: (path) => attempt(path, async () => { await parentVfs.unlink(path); return null; }),
+    exec: (command) => attempt('', async () => {
+      if (!parent.shell) throw new Error('the parent workspace has no shell');
+      return parent.shell.exec(command);
+    }),
+  };
+  const parentFiles = createParentWorkspaceVfs(parentHandle);
+  executionRouter.register(createParentExecutor({
+    handle: parentHandle,
+    vfs: opts.writeObserver ? observeWrites(parentFiles, opts.writeObserver) : parentFiles,
+    workspaceName: opts.agentName,
+  }));
+
   // The parent's REAL host executor, shared unchanged: `run laptop` / `laptop.*`
   // reach the machine at the parent's cwd. This is the fork's real execution.
   const laptop = parent.executionRouter?.getProvider('laptop');
   if (laptop) executionRouter.register(laptop);
+  const checkpoints = parent.checkpoints;
 
   return buildRuntime({
     sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
@@ -494,6 +567,10 @@ function createLocalLaptopExecutor(
   return {
     name: 'laptop',
     kind: 'laptop',
+    // The machine's own files, in the machine's own absolute paths. Writes
+    // snapshot into the same shadow-git checkpoints the bound shell uses, so
+    // /undo covers file-plane mutations too.
+    files: createHostMountVFS(checkpoints),
     capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
     ...(resourceLimits ? { resourceLimits } : {}),
     positionalArgs: true,

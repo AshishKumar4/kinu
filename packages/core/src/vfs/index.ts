@@ -1,19 +1,13 @@
 /**
- * Workspace file plane — CompositeVFS mount table + raw-handle mount adapters.
+ * The workspace filesystem: Nimbus, and nothing layered over it.
  */
 
 export {
-  CompositeVFS, EXECUTOR_MOUNT_PREFIX, cleanAbsolutePath,
-  type MountPolicy, type MountSpec, type MountInfo, type MountConsistency,
-  type ResolvedPath, type CompositeWriteEvent, type CompositeWriteObserver,
-} from './composite.js';
+  createWorkspace, nextWorkspaceGeneration, workspacePath, WORKSPACE_ROOT,
+  type WorkspaceBundle, type WorkspaceOptions, type WorkspaceVFS,
+} from './nimbus-workspace.js';
 export {
-  makeVfsError, isVfsError, ERRNO,
+  makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
   type VfsError, type VfsErrorCode,
 } from './errno.js';
-export {
-  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
-  createParentRpcMountVFS,
-  type DeviceMountConsent, type ParentRpcFileHandle, type ParentRpcWrite,
-  type ParentRpcResult, type ParentRpcError,
-} from './mount-adapters.js';
+export { observeWrites, type WriteEvent, type WriteObserver } from './observe.js';

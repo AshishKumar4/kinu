@@ -28,7 +28,7 @@ import { useDeviceConnectPrompt } from './use-device-connect.js';
 import { tuiColors } from './theme.js';
 
 export type HomeTuiAction =
-  | { type: 'open-agent'; name: string; initialPrompt?: string }
+  | { type: 'open-agent'; name: string }
   | { type: 'exit' };
 
 export interface HomeTuiOptions {
@@ -179,7 +179,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
       // A new cloud agent with no connected PC: offer to connect this one
       // before the chat opens (the modal resolves immediately otherwise).
       if (created.mode === 'cloud') await deviceConnect.offerIfUnconnected();
-      finishHome?.({ type: 'open-agent', name: created.name, initialPrompt: mission });
+      finishHome?.({ type: 'open-agent', name: created.name });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
@@ -271,12 +271,12 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
         }}
       >
         <text>
-          <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'Start with a mission' : 'What should Proteus do next?'}</strong>{'\n'}
+          <strong fg={tuiColors.textStrong}>{agents.length === 0 ? 'What is this workspace for?' : 'Open a workspace, or start a new one'}</strong>{'\n'}
           <span fg={tuiColors.muted}>
             {setupRequired
               ? 'Connect Proteus once, then this screen can create and open workspaces directly.'
               : agents.length === 0
-              ? 'Describe the work. Proteus will create a workspace and send this as its first turn.'
+              ? "Describe what the workspace is for. It becomes the workspace's SOUL.md and its name; nothing runs until you send the first message."
               : 'Select a workspace, or write a mission to create a new one.'}
           </span>
         </text>
@@ -351,7 +351,7 @@ export function HomeApp({ opts }: { opts: HomeTuiOptions }) {
             <textarea
               ref={(value) => { textareaRef.current = value; }}
               focused={!busy && focusArea === 'mission'}
-              placeholder="Ask Proteus to investigate, build, audit, automate, or improve something..."
+              placeholder='A standing brief, not a task. "My personal assistant, Jarvis." "Own the checkout service..."'
               wrapMode="word"
               keyBindings={[
                 { name: 'return', ctrl: true, action: 'submit' },

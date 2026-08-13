@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLMProviderConfig } from '@proteus/core';
+import { createInlineWorkspace } from '@proteus/core';
 import { openWorkspaceCLI } from '../src/open.js';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -19,9 +20,10 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-/** Identity in `agent_identity`, SOUL.md bound as TEXT — the shape of a
- *  workspace created before the rename and the VFS BLOB-encoding fix. */
-function legacyWorkspace(): { db: Database; dbPath: string } {
+/** Identity in `agent_identity` — the shape of a workspace created before the
+ *  rename to `workspace_identity`. Its SOUL.md is an ordinary file, because a
+ *  workspace's files have only ever been files. */
+async function legacyWorkspace(): Promise<{ db: Database; dbPath: string }> {
   const dir = mkdtempSync(join(tmpdir(), 'proteus-open-legacy-'));
   tempDirs.push(dir);
   const dbPath = join(dir, 'agent.db');
@@ -33,30 +35,18 @@ function legacyWorkspace(): { db: Database; dbPath: string } {
       owner_user_id TEXT NOT NULL DEFAULT '',
       created_at INTEGER NOT NULL
     );
-    CREATE TABLE vfs_files (
-      path TEXT NOT NULL,
-      chunk_index INTEGER NOT NULL DEFAULT 0,
-      parent_path TEXT NOT NULL DEFAULT '',
-      data BLOB,
-      is_dir INTEGER NOT NULL DEFAULT 0,
-      size INTEGER NOT NULL DEFAULT 0,
-      mtime INTEGER NOT NULL DEFAULT 0,
-      PRIMARY KEY (path, chunk_index)
-    );
   `);
   db.run('INSERT INTO agent_identity (id, name, created_at) VALUES (?, ?, ?)', ['legacy-1', 'jarvis', 1781042330894]);
-  const soul = '# jarvis\n\n## Mission\n\nRun the household and the lab.';
-  db.run('INSERT INTO vfs_files (path, chunk_index, data, is_dir, size, mtime) VALUES (?, 0, ?, 0, ?, ?)', [
-    'SOUL.md', soul, soul.length, 1,
-  ]);
+  const workspace = createInlineWorkspace(db as never);
+  await workspace.vfs.writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the household and the lab.');
   return { db, dbPath };
 }
 
 describe('openWorkspaceCLI on a pre-current-schema workspace', () => {
-  test('adopts the legacy identity instead of refusing to open', () => {
-    const { db, dbPath } = legacyWorkspace();
+  test('adopts the legacy identity instead of refusing to open', async () => {
+    const { db, dbPath } = await legacyWorkspace();
 
-    const { info } = openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { info } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
 
     expect(info.id).toBe('legacy-1');
     expect(info.name).toBe('jarvis');
@@ -65,12 +55,12 @@ describe('openWorkspaceCLI on a pre-current-schema workspace', () => {
     expect(db.query(`SELECT name FROM sqlite_master WHERE name = 'agent_identity'`).get()).toBeNull();
   });
 
-  test('re-encodes the TEXT SOUL.md row so the VFS can read it', () => {
-    const { db, dbPath } = legacyWorkspace();
+  test('reads the soul out of the workspace filesystem, and its mission onto the identity row', async () => {
+    const { db, dbPath } = await legacyWorkspace();
 
-    openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
+    const { info } = await openWorkspaceCLI(db, dbPath, { llm: DUMMY_LLM });
 
-    expect(db.query(`SELECT typeof(data) AS t FROM vfs_files WHERE path = 'SOUL.md'`).get())
-      .toEqual({ t: 'blob' });
+    expect(info.soul).toContain('Run the household and the lab.');
+    expect(info.purpose).toBe('Run the household and the lab.');
   });
 });

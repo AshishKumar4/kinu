@@ -2,7 +2,7 @@
 // Prefers the sticky last-active executor only when it is already active, else
 // workspace. This keeps status/diff reads from waking idle remote executors.
 import { describe, test, expect } from "bun:test";
-import { pickDefaultExecutor } from "../src/lib/executors";
+import { EXECUTOR_LABELS, EXECUTOR_ORDER, executorLabel, pickDefaultExecutor } from "../src/lib/executors";
 
 const avail = (...names: string[]) => names.map((name) => ({ name, available: true }));
 const active = (...names: string[]) => names.map((name) => ({ name, available: true, active: true }));
@@ -32,5 +32,45 @@ describe("pickDefaultExecutor", () => {
     expect(pickDefaultExecutor([{ name: "sandbox", available: false }])).toBe("workspace");
     expect(pickDefaultExecutor([])).toBe("workspace");
     expect(pickDefaultExecutor([], "sandbox")).toBe("workspace"); // lastActive not in list
+  });
+});
+
+/**
+ * The Environment surface renders one chip per environment, each carrying this
+ * label. Nimbus runs the workspace filesystem itself now
+ * (core/src/vfs/nimbus-workspace.ts) while the `nimbus` executor is a SEPARATE
+ * Nimbus session in its own DO (cf-backend/src/runtime.ts) — so a label set
+ * where two rows say the same word draws two boxes for what reads as one
+ * thing, which is exactly the complaint.
+ */
+describe("executor labels name one environment each", () => {
+  test("no two environments share a name", () => {
+    const labels = EXECUTOR_ORDER.map(executorLabel);
+    expect(new Set(labels).size).toBe(labels.length);
+  });
+
+  test("only the agent's own filesystem is called the Workspace", () => {
+    // `parent` is legitimately a workspace too — someone else's, and its label
+    // says whose. What no other environment may do is answer to the bare word.
+    expect(EXECUTOR_LABELS.workspace).toBe("Workspace");
+    for (const [name, label] of Object.entries(EXECUTOR_LABELS)) {
+      if (name === "workspace") continue;
+      expect(label).not.toBe("Workspace");
+    }
+  });
+
+  test("the executor that is a separate Nimbus session is not the one called Nimbus", () => {
+    // It shares software with the workspace, not bytes: calling it "Nimbus"
+    // beside a workspace Nimbus also powers is the duplicate the owner saw.
+    for (const label of Object.values(EXECUTOR_LABELS)) {
+      expect(label.toLowerCase()).not.toContain("nimbus");
+    }
+  });
+
+  test("every ordered executor has a name of its own — none falls back to its namespace", () => {
+    for (const name of EXECUTOR_ORDER) {
+      expect(EXECUTOR_LABELS[name]).toBeDefined();
+      expect(executorLabel(name)).not.toBe(name);
+    }
   });
 });

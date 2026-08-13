@@ -2,7 +2,7 @@
 // six different calls, and no summary may claim detail the arguments never
 // carried.
 import { describe, test, expect } from 'bun:test';
-import { clip, summarizeToolCall } from '../src/components/tool-call-summary.ts';
+import { clip, isToolCallFailed, summarizeToolCall } from '../src/components/tool-call-summary.ts';
 
 describe('tool call summaries — the unified agents tool', () => {
   test('agents calls are told apart by action and target', () => {
@@ -164,5 +164,31 @@ describe('tool call summaries — truthfulness', () => {
     expect(summary.length).toBeLessThanOrEqual(72);
     expect(clip('short')).toBe('short');
     expect(clip('one    two\n three')).toBe('one two three');
+  });
+});
+
+describe('isToolCallFailed — reads the result, not just the transport', () => {
+  test('a protocol-level error is always a failure, whatever the output says', () => {
+    expect(isToolCallFailed('run', { command: 'ls' }, undefined, true)).toBe(true);
+  });
+
+  test('a `run` command that exits non-zero is a failure even though the transport says it succeeded', () => {
+    // execution/exec-result.ts: formatExecResult's non-zero-exit shape.
+    expect(isToolCallFailed('run', { command: 'bun test' }, 'Error (exit 1)\n--- stdout ---\n3 failing', false)).toBe(true);
+  });
+
+  test('a built-in that caught its own failure and returned {error} is a failure', () => {
+    expect(isToolCallFailed('file', { action: 'edit' }, { error: 'old_text not found or not unique' }, false)).toBe(true);
+    expect(isToolCallFailed('file', { action: 'edit' }, '{"error":"old_text not found or not unique"}', false)).toBe(true);
+  });
+
+  test('a clean success is never flagged — a quiet call with no output, or ordinary text', () => {
+    expect(isToolCallFailed('run', { command: 'ls' }, undefined, false)).toBe(false);
+    expect(isToolCallFailed('run', { command: 'echo hi' }, 'hi', false)).toBe(false);
+    expect(isToolCallFailed('file', { action: 'read' }, 'file contents', false)).toBe(false);
+  });
+
+  test('the word "error" appearing inside a normal output is not itself a failure', () => {
+    expect(isToolCallFailed('run', { command: 'grep error app.log' }, 'app.log:12: error handler registered', false)).toBe(false);
   });
 });

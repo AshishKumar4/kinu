@@ -15,9 +15,10 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLMProviderConfig } from '../llm.js';
 import { initAllTables, migrateWorkspaceStorage } from './schema.js';
 import { readSoul, summarizeSoul } from './soul.js';
+import { memoryBytes } from '../memory/note.js';
 import {
   createInlineCraftStore, createInlineExecutor, createInlineMemory,
-  createInlineSchedule, createInlineVFS, wrapDatabase, type AgentDatabase,
+  createInlineSchedule, createInlineWorkspace, wrapDatabase, type AgentDatabase,
 } from './inline-primitives.js';
 import { createVercelAILLM } from '../llm.js';
 import { buildRuntime } from '../runtime-builder.js';
@@ -40,11 +41,12 @@ export interface WorkspaceInfo {
   createdAt: number;
 }
 
-/** Open an existing workspace database and resume it */
-export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig): {
+/** Open an existing workspace database and resume it. Async because SOUL.md
+ *  and the memory total are read out of the workspace filesystem. */
+export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig): Promise<{
   rt: AgentRuntime;
   info: WorkspaceInfo;
-} {
+}> {
   const { sql, execRaw } = wrapDatabase(db);
 
   // Ensure all tables exist (handles schema upgrades gracefully)
@@ -57,8 +59,10 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
   `[0];
   if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
+  const workspace = createInlineWorkspace(db);
+
   // Step 2: Read SOUL.md
-  const soul = readSoul(sql);
+  const soul = await readSoul(workspace.vfs);
   if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
 
   // Step 3: Scaffold version
@@ -75,11 +79,6 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
   // Step 6: Task history
   const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;
 
-  // Step 7: Memory size
-  const memorySize = sql<{ total: number }>`
-    SELECT COALESCE(SUM(size), 0) as total FROM vfs_files WHERE path LIKE 'memory/%'
-  `[0]?.total ?? 0;
-
   // Step 8: Detect orphaned fibers
   const orphanedFibers = sql<{ id: string; name: string }>`SELECT id, name FROM fibers`;
   if (orphanedFibers.length > 0) {
@@ -91,7 +90,9 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
     }
   }
 
-  const vfs = createInlineVFS(sql);
+  const vfs = workspace.vfs;
+  // Memory size — walked through the filesystem the agent itself uses.
+  const memorySize = await memoryBytes(vfs);
   const memory = createInlineMemory(db, vfs);
   const craftStore = createInlineCraftStore(db);
 
@@ -103,7 +104,7 @@ export function openWorkspace(db: AgentDatabase, config: WorkspaceResumeConfig):
   const schedule = createInlineSchedule(sql);
 
   const rt = buildRuntime({
-    sql, execRaw, vfs, llm, executor: createInlineExecutor(), schedule,
+    sql, execRaw, vfs, llm, executor: createInlineExecutor(), schedule, shell: workspace.shell,
     agentId: identity.id, agentName: identity.name,
     memory, craftStore, judgeModel,
     spawnBranch: async () => ({

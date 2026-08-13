@@ -2,14 +2,13 @@ import { existsSync, mkdirSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
 import { generateText } from 'ai';
 import {
-  WORKSPACE_IDENTITY_SYSTEM_PROMPT,
-  workspaceIdentityPrompt,
+  WORKSPACE_TITLE_SYSTEM_PROMPT,
+  workspaceTitlePrompt,
   createWorkspace,
   createAgentConfigStore,
-  createWorkspaceNameFromMission as coreCreateAgentNameFromMission,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
-  parseWorkspaceIdentityOutput,
+  parseWorkspaceTitle,
   type LLMProviderConfig,
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
@@ -71,22 +70,20 @@ export interface SuggestAgentIdentityOptions {
   generate?: (mission: string) => Promise<string>;
 }
 
-export function createWorkspaceNameFromMission(mission: string, id: string = crypto.randomUUID()): string {
-  return coreCreateAgentNameFromMission(mission, id);
-}
-
+/** The workspace's permanent slug plus the best title available for it: the
+ *  generated one when the model answers, the mission-derived one otherwise.
+ *  The slug never depends on either — it is the id's, and only the id's. */
 export async function suggestAgentIdentityFromMission(
   mission: string,
   opts: SuggestAgentIdentityOptions = {},
 ): Promise<SuggestedWorkspaceIdentity> {
-  const id = opts.id ?? crypto.randomUUID();
-  const fallback = fallbackWorkspaceIdentity(mission, id);
+  const fallback = fallbackWorkspaceIdentity(mission, opts.id ?? crypto.randomUUID());
   try {
     const raw = opts.generate
       ? await opts.generate(mission)
-      : await generateIdentityJson(mission, opts);
-    const identity = parseWorkspaceIdentityOutput(raw, id);
-    return identity || fallback;
+      : await generateTitleJson(mission, opts);
+    const title = parseWorkspaceTitle(raw);
+    return title ? { ...fallback, displayName: title } : fallback;
   } catch {
     return fallback;
   }
@@ -177,7 +174,7 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   const db = new Database(dbPath);
   try {
     db.exec('PRAGMA journal_mode = WAL');
-    const rt = createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
+    const rt = await createWorkspace(db, { name: displayName, purpose, llm: llmConfig });
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema(makeWorkspaceSchemaSql(db));
     const agentConfig = createAgentConfigStore(rt.storage.sql);
@@ -202,12 +199,12 @@ export async function createCliAgent(input: CreateCliAgentInput): Promise<Create
   return { name, displayName, mode: 'local', purpose, model: llmConfig.model, dbPath, aliasPath };
 }
 
-async function generateIdentityJson(mission: string, opts: SuggestAgentIdentityOptions): Promise<string> {
+async function generateTitleJson(mission: string, opts: SuggestAgentIdentityOptions): Promise<string> {
   const { resolver } = createConfiguredLocalModelResolver(opts);
   const result = await generateText({
     model: resolver.resolveModel(opts.model ?? null),
-    system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
-    prompt: workspaceIdentityPrompt(mission),
+    system: WORKSPACE_TITLE_SYSTEM_PROMPT,
+    prompt: workspaceTitlePrompt(mission),
     // No output cap: reasoning models spend budget on thinking before the
     // JSON, so a cap starves them into empty text (the fallback-name bug).
     // Cheapness comes from low reasoning effort, not output caps.

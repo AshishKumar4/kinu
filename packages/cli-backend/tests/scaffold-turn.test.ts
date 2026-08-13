@@ -10,7 +10,7 @@
 //      to propose while a pending version exists — so a local agent proposed
 //      exactly one scaffold ever and then blocked forever.
 //
-// Driven by the authentic createCLIRuntime (real SqliteFS + in-process
+// Driven by the authentic createCLIRuntime (real workspace filesystem + in-process
 // executor) with fake models, so the whole path — transform, codemode host
 // bridge, shadow eval, promotion gate — runs for real without a network LLM.
 import { describe, test, expect } from 'bun:test';

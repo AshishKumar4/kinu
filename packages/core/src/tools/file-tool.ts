@@ -1,11 +1,10 @@
 /**
  * `file` — the built-in file plane: read, edit, write.
  *
- * Everything here goes through `rt.storage.vfs`, which IS the CompositeVFS, so
- * one implementation reaches `/local`, `/workspace`, `/sandbox`, `/nimbus` and
- * `/pc` on both backends. There is deliberately no second filesystem path and no
- * per-runtime variant: a mount that is reserved or offline answers with its own
- * ENXIO reason, which is more useful than a tool that pretends not to exist.
+ * Everything here goes through `rt.storage.vfs`, the workspace filesystem, on
+ * both backends. There is deliberately no second filesystem path and no
+ * per-runtime variant: another environment is reached through its own
+ * namespace, in its own paths, rather than through a prefix here.
  *
  * Why one tool with three actions rather than three tools: reading a file,
  * replacing text inside it and creating it are one concept — the file plane —
@@ -43,7 +42,7 @@ export interface FileToolDeps {
   memory?: Memory;
 }
 
-interface FileToolInput {
+export interface FileToolInput {
   action: 'read' | 'write' | 'edit';
   path: string;
   offset?: number;
@@ -70,7 +69,16 @@ async function vfsFailure(vfs: VFS, err: unknown, action: string, path: string):
   return { reason, error: `${err.message}${hint}` };
 }
 
-export function createFileTool(deps: FileToolDeps): ToolSet[string] {
+/**
+ * The file plane's dispatch logic — read / write / edit over one VFS,
+ * ledger and budget. Factored out so `workspace.editFile` (the codemode
+ * reach for the same exact-match, read-before-write-enforced edit — see
+ * execution/inline.ts) calls the SAME implementation the native `file` tool
+ * does, sharing the SAME TurnFileLedger: an edit gated here refuses
+ * identically regardless of which surface the model used, and a read/edit
+ * done through one surface is known to the other.
+ */
+export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<unknown> {
   const { vfs, ledger, budget } = deps;
 
   /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
@@ -122,6 +130,121 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
     }
   };
 
+  return async (args: FileToolInput): Promise<unknown> => {
+    const path = typeof args.path === 'string' ? args.path.trim() : '';
+    if (!path) return { error: 'file requires `path`.' };
+
+    switch (args.action) {
+      case 'read': {
+        let content: string;
+        try {
+          content = await readText(path);
+        } catch (err) {
+          return { error: (await vfsFailure(vfs, err, 'read', path)).error };
+        }
+        const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
+        const cap = budget.capFor(configured);
+        // The BOM is stripped from what the model is SHOWN, not from the file:
+        // it is invisible, so a model copying the first line back as old_text
+        // would carry it and never match, with no way to see why.
+        const shown = content.startsWith(BOM) ? content.slice(1) : content;
+        const slice = readFileSlice(shown, { path, offset: args.offset, limit: args.limit, maxChars: cap });
+        ledger.observeRange(path, content, slice.first, slice.last, slice.total);
+        budget.admit(slice.output.length);
+        if (slice.omitted > 0) {
+          // The full text is not spilled anywhere: it is already addressable
+          // at its own path, and the marker says which offset continues it.
+          budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true, tightened: cap < configured });
+        }
+        return slice.output;
+      }
+
+      case 'write': {
+        if (typeof args.content !== 'string') return { error: 'file action=write requires `content`.' };
+        let existing: string | null = null;
+        try {
+          existing = await readText(path);
+        } catch (err) {
+          if (!isVfsError(err) || err.code !== 'ENOENT') {
+            return { error: (await vfsFailure(vfs, err, 'write', path)).error };
+          }
+        }
+        if (existing !== null) {
+          const { refusal } = gate(path, existing, 'overwrite');
+          if (refusal) return { error: refusal };
+        }
+        const content = args.content;
+        try {
+          await persist(path, content, () => ledger.observeWhole(path, content));
+        } catch (err) {
+          return { error: (await vfsFailure(vfs, err, 'write', path)).error };
+        }
+        return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
+      }
+
+      case 'edit': {
+        const raw = Array.isArray(args.edits) ? args.edits : [];
+        if (raw.length === 0) {
+          return { error: 'file action=edit requires `edits`: [{ old_text, new_text }].' };
+        }
+        // A malformed edit must not be read as the destructive option: a
+        // missing new_text would otherwise default to deleting the match.
+        const malformed = raw.findIndex((e) => typeof e?.old_text !== 'string' || typeof e?.new_text !== 'string');
+        if (malformed !== -1) {
+          return { error:
+            `edits[${malformed}] needs both old_text and new_text. ` +
+            'old_text is the text to find; new_text replaces it, and "" deletes it.' };
+        }
+        const edits: FileEdit[] = raw.map((e) => ({ oldText: e.old_text as string, newText: e.new_text as string }));
+
+        let current: string;
+        try {
+          current = await readText(path);
+        } catch (err) {
+          const failure = await vfsFailure(vfs, err, 'edit', path);
+          ledger.recordEdit(path, failure.reason);
+          return { error: failure.error };
+        }
+
+        const { verdict, refusal } = gate(path, current, 'edit');
+        if (refusal) {
+          ledger.recordEdit(path, verdict.state === 'stale' ? 'stale' : 'unread');
+          return { error: refusal };
+        }
+
+        const outcome = applyFileEdits(current, edits, path);
+        if (!outcome.ok) {
+          ledger.recordEdit(path, outcome.reason);
+          return { error: outcome.message };
+        }
+        try {
+          // Coverage carries across the edit: only the span the model named
+          // itself changed, so what it knew about the file it still knows.
+          await persist(path, outcome.content, () => ledger.observeEdited(path, current, outcome.content));
+        } catch (err) {
+          const failure = await vfsFailure(vfs, err, 'edit', path);
+          ledger.recordEdit(path, failure.reason);
+          return { error: failure.error };
+        }
+        ledger.recordEdit(path, null);
+        return {
+          ok: true,
+          path,
+          applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
+        };
+      }
+
+      default:
+        // Only a model that ignored the enum lands here. Naming the action
+        // back is what lets it correct itself.
+        return { error: `unknown file action '${String(args.action)}'` };
+    }
+  };
+}
+
+/** The native `file` tool — a thin AI-SDK wrapper around createFileDispatcher. */
+export function createFileTool(deps: FileToolDeps): ToolSet[string] {
+  const run = createFileDispatcher(deps);
   return tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.file,
     inputSchema: jsonSchema<FileToolInput>({
@@ -132,7 +255,7 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
           enum: ['read', 'write', 'edit'],
           description: 'read the file, edit exact text inside it, or write it whole.',
         },
-        path: { type: 'string', description: 'Absolute path. /local is this agent\'s durable filesystem; the other roots are live windows into the execution environments listed for this turn.' },
+        path: { type: 'string', description: 'Path in this agent\'s own durable workspace filesystem; relative paths resolve at its root. Other environments have their own filesystems, reached through their namespaces in execute_tools.' },
         offset: { type: 'number', description: 'For action=read: 1-indexed first line to return (default 1).' },
         limit: { type: 'number', description: 'For action=read: how many lines to return (default: as many as fit).' },
         content: { type: 'string', description: 'For action=write: the file\'s complete new contents.' },
@@ -151,115 +274,6 @@ export function createFileTool(deps: FileToolDeps): ToolSet[string] {
       },
       required: ['action', 'path'],
     }),
-    execute: async (args: FileToolInput) => {
-      const path = typeof args.path === 'string' ? args.path.trim() : '';
-      if (!path) return { error: 'file requires `path`.' };
-
-      switch (args.action) {
-        case 'read': {
-          let content: string;
-          try {
-            content = await readText(path);
-          } catch (err) {
-            return { error: (await vfsFailure(vfs, err, 'read', path)).error };
-          }
-          const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
-          const cap = budget.capFor(configured);
-          // The BOM is stripped from what the model is SHOWN, not from the file:
-          // it is invisible, so a model copying the first line back as old_text
-          // would carry it and never match, with no way to see why.
-          const shown = content.startsWith(BOM) ? content.slice(1) : content;
-          const slice = readFileSlice(shown, { path, offset: args.offset, limit: args.limit, maxChars: cap });
-          ledger.observeRange(path, content, slice.first, slice.last, slice.total);
-          budget.admit(slice.output.length);
-          if (slice.omitted > 0) {
-            // The full text is not spilled anywhere: it is already addressable
-            // at its own path, and the marker says which offset continues it.
-            budget.recordSpill({ producer: 'file_read', omitted: slice.omitted, referenced: true, tightened: cap < configured });
-          }
-          return slice.output;
-        }
-
-        case 'write': {
-          if (typeof args.content !== 'string') return { error: 'file action=write requires `content`.' };
-          let existing: string | null = null;
-          try {
-            existing = await readText(path);
-          } catch (err) {
-            if (!isVfsError(err) || err.code !== 'ENOENT') {
-              return { error: (await vfsFailure(vfs, err, 'write', path)).error };
-            }
-          }
-          if (existing !== null) {
-            const { refusal } = gate(path, existing, 'overwrite');
-            if (refusal) return { error: refusal };
-          }
-          const content = args.content;
-          try {
-            await persist(path, content, () => ledger.observeWhole(path, content));
-          } catch (err) {
-            return { error: (await vfsFailure(vfs, err, 'write', path)).error };
-          }
-          return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
-        }
-
-        case 'edit': {
-          const raw = Array.isArray(args.edits) ? args.edits : [];
-          if (raw.length === 0) {
-            return { error: 'file action=edit requires `edits`: [{ old_text, new_text }].' };
-          }
-          // A malformed edit must not be read as the destructive option: a
-          // missing new_text would otherwise default to deleting the match.
-          const malformed = raw.findIndex((e) => typeof e?.old_text !== 'string' || typeof e?.new_text !== 'string');
-          if (malformed !== -1) {
-            return { error:
-              `edits[${malformed}] needs both old_text and new_text. ` +
-              'old_text is the text to find; new_text replaces it, and "" deletes it.' };
-          }
-          const edits: FileEdit[] = raw.map((e) => ({ oldText: e.old_text as string, newText: e.new_text as string }));
-
-          let current: string;
-          try {
-            current = await readText(path);
-          } catch (err) {
-            const failure = await vfsFailure(vfs, err, 'edit', path);
-            ledger.recordEdit(path, failure.reason);
-            return { error: failure.error };
-          }
-
-          const { verdict, refusal } = gate(path, current, 'edit');
-          if (refusal) {
-            ledger.recordEdit(path, verdict.state === 'stale' ? 'stale' : 'unread');
-            return { error: refusal };
-          }
-
-          const outcome = applyFileEdits(current, edits, path);
-          if (!outcome.ok) {
-            ledger.recordEdit(path, outcome.reason);
-            return { error: outcome.message };
-          }
-          try {
-            // Coverage carries across the edit: only the span the model named
-            // itself changed, so what it knew about the file it still knows.
-            await persist(path, outcome.content, () => ledger.observeEdited(path, current, outcome.content));
-          } catch (err) {
-            const failure = await vfsFailure(vfs, err, 'edit', path);
-            ledger.recordEdit(path, failure.reason);
-            return { error: failure.error };
-          }
-          ledger.recordEdit(path, null);
-          return {
-            ok: true,
-            path,
-            applied: outcome.applied.map((a) => ({ line: a.line, removed_lines: a.removedLines, added_lines: a.addedLines })),
-          };
-        }
-
-        default:
-          // Only a model that ignored the enum lands here. Naming the action
-          // back is what lets it correct itself.
-          return { error: `unknown file action '${String(args.action)}'` };
-      }
-    },
+    execute: async (args: FileToolInput) => run(args),
   });
 }

@@ -1,30 +1,42 @@
 /**
- * Environment surface — WHERE the agent works. The merge of the old
- * "Workspace" and "Devices" tabs: the CompositeVFS mount table is the spine
- * (one chip per environment: liveness, policy, consistency) and Files /
- * Terminal / Previews are panes over the selected mount. The workspace's
- * agents (default orchestrator + team peers) sit in the header strip.
+ * Environment surface — WHERE the agent can act. The merge of the old
+ * "Workspace" and "Devices" tabs: one chip per environment (liveness, policy,
+ * consistency), with Files and Terminal as the panes over the selected one.
  *
- * Liveness renders here ONCE: each mount chip's dot fuses the polled executor
- * status (exec plane) with the mount's own live flag (file plane). Files
- * browse through the ONE FilesPane entry point over the composite ('workspace'
- * executor, keyed at the mount prefix), so /local, /sandbox, /nimbus and /pc
- * — including consented /pc descent — share a single browser.
+ * There is no mount table and no composite filesystem — those went with
+ * CompositeVFS. Each environment is its OWN filesystem addressed in its own
+ * native paths, listed straight off the executor router
+ * (core/src/read-models/files.ts listEnvironments), and the chip's namespace
+ * (`sandbox.*`) is how the agent reaches it. The workspace is one of these
+ * rows, not a base the others hang off: Nimbus over this Durable Object's own
+ * SQLite, durable, with a real shell. The row named `nimbus.*` is a DIFFERENT
+ * machine — a separate Nimbus session in its own NimbusSession DO — which is
+ * why it is not called "Nimbus" here (lib/executors.ts).
+ *
+ * Two things left. The Agents chips were an inert roster — informational only,
+ * duplicating chat's SubordinateTabs, which is the roster that can actually
+ * spawn and dismiss; they existed because `getWorkspaceAgents` was loaded
+ * alongside `listMounts`. And previews left with their auto-focus effect:
+ * Output owns looking at a running thing, and TWO rules racing to steer where a
+ * new port lands was never a design, it was a bug.
+ *
+ * Liveness renders here ONCE: each chip's dot fuses the polled executor status
+ * (exec plane) with the row's own live flag (file plane).
  *
  * Device registration/consent are settings, not work surfaces: registering or
  * revoking a PC lives in Account settings → Devices; the per-agent file-access
- * tier lives in Workspace settings. The offline /pc mount keeps only a
- * connect call-to-action pointing there.
+ * tier lives in Workspace settings. The offline PC row keeps only a connect
+ * call-to-action pointing there.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  RobotIcon, UsersThreeIcon, HardDrivesIcon, CircleIcon, ArrowsClockwiseIcon,
+  HardDrivesIcon, CircleIcon, ArrowsClockwiseIcon,
   LockSimpleIcon, TerminalIcon, FolderOpenIcon, PlugIcon, GearSixIcon,
 } from "@phosphor-icons/react";
 import type { MountInfo } from "@proteus/core";
-import type { Rpc, WorkspaceAgent } from "@/lib/protocol";
+import type { Rpc } from "@/lib/protocol";
 import {
   executorForMount, executorLabel, isExecutorActive, pickDefaultExecutor,
   type ExecutorInfo,
@@ -32,11 +44,9 @@ import {
 import type { ExecutorOutput } from "@/hooks/use-proteus";
 import { FilesPane } from "@/components/FilesPane";
 import { ExecutorTerminal } from "@/components/ExecutorTerminal";
-import { PreviewFrame } from "@/components/PreviewFrame";
 import { listDevices, type UserDevice } from "@/lib/user-api";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
-import type { PinnedPort } from "./OutputSurface";
 import { EmptyState } from "./shared";
 
 const CONSISTENCY_HINT: Record<MountInfo["policy"]["consistency"], string> = {
@@ -51,13 +61,9 @@ export interface EnvironmentSurfaceProps {
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
   onExecute: (id: string, cmd: string) => Promise<unknown>;
-  pinnedPorts: PinnedPort[];
 }
 
-type Pane =
-  | { kind: "files" }
-  | { kind: "terminal" }
-  | { kind: "preview"; port: number };
+type Pane = { kind: "files" } | { kind: "terminal" };
 
 function mountDotClass(mount: MountInfo, exec: ExecutorInfo | undefined): string {
   if (!mount.live) return "p-text-3";
@@ -72,25 +78,17 @@ function mountTitle(mount: MountInfo, exec: ExecutorInfo | undefined): string {
 }
 
 export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
-  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute, pinnedPorts } = props;
+  const { rpc, executors, executorOutputs, lastActiveExecutor, onExecute } = props;
   const [selected, setSelected] = useState<string | null>(null); // mount name
   const [pane, setPane] = useState<Pane>({ kind: "files" });
 
-  const load = useCallback(async () => {
-    const [agents, mounts] = await Promise.all([
-      rpc<WorkspaceAgent[]>("getWorkspaceAgents"),
-      rpc<MountInfo[]>("listMounts"),
-    ]);
-    return { agents, mounts };
-  }, [rpc]);
+  const load = useCallback(() => rpc<MountInfo[]>("listMounts"), [rpc]);
   const { resource, reload } = useAsyncResource(load);
-  // The rosters are read together and rendered separately, so each list needs
-  // to know whether it is empty or merely unread — `length === 0` conflated
-  // the two, printing "loading…" under an error banner and spinning forever on
-  // a workspace that genuinely has none.
+  // The table needs to know whether it is empty or merely unread — `length ===
+  // 0` conflated the two, printing "loading…" under an error banner and
+  // spinning forever on a workspace that genuinely has none.
   const loaded = lastValue(resource);
-  const agents = loaded?.agents ?? [];
-  const mounts = loaded?.mounts ?? [];
+  const mounts = loaded ?? [];
 
   // Executor availability is polled live; when it flips (PC connects, sandbox
   // wakes) the mount table's live flags are stale — refetch them.
@@ -114,78 +112,19 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const selectedMount = mounts.find((m) => m.name === selectedName) ?? null;
   const selectedExec = selectedMount ? execByName.get(executorForMount(selectedMount.name)) : undefined;
 
-  // Auto-focus newly-exposed ports: jump to the sandbox mount's newest
-  // preview. On first render, ports that already exist only steer the view
-  // when the user hasn't picked a mount themselves.
-  const prevPortsRef = useRef<number[] | null>(null);
-  useEffect(() => {
-    const cur = pinnedPorts.map((p) => p.port);
-    const prev = prevPortsRef.current;
-    prevPortsRef.current = cur;
-    if (prev === null) {
-      if (cur.length > 0 && selected === null) {
-        setSelected("sandbox");
-        setPane({ kind: "preview", port: cur[cur.length - 1] });
-      }
-      return;
-    }
-    const added = cur.filter((p) => !prev.includes(p));
-    if (added.length > 0) {
-      setSelected("sandbox");
-      setPane({ kind: "preview", port: added[added.length - 1] });
-    } else if (pane.kind === "preview" && !cur.includes(pane.port)) {
-      setPane(cur.length > 0 ? { kind: "preview", port: cur[0] } : { kind: "files" });
-    }
-  }, [pinnedPorts, pane, selected]);
-
-  const orchestrator = agents.find((a) => a.role === "orchestrator");
-  const peers = agents.filter((a) => a.role !== "orchestrator");
-  const mountPorts = selectedMount?.name === "sandbox" ? pinnedPorts : [];
-
   return (
     <div className="flex flex-col h-full -m-5">
       <div className="px-4 pt-3 pb-3 space-y-3 shrink-0 border-b p-border">
         {resource.status === "error" && (
-          <LoadFailure what="the environment" message={resource.message} onRetry={reload} className="p-card rounded-lg px-3 py-2" />
+          <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="p-card rounded-lg px-3 py-2" />
         )}
-
-        {/* Agents — the actors inside this workspace */}
-        <section>
-          <div className="flex items-center gap-2 mb-2">
-            <UsersThreeIcon size={14} className="p-accent" />
-            <span className="text-xs font-semibold p-text">Agents</span>
-            <span className="text-[10px] p-text-3">the workspace's default agent, plus team peers it can message or spawn</span>
-            <button onClick={reload} className="ml-auto p-text-3 hover:p-text p-1" title="Refresh">
-              <ArrowsClockwiseIcon size={12} />
-            </button>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {orchestrator && (
-              <span className="inline-flex items-center gap-1.5 rounded-md p-card px-2.5 py-1.5 text-xs">
-                <RobotIcon size={13} className="p-accent" />
-                <span className="p-text font-medium truncate max-w-48">{orchestrator.displayName || orchestrator.name}</span>
-                <span className="text-[10px] p-accent-subtle p-accent rounded px-1 py-px">orchestrator</span>
-              </span>
-            )}
-            {peers.map((p) => (
-              <span key={p.name} title={p.name}
-                className="inline-flex items-center gap-1.5 rounded-md p-card px-2.5 py-1.5 text-xs">
-                <RobotIcon size={13} className="p-text-3" />
-                <span className="p-text-2 truncate max-w-48">{p.displayName || p.name}</span>
-                <span className="text-[10px] p-text-3 rounded px-1 py-px border p-border">subordinate</span>
-              </span>
-            ))}
-            {agents.length === 0 && loaded && <span className="text-xs p-text-3">No agents in this workspace.</span>}
-            {agents.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
-          </div>
-        </section>
 
         {/* Mount table — the spine. One chip per environment. */}
         <section>
           <div className="flex items-center gap-2 mb-2">
             <HardDrivesIcon size={14} className="p-accent" />
             <span className="text-xs font-semibold p-text">Environments</span>
-            <span className="text-[10px] p-text-3">every environment as one filesystem — /local is the durable base</span>
+            <span className="text-[10px] p-text-3">each one its own filesystem, in its own paths — the workspace is the durable one</span>
           </div>
           <div className="flex flex-wrap gap-1.5">
             {mounts.map((m) => {
@@ -207,7 +146,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                 </button>
               );
             })}
-            {mounts.length === 0 && loaded && <span className="text-xs p-text-3">No environments mounted.</span>}
+            {mounts.length === 0 && loaded !== null && <span className="text-xs p-text-3">No environments mounted.</span>}
             {mounts.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
           </div>
         </section>
@@ -223,23 +162,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
       ) : (
         <>
           <div className="flex items-center gap-1 px-3 py-1.5 border-b p-border overflow-x-auto shrink-0">
-            {mountPorts.map((p) => (
-              <button key={p.port}
-                onClick={() => setPane({ kind: "preview", port: p.port })}
-                title={p.name ? `:${p.port} (${p.name})` : `:${p.port}`}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-colors ${
-                  pane.kind === "preview" && pane.port === p.port ? "p-card p-text" : "p-text-2 hover:p-card-hover"
-                }`}>
-                <span className="size-1.5 rounded-full p-dot-success" />
-                <span className="font-mono">:{p.port}</span>
-                {p.name && <span className="p-text-3 truncate max-w-[100px]">{p.name}</span>}
-              </button>
-            ))}
-            {selectedMount.name === "sandbox" && mountPorts.length === 0 && (
-              <div className="text-[11px] p-text-3 italic">
-                No exposed ports yet — when the agent calls <code className="font-mono p-fill px-1 rounded">sandbox.exposePort(N)</code>, the preview will open here.
-              </div>
-            )}
+            <span className="text-[10px] p-text-3 font-mono">{selectedMount.prefix}</span>
             <div className="ml-auto flex items-center gap-1 shrink-0">
               <PaneTabButton icon={FolderOpenIcon} label="Files"
                 active={pane.kind === "files"} onClick={() => setPane({ kind: "files" })} />
@@ -264,14 +187,17 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           )}
 
           <div className="flex-1 min-h-0">
-            {pane.kind === "preview" && (() => {
-              const p = mountPorts.find((x) => x.port === pane.port);
-              if (!p) return <div className="p-6 text-xs p-text-3">Preview no longer available.</div>;
-              return <PreviewFrame url={p.url} label={`:${p.port}${p.name ? ` · ${p.name}` : ""}`} />;
-            })()}
             {pane.kind === "files" && (
-              /* ONE browser over the CompositeVFS, keyed at the mount prefix. */
-              <FilesPane key={selectedMount.prefix} execName="workspace" rpc={rpc} initialPath={selectedMount.prefix} />
+              /* The SELECTED environment's own file view, opened at its own
+                 working directory. It used to browse the `workspace` executor
+                 at `selectedMount.prefix` — correct while one CompositeVFS
+                 addressed every mount under `/sandbox`, `/nimbus`, …; since
+                 that went, `prefix` is a display string (`sandbox.*`), not a
+                 path, so every row listed the workspace at a directory that
+                 does not exist. `cwd` is the read model's answer to exactly
+                 this question (core/src/read-models/files.ts). */
+              <FilesPane key={selectedMount.name} execName={executorForMount(selectedMount.name)}
+                rpc={rpc} initialPath={selectedMount.cwd ?? "."} />
             )}
             {pane.kind === "terminal" && selectedExec && (
               <ExecutorTerminal
@@ -311,11 +237,13 @@ function PaneTabButton({ icon: Icon, label, active, badge, onClick }: {
 /* ── Unavailable environments ────────────────────────────────────── */
 
 function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInfo | undefined }) {
-  if (mount.name === "pc") return <PcConnectCta />;
+  // `laptop`, not `pc`: rows are named by their EXECUTOR now, and the old
+  // mount name left this branch — the whole connect call-to-action — dead.
+  if (mount.name === "laptop") return <PcConnectCta />;
   const docs = mount.name === "nimbus"
-    ? { text: "Nimbus is a lightweight Linux environment that runs inside Proteus. It isn't enabled on this deployment. Your agent can still use the Sandbox or its built-in workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
+    ? { text: "A lightweight Linux machine of its own, separate from this workspace, for package installs and anything that needs real binaries. It isn't enabled on this deployment — your agent can still use the Sandbox, or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
     : mount.name === "sandbox"
-      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use Nimbus (if available) or its built-in workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment — your agent can still use a Linux session (if available), or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">

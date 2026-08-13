@@ -33,6 +33,7 @@ import {
   type AgentsToolAction,
 } from './registry.js';
 import { FORK_STRATEGY_ID } from '../strategy/heads.js';
+import { readSpawnStarted } from '../jobs/threshold.js';
 import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget.js';
 import type { StrategyContext, StrategyRegistry } from '../strategy/types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
@@ -445,6 +446,14 @@ async function runFork(
     },
     options,
   };
+  // The spawn is validated and about to be in flight — tell the background
+  // wrapper, which detaches the call right now instead of racing a threshold
+  // whose wait could only be dead air (withSpawnDetach). Every validation
+  // error above returned before this line, so it still lands inline; a
+  // failure past it is genuinely the spawned work failing, and arrives as
+  // the job's wake. Inline surfaces (codemode `agents.*`, resume re-drives,
+  // the raw eval toolset) arm no announcement and run to completion.
+  readSpawnStarted(toolOptions)?.();
   try {
     const result = await strat.explore(ctx);
     // The spawn always records. The TOKENS record here only when the strategy

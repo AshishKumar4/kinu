@@ -1,29 +1,23 @@
 /**
  * Parameterized VFS conformance suite (SPEC §11.1).
  *
- * ONE contract, run against EVERY VFS implementation — SqliteFS, createInlineVFS,
- * the CompositeVFS, and each of the three raw-handle mount adapters. It locks:
- *   - the binary byte round-trip invariant (commit 2f57753): every mount must
+ * ONE contract, run against EVERY VFS implementation — the workspace filesystem
+ * and each executor's own raw-handle file view. It locks:
+ *   - the binary byte round-trip invariant (commit 2f57753): every one must
  *     return the exact bytes it was given, NUL / high bytes / a UTF-8 BOM and
  *     all, whether the transport is base64 or lossless-text;
- *   - the errno taxonomy (readFile of a missing path → ENOENT, closed union);
- *   - the CompositeVFS root/mount rules (EROFS on the synthetic table, ENXIO on
- *     an offline mount, EROFS on a read-only mount).
+ *   - the errno taxonomy (readFile of a missing path → ENOENT, closed union).
  *
- * The mount adapters are exercised over a shared in-memory environment that
+ * The executor views are exercised over a shared in-memory environment that
  * stores real bytes, so the round-trip assertion is genuine, not stubbed.
  */
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { SqliteFS } from '@proteus/agent-utils/vfs';
 import type { VFS } from '../src/types/primitives.js';
-import {
-  CompositeVFS, createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
-  isVfsError, type MountPolicy,
-} from '../src/vfs/index.js';
-import { createInlineVFS } from '../src/identity/inline-primitives.js';
-import { makeSql } from './helpers.js';
+import { isVfsError } from '../src/vfs/index.js';
+import { sandboxFiles, nimbusSessionFiles, deviceFiles } from '../src/execution/index.js';
+import { createWorkspaceBundle } from './helpers.js';
 
 /** The byte corpus that must survive a write→read round trip on every mount:
  *  NUL, a UTF-8 BOM (the silent-3-byte-loss trap), high bytes and a lone 0x80
@@ -82,9 +76,9 @@ const quoted = (cmd: string): string => {
   return all.length ? all[all.length - 1]![1]! : '';
 };
 
-type SandboxHandle = Parameters<typeof createSandboxMountVFS>[0];
-type NimbusHandle = Parameters<typeof createNimbusMountVFS>[0];
-type DeviceTransport = Parameters<typeof createDeviceMountVFS>[0];
+type SandboxHandle = Parameters<typeof sandboxFiles>[0];
+type NimbusHandle = Parameters<typeof nimbusSessionFiles>[0];
+type DeviceTransport = Parameters<typeof deviceFiles>[0];
 
 function sandboxHandle(fs: MemFs): SandboxHandle {
   return {
@@ -172,26 +166,20 @@ interface Case {
   /** Compose a path this implementation accepts (env-native root varies). */
   path: (sub: string) => string;
   /** How a missing path stats: the core-VFS impls normalise to null; bare
-   *  SqliteFS throws ENOENT (Node semantics) — the composite hides that. */
+   *  Node semantics would throw ENOENT; the core contract says null. */
   statMissing: 'null' | 'enoent';
 }
 
 const cases: Case[] = [
-  { name: 'SqliteFS', statMissing: 'enoent',
-    make: () => { const fs = new SqliteFS(makeSql(new Database(':memory:'))); fs.init(); return fs; },
+  { name: 'the workspace filesystem', statMissing: 'null',
+    make: () => createWorkspaceBundle(new Database(':memory:')).vfs,
     path: (s) => `conf/${s}` },
-  { name: 'createInlineVFS', statMissing: 'null',
-    make: () => createInlineVFS(makeSql(new Database(':memory:'))),
-    path: (s) => `conf/${s}` },
-  { name: 'CompositeVFS(/local)', statMissing: 'null',
-    make: () => new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) }),
-    path: (s) => `/local/conf/${s}` },
-  { name: 'sandbox mount adapter', statMissing: 'null',
-    make: () => createSandboxMountVFS(sandboxHandle(new MemFs())), path: (s) => `/conf/${s}` },
-  { name: 'nimbus mount adapter', statMissing: 'null',
-    make: () => createNimbusMountVFS(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
-  { name: 'device mount adapter', statMissing: 'null',
-    make: () => createDeviceMountVFS(deviceTransport(new MemFs()), {
+  { name: 'sandbox file view', statMissing: 'null',
+    make: () => sandboxFiles(sandboxHandle(new MemFs())), path: (s) => `/conf/${s}` },
+  { name: 'nimbus session file view', statMissing: 'null',
+    make: () => nimbusSessionFiles(nimbusHandle(new MemFs())), path: (s) => `/conf/${s}` },
+  { name: 'device file view', statMissing: 'null',
+    make: () => deviceFiles(deviceTransport(new MemFs()), {
       consentedRoot: () => '/', hasFullFilesystem: async () => true,
     }), path: (s) => `/conf/${s}` },
 ];
@@ -257,52 +245,3 @@ for (const c of cases) {
     });
   });
 }
-
-// ── CompositeVFS root & mount rules (errno taxonomy) ────────────────────────
-
-describe('VFS conformance — CompositeVFS root & mount rules', () => {
-  const readOnlyPolicy: MountPolicy =
-    { readOnly: true, rootPath: '', consistency: 'durable' };
-  const offlinePolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
-
-  const make = (): CompositeVFS => {
-    const c = new CompositeVFS({ local: createInlineVFS(makeSql(new Database(':memory:'))) });
-    c.reserve('sandbox', 'sandbox executor not configured', offlinePolicy);
-    c.mount('ro', { vfs: createInlineVFS(makeSql(new Database(':memory:'))), policy: readOnlyPolicy });
-    return c;
-  };
-
-  test('writing the synthetic mount table → EROFS', async () => {
-    expect(await code(() => make().writeFile('/newmount', 'x'))).toBe('EROFS');
-  });
-
-  test('reaching a reserved/offline mount → ENXIO', async () => {
-    expect(await code(() => make().readFile('/sandbox/x'))).toBe('ENXIO');
-  });
-
-  test('writing a read-only mount → EROFS', async () => {
-    expect(await code(() => make().writeFile('/ro/x', 'y'))).toBe('EROFS');
-  });
-
-  test('readdir("/") lists live mounts, hides reserved ones', async () => {
-    const names = await make().readdir('/');
-    expect(names).toContain('local');
-    expect(names).toContain('ro');
-    expect(names).not.toContain('sandbox');
-  });
-
-  test('every raised error carries a code from the closed VfsErrorCode union', async () => {
-    const c = make();
-    const ops = [
-      () => c.writeFile('/newmount', 'x'),
-      () => c.readFile('/sandbox/x'),
-      () => c.writeFile('/ro/x', 'y'),
-      () => c.readFile('/local/missing'),
-    ];
-    for (const op of ops) {
-      const err = await op().then(() => null, (e: unknown) => e);
-      expect(isVfsError(err)).toBe(true);
-    }
-  });
-});

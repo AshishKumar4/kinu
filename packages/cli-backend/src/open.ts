@@ -10,7 +10,7 @@
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initWorkspaceSchema, readSoul, summarizeSoul, getCurrentScaffoldVersion } from '@proteus/core';
+import { initWorkspaceSchema, readSoul, summarizeSoul, getCurrentScaffoldVersion, memoryBytes } from '@proteus/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
@@ -51,17 +51,17 @@ type AgentDb = {
  *
  * Unlike core's openWorkspace (which uses degraded inline VFS/Memory/Executor),
  * this uses:
- * - SqliteFS from agent-utils (chunked, with parent tracking)
+ * - the Nimbus workspace filesystem
  * - MemoryStore with FTS5 (BM25 ranking, markdown chunking)
  * - Sandboxed executor (Bun subprocess with timeout)
  * - Real MCTS branch spawner (child processes with LLM calls)
  * - Proper CraftStore with FTS5 search
  */
-export function openWorkspaceCLI(
+export async function openWorkspaceCLI(
   db: AgentDb,
   dbPath: string,
   config: CLIOpenConfig,
-): { rt: AgentRuntime; info: WorkspaceInfo } {
+): Promise<{ rt: AgentRuntime; info: WorkspaceInfo }> {
   const sql = makeSql(db);
 
   // Every table a workspace has, on any backend — one list, in core. Opening
@@ -75,34 +75,8 @@ export function openWorkspaceCLI(
   `[0];
   if (!identity) throw new Error('No workspace identity found. Use createWorkspace() to create one.');
 
-  // Read SOUL.md
-  const soul = readSoul(sql);
-  if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
-
-  // Gather stats for WorkspaceInfo display
-  // The LIVE version — the one that actually drives a turn. MAX(version)
-  // reported an unresolved pending proposal as though it were already running.
-  const scaffoldVersion = getCurrentScaffoldVersion(sql) ?? 0;
-  const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
-  const searchNodeCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`[0]?.c ?? 0;
-  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;
-
-  // Memory size — use SUM of text lengths (works for both old flat and new chunked schema)
-  let memorySize = 0;
-  try {
-    memorySize = sql<{ total: number }>`
-      SELECT COALESCE(SUM(size), 0) as total FROM vfs_files WHERE path LIKE 'memory/%'
-    `[0]?.total ?? 0;
-  } catch {
-    // vfs_files schema may differ (chunked vs flat) — try LENGTH(data) fallback
-    try {
-      memorySize = sql<{ total: number }>`
-        SELECT COALESCE(SUM(LENGTH(data)), 0) as total FROM vfs_files WHERE path LIKE 'memory/%'
-      `[0]?.total ?? 0;
-    } catch { /* table may not exist yet */ }
-  }
-
-  // Build the full CLI runtime with proper implementations
+  // Built before the reads below, because SOUL.md and the memory total are
+  // FILES now and this is what owns the filesystem they live in.
   const rt = createCLIRuntime(db, {
     dbPath,
     llm: config.llm,
@@ -114,6 +88,21 @@ export function openWorkspaceCLI(
     checkpointKeep: config.checkpointKeep,
     agentName: identity.name,
   });
+
+  // Read SOUL.md — a file in the workspace filesystem the runtime just built.
+  const soul = await readSoul(rt.storage.vfs);
+  if (!soul) throw new Error('No SOUL.md found. Database may be corrupted.');
+
+  // Gather stats for WorkspaceInfo display
+  // The LIVE version — the one that actually drives a turn. MAX(version)
+  // reported an unresolved pending proposal as though it were already running.
+  const scaffoldVersion = getCurrentScaffoldVersion(sql) ?? 0;
+  const craftedToolCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`[0]?.c ?? 0;
+  const searchNodeCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM search_nodes`[0]?.c ?? 0;
+  const taskCount = sql<{ c: number }>`SELECT COUNT(*) as c FROM task_history`[0]?.c ?? 0;
+
+  // Memory size — walked through the filesystem the agent itself uses.
+  const memorySize = await memoryBytes(rt.storage.vfs);
 
   return {
     rt,

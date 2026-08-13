@@ -22,49 +22,50 @@ import {
   initAllTables, readForkLineage, readSoul, writeSoul,
   snapshotWorkspaceForFork, writeForkSnapshot,
 } from '../src/index.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
 
 function fresh() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
   initAllTables(execRaw);
-  return { db, sql, execRaw };
+  return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs };
 }
 
-function seedSource(src: ReturnType<typeof fresh>) {
+async function seedSource(src: ReturnType<typeof fresh>) {
   src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
-  writeSoul(src.sql, 'help with testing');
+  await writeSoul(src.vfs, src.sql, 'help with testing');
   src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m1'}, ${null}, ${'user'}, ${'hello'}, ${1000})`;
   src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m2'}, ${'m1'}, ${'assistant'}, ${'hi there'}, ${1100})`;
   src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m3'}, ${'m2'}, ${'user'}, ${'post-fork-point'}, ${1500})`;
   src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'user'}, ${JSON.stringify({ content: 'hello' })}, ${1000})`;
   src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'assistant'}, ${JSON.stringify({ content: 'hi there' })}, ${1100})`;
   src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
-  src.sql`INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime) VALUES (${'memory/MEMORY.md'}, ${0}, ${'memory'}, ${'key insight'}, ${0}, ${11}, ${1000})`;
+  await src.vfs.mkdir('memory', { recursive: true });
+  await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
   // Pre-create agent_config and add non-display-name rows
   src.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
   src.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
 }
 
 describe('fork pipeline (end-to-end)', () => {
-  test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', () => {
+  test('payload round-trips across the RPC boundary (structured clone) and replays into the fork DB', async () => {
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     // Simulate the fork DO's onStart bootstrap
     tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BOOT-ID'}, ${'fork-bootstrap'}, ${999})`;
-    writeSoul(tgt.sql, 'default');
+    await writeSoul(tgt.vfs, tgt.sql, 'default');
 
-    seedSource(src);
+    await seedSource(src);
 
     // Source side: materialize the snapshot, then cross the RPC boundary.
     // DO RPC uses structured clone, which preserves the canonical BLOB
     // (Uint8Array/ArrayBuffer) vfs rows.
-    const snapshot = structuredClone(snapshotWorkspaceForFork(src.sql, 'm2'));
+    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
 
     // Fork side: land it.
-    writeForkSnapshot(tgt.sql, snapshot, {
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
       workspaceId: 'FORK-DO-ID', workspaceName: 'my-fork', now: 88888,
     });
 
@@ -74,7 +75,7 @@ describe('fork pipeline (end-to-end)', () => {
     expect(ident[0]!.id).toBe('FORK-DO-ID');
     expect(ident[0]!.name).toBe('my-fork');
 
-    expect(readSoul(tgt.sql)).toBe('help with testing');
+    expect(await readSoul(tgt.vfs)).toBe('help with testing');
 
     const msgs = tgt.sql<{ id: string }>`SELECT id FROM messages ORDER BY created_at ASC`;
     expect(msgs.map(m => m.id)).toEqual(['m1', 'm2']);  // m3 was after fork point
@@ -82,8 +83,8 @@ describe('fork pipeline (end-to-end)', () => {
     const tools = tgt.sql<{ name: string }>`SELECT name FROM crafted_tools`;
     expect(tools.map(t => t.name)).toEqual(['helper']);
 
-    const vfs = tgt.sql<{ path: string }>`SELECT path FROM vfs_files WHERE path LIKE 'memory/%'`;
-    expect(vfs.map(v => v.path)).toContain('memory/MEMORY.md');
+    // The memory arrived as a FILE the fork can open, not as copied rows.
+    expect(await tgt.vfs.readFile('memory/MEMORY.md', { encoding: 'utf8' })).toBe('key insight');
 
     const lineage = readForkLineage(tgt.sql);
     expect(lineage).not.toBeNull();
@@ -108,25 +109,25 @@ describe('fork pipeline (end-to-end)', () => {
     expect(cfg.get('display_name')).toBe('my-fork');
   });
 
-  test('a snapshot with zero crafted tools and zero memory is safe', () => {
+  test('a snapshot with zero crafted tools and zero memory is safe', async () => {
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
-    writeSoul(src.sql, 'p');
+    await writeSoul(src.vfs, src.sql, 'p');
     src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
-    const snapshot = structuredClone(snapshotWorkspaceForFork(src.sql, 'm1'));
+    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1'));
 
-    expect(() => writeForkSnapshot(tgt.sql, snapshot, {
+    await expect(writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
       workspaceId: 'F', workspaceName: 'empty-fork', now: 7000,
-    })).not.toThrow();
+    })).resolves.toBeDefined();
 
     const tools = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM crafted_tools`;
     expect(tools[0]!.c).toBe(0);
   });
 
-  test('idempotent re-copy over a partial failure — second run succeeds', () => {
+  test('idempotent re-copy over a partial failure — second run succeeds', async () => {
     // Simulates rawCopyFromFork being called twice: the first call failed
     // partway, leaving garbage in the fork DB, and the second must still
     // produce the correct final state. writeForkSnapshot purges the bootstrap
@@ -137,14 +138,14 @@ describe('fork pipeline (end-to-end)', () => {
     // Pretend a partial first run left the fork with bootstrap identity +
     // partial messages + a stale lineage row.
     tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'STALE'}, ${'partial'}, ${50})`;
-    writeSoul(tgt.sql, 'partial-soul');
+    await writeSoul(tgt.vfs, tgt.sql, 'partial-soul');
     tgt.sql`INSERT INTO fork_lineage (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
             VALUES (${1}, ${'OLD'}, ${'old'}, ${'x'}, ${0}, ${0})`;
 
-    seedSource(src);
-    const snapshot = structuredClone(snapshotWorkspaceForFork(src.sql, 'm2'));
+    await seedSource(src);
+    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
 
-    writeForkSnapshot(tgt.sql, snapshot, {
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
       workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
     });
 

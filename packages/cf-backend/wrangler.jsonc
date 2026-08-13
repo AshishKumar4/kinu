@@ -10,8 +10,14 @@
   "compatibility_flags": ["nodejs_compat"],
   // Persisted Workers Logs — without this, provider/turn errors are gone the
   // moment they scroll out of a live `wrangler tail` (made the 2026-07-13
-  // abrupt-stop incident's root error unrecoverable).
-  "observability": { "enabled": true },
+  // abrupt-stop incident's root error unrecoverable). head_sampling_rate is
+  // spelled out at its default (1 = every request/invocation logged, no
+  // sampling) rather than left implicit — this DO runs hours-long background
+  // jobs (MCTS forks, evict-recovery redrives) where a sampled-out activation
+  // is exactly the one an operator needed to see (2026-08-12 observability
+  // audit). 7-day retention on the paid tier (Cloudflare's Workers Logs
+  // limit, not ours) — `wrangler tail` is live-only and sees nothing older.
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
   "worker_loaders": [{ "binding": "LOADER" }],
   // Main site served by the custom domain. Sandbox previews get a hostname
   // each, under PREVIEW_HOST_SUFFIX below — see the note there.
@@ -217,7 +223,7 @@
       "main": "src/server.ts",
       "compatibility_date": "2025-12-01",
       "compatibility_flags": ["nodejs_compat"],
-      "observability": { "enabled": true },
+      "observability": { "enabled": true, "head_sampling_rate": 1 },
       "worker_loaders": [{ "binding": "LOADER" }],
       "assets": {
         "directory": "dist/client",

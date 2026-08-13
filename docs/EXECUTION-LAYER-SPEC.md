@@ -771,8 +771,8 @@ Formal proofs for the execution layer live in two files under `lean/Proteus/Exec
 
 Models a 5-tool architecture (execute_tools, run, explore, save_note,
 search_memory). **Also stale**: three of those five tools no longer exist. The
-real roster is the 10 names in `BUILTIN_TOOLS`; `explore`, `save_note`, and
-`search_memory` were folded into `think`, `memory`, and the `workspace.*`
+real roster is the 8 names in `BUILTIN_TOOLS`; `explore`, `save_note`, and
+`search_memory` were folded into `agents`, `memory`, and the `workspace.*`
 sandbox APIs. The theorems below are checked statements about the modeled
 5-tool vocabulary, not about the shipped one:
 

@@ -33,7 +33,7 @@ export async function evolveCommand(name: string, opts: {
   const llmConfig = resolveLLMConfig(opts);
   const codexAuthStore = createCodexAuthStore();
   const db = new Database(dbPath);
-  const { rt, info } = openWorkspaceCLI(db, dbPath, {
+  const { rt, info } = await openWorkspaceCLI(db, dbPath, {
     llm: llmConfig,
     providerCredentials: resolveProviderCredentials(),
     codexAuthStore,

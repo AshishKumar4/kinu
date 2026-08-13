@@ -39,17 +39,23 @@ export interface AcpAgentDeps {
 }
 
 /** Proteus's builtin tools, mapped to the kind ACP clients use to pick an icon
- *  and a presentation. Crafted and MCP tools fall through to 'other'. */
+ *  and a presentation. Crafted and MCP tools fall through to 'other'.
+ *
+ *  `skills` and `release` are not in this map on purpose: neither is a tool
+ *  name a live turn can produce anymore (skills are workspace.* file calls;
+ *  release is a release.* codemode call, both surfacing as `execute_tools`,
+ *  already mapped below) — keeping their entries would be dead code with no
+ *  "old transcript" justification, since ACP maps calls as they happen
+ *  rather than rendering stored history. Same reasoning retired `experience`
+ *  when it left the tool surface for an owner-only RPC. */
 const TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
   run: 'execute',
   execute_tools: 'execute',
   memory: 'think',
+  tasks: 'think',
   report: 'think',
-  experience: 'think',
   agents: 'think',
-  skills: 'read',
   web: 'fetch',
-  release: 'edit',
 };
 
 /** `file` is the one builtin whose kind depends on the call rather than the

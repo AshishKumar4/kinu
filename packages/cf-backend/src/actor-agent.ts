@@ -90,8 +90,9 @@ import {
   buildStrategyForkDeps, createDurableMctsSession, agentsActionsFor,
   // Background-job system (#173 — auto-background past the surface threshold)
   BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
+  TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob,
-  MctsSearchStore,
+  MctsSearchStore, readLatestSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills + per-turn surface (core turn-surface)
@@ -102,7 +103,7 @@ import {
   inheritedContextFromRows, headPhaseRunEvent,
   type ReleaseToolDeps,
   isVfsError,
-  type ParentRpcResult,
+  type ParentRpcResult, type ParentExecResult,
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
@@ -118,6 +119,8 @@ import {
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
   uiMessageText,
+  // memory.* / tasks.* — codemode projections of the same-named native tools
+  createMemoryCodemodeProvider, createTasksCodemodeProvider,
 } from "@proteus/core";
 import { createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
@@ -244,8 +247,11 @@ export interface ActorToolDeps {
 /** The deps-gated builtins: names dropped from the advertised tool surface
  *  when the actor profile wires no deps for them. The `agents` tool is never
  *  dropped on cf — every actor has the fork substrate — but its ACTIONS gate
- *  on the same profile (see actorAgentsActions). */
-const DEPS_GATED_TOOLS = ['report', 'release'] as const;
+ *  on the same profile (see actorAgentsActions). `release` is not a native
+ *  tool anymore (release.* is codemode-only — see extraCodemodeProviders
+ *  above), so `deps.releases` no longer gates anything here; it still feeds
+ *  that codemode namespace directly. */
+const DEPS_GATED_TOOLS = ['report'] as const;
 
 /** ACTIVE_TOOLS filtered to what this actor's deps actually wire — the prompt
  *  and the activeTools whitelist must not advertise structurally absent
@@ -253,7 +259,6 @@ const DEPS_GATED_TOOLS = ['report', 'release'] as const;
 export function actorActiveTools(deps: ActorToolDeps): BuiltinToolName[] {
   const present: Record<(typeof DEPS_GATED_TOOLS)[number], boolean> = {
     report: !!deps.report,
-    release: !!deps.releases,
   };
   return ACTIVE_TOOLS.filter((name) =>
     !(DEPS_GATED_TOOLS as readonly string[]).includes(name) || present[name as keyof typeof present]);
@@ -722,7 +727,7 @@ export abstract class ActorAgent extends Think<Env> {
       ...(liveOpts ? { replayLiveTurn: () => streamText(liveOpts).toUIMessageStream() } : {}),
     }).then((result) => {
       // What a DO does with the verdict: a note in the durable event log, so
-      // the Reasoning surface shows the comparison happened.
+      // the Exploration surface shows the comparison happened.
       if (!result) return;
       if (!result.skipped && result.evaluation && this._currentRunId) {
         try {
@@ -988,12 +993,65 @@ export abstract class ActorAgent extends Think<Env> {
     return this._jobs;
   }
 
+  // The agent's own task list — written by the `tasks` tool, read here for the
+  // live context block and by the Tasks surface.
+  private _taskList: TaskListStore | null = null;
+  protected get taskList(): TaskListStore {
+    if (!this._taskList) this._taskList = new TaskListStore(this.boundSql);
+    return this._taskList;
+  }
+
   // Durable MCTS search checkpoints — the resume record a fork(settle=mcts)
   // evicted mid-search continues from (B6). One per DO; keyed by search root id.
   private _mctsSearchStore: MctsSearchStore | null = null;
   protected get mctsSearchStore(): MctsSearchStore {
     if (!this._mctsSearchStore) this._mctsSearchStore = new MctsSearchStore(this.boundSql);
     return this._mctsSearchStore;
+  }
+
+  /**
+   * Push the search tree to every connected client, after each MCTS iteration.
+   * The ONE broadcast both producers use — the lifetime evolution cycle and an
+   * agent-initiated `agents` fork (see getAgentsToolDeps). It used to hang off
+   * the orchestrator and be reachable only from the first of those, so a
+   * search an operator started emitted nothing and its tree sat still for as
+   * long as it ran.
+   *
+   * Same scoped projection as getMctsTree: the tree in progress IS the latest
+   * one, and pushing every settled search's rows made the client render
+   * whichever root it picked out of the pile.
+   *
+   * Several events fire per iteration and each carries the WHOLE tree —
+   * observations and proposed code included — so an unchanged tree is skipped
+   * rather than re-serialized and fanned out. The receiver discards an
+   * identical payload on the same key anyway (use-proteus's fingerprint), so
+   * nothing downstream can tell the difference except the bytes it did not pay
+   * for.
+   */
+  broadcastMctsProgress(phase: string, iteration?: number, budget?: number): void {
+    try {
+      const nodes = readLatestSearchTree(this.boundSql);
+      const fingerprint = nodes.map((n) => `${n.id}:${n.visits}:${n.value}:${n.status}`).join('|');
+      if (fingerprint === this._lastMctsFingerprint) return;
+      this._lastMctsFingerprint = fingerprint;
+      this.broadcast(JSON.stringify({
+        type: 'mcts-progress', phase, iteration, budget,
+        nodeCount: nodes.length, nodes,
+      }));
+    } catch (err) {
+      console.warn('[proteus] broadcastMctsProgress failed:', err);
+    }
+  }
+
+  /** The tree last pushed. Per activation, which is the right lifetime: a
+   *  reconnecting client is served by the surface's own poll, not by a resend. */
+  private _lastMctsFingerprint = '';
+
+  /** One MCTS progress event → the broadcast, whichever producer raised it. */
+  protected onMctsProgress(event: MCTSProgressEvent): void {
+    const phase = event.type === 'phase' ? event.phase : event.type;
+    const budget = event.type === 'branch-failed' ? undefined : event.remainingBudget;
+    this.broadcastMctsProgress(phase, event.iteration, budget);
   }
   // The backend-agnostic background-job lifecycle (detach → settle → wake +
   // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
@@ -1060,11 +1118,18 @@ export abstract class ActorAgent extends Think<Env> {
           session: () => this.createMCTSSession(),
           search: this.mctsSearchStore,
           overrides: () => this.config.getMctsOverrides(),
+          // The search the operator watches. Bound at dispatch (the fork
+          // detaches on spawn-confirm), same as heads' onPhase.
+          onProgress: () => (event: MCTSProgressEvent) => this.onMctsProgress(event),
         },
         heads: {
           controller: () => this.getHeadController(),
           inheritedContext: () => this.readInheritedContext(),
-          onPhase: (event: SplitPhaseEvent) => this.emitHeadPhase(event),
+          // Captured at dispatch, once per fork call — see emitHeadPhase.
+          onPhase: () => {
+            const runId = this._currentRunId;
+            return (event: SplitPhaseEvent) => this.emitHeadPhase(event, runId);
+          },
           onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
         },
       }),
@@ -1078,9 +1143,6 @@ export abstract class ActorAgent extends Think<Env> {
   protected _currentRunId = '';
 
   // ── Skills (turn-scoped) ───────────────────────────────────────
-  /** Skill names invoked this turn (via /name or skills({action:'invoke'})).
-   *  Cleared at beforeTurn; closures from the skills tool mutate via .add(). */
-  private readonly _turnInvokedSkills = new Set<string>();
   /** Resolved active set for the current turn. Built in beforeTurn, read by
    *  the system-prompt assembly via TurnConfig.system override. */
   private _turnActiveSkills: ActiveSkillSet | null = null;
@@ -1210,6 +1272,21 @@ export abstract class ActorAgent extends Think<Env> {
    * and must not re-enter `this.rt`. */
   protected configureRuntime(_runtime: CFRuntime): void {}
 
+  /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator
+   *  and subordinate alike), the same way the native `memory` and `tasks`
+   *  tools are. Deps read live per provider's own convention (memory's facts/
+   *  vectorStore can rebind; tasks reuses `this.taskList`, the same
+   *  TaskListStore instance the dynamic-context snapshot reads). */
+  private baseCodemodeProviders(): CodemodeProvider[] {
+    return [
+      createMemoryCodemodeProvider(() => ({
+        memory: this.rt.memory, vectorStore: this.rt.vectorStore,
+        facts: this.facts, sql: this.rt.storage.sql,
+      })),
+      createTasksCodemodeProvider(this.taskList),
+    ];
+  }
+
   /** Build (or return cached) this DO's execute_tools tool. Construction (see
    *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
    *  still become callable because the executor re-reads craftStore per call. */
@@ -1225,7 +1302,7 @@ export abstract class ActorAgent extends Think<Env> {
         // `agents.*` in the sandbox — the same deps the top-level tool holds,
         // so a script delegates through the one path with the one action gate.
         agents: () => this.getAgentsToolDeps(),
-        extraProviders: () => this.extraCodemodeProviders(),
+        extraProviders: () => [...this.baseCodemodeProviders(), ...this.extraCodemodeProviders()],
         // Record which executor the agent actually works in, so the UI (diff /
         // file manager) defaults to where work happened. One upsert per executor
         // per turn (debounced via _executorsUsedThisTurn, reset in beforeTurn).
@@ -1276,7 +1353,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   // ── Parent workspace file plane (worker-side DO RPC only) ──────────────
 
-  /** Subordinate facets mount these methods at `/workspace`. They deliberately
+  /** A fork reaches these through its `parent` executor. They deliberately
    * carry no `@callable`: only a worker-held parent stub can reach them. */
   private workspaceFileFailure<T>(path: string, error: unknown): ParentRpcResult<T> {
     return {
@@ -1291,7 +1368,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async readWorkspaceFile(path: string): Promise<ParentRpcResult<Uint8Array>> {
     try {
-      const content = await this.rt.sqliteFS.readFile(path);
+      const content = await this.rt.localVfs.readFile(path);
       return { ok: true, value: typeof content === 'string' ? new TextEncoder().encode(content) : content };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
@@ -1300,8 +1377,8 @@ export abstract class ActorAgent extends Think<Env> {
 
   async writeWorkspaceFile(input: ParentRpcWrite): Promise<ParentRpcResult<null>> {
     try {
-      if (input.kind === 'file') await this.rt.sqliteFS.writeFile(input.path, input.data);
-      else await this.rt.sqliteFS.mkdir(input.path, { recursive: input.recursive });
+      if (input.kind === 'file') await this.rt.localVfs.writeFile(input.path, input.data);
+      else await this.rt.localVfs.mkdir(input.path, { recursive: input.recursive });
       return { ok: true, value: null };
     } catch (error) {
       return this.workspaceFileFailure(input.path, error);
@@ -1310,7 +1387,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async listWorkspaceFiles(path: string): Promise<ParentRpcResult<string[]>> {
     try {
-      return { ok: true, value: await this.rt.sqliteFS.readdir(path) };
+      return { ok: true, value: await this.rt.localVfs.readdir(path) };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
     }
@@ -1318,7 +1395,7 @@ export abstract class ActorAgent extends Think<Env> {
 
   async statWorkspaceFile(path: string): Promise<ParentRpcResult<{ size: number; mtimeMs: number; isDir: boolean } | null>> {
     try {
-      return { ok: true, value: await this.rt.sqliteFS.stat(path) };
+      return { ok: true, value: await this.rt.localVfs.stat(path) };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
     }
@@ -1326,10 +1403,28 @@ export abstract class ActorAgent extends Think<Env> {
 
   async deleteWorkspaceFile(path: string): Promise<ParentRpcResult<null>> {
     try {
-      await this.rt.sqliteFS.unlink(path);
+      await this.rt.localVfs.unlink(path);
       return { ok: true, value: null };
     } catch (error) {
       return this.workspaceFileFailure(path, error);
+    }
+  }
+
+  /**
+   * Run a command in THIS workspace's shell on behalf of a fork.
+   *
+   * The reason `parent` is worth being an executor rather than a file view: a
+   * fork searching its parent used to walk the tree one RPC per file through an
+   * emulated shell; this is one round trip into the real one, with the whole
+   * coreutils set behind it.
+   */
+  async execWorkspaceCommand(command: string): Promise<ParentRpcResult<ParentExecResult>> {
+    const shell = this.rt.shell;
+    if (!shell) return this.workspaceFileFailure('', new Error('this workspace has no shell'));
+    try {
+      return { ok: true, value: await shell.exec(command) };
+    } catch (error) {
+      return this.workspaceFileFailure('', error);
     }
   }
 
@@ -1369,14 +1464,23 @@ export abstract class ActorAgent extends Think<Env> {
    */
   protected _cachedSystemPrompt: string | null = null;
   protected _cachedSystemPromptKey: string = "";
-  /** Cached SOUL.md text. Loaded lazily on first read, invalidated by
-   *  setSoul(). Avoids a SQL round-trip on every getSystemPrompt() call. */
+  /**
+   * Cached SOUL.md text, refreshed at turn start and invalidated by setSoul().
+   *
+   * A cache rather than a read because `getSystemPrompt` is synchronous — Think
+   * calls it that way, and the prompt it builds is the byte-stable cacheable
+   * prefix — while the soul is a FILE in the workspace filesystem. So the read
+   * happens where there is a promise to await (refreshSoulText, from
+   * beforeTurn), and the prefix builder only ever consults what is already
+   * loaded. A cold activation that has not reached a turn yet renders the
+   * default identity, exactly as an unwritten SOUL.md always did.
+   */
   protected _cachedSoulText: string | null = null;
+  protected async refreshSoulText(): Promise<void> {
+    this._cachedSoulText = (await readSoul(this.rt.storage.vfs)) ?? '';
+  }
   private getSoulText(): string {
-    if (this._cachedSoulText === null) {
-      this._cachedSoulText = readSoul(this.boundSql) ?? '';
-    }
-    return this._cachedSoulText;
+    return this._cachedSoulText ?? '';
   }
 
   getSystemPrompt(): string {
@@ -1473,12 +1577,8 @@ export abstract class ActorAgent extends Think<Env> {
     this.logActivity("gettools_rebuilding", `${this._cachedToolsKey} → ${cacheKey}`);
 
     try {
-      const orchestrator = this;
-
       // No registry sync: PreambleCraftedExecutor reads craftStore.list()
       // fresh at every execute. See docs/CRAFT-ARCHITECTURE.md §5.6.
-
-      const shellApprovalMode = this.config.getShellApprovalMode();
 
       const actorDeps = this.actorToolDeps();
       const tools = buildBuiltinTools({
@@ -1501,23 +1601,12 @@ export abstract class ActorAgent extends Think<Env> {
         // Vectorize-backed semantic memory. memory.search auto-uses
         // hybrid retrieval when this is provided + available; FTS5-only fallback.
         vectorStore: this.rt.vectorStore,
-        // Per-agent approval policy for shell exec.
-        shellApprovalMode,
         // Typed, keyed world-model store — exposes the `fact` tool.
         facts: this.facts,
-        // Single `skills` tool — list/read/invoke/create/edit/delete actions.
-        // Per-turn invocation state lives on the orchestrator; closures here
-        // mutate / read it without ever recreating the Set, so the binding
-        // stays stable across the cached toolset.
-        skills: {
-          vfs: orchestrator.getSkillsVfs(),
-          recordInvoke: (name: string) => { orchestrator._turnInvokedSkills.add(name); },
-          currentlyInvoked: () => Array.from(orchestrator._turnInvokedSkills),
-        },
-        // The remaining actor-profile deps (subordinate report spine,
-        // release lane).
+        // The remaining actor-profile dep: the subordinate report spine.
+        // The release lane is codemode-only now (release.* — see
+        // getExecuteToolsTool below), not a BuiltinToolDeps field.
         ...(actorDeps.report ? { report: actorDeps.report } : {}),
-        ...(actorDeps.releases ? { releases: actorDeps.releases } : {}),
         // Web research — key-less default, codemode web.* wired below.
         webSearch: this.getWebSearchProvider(),
       });
@@ -1616,11 +1705,21 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /** Stream head_split / head_merge into the durable event log so SSE
-   *  subscribers + MCP `list_run_events` see the split lifecycle. */
-  private emitHeadPhase(event: SplitPhaseEvent): void {
+   *  subscribers + MCP `list_run_events` see the split lifecycle.
+   *
+   *  `runId` is captured at fork DISPATCH (getAgentsToolDeps' onPhase
+   *  factory), not read live off `_currentRunId`: a fork on the interactive
+   *  surface now detaches the instant it spawns, so the calling turn's own
+   *  run can close — and `_currentRunId` moves on to whatever turn runs next
+   *  — before 'split' fires and always before 'merge' does (it only fires once
+   *  the whole exploration finishes). Reading live would misattribute a late
+   *  phase to an unrelated later turn instead of dropping it silently, which
+   *  is worse. Passing '' (a closed run) is deliberate and distinct from
+   *  omitting it. */
+  private emitHeadPhase(event: SplitPhaseEvent, runId: string): void {
     try {
-      if (!this._currentRunId) return;
-      this.eventRecorder.emit(this._currentRunId, headPhaseRunEvent(event));
+      if (!runId) return;
+      this.eventRecorder.emit(runId, headPhaseRunEvent(event));
     } catch (err) {
       console.warn('[proteus] event emit failed at head onPhase:', err);
     }
@@ -1799,6 +1898,8 @@ export abstract class ActorAgent extends Think<Env> {
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
+    // The soul is a file; load it where there is a promise to await.
+    if (this._cachedSoulText === null) await this.refreshSoulText();
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
     // The continuation flag resets mid-turn signal splice state: a continuation
@@ -1836,22 +1937,17 @@ export abstract class ActorAgent extends Think<Env> {
     });
 
     // ── Skills resolution for this turn (core turn-surface) ──────────────
-    // Reset per-turn invocation set (don't reassign — closures from the
-    // skills tool hold a stable reference).
-    this._turnInvokedSkills.clear();
     this._turnActiveSkills = null;
-    // The actor's REAL tool surface: deps-gated builtins (report/
-    // release) are advertised only when this actor class wires them,
-    // and the agents ladder renders only the actions this profile supports —
-    // then restricted to the active skills' allowed union (skills tool kept,
-    // core turn-surface).
+    // The actor's REAL tool surface: deps-gated builtins (report) are
+    // advertised only when this actor class wires them, and the agents
+    // ladder renders only the actions this profile supports — then
+    // restricted to the active skills' allowed union (core turn-surface).
     const turnActorDeps = this.actorToolDeps();
     let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
-    const activeSetForPrompt = await resolveTurnSkills({
+    const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
       userText: extractLastUserText(ctx.messages),
-      invoked: this._turnInvokedSkills,
     });
     if (activeSetForPrompt) {
       this._turnActiveSkills = activeSetForPrompt;
@@ -1913,6 +2009,7 @@ export abstract class ActorAgent extends Think<Env> {
       executors: execs,
       availableTools: activeTools,
       agentsActions: actorAgentsActions(turnActorDeps),
+      ...(availableSkills.length > 0 ? { availableSkills } : {}),
       ...(activeSetForPrompt ? { activeSkills: activeSetForPrompt } : {}),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
@@ -2056,6 +2153,7 @@ export abstract class ActorAgent extends Think<Env> {
       memoryTail: this._turnMemoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
+      openTasks: this.taskList.listOpen(),
       liveHeadRuns: this.headJournal.listLive(),
       missingCapabilities: this._mcpUnavailable,
     });

@@ -68,7 +68,7 @@ import {
   type CompletedTurn, type ToolCallRecord, type SqlExecutor,
   // Adaptive reasoning_effort per stage
   effortFor,
-  type BackgroundJob, TriggerRegistry, ReplyChannelStore,
+  type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
   type ReasoningEffort, type ShellApprovalMode,
   type AlarmScheduler, type ReplyDispatcher, type ReplyChannelRow,
   // GEPA run lineage (the pass itself is core's evolution control plane)
@@ -103,10 +103,10 @@ import {
   type PeersToolDeps, type PeerSpawnOutcome, type PeerSendOutcome,
   type EnqueueTurnResult,
   slugifyName,
-  readSoul, summarizeSoul, writeSoul,
+  readSoul, readMission, summarizeSoul, writeSoul,
   // Automatic workspace titling (first turn + legacy slug heal)
-  applyWorkspaceTitle, isPlaceholderWorkspaceTitle, parseWorkspaceIdentityOutput,
-  WORKSPACE_IDENTITY_SYSTEM_PROMPT, workspaceIdentityPrompt,
+  applyWorkspaceTitle, isPlaceholderMission, isPlaceholderWorkspaceTitle, parseWorkspaceTitle,
+  WORKSPACE_TITLE_SYSTEM_PROMPT, workspaceTitlePrompt,
   // Device shadow-git checkpoints (forwarded to the pc-agent daemon)
   isDeviceNotConnectedError,
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
@@ -128,13 +128,16 @@ import {
   receiveSubordinateEvent,
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
-  getAgentStatus, getChatHistory, getToolList, type ChatHistoryEntry,
+  getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, readSearchTree,
+  listForkRuns, type ForkRunSummary,
+  buildPendingActions, type PendingAction,
+  type ChatHistoryEntry,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
   getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
-  getExecutorFiles, readExecutorFile, writeExecutorFileOp,
+  getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
   type DirEntry, type ExecutorWriteResult,
   cancelBackgroundJob, cancelCurrentWork, clearBackgroundJobs, dismissBackgroundJob,
   jobResult, listBackgroundJobs, retryBackgroundJob,
@@ -143,7 +146,7 @@ import {
   getShellApprovalMode, getStoredModelSpec, setAlwaysActiveSkills, setEvolutionConfig,
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
-  getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
 } from "@proteus/core";
 import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
@@ -157,11 +160,12 @@ import {
   type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
   createAgentSelfProvider,
+  createReleaseCodemodeProvider,
   DeviceConsentRegistry,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
 } from "@proteus/core";
-import type { CodemodeProvider } from "@proteus/core";
+import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
 import { agentEmailAddress } from "./email/inbound.js";
 import {
@@ -501,11 +505,9 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
         enabled: true,
-        onMctsProgress: (event) => {
-          const phase = event.type === "phase" ? event.phase : event.type;
-          const budget = event.type === "branch-failed" ? undefined : event.remainingBudget;
-          this.broadcastMctsProgress(phase, event.iteration, budget);
-        },
+        // The same sink an agent-initiated fork(settle=mcts) uses — one
+        // broadcast for every search this workspace runs (ActorAgent).
+        onMctsProgress: (event) => this.onMctsProgress(event),
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
@@ -708,6 +710,21 @@ export class OrchestratorAgent extends ActorAgent {
     return runExperienceAction(deps, input);
   }
 
+  /** release.* (tools/release-codemode.ts) is constructed once per DO
+   *  lifetime along with execute_tools, so it cannot re-check ownership on
+   *  every call the way a callable RPC does. An unclaimed workspace gets a
+   *  deps object whose every method rejects with the same honest reason,
+   *  rather than a namespace that silently vanished or crashed on first use. */
+  private unclaimedReleaseDeps(): ReleaseToolDeps {
+    const reject = async (): Promise<never> => {
+      throw new Error('This agent has no owner yet, so there is no release lane to reach. Open it through the authenticated app or CLI first.');
+    };
+    return {
+      board: reject, bindSource: reject, create: reject, update: reject,
+      transition: reject, recordCheck: reject, requestApproval: reject, recordDeployment: reject,
+    };
+  }
+
   private getReleaseToolDeps(): ReleaseToolDeps | undefined {
     if (!this.getOwnerUserDO()) return undefined;
     const hub = () => this.userHub();
@@ -767,9 +784,15 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
-  /** `agent.*` — the agent steers itself (curriculum + self-scheduling). */
+  /** `agent.*` (self-steering) and `release.*` (the governed release lane —
+   *  left the native surface; see tools/release-codemode.ts). Both read
+   *  their deps lazily so a claimOwner mid-DO-lifetime lands without
+   *  rebuilding execute_tools. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
-    return [createAgentSelfProvider(this)];
+    return [
+      createAgentSelfProvider(this),
+      createReleaseCodemodeProvider(() => this.getReleaseToolDeps() ?? this.unclaimedReleaseDeps()),
+    ];
   }
 
   /** Mission Inbox: owner notifications go out as email. */
@@ -980,10 +1003,12 @@ export class OrchestratorAgent extends ActorAgent {
     // Evolution Changelog and are revertable).
     void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
-    // On the first turn, replace the creation-time slug with a concise
-    // AI-generated title derived from the opening request. Fire-and-forget;
-    // once-only (persisting an auto title marks name_origin).
-    void this.maybeAutoTitleWorkspace(userText);
+    // Title the workspace from what it is FOR — its mission — not from
+    // whatever it was asked to do first. A workspace with no mission of its
+    // own has only the opening request to go on. Fire-and-forget; once-only
+    // (persisting an auto title marks name_origin).
+    const mission = readMission(this.boundSql);
+    void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!);
 
     // Persist /workspace to R2 if the agent used the sandbox this turn — so the
     // work survives the container sleeping. Debounced + fire-and-forget.
@@ -1034,7 +1059,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  that was never titled, and the wake of a legacy workspace still showing
    *  its raw slug (created before mission-derived titling existed). The shared
    *  policy decides; a title the operator chose is never touched, and persisting
-   *  an auto title marks name_origin='auto', so this runs at most once. */
+   *  an auto title marks name_origin='auto', so this runs at most once.
+   *  The slug is NOT part of this: it is fixed at creation and permanent. */
   private async maybeAutoTitleWorkspace(mission: string): Promise<void> {
     try {
       const title = await applyWorkspaceTitle({
@@ -1057,13 +1083,13 @@ export class OrchestratorAgent extends ActorAgent {
   private async suggestWorkspaceTitle(mission: string): Promise<string | null> {
     const { text } = await generateText({
       model: await this.getModelForReview(),
-      system: WORKSPACE_IDENTITY_SYSTEM_PROMPT,
-      prompt: workspaceIdentityPrompt(mission),
+      system: WORKSPACE_TITLE_SYSTEM_PROMPT,
+      prompt: workspaceTitlePrompt(mission),
       // No output cap: reasoning models spend their budget thinking before the
       // JSON, and a cap starves them into empty text.
       ...effortFor('judge'),
     });
-    return parseWorkspaceIdentityOutput(text, this.name)?.displayName ?? null;
+    return parseWorkspaceTitle(text);
   }
 
   /** Push a display name to all three homes: agent_config (source of truth),
@@ -1121,6 +1147,15 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async clearBackgroundJobs(): Promise<{ ok: boolean }> {
     return clearBackgroundJobs(this.jobs);
+  }
+
+  /** The agent's own task list, for the Tasks surface. Read-only on purpose:
+   *  the agent maintains this list from the `tasks` tool and re-reads it in
+   *  its live context, so a second writer would swap its plan underneath it
+   *  with nothing to say so. Changing what it is doing goes through chat. */
+  @callable()
+  async listAgentTasks(): Promise<AgentTaskTree[]> {
+    return this.taskList.list();
   }
 
   @callable()
@@ -1309,7 +1344,7 @@ export class OrchestratorAgent extends ActorAgent {
     // every other workspace is already titled, so it costs a config read.
     // Fire-and-forget: boot never waits on a model call.
     if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
-      void this.maybeAutoTitleWorkspace(summarizeSoul(readSoul(this.boundSql) ?? ''));
+      void readSoul(this.rt.storage.vfs).then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')));
     }
   }
 
@@ -1427,6 +1462,7 @@ export class OrchestratorAgent extends ActorAgent {
   async getAgentStatus() {
     return getAgentStatus({
       sql: this.boundSql,
+      vfs: this.rt.storage.vfs,
       config: this.config,
       fallbackId: this.ctx.id.toString(),
       name: this.name,
@@ -1445,9 +1481,67 @@ export class OrchestratorAgent extends ActorAgent {
     return getToolList(this.boundSql, this.rt.craftStore);
   }
 
+  /** The LATEST search's tree only — settled earlier searches stay in
+   *  search_nodes and must never shadow the run the operator is watching. */
   @callable() async getMctsTree() {
-    return this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
-      FROM search_nodes ORDER BY depth, created_at`;
+    return readLatestSearchTree(this.boundSql);
+  }
+
+  /** One named search's tree. The unified fork list can select a competed run
+   *  that is not the latest, and `getMctsTree` would then answer with another
+   *  search's branches under it. */
+  @callable() async getSearchTree(rootId: string) {
+    return readSearchTree(this.boundSql, rootId);
+  }
+
+  /** Every fork this workspace has run, newest first, whichever settle policy
+   *  it chose — the one entry point the Exploration surface lists. Detail
+   *  stays per-mechanism (`getSearchTree` for a competition, `getHeadRuns`
+   *  for a merge); this is the list they are both reached from. */
+  @callable() async listForkRuns(limit: number = 20): Promise<ForkRunSummary[]> {
+    return listForkRuns(this.boundSql, limit);
+  }
+
+  /**
+   * Everything asynchronous that is waiting on the owner, in one queue.
+   *
+   * Host-owned by design: this is NOT in `VIEW_DATA_SOURCES` and must not be
+   * added. An agent-authored view that could draw the needs-you queue could
+   * draw a plausible fake of it — the same argument that keeps
+   * `listPendingConsents` off that list, on the surface an owner reads right
+   * before authorising something.
+   *
+   * A read that fails degrades to "nothing pending of that kind" rather than
+   * failing the whole queue: a broken release hub must not hide a failed job.
+   */
+  @callable() async listPendingActions(): Promise<PendingAction[]> {
+    const board = await this.getReleaseBoard(20).catch(() => null);
+    // The unseen window itself, not the whole digest: the queue row needs the
+    // count, the newest entry's time, and how many of those entries actually
+    // offer keep/revert rather than being measurements to read.
+    let unseen: ChangelogEntry[] = [];
+    try { unseen = getUnseenChangelog(this.config, this.boundSql); }
+    catch { /* a digest that will not assemble must not hide a failed job */ }
+    return buildPendingActions({
+      approvals: board?.approvals ?? [],
+      changes: board?.changes ?? [],
+      scaffoldVersions: listScaffoldVersions(this.boundSql, 20),
+      jobs: listBackgroundJobs(this.jobs, 50),
+      unseenChanges: {
+        count: unseen.length,
+        revertable: unseen.filter((entry) => entry.revert !== undefined).length,
+        latestAt: unseen[0]?.at ?? Date.now(),
+      },
+      curriculum: listProposedTasks(this.rt, 'pending'),
+    });
+  }
+
+  /** The run-level MCTS ledger (mcts_search_runs): every search this workspace
+   *  has run, newest-updated first, with its status/iteration/budget. Distinct
+   *  from getMctsTree's node rows — this is how a caller tells which search is
+   *  the latest without inferring it from node ordering. */
+  @callable() async getMctsSearchRuns(limit: number = 20): Promise<MctsSearchRunSummary[]> {
+    return this.mctsSearchStore.list(limit);
   }
 
   @callable() async getMctsNodeDetail(nodeId: string) {
@@ -2019,7 +2113,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** One GEPA run in full: its candidates (scores/feedback per instance) +
-   *  the Pareto-front membership — drives the Reasoning surface's Pareto
+   *  the Pareto-front membership — drives the Exploration surface's Pareto
    *  scatter + ancestry tree. Maps are flattened to plain objects for RPC. */
   @callable()
   async getGepaRun(runId: string): Promise<{
@@ -2071,7 +2165,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Recent branching-head runs (think strategy=heads): each split grouped by
    *  root_id with its heads (incl. the ordered per-head step trace) + the merged
-   *  synthesis — drives the Reasoning surface's Branches strip. */
+   *  synthesis — drives the Exploration surface's Branches strip. */
   @callable()
   async getHeadRuns(limit: number = 20): Promise<HeadRunView[]> {
     try { return this.headJournal.listRuns(limit); } catch { return []; }
@@ -2126,7 +2220,7 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   /** The agent's world model — keyed agent_facts, most-recent first — for the
-   *  Brain surface. Wraps FactsStore (otherwise consumed only internally for
+   *  Self surface. Wraps FactsStore (otherwise consumed only internally for
    *  prompt injection). */
   @callable()
   async getFacts(limit: number = 100): Promise<Array<{
@@ -2358,11 +2452,10 @@ export class OrchestratorAgent extends ActorAgent {
     return this.rt.executionRouter?.listExecutors() ?? [];
   }
 
-  /** The workspace mount table — the CompositeVFS data surface behind the
-   *  unified file browser. One row per environment (/local always; /sandbox,
-   *  /nimbus, /pc as configured), with live state + declared policy. */
+  /** The environments behind the unified file browser — one row per executor
+   *  that has a filesystem, with live state and how durable it is. */
   @callable() async listMounts() {
-    return this.rt.compositeVfs.listMounts();
+    return this.rt.executionRouter ? listEnvironments(this.rt.executionRouter) : [];
   }
 
   /** The agent roster as seen from this workspace: this DO's orchestrator is
@@ -2471,15 +2564,17 @@ export class OrchestratorAgent extends ActorAgent {
     }
   }
 
-  /** Typed directory listing for the file manager — read straight off the
-   *  CompositeVFS for every executor (accurate types + sizes). */
+  /** Typed directory listing for the file manager — read off each executor's
+   *  own raw handle, in that environment's own paths. */
   @callable() async getExecutorFiles(executorId: string, path: string): Promise<{ entries?: DirEntry[]; error?: string }> {
-    return getExecutorFiles(this.rt.storage.vfs, executorId, path);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return getExecutorFiles(this.rt.executionRouter, executorId, path);
   }
 
   /** Read a single file's text content for the file-manager viewer. */
   @callable() async readExecutorFile(executorId: string, path: string): Promise<{ content?: string; truncated?: boolean; error?: string }> {
-    return readExecutorFile(this.rt.storage.vfs, executorId, path);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return readExecutorFile(this.rt.executionRouter, executorId, path);
   }
 
   /** Upload one file into an executor (file-manager drop/Upload).
@@ -2488,7 +2583,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  upload has to base64 its payload into a frame with a 1 MiB ceiling, so
    *  ordinary files died at the socket as an opaque connection failure. */
   async writeExecutorFile(executorId: string, path: string, bytes: Uint8Array): Promise<ExecutorWriteResult> {
-    return writeExecutorFileOp({ vfs: this.rt.storage.vfs }, executorId, path, bytes);
+    if (!this.rt.executionRouter) return { error: 'no execution router' };
+    return writeExecutorFileOp(this.rt.executionRouter, executorId, path, bytes);
   }
 
   /**
@@ -2567,7 +2663,7 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
     if (!text) throw new Error('SOUL.md cannot be empty.');
-    writeSoul(this.boundSql, text);
+    await writeSoul(this.rt.storage.vfs, this.boundSql, text);
     // Invalidate the cached SOUL.md + system prompt so the next turn
     // picks up the new identity.
     this._cachedSoulText = null;
@@ -2592,27 +2688,6 @@ export class OrchestratorAgent extends ActorAgent {
     return setEvolutionConfig(this.config, config);
   }
 
-  /**
-   * Broadcast the current MCTS tree to all connected WebSocket clients.
-   * Called after each MCTS iteration so the UI updates in real-time.
-   */
-  broadcastMctsProgress(phase: string, iteration?: number, budget?: number) {
-    try {
-      const nodes = this.sql`SELECT id, parent_id, depth, visits, value, status, action, task, observation, code_used, branch_agent_key, msg_id, created_at
-        FROM search_nodes ORDER BY depth, created_at`;
-      this.broadcast(JSON.stringify({
-        type: "mcts-progress",
-        phase,
-        iteration,
-        budget,
-        nodeCount: nodes.length,
-        nodes,
-      }));
-    } catch (err) {
-      console.warn("[proteus] broadcastMctsProgress failed:", err);
-    }
-  }
-
   // ── Fork RPCs ──────────────────────────────────────────────────
 
   /**
@@ -2634,6 +2709,7 @@ export class OrchestratorAgent extends ActorAgent {
   ): Promise<{ id: string; name: string; url: string; forkPointMs: number }> {
     const fork = await forkWorkspace({
       sql: this.boundSql,
+      vfs: this.rt.storage.vfs,
       sourceName: this.name,
       busy: () => this._inFlight,
       transport: this.forkTransport,
@@ -2696,13 +2772,15 @@ export class OrchestratorAgent extends ActorAgent {
     // missing table.
     this.ensureSchema();
 
-    // Atomic. `this.boundSql` is a stable closure over `this.sql` that
-    // preserves the `this`-binding the Agent base class needs.
-    this.ctx.storage.transactionSync(() => {
-      writeForkSnapshot(this.boundSql, snapshot, {
-        workspaceId: this.ctx.id.toString(),
-        workspaceName: forkName,
-      });
+    // The row copy is atomic; the file copy cannot be inside that transaction
+    // (a host transaction is synchronous, the filesystem is not) and does not
+    // need to be — it is a set of idempotent overwrites. `this.boundSql` is a
+    // stable closure over `this.sql` that preserves the `this`-binding the
+    // Agent base class needs.
+    await writeForkSnapshot(this.boundSql, this.rt.storage.vfs, snapshot, {
+      workspaceId: this.ctx.id.toString(),
+      workspaceName: forkName,
+      transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
 
     return { ok: true, agentId: this.ctx.id.toString() };

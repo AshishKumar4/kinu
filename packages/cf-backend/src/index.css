@@ -643,6 +643,14 @@ body { background: var(--c-bg); color: var(--c-text); }
 
 .p-row-hover:hover { background: var(--c-neutral-tint); }
 
+/* MCTS tree labels. Below the zoom where an 11px label lands under ~8px on
+   screen they are noise rather than text, so the whole layer is gated on one
+   attribute the zoom handler writes; the selected and hovered nodes keep
+   theirs regardless, because those two were asked for. */
+.mcts-label { visibility: hidden; }
+.mcts-labels[data-lod] .mcts-label,
+.mcts-label[data-pinned] { visibility: visible; }
+
 /* Streaming label shimmer — live work reads as light moving through text. */
 .p-shimmer {
   background: linear-gradient(90deg, var(--c-text-3) 0%, var(--c-text) 50%, var(--c-text-3) 100%);

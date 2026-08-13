@@ -9,23 +9,22 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { toolExecute } from '@proteus/test-utils';
 import {
   ReleaseEngine,
-  buildBuiltinTools,
+  runReleaseAction,
   createReleaseStore,
   createSandboxReleaseExec,
   deployTargetAsCommand,
   initReleaseTables,
   parseDeployOutput,
   releaseSqlFromExec,
+  type ReleaseActionInput,
   type ReleaseExec,
   type ReleaseLedger,
   type ReleaseStore,
   type ReleaseToolDeps,
   type SandboxHandle,
 } from '../src/index.js';
-import { createTestRuntime } from './helpers.js';
 
 // ── Fake sandbox exec seam ─────────────────────────────────────────────────
 
@@ -787,9 +786,13 @@ describe('createSandboxReleaseExec', () => {
   });
 });
 
-// ── release tool ← engine wiring (governance gates) ─────────────────
+// ── release dispatcher ← engine wiring (governance gates) ────────────
+// Drives runReleaseAction directly — the same dispatcher the release.*
+// codemode namespace calls (tools/release-codemode.ts) — rather than through
+// a native tool; release left the model's top-level surface for codemode,
+// but the gate behavior this describes did not move.
 
-describe('release tool with an engine wired', () => {
+describe('release dispatcher with an engine wired', () => {
   type ToolExecute = (args: Record<string, unknown>) => Promise<unknown>;
 
   function buildTool(opts?: { engine?: false }): { s: Setup; execute: ToolExecute } {
@@ -805,14 +808,7 @@ describe('release tool with an engine wired', () => {
       recordDeployment: async (changeId, input) => s.store.recordDeployment(changeId, input),
       ...(opts?.engine === false ? {} : { engine: s.engine }),
     };
-    const { rt } = createTestRuntime();
-    const tools = buildBuiltinTools({
-      rt,
-      craftedToolExecute: () => async () => undefined,
-      releases: deps,
-    });
-    const execute = toolExecute<Record<string, unknown>, unknown>(tools.release);
-    return { s, execute: (args) => execute(args) };
+    return { s, execute: (args) => runReleaseAction(deps, args as unknown as ReleaseActionInput) };
   }
 
   test('refuses manual transitions into engine-owned states; ordinary transitions pass through', async () => {

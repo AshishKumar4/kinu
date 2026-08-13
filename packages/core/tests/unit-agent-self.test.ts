@@ -116,6 +116,41 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     expect(p.types).toContain("replayEvals");
   });
 
+  test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {
+    const settled = { id: "bgjob-1", kind: "run", status: "completed" as const, result: '"the output"', error: null };
+    const host = fakeHost({ jobResult: (async (id: string) => { host.calls.push(`jobResult:${id}`); return settled; }) as never });
+    const p = createAgentSelfProvider(host);
+    expect(await p.tools.jobResult.execute("bgjob-1")).toEqual(settled);
+  });
+
+  test("jobResult on a job still RUNNING returns a note instead of an empty poll — no loop to spin on", async () => {
+    // The mechanism defect B's fix rests on: a bare {status:'running'} read
+    // invites another read a moment later (that is what a poll loop IS). The
+    // shaped read states the wake contract instead, so there is nothing to gain
+    // by reading again.
+    const running = { id: "bgjob-2", kind: "agents", status: "running" as const, result: null, error: null };
+    const host = fakeHost({ jobResult: (async () => running) as never });
+    const p = createAgentSelfProvider(host);
+    const r = await p.tools.jobResult.execute("bgjob-2") as Record<string, unknown>;
+    expect(r.status).toBe("running");
+    expect(r.id).toBe("bgjob-2");
+    expect(r.kind).toBe("agents");
+    // No result/error fields to misread as "it returned nothing" — and no
+    // invitation to call again.
+    expect(r.result).toBeUndefined();
+    expect(r.error).toBeUndefined();
+    expect(typeof r.note).toBe("string");
+    expect(r.note as string).toContain("woken");
+    expect(r.note as string).toMatch(/not.*finish sooner|will not make it finish/i);
+  });
+
+  test("jobResult on a null (unknown) job passes null through", async () => {
+    const host = fakeHost();
+    const p = createAgentSelfProvider(host);
+    expect(await p.tools.jobResult.execute("no-such-job")).toBeNull();
+    expect(host.calls).toEqual(["jobResult:no-such-job"]);
+  });
+
   test("acceptCurriculumTask rejects a non-string id", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);

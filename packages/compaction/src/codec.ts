@@ -123,9 +123,21 @@ export const proteusCodec: Codec<ModelMessage> = {
 };
 
 export const proteusConventions: Conventions = {
-  // Skill bodies enter history as `skills` tool read/invoke outputs (active
-  // skills render in the system prefix, outside messages). Those loaded
-  // bodies are re-readable on demand, so the skills stage prunes them first.
+  // Skill bodies used to enter history as `skills` tool read/invoke outputs
+  // (active skills render in the system prefix, outside messages), so the
+  // skills stage pruned those loaded copies first — cheaply re-fetchable
+  // duplicates. The `skills` tool is gone (read/create/edit/delete are now
+  // workspace.readFile/writeFile/readdir calls inside execute_tools), so
+  // isSkillBodyLoad's toolName match never fires for a NEW call — but it
+  // still correctly identifies any `{toolName:'skills'}` calls already
+  // sitting in durable history from before this migration, so a session with
+  // older turns keeps pruning them with the same priority. Not extended to
+  // detect a skill read done via execute_tools: that call's `code` is
+  // free-form JS mixing arbitrary logic, so matching on it would be a
+  // fragile heuristic (false positives on unrelated code, false negatives on
+  // any indirection) where the old exact toolName match was exact. A skill
+  // read via execute_tools falls through to the generic tool-result pruning
+  // tiers (toolsOldStage / toolsRemainingStage) instead of this priority one.
   isSkillItem: (item) =>
     item.kind === 'tool' && isSkillBodyLoad(pairOf(item).call),
   tool: (item) => {
@@ -455,6 +467,9 @@ function pairOf(item: ToolItem): ToolPairHandle {
   return item.handle as ToolPairHandle;
 }
 
+/** Matches a legacy `{toolName:'skills', action:'read'|'invoke'}` call —
+ *  see the isSkillItem comment above for why this is intentionally NOT kept
+ *  in step with the current action set (the tool itself is gone). */
 function isSkillBodyLoad(call: ToolCallPart): boolean {
   if (call.toolName !== 'skills') return false;
   const input = call.input;

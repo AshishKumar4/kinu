@@ -1,11 +1,12 @@
 /**
  * InlineExecutor — the "workspace" provider inside the codemode sandbox.
  *
- * Wraps the agent's DO-local resources (SqliteFS, MemoryStore, shell emulator)
- * as workspace.* APIs callable from LLM-generated JS:
+ * Wraps the agent's own resources — the Nimbus filesystem and shell, memory,
+ * the craft store — as workspace.* APIs callable from LLM-generated JS:
  *
  *   workspace.readFile("/src/main.ts")
  *   workspace.writeFile("/src/util.ts", code)
+ *   workspace.editFile("/src/util.ts", [{old_text, new_text}])
  *   workspace.exec("grep -rn TODO /src")
  *   workspace.searchMemory("how to handle errors")
  *   workspace.saveNote("User prefers TypeScript strict mode")
@@ -25,6 +26,9 @@ import { checkMisevolutionForSurface, recordMisevolutionVeto } from '../scaffold
 import { seedCraftScore } from '../craft/in-episode.js';
 import { createView, deleteView, viewSlug } from '../views/store.js';
 import { VIEW_DATA_SOURCES } from '../views/sources.js';
+import { createFileDispatcher } from '../tools/file-tool.js';
+import { TurnFileLedger } from '../tools/file-ledger.js';
+import { TurnContextBudget } from '../context-budget.js';
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -35,9 +39,9 @@ export interface InlineExecutorDeps {
   memory: Memory;
   craftStore: CraftStore;
   shell: ShellExec;
-  /** The measured limits of wherever `shell` really runs. The cf backend's
-   *  workspace shell is emulated in the Worker and declares none; the CLI's is
-   *  the host process, so it passes its own cgroup's. */
+  /** The measured limits of wherever `shell` really runs. The workspace shell
+   *  runs inside the Worker/process and declares none unless the host measured
+   *  one (the CLI passes its own cgroup's). */
   resourceLimits?: ResourceLimits;
   /** Optional — used to look up craft_scores for listTools(). Falls back to 0.7 if missing. */
   sql?: SqlExecutor;
@@ -48,6 +52,35 @@ export interface InlineExecutorDeps {
    * can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
+  /**
+   * The turn's read/edit ledger, read live — SHARED with the native `file`
+   * tool, so workspace.editFile's exact-match, read-before-write enforcement
+   * is the SAME gate the native tool enforces (createFileDispatcher, tools/
+   * file-tool.ts) over the SAME state, not a second implementation: a native
+   * `file` edit never refuses a path this turn already read or wrote through
+   * workspace.*, and vice versa.
+   *
+   * A THUNK, not a value, because this executor is registered once per
+   * runtime construction — often the first thing a DO/session builds, ahead
+   * of the per-turn accumulator that owns the real ledger — while the ledger
+   * itself is reset per turn. Reading it lazily, at call time rather than
+   * construction time, means construction order never matters: by the time
+   * any tool here actually runs, a turn has always already begun.
+   *
+   * Returns `undefined`, not omitted, for an actor that has no turn-scoped
+   * ledger at all (ExplorationAgent — a head/fork): the caller can supply
+   * the thunk unconditionally without itself touching whatever lazily-built
+   * state decides the answer, which is what keeps this safe to wire from
+   * inside another lazy getter's own construction. Undefined (from the
+   * thunk, or the whole field omitted) → a private fresh ledger (tests, the
+   * identity bootstrap path, heads) — every caller still gets a working
+   * ledger, just not a turn-shared one.
+   */
+  ledger?: () => TurnFileLedger | undefined;
+  /** Same sharing rule and reason as ledger. editFile's small ack payload
+   *  never spends it (only file-tool.ts's own `read` does); required because
+   *  the shared dispatcher's deps shape asks for one. */
+  budget?: () => TurnContextBudget | undefined;
 }
 
 /**
@@ -76,12 +109,24 @@ function withVfsGuidance(vfs: VFS, tools: ExecutorProvider['tools']): ExecutorPr
 
 export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider {
   const { vfs, memory, craftStore, shell, sql, resourceLimits, onToolRegistered } = deps;
+  // Private fallback for callers that share no turn-scoped ledger (tests, the
+  // identity bootstrap path) — stable across calls, so it still behaves like
+  // ONE ledger for THIS executor's lifetime even though it is not turn-shared.
+  const fallbackLedger = new TurnFileLedger();
+  const fallbackBudget = new TurnContextBudget();
+  const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
+  const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
 
   const tools: ExecutorProvider['tools'] = {
     readFile: {
       description: 'Read a file from the agent workspace. Returns content as string.',
       execute: async (path: unknown) => {
-        const content = await vfs.readFile(String(path), { encoding: 'utf8' });
+        const p = String(path);
+        const content = await vfs.readFile(p, { encoding: 'utf8' });
+        // The caller now has the WHOLE file, exactly like a native `file`
+        // action=write's read-before-overwrite check would record — a
+        // subsequent native `file` edit on this path is not refused as blind.
+        if (typeof content === 'string') currentLedger().observeWhole(p, content);
         return content ?? `File not found: ${path}`;
       },
     },
@@ -92,10 +137,28 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         const p = String(path);
         const dir = p.split('/').slice(0, -1).join('/');
         if (dir) await ensureDir(vfs, dir);
-        await vfs.writeFile(p, String(content));
+        const text = String(content);
+        await vfs.writeFile(p, text);
+        // Mirrors the native `file` tool's write: the caller just authored
+        // the WHOLE file, so it is known, not blind, to a later edit.
+        currentLedger().observeWhole(p, text);
         const indexed = memoryIndexPath(p);
         if (indexed) await memory.index(indexed);
-        return `Written ${String(content).length} bytes to ${p}`;
+        return `Written ${text.length} bytes to ${p}`;
+      },
+    },
+
+    editFile: {
+      description: 'Replace exact text inside a file — old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
+      execute: async (path: unknown, edits: unknown) => {
+        const list = Array.isArray(edits) ? edits as Array<{ old_text?: string; new_text?: string }> : [];
+        // Built per call: the SAME dispatcher and ledger the native `file`
+        // tool's edit action uses (createFileDispatcher, tools/file-tool.ts),
+        // read live so an edit gated here refuses identically to a
+        // native-tool edit over the SAME turn's read state — cheap
+        // (closures only, no I/O), the same cost SessionSearchStore accepts.
+        const fileDispatch = createFileDispatcher({ vfs, ledger: currentLedger(), budget: currentBudget(), memory });
+        return fileDispatch({ action: 'edit', path: String(path), edits: list });
       },
     },
 
@@ -114,7 +177,10 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     },
 
     exec: {
-      description: 'Execute a POSIX shell command. Supports cat, grep, find, sed, ls, tree, head, tail, wc, mkdir, rm, cp, mv, echo, sort, uniq, xargs. Pipes (|) and redirects (>, >>) work.',
+      description:
+        'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
+        + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
+        + 'It has no compilers or package managers — build, test and install in sandbox/nimbus/laptop.',
       execute: async (command: unknown, context?: unknown) => {
         const signal = readExecSignal(context);
         return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
@@ -273,8 +339,26 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const types = `declare namespace workspace {
   function readFile(path: string): Promise<string>;
   function writeFile(path: string, content: string): Promise<string>;
+  /**
+   * Replace exact text inside a file — old_text must occur exactly once,
+   * copied verbatim (indentation and all) from what readFile/writeFile/
+   * editFile last showed you here. Refused, touching nothing, if the file
+   * was never read/written in this scope, has changed since, or old_text is
+   * missing or not unique — the SAME enforcement the native \`file\` tool's
+   * edit action applies, over the same read state (a native \`file\` read or
+   * write of this path counts here too, and vice versa).
+   */
+  function editFile(
+    path: string, edits: Array<{ old_text: string; new_text: string }>
+  ): Promise<{ ok: boolean; path?: string; applied?: Array<{ line: number; removed_lines: number; added_lines: number }>; error?: string }>;
   function readdir(path: string): Promise<string[]>;
   function exists(path: string): Promise<boolean>;
+  /**
+   * Run a command in the workspace shell, over the SAME files the calls above
+   * address. A real POSIX shell: ~95 coreutils, pipes, redirects, loops,
+   * variables, and a working directory that persists across calls. No
+   * compilers or package managers — build and test in sandbox/nimbus/laptop.
+   */
   function exec(command: string): Promise<string>;
   function searchMemory(query: string): Promise<string>;
   function saveNote(content: string): Promise<string>;
@@ -308,6 +392,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   return {
     name: 'workspace',
     kind: 'workspace',
+    files: vfs,
     capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
     ...(resourceLimits ? { resourceLimits } : {}),
     isAvailable: () => true,

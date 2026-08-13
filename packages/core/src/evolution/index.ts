@@ -88,7 +88,7 @@ export {
   initSessionWindowTable, createSessionWindowStore, type SessionWindowStore, type ClaimedWindow,
 } from './session-window.js';
 export {
-  buildChangelog, countUnseenChangelog, renderChangelogText,
+  buildChangelog, countUnseenChangelog, listUnseenChangelog, renderChangelogText,
   executeChangelogRevert, revertChangelogEntryById,
   type ChangelogEntry, type ChangelogEntryKind, type BuildChangelogOptions,
   type ChangelogRevertAction,

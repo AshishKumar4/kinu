@@ -1,8 +1,9 @@
 /**
  * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
  *
- * Uses agent-utils for storage (pure DO SQLite — no R2, no @cloudflare/shell):
- *   VFS      → SqliteFS (vfs_files table with chunked storage)
+ * Storage is pure DO SQLite — no R2, no @cloudflare/shell:
+ *   VFS      → Nimbus over this DO's SQLite. The whole workspace filesystem.
+ *   Shell    → Nimbus's shell over those same bytes.
  *   Memory   → MemoryStore (FTS5-indexed markdown chunks)
  *   CraftStore → CraftStore (FTS5-indexed tool storage)
  *
@@ -19,11 +20,12 @@ import type {
   ExecuteResult, ResolvedProvider,
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
+  TurnAccumulator,
 } from "@proteus/core";
 import {
-  CompositeVFS, type MountPolicy,
-  createSandboxMountVFS, createNimbusMountVFS, createDeviceMountVFS,
+  createWorkspaceFilesystem, nextWorkspaceGeneration, type WorkspaceVFS,
   DefaultExecutionRouter, createInlineExecutor,
+  withApprovalGatedShell, type ShellApprovalPolicy,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
   createNimbusExecutor, type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
@@ -35,10 +37,8 @@ import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
 import { previewHostSuffix } from "./lib/preview-origin.js";
 import { Nimbus } from "@nimbus-sh/sdk";
-import { SqliteFS } from "@proteus/agent-utils/vfs";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
-import { createShell } from "@proteus/agent-utils/shell";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
@@ -72,6 +72,13 @@ import {
 type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'> & {
   readonly env: Env;
   readonly ctx: DurableObjectState;
+  /** The turn's ledger + budget, when this actor has one — ActorAgent
+   *  (orchestrator, subordinate) does; ExplorationAgent (a head/fork) does
+   *  not, so the `workspace` provider's editFile/readFile/writeFile fall
+   *  back to a private ledger there. Optional, not narrowed further than
+   *  TurnAccumulator's own two turn-scoped fields, so this stays the same
+   *  "bare surface" the type's own docstring commits to. */
+  readonly acc?: Pick<TurnAccumulator, 'files' | 'context'>;
 };
 
 /**
@@ -92,8 +99,9 @@ function boundSql(agent: AgentHost): SqlExecutor {
  * DO name; a facet actor passes its own owner row and the PARENT workspace
  * name, so it shares the workspace's sandbox container, Nimbus session, and
  * device consent instead of materializing fresh planes keyed by facet name.
- * Mounts need no parameter here: `CFRuntime.compositeVfs.mount()` attaches
- * additional planes (e.g. a facet's /workspace RPC mount) post-construction.
+ * A fork's window onto its parent is not configured here: it is an EXECUTOR
+ * the facet registers post-construction (`createParentExecutor`), the same way
+ * the sandbox and the device are.
  */
 export interface ActorRuntimeIdentity {
   /** Owner userId, or null while unclaimed. Resolved per call — never cached
@@ -129,14 +137,15 @@ function userCredentialSourceFor(agent: AgentHost, actor: ActorRuntimeIdentity):
   return stub ? { stub, caller: () => userCallerFor(actor) } : null;
 }
 
-/** Extended runtime that exposes the raw SqliteFS for shell emulation, the
- *  device transport for per-turn laptop-status refreshes, and the Vectorize-
- *  backed vector store for semantic memory. */
+/** Extended runtime that exposes the durable base for the parent-file RPC a
+ *  fork reads through, the device transport for per-turn laptop-status
+ *  refreshes, and the Vectorize-backed vector store for semantic memory. */
 export type CFRuntime = AgentRuntime & {
-  sqliteFS: SqliteFS;
-  /** Storage.vfs, typed — the mount-table data surface (listMounts) for the
-   *  file-manager UI and cross-environment copy. */
-  compositeVfs: CompositeVFS;
+  /** `Storage.vfs`, typed — the workspace filesystem, plus the two operations
+   *  beyond the seven that `mv` and `rm -r` need. Also what the parent-file RPC
+   *  serves to a fork, so a fork reads exactly the bytes its parent's shell
+   *  does. */
+  localVfs: WorkspaceVFS;
   /** The laptop runtime's hub transport. `refreshStatus()` is awaited at turn
    *  start so the turn's context reflects the CURRENT device state. */
   deviceTransport: DeviceTransport;
@@ -164,12 +173,24 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const sql = boundSql(agent);
   const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
 
-  // SqliteFS from agent-utils — pure DO SQLite, no R2
-  const sqliteFS = new SqliteFS(sql);
-  sqliteFS.init();
+  // The workspace filesystem: Nimbus over this Durable Object's OWN SQLite. A
+  // real filesystem with a real shell over the same bytes, and the only one —
+  // the sandbox, a Nimbus session and the user's machine are EXECUTORS, reached
+  // through their own namespaces in their own native paths.
+  //
+  // The generation counter must never repeat for this database, or a dead
+  // process keeps live write authority; DO storage is what makes it durable.
+  const workspace = createWorkspaceFilesystem({
+    sql: agent.ctx.storage.sql,
+    transactions: agent.ctx,
+    generation: nextWorkspaceGeneration(agent.ctx.storage.sql),
+  });
+  const vfs: CoreVFS = workspace.vfs;
 
-  // MemoryStore from agent-utils — FTS5-indexed search
-  const memoryStore = new MemoryStore(sqliteFS, sql);
+  // MemoryStore from agent-utils — FTS5-indexed search over the workspace
+  // filesystem itself, so `memory/MEMORY.md` is the same file the agent reads
+  // with the `file` tool and greps in the shell.
+  const memoryStore = new MemoryStore(vfs, sql);
   memoryStore.ensureSchema();
 
   // Vectorize-backed semantic memory, scoped to this workspace's namespace.
@@ -188,12 +209,6 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const craftStoreImpl = new AgentUtilsCraftStore(sql);
   craftStoreImpl.ensureSchema();
 
-  // Storage.vfs is the CompositeVFS mount table; /local is SqliteFS directly
-  // (it implements the core VFS interface — a superset of methods). Dynamic
-  // mounts (/sandbox, /nimbus, /pc) attach below once their handles exist.
-  const compositeVfs = new CompositeVFS({ local: sqliteFS });
-  const vfs: CoreVFS = compositeVfs;
-
   // Adapt MemoryStore to core's Memory interface (writes sync to vectorStore)
   const memory = adaptMemory(memoryStore, vectorStore, memoryConfig);
 
@@ -210,14 +225,34 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const identity = createIdentity(agent, vfs, sql);
 
   // Execution router — manages codemode providers (workspace, nimbus, sandbox, laptop)
-  const shell = createShell(sqliteFS);
-  const executionRouter: ExecutionRouter = new DefaultExecutionRouter();
+  // Live shell-approval policy every gated exec boundary consults (`run`'s
+  // workspace/router dispatch and every ExecutorProvider's exec — see
+  // execution/approval.ts). `mode` reads agent_config directly off the SAME
+  // store the memory backfill above already opened, so a setShellApprovalMode
+  // RPC takes effect on the very next command with no toolset rebuild needed.
+  const approvalPolicy: ShellApprovalPolicy = { mode: () => memoryConfig.getShellApprovalMode() };
+  // The workspace shell is Nimbus's, over the same bytes `vfs` addresses.
+  // Gated at the Shell object, so what it wraps is transparent to the seam.
+  const shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
+  const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
   executionRouter.register(createInlineExecutor({
     vfs, memory, craftStore, shell,
     // sql is used by workspace.listTools() to look up EMA craft_scores.
     sql,
     // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
     onToolRegistered: hooks.onToolRegistered,
+    // Shares the native `file` tool's turn ledger/budget with workspace.*
+    // (editFile's gate, readFile/writeFile's observe). The thunks are passed
+    // unconditionally and read `agent.acc` only when actually CALLED (a tool
+    // execution, always well after this runtime finished constructing) —
+    // never here, synchronously, inside this lazy getter's own body, where
+    // touching `agent.acc` (ActorAgent only) could recurse back into
+    // `this.rt` through `this.orch`'s own dependency chain before `_rt` is
+    // cached. Undefined for a head (ExplorationAgent has no `acc`) — the
+    // executor falls back to a private ledger there, same as before this
+    // existed.
+    ledger: () => agent.acc?.files,
+    budget: () => agent.acc?.context,
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
@@ -228,9 +263,6 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = `proteus-${actor.workspaceName}`;
   // Every remote mount exposes the environment's REAL root ('/'); the
-  // ergonomic working dir is metadata, not a path rewrite.
-  const sandboxMountPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   let sandboxHandle: SandboxHandle | null = null;
   if (env.Sandbox && previewSuffix) {
     try {
@@ -242,49 +274,34 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
       const configStore = createAgentConfigStore(sql);
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
+      // The executor carries its own file view over this same (restoring) raw
+      // handle, for the file manager's sandbox pane.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      // File plane: /sandbox over the same (restoring) raw handle the
-      // codemode sandbox.* tools use — two consumers of one handle.
-      compositeVfs.mount('sandbox', {
-        vfs: createSandboxMountVFS(handle),
-        policy: sandboxMountPolicy,
-        workingDir: '/workspace',
-      });
       console.log(`[proteus] SandboxExecutor registered (previews=*.${previewSuffix} id=${sandboxId})`);
     } catch (err) {
       console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
       executionRouter.register(createSandboxExecutor());
-      compositeVfs.reserve('sandbox', (err as Error).message, sandboxMountPolicy);
     }
   } else {
     if (!previewSuffix) console.warn("[proteus] PREVIEW_HOST_SUFFIX not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
-    compositeVfs.reserve('sandbox', 'sandbox executor not configured (Sandbox binding / PREVIEW_HOST_SUFFIX missing)', sandboxMountPolicy);
   }
 
   // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
   // official SDK against the local NIMBUS_SESSION binding, so there are no
   // endpoint/token secrets. The handle is lazy: no session is touched until
   // the agent actually calls nimbus.*.
-  const nimbusMountPolicy: MountPolicy =
-    { readOnly: false, rootPath: '/', consistency: 'ephemeral' };
   if (env.NIMBUS_SESSION) {
     try {
       const nimbusBox = createAgentNimbusHandle(agent, actor);
       executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
-      compositeVfs.mount('nimbus', {
-        vfs: createNimbusMountVFS(nimbusBox),
-        policy: nimbusMountPolicy,
-        workingDir: '/home/user',
-      });
       console.log('[proteus] NimbusExecutor registered (NIMBUS_SESSION binding)');
     } catch (err) {
       console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
-      compositeVfs.reserve('nimbus', (err as Error).message, nimbusMountPolicy);
+      executionRouter.register(createNimbusExecutor());
     }
   } else {
     executionRouter.register(createNimbusExecutor());
-    compositeVfs.reserve('nimbus', 'NIMBUS_SESSION binding not configured', nimbusMountPolicy);
   }
 
   // Register the laptop executor. The device socket lives on the user's UserDO
@@ -305,27 +322,20 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
     },
   });
   void deviceTransport.refreshStatus();
-  executionRouter.register(createDeviceTunnelExecutor(deviceTransport));
-  // File plane: /pc over the same transport the laptop.* tools use. The mount
-  // is live only while a device is connected; the adapter scopes paths to the
-  // consented subtree (connect dir / home) unless the agent holds the
-  // full-filesystem consent tier on the hub. Action consent (ask-once-then-
-  // remember) still applies to every RPC underneath.
-  compositeVfs.mount('pc', {
-    vfs: createDeviceMountVFS(deviceTransport, {
-      consentedRoot: cliCwdForDevice,
-      hasFullFilesystem: async () => {
-        const hub = userDOStubFor(agent, actor);
-        if (!hub) return false;
-        try {
-          return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
-        }
-        catch { return false; } // consent unverifiable → subtree scope (fail closed)
-      },
-    }),
-    policy: { readOnly: false, rootPath: '/', consistency: 'live-shared' },
-    live: () => deviceTransport.status().connected,
-  });
+  // The executor's file view scopes paths to the consented subtree (connect dir
+  // / home) unless the agent holds the full-filesystem consent tier on the hub.
+  // Action consent (ask-once-then-remember) still applies to every RPC beneath.
+  executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
+    consentedRoot: cliCwdForDevice,
+    hasFullFilesystem: async () => {
+      const hub = userDOStubFor(agent, actor);
+      if (!hub) return false;
+      try {
+        return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
+      }
+      catch { return false; } // consent unverifiable → subtree scope (fail closed)
+    },
+  }));
 
   return {
     storage: { vfs, sql, execRaw },
@@ -336,8 +346,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
     abortBranch: createFacetAborter(agent),
     executionRouter,
     shell,
-    sqliteFS,
-    compositeVfs,
+    localVfs: workspace.vfs,
     deviceTransport,
     vectorStore,
     sandboxHandle,

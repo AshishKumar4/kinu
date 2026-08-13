@@ -18,29 +18,31 @@ paths are cited so you can jump to the source.
 
 A workspace is the container; agents are the actors inside it. The workspace is
 1:1 with an `OrchestratorAgent` Durable Object on the cloud backend
-(`cf-backend/src/orchestrator.ts`). Its file plane is a `CompositeVFS`
-(`core/src/vfs/composite.ts`) — a single address space over every environment —
-and its execution plane is an `ExecutionRouter` (`core/src/execution/router.ts`)
-that dispatches to whichever environment is asked for, running commands
-target-native rather than emulating them.
+(`cf-backend/src/orchestrator.ts`). Its file plane is the workspace filesystem
+(`core/src/vfs/nimbus-workspace.ts`) — Nimbus over that DO's own SQLite, with a
+real shell over the same bytes — and its execution plane is an
+`ExecutionRouter` (`core/src/execution/router.ts`) that dispatches to whichever
+OTHER environment is asked for, running commands target-native rather than
+emulating them. There is no mount table: every other environment is its own
+filesystem in its own native paths, reached through its namespace.
 
 ```mermaid
 graph TB
     subgraph WS["Workspace = OrchestratorAgent DO (orchestrator.ts)"]
         direction TB
-        subgraph Files["CompositeVFS — one address space (core/src/vfs/composite.ts)"]
-            L["/local — durable SqliteFS base (always mounted)"]
-            S["/sandbox — container root (when configured)"]
-            N["/nimbus — Nimbus sandbox root (when provisioned)"]
-            P["/pc — the user's own machine (connect + consent)"]
+        Files["Workspace filesystem — Nimbus over this DO's SQLite<br/>(core/src/vfs/nimbus-workspace.ts), durable, real shell"]
+        subgraph Execs["ExecutionRouter — target-native exec, each its own filesystem"]
+            W["workspace.* — the file plane above (default runtime)"]
+            S["sandbox.* — full Linux container (when configured)"]
+            N["nimbus.* — a SEPARATE Nimbus session (when provisioned)"]
+            P["laptop.* — the user's own machine (connect + consent)"]
         end
-        Router["ExecutionRouter — target-native exec<br/>run(runtimeKey: workspace / nimbus / sandbox / laptop)"]
         State["State: sessions · SOUL.md · memory · scaffold<br/>CraftStore · evolution ledgers · triggers"]
     end
 
     Orch["orchestrator (default agent)<br/>the workspace's voice"] --> WS
-    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>parent's files mounted at /workspace over RPC"] -.->|report events| Orch
-    Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>bare per-head scratch VFS"] -.->|findings merge back| Orch
+    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>own workspace, parent reached as parent.*"] -.->|report events| Orch
+    Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>own private workspace, parent reached as parent.*"] -.->|findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
@@ -90,14 +92,16 @@ because there is no `team` tool in its ToolSet to call.
 
 **`ExplorationAgent` deliberately stays on the bare `Agent`.** It is not an
 `ActorAgent` and never inherits the actor tool surface. Its ToolSet is
-hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`, the
-four `sandbox_*` verbs over its own ephemeral SqliteFS and virtual shell,
-`web`, three `shared_*` verbs into the root's scratch, and
-the depth-budgeted `split_subheads`. No `execute_tools`, no `run`, no `think`,
-no `team`, no `peers`. Recursion is bounded by construction: without `think` a
-head cannot start a fresh strategy run, and its one fan-out path,
-`split_subheads`, decrements `maxDepth` on every spawn and refuses once the
-budget is exhausted.
+hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`,
+`execute_tools`, `run`, `file`, `web`, and the depth-budgeted `split_subheads`.
+No `agents`, so it cannot delegate. Its file plane is genuinely its own — a
+private workspace filesystem in its own facet's SQLite that siblings cannot
+see — and the parent workspace is reached the way every other environment is,
+as an executor: `parent.*` / `run { runtime: 'parent' }` over the parent RPC
+handle (`core/src/execution/parent.ts`), which runs the parent's REAL shell in
+its own native paths rather than walking it a file at a time.
+Recursion is bounded by construction: its one fan-out path, `split_subheads`,
+decrements `maxDepth` on every spawn and refuses once the budget is exhausted.
 
 All three share the owner/provider/model/web substrate by **composition**, not
 inheritance: `OwnedModelServices`
@@ -117,14 +121,16 @@ worker-held parent stub can create one.
 
 A subordinate is a *durable* teammate, not a one-shot call. It has its own
 SQLite, runs the full turn loop, keeps its own evolution engine and history, and
-survives hibernation. It sees the workspace's files through
-`createParentRpcMountVFS`, mounted at `/workspace` with `consistency: 'durable'`
-and `credentialsStayInHost: true`; the five parent-side methods it calls
-(`readWorkspaceFile`, `writeWorkspaceFile`, `listWorkspaceFiles`,
-`statWorkspaceFile`, `deleteWorkspaceFile`) deliberately carry no `@callable`,
-so nothing but a parent stub can reach them. Exec planes stay keyed on the
-*parent's* workspace name, so sandbox and `/pc` are shared rather than
-duplicated.
+survives hibernation. Its own filesystem is its own; the parent workspace is
+reached as an EXECUTOR — `createParentExecutor` registers a `parent.*` namespace
+over the parent stub (`subordinate-agent.ts` `registerParentWorkspace`) — rather
+than as a directory of this facet, because the parent is another Durable Object
+behind async RPC exactly like the sandbox and the user's machine. The six
+parent-side methods it calls (`readWorkspaceFile`, `writeWorkspaceFile`,
+`listWorkspaceFiles`, `statWorkspaceFile`, `deleteWorkspaceFile`,
+`execWorkspaceCommand`) deliberately carry no `@callable`, so nothing but a
+parent stub can reach them. Exec planes stay keyed on the *parent's* workspace
+name, so the sandbox and the user's PC are shared rather than duplicated.
 
 Work arrives as an `ingress: 'subordinate'` event with variant
 `subordinate_task`; results come back through `receiveSubordinateEvent` as

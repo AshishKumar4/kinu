@@ -13,12 +13,11 @@ export const BUILTIN_TOOLS = [
   'execute_tools',
   'run',
   'file',
-  'skills',
   'agents',
   'memory',
+  'tasks',
   'web',
   'report',
-  'release',
 ] as const;
 
 export type BuiltinToolName = (typeof BUILTIN_TOOLS)[number];
@@ -79,7 +78,7 @@ export const DELEGATION_RUNGS = {
   fork:
     'Fork (action=fork) on two triggers. Breadth: work splits into 2+ independent angles you would otherwise grind through one-by-one — research sweeps, pre-implementation investigation, reviewing or verifying separate components in parallel. ' +
     'Doubt: your first attempt failed, two approaches are both plausible, the step ahead is expensive to undo, or you cannot check your own output — being unsure is itself a reason to fork. ' +
-    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, may auto-background. ' +
+    'Each fork is you on the same workspace, files and sandbox, running its own multi-step tool loop concurrently (web search/fetch, exec), then merging back and disappearing; takes minutes, and on a live session it backgrounds the moment it spawns — the settled result wakes you. ' +
     // The payoff-before-limitation ORDER is deliberate and preserved: opening
     // on deterrents ("only… do NOT…") drew 0/10 uses in a shell corpus. What
     // changed is precision — "scored against each other by execution" flat
@@ -118,6 +117,20 @@ export const MEMORY_NOTE_ACTIONS = ['save', 'search', 'sessions'] as const;
 /** Present only where a FactsStore is wired. */
 export const MEMORY_FACT_ACTIONS = ['remember', 'recall', 'forget'] as const;
 
+// ── Task-list doctrine (single source) ──────────────────────────────────────
+// `tasks` is its own tool rather than three more actions on `memory` because
+// the two answer different questions. `memory` is what the agent will want to
+// look up in some later turn — its own docstring rules out "temporary task
+// progress" in as many words. A task list is the opposite: live plan state
+// for the work in front of it, read back every step from the dynamic-context
+// block, closed out as the work lands, and shown to the owner on its own
+// surface. Folding it in would make `memory`'s one-sentence summary untrue and
+// put four more properties on the schema the model reads for every durable-
+// state decision.
+
+export const TASKS_TOOL_ACTIONS = ['add', 'update', 'list'] as const;
+export type TasksToolAction = (typeof TASKS_TOOL_ACTIONS)[number];
+
 export type MemoryToolAction =
   | (typeof MEMORY_NOTE_ACTIONS)[number]
   | (typeof MEMORY_FACT_ACTIONS)[number];
@@ -155,21 +168,73 @@ export function memoryToolSpec(hasFacts: boolean): BuiltinToolSpec {
   };
 }
 
+// ── Release doctrine (single source) ────────────────────────────────────────
+// The release lane has two halves and no actor has both. Where an execution
+// engine drives the working copy, apply/run_checks/preview/deploy/rollback earn
+// their results from real command output, and the ledger's record_* twins are
+// refused as assertions of what was never run. Where no engine is wired, the
+// agent runs the commands itself and the record_* actions are the only way the
+// ledger learns what happened. This gate lives on in tools/release-codemode.ts,
+// which projects the SAME action set into the sandbox — release left the
+// model's top-level surface (a governed, high-blast-radius, occasional lane
+// costs a standing choice every turn it is not the answer to), but the
+// gate-on-engine-presence policy did not move.
+
+/** The governance ledger — wherever the release lane exists at all. */
+export const RELEASE_LEDGER_ACTIONS = [
+  'board', 'bind_source', 'create', 'update', 'transition', 'request_approval',
+] as const;
+
+/** Results asserted rather than earned. Only without an execution engine. */
+export const RELEASE_RECORD_ACTIONS = ['record_check', 'record_deployment'] as const;
+
+/** Results driven for real in the working copy. Only with an engine. */
+export const RELEASE_ENGINE_ACTIONS = ['apply', 'run_checks', 'preview', 'deploy', 'rollback'] as const;
+
+export type ReleaseToolAction =
+  | (typeof RELEASE_LEDGER_ACTIONS)[number]
+  | (typeof RELEASE_RECORD_ACTIONS)[number]
+  | (typeof RELEASE_ENGINE_ACTIONS)[number];
+
+/** The actions a runtime with (or without) an execution engine exposes. */
+export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolAction[] {
+  return hasEngine
+    ? [...RELEASE_LEDGER_ACTIONS, ...RELEASE_ENGINE_ACTIONS]
+    : [...RELEASE_LEDGER_ACTIONS, ...RELEASE_RECORD_ACTIONS];
+}
+
 /**
  * Canonical descriptions. These are what the LLM sees as tool docstrings and
  * what the UI shows in the Tools tab.
  *
  * Namespace contract (preamble-injection pattern — see docs/CRAFT-ARCHITECTURE.md):
- *   - `workspace.*` — filesystem / shell / memory primitives.
+ *   - `workspace.*` — filesystem / shell / memory primitives, including
+ *     `editFile` — the exact-match edit reachable natively as `file`'s `edit`
+ *     action (tools/file-tool.ts's createFileDispatcher, shared by both).
  *   - `codemode.*` — every provider exposed via createCodeTool, including
  *     crafted tools once they have been type-declared at construction time.
  *   - `tools.<name>` — crafted tools are ALSO reachable as local object
  *     properties inside the execute_tools async arrow, injected by the
  *     preamble. Crafted-tool bodies may call `workspace.*`, `codemode.*`,
  *     and `tools.<other>` interchangeably.
- *   - `agents.*` — the delegation tool projected into the sandbox, gated to the
- *     same actions (tools/agents-codemode.ts). It is what makes a crafted tool
- *     able to BE a workflow: plain control flow over delegated steps.
+ *   - `agents.*` / `memory.*` / `tasks.*` / `report.*` — the same-named
+ *     native tool, projected into the sandbox over its own dispatcher
+ *     (tools/agents-codemode.ts, memory-codemode.ts, tasks-codemode.ts,
+ *     report-codemode.ts), gated to the same deps/actions the native tool
+ *     is. `agents.*` is what makes a crafted tool able to BE a workflow:
+ *     plain control flow over delegated steps.
+ *   - `release.*` — the governed release lane's ONLY reach (tools/release-
+ *     codemode.ts): no native `release` tool exists. Same reasoning as
+ *     `skills`, below, applied to a lane occasional and high-blast-radius
+ *     enough that it should not cost a standing top-level choice either.
+ *
+ * `skills` has no tool AND no codemode namespace: SKILL.md files are
+ * ordinary paths under /workspace/skills/ on the SAME VFS `workspace.*`
+ * already addresses (readFile/writeFile/readdir/exec('rm …')) — a dedicated
+ * surface would have been a third path to the same bytes. Discovery is
+ * ambient (renderSkillsIndexSection in the system prompt); activation is
+ * resolved once at turn start (orchestrator/turn-surface.ts), never by a
+ * tool call.
  */
 export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   execute_tools: {
@@ -188,7 +253,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'workspace.* is the agent\'s OWN virtual filesystem, not the filesystem of the machine or container this agent runs on — a container path such as /app is not reachable through it. '
       + 'Read and write files that live on a real machine or container by running a shell command there with the `run` tool, in the runtime that owns them.',
     result: 'Returns whatever the code returns, as a structured result, or a structured error.',
-    example: "execute_tools({code:\"const files = await workspace.readdir('/local/reports'); return files.slice(0, 5)\"})",
+    example: "execute_tools({code:\"const files = await workspace.readdir('reports'); return files.slice(0, 5)\"})",
   },
   run: {
     name: 'run',
@@ -199,8 +264,16 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     // cores, so `make -j$(nproc)` forked 32 compilers into 2GB. The live
     // execution-status block carries the measured cpus/mem when the runtime
     // declares them; this is the sentence that tells the model to use them.
+    //
+    // The other recurring error this doctrine exists to stop: a fork given
+    // `run` and no `execute_tools` never sees the workspace-namespace warning
+    // that lives on execute_tools's own doctrine, so it hits the same trap —
+    // `runtime: 'workspace'` reads as a real machine because the label says
+    // so, then a real-machine path against it comes back empty or ENOENT and
+    // gets misread as "nothing is here" instead of "wrong runtime."
     doctrine:
-      'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them.',
+      'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them. '
+      + '`runtime: "workspace"` is Proteus\'s own internal virtual filesystem, emulated with a small fixed command set — it never contains a repository checkout or any real machine\'s files, and running programs there fails outright. A path that looks like it belongs to a real machine or container (e.g. `/workspace/...`) resolves against whichever runtime actually owns it, not this one — pick that runtime explicitly.',
     result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
     example: "run({runtime:'sandbox', command:'npm test'})",
   },
@@ -230,15 +303,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'read returns the content, naming the offset that continues it when a cap or a limit stopped it early. '
       + 'edit returns the line each replacement landed on, or one failure naming what was wrong. '
       + 'write returns the size written and whether the file was created or replaced.',
-    example: "file({action:'edit', path:'/local/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
-  },
-  skills: {
-    name: 'skills',
-    summary: 'SKILL.md workflow instructions stored for this agent — list, read, invoke, create, edit, delete.',
-    whenToUse: 'Use when the task matches a workflow worth following step by step, or when the user invokes a skill by name. Write one with create once a workflow has proven itself.',
-    whenNotToUse: 'Do not load broad skills speculatively; they consume context and can over-constrain unrelated work.',
-    result: 'Returns the skill catalogue, one skill\'s content, or mutation status.',
-    example: "skills({action:'invoke', name:'release-checklist'})",
+    example: "file({action:'edit', path:'src/api.ts', edits:[{old_text:'timeout: 30', new_text:'timeout: 60'}]})",
   },
   // The agents spec is the SINGLE SOURCE of delegation doctrine: it composes
   // the DELEGATION_RUNGS + DELEGATION_CONVERSE constants above, which the
@@ -253,7 +318,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse:
       'Do not delegate a single short coherent change you can simply do directly, or forks that would race on the same mutable resource. Caution: every subordinate or peer message wakes that agent for a full turn, so send purposeful work.',
     result:
-      'fork returns the merged (or mcts-scored) answer with per-fork outputs; staff/dismiss return roster state. '
+      'fork produces the merged (or mcts-scored) answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
       + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
     // The fork call, because it is the one shape here a model gets wrong: the
@@ -264,6 +329,26 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     example: "agents({action:'fork', task:'Why staging 502s under load', forks:[{task:'Read the gateway logs', rationale:'where the failure shows'}, {task:'Diff the last deploy', rationale:'timing points at the release'}]})",
   },
   memory: memoryToolSpec(true),
+  tasks: {
+    name: 'tasks',
+    summary: 'Your own task list for the work in front of you — write down the steps, mark one active, close it when it lands.',
+    whenToUse:
+      'Use whenever the work ahead is more than a step or two, and at the moment you learn a step has parts: '
+      + 'add writes several titles in one call, so one call records the whole plan; pass parent to file them under a task you already wrote. '
+      + 'update moves one item to active as you start it and done as you finish it, or to dropped when it turns out not to be needed. '
+      + 'list reads the whole list back, closed items included.',
+    // A standing fact about where the list is READ, which is what makes
+    // keeping it current worth the call.
+    doctrine:
+      'Your open items are re-rendered into your live context at every step, so this list is what you read back after a long tool call, a background job settles, or the user interrupts with something else.',
+    whenNotToUse:
+      'Do not use it for a single-step request, and keep findings, lessons and decisions in `memory` — this list holds what is still to be done, not what you learned doing it.',
+    result:
+      'add returns the new ids in order, with any title it refused and why. '
+      + 'update returns the item at its new status, and says how many of its subtasks are still open when you close a parent. '
+      + 'list returns every item, each task carrying its subtasks.',
+    example: "tasks({action:'add', titles:['Reproduce the 502', 'Patch the gateway timeout', 'Add a regression test']})",
+  },
   web: {
     name: 'web',
     summary: 'Live web access — search for ranked results, fetch one URL as clean markdown.',
@@ -283,14 +368,6 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     whenNotToUse: 'Do not report per-step noise — the answer of a turn the orchestrator assigned is relayed to it automatically at turn end.',
     result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
-  },
-  release: {
-    name: 'release',
-    summary: 'Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.',
-    whenToUse: 'Use when the user asks Proteus to change its own app, UI, prompts, or deployment. Flow: bind_source → create → update (store the unified diff) → apply → run_checks → preview → request_approval → deploy; rollback reverts a bad deploy.',
-    whenNotToUse: 'Not for ordinary project work, and not for adding a workspace dashboard — that is workspace.createView, which needs no deploy.',
-    result: 'Returns the board/ledger records, or grounded execution results: the apply commit sha, per-check exit codes, the live preview URL, the real deploy version id, or the verified rollback.',
-    example: "release({action:'run_checks', changeId:'chg_4f2'})",
   },
 };
 

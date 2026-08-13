@@ -42,6 +42,20 @@ interface Row {
   iteration: number; budget: number; status: string; epoch: number;
 }
 
+/** One search run's ledger row — the checkpoint metadata, without the live
+ *  config blob. What "how many searches has this workspace run, and how did
+ *  each end" reads. */
+export interface MctsSearchRunSummary {
+  rootId: string;
+  task: string;
+  status: SearchStatus;
+  iteration: number;
+  budget: number;
+  epoch: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 /** Strip the live, non-serializable fields off an MCTSConfig for persistence. */
 export function persistableMCTSConfig(config: MCTSConfig): PersistedMCTSConfig {
   const { signal: _signal, onProgress: _onProgress, search: _search, mission: _mission, ...rest } = config;
@@ -135,6 +149,26 @@ export class MctsSearchStore {
     if (!r) return null;
     const status: SearchStatus = r.status === 'converged' || r.status === 'failed' ? r.status : 'running';
     return { status, iteration: r.iteration, budget: r.budget, epoch: r.epoch };
+  }
+
+  /** Recent search runs, newest-updated first — the run-level ledger a
+   *  debugging surface needs to tell "how many searches has this workspace
+   *  run, and which root_id does the latest one own" without touching
+   *  search_nodes at all. */
+  list(limit = 20): MctsSearchRunSummary[] {
+    const rows = this.sql<Row & { created_at: number; updated_at: number }>`
+      SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at
+      FROM mcts_search_runs ORDER BY updated_at DESC LIMIT ${limit}`;
+    return rows.map((r) => ({
+      rootId: r.root_id,
+      task: r.task,
+      status: r.status === 'converged' || r.status === 'failed' ? r.status : 'running',
+      iteration: r.iteration,
+      budget: r.budget,
+      epoch: r.epoch,
+      createdAt: r.created_at,
+      updatedAt: r.updated_at,
+    }));
   }
 }
 

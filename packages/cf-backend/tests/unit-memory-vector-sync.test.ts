@@ -5,7 +5,7 @@
 // real MemoryStore (bun:sqlite) and a fake VectorStore that records calls.
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { SqliteFS } from '@proteus/agent-utils/vfs';
+import { createWorkspaceBundle } from '../../core/tests/helpers.js';
 import { MemoryStore } from '@proteus/agent-utils/memory';
 import {
   createAgentConfigStore, createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
@@ -16,6 +16,7 @@ import type { SqlExecutor } from '@proteus/core';
 
 function createSql() {
   const db = new Database(':memory:');
+  createdDb = db;
   return (<T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] => {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
     const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
@@ -26,11 +27,11 @@ function createSql() {
   }) as SqlExecutor;
 }
 
+let createdDb: Database | null = null;
+
 function createStore() {
   const sql = createSql();
-  const fs = new SqliteFS(sql);
-  fs.init();
-  const store = new MemoryStore(fs, sql);
+  const store = new MemoryStore(createWorkspaceBundle(createdDb!).vfs, sql);
   store.ensureSchema();
   sql`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
   const config = createAgentConfigStore(sql);

@@ -135,16 +135,32 @@ proteus jobs jarvis       # background jobs, and cancel them
 ```
 
 The web app at [proteus.ashishkumarsingh.com](https://proteus.ashishkumarsingh.com)
-has the same information as six work surfaces — Output, Brain, Reasoning,
-Releases, Tasks, Environment — plus the Evolution Changelog, where you approve or
-revert the changes the agent proposes to itself.
+has the same information, split across six surfaces named for what you go there
+to find out: **Output** (what it produced), **Work** (what it is working
+through — the plan it wrote for itself, the jobs still running, everything
+that has settled, and anything waiting on you at the top), **Releases** (what
+it is shipping, and what you have to approve), **Exploration** (every time it
+forked itself to try more than one approach, each fork drawn as the tree it
+is), **Agent** (what this agent is — identity, memory, learned tools, and
+whether it is measurably getting better), **Environment** (every executor it
+can reach, its files and its terminal). The gauge at the far right of the strip
+is the run's own instrument panel: context, cost and cache-hit rate.
 
-Proteus can add work surfaces of its own. Ask it for a dashboard and it publishes
+Two things worth knowing. Anything the agent needs a decision on — a release
+awaiting approval, a rewrite of its own scaffold sitting under trial, a failed
+job, changes to itself you have not read — is counted on the **Work** tab and
+listed at the top of it, and each row takes you to where the decision is
+actually made. And a fork is one list whatever the agent chose to do with it:
+a merge is a tree one level deep, a competition is the same tree deeper with
+scores on it, and past forks are the rows below the newest one.
+
+Proteus can add surfaces of its own. Ask it for a dashboard and it publishes
 a **view**: a tab, after the six, marked with a sparkle and labelled *written by
 Proteus*. A view is data, not code — it reads workspace state you can already see
 and draws it with the same components everything else uses, so it can show you
-numbers but can never ask you for anything. "View source" shows exactly what it
-wrote, and the Evolution Changelog reverts it.
+numbers but can never ask you for anything. It also cannot wear the name of any
+surface Proteus ships, including ones we have retired. "View source" shows
+exactly what it wrote, and the Work tab's journal reverts it.
 
 ## 7. Backup, and moving a workspace
 

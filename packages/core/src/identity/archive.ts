@@ -16,11 +16,13 @@
  * `end` record is what makes a truncated download detectable rather than a
  * silently short restore.
  *
- * What is deliberately NOT in an archive: `workspace_capability`. That table
- * holds the secret the owner's UserDO minted to prove which workspace is
- * calling it — identity, not data (see ActorAgent.workspaceCapabilityToken:
- * "must not be reachable through any config or snapshot surface"). A restored
- * workspace is re-issued one by its owner; an archive never carries one.
+ * What is deliberately NOT in an archive: `workspace_capability`, which holds
+ * the secret the owner's UserDO minted to prove which workspace is calling it
+ * — identity, not data (see ActorAgent.workspaceCapabilityToken: "must not be
+ * reachable through any config or snapshot surface"). A restored workspace is
+ * re-issued one by its owner; an archive never carries one. And
+ * `webhook_secrets`, a live ingress credential rather than workspace state —
+ * see EXCLUDED_TABLES below.
  *
  * Consistency: pages are read one at a time, so a workspace actively taking a
  * turn during an export can land rows written between pages. It is a backup of
@@ -58,8 +60,15 @@ export const WORKSPACE_ARCHIVE_EXTENSION = '.proteus.jsonl';
 /**
  * Tables an archive never carries. Everything else in the workspace's SQLite
  * is data the owner is entitled to a copy of.
+ *
+ * `webhook_secrets` holds the plaintext HMAC/bearer secret an ingress
+ * endpoint was created with (events/ingress/secrets.ts) — a live credential,
+ * not workspace data, and restoring it verbatim would round-trip a secret
+ * through a file on disk. `listTriggers` already reads triggers without it
+ * (secrets live in their own table for exactly this reason); an archive
+ * follows the same rule.
  */
-const EXCLUDED_TABLES = new Set(['workspace_capability']);
+const EXCLUDED_TABLES = new Set(['workspace_capability', 'webhook_secrets']);
 
 /** Durable-Object-internal tables (the KV shim and its metadata) and SQLite's
  *  own bookkeeping — neither is ours to restore. */

@@ -46,6 +46,23 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     expect(out.result).toBe(2);
     expect(out.logs).toBeUndefined();
   });
+
+  // `run` is a native top-level tool, not a codemode binding — reaching for
+  // it here is a ReferenceError, and a bare "run is not defined" gives the
+  // model no idea why. Real evidence from production (2026-08-12 debug
+  // audit): a model wrote exactly this and got only the bare V8 message back.
+  test('calling the native `run` tool from inside execute_tools gets an actionable hint, not a bare ReferenceError', async () => {
+    const out = await makeTool().execute({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
+    expect(out.error).toContain('run is not defined');
+    expect(out.error).toContain('"run" is a native Proteus tool, not a codemode member');
+    expect(out.error).toContain('workspace.exec(...)');
+  });
+
+  test('an unrelated ReferenceError for a name that is not a native tool stays a bare message', async () => {
+    const out = await makeTool().execute({ code: 'return totallyUndefinedThing;' });
+    expect(out.error).toContain('totallyUndefinedThing is not defined');
+    expect(out.error).not.toContain('native Proteus tool');
+  });
 });
 
 /** A provider namespace whose calls reject, like the host-bridged `workspace.*`

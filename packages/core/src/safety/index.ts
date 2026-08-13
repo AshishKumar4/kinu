@@ -7,11 +7,14 @@ export {
   formatApproval,
   withApprovalGate,
   approvalGrants,
+  gateExec,
+  STRICT_NO_CHANNEL_POLICY,
   type ApprovalDecision,
   type ApprovalRuleHit,
   type ApprovalResult,
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
+  type ShellApprovalPolicy,
 } from './approval-gate.js';
 
 export {

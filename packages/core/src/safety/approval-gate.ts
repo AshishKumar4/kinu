@@ -258,3 +258,96 @@ export function withApprovalGate<R>(
     return exec(cmd);
   };
 }
+
+/**
+ * How the `mode`/`allow_all`/`deny_all` ladder is spelled wherever a policy
+ * is threaded — kept a plain union here (not imported from config/store.ts)
+ * so this file stays import-free: it is a layergate subject source, and the
+ * decomposition proof walks its transitive imports to prove the safety-gate
+ * layer never reaches another layer's subject.
+ */
+export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
+
+/**
+ * The live policy every gated exec boundary consults — read at CALL time,
+ * not captured when the boundary was wrapped, so a `setShellApprovalMode`
+ * RPC or an ACP channel attach/detach takes effect on the very next command
+ * with no toolset rebuild required.
+ */
+export interface ShellApprovalPolicy {
+  /** Current standing mode. A live read (e.g. straight off agent_config). */
+  mode(): ShellApprovalMode;
+  /** The interactive channel consulted for a 'gate' decision under 'strict'.
+   *  Omitted, or resolving null, means nobody is listening — 'strict' keeps
+   *  its explanatory refusal. A live read too: a surface may attach/detach
+   *  the channel after the boundary was wrapped. */
+  requestApproval?(req: ShellApprovalRequest): Promise<ShellApprovalOutcome | null>;
+}
+
+/** The conservative default every gated boundary falls back to when no
+ *  policy is supplied: 'strict', with nobody to ask — 'gate' decisions are
+ *  refused with the explanatory message, never silently allowed. Matches
+ *  what `run` always defaulted to before this policy existed. */
+export const STRICT_NO_CHANNEL_POLICY: ShellApprovalPolicy = { mode: () => 'strict' };
+
+/**
+ * Wrap ANY exec-shaped function — a `Shell.exec`, an `ExecutorProvider`
+ * tool's `execute` — with the FULL mode-aware approval gate. This is the one
+ * implementation of "should this command run" used at every boundary a
+ * command actually reaches a shell: `run`'s workspace/router dispatch and
+ * every ExecutorProvider's `exec`/`startProcess` (see execution/approval.ts),
+ * so `run { command }` and the same command reached through codemode
+ * (`workspace.exec`, `nimbus.exec`, `sandbox.exec`, `laptop.exec`) answer to
+ * the identical decision instead of one tool remembering to ask and the rest
+ * not.
+ *
+ * `denyResult` shapes a gate/deny message into the wrapped function's own
+ * return type — a bare string for a codemode tool, `{stdout,stderr,exitCode}`
+ * for a raw `Shell`.
+ */
+export function gateExec<R>(
+  execute: (command: string, ...rest: unknown[]) => Promise<R>,
+  denyResult: (message: string) => R,
+  policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
+): (...args: unknown[]) => Promise<R> {
+  // A rest-args signature — not `(command: string, ...)` — so the wrapped
+  // function stays assignable to `ExecutorProvider['tools'][name].execute`
+  // (`(...args: unknown[]) => Promise<unknown>`) as well as to a narrower
+  // fixed-shape target like `Shell.exec`.
+  return async (...args) => {
+    const [command, ...rest] = args;
+    const cmd = String(command);
+    const mode = policy.mode();
+    const review = reviewCommand(cmd);
+    if (review.decision === 'deny') {
+      return denyResult(`Denied by approval gate:\n${formatApproval(review)}`);
+    }
+    if (review.decision === 'gate') {
+      if (mode === 'allow_all') {
+        console.warn(`[approval-gate] gate→allow (allow_all mode): ${formatApproval(review)}`);
+      } else {
+        // 'deny_all' never asks. Under 'strict' a connected channel gets to
+        // put the decision to the user; null means nobody is listening.
+        const outcome = mode === 'strict' && policy.requestApproval
+          ? await policy.requestApproval({ command: cmd, review })
+          : null;
+        if (outcome === null) {
+          return denyResult(
+            `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
+            `or change the shell approval mode in agent settings.\n${formatApproval(review)}`,
+          );
+        }
+        if (!approvalGrants(outcome)) {
+          return denyResult(`Denied by the user.\n${formatApproval(review)}`);
+        }
+      }
+    }
+    if (review.decision === 'warn') {
+      if (mode === 'deny_all') {
+        return denyResult(`Denied by approval gate (deny_all mode):\n${formatApproval(review)}`);
+      }
+      console.warn(`[approval-gate] warn: ${formatApproval(review)}`);
+    }
+    return execute(cmd, ...rest);
+  };
+}

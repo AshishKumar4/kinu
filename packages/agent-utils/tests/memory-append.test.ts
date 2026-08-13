@@ -4,14 +4,12 @@
 // with just the appended text — a TEXT-corrupted row (whose read throws a
 // decode error, not ENOENT) silently nuked the whole memory file.
 import { describe, test, expect } from "bun:test";
-import { SqliteFS } from "../src/vfs/sqlite";
 import { MemoryStore } from "../src/memory/store";
-import { createTestDb } from "./helpers";
+import { createTestDb, createMemoryVfs } from "./helpers";
 
 function createStore() {
 	const { sql, db } = createTestDb();
-	const fs = new SqliteFS(sql);
-	fs.init();
+	const fs = createMemoryVfs();
 	const store = new MemoryStore(fs, sql);
 	store.ensureSchema();
 	return { sql, db, fs, store };
@@ -32,18 +30,16 @@ describe("MemoryStore.appendToFile", () => {
 	});
 
 	test("a non-ENOENT read failure propagates instead of overwriting the file", async () => {
-		const { store, db, sql } = createStore();
-		// A TEXT row written by a broken raw-SQL writer: SqliteFS read decodes
-		// string rows as legacy base64 and throws on markdown.
-		db.run(
-			"INSERT INTO vfs_files (path, chunk_index, parent_path, data, is_dir, size, mtime) VALUES (?, 0, 'memory', ?, 0, ?, ?)",
-			["memory/MEMORY.md", "# precious notes (not base64!)", 30, Date.now()],
-		);
+		// The bug this guards: treating ANY read failure as "no file yet" and
+		// writing over it. Only ENOENT may mean that; anything else must
+		// propagate with the file untouched.
+		const { sql } = createTestDb();
+		const fs = createMemoryVfs({ "memory/MEMORY.md": "# precious notes" });
+		fs.readFile = async () => { throw new Error("EIO: the store is unreachable"); };
+		const store = new MemoryStore(fs, sql);
+		store.ensureSchema();
 
 		await expect(store.appendToFile("memory/MEMORY.md", "more")).rejects.toThrow();
-
-		// The original row is untouched — no silent data destruction.
-		const row = sql<{ data: string }>`SELECT data FROM vfs_files WHERE path = 'memory/MEMORY.md'`;
-		expect(row[0]?.data).toBe("# precious notes (not base64!)");
+		expect(fs.files.get("memory/MEMORY.md")).toBe("# precious notes");
 	});
 });

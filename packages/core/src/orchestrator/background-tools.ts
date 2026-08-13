@@ -1,34 +1,51 @@
 /**
- * Background-tool policy — which tool calls may auto-detach past the 30s
- * threshold (with the per-call gate: `agents` detaches only its fork action —
- * the converse actions keep their inline semantics), the wrapper that arms
- * it, and the evict/exit resume policy. One implementation for both backends
+ * Background-tool policy — which tool calls may auto-detach to the background
+ * (with the per-call gate: `agents` detaches only its fork action — the
+ * converse actions keep their inline semantics), the wrapper that arms it,
+ * and the evict/exit resume policy. One implementation for both backends
  * (each previously carried its own copy of the map AND the wrapper AND the
  * resume gate).
+ *
+ * Two shapes of backgroundable work, one axis:
+ *   'result' — the turn is waiting on the call's result and its duration is
+ *              unknown (`run`, `execute_tools`), so it races the surface's
+ *              detach threshold and only work that proved slow crosses.
+ *   'spawn'  — the call launches a process whose completion arrives as a wake
+ *              event (`agents` fork), so on a surface whose session outlives
+ *              the turn it detaches the moment the spawn is confirmed started;
+ *              the threshold wait could only ever be dead air.
  */
 
-import type { ToolSet } from 'ai';
+import type { ToolExecutionOptions, ToolSet } from 'ai';
 import { combineAbortSignals } from '@proteus/agent-utils';
-import { withBackgroundThreshold } from '../jobs/threshold.js';
+import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '../jobs/threshold.js';
 import { JobNotResumable } from '../jobs/runner.js';
 import type { BackgroundJobRunner } from '../jobs/runner.js';
 import { resumableForkInput } from '../tools/agents-tool.js';
 import { nanoid } from '../utils/nanoid.js';
 
-/** Tools whose work can be long enough to auto-detach to the background,
- *  keyed to a per-call gate over the tool input. */
-export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, (input: unknown) => boolean> = new Map([
-  ['agents', (input: unknown) => (input as { action?: unknown } | null)?.action === 'fork'],
-  ['execute_tools', () => true],
-  ['run', () => true],
+/** How a backgroundable tool's work detaches: racing the threshold for a
+ *  result the turn waits on, or on spawn-confirm for a launched process. */
+export interface BackgroundableTool {
+  readonly shape: 'result' | 'spawn';
+  /** Per-call gate over the tool input. */
+  readonly detachable: (input: unknown) => boolean;
+}
+
+/** Tools whose work can be long enough to auto-detach to the background. */
+export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, BackgroundableTool> = new Map([
+  ['agents', { shape: 'spawn', detachable: (input: unknown) => (input as { action?: unknown } | null)?.action === 'fork' }],
+  ['execute_tools', { shape: 'result', detachable: () => true }],
+  ['run', { shape: 'result', detachable: () => true }],
 ]);
 
 /**
  * Return a SHALLOW CLONE of the raw toolset with the long-running tools'
- * execute wrapped in the 30s background threshold. Never mutates the cached
- * raw toolset — so the raw surface stays unwrapped for the eval side-streams
- * (shadow eval / scaffold / GEPA), where a >30s tool run must complete inline
- * instead of detaching a job into the user's chat.
+ * execute wrapped in the surface's background detach (threshold race for
+ * result-shaped work, spawn-confirm for spawn-shaped). Never mutates the
+ * cached raw toolset — so the raw surface stays unwrapped for the eval
+ * side-streams (shadow eval / scaffold / GEPA), where a long tool run must
+ * complete inline instead of detaching a job into the user's chat.
  *
  * Each detachable call gets its own AbortController (hard-cancel aborts the
  * underlying work), merged with the turn's signal so a turn abort still
@@ -37,11 +54,11 @@ export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, (input: unknown) => boole
  * owns it.
  */
 export function wrapToolsForBackground(raw: ToolSet, deps: {
-  jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps'>;
+  jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy'>;
   trackController?: (controller: AbortController) => (() => void);
 }): ToolSet {
   const wrapped: ToolSet = { ...raw };
-  for (const [key, detachable] of BACKGROUNDABLE_TOOLS) {
+  for (const [key, { shape, detachable }] of BACKGROUNDABLE_TOOLS) {
     const orig = wrapped[key];
     const exec = orig?.execute;
     if (!orig || typeof exec !== 'function') continue;
@@ -54,7 +71,27 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
         const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
         const thresholdDeps = deps.jobRunner.thresholdDeps(key, input, controller);
         const untrack = deps.trackController?.(controller);
-        const run = withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), thresholdDeps);
+        // Spawn-shaped work detaches when the tool confirms the spawn started
+        // (never on the timer) — but only where the surface's policy says a
+        // session outlives the turn to receive the wake. The policy is read
+        // per call, exactly like the threshold: on cf one runner serves both
+        // surfaces and only the turn in flight knows which it is.
+        const run = shape === 'spawn' && deps.jobRunner.policy.detachSpawnOnStart
+          ? withSpawnDetach(
+              key,
+              (spawnStarted) => {
+                // The AI SDK's ToolExecutionOptions is a closed interface; the
+                // announce callback rides alongside it as an explicit
+                // intersection rather than an unsafe cast — `readSpawnStarted`
+                // reads it back the same way on the tool side.
+                const execOptions: ToolExecutionOptions & { [SPAWN_STARTED_OPTION]: () => void } = {
+                  ...options, abortSignal, [SPAWN_STARTED_OPTION]: spawnStarted,
+                };
+                return exec(input, execOptions);
+              },
+              thresholdDeps,
+            )
+          : withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), thresholdDeps);
         return untrack ? run.finally(untrack) : run;
       },
     } as ToolSet[string];

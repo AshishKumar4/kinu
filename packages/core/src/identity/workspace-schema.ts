@@ -38,6 +38,7 @@ import { initMctsSearchTable } from '../mcts/search-store.js';
 import { initFactsTable } from '../memory/facts.js';
 import { initScaffoldTables } from '../scaffold/schemas.js';
 import { initShadowTables } from '../scaffold/shadow.js';
+import { initTaskListTable } from '../tasks/store.js';
 
 /**
  * The three SQL handles onto one workspace database.
@@ -101,11 +102,6 @@ function initCompactionStateTables(execRaw: RawSqlExec): void {
  */
 function repairLegacyTables(execRaw: RawSqlExec, sql: SqlExecutor): void {
   try {
-    // vfs_files: the pre-chunking schema lacks chunk_index, which SqliteFS needs.
-    const vfsCols = sql<{ name: string }>`PRAGMA table_info(vfs_files)`;
-    if (vfsCols.length > 0 && !vfsCols.some((c) => c.name === 'chunk_index')) {
-      execRaw('DROP TABLE vfs_files');
-    }
     // memory_chunks: the 3-column flat schema against MemoryStore's 7-column FTS5 one.
     const mcCols = sql<{ name: string }>`PRAGMA table_info(memory_chunks)`;
     if (mcCols.length > 0 && !mcCols.some((c) => c.name === 'start_line')) {
@@ -195,6 +191,8 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   initGepaTables(execRaw);
   // Background-job registry — work auto-detached past the 30s threshold.
   initBackgroundJobsTable(execRaw);
+  // The agent's own task list, written by the `tasks` tool.
+  initTaskListTable(execRaw);
   // Durable MCTS search checkpoints: an evicted fork(settle=mcts) resumes here.
   initMctsSearchTable(execRaw);
   // Experience-import staging ledger, settled by the shared EvolutionEngine on

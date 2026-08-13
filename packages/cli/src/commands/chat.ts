@@ -9,7 +9,7 @@ import { listKnownAgents } from '../agent-list.js';
 import { ask } from '../prompt.js';
 
 export async function chatCommand(name: string | undefined, opts: {
-  model?: string; baseUrl?: string; auth?: string; classic?: boolean; initialPrompt?: string;
+  model?: string; baseUrl?: string; auth?: string; classic?: boolean;
   continue?: boolean; resume?: boolean; session?: string; sessionDir?: string; noSession?: boolean; fork?: string;
 }): Promise<void> {
   // No name: let user pick from existing agents
@@ -19,9 +19,7 @@ export async function chatCommand(name: string | undefined, opts: {
       // non-TUI command paths (e.g. the installer's setup prompts).
       const { runHomeTui } = await import('../tui/home-app.js');
       const action = await runHomeTui(opts);
-      if (action.type === 'open-agent') {
-        await chatCommand(action.name, { ...opts, initialPrompt: action.initialPrompt });
-      }
+      if (action.type === 'open-agent') await chatCommand(action.name, opts);
       return;
     }
     const agents = listKnownAgents();
@@ -52,15 +50,16 @@ export async function chatCommand(name: string | undefined, opts: {
 
   const target = resolveAgentTarget(name);
   if (target.mode === 'local') ensureLocalDaemonRunning();
-  const client = createAgentClient(target, opts);
+  const client = await createAgentClient(target, opts);
+  // A cloud workspace keeps its transcript server-side, so opening one always
+  // replays it; a local one replays only the recorded session you asked for.
   const hydrateHistory = target.mode === 'cloud'
-    ? !opts.initialPrompt
-    : Boolean(opts.session || opts.continue || opts.resume || opts.fork);
+    || Boolean(opts.session || opts.continue || opts.resume || opts.fork);
 
   if (opts.classic || !process.stdin.isTTY || !process.stdout.isTTY) {
-    await runChatLoop({ client, initialPrompt: opts.initialPrompt });
+    await runChatLoop({ client });
   } else {
     const { runTuiChat } = await import('../tui/chat-app.js');
-    await runTuiChat({ client, hydrateHistory, initialPrompt: opts.initialPrompt });
+    await runTuiChat({ client, hydrateHistory });
   }
 }

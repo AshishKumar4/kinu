@@ -17,13 +17,34 @@
  */
 
 import { spawn } from 'node:child_process';
+import { createServer } from 'node:net';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import puppeteer, { type Browser } from 'puppeteer';
 
 const REPO = join(import.meta.dir, '..');
 const CF = join(REPO, 'packages', 'cf-backend');
-const PORT = 5199;
+
+/** A free port, starting at the usual one.
+ *
+ *  Not a nicety: several worktrees of this repo are normally checked out at
+ *  once, and a fixed port means the second run's vite fails to bind, `waitForServer`
+ *  succeeds against the FIRST worktree's server, and the shots are of somebody
+ *  else's code — silently, with the frame names you asked for. */
+async function freePort(from: number): Promise<number> {
+  for (let port = from; port < from + 50; port++) {
+    const free = await new Promise<boolean>((resolve) => {
+      const probe = createServer();
+      probe.once('error', () => resolve(false));
+      probe.once('listening', () => probe.close(() => resolve(true)));
+      probe.listen(port, '127.0.0.1');
+    });
+    if (free) return port;
+  }
+  throw new Error(`no free port in ${from}..${from + 50}`);
+}
+
+const PORT = await freePort(5199);
 
 const args = process.argv.slice(2);
 const outIndex = args.indexOf('--out');

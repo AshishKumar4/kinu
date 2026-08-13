@@ -11,7 +11,7 @@ import { MAX_LINES_PER_FILE, type DiffLine } from "@proteus/core";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
- *  scaffold-version diff (Brain) and the workspace change-set (Output).
+ *  scaffold-version diff (Self) and the workspace change-set (Output).
  *  `truncated` marks a body the parser bounded, so a partial hunk never reads
  *  as the whole file. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
@@ -111,15 +111,47 @@ export function EmptyState({ icon, title, hint, children }: {
 export const EMPTY_HINTS: Record<string, string> = {
   memory: "Your agent will remember important information here. Ask it to remember something!",
   tools: "Tools your agent learns will appear here — extracted from successful conversations.",
-  mcts: "Exploration trees appear when the agent uses think(strategy:'mcts') to investigate subproblems.",
+  forks: "When the agent forks itself to try more than one approach, each fork appears here as a tree — one branch per approach, however it settled them.",
   preview: "When the agent exposes a port (sandbox.exposePort), the running app appears here as a live preview.",
 };
+
+/* ── small readouts shared by the fork tree's inspector and the evolution
+      panels — one copy, so a metric tile means the same thing everywhere ── */
+
+export function Metric({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-md border p-border p-recessed px-2 py-1.5">
+      <div className="text-[9px] uppercase tracking-normal p-text-3">{label}</div>
+      <div className="text-[11px] p-text font-mono tabular-nums">{value}</div>
+    </div>
+  );
+}
+
+export function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="space-y-1.5">
+      <div className="text-[10px] uppercase tracking-normal p-text-3">{title}</div>
+      {children}
+    </section>
+  );
+}
+
+/** The product's danger→warning→success bands, as a text token. */
+export function scoreColor(value: number): string {
+  if (value >= 0.7) return "p-success";
+  if (value >= 0.4) return "p-warning";
+  return "p-danger";
+}
+
+export function formatScore(value: number): string {
+  return `${Math.round(Math.max(0, Math.min(1, value)) * 100)}%`;
+}
 
 /**
  * A titled, collapsible section — the one header grammar the work surfaces
  * use, so the six that hand-rolled `<section><div flex gap-2>…` stay aligned.
  *
- * The Brain surface stacks identity, changelog, scaffold lineage, tools,
+ * The Self surface stacks identity, changelog, scaffold lineage, tools,
  * memory and the world model into one scroll; being able to fold the ones you
  * are not reading is what makes it usable at length. Which sections a person
  * keeps folded is a property of that person's workspace, not of the agent, so
@@ -170,4 +202,20 @@ export function Section({ id, title, icon, badge, defaultOpen = true, children }
       {open && <div className="mt-2.5">{children}</div>}
     </section>
   );
+}
+
+/**
+ * How long ago, in the one wording the Work surface uses.
+ *
+ * There were two of these — the jobs card counted seconds, the changelog said
+ * "just now" and fell back to a date — and they now render in the SAME feed,
+ * where one row reading "8s ago" beside another reading "just now" is two
+ * clocks, not one.
+ */
+export function timeAgo(at: number): string {
+  const s = Math.max(0, Math.floor((Date.now() - at) / 1000));
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+  return new Date(at).toLocaleDateString();
 }

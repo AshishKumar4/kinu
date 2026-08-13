@@ -80,18 +80,22 @@ export const AGENT_RPC_ACCESS = {
   getGepaRuns: 'workspace.read',
   getHeadRuns: 'workspace.read',
   getMctsNodeDetail: 'workspace.read',
+  getMctsSearchRuns: 'workspace.read',
   getMctsTree: 'workspace.read',
   getMemoryContent: 'workspace.read',
   getOutcomeCalibration: 'workspace.read',
   getOutcomeEnsemble: 'workspace.read',
   getReleaseBoard: 'workspace.read',
   getRunTimeline: 'workspace.read',
+  getSearchTree: 'workspace.read',
   getStoredModelSpec: 'workspace.read',
   getReasoningEffort: 'workspace.read',
   getToolDescriptions: 'workspace.read',
   getWorkspaceSnapshot: 'workspace.read',
+  listAgentTasks: 'workspace.read',
   listAgentViews: 'workspace.read',
   listBackgroundJobs: 'workspace.read',
+  listForkRuns: 'workspace.read',
   listPendingConsents: 'workspace.read',
   listRecentEvents: 'workspace.read',
   listTriggers: 'workspace.read',
@@ -140,12 +144,23 @@ export const AGENT_RPC_ACCESS = {
   getEvolutionConfig: 'interactive',
   getMctsConfig: 'interactive',
   getReplayEvals: 'interactive',
+  // Raw per-run events: full tool-call arguments/results and every turn's
+  // context-budget/steering/file-edit telemetry. Same sensitivity class as
+  // exportWorkspaceArchive — a workspace.read token gets the read MODELS
+  // (getRunTimeline's merged spans, getRunSummaries' cost folds), not the
+  // unredacted event payloads themselves.
+  getRunEvents: 'interactive',
   getRunSummaries: 'interactive',
+  listRuns: 'interactive',
   getScaffoldDiff: 'interactive',
   getShadowVerdict: 'interactive',
   getShellApprovalMode: 'interactive',
   listAlternateTakes: 'interactive',
   listCurriculumTasks: 'interactive',
+  // The needs-you queue. Interactive because it is an aggregate, and an
+  // aggregate is only as open as its strictest input: it folds the changelog,
+  // the scaffold archive and the curriculum, all of which are interactive.
+  listPendingActions: 'interactive',
   listScaffoldVersions: 'interactive',
   listTurnFeedback: 'interactive',
   markChangelogSeen: 'interactive',

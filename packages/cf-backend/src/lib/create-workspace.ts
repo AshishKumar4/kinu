@@ -1,8 +1,10 @@
-import { registerWorkspace } from "@/lib/user-api";
+import { registerWorkspace, type WorkspaceEntry } from "@/lib/user-api";
 
-export async function createWorkspaceFromMission(mission: string): Promise<{ name: string; mission: string }> {
+/** Create a workspace from its mission — the standing brief that seeds SOUL.md
+ *  and titles the workspace. It is NOT a chat turn: the new workspace opens
+ *  with an empty conversation, waiting for the first thing to do. */
+export async function createWorkspaceFromMission(mission: string): Promise<WorkspaceEntry> {
   const trimmed = mission.trim();
   if (!trimmed) throw new Error("Mission required.");
-  const agent = await registerWorkspace(undefined, trimmed);
-  return { name: agent.name, mission: trimmed };
+  return registerWorkspace(undefined, trimmed);
 }

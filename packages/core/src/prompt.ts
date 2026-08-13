@@ -9,8 +9,8 @@ import {
   BUILTIN_TOOL_SPECS,
   type BuiltinToolName,
 } from './tools/registry.js';
-import { renderActiveSkillsSection } from './skills/render.js';
-import type { ActiveSkillSet } from './skills/types.js';
+import { renderActiveSkillsSection, renderSkillsIndexSection } from './skills/render.js';
+import type { ActiveSkillSet, ParsedSkill } from './skills/types.js';
 import {
   compilePromptSurface,
   executorIsSelectable,
@@ -20,9 +20,9 @@ import {
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface.js';
-import { DEFAULT_SOUL_MD, readSoul } from './identity/soul.js';
+import { DEFAULT_SOUL_MD } from './identity/soul.js';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
-import { EXECUTOR_MOUNT_PREFIX } from './vfs/composite.js';
+import { WORKSPACE_ROOT } from './vfs/nimbus-workspace.js';
 
 export type {
   PromptBackend,
@@ -40,6 +40,10 @@ export type {
 export interface SystemPromptOptions extends PromptSurfaceOptions {
   /** Override the SOUL.md lookup. Tests and head runtimes use this for isolated prompt construction. */
   soulOverride?: string;
+  /** Every available skill (built-ins + VFS) — renders as an ambient
+   *  name+description index every turn, resolved by the backend from
+   *  resolveTurnSkills. */
+  availableSkills?: ReadonlyArray<ParsedSkill>;
   /** Active skills for this turn, resolved by the backend at turn start. */
   activeSkills?: ActiveSkillSet;
   /** Optional working directory hint for local/cloud execution surfaces. */
@@ -96,7 +100,7 @@ function renderOperatingGuidance(surface: PromptSurface): string {
   if (mode === 'plan') {
     lines.push('- Planning mode: leave state as you found it and produce a concrete plan with affected files and verification.');
   } else if (mode === 'release') {
-    lines.push('- Release mode: use release to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
+    lines.push('- Release mode: use `release.*` inside execute_tools to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
     lines.push('- Never deploy Proteus release changes without an explicit approval record.');
   } else if (mode === 'cron') {
     lines.push('- Scheduled wake mode: identify why you were woken, do only the scheduled work, persist any durable outcome, then stop.');
@@ -159,10 +163,21 @@ function renderToolsSection(surface: PromptSurface): string {
  *  prefix, so a sandbox waking up doesn't re-prefill the whole conversation. */
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   switch (exec.name) {
+      // What the `workspace` SHELL is differs by backend, and the difference
+      // is the one an agent gets wrong. Hosted, it is a real POSIX shell over
+      // the agent's durable filesystem — but one with no NATIVE binaries, so
+      // the line has to say both halves: what it can now do, and the exact
+      // boundary (an interpreter or a toolchain) that still needs an executor.
       case 'workspace':
-        return '- **workspace.*** / `runtime: "workspace"`: internal Proteus state VFS and lightweight shell. Use it for durable notes, small generated files, and crafted-tool state; the user\'s PC and a full Linux sandbox are the other runtimes below.';
+        return backend === 'cli-local'
+          ? '- **workspace.*** / `runtime: "workspace"`: your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.'
+          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable filesystem, with a real POSIX shell over it — pipes, redirection, variables, loops, `cd`, and the usual coreutils (grep/sed/awk/sort/find/tar/diff/xargs/curl...). No NATIVE binaries live here: node, python, git, package managers and builds have no executable to run and belong in the runtimes above.';
+      // "machine", not "workspace": Nimbus runs the workspace itself now, and
+      // this executor is a SEPARATE Nimbus session. Calling both a workspace
+      // invited the agent to look for a file it wrote on the wrong filesystem.
+      // The separateness itself is stated once, below, for all of them.
       case 'nimbus':
-        return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux workspace for quick commands, scripts, package installs, and file work.';
+        return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux machine for quick commands, scripts, package installs, and file work.';
       case 'sandbox':
         return '- **sandbox.*** / `runtime: "sandbox"`: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.';
       case 'laptop':
@@ -209,27 +224,26 @@ function renderExecutorSection(surface: PromptSurface): string {
     '',
     ...lines,
   ];
-  // Whether two runtimes are two filesystems is a fact about the backend, not
-  // about the count. On cli-local the workspace and laptop executors are both
-  // handed the SAME host shell (cli-backend/runtime.ts) — a command in either
-  // sees the same files — so the disjoint-filesystem warning was false there,
-  // and a model that believed it would copy a file between two views of one
-  // directory. Every other backend provisions a real container per runtime.
+  // No backend conditional: the workspace filesystem is the same durable
+  // component everywhere, and every other runtime is a different machine. That
+  // used to be untrue on cli-local, where the workspace and laptop executors
+  // shared one host shell, and the prompt had to carry the exception.
   if (executors.length > 1) {
-    parts.push('', surface.backend === 'cli-local'
-      ? 'These runtimes execute on the same machine and see the same files — there is nothing to copy between them.'
-      : 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
+    parts.push('', 'These runtimes have separate filesystems. Use the same runtime to read back files you wrote.');
   }
-  // Mount-table doctrine. Every backend's workspace VFS mounts the file plane
-  // of the execution environments it actually has — /sandbox and /nimbus on cf,
-  // /pc on both (the device tunnel there, node:fs here) — so the doctrine
-  // follows the executor list rather than the backend.
-  const mounts = devices.map((exec) => EXECUTOR_MOUNT_PREFIX[exec.name]).filter(Boolean);
-  if (mounts.length > 0) {
+  // The file doctrine. Every environment is its own filesystem addressed in its
+  // own native paths — there is no mount table and no path that means two
+  // places. The workspace's filesystem is the one the file tools address, and
+  // the workspace shell is a real shell over exactly those bytes.
+  parts.push(
+    '',
+    `Your own workspace is a durable POSIX filesystem at ${WORKSPACE_ROOT}, and the \`workspace\` runtime is a real shell over it — `
+    + 'the same bytes the `file` tool and `workspace.*` file ops read, by the same paths. Relative paths resolve there; `cd` persists between commands.',
+  );
+  if (devices.length > 0) {
     parts.push(
-      '',
-      `The workspace filesystem (workspace.* file ops) is a mount table: /local is the durable base, and ${mounts.join(', ')} ${mounts.length === 1 ? 'is a live window' : 'are live windows'} into those environments' real filesystems — the way to copy files ACROSS runtimes (readdir('/') lists what is mounted right now).`,
-      'Mounts are the FILE plane only: command execution stays target-native — run commands via the environment\'s own namespace or the run tool, never against a mount path.',
+      'The other environments above are SEPARATE machines with separate filesystems, reached only through their own namespaces '
+      + `(${devices.map((exec) => `\`${exec.name}.*\``).join(', ')}) in THEIR native paths. To move a file between two of them, read it from one and write it to the other.`,
     );
   }
   if (devices.length > 1) {
@@ -271,7 +285,7 @@ function renderAgentStateSection(surface: PromptSurface): string {
       '- `agent.proposeCurriculum(count?)` proposes self-improvement tasks; `agent.listCurriculum(status?)` / `agent.acceptCurriculumTask(id)` manage them.',
       '- `agent.proposeScaffold(rationale, code, baseVersion?)` proposes a new version of your own agentic-loop scaffold; it must pass the validation gates and win shadow evaluation before going live. `agent.scaffoldVersions(limit?)` lists your scaffold archive (lineage + shadow record) — you may branch from any archived version via `baseVersion`.',
       '- `agent.schedule({ cron | atMs, label?, payload? })` can create a future autonomous wake; use it only when the user or task genuinely calls for recurrence or a reminder. Add `budget_usd`/`budget_tokens` when the owner names a spending limit — the host then caps that whole run cumulatively; `agent.budget()` reads what is left.',
-      '- `agent.jobResult(jobId)` and `agent.backgroundJobs(limit?)` read durable background work status and results.',
+      '- `agent.jobResult(jobId)` reads a settled background job\'s full result — the wake that announces a job settled names the id to read; `agent.backgroundJobs(limit?)` lists recent jobs.',
       '- `agent.compactNow()` folds the conversation at a phase boundary instead of waiting for the token trigger: the finished range is archived verbatim and stays listed in the checkpoint\'s Compaction Archive manifest, so you can still read it back.',
     ].join('\n'));
   }
@@ -387,7 +401,8 @@ function renderAgentStateSection(surface: PromptSurface): string {
   if (hasTool(tools, 'run') || hasTool(tools, 'execute_tools') || hasTool(tools, 'agents')) {
     parts.push([
       '## Background work',
-      'Long fork, `execute_tools`, or `run` calls may detach after the background threshold and return `{ background: true, jobId }`. When that happens, stop the turn; the backend will wake you when the job settles.',
+      'Work moves to the background two ways: a fork backgrounds the moment it spawns on a live session, and a long `execute_tools` or `run` call backgrounds once it outruns the surface threshold. Either way the call returns `{ background: true, jobId }` and the work KEEPS RUNNING unwatched — never start the same work again; the running copy will land its effects.',
+      'A background job needs nothing from you while it runs, and you are woken with its full result when it settles — mid-turn if you are still working, as a fresh turn if you are idle. Finish whatever other work you have, then end your turn; the wake is how the result arrives.',
     ].join('\n'));
   }
 
@@ -422,9 +437,16 @@ function renderAgentStateSection(surface: PromptSurface): string {
   return parts.join('\n\n');
 }
 
-function readSoulForPrompt(rt: AgentRuntime, override?: string): string {
-  if (override) return override;
-  return readSoul(rt.storage.sql) ?? FALLBACK_PURPOSE;
+/**
+ * The soul this prompt speaks with.
+ *
+ * Passed in, never read here: the soul is a FILE now, and this builder is the
+ * byte-stable cacheable prefix — synchronous by contract, and no place to do
+ * I/O. Callers that hold a runtime read it once and hand it over (the cf actor
+ * caches it per activation); a caller that does not gets the default.
+ */
+function readSoulForPrompt(override?: string): string {
+  return override?.trim() || FALLBACK_PURPOSE;
 }
 
 /** Skill BODIES belong in the stable prefix (an activation-set change is a
@@ -449,13 +471,14 @@ export function buildSystemPromptSync(
 ): string {
   const surface = compilePromptSurface(opts);
   return [
-    readSoulForPrompt(rt, opts.soulOverride),
+    readSoulForPrompt(opts.soulOverride),
     renderRuntimeContext(opts),
     renderOperatingGuidance(surface),
     renderToolsSection(surface),
     renderExecutorSection(surface),
     renderAgentStateSection(surface),
     opts.agentsMd?.length ? renderAgentsMdSection(opts.agentsMd) : '',
+    opts.availableSkills?.length ? renderSkillsIndexSection(opts.availableSkills).trim() : '',
     opts.activeSkills ? renderActiveSkillsSection(stableActiveSkills(opts.activeSkills)).trim() : '',
   ].filter(Boolean).join('\n\n');
 }

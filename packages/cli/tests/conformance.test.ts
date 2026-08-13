@@ -83,7 +83,7 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
 
   const dbPath = agentDbPath(AGENT_NAME);
   const db = new Database(dbPath);
-  const { rt } = openWorkspaceCLI(db as never, dbPath, { llm: resolveLLMConfig({}) });
+  const { rt } = await openWorkspaceCLI(db as never, dbPath, { llm: resolveLLMConfig({}) });
 
   let captured: CapturedTool[] = [];
   const model = capturingModel((tools) => { captured = tools; });

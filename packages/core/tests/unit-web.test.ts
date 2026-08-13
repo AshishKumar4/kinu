@@ -316,11 +316,11 @@ describe('web builtin', () => {
 
     expect(out).toContain('Source: https://example.com/big');
     expect(out).toContain('[output truncated');
-    expect(out).toContain(`/${TOOL_OUTPUT_DIR}/`);
+    expect(out).toContain(`${TOOL_OUTPUT_DIR}/`);
     // The full output is restorable from the VFS.
-    const m = /full output saved to (\/[^\s]+)/.exec(out);
+    const m = /full output saved to (\S+)/.exec(out);
     expect(m).toBeTruthy();
-    const saved = await rt.storage.vfs.readFile(m![1].slice(1), { encoding: 'utf8' });
+    const saved = await rt.storage.vfs.readFile(m![1], { encoding: 'utf8' });
     expect(String(saved).length).toBeGreaterThan(out.length);
   });
 

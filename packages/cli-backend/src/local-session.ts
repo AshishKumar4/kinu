@@ -22,9 +22,9 @@ import type {
   ChatOptions,
   AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
-  SessionWriter, SkillsVfs, ActiveSkillSet, FactsStore, ProteusExtension,
+  SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, ProteusExtension,
   HeadRuntime, HeadGrounding, MergeResult, SerializedMessage, SplitPhaseEvent, AgentConfigStore, ShellApprovalMode,
-  ShellApprovalRequest, ShellApprovalOutcome,
+  ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   AgentsForkDeps, AgentsToolDeps,
   IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
   RunEvent, RunEventInput, RunEventQuery,
@@ -33,7 +33,7 @@ import type {
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, JobNotResumable,
+  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
@@ -63,7 +63,8 @@ import {
   CompletionGate, observeCompletionState, completionGateText, COMPLETION_GATE_EVENT,
   ExtensionHost, StepInjections,
   createDefaultWebSearchProvider, createWebCodemodeProvider, createRLMProvider, type WebSearchProvider,
-  createAgentsCodemodeProvider, type CodemodeProvider,
+  createAgentsCodemodeProvider, createReleaseCodemodeProvider, type CodemodeProvider,
+  createMemoryCodemodeProvider, createTasksCodemodeProvider,
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
   type DynamicContext,
@@ -277,6 +278,9 @@ export class LocalAgentSession implements BackendHost {
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
   private readonly jobs: BackgroundJobStore;
+  /** The agent's own task list — the `tasks` tool writes it, the live context
+   *  block reads it. */
+  private readonly taskList: TaskListStore;
   private readonly jobRunner: BackgroundJobRunner;
   /** Durable MCTS search checkpoint — what makes an interrupted think(mcts)
    *  resumable instead of losing its whole budget. runMCTS creates the table
@@ -352,10 +356,6 @@ export class LocalAgentSession implements BackendHost {
   private readonly compactionState: CompactionStateStore;
   private readonly compactionExtension: ProteusExtension;
 
-  /** Skills invoked this turn (explicit/auto-activation + the skills tool's
-   *  `invoke` action). Cleared at turn start; the skills tool's closures mutate
-   *  this stable Set, so the cached toolset never needs rebuilding. */
-  private readonly turnInvokedSkills = new Set<string>();
   private skillsVfs: SkillsVfs | null = null;
 
   /** Tools from connected MCP servers, merged into the turn surface. Connected
@@ -412,6 +412,7 @@ export class LocalAgentSession implements BackendHost {
     // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
     // this session as the BackendHost (enqueueTurn wakes the agent).
     this.jobs = new BackgroundJobStore(this.rt.storage.sql);
+    this.taskList = new TaskListStore(this.rt.storage.sql);
     this.headJournal = new HeadJournal(this.rt.storage.sql);
     this.mctsSearchStore = new MctsSearchStore(this.rt.storage.sql);
     this.config = createAgentConfigStore(this.rt.storage.sql);
@@ -593,10 +594,32 @@ export class LocalAgentSession implements BackendHost {
   /** Install the interactive approval channel for gated shell commands, or
    *  null to remove it. Surfaces that own a live user (ACP) set this; without
    *  one, 'strict' keeps rejecting gate hits with its explanatory message.
-   *  Returns a disposer so a surface can detach on disconnect. */
+   *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
+   *  `rt.shell` and every `rt.executionRouter` provider consult, so an
+   *  approval answers `run` and a codemode `workspace.exec()`/`nimbus.exec()`/
+   *  `sandbox.exec()`/`laptop.exec()` call identically. Returns a disposer so
+   *  a surface can detach on disconnect. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
     this.shellApprovalHandler = handler;
-    return () => { if (this.shellApprovalHandler === handler) this.shellApprovalHandler = null; };
+    this.rt.setShellApprovalChannel?.(handler ? this.wrapShellApprovalHandler(handler) : null);
+    return () => {
+      if (this.shellApprovalHandler === handler) {
+        this.shellApprovalHandler = null;
+        this.rt.setShellApprovalChannel?.(null);
+      }
+    };
+  }
+
+  /** `allow_always`/`deny_always` also carry the user's intent to change the
+   *  session's standing shell approval mode — that side effect belongs to
+   *  the session (which owns setShellApprovalMode), not to the gate itself. */
+  private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
+    return async (req) => {
+      const outcome = await handler(req) ?? null;
+      if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
+      else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
+      return outcome;
+    };
   }
 
   /** Stored model spec, or null when unset (parity with DO getStoredModelSpec). */
@@ -1222,11 +1245,16 @@ export class LocalAgentSession implements BackendHost {
     }
   }
 
-  /** Append to the durable run-event log, scoped to the in-flight run. Never
-   *  throws: losing a history row must not fail a turn. */
-  private recordRunEvent(input: RunEventInput): void {
-    if (!this.currentRunId) return;
-    try { this.eventRecorder.emit(this.currentRunId, input); }
+  /** Append to the durable run-event log. Scoped to the in-flight run by
+   *  default (`runId` omitted); a caller that captured its OWN run id at
+   *  dispatch time (a detached fork's phase events — see emitHeadPhase) passes
+   *  it explicitly so a later phase still lands correctly once the calling
+   *  turn has moved on. Never throws: losing a history row must not fail a
+   *  turn. */
+  private recordRunEvent(input: RunEventInput, runId?: string | null): void {
+    const id = runId !== undefined ? runId : this.currentRunId;
+    if (!id) return;
+    try { this.eventRecorder.emit(id, input); }
     catch (err) { console.warn('[proteus] run event emit failed:', err); }
   }
 
@@ -1289,7 +1317,6 @@ export class LocalAgentSession implements BackendHost {
     // A one-shot task turn is graded by whatever it leaves on disk, with nobody
     // to push back — so it arms the completion gate. Nothing else does.
     if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
-    this.turnInvokedSkills.clear();
     const model = this.ensureModelState();
 
     // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
@@ -1299,7 +1326,7 @@ export class LocalAgentSession implements BackendHost {
     // trip the prompt-hash telemetry with no real agent event.
     const memoryTail = await readMemoryTail(this.rt.memory);
     const executors = this.rt.executionRouter?.listExecutors() ?? [];
-    const activeSkills = await this.resolveTurnSkills(item.text);
+    const { available: availableSkills, activeSkills } = await this.resolveTurnSkills(item.text);
     // Skill-filtered built-ins + the connected MCP tools (always available).
     const filteredBuiltins = this.filterToolsBySkills(activeSkills);
     const turnTools = { ...filteredBuiltins, ...this.extraTools };
@@ -1328,6 +1355,7 @@ export class LocalAgentSession implements BackendHost {
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
       ...(agentsMd.length > 0 ? { agentsMd } : {}),
+      ...(availableSkills.length > 0 ? { availableSkills } : {}),
       ...(activeSkills ? { activeSkills } : {}),
     });
     this.recordSystemPromptHash(systemPrompt);
@@ -1760,14 +1788,13 @@ export class LocalAgentSession implements BackendHost {
     return this._webSearchProvider;
   }
 
-  /** Resolve the skills active for this turn (core turn-surface — the SAME
+  /** Resolve this turn's skill surface (core turn-surface — the SAME
    *  resolution the DO's beforeTurn runs). */
-  private resolveTurnSkills(userText: string): Promise<ActiveSkillSet | undefined> {
+  private resolveTurnSkills(userText: string): Promise<TurnSkillSurface> {
     return resolveTurnSkills({
       vfs: this.getSkillsVfs(),
       config: this.config,
       userText,
-      invoked: this.turnInvokedSkills,
     });
   }
 
@@ -1944,6 +1971,7 @@ export class LocalAgentSession implements BackendHost {
       memoryTail,
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
+      openTasks: this.taskList.listOpen(),
       liveHeadRuns: this.headJournal.listLive(),
       missingCapabilities: this.mcpUnavailable,
     });
@@ -1985,7 +2013,11 @@ export class LocalAgentSession implements BackendHost {
       heads: {
         controller: () => this.headController,
         inheritedContext: () => this.readInheritedContext(),
-        onPhase: (e: SplitPhaseEvent) => this.emitHeadPhase(e),
+        // Captured at dispatch, once per fork call — see emitHeadPhase.
+        onPhase: () => {
+          const runId = this.currentRunId;
+          return (e: SplitPhaseEvent) => this.emitHeadPhase(e, runId);
+        },
         onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
       },
     });
@@ -2014,9 +2046,17 @@ export class LocalAgentSession implements BackendHost {
    *  trajectories by hand. The recorder streams every row it writes as a
    *  `run-event`, so recording IS the fan-out; broadcasting a second copy put
    *  the split through `proteus exec --json` twice and reached no other
-   *  reader — no CLI surface consumes a head phase as a broadcast. */
-  private emitHeadPhase(event: SplitPhaseEvent): void {
-    this.recordRunEvent(headPhaseRunEvent(event));
+   *  reader — no CLI surface consumes a head phase as a broadcast.
+   *
+   *  `runId` is the run captured at fork DISPATCH (buildAgentsForkDeps'
+   *  onPhase factory), not read live: a fork on the interactive surface now
+   *  detaches the instant it spawns, so the calling turn can close ITS run —
+   *  nulling `this.currentRunId` — before 'split' fires and always before
+   *  'merge' does. Passing null explicitly (a closed run) is deliberate and
+   *  distinct from omitting it (fall back to whatever is live) — see
+   *  recordRunEvent. */
+  private emitHeadPhase(event: SplitPhaseEvent, runId: string | null): void {
+    this.recordRunEvent(headPhaseRunEvent(event), runId);
   }
 
   /** A fresh SessionWriter for an MCTS run — the SAME durable writer the DO
@@ -2167,16 +2207,11 @@ export class LocalAgentSession implements BackendHost {
 
     const rawTools = buildBuiltinTools({
       rt: this.rt,
-      shellApprovalMode: this.config.getShellApprovalMode(),
-      // Stable indirection: the toolset is rebuilt only on model change, so it
-      // must read the handler live rather than capture whichever was installed
-      // when the model was resolved.
-      requestShellApproval: async (req) => {
-        const outcome = await this.shellApprovalHandler?.(req) ?? null;
-        if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
-        else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
-        return outcome;
-      },
+      // No shellApprovalMode/requestShellApproval here — the gate lives at
+      // the execution seam now (rt.shell / rt.executionRouter, wired once in
+      // runtime.ts off agent_config live and the channel `setShellApprovalHandler`
+      // installs below), not re-derived per toolset build. See
+      // execution/approval.ts.
       // The turn's cumulative bulk budget — held on the accumulator so this
       // toolset (rebuilt only on model change) reads the live turn's state.
       contextBudget: this.orch.acc.context,
@@ -2191,6 +2226,20 @@ export class LocalAgentSession implements BackendHost {
           // the same deps the top-level tool holds. Locally that is fork only.
           createAgentsCodemodeProvider(() => this.agentsToolDeps()),
           createWebCodemodeProvider(this.getWebSearchProvider()),
+          // `memory.*` / `tasks.*` — unconditional codemode projections of
+          // the same-named native tools (tools/memory-tool.ts, tools/tasks-
+          // tool.ts); `this.taskList` is the SAME TaskListStore instance the
+          // dynamic-context snapshot reads.
+          // No vectorStore: Vectorize hybrid search is CF-only, same as the
+          // native `memory` tool's wiring below (search stays FTS5-only here).
+          createMemoryCodemodeProvider(() => ({
+            memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
+          })),
+          createTasksCodemodeProvider(this.taskList),
+          // `release.*` — left the native surface for codemode-only reach
+          // (tools/release-codemode.ts); deps read live so a rebind lands
+          // without rebuilding this toolset.
+          createReleaseCodemodeProvider(() => this.releaseToolDeps()),
           // llm.query (RLM) — CLI parity with the cf backend. Needs a real
           // resolver to spawn sub-calls; static-model sessions have none.
           ...(this.modelResolver
@@ -2201,12 +2250,6 @@ export class LocalAgentSession implements BackendHost {
       codemodeLoader: { __cli: true },
       agents: this.agentsToolDeps(),
       facts: this.factsStore,
-      skills: {
-        vfs: this.getSkillsVfs(),
-        recordInvoke: (name: string) => { this.turnInvokedSkills.add(name); },
-        currentlyInvoked: () => Array.from(this.turnInvokedSkills),
-      },
-      releases: this.releaseToolDeps(),
       webSearch: this.getWebSearchProvider(),
     });
     this.rawTools = rawTools;

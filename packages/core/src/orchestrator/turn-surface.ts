@@ -11,7 +11,7 @@ import { resolveActiveSkills, extractExplicitInvocations } from '../skills/loade
 import { discoverSkills, type SkillsVfs } from '../skills/discover.js';
 import { BUILTIN_SKILLS } from '../skills/builtins.js';
 import { unionAllowedTools, toolAllowedBySkills } from '../skills/render.js';
-import type { ActiveSkillSet } from '../skills/types.js';
+import type { ActiveSkillSet, ParsedSkill } from '../skills/types.js';
 import { renderFactsBlock, type FactsStore } from '../memory/facts.js';
 import type { VFS } from '../types/primitives.js';
 
@@ -31,44 +31,56 @@ export interface TurnSkillsConfig {
   getAlwaysActiveSkills(): string[];
 }
 
+/** What a turn needs from the skills store: every available skill (for the
+ *  ambient index, always rendered) plus whichever ones are active this turn
+ *  (for the expanded-body section and the tool-surface restriction). */
+export interface TurnSkillSurface {
+  available: ParsedSkill[];
+  activeSkills: ActiveSkillSet | undefined;
+}
+
 /**
- * Resolve the skills active for this turn — explicit /invocations, the
- * always-active config, and builtin auto-activation. Only scans the VFS when
- * activation is plausible (explicit invocation, always_active config, or an
- * auto-activating builtin), so vanilla turns pay no filesystem walk. The
- * activated names are recorded onto the per-turn `invoked` tracker so
- * skills.list reflects what is active right now. Never fails the turn.
- */
+ * Resolve this turn's skill surface — every available skill (built-ins + VFS,
+ * for the ambient name+description index every turn renders) and which of
+ * them are active (explicit /invocation, always-active config, or a builtin's
+ * auto-activate keyword match).
+ *
+ * Discovery now runs on every turn: the ambient index needs the full catalogue
+ * regardless of whether anything activates, which is the one filesystem walk
+ * this call was previously skipping on a vanilla turn. Never fails the turn —
+ * a discovery error still returns the built-ins so the index isn't silently
+ * empty. */
 export async function resolveTurnSkills(opts: {
   vfs: SkillsVfs;
   config: TurnSkillsConfig;
   userText: string;
-  invoked: Set<string>;
-}): Promise<ActiveSkillSet | undefined> {
+}): Promise<TurnSkillSurface> {
+  let available: ParsedSkill[];
   try {
-    const explicit = extractExplicitInvocations(opts.userText);
-    const alwaysActive = opts.config.getAlwaysActiveSkills();
-    const anyAutoActivate = BUILTIN_SKILLS.some((s) => s.auto_activate);
-    if (explicit.length === 0 && alwaysActive.length === 0 && !anyAutoActivate) return undefined;
-    const available = await discoverSkills(opts.vfs);
-    const activeSet = resolveActiveSkills({
-      available, explicit, userMessage: opts.userText, alwaysActive,
-    });
-    if (activeSet.active.length === 0) return undefined;
-    for (const r of activeSet.reasons) opts.invoked.add(r.name);
-    return activeSet;
+    available = await discoverSkills(opts.vfs);
   } catch (err) {
-    console.warn('[proteus] skills resolution failed:', (err as Error).message);
-    return undefined;
+    console.warn('[proteus] skills discovery failed:', (err as Error).message);
+    available = [...BUILTIN_SKILLS];
   }
+  const explicit = extractExplicitInvocations(opts.userText);
+  const alwaysActive = opts.config.getAlwaysActiveSkills();
+  const activeSet = resolveActiveSkills({
+    available, explicit, userMessage: opts.userText, alwaysActive,
+  });
+  return { available, activeSkills: activeSet.active.length > 0 ? activeSet : undefined };
 }
 
-/** The one restriction rule: the active skills' allowed_tools union bounds the
- *  surface (empty union = skills don't restrict), and the `skills` tool itself
- *  ALWAYS stays reachable so the LLM can list / read / invoke more skills
- *  mid-turn — filtering it out would lock the agent into the first activation. */
+/** The one restriction rule: the active skills' allowed_tools union bounds
+ *  the surface (empty union = skills don't restrict). No name is exempted —
+ *  there is no `skills` tool left to protect from its own restriction, and
+ *  `execute_tools` (the only remaining path to a skill's own VFS bytes) is
+ *  deliberately NOT exempted either: a skill that restricts the surface
+ *  and omits execute_tools means it, the same as it means it for any other
+ *  tool. Discovering or authoring more skills mid-restriction can wait for
+ *  the next turn, where resolveTurnSkills re-evaluates from the new message,
+ *  unaffected by what the previous turn excluded. */
 function allowedBySkills(name: string, allowedUnion: string[]): boolean {
-  return name === 'skills' || toolAllowedBySkills(name, allowedUnion);
+  return toolAllowedBySkills(name, allowedUnion);
 }
 
 /** Restrict a tool-NAME list (the cf activeTools whitelist) to the active
@@ -81,9 +93,7 @@ export function filterToolNamesBySkills<T extends string>(
   if (!activeSkills) return [...names];
   const allowedUnion = unionAllowedTools(activeSkills.active);
   if (allowedUnion.length === 0) return [...names];
-  const filtered = names.filter((name) => allowedBySkills(name, allowedUnion));
-  if (!filtered.includes('skills' as T)) filtered.push('skills' as T);
-  return filtered;
+  return names.filter((name) => allowedBySkills(name, allowedUnion));
 }
 
 /** Restrict a ToolSet (the CLI turn surface) to the active skills' allowed
