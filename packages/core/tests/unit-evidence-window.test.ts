@@ -8,8 +8,8 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   EVIDENCE_BUDGETS, evidenceWindow,
-  initScaffoldTables, initShadowTables, runAutoShadowEval, runTurnShadowEval, type AgentConfigStore,
-  type JudgeOutput,
+  initScaffoldTables, initShadowTables, runAutoShadowEval, queueTurnShadowTrial,
+  runQueuedShadowTrials, type AgentConfigStore, type JudgeOutput, type ScaffoldControl,
 } from '../src/index.js';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate.js';
 import type { GepaCandidate } from '../src/evolution/gepa/types.js';
@@ -95,7 +95,6 @@ describe('the readers can see the end of a long turn', () => {
       currentOutput: trajectory(40_000, `CURRENT-${ending}`),
       judge,
       llmStream: async function* () { yield ''; },
-      config: { sampleRate: 1 },
       random: () => 0,
     });
 
@@ -129,7 +128,7 @@ describe('the readers can see the end of a long turn', () => {
 
     const prompts: string[] = [];
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
-    await runTurnShadowEval({
+    const control: ScaffoldControl = {
       rt,
       sql: rt.storage.sql,
       config: { getShadowSampleRate: () => 1, getAutoPromoteScaffold: () => false } as unknown as AgentConfigStore,
@@ -137,17 +136,19 @@ describe('the readers can see the end of a long turn', () => {
         llmStream: async function* () { yield ''; },
         callTool: async () => ({}),
         history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
+        defaultInference: async function* () { yield ''; },
       }),
       model: () => ({}) as never,
       judge: async ({ prompt }) => {
         prompts.push(prompt);
         return { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 } as never;
       },
-    }, {
-      task: 'short task',
-      currentOutput,
-      replayLiveTurn: async function* () { yield ''; },
-    });
+    };
+    // The turn stores the live output WHOLE; the drain windows it once.
+    expect(queueTurnShadowTrial(control, {
+      task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
+    })).toBe('queued');
+    await runQueuedShadowTrials(control);
 
     expect(prompts.length).toBeGreaterThan(0);
     const omissions = [...prompts[0]!.matchAll(/(\d+) chars omitted from the middle/g)].map((m) => Number(m[1]));

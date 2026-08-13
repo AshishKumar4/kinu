@@ -20,7 +20,7 @@
  * its own history. Everything else is policy and lives here.
  */
 
-import { generateText, type LanguageModel } from 'ai';
+import { generateText, type LanguageModel, type ModelMessage } from 'ai';
 import * as v from 'valibot';
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
@@ -37,11 +37,13 @@ import {
 import { modifyScaffold } from '../scaffold/modify.js';
 import { listScaffoldArchive, type ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import {
-  DEFAULT_SHADOW_CONFIG, applyPromotionDecision, decidePromotion, getPendingScaffold,
-  readScaffoldVersion,
+  DEFAULT_SHADOW_CONFIG, MAX_QUEUED_SHADOW_TRIALS, applyPromotionDecision, countQueuedShadowTrials,
+  decidePromotion, dropQueuedShadowTrial, getPendingScaffold, listQueuedShadowTrials,
+  purgeQueuedShadowTrials, queueShadowTrial, readScaffoldVersion,
 } from '../scaffold/shadow.js';
+import type { ShadowTrialDrain } from './types.js';
 import {
-  DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval, type AutoShadowEvalResult,
+  DEFAULT_AUTO_JUDGE_CONFIG, runAutoShadowEval,
 } from '../scaffold/auto-judge.js';
 import { buildOutcomeEvalSplit, describeSplitDegeneracy, type OutcomeEvalExpectation } from './outcomes.js';
 import { runScaffoldGepa } from './gepa/scaffold-bridge.js';
@@ -69,6 +71,10 @@ export interface ScaffoldSurface {
   readonly defaultInference?: ScaffoldRunOptions['defaultInference'];
 }
 
+/** The conversation a candidate's default loop replays. Empty means the caller
+ *  has none, and the backend reconstructs one from the task alone. */
+export type ScaffoldReplayContext = readonly ModelMessage[];
+
 /** Structured output from a model, validated against a schema. */
 export type JsonGenerator = <T>(opts: {
   schema: v.GenericSchema<unknown, T>;
@@ -83,8 +89,11 @@ export interface ScaffoldControl {
   /** Resolved per call against the task being run, so a control-plane
    *  operation issued mid-session runs the candidate against the tools the
    *  session has right now, and `defaultInference` delegates to the ordinary
-   *  loop for THIS task. */
-  readonly surface: (task: string) => ScaffoldSurface;
+   *  loop for THIS task. `context` is the conversation that task was asked in,
+   *  which a delegating candidate must be given or it answers a
+   *  context-dependent task from the task text alone; empty for the one-shot
+   *  operations (preview, GEPA rollout, replay), which have none. */
+  readonly surface: (task: string, context?: ScaffoldReplayContext) => ScaffoldSurface;
   /** The chat model — what a candidate loop and the reflection LM run on. */
   readonly model: () => LanguageModel | Promise<LanguageModel>;
   /**
@@ -156,74 +165,131 @@ export async function runScaffoldOnce(
   }));
 }
 
+/** What a completed turn offered the promotion gate. Every value except
+ *  `'queued'` is a turn that contributed nothing — named, so a caller reporting
+ *  the gate's state never has to guess which. */
+export type ShadowTrialQueueOutcome = 'queued' | 'not_sampled' | 'no_pending' | 'queue_full' | 'failed';
+
 /**
- * The turn-bound half of the shadow loop: sample this turn, run the pending
- * scaffold against the same task the live answer answered, judge the two, and
- * promote or roll back.
+ * The turn-bound half of the shadow loop — and ALL of it that a turn pays for:
+ * sample this turn, and if it is in the sample, write ONE row recording the
+ * task, what the live turn answered, and the conversation it answered in.
  *
- * Written twice until now — once per backend — because it is the only
- * control-plane operation with a LIVE TURN in it, and each backend holds the
- * turn's prepared inference differently (a `_lastTurnOpts` stash on the DO, a
- * `liveTurnOpts` local on the CLI). That is the whole of the difference, and it
- * arrives here as `replayLiveTurn`: a candidate that delegates to the default
- * loop must replay the turn's OWN inference — same system prompt, same tool
- * surface, same conversational history — or it is judged on a handicap rather
- * than on the scaffold delta. Everything else (the sampling gate, the four
- * ports, the judge, swallowing failures so a shadow eval can never fail a turn)
- * is policy, and both copies had already drifted on the judge: cf sent
- * reasoning options derived from the CHAT model's provider family to a
- * cross-family REVIEW model, where they cannot apply.
+ * The trial itself — a whole candidate turn plus two judge calls, minutes of
+ * wall clock — is NOT run here. It used to be, on the turn's own lane, which
+ * meant the promotion gate resolved candidates against the user's clock: a
+ * `proteus exec` process waited up to its settle bound for a rollout, and a
+ * Durable Object ran a full extra inference beside the next request. What runs
+ * the queue is the cadence lane ({@link runQueuedShadowTrials}), and until it
+ * does the gate simply has less evidence — which `decidePromotion` already has
+ * an honest answer for ('continue'), and which `getShadowStatus` reports as
+ * queued rather than as trials.
  *
- * Returns the result for the caller's telemetry, or null when sampling is off
- * or the eval failed.
+ * Synchronous and total: a lost trial must never fail the turn that produced
+ * it, so every failure is absorbed and named in the return value.
  */
-export async function runTurnShadowEval(
+export function queueTurnShadowTrial(
   control: ScaffoldControl,
   turn: {
     task: string;
-    /** What the live turn actually answered — the shadow run's comparand. */
+    /** What the live turn actually answered — the trial's comparand. */
     currentOutput: string;
-    /** Replay of the live turn's prepared inference, captured synchronously by
-     *  the caller so a later turn's state can never bleed into this one.
-     *  Omitted when the host no longer holds it — a DO restarted between the
-     *  live turn and this eval — and then the surface's own default loop
-     *  stands in, under the live loop's full step envelope: a candidate judged
-     *  against the live answer has to be allowed to reach one. */
-    replayLiveTurn?: ScaffoldSurface['defaultInference'];
+    /** The live turn's prepared conversation, read synchronously by the caller
+     *  so a later turn's state can never bleed into this one. A delegating
+     *  candidate replays it as its own default loop; empty when the host held
+     *  none, and then the surface reconstructs one from the task. */
+    context: ScaffoldReplayContext;
   },
-): Promise<AutoShadowEvalResult | null> {
+): ShadowTrialQueueOutcome {
   try {
     const sampleRate = control.config.getShadowSampleRate();
-    if (sampleRate <= 0) return null;
-    const surface = control.surface(turn.task);
-    const defaultInference = turn.replayLiveTurn ?? surface.defaultInference;
-    return await runAutoShadowEval({
-      rt: control.rt,
+    if (sampleRate <= 0) return 'not_sampled';
+    const pending = getPendingScaffold(control.sql);
+    if (!pending) return 'no_pending';
+    if (Math.random() >= sampleRate) return 'not_sampled';
+    return queueShadowTrial(control.sql, {
+      pendingVersion: pending.version,
       // Passed WHOLE. runAutoShadowEval owns the evidence budget and applies it
-      // once, to the judge and the trial row together; a second clamp here both
-      // duplicated the policy and lied about it — windowing an already windowed
+      // once, to the judge and the trial row together; a clamp here both
+      // duplicates the policy and lies about it — windowing an already windowed
       // string reports the second pass's omission count, not the total. It also
-      // mattered beyond tidiness: `task` is what the PENDING scaffold is run on,
+      // matters beyond tidiness: `task` is what the PENDING scaffold is run on,
       // so a slice here would ask the pending to answer a truncated version of
       // the question the live turn answered in full, then judge the two against
       // each other.
       task: turn.task,
       currentOutput: turn.currentOutput,
-      judge: (prompt, schema) => control.judge({ schema, prompt }),
-      llmStream: surface.llmStream,
-      ...(surface.callTool ? { callTool: surface.callTool } : {}),
-      ...(surface.history ? { history: surface.history } : {}),
-      ...(defaultInference ? { defaultInference } : {}),
-      config: {
-        ...DEFAULT_AUTO_JUDGE_CONFIG,
-        sampleRate,
-        autoApply: control.config.getAutoPromoteScaffold(),
-      },
+      context: turn.context,
     });
   } catch (err) {
-    console.warn('[proteus] shadow eval failed:', err instanceof Error ? err.message : err);
-    return null;
+    console.warn('[proteus] shadow trial queue failed:', err instanceof Error ? err.message : err);
+    return 'failed';
   }
+}
+
+/**
+ * The offline half: run every trial queued for the pending scaffold, then let
+ * the promotion gate read what has accumulated.
+ *
+ * Cadence-lane work by construction — minutes of wall clock per trial, so only
+ * a host that can afford to finish it ever starts it (the Durable Object under
+ * keepAlive, a long-lived CLI session, the local scheduler daemon). A host that
+ * exits first leaves the rows where they are; the queue is durable and the next
+ * capable host runs them.
+ *
+ * Trials for any version that is no longer pending are discarded rather than
+ * run: a trial is evidence about ONE candidate, and once that candidate is
+ * resolved its remaining trials would score a version nobody is deciding on.
+ * The same reason stops the loop the moment a decision is applied.
+ */
+export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<ShadowTrialDrain> {
+  const pending = getPendingScaffold(control.sql);
+  purgeQueuedShadowTrials(control.sql, pending?.version ?? null);
+  if (!pending) return { trials: 0, applied: null };
+
+  let trials = 0;
+  let processed = 0;
+  // Re-read between laps: a turn can queue a trial while the previous lap is
+  // running, and a drain that only ever saw its opening snapshot would leave
+  // the newest evidence for a pass that may never come. A lap that finds
+  // nothing ends the drain; the ceiling bounds the pathological case, and past
+  // it one drain has already run more trials than the gate can consume.
+  while (processed < MAX_QUEUED_SHADOW_TRIALS) {
+    const batch = listQueuedShadowTrials(control.sql, pending.version);
+    if (batch.length === 0) break;
+    for (const trial of batch) {
+      if (processed >= MAX_QUEUED_SHADOW_TRIALS) break;
+      processed++;
+      const surface = control.surface(trial.task, trial.context);
+      let applied: 'promote' | 'rollback' | null = null;
+      try {
+        const result = await runAutoShadowEval({
+          rt: control.rt,
+          task: trial.task,
+          currentOutput: trial.currentOutput,
+          judge: (prompt, schema) => control.judge({ schema, prompt }),
+          llmStream: surface.llmStream,
+          ...(surface.callTool ? { callTool: surface.callTool } : {}),
+          ...(surface.history ? { history: surface.history } : {}),
+          ...(surface.defaultInference ? { defaultInference: surface.defaultInference } : {}),
+          config: { ...DEFAULT_AUTO_JUDGE_CONFIG, autoApply: control.config.getAutoPromoteScaffold() },
+        });
+        applied = result.applied ?? null;
+        if (!result.skipped) trials++;
+      } catch (err) {
+        // A trial that throws is a trial we cannot score, not a queue we should
+        // wedge on: drop it below and carry on with the rest.
+        console.warn('[proteus] shadow trial failed:', err instanceof Error ? err.message : err);
+      }
+      dropQueuedShadowTrial(control.sql, trial.id);
+      if (applied) {
+        purgeQueuedShadowTrials(control.sql, null);
+        console.log(`[proteus] promotion gate chose ${applied} for scaffold v${pending.version} after ${trials} trial(s)`);
+        return { trials, applied };
+      }
+    }
+  }
+  return { trials, applied: null };
 }
 
 /**
@@ -312,6 +378,10 @@ export type ShadowStatus =
       pending: NonNullable<ReturnType<typeof getPendingScaffold>>;
       decision: ReturnType<typeof decidePromotion>;
       config: typeof DEFAULT_SHADOW_CONFIG;
+      /** Trials sampled but not yet executed. Reported separately from
+       *  `pending.trialsSoFar` and never folded into it: this is evidence the
+       *  candidate is OWED, and the gate has not seen a single bit of it. */
+      queuedTrials: number;
     };
 
 /** The pending scaffold's rollout state — trials so far and what the promotion
@@ -324,6 +394,7 @@ export function getShadowStatus(sql: SqlExecutor): ShadowStatus {
     pending,
     decision: decidePromotion(pending, DEFAULT_SHADOW_CONFIG),
     config: DEFAULT_SHADOW_CONFIG,
+    queuedTrials: countQueuedShadowTrials(sql, pending.version),
   };
 }
 

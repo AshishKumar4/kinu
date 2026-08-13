@@ -166,6 +166,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     scaffold_regression_fixtures: EVERYWHERE,
     task_history: EVERYWHERE,
     scaffold_evaluations: EVERYWHERE,
+    scaffold_trial_queue: EVERYWHERE,
 
     // ── evolution / outcome ledger ──
     turn_outcomes: EVERYWHERE,

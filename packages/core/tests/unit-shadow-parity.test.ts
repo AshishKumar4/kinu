@@ -102,7 +102,6 @@ describe('shadow context parity', () => {
       // The orchestrator now replays the live turn's full streamText opts —
       // so defaultInference yields the context-aware answer.
       defaultInference: uiStream(CONTEXT_AWARE_ANSWER),
-      config: { sampleRate: 1.0 },
       random: () => 0,
     });
 
@@ -127,7 +126,6 @@ describe('shadow context parity', () => {
       defaultInference: uiStream(CONTEXT_FREE_ANSWER),
       judge: contextJudge,
       llmStream: async function* () { yield ''; },
-      config: { sampleRate: 1.0 },
       random: () => 0,
     });
     expect(result.skipped).toBe(false);

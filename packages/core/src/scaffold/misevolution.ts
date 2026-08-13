@@ -72,7 +72,7 @@ const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
   },
   {
     id: 'version-machinery-tamper',
-    pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|['"`]scaffold\/agent\.js|agent\.js\.v\d/,
+    pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|\bscaffold_trial_queue\b|['"`]scaffold\/agent\.js|agent\.js\.v\d/,
     reason: 'touches the scaffold version files or shadow-eval tables — promotion happens only through the gated pipeline',
   },
   {

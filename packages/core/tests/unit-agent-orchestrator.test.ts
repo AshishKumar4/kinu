@@ -41,6 +41,8 @@ function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): 
 function fakeEngine(opts?: { enabled?: boolean }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
+  /** One entry per cadence pass that ran the promotion gate's queued trials. */
+  const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
   initSessionWindowTable(execRaw);
   // The crafted-tool ledger the engine owns in production, over a real store,
@@ -59,8 +61,9 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     },
     reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
+    runDueShadowTrials: async () => { trials.push(Date.now()); },
   } as unknown as EvolutionEngine;
-  return { engine, reviews, sessions, crafted, observed };
+  return { engine, reviews, sessions, crafted, observed, trials };
 }
 function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
@@ -125,8 +128,9 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
       .onSessionComplete = async (s) => { await gate; sessions.push(s.turns.length); };
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
     orch.recordTurn(aTurn(0), 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');   // reaches the interval → dispatches the pass
+    // The pass recordTurn just started, not a second one.
     const pass = orch.runDueSessionEvolution();
-    orch.recordTurn(aTurn(1), 'conversation');
     expect(sessions).toEqual([]);            // still in flight
     // The turn lane settles without waiting for the cadence lane — that is the
     // whole point: one exec invocation must not own a lifetime cycle's clock.
@@ -163,7 +167,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     });
     let release = () => {};
     const stuck = new Promise<void>((resolve) => { release = resolve; });
-    orch.track(stuck, 'Shadow eval');
+    orch.track(stuck, 'Turn review');
     const startedAt = Date.now();
     await orch.settleEvolution();                    // returns on the bound, not on `stuck`
     expect(Date.now() - startedAt).toBeLessThan(2000);
@@ -189,14 +193,17 @@ describe('AgentOrchestrator — the durable session window', () => {
   // `proteus exec` is one process per turn: a fresh orchestrator every time,
   // against the same workspace database. The window and the pending review
   // have to live in that database or headless usage never evolves at all.
-  test('the window accumulates across orchestrator instances and fires at the interval', () => {
+  test('the window accumulates across orchestrator instances and fires at the interval', async () => {
     const { engine, sessions } = fakeEngine();
     const eventLog = newEventLog();
+    let last: AgentOrchestrator | null = null;
     for (let i = 0; i < 5; i++) {
       const { host } = fakeHost();
-      new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 })
-        .recordTurn(aTurn(i), 'conversation');
+      last = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 });
+      last.recordTurn(aTurn(i), 'conversation');
     }
+    // recordTurn detaches the cadence pass; join the one it started.
+    await last!.runDueSessionEvolution();
     expect(sessions).toEqual([5]);
   });
 

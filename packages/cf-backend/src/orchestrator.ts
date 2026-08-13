@@ -53,7 +53,7 @@ import {
   // supplies the surface they run against).
   applyScaffoldDecision, getShadowStatus, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
-  runScaffoldOnce,
+  runQueuedShadowTrials, runScaffoldOnce,
   type GepaOptimizationResult, type ScaffoldDecisionResult,
   type ScaffoldVersionView, type ShadowStatus,
   getPendingScaffold,
@@ -518,6 +518,10 @@ export class OrchestratorAgent extends ActorAgent {
         // Replay-eval rollout: the LIVE scaffold with the real LLM + tool
         // bridges — the closest re-run of "what would the agent do today".
         replayTaskRunner: (task) => this.runScaffoldCaptureText(task),
+        // The promotion gate's evidence, gathered here rather than on the
+        // turn: a DO under keepAlive can afford a candidate rollout, Think's
+        // TurnQueue cannot.
+        shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
       });
       // Mission Inbox: the session-end changelog digest also goes to the
       // owner's inbox — the "what I changed about myself" email.
@@ -1831,7 +1835,8 @@ export class OrchestratorAgent extends ActorAgent {
    * its own agentic loop from inside execute_tools. Routes through the
    * EXISTING modifyScaffold 4-gate pipeline; an accepted proposal lands as
    * status='pending' and is scored by the sampled shadow eval + promotion
-   * gate (core runTurnShadowEval) like any other proposal — no new safety
+   * gate (core queueTurnShadowTrial → runQueuedShadowTrials) like any other
+   * proposal — no new safety
    * surface.
    */
   async proposeScaffold(rationale: string, code: string, baseVersion?: number) {

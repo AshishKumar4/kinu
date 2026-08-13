@@ -78,6 +78,15 @@ export interface EvolutionEvent {
 /** Callback for evolution events — CLI/web can hook into this */
 export type EvolutionListener = (event: EvolutionEvent) => void;
 
+/** What one drain of the shadow trial queue did. `applied` is the action the
+ *  promotion gate ACTUALLY took (the misevolution recheck can turn a promote
+ *  into a rollback), or null when the evidence stayed inconclusive — which is
+ *  the honest state, not a pass. */
+export interface ShadowTrialDrain {
+  readonly trials: number;
+  readonly applied: 'promote' | 'rollback' | null;
+}
+
 /** Evolution engine configuration. The every-N-turns session-reflection
  *  cadence is NOT here — AgentOrchestrator owns it (sessionReflectionInterval
  *  on its deps) and calls onSessionComplete. Turn-level reflection/extraction
@@ -93,6 +102,12 @@ export interface EvolutionConfig {
    *  backend seam the replay-eval harness rolls out through. Absent = the
    *  periodic replay eval is skipped. */
   replayTaskRunner?: (task: string) => Promise<string>;
+  /** Run the shadow trials a turn queued for the pending scaffold — the
+   *  promotion gate's evidence, gathered on the cadence lane instead of on the
+   *  user's turn (evolution/control.ts `runQueuedShadowTrials`). Absent = this
+   *  host runs no trials; the queue is durable, so the next host that can
+   *  afford them runs the same rows. */
+  shadowTrialRunner?: () => Promise<ShadowTrialDrain>;
 }
 
 export const DEFAULT_EVOLUTION_CONFIG: EvolutionConfig = {

@@ -82,26 +82,12 @@ describe('runAutoShadowEval', () => {
       rt, task: 'hello', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('current', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0 },
     });
     expect(result.skipped).toBe(true);
     expect(result.reason).toBe('no_pending');
   });
 
-  test('skips when sampling roll misses', async () => {
-    const rt = await setup();
-    const result = await runAutoShadowEval({
-      rt, task: 'hello', currentOutput: LIVE_OUTPUT,
-      judge: makeJudge('current', LIVE_OUTPUT),
-      llmStream: noOpLlmStream,
-      config: { sampleRate: 0.5 },
-      random: () => 0.9, // > 0.5, skip
-    });
-    expect(result.skipped).toBe(true);
-    expect(result.reason).toBe('not_sampled');
-  });
-
-  test('runs + records evaluation on a sampled turn', async () => {
+  test('runs + records evaluation on a queued trial', async () => {
     const rt = await setup();
     const inner = makeJudge('pending', LIVE_OUTPUT);
     let judgeCalls = 0;
@@ -109,8 +95,7 @@ describe('runAutoShadowEval', () => {
       rt, task: 'compute 2+2', currentOutput: LIVE_OUTPUT,
       judge: async (prompt, schema) => { judgeCalls++; return inner(prompt, schema); },
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0, autoApply: false },
-      random: () => 0.0, // always sample
+      config: { autoApply: false },
     });
     expect(judgeCalls).toBe(2); // one call per presentation order
     expect(result.skipped).toBe(false);
@@ -128,7 +113,6 @@ describe('runAutoShadowEval', () => {
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0 },
       random: () => 0,
     });
     expect(result.decision).toBe('continue');
@@ -148,7 +132,7 @@ describe('runAutoShadowEval', () => {
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0, autoApply: true },
+      config: { autoApply: true },
       random: () => 0,
     });
     expect(result.decision).toBe('promote');
@@ -180,7 +164,7 @@ describe('runAutoShadowEval', () => {
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('current', LIVE_OUTPUT), // the regression
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0, autoApply: true },
+      config: { autoApply: true },
       random: () => 0,
     });
     expect(result.decision).toBe('rollback');
@@ -212,7 +196,6 @@ describe('runAutoShadowEval', () => {
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0 },
       random: () => 0,
     });
     expect(result.skipped).toBe(false);
@@ -241,7 +224,6 @@ describe('runAutoShadowEval', () => {
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0 },
       random: () => 0,
     });
     // Result is either pending_unreadable OR — if execMockExecutor parsed
@@ -271,7 +253,7 @@ describe('runAutoShadowEval', () => {
     // candidate attempting substantial work timed out and was rolled back for
     // running out of room rather than for being worse — the gate could only
     // promote scaffolds that finish fast and do little. Cost is bounded by
-    // sampleRate (evaluate fewer candidates), never by starving one arm.
+    // how many turns become trials at all, never by starving one arm.
     expect(DEFAULT_AUTO_JUDGE_CONFIG.scaffoldTimeoutMs).toBe(SCAFFOLD_TURN_TIMEOUT_MS);
   });
 });
@@ -292,18 +274,15 @@ describe('order-swapped double-win judging', () => {
     };
   }
 
-  /** Runs one sampled trial with an injected RNG. `orderRoll` decides the
-   *  presentation order of the FIRST call (< 0.5 → pending first). */
+  /** Runs one trial with an injected RNG. `orderRoll` decides the presentation
+   *  order of the FIRST call (< 0.5 → pending first). */
   async function runTrial(judge: StructuredJudgeFn, orderRoll: number) {
     const rt = await setup();
-    const rolls = [0, orderRoll]; // [sampling roll, order roll]
-    let i = 0;
     return runAutoShadowEval({
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge,
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0 },
-      random: () => rolls[i++] ?? 0,
+      random: () => orderRoll,
     });
   }
 
@@ -381,7 +360,6 @@ describe('order-swapped double-win judging', () => {
       rt, task: 't', currentOutput: LIVE_OUTPUT,
       judge: makeJudge('pending', LIVE_OUTPUT),
       llmStream: noOpLlmStream,
-      config: { sampleRate: 1.0 },
       random: () => 0,
     });
     const row = rt.storage.sql<{ winner: string; current_score: number; pending_score: number }>`

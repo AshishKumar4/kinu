@@ -207,9 +207,12 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     expect(getPendingScaffold(rt.storage.sql)?.version).toBe(2);
 
     // DEFAULT_SHADOW_CONFIG needs 5 decisive trials before it will promote.
+    // Each turn only QUEUES one — the rollout is cadence-lane work, so no turn
+    // here pays for a candidate run. runDueEvolution is that lane's entry (the
+    // scheduler daemon's tick), and end() never joins it: the queue is durable,
+    // so a host that exits mid-drain loses time and nothing else.
     for (let i = 0; i < 6; i++) await session.send(`turn ${i}`);
-    // The eval is detached so it never blocks a turn; end() joins it, which is
-    // exactly what keeps `proteus exec` from killing it on the way out.
+    await session.runDueEvolution();
     await session.end();
 
     // Resolved: nothing is pending, so maybeEvolveScaffold's guard
@@ -239,6 +242,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
     config.setAutoPromoteScaffold(true);
 
     for (let i = 0; i < 6; i++) await session.send(`turn ${i}`);
+    await session.runDueEvolution();
     await session.end();
 
     expect(getPendingScaffold(rt.storage.sql)).toBeNull();

@@ -19,22 +19,26 @@
 // settles, so there is nothing to detach and nothing to join. That clock is
 // the only evolution that ticks inside a single long autonomous turn.
 //
-//   TURN LANE — the outcome review (classifier → reflection/extraction/lesson)
-//     and the sampled scaffold shadow eval. Seconds to ~a minute, and the
-//     shadow eval is what resolves a pending scaffold, so it must not be
-//     killed. `settleEvolution()` JOINS this lane, bounded by
+//   TURN LANE — the outcome review (classifier → reflection/extraction/lesson).
+//     Seconds to ~a minute. `settleEvolution()` JOINS this lane, bounded by
 //     `settleTimeoutMs` (default DEFAULT_SETTLE_TIMEOUT_MS); whatever is still
 //     running when the bound expires is LOGGED by label and abandoned, never
 //     silently waited on forever.
 //
-//   CADENCE LANE — the whole session/lifetime chain (session reflection →
-//     scaffold proposal → replay eval → craft consolidation → lifetime MCTS).
-//     Minutes to tens of minutes. `settleEvolution()` does NOT join it. It is
-//     only ever STARTED by a host that can afford to finish it: a long-lived
-//     CLI session, the Durable Object (which holds itself open with keepAlive),
-//     or the local scheduler daemon. A `oneShot` host — one `proteus exec`
-//     process per task — never starts it at all, so it can never land on that
-//     process's wall clock.
+//   CADENCE LANE — the whole session/lifetime chain (queued scaffold trials →
+//     session reflection → scaffold proposal → replay eval → craft
+//     consolidation → lifetime MCTS). Minutes to tens of minutes.
+//     `settleEvolution()` does NOT join it. It is only ever STARTED by a host
+//     that can afford to finish it: a long-lived CLI session, the Durable
+//     Object (which holds itself open with keepAlive), or the local scheduler
+//     daemon. A `oneShot` host — one `proteus exec` process per task — never
+//     starts it at all, so it can never land on that process's wall clock.
+//     The scaffold shadow trial is here, not on the turn lane: a candidate
+//     rollout is a whole extra turn plus two judge calls, and charging that to
+//     the process that just answered the user is what "resolving the promotion
+//     gate inline" meant. The turn writes one queue row (scaffold/shadow.ts)
+//     and is done; the queue is durable, so a host that exits first loses
+//     nothing but time.
 //
 // What makes deferral safe is that the session window is DURABLE and is now
 // closed only AFTER the pass it fed settles (`SessionWindowStore.claim`). A
@@ -54,6 +58,7 @@ import type { ExecutionRecoveryRecord } from '../events/types.js';
 import type { PrepareStepContext, ProteusExtension } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
+import type { ClaimedWindow } from '../evolution/session-window.js';
 import type { RecoveryFinding } from '../evolution/recovery.js';
 import type { CompletedTurn } from '../evolution/types.js';
 import {
@@ -85,8 +90,8 @@ export type TurnContinuity = 'conversation' | 'independent_task';
 export const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
 /** How long `settleEvolution` waits for the turn lane before it gives up and
- *  says what it dropped. Sized for the worst honest turn-level case: one
- *  sampled shadow rollout (its own ≤60s cap) plus its two judge calls. */
+ *  says what it dropped. Sized for the worst honest turn-level case: the
+ *  outcome classifier plus the reflection/extraction calls it opens. */
 export const DEFAULT_SETTLE_TIMEOUT_MS = 120_000;
 
 export interface AgentOrchestratorDeps {
@@ -170,8 +175,15 @@ export class AgentOrchestrator {
    *  process about to exit can wait for it under a bound (settleEvolution). */
   private readonly inFlight = new Map<Promise<void>, string>();
   /** CADENCE LANE: the session-evolution pass this instance is running, or
-   *  null. At most one at a time — a second would re-run the same window. */
+   *  null. At most one at a time — a second would re-run the same window,
+   *  because `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
+  /** CADENCE LANE: the promotion gate's trial drain, or null. Its own latch,
+   *  separate from the window pass: two drains would run the same queued
+   *  trials twice and record each verdict twice, and folding it into the
+   *  window's latch would let a no-op drain hide a window that had just
+   *  filled. */
+  private shadowTrials: Promise<void> | null = null;
   private readonly settleTimeoutMs: number;
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
@@ -301,38 +313,75 @@ export class AgentOrchestrator {
   }
 
   /**
-   * The CADENCE LANE: run the session/lifetime evolution chain when the
-   * durable window has reached the interval, and close the window only once
-   * that chain has settled — so a host that dies mid-pass carries the same
-   * turns forward instead of consuming them for nothing.
+   * The CADENCE LANE: the promotion gate's queued shadow trials, then the
+   * session/lifetime evolution chain when the durable window has reached the
+   * interval — closing the window only once that chain has settled, so a host
+   * that dies mid-pass carries the same turns forward instead of consuming
+   * them for nothing.
    *
-   * Returns the running pass (resolved when nothing is due), so the hosts that
-   * OWN this work — the Durable Object under keepAlive and the local scheduler
+   * Returns the running pass, so the hosts that OWN this work — the Durable
+   * Object under keepAlive, a long-lived CLI session, and the local scheduler
    * daemon — can await it. `recordTurn` ignores the result: the pass runs
    * alongside the live conversation, never in front of it. Never rejects.
+   *
+   * The window is claimed BEFORE any await. `claim()` does not mark its rows —
+   * they are retired only by `settle()`, once the pass has actually run — so
+   * the one thing keeping a second pass off the same window is taking it in a
+   * single event-loop tick, exactly as the event drain takes its batch.
    */
   runDueSessionEvolution(): Promise<void> {
-    if (!this.deps.engine.enabled) return Promise.resolve();
     if (this.sessionEvolution) return this.sessionEvolution;
-    if (this.window.size() < this.reflectionInterval) return Promise.resolve();
-    const claimed = this.window.claim();
-    if (!claimed) return Promise.resolve();
-    const pass = this.deps.engine
-      .onSessionComplete({
+    const claimed = this.deps.engine.enabled && this.window.size() >= this.reflectionInterval
+      ? this.window.claim()
+      : null;
+    const pass = this.runCadencePass(claimed);
+    // Only a pass that CLAIMED a window latches. A drain-only pass must not,
+    // or it would hide a window that filled while it ran.
+    if (claimed) {
+      this.sessionEvolution = pass;
+      void pass.finally(() => { this.sessionEvolution = null; });
+    }
+    return pass;
+  }
+
+  /**
+   * The pass itself. Trials first, because the window pass may want to propose
+   * a new scaffold and the engine refuses to while one is still pending.
+   *
+   * They also run with auto-evolution OFF, which the window pass does not: a
+   * proposal a previous run already made has to stay resolvable or the
+   * workspace is stuck with it forever, and resolving one opens no new
+   * evolution state (whether a resolution is APPLIED is the operator's own
+   * `auto_promote_scaffold` switch). This is what the shadow eval did when it
+   * ran on the turn.
+   */
+  private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
+    await this.drainDueShadowTrials();
+    if (!claimed) return;
+    try {
+      await this.deps.engine.onSessionComplete({
         sessionId: `sess-${nanoid()}`,
         turns: claimed.turns,
         startedAt: claimed.startedAt,
         endedAt: Date.now(),
-      })
-      .catch((err) => { console.error('[proteus] Session evolution failed:', err); })
-      // Settled either way: retrying the same window forever on a persistent
-      // failure would be a livelock, and every step of the chain already
-      // absorbs its own errors. Carry-forward is for a host that DIED, which
-      // never reaches here at all.
-      .then(() => { claimed.settle(); })
-      .finally(() => { this.sessionEvolution = null; });
-    this.sessionEvolution = pass;
-    return pass;
+      });
+    } catch (err) {
+      console.error('[proteus] Session evolution failed:', err);
+    }
+    // Settled either way: retrying the same window forever on a persistent
+    // failure would be a livelock, and every step of the chain already absorbs
+    // its own errors. Carry-forward is for a host that DIED, which never
+    // reaches here at all.
+    claimed.settle();
+  }
+
+  /** The promotion gate's queued trials, at most one drain at a time. */
+  private drainDueShadowTrials(): Promise<void> {
+    if (this.shadowTrials) return this.shadowTrials;
+    const drain = this.deps.engine.runDueShadowTrials()
+      .finally(() => { this.shadowTrials = null; });
+    this.shadowTrials = drain;
+    return drain;
   }
 
   /**

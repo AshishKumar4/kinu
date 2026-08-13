@@ -44,7 +44,7 @@ import {
   // shadow rollout. Shared by every actor that carries an EvolutionEngine.
   scaffoldInferenceTransform, type ScaffoldRunOptions,
   createScaffoldLLMStream, createScaffoldCallTool, createScaffoldHistory,
-  runTurnShadowEval, createJsonJudge, type ScaffoldControl,
+  queueTurnShadowTrial, createJsonJudge, type ScaffoldControl,
   SCAFFOLD_TURN_TIMEOUT_MS,
   effortFor, type CompletedTurn, type TurnContinuity,
   // canonical tool + prompt surface — single source of truth
@@ -701,10 +701,11 @@ export abstract class ActorAgent extends Think<Env> {
    *
    * `orch.recordTurn` opens the outcome review + session cadence (which is
    * what eventually proposes a new scaffold), `settleEvolutionInBackground`
-   * holds the DO open for that detached work, and core's `runTurnShadowEval`
-   * scores + promotes whatever proposal is pending. Split across subclasses
-   * these drift: a facet that recorded turns but never settled or scored them
-   * proposes exactly one scaffold and then stalls forever on it.
+   * holds the DO open for that detached work, and core's
+   * `queueTurnShadowTrial` records this turn as evidence the promotion gate
+   * may draw on. Split across subclasses these drift: a facet that recorded
+   * turns but never settled or queued them proposes exactly one scaffold and
+   * then stalls forever on it.
    */
   protected settleCompletedTurn(
     turn: CompletedTurn,
@@ -715,32 +716,13 @@ export abstract class ActorAgent extends Think<Env> {
     // never blocked, and held open by the keepAlive heartbeat instead.
     this.orch.recordTurn(turn, this._turnContinuity);
     this.settleEvolutionInBackground();
-    // Read synchronously (before any await) so a later turn's stash can never
-    // bleed into this turn's shadow run.
-    const liveOpts = this._lastTurnOpts;
-    void runTurnShadowEval(this.scaffoldControl, {
+    // One row, no inference: the trial itself runs on the cadence lane. The
+    // turn's prepared messages are read synchronously (before any await) so a
+    // later turn's stash can never bleed into this one's replay.
+    queueTurnShadowTrial(this.scaffoldControl, {
       task: texts.userText,
       currentOutput: texts.assistantText,
-      // Replay the EXACT streamText opts the live answer ran with — full
-      // conversational context, system prompt, tool surface — so a pending
-      // that delegates to the default loop is judged on the scaffold delta
-      // alone. Costs one extra full-context inference: that IS the shadow run,
-      // already sampled.
-      ...(liveOpts ? { replayLiveTurn: () => streamText(liveOpts).toUIMessageStream() } : {}),
-    }).then((result) => {
-      // What a DO does with the verdict: a note in the durable event log, so
-      // the Exploration surface shows the comparison happened.
-      if (!result) return;
-      if (!result.skipped && result.evaluation && this._currentRunId) {
-        try {
-          this.eventRecorder.emit(this._currentRunId, {
-            type: 'memory_write',
-            path: 'shadow-eval',
-            bytes: result.evaluation.rationale.length,
-          });
-        } catch { /* nop */ }
-      }
-      if (result.applied) console.log(`[proteus] auto-judge applied: ${result.applied}`);
+      context: (this._lastTurnOpts?.messages ?? []) as ModelMessage[],
     });
   }
 
@@ -750,25 +732,29 @@ export abstract class ActorAgent extends Think<Env> {
    * itself is core's (evolution/control.ts); this is the whole of what being a
    * Durable Object contributes to it.
    *
-   * On the substrate rather than on the orchestrator because the shadow eval
-   * above runs for EVERY actor, and a facet with a control plane it cannot
-   * reach would score no proposal at all.
+   * On the substrate rather than on the orchestrator because the shadow trial
+   * queue above fills for EVERY actor, and a facet with a control plane it
+   * cannot reach would score no proposal at all.
    */
   protected get scaffoldControl(): ScaffoldControl {
     return {
       rt: this.rt,
       sql: this.boundSql,
       config: this.config,
-      surface: (task) => ({
+      surface: (task, context) => ({
         llmStream: this.makeScaffoldLLMStream(),
         // The same tool dispatcher the production chat path uses, so a
         // candidate runs with the real tool surface rather than the disabled
         // tool-call fallback that penalizes any tool-using candidate.
         callTool: this.makeScaffoldCallTool(),
         history: this.makeScaffoldHistory(),
+        // With a replay context this re-runs the trial turn's OWN conversation
+        // — the parity a delegating candidate needs to be judged on the
+        // scaffold delta rather than on a context handicap. Without one (a
+        // preview, a GEPA rollout) the task is all there is.
         defaultInference: () => streamText({
           model: this.getModel(),
-          messages: [{ role: 'user', content: task }],
+          messages: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
           tools: this.getRawTools(),
           stopWhen: stepCountIs(this.maxSteps),
           ...effortFor('scaffold_mutation'),

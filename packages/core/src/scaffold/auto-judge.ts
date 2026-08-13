@@ -1,18 +1,19 @@
 /**
- * Auto-judge shadow evaluation — closes the shadow-rollout loop.
+ * Auto-judge shadow evaluation — ONE trial, executed.
  *
- * Per chat turn (sampled to keep cost bounded), runs the pending scaffold
- * against the same task the user just sent, asks a judge LLM to compare
- * its output to the live response, and records the result. When trial
- * count reaches minTrials and the decision is conclusive, optionally
+ * Runs the pending scaffold against a recorded task, asks a judge LLM to
+ * compare its output to what the live turn answered, and records the result.
+ * When the accumulated trials make the promotion gate conclusive, optionally
  * auto-promotes or auto-rolls-back.
  *
  * Judging is order-swapped and double-called — see judgeTrialOrderSwapped for
  * the bias it removes and what it costs.
  *
- * Sampling: configurable via `sampleRate` (0.0..1.0). Default 0.25 — every
- * fourth turn. Use 1.0 for full coverage (one extra scaffold run plus two
- * judge calls per turn); use 0 to disable automatic evaluation (RPC-driven only).
+ * This is the expensive half of the loop — a whole candidate turn plus two
+ * judge calls — and it never runs on the turn that produced the task. Which
+ * turns become trials is decided (and sampled) where the turn ends
+ * (evolution/control.ts `queueTurnShadowTrial`); this runs what that queued,
+ * from the cadence lane.
  *
  * Cost discipline: only fires when a pending scaffold exists. Aborts
  * gracefully on judge LLM failure (logged, not recorded).
@@ -64,8 +65,6 @@ export function createStructuredJudge(llm: LLM): StructuredJudgeFn {
 }
 
 export interface AutoJudgeConfig {
-  /** Fraction of turns to evaluate (0..1). Default 0.25. */
-  sampleRate: number;
   /** Auto-apply promotion/rollback when decision is conclusive. The engine
    *  default is false (a bare runAutoShadowEval never mutates state); both
    *  backends pass the agent-level switch, which defaults ON
@@ -79,16 +78,15 @@ export interface AutoJudgeConfig {
 }
 
 export const DEFAULT_AUTO_JUDGE_CONFIG: AutoJudgeConfig = {
-  sampleRate: 0.25,
   autoApply: false,
   shadowConfig: DEFAULT_SHADOW_CONFIG,
   // The candidate runs under the SAME wall clock the live loop got. This was
   // 60s against a live 5 minutes, which does not measure scaffold quality: any
   // candidate that attempted substantial work timed out, scored 0, and was
   // rolled back for reasons unrelated to how good it was, so the gate could
-  // only ever promote scaffolds that finish fast and do little. Sampling
-  // (`sampleRate`) is where the cost is bounded — evaluate fewer candidates,
-  // not each one under a handicap.
+  // only ever promote scaffolds that finish fast and do little. Sampling — how
+  // many turns become trials at all — is where the cost is bounded, and it is
+  // applied when a trial is QUEUED, not when it runs.
   scaffoldTimeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
 };
 
@@ -126,14 +124,14 @@ export interface RunAutoShadowEvalOpts {
    *  whole point is context discipline would lose every trial. */
   history?: Parameters<typeof runScaffold>[0]['history'];
   config?: Partial<AutoJudgeConfig>;
-  /** Deterministic randomness override (used by tests). Drives both the
-   *  sampling roll and the judge's presentation order. Default Math.random. */
+  /** Deterministic randomness override (used by tests). Drives the judge's
+   *  presentation order. Default Math.random. */
   random?: () => number;
 }
 
 export interface AutoShadowEvalResult {
   readonly skipped: boolean;
-  readonly reason?: 'no_pending' | 'not_sampled' | 'pending_unreadable';
+  readonly reason?: 'no_pending' | 'pending_unreadable';
   readonly evaluation?: {
     currentScore: number;
     pendingScore: number;
@@ -145,20 +143,15 @@ export interface AutoShadowEvalResult {
 }
 
 /**
- * Run one round of auto-judge shadow evaluation.
- *
- * Idempotent w.r.t. sampling — the caller is expected to invoke fire-and-
- * forget; whether work happens depends on sampleRate + presence of a pending
- * scaffold.
+ * Execute one shadow trial.
  *
  * Sequence:
  *   1. Get pending scaffold (skip if none)
- *   2. Decide to sample (skip if not in the sample)
- *   3. Read pending code (skip if file missing — shouldn't happen)
- *   4. Run pending via runScaffold against the same task
- *   5. Judge the two outputs with the order-swapped double-win rule
- *   6. Record via recordShadowEvaluation
- *   7. If trial count >= minTrials and config.autoApply, applyPromotionDecision
+ *   2. Read pending code (skip if file missing — shouldn't happen)
+ *   3. Run pending via runScaffold against the same task
+ *   4. Judge the two outputs with the order-swapped double-win rule
+ *   5. Record via recordShadowEvaluation
+ *   6. If the gate is now conclusive and config.autoApply, applyPromotionDecision
  */
 export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<AutoShadowEvalResult> {
   const config: AutoJudgeConfig = { ...DEFAULT_AUTO_JUDGE_CONFIG, ...opts.config };
@@ -166,10 +159,6 @@ export async function runAutoShadowEval(opts: RunAutoShadowEvalOpts): Promise<Au
 
   const pending = getPendingScaffold(opts.rt.storage.sql);
   if (!pending) return { skipped: true, reason: 'no_pending' };
-
-  if (rng() >= config.sampleRate) {
-    return { skipped: true, reason: 'not_sampled' };
-  }
 
   const pendingCode = await readScaffoldVersion(opts.rt, pending.version);
   if (!pendingCode) return { skipped: true, reason: 'pending_unreadable' };

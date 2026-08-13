@@ -62,6 +62,7 @@ export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord, type TurnUsage,
+  type ShadowTrialDrain,
 } from './evolution/types.js';
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
@@ -676,7 +677,18 @@ export {
   decidePromotion,
   applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG,
+  // The trial queue — what a turn contributes to the promotion gate before
+  // anything expensive runs, kept out of scaffold_evaluations so unrun trials
+  // can never walk the calibrated ladder.
+  queueShadowTrial,
+  listQueuedShadowTrials,
+  countQueuedShadowTrials,
+  dropQueuedShadowTrial,
+  purgeQueuedShadowTrials,
+  MAX_QUEUED_SHADOW_TRIALS,
+  SHADOW_TRIAL_CONTEXT_CHARS,
   type PendingScaffold,
+  type QueuedShadowTrial,
   type ShadowEvaluationRow,
   type ShadowVerdict,
   type ShadowVerdictTrial,
@@ -685,10 +697,10 @@ export {
   type JudgeFn,
   type ShadowTrialVerdict,
 } from './scaffold/shadow.js';
-// auto-judge shadow evaluation — sampled-per-turn closure of the
-// shadow-rollout loop. Picks up pending scaffolds, runs them against the
-// same task, asks a judge LLM to compare, records the result, optionally
-// auto-applies promotion/rollback when minTrials is reached.
+// auto-judge shadow evaluation — ONE queued trial, executed: runs the pending
+// scaffold against the recorded task, asks a judge LLM to compare, records the
+// result, optionally auto-applies promotion/rollback once the gate is
+// conclusive.
 export {
   runAutoShadowEval,
   createStructuredJudge,
@@ -1067,10 +1079,11 @@ export type {
 // from the CLI at all; both backends now call these.
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
-  runScaffoldOnce, runTurnShadowEval,
+  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, runQueuedShadowTrials,
+  runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldSurface, type ScaffoldVersionView, type ShadowStatus,
+  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
+  type ScaffoldVersionView, type ShadowStatus, type ShadowTrialQueueOutcome,
 } from './evolution/control.js';
 export {
   runGepa, runScaffoldGepa,

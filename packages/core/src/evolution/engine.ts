@@ -629,6 +629,30 @@ export class EvolutionEngine {
     this.emitChangelogDigest(session.startedAt);
   }
 
+  /**
+   * The expensive half of the shadow-rollout loop, on the lane that can afford
+   * it: run whatever trials the turns queued for the pending scaffold.
+   *
+   * Due whenever a capable host asks — NOT on the session-reflection window,
+   * which is a different clock. Gating it there would leave a candidate
+   * unresolved through every window that never closed, and `maybeEvolveScaffold`
+   * refuses to propose while one is pending, so the whole loop would stall on
+   * it. AgentOrchestrator calls this at the head of its cadence pass, before
+   * the window pass that may want to propose.
+   *
+   * Absorbs its own failures: a trial that cannot be scored must not stop the
+   * pass it rides on. Not gated on `enabled` — see AgentOrchestrator's cadence
+   * pass for why a proposal must stay resolvable with auto-evolution off.
+   */
+  async runDueShadowTrials(): Promise<void> {
+    if (!this.config.shadowTrialRunner) return;
+    try {
+      await this.config.shadowTrialRunner();
+    } catch (err) {
+      console.warn('[proteus] shadow trial drain failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
   /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
     let entries;

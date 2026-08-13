@@ -14,8 +14,17 @@
  *     (default 0.6) → promote
  *   - else (in between → keep observing, extend trial window)
  *
+ * A trial is EXPENSIVE — a whole candidate turn plus two judge calls — so it
+ * never runs on the turn that sampled it. The turn writes one row into
+ * `scaffold_trial_queue` and returns; the cadence lane runs the queue later
+ * (evolution/control.ts `runQueuedShadowTrials`). A queued trial is evidence
+ * that does not exist yet: it is deliberately in its own table, because
+ * counting it in `scaffold_evaluations` would inflate `trialsSoFar` and walk
+ * the calibrated ladder below on trials nobody ran.
+ *
  * Schema:
- *   scaffold_evaluations         — one row per shadow turn
+ *   scaffold_evaluations         — one row per EXECUTED trial
+ *   scaffold_trial_queue         — one row per trial awaiting execution
  *   scaffold_versions.status     — 'current' | 'pending' | 'rolled_back' | 'historical'
  *
  * Auto-promotion is ON by default at the agent level (agent_config
@@ -25,6 +34,7 @@
  * 'false' to require manual promotion via the RPC instead.
  */
 
+import type { ModelMessage } from 'ai';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { nowMs } from '../utils/date.js';
@@ -175,8 +185,154 @@ export function initShadowTables(execRaw: RawSqlExec): void {
     evaluated_at INTEGER NOT NULL
   )`);
   execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_eval_pending ON scaffold_evaluations(pending_version)`);
+  execRaw(`CREATE TABLE IF NOT EXISTS scaffold_trial_queue (
+    id TEXT PRIMARY KEY,
+    pending_version INTEGER NOT NULL,
+    task TEXT NOT NULL,
+    current_output TEXT NOT NULL,
+    context TEXT NOT NULL,
+    queued_at INTEGER NOT NULL
+  )`);
+  execRaw(`CREATE INDEX IF NOT EXISTS idx_scaffold_trial_queue_pending ON scaffold_trial_queue(pending_version)`);
   // scaffold_versions.status is now created natively by initScaffoldTables
   // (in scaffold/schemas.ts); no ALTER fallback needed here.
+}
+
+// ── The trial queue: what a turn contributes, before anything runs ──────────
+
+/** A trial the turn sampled and nothing has executed yet. */
+export interface QueuedShadowTrial {
+  readonly id: string;
+  readonly pendingVersion: number;
+  /** The user's task, WHOLE — the candidate answers the same question the live
+   *  turn answered, and the evidence budget is applied once, at judging time. */
+  readonly task: string;
+  /** What the live turn actually answered — the trial's comparand. */
+  readonly currentOutput: string;
+  /** The conversation as the live turn's inference saw it, replayed as the
+   *  candidate's `host.defaultInference`. Without it a delegating candidate
+   *  answers a context-dependent task from the task text alone and loses trials
+   *  it should tie — the structural handicap the shadow-parity fix removed, and
+   *  the only part of the live turn an offline trial cannot re-derive. Empty
+   *  when the host held none; the surface's own default loop stands in. */
+  readonly context: readonly ModelMessage[];
+  readonly queuedAt: number;
+}
+
+/**
+ * Queued trials one pending version may accumulate.
+ *
+ * The queue only buffers between cadence passes, so depth is normally 1-2. The
+ * ceiling exists for the host that never drains — a one-shot `proteus exec`
+ * process, which by the evolution exit contract starts no cadence work at all
+ * — and is set at the trial ceiling itself: past `maxTrials` there is already
+ * more queued work than the gate below can consume.
+ */
+export const MAX_QUEUED_SHADOW_TRIALS = DEFAULT_SHADOW_CONFIG.maxTrials;
+
+/**
+ * Characters of serialized turn context one queued trial carries.
+ *
+ * A live replay held the whole prepared message list in memory; a queued one
+ * has to store it, and a workspace can hold {@link MAX_QUEUED_SHADOW_TRIALS}
+ * of them at once. The budget keeps the TAIL — a trial's own task is the last
+ * message, and what a context-dependent task needs is what was said near it —
+ * and is bounded well inside a single SQLite row.
+ */
+export const SHADOW_TRIAL_CONTEXT_CHARS = 64_000;
+
+/**
+ * The tail of `messages` that fits the context budget, starting at a user
+ * message. Trimming mid-exchange would leave a tool result whose call is gone,
+ * which providers reject outright — a replay that 400s is worth less than a
+ * shorter one.
+ */
+function trimTrialContext(messages: readonly ModelMessage[]): ModelMessage[] {
+  const kept: ModelMessage[] = [];
+  let spent = 0;
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const size = JSON.stringify(messages[i]).length;
+    if (spent + size > SHADOW_TRIAL_CONTEXT_CHARS && kept.length > 0) break;
+    spent += size;
+    kept.unshift(messages[i]);
+  }
+  while (kept.length > 0 && kept[0].role !== 'user') kept.shift();
+  return kept;
+}
+
+/**
+ * Record one trial for later execution. Returns what happened, so the caller
+ * can report an honest reason rather than a silent no-op.
+ */
+export function queueShadowTrial(
+  sql: SqlExecutor,
+  args: {
+    pendingVersion: number;
+    task: string;
+    currentOutput: string;
+    context: readonly ModelMessage[];
+    now?: number;
+  },
+): 'queued' | 'queue_full' {
+  if (countQueuedShadowTrials(sql, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
+  sql`INSERT INTO scaffold_trial_queue (id, pending_version, task, current_output, context, queued_at)
+      VALUES (${`trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
+              ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})`;
+  return 'queued';
+}
+
+/** Trials awaiting execution for a version, oldest first. */
+export function listQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number): QueuedShadowTrial[] {
+  type Row = {
+    id: string; pending_version: number; task: string; current_output: string;
+    context: string; queued_at: number;
+  };
+  const rows = sql<Row>`
+    SELECT id, pending_version, task, current_output, context, queued_at
+    FROM scaffold_trial_queue WHERE pending_version = ${pendingVersion}
+    ORDER BY queued_at ASC`;
+  return rows.map((r) => ({
+    id: r.id,
+    pendingVersion: r.pending_version,
+    task: r.task,
+    currentOutput: r.current_output,
+    context: parseTrialContext(r.context),
+    queuedAt: r.queued_at,
+  }));
+}
+
+/** A context row that cannot be read back is a replay we no longer have, not a
+ *  trial we should refuse to run: the candidate falls back to the surface's own
+ *  default loop, exactly as it does for a host that held no context. */
+function parseTrialContext(raw: string): ModelMessage[] {
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed as ModelMessage[] : [];
+  } catch {
+    return [];
+  }
+}
+
+/** How many trials are queued but not yet run — the evidence a pending version
+ *  is owed and does not have. */
+export function countQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number): number {
+  const rows = sql<{ n: number }>`
+    SELECT COUNT(*) AS n FROM scaffold_trial_queue WHERE pending_version = ${pendingVersion}`;
+  return rows[0]?.n ?? 0;
+}
+
+/** Trial executed (or thrown away) — the queue row's job is done. */
+export function dropQueuedShadowTrial(sql: SqlExecutor, id: string): void {
+  sql`DELETE FROM scaffold_trial_queue WHERE id = ${id}`;
+}
+
+/** Discard every queued trial that is not for `keepVersion`. A trial is
+ *  evidence about ONE candidate: once that candidate is promoted or rolled
+ *  back, running it would score a version no longer under trial. Pass null to
+ *  clear the queue entirely. */
+export function purgeQueuedShadowTrials(sql: SqlExecutor, keepVersion: number | null): void {
+  if (keepVersion === null) sql`DELETE FROM scaffold_trial_queue`;
+  else sql`DELETE FROM scaffold_trial_queue WHERE pending_version != ${keepVersion}`;
 }
 
 /**

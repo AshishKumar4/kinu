@@ -7,6 +7,7 @@ import {
   bootstrapScaffold,
   createParentExecutor, createParentWorkspaceVfs,
   initWorkspaceSchema,
+  runQueuedShadowTrials,
   seedSoul,
   snapshotCompletedTurn,
   type CompletedTurn,
@@ -76,7 +77,15 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   protected get engine(): EvolutionEngine {
-    if (!this._engine) this._engine = new EvolutionEngine(this.rt, { enabled: true });
+    if (!this._engine) {
+      this._engine = new EvolutionEngine(this.rt, {
+        enabled: true,
+        // A subordinate queues shadow trials like any actor, so it must also
+        // be able to run them; without this its pending scaffold would sit
+        // unresolved forever.
+        shadowTrialRunner: () => runQueuedShadowTrials(this.scaffoldControl),
+      });
+    }
     return this._engine;
   }
 

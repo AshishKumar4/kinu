@@ -75,9 +75,10 @@ import {
   // supplies the local surface they run against.
   applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listGepaRuns, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldGepaOptimization, runScaffoldOnce,
-  runTurnShadowEval,
+  queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type GepaRunSummary, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldVersionView, type ShadowStatus,
+  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldVersionView,
+  type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
   revertChangelogEntryById, type ChangelogRevertResult,
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet,
@@ -400,6 +401,21 @@ export class LocalAgentSession implements BackendHost {
       // machine and can block on shell approvals — so CLI replay measures the
       // prompt/model config, not tool trajectories.
       replayTaskRunner: (task) => this.runReplayTask(task),
+      // The promotion gate's evidence, on the cadence lane. A resolved gate
+      // changes the live scaffold under us, so the session's model-bound state
+      // is dropped and the decision is surfaced like any other self-change.
+      shadowTrialRunner: async () => {
+        const drain = await runQueuedShadowTrials(this.scaffoldControl);
+        if (drain.applied) {
+          this.emit({
+            type: 'evolution',
+            event: drain.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+            message: `Shadow eval ${drain.applied}d the pending scaffold after ${drain.trials} trial(s)`,
+          });
+          this.invalidateModelState();
+        }
+        return drain;
+      },
     });
     this.engine.onEvent((e) => this.emit({ type: 'evolution', event: e.type, message: e.message }));
 
@@ -1639,32 +1655,16 @@ export class LocalAgentSession implements BackendHost {
       this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
       await this.orch.completeTurn(turn, this.turnContinuity);
-      // Sampled auto-judge shadow rollout — core's control plane, the same
-      // driver the cloud backend runs. Tracked rather than fire-and-forget: a
-      // `proteus exec` process exits the moment the turn ends, and the
-      // evaluation that resolves a pending scaffold must not die with it.
-      this.orch.track(
-        runTurnShadowEval(this.scaffoldControl, {
-          task: item.text,
-          currentOutput: fullText,
-          // A candidate that delegates is judged on the scaffold delta alone,
-          // so it replays the live turn's OWN inference — same system prompt,
-          // same tool surface, same conversational history, same step budget.
-          replayLiveTurn: () => runChat(liveTurnOpts),
-        }).then((result) => {
-          // What a local session does with the verdict: surface it, and drop
-          // the model-bound state so the next turn's toolset is rebuilt over
-          // whichever scaffold now stands.
-          if (!result?.applied) return;
-          this.emit({
-            type: 'evolution',
-            event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-            message: `Shadow eval ${result.applied}d the pending scaffold`,
-          });
-          this.invalidateModelState();
-        }),
-        'Scaffold shadow eval',
-      );
+      // The turn's contribution to the promotion gate: one row recording the
+      // task, the answer, and the conversation it was asked in. The rollout it
+      // pays for runs on the cadence lane, which is why this is not tracked —
+      // a `proteus exec` process no longer waits out a candidate turn before
+      // it can exit.
+      queueTurnShadowTrial(this.scaffoldControl, {
+        task: item.text,
+        currentOutput: fullText,
+        context: liveTurnOpts.history,
+      });
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1822,13 +1822,13 @@ export class LocalAgentSession implements BackendHost {
       rt: this.rt,
       sql: this.rt.storage.sql,
       config: this.config,
-      surface: (task) => {
+      surface: (task, context) => {
         const model = this.ensureModelState();
         return {
           llmStream: this.makeScaffoldLLMStream(model, this.tools),
           callTool: this.makeScaffoldCallTool(this.tools),
           history: this.makeScaffoldHistory(),
-          defaultInference: () => this.scaffoldDefaultInference(task, model),
+          defaultInference: () => this.scaffoldDefaultInference(task, model, context),
         };
       },
       model: () => this.ensureModelState(),
@@ -1838,8 +1838,13 @@ export class LocalAgentSession implements BackendHost {
 
   /** `host.defaultInference()` for a scaffold run outside a live turn — the
    *  ordinary local loop over this session's whole tool surface, which is what
-   *  the cloud backend's streamText bridge gives a candidate there. */
-  private scaffoldDefaultInference(task: string, model: LanguageModel): AsyncIterable<unknown> {
+   *  the cloud backend's streamText bridge gives a candidate there. `context`
+   *  is the conversation a queued trial's turn was asked in, replayed so a
+   *  delegating candidate is judged on the scaffold delta rather than on a
+   *  handicap; without one the task is all there is. */
+  private scaffoldDefaultInference(
+    task: string, model: LanguageModel, context?: ScaffoldReplayContext,
+  ): AsyncIterable<unknown> {
     return runChat({
       model,
       modelContext: { id: this.effectiveModelSpec(), contextWindow: this.sessionContextWindow() },
@@ -1849,7 +1854,7 @@ export class LocalAgentSession implements BackendHost {
         model: { id: this.effectiveModelSpec() },
         currentDate: currentDateForPrompt(),
       }),
-      history: [{ role: 'user', content: task }],
+      history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       tools: this.tools,
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
     });
