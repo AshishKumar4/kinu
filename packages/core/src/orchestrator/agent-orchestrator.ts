@@ -119,7 +119,8 @@ export class AgentOrchestrator {
    *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
    *  time anything reaches it: its next step. Producers state intent only. */
   readonly signals: SignalDelivery;
-  /** Per-turn mechanical steering — repeat, repeated failure, long turn.
+  /** Per-turn mechanical steering — repeat, repeated failure, no progress,
+   *  long turn.
    *  Observed through {@link turnExtension} and handed to closeTurnRun for the
    *  durable `turn_steering` row. */
   readonly steering = new TurnSteering();
@@ -143,7 +144,10 @@ export class AgentOrchestrator {
       if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
     },
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
-      const steer = this.steering.steerFor(ctx.stepNumber);
+      // The turn's file ledger is the other half of the progress trigger's
+      // evidence — what a codemode program actually changed, which no
+      // tool-call signature can show. Both live on this object, per turn.
+      const steer = this.steering.steerFor(ctx.stepNumber, this.acc.files.progress);
       return this.signals.prepareStep(ctx, steer ? [steer] : []);
     },
   };

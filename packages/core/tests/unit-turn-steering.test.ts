@@ -15,6 +15,7 @@ import { z } from 'zod';
 import {
   AgentOrchestrator, TurnSteering, isFailingToolResult, runChat,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
+  STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
   TURN_STEERING_HEADER, ExtensionHost, type BackendHost,
 } from '../src/index.js';
 import type { EventLog } from '../src/events/hub/log.js';
@@ -280,6 +281,164 @@ describe('repeated-call trigger', () => {
     orch.beginTurn(Date.now());
     expect(orch.steering.snapshot()).toBeNull();
     expect(injected(step(orch, 0, [user('next')]))).toEqual([]);
+  });
+});
+
+// A stalled step is the SAME call answered DIFFERENTLY every time — a
+// `git status`, a `curl /health`, a `make` whose only change is a timestamp.
+// The identical-output detector cannot see any of those, which is exactly why
+// this trigger exists.
+describe('no-progress trigger', () => {
+  test('a turn that keeps succeeding and getting nowhere is told so', () => {
+    const orch = newTurn();
+    // The first call is new ground; from then on the frontier never moves.
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean 0', success: true,
+    });
+    let steered: string[] = [];
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
+      steered = injected(step(orch, s, [user('ship it')]));
+      // Nothing new happens between boundaries: the same command, a different
+      // answer each time (so the repeat detector stays silent).
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
+      });
+      if (s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER) expect(steered).toEqual([]);
+    }
+    steered = injected(step(orch, STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, [user('ship it')]));
+    expect(steered).toHaveLength(1);
+    expect(steered[0]).toContain('steps in a row with nothing new');
+    expect(steered[0]).toContain('Steps that succeed are not the same as steps that get somewhere');
+    expect(steered[0]).toContain('hint, not an instruction');
+    expect(orch.steering.snapshot()).toEqual({
+      trigger: 'no_progress', step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, converted: false,
+    });
+  });
+
+  test('a turn making new calls is never steered by this trigger', () => {
+    // Information-gathering is work. A trigger that fired on a long read-only
+    // investigation would be spam, and the owner's rule is no spam. (Kept
+    // under the long-turn threshold so THAT steer is not what is measured.)
+    const orch = newTurn();
+    for (let s = 1; s < LONG_TURN_STEPS_BEFORE_STEER; s++) {
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
+      });
+      expect(injected(step(orch, s, [user('q')]))).toEqual([]);
+    }
+    expect(orch.steering.snapshot()).toBeNull();
+  });
+
+  test('a file touched for the first time is progress, and resets the stall', () => {
+    // The half no tool-call signature can show: an `execute_tools` program is
+    // ONE call, and what it did is only visible in the shared file ledger.
+    // Two near-threshold stalls with one new file between them: twice the
+    // steps it takes to fire, and it does not, because the turn moved.
+    const orch = newTurn();
+    let boundary = 0;
+    let answer = 0;
+    const idle = () => orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'ls' }, result: `listing ${++answer}`, success: true,
+    });
+    const runStall = () => {
+      for (let i = 0; i < STEPS_WITHOUT_PROGRESS_BEFORE_STEER - 1; i++) {
+        expect(injected(step(orch, ++boundary, [user('q')]))).toEqual([]);
+        idle();
+      }
+    };
+
+    idle();
+    runStall();
+    orch.acc.files.observeWhole('/src/server.ts', 'export const x = 1;\n');
+    runStall();
+
+    expect(boundary).toBeGreaterThan(STEPS_WITHOUT_PROGRESS_BEFORE_STEER);
+    expect(orch.steering.snapshot()).toBeNull();
+  });
+
+  test('an edit that landed is progress; one that missed is not', () => {
+    // `sed -i` exits 0 whether or not it matched — a failed edit is a step
+    // that spent and moved nothing, and the ledger is what can tell.
+    const orch = newTurn();
+    const missed = newTurn();
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
+      for (const o of [orch, missed]) {
+        o.turnExtension.onToolResult!({
+          toolName: 'execute_tools', args: { code: 'edit()' }, result: `attempt ${s}`, success: true,
+        });
+      }
+      if (s === 3) {
+        orch.acc.files.recordEdit('/a.ts', null);
+        missed.acc.files.recordEdit('/a.ts', 'ambiguous');
+      }
+      injected(step(orch, s, [user('q')]));
+      injected(step(missed, s, [user('q')]));
+    }
+    // Both turns re-issue an identical-looking call, so neither trips the
+    // repeat detector on args alone; only the landed edit is progress.
+    expect(orch.steering.snapshot()).toBeNull();
+    expect(missed.steering.snapshot()?.trigger).toBe('no_progress');
+  });
+
+  test('the identical-call steer still outranks it — it can name what repeats', () => {
+    const orch = newTurn();
+    repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) step(orch, s, [user('q')]);
+    expect(orch.steering.snapshot()?.trigger).toBe('repeated_call');
+  });
+
+  test('…and it outranks the long-turn steer, because it can say why', () => {
+    // Both would be true at once on a long circling turn. The one that names
+    // the problem is worth more than the one that names the length — and it
+    // gets there first, at half the step count.
+    const orch = newTurn();
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
+    });
+    let fired: string[] = [];
+    for (let s = 1; s <= LONG_TURN_STEPS_BEFORE_STEER + 1 && fired.length === 0; s++) {
+      fired = injected(step(orch, s, [user('q')]));
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
+      });
+    }
+    expect(orch.steering.snapshot()?.trigger).toBe('no_progress');
+    expect(orch.steering.snapshot()!.step).toBeLessThan(LONG_TURN_STEPS_BEFORE_STEER);
+  });
+
+  test('converted means the turn went somewhere it had not been', () => {
+    const orch = newTurn();
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
+    });
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
+      step(orch, s, [user('q')]);
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
+      });
+    }
+    expect(orch.steering.snapshot()).toMatchObject({ trigger: 'no_progress', converted: false });
+
+    // Re-covering the same ground is not a conversion…
+    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git status' } });
+    expect(orch.steering.snapshot()?.converted).toBe(false);
+
+    // …reaching for something the turn has not done is.
+    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git log -1' } });
+    expect(orch.steering.snapshot()?.converted).toBe(true);
+  });
+
+  test('a new turn starts with a clean stall counter', () => {
+    const orch = newTurn();
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
+    });
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) step(orch, s, [user('q')]);
+    orch.beginTurn(Date.now());
+    expect(orch.steering.snapshot()).toBeNull();
+    for (let s = 0; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
+      expect(injected(step(orch, s, [user('next')]))).toEqual([]);
+    }
   });
 });
 

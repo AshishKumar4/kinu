@@ -190,6 +190,20 @@ export class TurnFileLedger {
   get active(): boolean {
     return this.attempts > 0;
   }
+
+  /**
+   * How far the turn's file work has actually got: distinct paths it has
+   * touched at all, and edits that changed something.
+   *
+   * Both are monotone within a turn, which is the whole point — the progress
+   * trigger (orchestrator/turn-steering.ts) reads them once per step and an
+   * INCREASE is literally "the turn moved". Exposed as a pair rather than
+   * folded into `snapshot()` because that snapshot is the durable `file_edit`
+   * row's shape and must not grow fields nothing writes.
+   */
+  get progress(): { filesTouched: number; editsApplied: number } {
+    return { filesTouched: this.seenPaths.size, editsApplied: this.applied };
+  }
 }
 
 /** Lines in a file, counting a trailing newline as ending the last line rather

@@ -448,6 +448,12 @@ export function useProteus(target?: string | ProteusActorAddress) {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
         } else if (msg.type === "work_cancelled") {
           refreshBackgroundJobs();
+        } else if (msg.type === "pending_actions_changed") {
+          // A command was parked on the owner, or they decided one. The queue
+          // is polled, so the server pushes the fact rather than the rows —
+          // one re-read keeps the tab badge and the queue the same answer,
+          // and updates every open tab, not just the one that clicked.
+          refreshPendingActions();
         } else if (msg.type === "branch_status" && typeof msg.branchId === "string") {
           setBranchRuns((prev) => [
             ...prev.filter((b) => b.branchId !== msg.branchId),
@@ -478,7 +484,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
     };
     agent.addEventListener("message", handler as EventListener);
     return () => agent.removeEventListener("message", handler as EventListener);
-  }, [agent, refreshBackgroundJobs, setMctsTreeFromRows, isSubordinate]);
+  }, [agent, refreshBackgroundJobs, refreshPendingActions, setMctsTreeFromRows, isSubordinate]);
 
   const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
     setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic

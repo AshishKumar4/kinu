@@ -25,7 +25,8 @@ import { SIGNAL_ID_METADATA_KEY, type SignalCardEvent, type SignalCardState } fr
 /** A turn the backend enqueued, never typed by the operator. */
 export type ProgrammaticTurn =
   | { kind: "event_drain" }
-  | { kind: "background_job"; jobKind: string; status: string };
+  | { kind: "background_job"; jobKind: string; status: string }
+  | { kind: "deferred_approval"; decision: string; count: number };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -39,10 +40,15 @@ function str(source: Record<string, unknown>, key: string, fallback: string): st
 /**
  * The provenance of a message, or null when the operator really did type it.
  *
- * Only the two events that arrive *on the agent's behalf* get a card. The
- * other programmatic turns (`mcp` — the operator talking through an MCP
- * client, `take_pick`, `overflow_retry`) are the operator's own words or a
- * mechanical re-send of them, so they keep the user bubble.
+ * Only the events that arrive *on the agent's behalf* get a card. The other
+ * programmatic turns (`mcp` — the operator talking through an MCP client,
+ * `take_pick`, `overflow_retry`) are the operator's own words or a mechanical
+ * re-send of them, so they keep the user bubble.
+ *
+ * `deferred_approval` is the odd one: the OWNER did decide it, in the queue.
+ * But the words in the turn are the harness's, not theirs, and rendering them
+ * as something the owner typed would be the same misattribution the other
+ * cards exist to prevent.
  */
 export function classifyProgrammaticTurn(metadata: unknown): ProgrammaticTurn | null {
   if (!isRecord(metadata)) return null;
@@ -54,6 +60,12 @@ export function classifyProgrammaticTurn(metadata: unknown): ProgrammaticTurn | 
         kind: "background_job",
         jobKind: str(metadata, "kind", "task"),
         status: str(metadata, "status", "completed"),
+      };
+    case "deferred_approval":
+      return {
+        kind: "deferred_approval",
+        decision: str(metadata, "decision", "decided"),
+        count: typeof metadata.count === "number" ? metadata.count : 1,
       };
     default:
       return null;

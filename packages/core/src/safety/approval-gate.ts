@@ -278,10 +278,14 @@ export interface ShellApprovalPolicy {
   /** Current standing mode. A live read (e.g. straight off agent_config). */
   mode(): ShellApprovalMode;
   /** The interactive channel consulted for a 'gate' decision under 'strict'.
-   *  Omitted, or resolving null, means nobody is listening — 'strict' keeps
-   *  its explanatory refusal. A live read too: a surface may attach/detach
-   *  the channel after the boundary was wrapped. */
+   *  Omitted, or resolving null, means nobody is listening — 'strict' falls
+   *  through to `deferrals` if one is wired, and otherwise keeps its
+   *  explanatory refusal. A live read too: a surface may attach/detach the
+   *  channel after the boundary was wrapped. */
   requestApproval?(req: ShellApprovalRequest): Promise<ShellApprovalOutcome | null>;
+  /** Where a 'gate' decision goes when nobody answered — parked on the owner
+   *  rather than refused on their behalf. See {@link DeferredApprovalChannel}. */
+  deferrals?: DeferredApprovalChannel;
 }
 
 /** The conservative default every gated boundary falls back to when no
@@ -289,6 +293,25 @@ export interface ShellApprovalPolicy {
  *  refused with the explanatory message, never silently allowed. Matches
  *  what `run` always defaulted to before this policy existed. */
 export const STRICT_NO_CHANNEL_POLICY: ShellApprovalPolicy = { mode: () => 'strict' };
+
+/**
+ * What the gate does with a 'gate' decision nobody is around to answer:
+ * park it on the owner instead of refusing on their behalf.
+ *
+ * The whole vocabulary of parking — ids, durable rows, the words the model
+ * reads, the wake when the owner decides — belongs to
+ * safety/deferred-approval.ts. What crosses into THIS file is one verb with
+ * two answers, because this file is a layergate subject source and stays
+ * import-free (see {@link ShellApprovalMode}); a `DeferredApproval` type here
+ * would drag the queue's whole import closure into the safety-gate layer.
+ *
+ * `run: true` is the only answer that lets the command through, and by the
+ * time it is returned the owner's grant is already spent — so one approval
+ * can never authorise two executions.
+ */
+export interface DeferredApprovalChannel {
+  park(req: ShellApprovalRequest): { readonly run: true } | { readonly run: false; readonly message: string };
+}
 
 /**
  * Wrap ANY exec-shaped function — a `Shell.exec`, an `ExecutorProvider`
@@ -332,12 +355,26 @@ export function gateExec<R>(
           ? await policy.requestApproval({ command: cmd, review })
           : null;
         if (outcome === null) {
-          return denyResult(
-            `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
-            `or change the shell approval mode in agent settings.\n${formatApproval(review)}`,
-          );
-        }
-        if (!approvalGrants(outcome)) {
+          // Nobody decided. Under 'strict' that is an ABSENCE, not a refusal:
+          // if a deferral queue is wired, the action is parked on the owner
+          // and the model is told exactly that — never that it ran, and never
+          // that it was denied. 'deny_all' skips this: the owner's standing
+          // answer is already no, so there is nothing to park.
+          // The queue is consulted only here, after the interactive channel
+          // has declined to decide: when a human IS on the channel their
+          // answer is the better one, and replaying a grant they left in the
+          // queue hours ago behind their back would be worse.
+          const parked = mode === 'strict' ? policy.deferrals?.park({ command: cmd, review }) : undefined;
+          if (parked && !parked.run) return denyResult(parked.message);
+          if (!parked) {
+            return denyResult(
+              `Requires user approval (mode=${mode}). Ask the user to approve this command ` +
+              `or change the shell approval mode in agent settings.\n${formatApproval(review)}`,
+            );
+          }
+          // parked.run — the owner approved this command while the agent was
+          // away and the grant has just been spent; fall through to execute.
+        } else if (!approvalGrants(outcome)) {
           return denyResult(`Denied by the user.\n${formatApproval(review)}`);
         }
       }

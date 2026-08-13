@@ -126,6 +126,12 @@ export const AGENT_RPC_ACCESS = {
   createReleaseChange: 'interactive',
   createTimerTrigger: 'interactive',
   decideReleaseApproval: 'interactive',
+  // Approving a command the gate stopped IS the approval — a scoped token that
+  // could call it would be a way around the gate, not a read of it. The
+  // listing is interactive for the same reason `listPendingActions` is: it is
+  // the surface an owner reads immediately before authorising something.
+  decideDeferredApprovals: 'interactive',
+  listDeferredApprovals: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubordinate: 'interactive',
   // The owner's backup of their own workspace. Interactive-only: a CI token

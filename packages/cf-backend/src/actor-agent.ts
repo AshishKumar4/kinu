@@ -133,7 +133,7 @@ import {
   promptCachePlan, hasCacheMarkers, markLastToolForAnthropicCache,
   type PromptCacheStrategy,
 } from "@proteus/core";
-import type { CodemodeProvider } from "@proteus/core";
+import type { CodemodeProvider, DeferredApprovalChannel } from "@proteus/core";
 import type { UserDO } from "./user/user-do.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { sha256Hex } from "./lib/crypto.js";
@@ -1262,7 +1262,7 @@ export abstract class ActorAgent extends Think<Env> {
         ownerUserId: () => this.getOwnerUserId(),
         workspaceName: this.workspaceName(),
         capabilityToken: () => this.workspaceCapabilityToken(),
-      });
+      }, { deferrals: () => this.deferralChannel() });
       this.configureRuntime(runtime);
       this._rt = runtime;
     }
@@ -1273,6 +1273,21 @@ export abstract class ActorAgent extends Think<Env> {
    * is not cached until this returns, so implementations must use the argument
    * and must not re-enter `this.rt`. */
   protected configureRuntime(_runtime: CFRuntime): void {}
+
+  /**
+   * Where a gated command goes when nobody is there to approve it.
+   *
+   * None here. A subordinate has no needs-you queue of its own — it is a
+   * workspace-level surface reached through its orchestrator — so parking an
+   * action on this actor would put a decision somewhere nobody looks. It keeps
+   * 'strict''s explanatory refusal, and the orchestrator (which owns the queue,
+   * the UI and the wake) overrides this.
+   *
+   * Resolved at exec time, never during runtime construction: reaching the
+   * queue means reaching `this.orch` for the wake's signal seam, and the
+   * runtime is built inside this actor's own lazy `rt` getter.
+   */
+  protected deferralChannel(): DeferredApprovalChannel | undefined { return undefined; }
 
   /** `memory.*` / `tasks.*` — unconditional on every ActorAgent (orchestrator
    *  and subordinate alike), the same way the native `memory` and `tasks`

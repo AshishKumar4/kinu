@@ -20,9 +20,15 @@
  */
 
 import type { BackgroundJob } from '../jobs/store.js';
+import type { DeferredApproval } from '../safety/deferred-approval.js';
 
 export type PendingActionKind =
   | 'release_approval'
+  /** A gated command the agent parked because nobody was there to decide.
+   *  Unlike every other kind, its decision is made HERE — the queue is the
+   *  action's only home, and deciding a night's worth in one sitting is the
+   *  point. */
+  | 'deferred_action'
   | 'scaffold_version'
   | 'failed_job'
   | 'unseen_changes'
@@ -49,6 +55,10 @@ export interface PendingActionInputs {
   readonly scaffoldVersions: ReadonlyArray<{
     version: number; status: string; rationale: string; written_at: number;
   }>;
+  /** Gated commands parked on the owner (safety/deferred-approval.ts). Only
+   *  the still-queued ones ever reach here — a decided action has stopped
+   *  needing anyone. */
+  readonly deferredActions: readonly DeferredApproval[];
   readonly jobs: readonly BackgroundJob[];
   /** Evolution Changelog entries the owner has not seen, and the newest one's
    *  timestamp — one queue row, because the digest is one thing to go read.
@@ -84,6 +94,17 @@ export function buildPendingActions(input: PendingActionInputs): PendingAction[]
       title: `Approve: ${APPROVAL_LABEL[approval.approvalType] ?? approval.approvalType}`,
       detail: changeTitle.get(approval.changeId) ?? approval.changeId,
       at: approval.createdAt,
+    });
+  }
+
+  for (const action of input.deferredActions) {
+    if (action.status !== 'queued') continue;
+    actions.push({
+      id: action.id,
+      kind: 'deferred_action',
+      title: 'Approve: a command the agent is waiting on',
+      detail: action.command,
+      at: action.requestedAt,
     });
   }
 

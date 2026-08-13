@@ -888,6 +888,20 @@ export {
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
   type ShellApprovalPolicy,
+  type DeferredApprovalChannel,
+  DeferredApprovalQueue,
+  DeferredApprovalStore,
+  initDeferredApprovalsTable,
+  queuedActionMessage,
+  deniedActionMessage,
+  decisionWakeMessage,
+  DEFERRED_APPROVAL_SIGNAL,
+  type DeferredApproval,
+  type DeferredApprovalStatus,
+  type DeferredApprovalAnswer,
+  type DeferredApprovalVerdict,
+  type DeferredApprovalNotice,
+  type DeferredApprovalQueueDeps,
   argumentDigest,
   sha256Hex,
   stableStringify,
@@ -980,6 +994,8 @@ export { SignalDelivery } from './orchestrator/signals.js';
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
+  STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
+  type TurnProgressInputs,
 } from './orchestrator/turn-steering.js';
 export { CraftCycle } from './orchestrator/craft-cycle.js';
 export {

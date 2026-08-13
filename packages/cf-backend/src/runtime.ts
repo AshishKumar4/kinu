@@ -21,6 +21,7 @@ import type {
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
+  DeferredApprovalChannel,
 } from "@proteus/core";
 import {
   createWorkspaceFilesystem, nextWorkspaceGeneration, type WorkspaceVFS,
@@ -164,6 +165,18 @@ export interface CFRuntimeHooks {
    * craftStore.list() live; other adapters can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
+  /**
+   * Where a 'gate'-tier command goes when nobody is there to approve it — the
+   * owner's parked-action queue (core's safety/deferred-approval.ts). A thunk,
+   * and read at exec time, for the two reasons the runtime's other thunks are:
+   * the queue's wake rides the orchestrator's signal seam, which this builder
+   * deliberately cannot see (`AgentHost` is the bare agents-SDK surface), and
+   * resolving it during construction would re-enter the caller's own lazy
+   * runtime getter. Returning undefined — a head, a subordinate — means no
+   * queue: neither owns a needs-you queue its parked actions could be decided
+   * from, so 'strict' keeps its explanatory refusal there.
+   */
+  deferrals?: () => DeferredApprovalChannel | undefined;
 }
 
 /**
@@ -230,7 +243,16 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // execution/approval.ts). `mode` reads agent_config directly off the SAME
   // store the memory backfill above already opened, so a setShellApprovalMode
   // RPC takes effect on the very next command with no toolset rebuild needed.
-  const approvalPolicy: ShellApprovalPolicy = { mode: () => memoryConfig.getShellApprovalMode() };
+  // `deferrals` is what stops an unattended run dying on its first `sudo`: with
+  // no interactive channel on this backend, a 'gate' decision under 'strict'
+  // used to be an explanatory refusal, so a night's run stopped there. It is
+  // now parked on the owner and the model is told so — never told it ran.
+  // A getter, so the queue is resolved at exec time like every other member of
+  // this policy — see ShellApprovalPolicy's own doc on live reads.
+  const approvalPolicy: ShellApprovalPolicy = {
+    mode: () => memoryConfig.getShellApprovalMode(),
+    get deferrals() { return hooks.deferrals?.(); },
+  };
   // The workspace shell is Nimbus's, over the same bytes `vfs` addresses.
   // Gated at the Shell object, so what it wraps is transparent to the seam.
   const shell = withApprovalGatedShell(workspace.shell, approvalPolicy);

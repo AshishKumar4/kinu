@@ -132,7 +132,7 @@ export type RunEvent =
    *  other layer may reach. */
   | (RunEventBase & { type: 'turn_steering';
       /** Which mechanical trigger fired. */
-      trigger: 'repeated_call' | 'repeated_failure' | 'long_turn_no_delegation';
+      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress' | 'long_turn_no_delegation';
       /** Step boundary the steer was spliced into. */
       step: number;
       /** The tool that kept repeating or failing (not the long-turn trigger). */

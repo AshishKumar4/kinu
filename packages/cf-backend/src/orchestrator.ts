@@ -164,6 +164,9 @@ import {
   DeviceConsentRegistry,
   type DeviceConsentAnswer, type DeviceConsentDecision,
   type DeviceConsentRequest, type PendingDeviceConsent,
+  DeferredApprovalQueue, DeferredApprovalStore,
+  type DeferredApproval, type DeferredApprovalAnswer, type DeferredApprovalChannel,
+  type DeferredApprovalNotice,
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
@@ -280,7 +283,11 @@ export class OrchestratorAgent extends ActorAgent {
     return {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
-      approvals: this._consents.approvals(),
+      // Both kinds of decision parked on the human, in one roster: a consent
+      // prompt someone may still answer in the next minutes, and a command
+      // parked for hours. The second is also the structural reminder that its
+      // effect has NOT happened — restated on every step until it is decided.
+      approvals: [...this._consents.approvals(), ...this.deferrals.approvals()],
       ...(deafInbox ? { missingCapabilities: [...(base.missingCapabilities ?? []), deafInbox] } : {}),
     };
   }
@@ -1225,6 +1232,67 @@ export class OrchestratorAgent extends ActorAgent {
     return this._consents.list();
   }
 
+  // ── Deferred approval — the owner is asleep, the run carries on ──────
+  // Device consent parks the CALLER on a promise for five minutes, which is
+  // right when the answer is minutes away. This one is for the answer that is
+  // hours away: the action is parked on the owner in SQL, the agent is told so
+  // and keeps working (or ends its turn), and the owner's decision wakes it
+  // through the same signal seam a settled background job uses. Nothing is
+  // ever reported as having run — see core's safety/deferred-approval.ts.
+  private _deferrals: DeferredApprovalQueue | null = null;
+  private get deferrals(): DeferredApprovalQueue {
+    if (!this._deferrals) {
+      this._deferrals = new DeferredApprovalQueue({
+        store: new DeferredApprovalStore(this.boundSql),
+        // Read through `this.orch` at DELIVERY time, never captured: this
+        // getter is reachable from the runtime's own construction path.
+        signals: { deliver: (signal) => this.orch.signals.deliver(signal) },
+        announce: (notice) => this.announceDeferral(notice),
+      });
+    }
+    return this._deferrals;
+  }
+
+  /** The gate's channel. Overrides the base actor's "no queue here". */
+  protected override deferralChannel(): DeferredApprovalChannel {
+    return this.deferrals.channel;
+  }
+
+  private announceDeferral(notice: DeferredApprovalNotice): void {
+    if (notice.kind === 'queued') {
+      this.logActivity('approval_deferred', `${notice.action.id}: ${notice.action.command.slice(0, 80)}`);
+    } else {
+      const [first] = notice.actions;
+      this.logActivity('approval_decided', `${notice.actions.length} ${first?.status ?? 'decided'}`);
+    }
+    // The needs-you queue is polled, not pushed; one frame tells a connected
+    // client to re-read it rather than duplicating the rows onto the wire.
+    try { this.broadcast(JSON.stringify({ type: 'pending_actions_changed' })); }
+    catch { /* no connected clients */ }
+  }
+
+  /** Everything the agent has parked on the owner. Read by the needs-you
+   *  queue; also callable on its own so a surface can render just this. */
+  @callable()
+  async listDeferredApprovals(): Promise<DeferredApproval[]> {
+    return this.deferrals.list();
+  }
+
+  /**
+   * The owner decides — one parked action, or a night's worth in one click.
+   *
+   * Bulk is the point: an unattended run can park a dozen commands, and
+   * deciding them one prompt at a time is the friction this whole mechanism
+   * exists to remove. One call, one durable write per row, ONE wake.
+   */
+  @callable()
+  async decideDeferredApprovals(
+    ids: string[], decision: DeferredApprovalAnswer,
+  ): Promise<{ decided: string[] }> {
+    const decided = await this.deferrals.decide(ids, decision);
+    return { decided: decided.map((a) => a.id) };
+  }
+
   // ── DO initialization ──────────────────────────────────────────
 
   // Device connection moved to the user level (UserDO owns the tunnel socket +
@@ -1527,6 +1595,7 @@ export class OrchestratorAgent extends ActorAgent {
       changes: board?.changes ?? [],
       scaffoldVersions: listScaffoldVersions(this.boundSql, 20),
       jobs: listBackgroundJobs(this.jobs, 50),
+      deferredActions: this.deferrals.list(),
       unseenChanges: {
         count: unseen.length,
         revertable: unseen.filter((entry) => entry.revert !== undefined).length,

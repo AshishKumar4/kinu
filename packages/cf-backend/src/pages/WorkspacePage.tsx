@@ -515,15 +515,42 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
   );
 }
 
+/** The owner's answer on commands the agent parked, coming back to the agent.
+ *  Says approved/denied and how many — never "ran": the approved commands have
+ *  not executed yet, and the agent re-issuing them is what runs them. */
+function DeferredApprovalCard({ decision, count, state }: {
+  decision: string; count: number; state: CardState;
+}) {
+  const approved = decision === "approved";
+  const Icon = approved ? CheckCircleIcon : ProhibitIcon;
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+        <Icon size={13} className={approved ? "p-success" : "p-text-3"} weight="fill" />
+        <span>
+          You <span className="font-medium p-text">{approved ? "approved" : "denied"}</span>{" "}
+          {count} queued command{count === 1 ? "" : "s"}
+        </span>
+        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
+        <ClockIcon size={11} className="p-text-3" />
+      </div>
+    </div>
+  );
+}
+
 /** One programmatic turn as the chat shows it — the durable message a queued
  *  signal became, or the live card of one spliced into a running turn. Same
  *  classifier, same cards, one rendering. */
 function ProgrammaticTurnCard({ turn, text, state }: {
   turn: ProgrammaticTurn; text: string; state: CardState;
 }) {
-  return turn.kind === "background_job"
-    ? <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />
-    : <DrainedEventsCard text={text} state={state} />;
+  if (turn.kind === "background_job") {
+    return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
+  }
+  if (turn.kind === "deferred_approval") {
+    return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
+  }
+  return <DrainedEventsCard text={text} state={state} />;
 }
 
 /** A subordinate's task assignment or progress report, mirrored into the main

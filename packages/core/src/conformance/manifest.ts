@@ -197,6 +197,12 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // per actor is what makes the list mean anything.
     agent_tasks: EVERYWHERE,
     background_jobs: EVERYWHERE,
+    // Gated commands parked on the owner. The TABLE is part of the shared
+    // workspace schema everywhere; what differs is who can decide the rows —
+    // the deferral channel is wired into the approval policy on cf, where the
+    // needs-you queue that decides them lives. A local session keeps its
+    // interactive channel (the human is at the terminal), so nothing parks.
+    deferred_approvals: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,
     imported_experience: EVERYWHERE,

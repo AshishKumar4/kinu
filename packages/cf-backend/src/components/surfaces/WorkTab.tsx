@@ -24,10 +24,10 @@
  * gauge beside the strip, which was already the right home for them.
  */
 import { useCallback, useMemo, useState } from "react";
-import { Badge, Loader } from "@cloudflare/kumo";
+import { Badge, Button, Loader } from "@cloudflare/kumo";
 import {
   ClockIcon, PulseIcon, WarningCircleIcon, GitBranchIcon,
-  RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon,
+  RocketLaunchIcon, PackageIcon, SparkleIcon, CaretRightIcon, ShieldWarningIcon,
 } from "@phosphor-icons/react";
 import type { AgentTaskTree, ChangelogEntry, PendingAction, PendingActionKind } from "@proteus/core";
 import type { BackgroundJob, Rpc } from "@/lib/protocol";
@@ -53,7 +53,9 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
 /**
  * Where each kind of pending thing is actually decided, and the words that
  * send the reader there. The mapping lives here, not in the read model: core
- * has no business knowing tab names.
+ * has no business knowing tab names. `deferred_action` is absent because it is
+ * the one kind with no elsewhere — the queue IS its home, so it is rendered
+ * with its own approve/deny controls instead of a deep link.
  *
  * The verb is part of the mapping rather than a fixed "decide in", because it
  * is not always a decision. The unseen digest is a READ — several of its entry
@@ -63,7 +65,7 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
  * do and where to do it is the whole of its detail line, and printing the
  * destination twice on one card reads as a stutter.
  */
-const PENDING_HOME: Record<PendingActionKind, { surface: SurfaceKind | null; cta: string | null }> = {
+const PENDING_HOME: Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }> = {
   release_approval: { surface: "Releases", cta: "decide in Releases" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   failed_job: { surface: null, cta: "retry or dismiss it in the journal below" },
@@ -71,7 +73,7 @@ const PENDING_HOME: Record<PendingActionKind, { surface: SurfaceKind | null; cta
   curriculum_task: { surface: null, cta: "decide in Supervise" },
 };
 
-const PENDING_ICON: Record<PendingActionKind, typeof ClockIcon> = {
+const PENDING_ICON: Record<Exclude<PendingActionKind, "deferred_action">, typeof ClockIcon> = {
   release_approval: RocketLaunchIcon,
   scaffold_version: GitBranchIcon,
   failed_job: WarningCircleIcon,
@@ -126,6 +128,13 @@ export function WorkTab({
   );
   const visible = journal.filter((row) => filter === "all" || row.filter === filter);
 
+  // Commands the agent parked on the owner decide HERE — grouped so a night's
+  // worth is one decision rather than N scattered rows. Everything else keeps
+  // its deep link to where its decision is really made.
+  const parkedCommands = pendingActions.filter((a) => a.kind === "deferred_action");
+  const elsewhere = pendingActions.filter(
+    (a): a is DecidedElsewhere => a.kind !== "deferred_action");
+
   const nothingAtAll = pendingActions.length === 0 && openTasks.length === 0
     && runningJobs.length === 0 && journal.length === 0
     && tasks !== null && changelog !== null;
@@ -144,7 +153,10 @@ export function WorkTab({
           icon={<WarningCircleIcon size={14} className="p-accent" />}
           badge={<Badge variant="secondary">{pendingActions.length}</Badge>}>
           <div className="space-y-1.5">
-            {pendingActions.map((action) => (
+            {parkedCommands.length > 0 && (
+              <ParkedCommands actions={parkedCommands} rpc={rpc} />
+            )}
+            {elsewhere.map((action) => (
               <PendingRow key={action.id} action={action} onOpenSurface={onOpenSurface} />
             ))}
           </div>
@@ -233,8 +245,106 @@ export function WorkTab({
 
 /* ── the needs-you queue ───────────────────────────────────────── */
 
+/**
+ * Commands the agent stopped on because the gate wanted an approval and nobody
+ * was there to give it.
+ *
+ * Decided here and nowhere else, and decided in BULK: an unattended overnight
+ * run parks a pile, and the failure this whole mechanism exists to remove is
+ * the owner working through them one prompt at a time. Selection defaults to
+ * everything, so the common case ("these are all fine") is one click.
+ *
+ * Nothing here has run. Approving does not run it either — the agent is woken
+ * and re-issues the command itself, which is the only moment it executes. The
+ * copy says so, because a button labelled "Approve" on a queue of commands is
+ * otherwise easy to read as "Run".
+ */
+/** What a bulk button says it will act on: nothing extra for a queue of one,
+ *  "all" when the whole queue is selected, the count otherwise. */
+function countLabel(chosen: number, total: number): string {
+  if (total === 1) return "";
+  return chosen === total ? "all" : String(chosen);
+}
+
+function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }) {
+  const [selected, setSelected] = useState<Set<string> | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  // Null means "everything", so a newly-parked action arriving mid-review is
+  // included rather than silently left out of an "approve all" click.
+  const chosen = selected ?? new Set(actions.map((a) => a.id));
+
+  const toggle = (id: string) => {
+    setSelected(new Set(
+      chosen.has(id) ? [...chosen].filter((x) => x !== id) : [...chosen, id],
+    ));
+  };
+
+  const decide = async (decision: "approved" | "denied") => {
+    if (busy || chosen.size === 0) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await rpc("decideDeferredApprovals", [[...chosen], decision]);
+      setSelected(null);
+    } catch (e) {
+      setError(`Could not record the decision: ${(e as Error).message}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="p-card rounded-lg px-3 py-2.5 space-y-2">
+      <div className="flex items-start gap-2">
+        <ShieldWarningIcon size={14} className="p-accent shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs p-text leading-relaxed">
+            {actions.length} command{actions.length === 1 ? "" : "s"} waiting on your approval
+          </div>
+          <div className="text-[10px] p-text-3 mt-0.5">
+            None of these have run. The agent was told they are queued and carried on — approving lets it
+            run them when it picks the decision up.
+          </div>
+        </div>
+      </div>
+
+      <div className="space-y-1">
+        {actions.map((action) => (
+          <label key={action.id}
+            className="flex items-start gap-2 rounded-md px-2 py-1.5 p-elevated cursor-pointer">
+            <input type="checkbox" className="mt-0.5 shrink-0" checked={chosen.has(action.id)}
+              onChange={() => toggle(action.id)} disabled={busy} />
+            <span className="min-w-0 flex-1">
+              <code className="block text-[11px] p-text break-all whitespace-pre-wrap">{action.detail}</code>
+              <span className="block text-[10px] p-text-3 mt-0.5">queued {timeAgo(action.at)}</span>
+            </span>
+          </label>
+        ))}
+      </div>
+
+      {error && <div className="text-[10px] p-danger">{error}</div>}
+
+      <div className="flex items-center gap-1.5">
+        <Button size="sm" variant="primary" disabled={busy || chosen.size === 0}
+          onClick={() => decide("approved")}>
+          Approve {countLabel(chosen.size, actions.length)}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={busy || chosen.size === 0}
+          onClick={() => decide("denied")}>
+          Deny {countLabel(chosen.size, actions.length)}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+/** A pending action whose decision is made on another surface — everything
+ *  except a parked command, which is decided in the queue itself. */
+type DecidedElsewhere = PendingAction & { kind: Exclude<PendingActionKind, "deferred_action"> };
+
 function PendingRow(
-  { action, onOpenSurface }: { action: PendingAction; onOpenSurface: (surface: SurfaceKind) => void },
+  { action, onOpenSurface }: { action: DecidedElsewhere; onOpenSurface: (surface: SurfaceKind) => void },
 ) {
   const home = PENDING_HOME[action.kind];
   const Icon = PENDING_ICON[action.kind];
