@@ -4,9 +4,10 @@
 // CLIENT directly over child processes.
 
 import { tool, jsonSchema, type ToolSet } from 'ai';
-import { mcpToolKey } from '@proteus/core';
+import { JsonObjectSchema, mcpToolKey } from '@proteus/core';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import * as v from 'valibot';
 
 /** Startup budget — spawning the child and listing its tools happens inside a
  *  turn, so a server that never comes up must not stall one. Mirrors the cap cf
@@ -77,15 +78,15 @@ export async function connectMcpServers(
       for (const t of mcpTools) {
         tools[mcpToolKey(serverName, t.name)] = tool({
           description: t.description ?? `${serverName}/${t.name}`,
-          inputSchema: jsonSchema((t.inputSchema ?? { type: 'object' }) as Parameters<typeof jsonSchema>[0]),
-          execute: async (args: unknown) => {
+          inputSchema: jsonSchema(t.inputSchema ?? { type: 'object' }),
+          execute: async (args) => {
             try {
               const res = await client.callTool(
-                { name: t.name, arguments: (args ?? {}) as Record<string, unknown> },
+                { name: t.name, arguments: v.parse(JsonObjectSchema, args ?? {}) },
                 undefined,
                 { timeout: callTimeout },
               );
-              return formatMcpResult(res as McpToolResult);
+              return formatMcpResult(res);
             } catch (err) {
               return `mcp error: ${err instanceof Error ? err.message : String(err)}`;
             }
@@ -97,7 +98,7 @@ export async function connectMcpServers(
       onLog?.(`mcp: ${serverName} → ${mcpTools.length} tool(s)`);
     } catch (err) {
       await client.close().catch(() => undefined);
-      const reason = formatMcpError(err);
+      const reason = formatMcpError({ error: err });
       const stderrText = stderr.trim();
       diagnostics.push({
         server: serverName,
@@ -119,7 +120,7 @@ export async function connectMcpServers(
   };
 }
 
-interface McpToolResult { content?: Array<{ type: string; text?: string }>; isError?: boolean }
+type McpToolResult = Awaited<ReturnType<Client['callTool']>>;
 
 /** Flatten an MCP CallTool result's content blocks into a string the model reads. */
 function formatMcpResult(res: McpToolResult): string {
@@ -128,6 +129,6 @@ function formatMcpResult(res: McpToolResult): string {
   return (res?.isError ? 'MCP tool error: ' : '') + (text || '(no output)');
 }
 
-function formatMcpError(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+function formatMcpError(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
 }

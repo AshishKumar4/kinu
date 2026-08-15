@@ -11,8 +11,8 @@ import {
   type LongHorizonSpec,
 } from '../src/index.js';
 
-const digest: LongHorizonSpec = { shape: 'digest', seed: 11, entries: 120, filler: 60, markers: 5, parts: 1 };
-const continuation: LongHorizonSpec = { shape: 'continuation', seed: 12, entries: 200, filler: 40, markers: 6, parts: 4 };
+const digest: LongHorizonSpec = { mode: 'digest', seed: 11, entries: 120, filler: 60, markers: 5, parts: 1 };
+const continuation: LongHorizonSpec = { mode: 'continuation', seed: 12, entries: 200, filler: 40, markers: 6, parts: 4 };
 
 describe('the corpus is a pure function of the spec', () => {
   test('the same spec generates byte-identical files', () => {
@@ -186,20 +186,22 @@ describe('the spec round-trips into the check argv', () => {
     }
     // Field order in the encoding must not follow object-literal order — the
     // encoded string lands in the check argv, so it lands in the task hash.
-    const reordered = { parts: 1, markers: 5, filler: 60, entries: 120, seed: 11, shape: 'digest' } as LongHorizonSpec;
+    const reordered: LongHorizonSpec = {
+      parts: 1, markers: 5, filler: 60, entries: 120, seed: 11, mode: 'digest',
+    };
     expect(encodeLongHorizonSpec(reordered)).toBe(encodeLongHorizonSpec(digest));
   });
 
   test('a malformed spec is an error, not a silently different corpus', () => {
     expect(() => decodeLongHorizonSpec('{')).toThrow(/not valid JSON/);
-    expect(() => decodeLongHorizonSpec('[1,2,3]')).toThrow(/\[shape, seed, entries, filler, markers, parts\]/);
-    expect(() => decodeLongHorizonSpec('["nope",1,1,1,1,1]')).toThrow(/unknown long-horizon shape/);
+    expect(() => decodeLongHorizonSpec('[1,2,3]')).toThrow(/\[mode, seed, entries, filler, markers, parts\]/);
+    expect(() => decodeLongHorizonSpec('["nope",1,1,1,1,1]')).toThrow(/unknown long-horizon mode/);
   });
 
   test('specs that cannot produce a task are rejected at the source', () => {
     expect(() => assertLongHorizonSpec({ ...digest, markers: 0 })).toThrow(/markers must be an integer/);
     expect(() => assertLongHorizonSpec({ ...digest, markers: 999 })).toThrow(/plants 999 markers/);
-    expect(() => assertLongHorizonSpec({ ...digest, parts: 3 })).toThrow(/digest shape has exactly one part/);
+    expect(() => assertLongHorizonSpec({ ...digest, parts: 3 })).toThrow(/digest mode has exactly one part/);
     expect(() => assertLongHorizonSpec({ ...continuation, parts: 9999 })).toThrow(/over 9999 parts/);
     expect(() => assertLongHorizonSpec({ ...continuation, markers: 3, parts: 4 })).toThrow(/every part must plant at least one/);
   });

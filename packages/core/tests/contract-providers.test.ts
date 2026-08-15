@@ -13,6 +13,7 @@
 import { describe, test, expect } from 'bun:test';
 import { asFetchFunction } from '../src/providers/fetch-shim.js';
 import { generateText } from 'ai';
+import * as v from 'valibot';
 import {
   createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
   createAnthropicProvider, createCodexProvider,
@@ -21,6 +22,12 @@ import {
   type ProviderDeps, type AuthResolution,
 } from '../src/index.ts';
 import { createMockFetch } from '@proteus/test-utils';
+
+const CodexRequestBodySchema = v.object({
+  instructions: v.optional(v.string()),
+  store: v.optional(v.boolean()),
+  input: v.optional(v.array(v.object({ role: v.optional(v.string()) }))),
+});
 
 function makeDeps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): ProviderDeps {
   const store = new Map(Object.entries(creds));
@@ -207,7 +214,7 @@ describe('Codex provider contract', () => {
     } catch { /* minimal mock response may not satisfy the SDK parser */ }
 
     expect(mock.requests.length).toBeGreaterThan(0);
-    const body = JSON.parse(String(mock.requests[0].body)) as { instructions?: string; store?: boolean; input?: Array<{ role?: string }> };
+    const body = v.parse(CodexRequestBodySchema, JSON.parse(String(mock.requests[0].body)));
     expect(body.instructions).toBe('You are concise.');
     expect(body.store).toBe(false);
     expect(body.input?.some((item) => item.role === 'developer' || item.role === 'system')).toBe(false);
@@ -262,7 +269,12 @@ describe('Codex provider contract', () => {
 // ── Catalog caches keyed by credential ────────────────────────────────
 
 describe('listModels cache invalidation on credential change', () => {
-  function makeSwappableDeps(fetchFn: typeof fetch): { deps: ProviderDeps; set: (key: string, auth: AuthResolution | null) => void } {
+  interface SwappableDeps {
+    deps: ProviderDeps;
+    set: (key: string, auth: AuthResolution | null) => void;
+  }
+
+  function makeSwappableDeps(fetchFn: typeof fetch): SwappableDeps {
     const store = new Map<string, AuthResolution>();
     return {
       deps: {
@@ -271,7 +283,10 @@ describe('listModels cache invalidation on credential change', () => {
         async getAuth(key) { return store.get(key) ?? null; },
         async hasCredential(key) { return store.has(key); },
       },
-      set: (key, auth) => { auth ? store.set(key, auth) : store.delete(key); },
+      set: (key, auth) => {
+        if (auth) store.set(key, auth);
+        else store.delete(key);
+      },
     };
   }
 

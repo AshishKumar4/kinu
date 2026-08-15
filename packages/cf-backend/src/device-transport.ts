@@ -12,8 +12,10 @@
  */
 import {
   NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-  type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport,
+  JsonValueSchema,
+  type DeviceCheckpointHint, type DeviceStatus, type DeviceTransport, type JsonValue,
 } from '@proteus/core';
+import * as v from 'valibot';
 import { shellQuote } from './cli/install-command.js';
 import type { UserCaller } from './user/workspace-capability.js';
 
@@ -28,9 +30,15 @@ export interface DeviceHubClient {
   deviceRpc(
     caller: UserCaller,
     method: string,
-    params: unknown[],
-    opts?: { agentName?: string; checkpoint?: DeviceCheckpointHint; timeoutMs?: number },
-  ): Promise<unknown>;
+    params: JsonValue[],
+    opts?: DeviceRpcOptions,
+  ): Promise<string | undefined>;
+}
+
+export interface DeviceRpcOptions {
+  agentName?: string;
+  checkpoint?: DeviceCheckpointHint;
+  timeoutMs?: number;
 }
 
 export interface HubDeviceTransportOpts {
@@ -90,7 +98,7 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
       }
       try {
         const cwd = opts.cliCwd();
-        const effectiveParams = method === 'exec' && cwd
+        const effectiveParams: JsonValue[] = method === 'exec' && cwd
           ? [`cd ${shellQuote(cwd)} && ${String(params[0] ?? '')}`]
           : params;
         // Mutating methods carry the pre-mutation snapshot hint; the daemon
@@ -102,16 +110,16 @@ export function createHubDeviceTransport(opts: HubDeviceTransportOpts): DeviceTr
           sessionId: meta.sessionId,
           dir: method === 'exec' ? cwd : null,
         } : undefined;
-        const result = await hub.deviceRpc(
-          await opts.caller(), method, effectiveParams,
-          {
-            agentName: opts.agentName, checkpoint,
-            ...(rpcOpts?.timeoutMs !== undefined ? { timeoutMs: rpcOpts.timeoutMs } : {}),
-          },
+        const deviceOptions: DeviceRpcOptions = { agentName: opts.agentName, checkpoint };
+        if (rpcOpts?.timeoutMs !== undefined) deviceOptions.timeoutMs = rpcOpts.timeoutMs;
+        const rawResult = await hub.deviceRpc(
+          await opts.caller(), method, effectiveParams, deviceOptions,
         );
         snapshot = { connected: true, registered: true };
         checkedAt = now();
-        return result;
+        return rawResult === undefined
+          ? undefined
+          : v.parse(JsonValueSchema, JSON.parse(rawResult));
       } catch (err) {
         if (isDeviceNotConnectedError(err)) {
           snapshot = { ...snapshot, connected: false };

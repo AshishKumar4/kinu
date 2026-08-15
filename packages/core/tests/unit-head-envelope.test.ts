@@ -13,6 +13,8 @@
 
 import { describe, test, expect } from 'bun:test';
 import type { LanguageModel } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3Content } from '@ai-sdk/provider';
 import { DEFAULT_MAX_STEPS } from '../src/config.js';
 import {
   budgetExhausted, deriveChildBudget, DEFAULT_HEAD_BUDGET, type HeadBudget, type HeadInput,
@@ -91,7 +93,7 @@ describe('deriveChildBudget', () => {
 });
 
 /**
- * A v2 model that keeps calling `record_evidence` (so the agentic loop keeps
+ * A model that keeps calling `record_evidence` (so the agentic loop keeps
  * going), reporting a fixed prompt + output per step — the shape of a real head,
  * which re-sends its whole accumulated context every step.
  */
@@ -104,32 +106,42 @@ function loopingHeadModel(perStep: {
   stopAfterSteps?: number;
 }): LanguageModel {
   let step = 0;
-  return {
-    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-loop', supportedUrls: {},
+  return new MockLanguageModelV3({
+    provider: 'fake', modelId: 'fake-loop',
     doGenerate: async () => {
       const finishes = perStep.stopAfterSteps !== undefined && step >= perStep.stopAfterSteps;
       step++;
+      const content: LanguageModelV3Content[] = [];
+      if (perStep.text) content.push({ type: 'text', text: perStep.text });
+      if (!finishes) {
+        content.push({
+          type: 'tool-call', toolCallId: `tc-${step}`, toolName: 'record_evidence',
+          input: JSON.stringify({ kind: 'fact', body: 'still working' }),
+        });
+      }
       return {
-        content: [
-          ...(perStep.text ? [{ type: 'text' as const, text: perStep.text }] : []),
-          ...(finishes ? [] : [
-            { type: 'tool-call' as const, toolCallId: `tc-${Math.random()}`, toolName: 'record_evidence',
-              input: JSON.stringify({ kind: 'fact', body: 'still working' }) },
-          ]),
-        ],
-        finishReason: finishes ? 'stop' as const : 'tool-calls' as const,
-        usage: { inputTokens: perStep.promptTokens, outputTokens: perStep.outputTokens },
-        response: { id: 'r', modelId: 'fake-loop', timestamp: new Date(0) },
+        content,
+        finishReason: { unified: finishes ? 'stop' : 'tool-calls', raw: undefined },
+        usage: {
+          inputTokens: {
+            total: perStep.promptTokens, noCache: perStep.promptTokens,
+            cacheRead: undefined, cacheWrite: undefined,
+          },
+          outputTokens: {
+            total: perStep.outputTokens, text: perStep.outputTokens, reasoning: undefined,
+          },
+        },
         warnings: [],
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 function loopInput(budget: Partial<HeadBudget> = {}): HeadInput {
   return {
     id: 'h1', rootId: 'r1', parentId: null, depth: 0,
     task: 'keep recording evidence', rationale: 'exercise the envelope',
+    mode: 'build',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }],
     budget: { ...DEFAULT_HEAD_BUDGET, spawnedAt: Date.now(), ...budget },
     mergeStrategy: 'synthesize',
@@ -147,6 +159,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
         text: 'Here is what I found.', stopAfterSteps: 60,
       }),
       tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace',
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
     expect(report.status).toBe('completed');
@@ -163,6 +176,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 3_200, stopAfterSteps: 8 }),
       tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace',
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
     expect(report.status).toBe('completed');
@@ -176,6 +190,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
       {
         model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 100, text: 'Done.', stopAfterSteps: 3 }),
         tools: buildHeadAccumulatorTools(capture), capture,
+        workspaceLayout: 'shared-workspace',
         maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
       },
     );
@@ -187,6 +202,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 20_000, outputTokens: 400, stopAfterSteps: 9 }),
       tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace',
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
     expect(report.tokenUsage.input).toBe(20_000 * 10);
@@ -202,6 +218,7 @@ describe('runHeadInference — a fork works until the work is done', () => {
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1 }),
       tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace',
       maxSteps: 40, isAborted: () => false,
     });
     expect(report.steps.length).toBe(40);
@@ -221,6 +238,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 4_000, outputTokens: 1_000, text: SPECULATION }),
       tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace',
       maxSteps: 6, isAborted: () => false,
     });
     expect(report.status).toBe('budget_exceeded');
@@ -234,7 +252,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
     const capture = new HeadCapture();
     const report = await runHeadInference(loopInput(), {
       model: loopingHeadModel({ promptTokens: 1_000, outputTokens: 10, text: SPECULATION }),
-      tools: {}, capture, maxSteps: DEFAULT_MAX_STEPS,
+      tools: {}, capture, workspaceLayout: 'shared-workspace', maxSteps: DEFAULT_MAX_STEPS,
       isAborted: () => true, abortReason: () => 'the parent turn was cancelled',
     });
     expect(report.status).toBe('aborted');
@@ -251,6 +269,7 @@ describe('runHeadInference — a head that stopped never reports a conclusion it
         promptTokens: 500, outputTokens: 10, text: 'Here is what I found.', stopAfterSteps: 3,
       }),
       tools: buildHeadAccumulatorTools(capture), capture,
+      workspaceLayout: 'shared-workspace',
       maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false,
     });
     expect(report.status).toBe('completed');

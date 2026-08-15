@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/mcts/search-store.ts b/packages/core/src/mcts/search-store.ts
-index 1f3bd9d..8bcfa3e 100644
 --- a/packages/core/src/mcts/search-store.ts
 +++ b/packages/core/src/mcts/search-store.ts
-@@ -86,7 +86,7 @@ export class MctsSearchStore {
+@@ -117,7 +117,7 @@
    /** Persist loop progress. Fenced: a stale epoch (a zombie executor after a
     *  reclaim) is a no-op. */
    checkpoint(rootId: string, epoch: number, iteration: number, budget: number, now: number): void {
--    this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
-+    this.sql`UPDATE mcts_search_runs SET iteration=${budget}, budget=${iteration}, updated_at=${now}
+-    void this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
++    void this.sql`UPDATE mcts_search_runs SET iteration=${budget}, budget=${iteration}, updated_at=${now}
        WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
    }
- 
+

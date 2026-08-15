@@ -5,6 +5,7 @@
 // own checks. Nothing in the scoring path is LLM-judged; a task passes when a
 // process exits 0.
 import { unitHash } from './stats.js';
+import * as v from 'valibot';
 
 /** One machine-run check. All of a task's checks must exit 0 to score 1. */
 export interface BenchCheck {
@@ -79,6 +80,9 @@ export interface AttemptOutcome {
   checks: readonly CheckOutcome[];
   durationMs: number;
   tokens: number;
+  /** Exact inference requests observed by the attempt-local meter. Absent only
+   *  for an uninstrumented/legacy solver result; zero is an observed zero. */
+  modelCalls?: number;
   /** Largest per-turn prompt the provider actually priced over the attempt, or
    *  0 when the variant made no model call. Total tokens says what an attempt
    *  cost; this says how big its working set got, and a context-discipline
@@ -109,6 +113,8 @@ export interface SolverContext {
 
 export interface SolverResult {
   tokens?: number;
+  /** Exact inference requests observed by the solver's attempt-local meter. */
+  modelCalls?: number;
   /** See AttemptOutcome.peakPromptTokens. Deterministic controls omit it. */
   peakPromptTokens?: number;
   error?: string;
@@ -136,19 +142,28 @@ export function attemptPassed(checks: readonly CheckOutcome[]): boolean {
  *  accepted and anything else counts as zero, because a token budget that
  *  silently mis-sums is worse than no budget — the first version of this added
  *  the objects together and produced the STRING "0[object Object]". */
-export function usageTokens(usage: unknown): number {
-  return tokenField(usage, 'inputTokens') + tokenField(usage, 'outputTokens');
+const UsageBoundarySchema = v.object({
+  inputTokens: v.optional(v.unknown()),
+  outputTokens: v.optional(v.unknown()),
+});
+
+const TokenFieldSchema = v.union([
+  v.number(),
+  v.object({ total: v.optional(v.number()) }),
+]);
+
+function finiteTokenCount(value: v.InferOutput<typeof TokenFieldSchema>): number {
+  const count = v.is(v.number(), value) ? value : value.total ?? 0;
+  return Number.isFinite(count) ? count : 0;
 }
 
-function tokenField(usage: unknown, key: string): number {
-  if (typeof usage !== 'object' || usage === null) return 0;
-  const value = (usage as Record<string, unknown>)[key];
-  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-  if (typeof value === 'object' && value !== null) {
-    const total = (value as Record<string, unknown>).total;
-    if (typeof total === 'number' && Number.isFinite(total)) return total;
-  }
-  return 0;
+export function usageTokens<Usage>(usage: Usage): number {
+  const parsed = v.safeParse(UsageBoundarySchema, usage);
+  if (!parsed.success) return 0;
+  const input = v.safeParse(TokenFieldSchema, parsed.output.inputTokens);
+  const output = v.safeParse(TokenFieldSchema, parsed.output.outputTokens);
+  return (input.success ? finiteTokenCount(input.output) : 0)
+    + (output.success ? finiteTokenCount(output.output) : 0);
 }
 
 /** Which variant attempts a task first, randomized per task and repeat from the

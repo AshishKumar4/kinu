@@ -11,7 +11,6 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { createTestRuntime, createMockSession, makeSql } from './helpers.js';
 import { runMCTS } from '../src/mcts/engine.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
@@ -33,7 +32,7 @@ describe('MCTS evict-resume (B6)', () => {
   test('an interrupted search resumes from checkpoint, continues remaining budget, converges', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db as unknown as Database));
+    const store = new MctsSearchStore(makeSql(db));
 
     // ── Run 1: budget 4, "evicted" after 2 iterations ──────────────────────
     const ctrl = new AbortController();
@@ -81,7 +80,7 @@ describe('MCTS evict-resume (B6)', () => {
   test('a completed search is not re-resumed; a new run of the same task starts fresh', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db as unknown as Database));
+    const store = new MctsSearchStore(makeSql(db));
 
     await runMCTS(rt, createMockSession(), TASK, { budget: 2, branches: 1, search: store });
     expect(store.findResumable(TASK)).toBeNull();   // converged → not resumable
@@ -104,7 +103,12 @@ describe('MCTS evict-resume (B6)', () => {
  *  plain reassignment is what actually observes the calls. Both channels are
  *  captured because WHICH one carries the heartbeat is the contract under
  *  test. */
-async function captureConsole(fn: () => Promise<unknown>): Promise<{ stdout: string[]; stderr: string[] }> {
+interface ConsoleCapture {
+  stdout: string[];
+  stderr: string[];
+}
+
+async function captureConsole<Result>(fn: () => Promise<Result>): Promise<ConsoleCapture> {
   const originalLog = console.log;
   const originalError = console.error;
   const stdout: string[] = [];
@@ -127,7 +131,7 @@ const isCheckpointLine = (line: string): boolean => line.startsWith('[proteus] m
 function checkpointedRuntime() {
   const { rt, db } = createTestRuntime();
   initTables(rt);
-  return { rt, store: new MctsSearchStore(makeSql(db as unknown as Database)) };
+  return { rt, store: new MctsSearchStore(makeSql(db)) };
 }
 
 describe('MCTS per-iteration checkpoint logging', () => {

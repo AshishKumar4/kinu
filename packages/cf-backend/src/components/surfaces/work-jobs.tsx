@@ -42,7 +42,10 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
     setBusy(true);
     setErr(null);
     try { await rpc(method, [job.id]); onRefresh(); }
-    catch (e) { setErr(`${method.replace("BackgroundJob", "")} failed: ${(e as Error).message}`); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setErr(`${method.replace("BackgroundJob", "")} failed: ${message}`);
+    }
     finally { setBusy(false); }
   }, [rpc, onRefresh, job.id]);
 

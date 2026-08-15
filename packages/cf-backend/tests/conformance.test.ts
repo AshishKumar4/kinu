@@ -8,6 +8,7 @@
 // and why the rest is deliberately absent; `compareSurface` fails on any
 // disagreement in either direction. See core/src/conformance/manifest.ts.
 import { describe, test, expect } from 'bun:test';
+import type { ToolSet } from 'ai';
 import {
   compareSurface, normalizeObservedTables, observedActionEnum,
   renderConformanceFindings,
@@ -15,8 +16,10 @@ import {
 } from '@proteus/core';
 import { orchestratorHarness, subordinateHarness, type ActorHarness } from './helpers/actor-harness.js';
 
-function observe(root: ConformanceRoot, harness: ActorHarness<unknown>): ObservedSurface {
-  const tools = (harness.agent as { getRawTools(): Record<string, unknown> }).getRawTools();
+interface RawToolsAgent { observeRawTools(): ToolSet }
+
+function observe(root: ConformanceRoot, harness: ActorHarness<RawToolsAgent>): ObservedSurface {
+  const tools = harness.agent.observeRawTools();
   return {
     root,
     planes: {

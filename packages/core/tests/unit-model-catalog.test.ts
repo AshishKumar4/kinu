@@ -18,10 +18,16 @@ function deps(creds: Record<string, AuthResolution>, fetchFn: typeof fetch): Pro
   };
 }
 
+function fetchStub(
+  handler: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>,
+): typeof fetch {
+  return Object.assign(handler, { preconnect: fetch.preconnect });
+}
+
 describe('provider model catalogs', () => {
   test('OpenAI model menu comes from models.dev when available', async () => {
     const provider = createOpenAIProvider();
-    const fetchFn = async (input: RequestInfo | URL) => {
+    const fetchFn = fetchStub(async (input) => {
       expect(String(input)).toBe('https://models.dev/api.json');
       return Response.json({
         openai: {
@@ -50,11 +56,11 @@ describe('provider model catalogs', () => {
           },
         },
       });
-    };
+    });
 
     const models = await provider.listModels(deps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } },
-    }, fetchFn as typeof fetch));
+    }, fetchFn));
 
     expect(models).toEqual([{
       id: 'gpt-5.5',
@@ -67,7 +73,7 @@ describe('provider model catalogs', () => {
 
   test('models.dev per-model prices reach ModelInfo, and half-priced entries do not', async () => {
     const provider = createOpenAIProvider();
-    const fetchFn = async () => Response.json({
+    const fetchFn = fetchStub(async () => Response.json({
       openai: {
         models: {
           priced: {
@@ -84,11 +90,11 @@ describe('provider model catalogs', () => {
           },
         },
       },
-    });
+    }));
 
     const models = await provider.listModels(deps({
       [OPENAI_CRED_KEY]: { headers: { Authorization: 'Bearer sk-test' } },
-    }, fetchFn as unknown as typeof fetch));
+    }, fetchFn));
     const byId = new Map(models.map((m) => [m.id, m]));
 
     expect(byId.get('priced')?.cost).toEqual({ input: 5, output: 30, cacheRead: 1.25 });
@@ -100,7 +106,7 @@ describe('provider model catalogs', () => {
 
   test('Codex model menu uses the ChatGPT Codex model endpoint', async () => {
     const provider = createCodexProvider({ baseURL: 'https://chatgpt.test/backend-api/codex' });
-    const fetchFn = async (input: RequestInfo | URL, init?: RequestInit) => {
+    const fetchFn = fetchStub(async (input, init) => {
       expect(String(input)).toBe('https://chatgpt.test/backend-api/codex/models?client_version=1.0.0');
       expect(new Headers(init?.headers).get('authorization')).toBe('Bearer codex-token');
       return Response.json({
@@ -116,11 +122,11 @@ describe('provider model catalogs', () => {
           },
         ],
       });
-    };
+    });
 
     const models = await provider.listModels(deps({
       [CODEX_CRED_KEY]: { headers: { Authorization: 'Bearer codex-token' } },
-    }, fetchFn as typeof fetch));
+    }, fetchFn));
 
     expect(models).toEqual([{
       id: 'gpt-5.5',

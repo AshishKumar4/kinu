@@ -14,12 +14,12 @@ The threshold is expressed in chars/bytes at two scales: **40,000 chars** for to
 |---|---|---|---|
 | `run`, `web` fetch, `execute_tools` results | head + tail (40k) | `/.proteus/tool-output/<id>.log` | `core/src/tools/clamp.ts` |
 | MCP / external tool results | head + tail (40k) | same | `withClampedToolResults` at each backend's MCP wiring |
-| Attachments the model cannot accept | reference text part | `/local/attachments/<hash>.<ext>` | `core/src/prompting/attachment-sanitizer.ts` |
+| Attachments the model cannot accept | reference text part | `attachments/<hash>.<ext>` | `core/src/prompting/attachment-sanitizer.ts` |
 | Text attachments over 8 KiB | reference text part | same | same |
 | Documents the model *can* accept, over 1 MiB | reference text part | same | same |
 | Pasted user text over 8 KiB | 2,000-char head + address | same | same |
-| Subordinate reports / peer replies | 600-char brief | `/local/.proteus/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
-| Compacted history ranges | checkpoint summary | `/local/.proteus/compaction/<session>/<range>.md` | `@proteus/compaction` `stores.ts` |
+| Subordinate reports / peer replies | 600-char brief | `.proteus/event-content/<hash>.txt` | `core/src/events/hub/content-spill.ts` |
+| Compacted history ranges | checkpoint summary | `.proteus/compaction/<session>/<range>.md` | `@proteus/compaction` `stores.ts` |
 
 `SPILL_DIRS` in `core/src/context-budget.ts` is the single source of truth for those addresses; every producer builds its paths from it.
 

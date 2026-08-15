@@ -201,20 +201,21 @@ export interface DynamicContextSources {
  * request and append one per step.
  */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
-  return {
-    ...(sources.factsBlock ? { factsBlock: sources.factsBlock } : {}),
-    ...(sources.memoryTail ? { memoryTail: sources.memoryTail } : {}),
-    ...(sources.recoveryFindings.length > 0 ? { recoveries: sources.recoveryFindings } : {}),
+  const context: DynamicContext = {
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
     executors: sources.executors,
     jobs: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
     tasks: flattenTaskList(sources.openTasks),
     delegates: forkDelegates(sources.liveHeadRuns),
-    ...(sources.missingCapabilities.length > 0
-      ? { missingCapabilities: sources.missingCapabilities }
-      : {}),
   };
+  if (sources.factsBlock) context.factsBlock = sources.factsBlock;
+  if (sources.memoryTail) context.memoryTail = sources.memoryTail;
+  if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
+  if (sources.missingCapabilities.length > 0) {
+    context.missingCapabilities = sources.missingCapabilities;
+  }
+  return context;
 }
 
 /** State that only makes sense for THIS turn's user message. */

@@ -28,8 +28,9 @@ export async function runEvalPair(opts: RunEvalPairOpts): Promise<EvalResult[]> 
     try {
       verdict = await opts.judge(c, runA, runB);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       verdict = { winner: 'tie' as const, scoreA: 0.5, scoreB: 0.5,
-                  rationale: `judge error: ${(err as Error).message}` };
+                  rationale: `judge error: ${message}` };
     }
     const result: EvalResult = {
       caseId: c.id,
@@ -60,12 +61,13 @@ async function runOne(
       durationMs: Date.now() - t0,
     };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       caseId: c.id,
       strategyId: strategy.id,
       output: '',
       durationMs: Date.now() - t0,
-      error: (err as Error).message,
+      error: message,
     };
   }
 }

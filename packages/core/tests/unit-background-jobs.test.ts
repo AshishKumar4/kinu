@@ -18,7 +18,7 @@ const delay = (ms: number) => new Promise((r) => setTimeout(r, ms));
 describe('BackgroundJobStore', () => {
   test('create → running, settle → completed (idempotent)', () => {
     const s = newStore();
-    s.create({ id: 'j1', kind: 'think', label: 'heads', now: 1 });
+    s.create({ id: 'j1', kind: 'think', workMode: 'build', label: 'heads', now: 1 });
     expect(s.get('j1')?.status).toBe('running');
     expect(s.get('j1')?.epoch).toBe(0);
     s.settle('j1', 0, 'the result', 2);
@@ -34,8 +34,8 @@ describe('BackgroundJobStore', () => {
 
   test('fail marks failed; list reflects state', () => {
     const s = newStore();
-    s.create({ id: 'a', kind: 'run', now: 1 });
-    s.create({ id: 'b', kind: 'think', now: 2 });
+    s.create({ id: 'a', kind: 'run', workMode: 'build', now: 1 });
+    s.create({ id: 'b', kind: 'think', workMode: 'build', now: 2 });
     s.fail('a', 0, 'boom', 3);
     expect(s.get('a')?.status).toBe('failed');
     expect(s.get('a')?.error).toBe('boom');
@@ -47,7 +47,7 @@ describe('BackgroundJobStore', () => {
     // The dynamic-context roster reads this: `list` would let a settled backlog
     // crowd the still-running work out of the block entirely.
     const s = newStore();
-    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', now: i });
+    for (let i = 0; i < 5; i++) s.create({ id: `j${i}`, kind: 'run', workMode: 'build', now: i });
     s.settle('j1', 0, 'ok', 9);
     s.fail('j3', 0, 'boom', 9);
     expect(s.listRunning().map((j) => j.id)).toEqual(['j4', 'j2', 'j0']);
@@ -56,7 +56,7 @@ describe('BackgroundJobStore', () => {
 
   test('cancel marks a running job cancelled; no-op once settled', () => {
     const s = newStore();
-    s.create({ id: 'c', kind: 'think', now: 1 });
+    s.create({ id: 'c', kind: 'think', workMode: 'build', now: 1 });
     s.cancel('c', 0, 2);
     expect(s.get('c')?.status).toBe('cancelled');
     expect(s.get('c')?.error).toMatch(/cancelled/i);
@@ -67,7 +67,7 @@ describe('BackgroundJobStore', () => {
 
   test('lease-epoch fencing: a stale-epoch completion write is rejected, monotonic', () => {
     const s = newStore();
-    s.create({ id: 'e', kind: 'think', now: 1 });
+    s.create({ id: 'e', kind: 'think', workMode: 'build', now: 1 });
     expect(s.epochOf('e')).toBe(0);
 
     // Evict + recover: reclaim bumps the epoch (fences the dead executor) + attempts.
@@ -92,7 +92,7 @@ describe('BackgroundJobStore', () => {
 
   test('reclaim bumps epoch + attempts monotonically across repeated eviction', () => {
     const s = newStore();
-    s.create({ id: 'r', kind: 'think', now: 1 });
+    s.create({ id: 'r', kind: 'think', workMode: 'build', now: 1 });
     expect(s.reclaim('r')).toEqual({ epoch: 1, attempts: 1 });
     expect(s.reclaim('r')).toEqual({ epoch: 2, attempts: 2 });
     expect(s.reclaim('r')).toEqual({ epoch: 3, attempts: 3 });
@@ -103,15 +103,15 @@ describe('BackgroundJobStore', () => {
 
   test('create stores input_json; getInput round-trips it for retry', () => {
     const s = newStore();
-    s.create({ id: 'd', kind: 'execute_tools', input: '{"code":"1+1"}', now: 1 });
+    s.create({ id: 'd', kind: 'execute_tools', workMode: 'build', input: '{"code":"1+1"}', now: 1 });
     expect(s.getInput('d')).toBe('{"code":"1+1"}');
     expect(s.getInput('missing')).toBeNull();
   });
 
   test('dismiss removes only settled jobs; clearSettled keeps running ones', () => {
     const s = newStore();
-    s.create({ id: 'run1', kind: 'run', now: 1 });
-    s.create({ id: 'done1', kind: 'think', now: 2 });
+    s.create({ id: 'run1', kind: 'run', workMode: 'build', now: 1 });
+    s.create({ id: 'done1', kind: 'think', workMode: 'build', now: 2 });
     s.settle('done1', 0, 'ok', 3);
     // Can't dismiss a running job.
     s.dismiss('run1');
@@ -119,7 +119,7 @@ describe('BackgroundJobStore', () => {
     s.dismiss('done1');
     expect(s.get('done1')).toBeNull();
     // clearSettled drops settled, keeps running.
-    s.create({ id: 'done2', kind: 'think', now: 4 }); s.fail('done2', 0, 'x', 5);
+    s.create({ id: 'done2', kind: 'think', workMode: 'build', now: 4 }); s.fail('done2', 0, 'x', 5);
     s.clearSettled();
     expect(s.get('done2')).toBeNull();
     expect(s.get('run1')?.status).toBe('running');
@@ -138,8 +138,10 @@ describe('serializeJobResult', () => {
     // A backgrounded execute_tools can resolve a BigInt — JSON.stringify throws
     // on it; the helper must degrade to a string so settle() still records it.
     expect(serializeJobResult(10n)).toBe('10');
-    const circular: Record<string, unknown> = {}; circular.self = circular;
-    expect(typeof serializeJobResult(circular)).toBe('string');
+    interface CircularValue { self?: CircularValue }
+    const circular: CircularValue = {};
+    circular.self = circular;
+    expect(serializeJobResult(circular)).toBe('[object Object]');
   });
 
   test('an oversize result is stored whole — the wake message promises the full result', () => {

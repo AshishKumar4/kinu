@@ -110,13 +110,13 @@ export async function modifyScaffold(
   // Ensure the current content is backed up at its own version file so
   // rollback can restore it.
   const current = await rt.identity.scaffold.read();
-  await rt.storage.vfs.writeFile(`scaffold/agent.js.v${currentVersion}`, current);
+  await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v${currentVersion}`, current);
   // The failure cell the proposal claims to target, read off the code's own
   // `// pathology: <id>` tag. Parsed HERE rather than at each call site so
   // every proposal path — session evolution, agent.proposeScaffold, a GEPA
   // scaffold winner — stamps it the same way or not at all.
-  rt.storage.sql`
-    INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_version, pathology)
+  void rt.storage.sql`
+INSERT INTO scaffold_versions (version, written_at, rationale, status, parent_version, pathology)
     VALUES (${newVersion}, ${nowMs()}, ${rationale}, 'pending', ${baseVersion}, ${parsePathologyTag(code)})
   `;
 
@@ -130,7 +130,7 @@ export async function modifyScaffold(
   // flip with no on-disk consequence. Now the live `scaffold/agent.js` stays
   // on the current version's content throughout shadow eval; promotion is a
   // genuine file swap. See applyPromotionDecision in shadow.ts.
-  await rt.storage.vfs.writeFile(`scaffold/agent.js.v${newVersion}`, code);
+  await rt.storage.vfs.writeFile(`${rt.identity.scaffold.path}.v${newVersion}`, code);
   await rt.memory.append(
     `memory/logs/${today()}.md`,
     `\n## Scaffold v${newVersion} (pending)\n${rationale}\n`,

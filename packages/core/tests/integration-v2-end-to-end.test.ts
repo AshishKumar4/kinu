@@ -40,6 +40,10 @@ import {
 } from '../src/index.js';
 import { makeSql, makeExecRaw, createTestRuntime } from './helpers.js';
 
+interface HeadReportIndex {
+  [headId: string]: HeadReport;
+}
+
 // ── 1. Inline executor (workspace provider) ──────────────────────────
 
 describe('v2 e2e: workspace executor via createInlineExecutor', () => {
@@ -72,7 +76,7 @@ describe('v2 e2e: branching heads → merge', () => {
     const sql = makeSql(db);
     const journal = new HeadJournal(sql);
 
-    const headReports: Record<string, HeadReport> = {
+    const headReports: HeadReportIndex = {
       'survey': {
         id: 'will-be-replaced', status: 'completed',
         summary: 'Survey finding: 3 prior impls exist, all use the X pattern.',
@@ -136,6 +140,7 @@ describe('v2 e2e: branching heads → merge', () => {
     };
 
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       rootId: 'root-1',
       inheritedContext,
@@ -150,7 +155,7 @@ describe('v2 e2e: branching heads → merge', () => {
     // v2: headIds is now populated from the actual spawned handles (not
     // a hack mapping evidence ids).
     expect(result.headIds.length).toBe(3);
-    expect(result.headIds.every((id) => typeof id === 'string' && id.length > 0)).toBe(true);
+    expect(result.headIds.every((id) => id.length > 0)).toBe(true);
 
     const rows = sql<{ status: string; summary: string | null }>`SELECT status, summary FROM head_journal`;
     expect(rows.length).toBe(3);
@@ -173,7 +178,7 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield task; }');
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial', 'current')`;
 
     const validCode = `async function* run(rt, task) {
@@ -204,9 +209,9 @@ describe('v2 e2e: scaffold shadow rollout', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial bootstrap', 'current')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (1, ${Date.now()}, 'try alternate loop with retry', 'pending')`;
 
     const judge = (winner: 'pending' | 'current') => ({

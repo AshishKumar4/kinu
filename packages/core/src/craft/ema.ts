@@ -78,11 +78,11 @@ export function updateCraftScores(
     `[0];
 
     if (!existing) {
-      sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
+      void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
           VALUES (${name}, ${outcome}, 1, ${now})`;
     } else {
       const newScore = emaUpdate(existing.score, outcome, alpha);
-      sql`UPDATE craft_scores
+      void sql`UPDATE craft_scores
           SET score = ${newScore}, uses = uses + 1, last_used_at = ${now}
           WHERE tool_name = ${name}`;
     }

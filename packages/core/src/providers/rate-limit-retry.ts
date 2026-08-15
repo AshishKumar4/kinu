@@ -1,4 +1,5 @@
 import { asFetchFunction } from './fetch-shim.js';
+import * as v from 'valibot';
 
 const DEFAULT_MAX_ATTEMPTS = 6;
 const DEFAULT_MAX_ELAPSED_MS = 180_000;
@@ -64,7 +65,7 @@ export function withRateLimitRetry(
 }
 
 function hasReplayableBody(input: RequestInfo | URL, init: RequestInit | undefined): boolean {
-  if (init?.body !== undefined) return typeof init.body === 'string';
+  if (init?.body !== undefined) return v.safeParse(v.string(), init.body).success;
   return !(input instanceof Request) || input.body === null;
 }
 
@@ -93,9 +94,7 @@ function parseRetryAfter(value: string | null, nowMs: number): number | null {
 
 function providerHost(input: RequestInfo | URL): string {
   try {
-    const url = typeof input === 'string' ? input
-      : input instanceof URL ? input.toString()
-        : input.url;
+    const url = input instanceof Request ? input.url : input.toString();
     return new URL(url).host || 'provider';
   } catch {
     return 'provider';

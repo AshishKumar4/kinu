@@ -40,8 +40,10 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import {
   EVIDENCE_BUDGETS, evidenceWindow, isTrivialTurn,
-  type CorpusTurn, type ToolCallRecord,
+  JsonArraySchema, JsonObjectSchema, JsonValueSchema, parseJsonValue,
+  type CorpusTurn, type JsonObject, type JsonValue, type ToolCallRecord,
 } from '@proteus/core';
+import * as v from 'valibot';
 
 /** Where Claude Code keeps them. */
 export function defaultTranscriptRoot(home: string): string {
@@ -51,42 +53,107 @@ export function defaultTranscriptRoot(home: string): string {
 // ── The wire shapes, as far as this reader needs them ────────────
 
 interface ContentBlock {
-  type?: unknown;
-  text?: unknown;
-  name?: unknown;
-  input?: unknown;
-  content?: unknown;
-  is_error?: unknown;
+  type?: string;
+  text?: string;
+  name?: string;
+  input?: JsonObject;
+  content?: JsonValue;
+  is_error?: boolean;
 }
 
 interface Entry {
-  type?: unknown;
-  uuid?: unknown;
-  parentUuid?: unknown;
-  isSidechain?: unknown;
-  isMeta?: unknown;
-  isCompactSummary?: unknown;
-  entrypoint?: unknown;
-  sessionKind?: unknown;
-  version?: unknown;
-  timestamp?: unknown;
-  interruptedMessageId?: unknown;
-  toolDenialKind?: unknown;
-  message?: { role?: unknown; content?: unknown };
+  type?: string;
+  uuid?: string;
+  parentUuid?: string;
+  isSidechain?: boolean;
+  isMeta?: boolean;
+  isCompactSummary?: boolean;
+  entrypoint?: string;
+  sessionKind?: string;
+  version?: string;
+  timestamp?: string;
+  interruptedMessageId?: string;
+  toolDenialKind?: string;
+  message?: { role?: string; content?: JsonValue };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
+function normalizedEntry(input: { value: JsonValue }): Entry | null {
+  const record = v.safeParse(JsonObjectSchema, input.value);
+  if (!record.success) return null;
+  const entry: Entry = {};
+  const type = stringValue(record.output.type);
+  const uuid = stringValue(record.output.uuid);
+  const parentUuid = stringValue(record.output.parentUuid);
+  const entrypoint = stringValue(record.output.entrypoint);
+  const sessionKind = stringValue(record.output.sessionKind);
+  const version = stringValue(record.output.version);
+  const timestamp = stringValue(record.output.timestamp);
+  const interruptedMessageId = stringValue(record.output.interruptedMessageId);
+  const toolDenialKind = stringValue(record.output.toolDenialKind);
+  const isSidechain = booleanValue(record.output.isSidechain);
+  const isMeta = booleanValue(record.output.isMeta);
+  const isCompactSummary = booleanValue(record.output.isCompactSummary);
+  if (type !== undefined) entry.type = type;
+  if (uuid !== undefined) entry.uuid = uuid;
+  if (parentUuid !== undefined) entry.parentUuid = parentUuid;
+  if (entrypoint !== undefined) entry.entrypoint = entrypoint;
+  if (sessionKind !== undefined) entry.sessionKind = sessionKind;
+  if (version !== undefined) entry.version = version;
+  if (timestamp !== undefined) entry.timestamp = timestamp;
+  if (interruptedMessageId !== undefined) entry.interruptedMessageId = interruptedMessageId;
+  if (toolDenialKind !== undefined) entry.toolDenialKind = toolDenialKind;
+  if (isSidechain !== undefined) entry.isSidechain = isSidechain;
+  if (isMeta !== undefined) entry.isMeta = isMeta;
+  if (isCompactSummary !== undefined) entry.isCompactSummary = isCompactSummary;
+  const message = v.safeParse(JsonObjectSchema, record.output.message);
+  if (message.success) {
+    const normalizedMessage: Entry['message'] = {};
+    const role = stringValue(message.output.role);
+    if (role !== undefined) normalizedMessage.role = role;
+    const content = v.safeParse(v.optional(JsonValueSchema), message.output.content);
+    if (content.success && content.output !== undefined) normalizedMessage.content = content.output;
+    entry.message = normalizedMessage;
+  }
+  return entry;
+}
+
+function normalizedBlock(input: { value: JsonValue }): ContentBlock | null {
+  const record = v.safeParse(JsonObjectSchema, input.value);
+  if (!record.success) return null;
+  const block: ContentBlock = {};
+  const type = stringValue(record.output.type);
+  const text = stringValue(record.output.text);
+  const name = stringValue(record.output.name);
+  const isError = booleanValue(record.output.is_error);
+  if (type !== undefined) block.type = type;
+  if (text !== undefined) block.text = text;
+  if (name !== undefined) block.name = name;
+  if (isError !== undefined) block.is_error = isError;
+  const parsedInput = v.safeParse(JsonObjectSchema, record.output.input);
+  if (parsedInput.success) block.input = parsedInput.output;
+  const content = v.safeParse(v.optional(JsonValueSchema), record.output.content);
+  if (content.success && content.output !== undefined) block.content = content.output;
+  return block;
+}
+
+function stringValue(value: JsonValue | undefined): string | undefined {
+  const parsed = v.safeParse(v.string(), value);
+  return parsed.success ? parsed.output : undefined;
+}
+
+function booleanValue(value: JsonValue | undefined): boolean | undefined {
+  const parsed = v.safeParse(v.boolean(), value);
+  return parsed.success ? parsed.output : undefined;
 }
 
 /** A block's text, whatever nesting the version wrapped it in. Tool results
  *  carry either a bare string or an array of text blocks. */
-function blockText(value: unknown): string {
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value)) {
-    return value.map((part) => (isRecord(part) && typeof part.text === 'string' ? part.text : '')).join('');
-  }
-  return '';
+function blockText(value: JsonValue | undefined): string {
+  const text = v.safeParse(v.string(), value);
+  if (text.success) return text.output;
+  const parts = v.safeParse(JsonArraySchema, value);
+  if (!parts.success) return '';
+  return parts.output.map((part) => normalizedBlock({ value: part })?.text ?? '').join('');
 }
 
 // ── Telling the owner's messages from everything else ────────────
@@ -260,20 +327,20 @@ function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<
   const order: Entry[] = [];
   for (const line of lines) {
     if (line.trim() === '') continue;
-    let parsed: unknown;
+    let parsed: JsonValue;
     try {
-      parsed = JSON.parse(line);
+      parsed = parseJsonValue(line);
     } catch {
       skips.unparsableLines++;
       continue;
     }
-    if (!isRecord(parsed)) {
+    const entry = normalizedEntry({ value: parsed });
+    if (!entry) {
       skips.unparsableLines++;
       continue;
     }
-    const entry = parsed as Entry;
-    if (typeof entry.version === 'string') versions.add(entry.version);
-    if (typeof entry.uuid !== 'string') continue;
+    if (entry.version !== undefined) versions.add(entry.version);
+    if (entry.uuid === undefined) continue;
     byUuid.set(entry.uuid, entry);
     order.push(entry);
   }
@@ -283,12 +350,13 @@ function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<
   let cursor: Entry | undefined = order[order.length - 1];
   const guard = new Set<string>();
   while (cursor !== undefined) {
-    const uuid = cursor.uuid as string;
+    const uuid = cursor.uuid;
+    if (uuid === undefined) break;
     if (guard.has(uuid)) break;
     guard.add(uuid);
     path.push(cursor);
     const parent = cursor.parentUuid;
-    if (typeof parent !== 'string') break;
+    if (parent === undefined) break;
     cursor = byUuid.get(parent);
     if (cursor === undefined) skips.brokenChains++;
   }
@@ -308,7 +376,7 @@ function livePath(lines: ReadonlyArray<string>, skips: MineSkips, versions: Set<
  *  An interrupt or a refusal there is the harness, not the owner. Versions that
  *  record no `entrypoint` predate both and count as interactive. */
 function isNonInteractive(entry: Entry): boolean {
-  return (typeof entry.entrypoint === 'string' && entry.entrypoint !== 'cli') ||
+  return (entry.entrypoint !== undefined && entry.entrypoint !== 'cli') ||
     entry.sessionKind === 'bg';
 }
 
@@ -337,17 +405,19 @@ function mineSession(
 
   for (const entry of path) {
     const content = entry.message?.content;
+    const contentArray = v.safeParse(JsonArraySchema, content);
+    const contentText = v.safeParse(v.string(), content);
     if (entry.type === 'assistant') {
-      if (current === null || !Array.isArray(content)) continue;
-      for (const raw of content) {
-        if (!isRecord(raw)) continue;
-        const block = raw as ContentBlock;
-        if (block.type === 'text' && typeof block.text === 'string') current.texts.push(block.text);
-        if (block.type === 'tool_use' && typeof block.name === 'string') {
-          const args = isRecord(block.input) ? block.input : {};
+      if (current === null || !contentArray.success) continue;
+      for (const raw of contentArray.output) {
+        const block = normalizedBlock({ value: raw });
+        if (!block) continue;
+        if (block.type === 'text' && block.text !== undefined) current.texts.push(block.text);
+        if (block.type === 'tool_use' && block.name !== undefined) {
+          const args = block.input ?? {};
           current.toolCalls.push({ name: block.name, args, result: null });
-          const command = args.command;
-          if (typeof command === 'string' && current.commands.length < COMMANDS_PER_TURN) {
+          const command = stringValue(args.command);
+          if (command !== undefined && current.commands.length < COMMANDS_PER_TURN) {
             current.commands.push(command.slice(0, COMMAND_CHARS));
           }
         }
@@ -357,23 +427,26 @@ function mineSession(
 
     // A user entry. Tool results and the interrupt marker are SIGNALS about the
     // turn in flight; only a real prompt closes it and opens the next.
-    if (Array.isArray(content)) {
-      for (const raw of content) {
-        if (!isRecord(raw)) continue;
-        const block = raw as ContentBlock;
+    if (contentArray.success) {
+      for (const raw of contentArray.output) {
+        const block = normalizedBlock({ value: raw });
+        if (!block) continue;
         if (block.type !== 'tool_result' || current === null) continue;
         if (entry.toolDenialKind === USER_DENIAL_KIND || USER_REJECTION.test(blockText(block.content))) {
           current.toolRejected = true;
         }
       }
-    } else if (typeof content !== 'string') {
+    } else if (!contentText.success) {
       skips.unknownContent++;
       continue;
     }
 
-    const text = typeof content === 'string' ? content : firstText(content);
+    let text: string | null;
+    if (contentText.success) text = contentText.output;
+    else if (contentArray.success) text = firstText(contentArray.output);
+    else continue;
     if (text === null) continue;
-    if (typeof entry.interruptedMessageId === 'string' || INTERRUPT_MARKER.test(text)) {
+    if (entry.interruptedMessageId !== undefined || INTERRUPT_MARKER.test(text)) {
       if (current !== null) current.interrupted = true;
       continue;
     }
@@ -392,7 +465,7 @@ function mineSession(
       sessionId,
       index: drafts.length,
       userMessage: text,
-      createdAt: typeof entry.timestamp === 'string' ? Date.parse(entry.timestamp) : Number.NaN,
+      createdAt: entry.timestamp !== undefined ? Date.parse(entry.timestamp) : Number.NaN,
       texts: [], toolCalls: [], commands: [], interrupted: false, toolRejected: false,
     };
     drafts.push(current);
@@ -403,10 +476,11 @@ function mineSession(
 
 /** The first text block of a user content array, or null when it carries none
  *  (a pure tool-result or image entry). */
-function firstText(content: ReadonlyArray<unknown>): string | null {
-  const texts = content
-    .filter((raw): raw is ContentBlock => isRecord(raw) && (raw as ContentBlock).type === 'text')
-    .map((block) => (typeof block.text === 'string' ? block.text : ''));
+function firstText(content: ReadonlyArray<JsonValue>): string | null {
+  const texts = content.flatMap((raw): string[] => {
+    const block = normalizedBlock({ value: raw });
+    return block?.type === 'text' && block.text !== undefined ? [block.text] : [];
+  });
   return texts.length === 0 ? null : texts.join('\n');
 }
 

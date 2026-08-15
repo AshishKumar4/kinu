@@ -165,9 +165,9 @@
   <text class="xs" x="512" y="727" text-anchor="start">webhook · email · timer · peer message · file change ·</text>
   <text class="xs" x="512" y="743" text-anchor="start">subordinate report · MCP task · job completion · retry</text>
   <text class="xs" x="512" y="759" text-anchor="start"></text>
-  <text class="xs" x="512" y="775" text-anchor="start">Turn in flight → spliced in as one synthetic user</text>
+  <text class="xs" x="512" y="775" text-anchor="start">Compatible live turn → spliced in as one synthetic user</text>
   <text class="xs" x="512" y="791" text-anchor="start">message at the step tail, replayed at that index.</text>
-  <text class="xs" x="512" y="807" text-anchor="start">Idle → queued as the next programmatic turn.</text>
+  <text class="xs" x="512" y="807" text-anchor="start">Idle, own-turn or mode mismatch → queued as a turn.</text>
   <path d="M472 515 L490 515 L490 707 L497 707" class="edge-lite" stroke-dasharray="3 3" marker-end="url(#a)"/>
   <rect x="500" y="829" width="384" height="138" rx="7" fill="var(--blueFill)" stroke="var(--blueLine)"/>
   <text class="b" x="512" y="849" text-anchor="start" fill="var(--blue)">Dynamic context</text>

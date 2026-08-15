@@ -29,8 +29,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: TypeScript check
+      - name: Strict lint and TypeScript check
         run: bun run check
+
+      - name: Production bundle
+        working-directory: packages/cf-backend
+        run: ../../node_modules/.bin/vite build
 
       - name: Core unit tests
         run: bun test --cwd packages/core

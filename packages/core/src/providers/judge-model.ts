@@ -38,7 +38,11 @@ export async function availableJudgeSpecs(
 /** Providers that resell another vendor's models under their own id, so a
  *  bare provider id would misreport the family. Only genuine resell
  *  relationships belong here. */
-const PROVIDER_VENDOR: Readonly<Record<string, string>> = {
+interface ProviderVendorIndex {
+  readonly [provider: string]: string;
+}
+
+const PROVIDER_VENDOR: ProviderVendorIndex = {
   // OpenAI's Codex OAuth endpoint — same GPT models as the `openai` provider.
   codex: 'openai',
 };

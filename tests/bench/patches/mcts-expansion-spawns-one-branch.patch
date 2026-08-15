@@ -1,10 +1,9 @@
 diff --git a/packages/core/src/mcts/engine.ts b/packages/core/src/mcts/engine.ts
-index d21057c..8f8de40 100644
 --- a/packages/core/src/mcts/engine.ts
 +++ b/packages/core/src/mcts/engine.ts
-@@ -46,7 +46,7 @@ export async function runMCTS(
-   const effective: MCTSConfig = resumed ? { ...config, ...resumed.config } : config;
- 
+@@ -73,7 +73,7 @@
+     : { ...config, mode };
+
    const defaults = DEFAULT_CONFIG.mcts;
 -  const N_BRANCHES = Math.max(1, effective.branches);
 +  const N_BRANCHES = Math.min(1, effective.branches);

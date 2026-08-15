@@ -4,7 +4,6 @@
  */
 
 import { describe, test, expect } from 'bun:test';
-import { Database } from 'bun:sqlite';
 import { createTestRuntime } from './helpers.js';
 import { periodicCraftConsolidation } from '../src/craft/consolidation.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
@@ -24,11 +23,11 @@ describe('CraftStore consolidation', () => {
     // Add a tool with many uses but old timestamp (120 days ago → effective ≈ 0.0625)
     rt.craftStore.create({ name: 'stale_tool', description: 'old', params: null, code: 'fn()', scope: 'local' });
     const hundredTwentyDaysAgo = Date.now() - 120 * 86_400_000;
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale_tool', 0.5, 5, ${hundredTwentyDaysAgo})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale_tool', 0.5, 5, ${hundredTwentyDaysAgo})`;
 
     // Add a fresh tool
     rt.craftStore.create({ name: 'fresh_tool', description: 'new', params: null, code: 'fn()', scope: 'local' });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('fresh_tool', 0.8, 3, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('fresh_tool', 0.8, 3, ${Date.now()})`;
 
     await periodicCraftConsolidation(rt);
 
@@ -43,9 +42,9 @@ describe('CraftStore consolidation', () => {
 
     const veryOld = Date.now() - 365 * 86_400_000;
     rt.craftStore.create({ name: 'stale1', description: 'old', params: null, code: 'fn()', scope: 'local' });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale1', 0.3, 5, ${veryOld})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale1', 0.3, 5, ${veryOld})`;
     rt.craftStore.create({ name: 'stale2', description: 'old2', params: null, code: 'fn()', scope: 'local' });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale2', 0.2, 3, ${veryOld})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale2', 0.2, 3, ${veryOld})`;
 
     await periodicCraftConsolidation(rt);
 
@@ -61,11 +60,11 @@ describe('CraftStore consolidation', () => {
 
     const old = Date.now() - 120 * 86_400_000;
     rt.craftStore.create({ name: 'low_use', description: 'x', params: null, code: 'fn()', scope: 'local' });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('low_use', 0.5, 1, ${old})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('low_use', 0.5, 1, ${old})`;
 
     // Also add a high-use fresh tool to avoid BUG-2 guard
     rt.craftStore.create({ name: 'fresh', description: 'y', params: null, code: 'fn()', scope: 'local' });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('fresh', 0.9, 10, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('fresh', 0.9, 10, ${Date.now()})`;
 
     await periodicCraftConsolidation(rt);
 

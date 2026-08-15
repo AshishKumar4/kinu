@@ -1,8 +1,9 @@
 import type {
   ModelCapability, ModelInfo, ModelInputModality, ModelPricing, ProviderDeps,
 } from './types.js';
+import * as v from 'valibot';
 import { MODEL_INPUT_MODALITIES } from './types.js';
-import { cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
+import { cloneModelInfos, nonEmptyString, positiveInteger } from './util.js';
 
 const MODELS_DEV_URL = 'https://models.dev/api.json';
 const DEFAULT_TTL_MS = 5 * 60_000;
@@ -59,6 +60,40 @@ interface ModelsDevCache {
   fetchFn: typeof fetch;
   data: Record<string, ModelsDevProvider>;
 }
+
+const ModelsDevModelSchema = v.object({
+  id: v.optional(v.string()),
+  name: v.optional(v.string()),
+  tool_call: v.optional(v.boolean()),
+  reasoning: v.optional(v.boolean()),
+  status: v.optional(v.string()),
+  limit: v.optional(v.object({
+    context: v.optional(v.number()),
+    output: v.optional(v.number()),
+  })),
+  modalities: v.optional(v.object({
+    input: v.optional(v.array(v.string())),
+    output: v.optional(v.array(v.string())),
+  })),
+  cost: v.optional(v.object({
+    input: v.optional(v.number()),
+    output: v.optional(v.number()),
+    cache_read: v.optional(v.number()),
+    cache_write: v.optional(v.number()),
+  })),
+});
+
+const ModelsDevProviderSchema = v.object({
+  id: v.optional(v.string()),
+  name: v.optional(v.string()),
+  doc: v.optional(v.string()),
+  env: v.optional(v.array(v.string())),
+  npm: v.optional(v.string()),
+  api: v.optional(v.string()),
+  models: v.optional(v.record(v.string(), ModelsDevModelSchema)),
+});
+
+const ModelsDevCatalogSchema = v.record(v.string(), ModelsDevProviderSchema);
 
 let cache: ModelsDevCache | null = null;
 
@@ -128,7 +163,11 @@ export async function listModelsDevProviders(
  * the major ones are pinned here. Only consulted when the catalog itself
  * offers no usable `api`; keys must exist in models.dev to take effect.
  */
-const COMPAT_ENDPOINT_SUPPLEMENT: Record<string, string> = {
+interface CompatEndpointIndex {
+  [provider: string]: string;
+}
+
+const COMPAT_ENDPOINT_SUPPLEMENT: CompatEndpointIndex = {
   google: 'https://generativelanguage.googleapis.com/v1beta/openai',
   groq: 'https://api.groq.com/openai/v1',
   mistral: 'https://api.mistral.ai/v1',
@@ -160,9 +199,9 @@ async function getModelsDevCatalog(fetchFn: typeof fetch | undefined, ttlMs: num
     headers: { accept: 'application/json' },
   });
   if (!response.ok) throw new Error(`models.dev returned HTTP ${response.status}`);
-  const body: unknown = await response.json();
-  if (!isRecord(body)) throw new Error('models.dev response was not an object');
-  const data = body as Record<string, ModelsDevProvider>;
+  const body = v.safeParse(ModelsDevCatalogSchema, await response.json());
+  if (!body.success) throw new Error('models.dev response was not a valid catalog');
+  const data: Record<string, ModelsDevProvider> = body.output;
   cache = { at: Date.now(), fetchFn: fetchImpl, data };
   return data;
 }
@@ -172,7 +211,7 @@ function providerInfoFromModelsDev(id: string, provider: ModelsDevProvider): Mod
     id,
     name: nonEmptyString(provider.name) ?? id,
     doc: nonEmptyString(provider.doc),
-    env: Array.isArray(provider.env) ? provider.env.filter((v): v is string => typeof v === 'string' && v.length > 0) : [],
+    env: provider.env?.filter((name) => name.length > 0) ?? [],
     npm: nonEmptyString(provider.npm),
     api: nonEmptyString(provider.api),
   };
@@ -187,8 +226,8 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
   if (model.tool_call === true) capabilities.push('tools');
   if (model.reasoning === true) capabilities.push('reasoning');
   if (model.modalities?.input?.includes('image')) capabilities.push('vision');
-  const inputModalities = (model.modalities?.input ?? [])
-    .filter((m): m is ModelInputModality => (MODEL_INPUT_MODALITIES as readonly string[]).includes(m));
+  const inputModalities: ModelInputModality[] = MODEL_INPUT_MODALITIES
+    .filter((modality) => model.modalities?.input?.includes(modality) ?? false);
 
   const cost = pricingFromModelsDev(model.cost);
   return {
@@ -196,8 +235,8 @@ function modelInfoFromModelsDev(key: string, model: ModelsDevModel, toolCallOnly
     label: nonEmptyString(model.name) ?? id,
     capabilities,
     contextWindow: positiveInteger(model.limit?.context),
-    ...(cost ? { cost } : {}),
-    ...(inputModalities.length > 0 ? { inputModalities } : {}),
+    cost,
+    inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
   };
 }
 
@@ -211,14 +250,15 @@ function pricingFromModelsDev(cost: ModelsDevModel['cost']): ModelPricing | unde
   const cacheWrite = usdRate(cost?.cache_write);
   return {
     input, output,
-    ...(cacheRead !== undefined ? { cacheRead } : {}),
-    ...(cacheWrite !== undefined ? { cacheWrite } : {}),
+    cacheRead,
+    cacheWrite,
   };
 }
 
 /** A USD-per-1M rate. Zero is a real price (free tiers); negative is not. */
-function usdRate(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
+function usdRate<Value>(value: Value): number | undefined {
+  const rate = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(0)), value);
+  return rate.success ? rate.output : undefined;
 }
 
 function orderModels(models: ModelInfo[], preferredIds: readonly string[] | undefined): ModelInfo[] {

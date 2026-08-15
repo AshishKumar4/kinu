@@ -47,7 +47,7 @@ export function adaptMemory(store: MemoryStore, vectorStore: VectorStore, config
         if (delta.deletedIds.length > 0) await vectorStore.deleteChunks(delta.deletedIds);
         if (delta.upserted.length > 0) await vectorStore.upsertChunks(delta.upserted);
       } catch (err) {
-        console.warn('[proteus] memory vector sync failed:', (err as Error).message);
+        console.warn('[proteus] memory vector sync failed:', errorMessage(err));
         invalidateSemanticIndex(config);
       }
     },
@@ -81,7 +81,7 @@ export async function backfillMemoryVectors(
   try {
     chunks = store.allChunksAfter(cursor, cap);
   } catch (err) {
-    console.warn('[proteus] memory vector backfill could not read chunks:', (err as Error).message);
+    console.warn('[proteus] memory vector backfill could not read chunks:', errorMessage(err));
     return;
   }
   if (chunks.length === 0) {
@@ -98,7 +98,7 @@ export async function backfillMemoryVectors(
     // retries this same page.
     console.warn(
       `[proteus] memory vector backfill page failed (cursor held at "${cursor}"):`,
-      (err as Error).message,
+      errorMessage(err),
     );
     return;
   }
@@ -107,4 +107,8 @@ export async function backfillMemoryVectors(
   if (chunks.length < cap) {
     config.set(AGENT_CONFIG_KEYS.memoryVectorBackfillDone, 'true');
   }
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }

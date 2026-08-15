@@ -12,10 +12,17 @@ function sseEnv() {
   let polls = 0;
   const stub = {
     async setName() {},
-    async getRunEvents() { polls += 1; return []; },
+    async getRunEventsWire() { polls += 1; return '[]'; },
   };
-  const env = {
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+  const bindings = {
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => stub },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, bindings);
+  // SAFETY: the SSE route only reaches the locally constructed orchestrator
+  // namespace and credential secret in this suite.
+  const env = partialEnv as Env;
   return { env, pollCount: () => polls };
 }
 
@@ -49,7 +56,8 @@ describe('run-events SSE client disconnect', () => {
     const res = await handleRunEventsRequest(new Request(
       'https://proteus.example.com/api/workspaces/jarvis/runs/run-1/stream',
     ), env);
-    const reader = res!.body!.getReader();
+    if (!res?.body) throw new Error('Expected an SSE response body');
+    const reader = res.body.getReader();
     await sleep(1200);
     expect(pollCount()).toBeGreaterThanOrEqual(2);
 

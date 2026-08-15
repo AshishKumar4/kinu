@@ -8,6 +8,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
 import { createTestRuntime, createMockSession } from './helpers.js';
 import { runMCTS } from '../src/mcts/engine.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
@@ -15,16 +16,28 @@ import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
 import type { MCTSProgressEvent, SearchNode } from '../src/types/mcts.js';
 import type { Executor, LLM } from '../src/types/primitives.js';
+import type { BranchHandle } from '../src/types/agent-runtime.js';
 
 /** Executor that fails any code containing FAIL_MARKER, passes the rest. */
 function markerExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute(code: string) {
-      return String(code).includes('FAIL_MARKER')
+      return code.includes('FAIL_MARKER')
         ? { result: undefined, error: 'marker assertion failed' }
         : { result: true };
     },
-  } as unknown as Executor;
+  };
+}
+
+/** Simulates a facet/RPC boundary that resolves with a malformed payload. */
+function malformedBranch(): BranchHandle {
+  const branch: BranchHandle = {
+    explore: async () => ({ text: 'placeholder' }),
+    generateReflection: async () => ({ text: 'n/a' }),
+  };
+  Object.defineProperty(branch, 'explore', { value: async () => undefined });
+  return branch;
 }
 
 /** LLM whose complete() always returns `json` and counts judge-prompt calls. */
@@ -54,11 +67,8 @@ describe('MCTS integration', () => {
   test('a branch that resolves a malformed exploration is reported, not fatal', async () => {
     const { rt } = createTestRuntime();
     const failures: string[] = [];
-    rt.spawnBranch = async () => ({
-      // Resolves — but with nothing the engine can read.
-      explore: (async () => undefined) as unknown as never,
-      generateReflection: async () => ({ text: 'n/a' }),
-    });
+    // Resolves — but with nothing the engine can read.
+    rt.spawnBranch = async () => malformedBranch();
 
     initTables(rt);
     const result = await runMCTS(rt, createMockSession(), 'pick a strategy', {
@@ -80,11 +90,11 @@ describe('MCTS integration', () => {
     rt.spawnBranch = async () => {
       const idx = i++;
       return {
-        explore: async (_history, _tools, siblings = []) => {
+        explore: async (_history, _tools, _languages, _mode, siblings = []) => {
           seenSiblings.push(siblings);
           // Echo the received sibling angles into the proposal text so we can
           // assert downstream that explore actually consumed them.
-          return { text: `branch ${idx} differs from: ${siblings.join(' | ')}`, codeUsed: null };
+          return { text: `branch ${idx} differs from: ${siblings.join(' | ')}` };
         },
         generateReflection: async () => ({ text: 'n/a' }),
       };
@@ -125,8 +135,9 @@ describe('MCTS integration', () => {
       const i = branchCounter++;
       return {
         explore: async () => ({
-          text: `branch ${i} explored`,
-          codeUsed: i % 2 === 0 ? 'const x = 1;' : null,
+          text: i % 2 === 0
+            ? `branch ${i} explored\n\`\`\`js\nconst x = 1;\n\`\`\``
+            : `branch ${i} explored`,
         }),
         generateReflection: async () => ({ text: `reflection for branch ${i}` }),
       };
@@ -157,6 +168,8 @@ describe('MCTS integration', () => {
     const proseBranches = children.filter((n) => !n.code_used);
     expect(codeBranches.length).toBeGreaterThan(0);
     expect(proseBranches.length).toBeGreaterThan(0);
+    expect(codeBranches.every((node) => node.code_language === 'javascript')).toBe(true);
+    expect(proseBranches.every((node) => node.code_language === null)).toBe(true);
     const minPassing = Math.min(...codeBranches.map((n) => n.value));
     const maxProse = Math.max(...proseBranches.map((n) => n.value));
     expect(maxProse).toBeLessThanOrEqual(0.3);   // capped at the fail ceiling
@@ -187,8 +200,9 @@ describe('MCTS integration', () => {
       const i = branchCounter++;
       return {
         explore: async () => ({
-          text: `approach ${i}`,
-          codeUsed: i === 0 ? 'const broken = FAIL_MARKER;' : 'const ok = 1;',
+          text: i === 0
+            ? 'approach 0\n```js\nconst broken = FAIL_MARKER;\n```'
+            : `approach ${i}\n\`\`\`js\nconst ok = 1;\n\`\`\``,
         }),
         generateReflection: async () => ({ text: 'n/a' }),
       };
@@ -222,7 +236,7 @@ describe('MCTS integration', () => {
     rt.llm = llm;
     rt.judgeModel = llm;
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'prose approach', codeUsed: null }),
+      explore: async () => ({ text: 'prose approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
 
@@ -239,7 +253,7 @@ describe('MCTS integration', () => {
     rt.llm = llm;
     rt.judgeModel = llm;
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'prose approach', codeUsed: null }),
+      explore: async () => ({ text: 'prose approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
 
@@ -259,7 +273,7 @@ describe('MCTS integration', () => {
     // winner instead of the new task's root and expanded under it.
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'explored', codeUsed: null }),
+      explore: async () => ({ text: 'explored' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
 
@@ -292,7 +306,7 @@ describe('MCTS integration', () => {
       llmResponses: { 'bad approach': '{"score": 0.1}' },
     });
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'bad approach', codeUsed: null }),
+      explore: async () => ({ text: 'bad approach' }),
       generateReflection: async () => ({ text: 'approach failed because auth layer is tightly coupled' }),
     });
 
@@ -325,7 +339,7 @@ describe('MCTS integration', () => {
       llmResponses: { 'hopeless attempt': '{"score": 0.05}' },
     });
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'hopeless attempt', codeUsed: null }),
+      explore: async () => ({ text: 'hopeless attempt' }),
       generateReflection: async () => ({ text: 'everything failed' }),
     });
 
@@ -349,7 +363,7 @@ describe('MCTS integration', () => {
     rt.llm = downLLM;
     rt.judgeModel = downLLM;
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'provider produced rollout', codeUsed: null }),
+      explore: async () => ({ text: 'provider produced rollout' }),
       generateReflection: async () => ({ text: 'judge failure should penalize the branch' }),
     });
 
@@ -377,7 +391,7 @@ describe('MCTS branch lifetime', () => {
     rt.spawnBranch = async (id) => {
       spawned.push(id);
       return {
-        explore: async () => ({ text: 'a solid approach', codeUsed: null }),
+        explore: async () => ({ text: 'a solid approach' }),
         generateReflection: async () => ({ text: 'lesson' }),
       };
     };
@@ -416,7 +430,7 @@ describe('MCTS progress reporting', () => {
   test('phases are announced per iteration, in order', async () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'a solid approach', codeUsed: null }),
+      explore: async () => ({ text: 'a solid approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
 
@@ -437,6 +451,28 @@ describe('MCTS progress reporting', () => {
     expect(events[0]).toMatchObject({ type: 'phase', phase: 'explore', iteration: 1, branches: 2 });
   });
 
+  test('reports an unsupported proposal language once per search', async () => {
+    const { rt } = createTestRuntime();
+    rt.spawnBranch = async () => ({
+      explore: async () => ({ text: '```python\nprint(42)\n```' }),
+      generateReflection: async () => ({ text: 'n/a' }),
+    });
+    initTables(rt);
+    const events: MCTSProgressEvent[] = [];
+    await runMCTS(rt, createMockSession(), 'write a script', {
+      budget: 2,
+      branches: 2,
+      onProgress: (event) => events.push(event),
+    });
+    expect(events.filter(({ type }) => type === 'grounding-unavailable')).toEqual([{
+      type: 'grounding-unavailable',
+      language: 'python',
+      canRun: ['javascript'],
+      iteration: 1,
+      remainingBudget: 2,
+    }]);
+  });
+
   test('a failed exploration is reported with its provider error, and the search continues', async () => {
     const { rt } = createTestRuntime();
     let branch = 0;
@@ -445,7 +481,7 @@ describe('MCTS progress reporting', () => {
       return {
         explore: async () => {
           if (failing) throw new Error('Failed after 3 attempts. Last error: 429 rate limited');
-          return { text: 'a solid approach', codeUsed: null };
+          return { text: 'a solid approach' };
         },
         generateReflection: async () => ({ text: 'n/a' }),
       };
@@ -471,7 +507,7 @@ describe('MCTS progress reporting', () => {
       llmResponses: { 'weak attempt': '{"score": 0.05}' },
     });
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'weak attempt', codeUsed: null }),
+      explore: async () => ({ text: 'weak attempt' }),
       generateReflection: async () => { throw new Error('reflection provider down'); },
     });
 
@@ -503,7 +539,7 @@ describe('MCTS strategy — stored operator overrides', () => {
     const { createMCTSStrategy } = await import('../src/strategy/mcts.js');
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'explored', codeUsed: null }),
+      explore: async () => ({ text: 'explored' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
     initTables(rt);
@@ -511,8 +547,9 @@ describe('MCTS strategy — stored operator overrides', () => {
     const strategy = createMCTSStrategy();
     const result = await strategy.explore({
       task: 'tuned task',
+      mode: 'build',
       rt,
-      model: undefined as never,
+      model: new MockLanguageModelV3(),
       budget: { maxIterations: undefined },
       options: { mcts: { session: createMockSession(), budget: 2, branches: 1 } },
     });
@@ -530,7 +567,7 @@ describe('MCTS strategy — stored operator overrides', () => {
     rt.llm = llm;
     rt.judgeModel = llm;
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'explored', codeUsed: null }),
+      explore: async () => ({ text: 'explored' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
     initTables(rt);
@@ -538,8 +575,9 @@ describe('MCTS strategy — stored operator overrides', () => {
     const strategy = createMCTSStrategy();
     await strategy.explore({
       task: 'judge-knob task',
+      mode: 'build',
       rt,
-      model: undefined as never,
+      model: new MockLanguageModelV3(),
       budget: { maxIterations: undefined },
       options: { mcts: { session: createMockSession(), budget: 1, branches: 2, judgeSamples: 1 } },
     });

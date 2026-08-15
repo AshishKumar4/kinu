@@ -33,6 +33,7 @@
  * wakes the sender's next turn instead.
  */
 
+import * as v from 'valibot';
 import type { EventLog } from '../hub/log.js';
 import type { ReplyChannelStore } from '../hub/reply-channel.js';
 import type { PeerAgentPayload, ReplyChannelRow } from '../hub/types.js';
@@ -43,6 +44,11 @@ import {
   type PeerAskOutcome, type PeerReplyOutcome, type PeerSendOutcome,
 } from '../../tools/agents-tool.js';
 import type { SqlExec, VFS } from '../../types/primitives.js';
+import type { WorkMode } from '../../prompting/surface.js';
+import {
+  JsonValueSchema, parseJsonObject,
+  type JsonObject, type JsonValue,
+} from '../../utils/json.js';
 
 // ── Wire shapes ──────────────────────────────────────────────────
 
@@ -51,7 +57,8 @@ export interface PeerMessage {
   sender_agent_name: string;
   sender_user_id: string;
   topic: string;
-  body: unknown;
+  body: JsonValue;
+  mode: WorkMode;
   /** The sender holds an ask waiter — open a peer-back reply channel. */
   reply_expected?: boolean;
 }
@@ -75,7 +82,7 @@ export interface OutboxRow {
   id: string;
   receiver_agent_name: string;
   receiver_user_id: string;
-  payload: unknown;
+  payload: JsonObject;
   causality_event_id: string | null;
   next_attempt_at: number;
 }
@@ -84,10 +91,47 @@ export interface SendOptions {
   receiver_agent_name: string;
   receiver_user_id: string;
   topic: string;
-  body: unknown;
+  body: JsonValue;
+  mode: WorkMode;
   reply_expected?: boolean;
   caused_by_event_id?: string;
 }
+
+const WorkModeSchema = v.picklist(['plan', 'build']);
+const PeerBackHolderSchema = v.object({
+  agent_name: v.string(),
+  user_id: v.string(),
+  ask_id: v.string(),
+  mode: WorkModeSchema,
+});
+const ReplyBodySchema = v.object({
+  in_reply_to: v.string(),
+  content: v.optional(JsonValueSchema),
+});
+const OutboxDbRowSchema = v.object({
+  id: v.string(),
+  receiver_agent_name: v.string(),
+  receiver_user_id: v.string(),
+  payload: v.string(),
+  attempt_count: v.number(),
+  next_attempt_at: v.number(),
+});
+const OutboxPayloadSchema = v.object({
+  topic: v.string(),
+  body: JsonValueSchema,
+  mode: WorkModeSchema,
+  reply_expected: v.optional(v.boolean()),
+});
+const DeliveredOutboxRowSchema = v.object({
+  receiver_agent_name: v.string(),
+  receiver_user_id: v.string(),
+  payload: v.string(),
+});
+const OutboxStateSchema = v.object({
+  state: v.string(),
+  last_error: v.nullable(v.string()),
+});
+const NextRetrySchema = v.object({ next: v.nullable(v.number()) });
 
 /** Sender API: enqueue a peer message. Returns the outbox row id. */
 export function enqueueOutboundPeer(
@@ -100,7 +144,7 @@ export function enqueueOutboundPeer(
     id,
     receiver_agent_name: opts.receiver_agent_name,
     receiver_user_id: opts.receiver_user_id,
-    payload: { topic: opts.topic, body: opts.body, reply_expected: opts.reply_expected ?? false },
+    payload: { topic: opts.topic, body: opts.body, mode: opts.mode, reply_expected: opts.reply_expected ?? false },
     causality_event_id: opts.caused_by_event_id ?? null,
     next_attempt_at: now,
   });
@@ -147,9 +191,10 @@ export async function receivePeerMessage(
     topic: msg.topic,
     body: msg.body,
     sender_event_id: msg.sender_event_id,
+    proteus_mode: msg.mode,
     reply_expected: msg.reply_expected ?? false,
-    ...(bodyPath ? { body_path: bodyPath } : {}),
   };
+  if (bodyPath) Object.assign(payload, { body_path: bodyPath });
 
   try {
     const { id, admitted } = deps.log.publish({
@@ -165,7 +210,7 @@ export async function receivePeerMessage(
     if (admitted && msg.reply_expected) deps.openPeerBackChannel?.(id, msg);
     return { admitted, event_id: id };
   } catch (err) {
-    return { admitted: false, reason: (err as Error).message };
+    return { admitted: false, reason: err instanceof Error ? err.message : String(err) };
   }
 }
 
@@ -181,15 +226,7 @@ interface PeerBackHolder {
   agent_name: string;
   user_id: string;
   ask_id: string;
-}
-
-interface OutboxDbRow {
-  id: string;
-  receiver_agent_name: string;
-  receiver_user_id: string;
-  payload: string;
-  attempt_count: number;
-  next_attempt_at: number;
+  mode: WorkMode;
 }
 
 export interface PeerHubDeps {
@@ -224,7 +261,7 @@ export class PeerHub {
    *  awaits inside the current activation. A reply with no waiter (timeout
    *  passed, or the agent evicted) stays a pending event and wakes a normal
    *  turn. */
-  private readonly waiters = new Map<string, (envelope: { content: unknown }) => void>();
+  private readonly waiters = new Map<string, (envelope: { content: JsonValue | undefined }) => void>();
   private dispatching = false;
 
   constructor(private readonly deps: PeerHubDeps) {}
@@ -253,6 +290,7 @@ export class PeerHub {
           agent_name: m.sender_agent_name,
           user_id: m.sender_user_id,
           ask_id: m.sender_event_id,
+          mode: m.mode,
         };
         this.deps.replyChannels.open({
           event_id,
@@ -281,19 +319,19 @@ export class PeerHub {
    *  that receiver, so the correlation is unforgeable by third parties. */
   private isReplyToMyAsk(msg: PeerMessage): boolean {
     if (msg.topic !== PEER_REPLY_TOPIC) return false;
-    const body = (msg.body ?? null) as { in_reply_to?: unknown } | null;
-    const askId = typeof body?.in_reply_to === 'string' ? body.in_reply_to : null;
-    if (!askId) return false;
+    const body = v.safeParse(ReplyBodySchema, msg.body);
+    if (!body.success) return false;
+    const askId = body.output.in_reply_to;
     const rows = this.deps.sql.exec(
       `SELECT receiver_agent_name, receiver_user_id, payload
        FROM peer_outbox WHERE id = ? AND state = 'delivered'`, askId,
-    ).toArray() as Array<{ receiver_agent_name: string; receiver_user_id: string; payload: string }>;
-    const row = rows[0];
+    ).toArray();
+    const row = rows[0] ? v.parse(DeliveredOutboxRowSchema, rows[0]) : undefined;
     if (!row) return false;
     if (row.receiver_agent_name !== msg.sender_agent_name) return false;
     if (row.receiver_user_id !== msg.sender_user_id) return false;
     try {
-      return (JSON.parse(row.payload) as { reply_expected?: boolean }).reply_expected === true;
+      return v.parse(OutboxPayloadSchema, parseJsonObject(row.payload)).reply_expected === true;
     } catch {
       return false;
     }
@@ -302,20 +340,20 @@ export class PeerHub {
   /** Match a transport reply envelope to a live ask waiter. */
   private resolveAskWaiter(msg: PeerMessage): string | null {
     if (msg.topic !== PEER_REPLY_TOPIC) return null;
-    const body = (msg.body ?? null) as { in_reply_to?: unknown; content?: unknown } | null;
-    const askId = typeof body?.in_reply_to === 'string' ? body.in_reply_to : null;
-    if (!askId) return null;
+    const body = v.safeParse(ReplyBodySchema, msg.body);
+    if (!body.success) return null;
+    const askId = body.output.in_reply_to;
     const resolve = this.waiters.get(askId);
     if (!resolve) return null;
-    resolve({ content: body?.content });
+    resolve({ content: body.output.content });
     return askId;
   }
 
   // ── Sending ────────────────────────────────────────────────────
 
   /** Fire-and-forget. */
-  async send(input: { agent: string; userId: string; topic: string; message: string }): Promise<PeerSendOutcome> {
-    const id = this.enqueue(input.agent, input.userId, input.topic, input.message, false);
+  async send(input: { agent: string; userId: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome> {
+    const id = this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, false);
     await this.dispatchOutbox();
     const row = this.outboxState(id);
     if (row?.state === 'dlq') return { status: 'rejected', reason: row.last_error ?? 'rejected by receiver' };
@@ -323,8 +361,8 @@ export class PeerHub {
   }
 
   /** Send-and-await over the async transport. */
-  async ask(input: { agent: string; userId: string; topic: string; message: string; timeoutMs: number }): Promise<PeerAskOutcome> {
-    const askId = this.enqueue(input.agent, input.userId, input.topic, input.message, true);
+  async ask(input: { agent: string; userId: string; topic: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerAskOutcome> {
+    const askId = this.enqueue(input.agent, input.userId, input.topic, input.message, input.mode, true);
     const wait = this.registerWaiter(askId, input.timeoutMs);
     await this.dispatchOutbox();
     const row = this.outboxState(askId);
@@ -359,26 +397,30 @@ export class PeerHub {
 
   /** ReplyDispatcher body for kind='peer_back': route the answer back to the
    *  asker over the same durable outbox transport. */
-  async dispatchPeerBack(channel: ReplyChannelRow, payload: unknown): Promise<{ delivered: boolean; detail?: string }> {
-    let holder: Partial<PeerBackHolder>;
+  async dispatchPeerBack(channel: ReplyChannelRow, payload: JsonValue): Promise<{ delivered: boolean; detail?: string }> {
+    let holder: PeerBackHolder;
     try {
-      holder = JSON.parse(channel.holder_addr) as Partial<PeerBackHolder>;
+      holder = v.parse(PeerBackHolderSchema, parseJsonObject(channel.holder_addr));
     } catch {
       return { delivered: false, detail: 'malformed peer_back holder_addr' };
-    }
-    if (!holder.agent_name || !holder.user_id || !holder.ask_id) {
-      return { delivered: false, detail: 'incomplete peer_back holder_addr' };
     }
     this.enqueue(holder.agent_name, holder.user_id, PEER_REPLY_TOPIC, {
       in_reply_to: holder.ask_id,
       content: payload,
-    }, false);
+    }, holder.mode, false);
     await this.dispatchOutbox();
     // Durable handoff: the outbox owns retries from here on.
     return { delivered: true };
   }
 
-  private enqueue(receiverAgent: string, receiverUserId: string, topic: string, body: unknown, replyExpected: boolean): string {
+  private enqueue(
+    receiverAgent: string,
+    receiverUserId: string,
+    topic: string,
+    body: JsonValue,
+    mode: WorkMode,
+    replyExpected: boolean,
+  ): string {
     return enqueueOutboundPeer({
       enqueueOutboxRow: (row) => {
         this.deps.sql.exec(
@@ -397,6 +439,7 @@ export class PeerHub {
       receiver_user_id: receiverUserId,
       topic,
       body,
+      mode,
       reply_expected: replyExpected,
     }, this.now());
   }
@@ -414,7 +457,7 @@ export class PeerHub {
       const rows = this.deps.sql.exec(
         `SELECT id, receiver_agent_name, receiver_user_id, payload, attempt_count, next_attempt_at
          FROM peer_outbox WHERE state = 'pending' ORDER BY id`,
-      ).toArray() as unknown as OutboxDbRow[];
+      ).toArray().map((row) => v.parse(OutboxDbRowSchema, row));
 
       const blocked = new Set<string>();
       for (const row of rows) {
@@ -426,16 +469,26 @@ export class PeerHub {
           continue;
         }
 
-        const payload = JSON.parse(row.payload) as { topic: string; body: unknown; reply_expected?: boolean };
+        const parsedPayload = v.safeParse(OutboxPayloadSchema, parseJsonObject(row.payload));
+        if (!parsedPayload.success) {
+          this.deps.sql.exec(
+            `UPDATE peer_outbox SET state = 'dlq', attempt_count = attempt_count + 1, last_error = ? WHERE id = ?`,
+            'peer outbox row is missing a valid work mode', row.id,
+          );
+          continue;
+        }
+        const payload = parsedPayload.output;
         try {
-          const res = await this.deps.deliver(row.receiver_agent_name, {
+          const message: PeerMessage = {
             sender_event_id: row.id,
             sender_agent_name: this.deps.selfAgentName(),
             sender_user_id: this.deps.selfUserId(),
             topic: payload.topic,
             body: payload.body,
-            ...(payload.reply_expected ? { reply_expected: true } : {}),
-          });
+            mode: payload.mode,
+          };
+          if (payload.reply_expected) Object.assign(message, { reply_expected: true });
+          const res = await this.deps.deliver(row.receiver_agent_name, message);
           if (res.admitted || res.event_id) {
             // Admitted now, or deduped by the receiver (a crash redelivery) —
             // delivered either way.
@@ -478,23 +531,20 @@ export class PeerHub {
   nextRetryAt(): number | null {
     const rows = this.deps.sql.exec(
       `SELECT MIN(next_attempt_at) AS next FROM peer_outbox WHERE state = 'pending'`,
-    ).toArray() as Array<{ next: number | null }>;
-    return rows[0]?.next ?? null;
+    ).toArray();
+    return rows[0] ? v.parse(NextRetrySchema, rows[0]).next : null;
   }
 
   private outboxState(id: string): { state: string; last_error: string | null } | null {
     const rows = this.deps.sql.exec(
       `SELECT state, last_error FROM peer_outbox WHERE id = ?`, id,
-    ).toArray() as Array<{ state: string; last_error: string | null }>;
-    return rows[0] ?? null;
+    ).toArray();
+    return rows[0] ? v.parse(OutboxStateSchema, rows[0]) : null;
   }
 
-  private registerWaiter(askId: string, timeoutMs: number): {
-    promise: Promise<{ content: unknown } | null>;
-    cancel(): void;
-  } {
+  private registerWaiter(askId: string, timeoutMs: number) {
     let cancel!: () => void;
-    const promise = new Promise<{ content: unknown } | null>((resolve) => {
+    const promise = new Promise<{ content: JsonValue | undefined } | null>((resolve) => {
       const timer = setTimeout(() => {
         this.waiters.delete(askId);
         resolve(null);

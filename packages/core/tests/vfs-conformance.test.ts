@@ -14,9 +14,17 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import type { VFS } from '../src/types/primitives.js';
-import { isVfsError } from '../src/vfs/index.js';
-import { sandboxFiles, nimbusSessionFiles, deviceFiles } from '../src/execution/index.js';
+import type { JsonValue } from '../src/utils/json.js';
+import {
+  sandboxFiles,
+  nimbusSessionFiles,
+  deviceFiles,
+  type DeviceTransport,
+  type NimbusSandboxHandle,
+  type SandboxHandle,
+} from '../src/execution/index.js';
 import { createWorkspaceBundle } from './helpers.js';
 
 /** The byte corpus that must survive a write→read round trip on every mount:
@@ -24,9 +32,17 @@ import { createWorkspaceBundle } from './helpers.js';
  *  that is invalid UTF-8 (forces the base64 transport). */
 const BINARY = new Uint8Array([0xef, 0xbb, 0xbf, 0x00, 0x01, 0x80, 0xff, 0xfe, 0x00, 0x42]);
 
-const code = async (fn: () => Promise<unknown>): Promise<string | undefined> => {
-  try { await fn(); return undefined; } catch (e) { return (e as { code?: string }).code; }
-};
+const ErrorCodeSchema = v.object({ code: v.optional(v.string()) });
+
+async function rejectionCode<Result>(action: () => Promise<Result>): Promise<string | undefined> {
+  try {
+    await action();
+    return undefined;
+  } catch (error) {
+    const parsed = v.safeParse(ErrorCodeSchema, error);
+    return parsed.success ? parsed.output.code : undefined;
+  }
+}
 
 // ── shared in-memory environment for the mount adapters ─────────────────────
 
@@ -47,7 +63,8 @@ class MemFs {
   del(p: string): boolean { return this.files.delete(this.norm(p)); }
   stat(p: string): { size: number; isDir: boolean } | null {
     p = this.norm(p);
-    if (this.files.has(p)) return { size: this.files.get(p)!.length, isDir: false };
+    const file = this.files.get(p);
+    if (file) return { size: file.length, isDir: false };
     if (this.dirs.has(p)) return { size: 0, isDir: true };
     return null;
   }
@@ -62,7 +79,7 @@ class MemFs {
     return [...names];
   }
   /** stat(1) line the exec-based adapters parse: `<size> <mtime-s> <type>`. */
-  statLine(p: string): { stdout: string; exitCode: number } {
+  statLine(p: string) {
     const s = this.stat(p);
     if (!s) return { stdout: '', exitCode: 1 };
     return { stdout: `${s.size} ${Math.floor(this.mtimeMs / 1000)} ${s.isDir ? 'directory' : 'regular file'}`, exitCode: 0 };
@@ -76,12 +93,8 @@ const quoted = (cmd: string): string => {
   return all.length ? all[all.length - 1]![1]! : '';
 };
 
-type SandboxHandle = Parameters<typeof sandboxFiles>[0];
-type NimbusHandle = Parameters<typeof nimbusSessionFiles>[0];
-type DeviceTransport = Parameters<typeof deviceFiles>[0];
-
 function sandboxHandle(fs: MemFs): SandboxHandle {
-  return {
+  const handle: SandboxHandle = {
     async readFile(path: string) {
       const b = fs.read(path);
       if (b === null) return { exitCode: 1 };
@@ -94,7 +107,8 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
     },
     async listFiles(dir: string) {
       return { files: fs.list(dir).map((name) => {
-        const s = fs.stat(`${dir === '/' ? '' : dir}/${name}`)!;
+        const s = fs.stat(`${dir === '/' ? '' : dir}/${name}`);
+        if (!s) throw new Error(`Expected '${name}' in in-memory filesystem`);
         return { name, type: s.isDir ? 'directory' : 'file', size: s.size };
       }) };
     },
@@ -105,16 +119,29 @@ function sandboxHandle(fs: MemFs): SandboxHandle {
       if (command.startsWith('test -e')) return { exitCode: 0, stdout: fs.exists(p) ? 'true' : 'false' };
       return { exitCode: 0, stdout: '' };
     },
-  } as unknown as SandboxHandle;
+    async exposePort(port, opts) {
+      const exposed = { url: `https://preview.invalid/${port}`, port };
+      return opts.name ? { ...exposed, name: opts.name } : exposed;
+    },
+    async unexposePort() {},
+    async getExposedPorts() { return []; },
+    async createBackup() { throw new Error('Backups are outside this VFS conformance test'); },
+    async restoreBackup() { throw new Error('Backups are outside this VFS conformance test'); },
+  };
+  return handle;
 }
 
-function nimbusHandle(fs: MemFs): NimbusHandle {
-  return {
+function nimbusHandle(fs: MemFs): NimbusSandboxHandle {
+  const handle: NimbusSandboxHandle = {
+    async ready() {},
     files: {
       async read(path: string) { const b = fs.read(path); return b === null ? null : new TextDecoder().decode(b); },
       async readBytes(path: string) { return fs.read(path); },
       async write(path: string, data: string | Uint8Array) {
-        fs.write(path, typeof data === 'string' ? new TextEncoder().encode(data) : data);
+        const text = v.safeParse(v.string(), data);
+        fs.write(path, text.success
+          ? new TextEncoder().encode(text.output)
+          : v.parse(v.instance(Uint8Array), data));
       },
       async list(path: string) { return fs.list(path).map((name) => ({ name })); },
       async exists(path: string) { return fs.exists(path); },
@@ -122,29 +149,35 @@ function nimbusHandle(fs: MemFs): NimbusHandle {
       async delete(path: string) { fs.del(path); },
     },
     async exec(cmd: string) {
-      if (cmd.startsWith('stat -c')) { const r = fs.statLine(quoted(cmd)); return { success: true, ...r, stderr: '' }; }
-      return { success: true, exitCode: 0, stdout: '', stderr: '' };
+      if (cmd.startsWith('stat -c')) {
+        const result = fs.statLine(quoted(cmd));
+        return { command: cmd, success: true, ...result, stderr: '' };
+      }
+      return { command: cmd, success: true, exitCode: 0, stdout: '', stderr: '' };
     },
-  } as unknown as NimbusHandle;
+  };
+  return handle;
 }
 
 /** `calls` records every method that actually reached the device, so a test can
  *  assert a denial happened locally rather than at the far end. */
 function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
-  return {
-    async rpc(method: string, params: unknown[]) {
+  const transport: DeviceTransport = {
+    async rpc(method, params): Promise<JsonValue | undefined> {
       calls.push(method);
-      const p = String(params[0] ?? '');
+      const path = v.safeParse(v.string(), params[0]);
+      const p = path.success ? path.output : '';
       if (method === 'readFile') {
         const b = fs.read(p);
         if (b === null) throw Object.assign(new Error(`ENOENT: no such file '${p}'`), { code: 'ENOENT' });
         return { content: Buffer.from(b).toString('base64'), encoding: 'base64' };
       }
       if (method === 'writeFile') {
-        const opts = params[2] as { encoding?: string } | undefined;
-        fs.write(p, opts?.encoding === 'base64'
-          ? new Uint8Array(Buffer.from(String(params[1]), 'base64'))
-          : new TextEncoder().encode(String(params[1])));
+        const content = v.parse(v.string(), params[1]);
+        const options = v.safeParse(v.object({ encoding: v.optional(v.string()) }), params[2]);
+        fs.write(p, options.success && options.output.encoding === 'base64'
+          ? new Uint8Array(Buffer.from(content, 'base64'))
+          : new TextEncoder().encode(content));
         return 'ok';
       }
       if (method === 'listFiles') return fs.list(p).map((name) => ({ name }));
@@ -158,7 +191,10 @@ function deviceTransport(fs: MemFs, calls: string[] = []): DeviceTransport {
       }
       return null;
     },
-  } as unknown as DeviceTransport;
+    status: () => ({ connected: true, registered: true }),
+    refreshStatus: async () => ({ connected: true, registered: true }),
+  };
+  return transport;
 }
 
 // ── the parameterized contract ──────────────────────────────────────────────
@@ -225,7 +261,7 @@ for (const c of cases) {
 
     test('reading a missing file throws ENOENT (closed taxonomy)', async () => {
       const vfs = c.make();
-      expect(await code(() => vfs.readFile(c.path('nope.txt')))).toBe('ENOENT');
+      expect(await rejectionCode(() => vfs.readFile(c.path('nope.txt')))).toBe('ENOENT');
     });
 
     test('stat of a missing path signals absence per the impl contract', async () => {
@@ -233,7 +269,7 @@ for (const c of cases) {
       if (c.statMissing === 'null') {
         expect(await vfs.stat(c.path('ghost'))).toBeNull();
       } else {
-        expect(await code(() => vfs.stat(c.path('ghost')))).toBe('ENOENT');
+        expect(await rejectionCode(() => vfs.stat(c.path('ghost')))).toBe('ENOENT');
       }
     });
 
@@ -264,19 +300,19 @@ describe('device file view — the consented subtree is a boundary', () => {
 
   test('SECURITY: escaping the consented subtree is denied without the full-fs tier', async () => {
     const { vfs, calls } = scoped('/home/me/proj');
-    expect(await code(() => vfs.readFile('/etc/passwd'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.readFile('/etc/passwd'))).toBe('EACCES');
     await expect(vfs.readFile('/etc/passwd')).rejects.toThrow(
       /outside the consented device directory '\/home\/me\/proj'[\s\S]*full-filesystem consent tier/,
     );
     // A sibling whose name merely BEGINS with the consented one is outside it.
-    expect(await code(() => vfs.readFile('/home/me/projects/x'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.readFile('/home/me/projects/x'))).toBe('EACCES');
     // Every op is guarded, not just reads.
-    expect(await code(() => vfs.writeFile('/etc/cron.d/evil', 'x'))).toBe('EACCES');
-    expect(await code(() => vfs.readdir('/etc'))).toBe('EACCES');
-    expect(await code(() => vfs.stat('/etc/passwd'))).toBe('EACCES');
-    expect(await code(() => vfs.exists('/etc/passwd'))).toBe('EACCES');
-    expect(await code(() => vfs.unlink('/etc/passwd'))).toBe('EACCES');
-    expect(await code(() => vfs.mkdir('/opt/x'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.writeFile('/etc/cron.d/evil', 'x'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.readdir('/etc'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.stat('/etc/passwd'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.exists('/etc/passwd'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.unlink('/etc/passwd'))).toBe('EACCES');
+    expect(await rejectionCode(() => vfs.mkdir('/opt/x'))).toBe('EACCES');
     // The denial happened locally — nothing was ever sent to the device.
     expect(calls).toEqual([]);
   });
@@ -285,6 +321,6 @@ describe('device file view — the consented subtree is a boundary', () => {
     const { vfs } = scoped('/home/me/proj');
     await vfs.writeFile('/home/me/proj/notes.md', 'ok');
     expect(await vfs.readFile('/home/me/proj/notes.md', { encoding: 'utf8' })).toBe('ok');
-    expect(await code(() => vfs.readdir('/home/me/proj'))).toBeUndefined();
+    expect(await rejectionCode(() => vfs.readdir('/home/me/proj'))).toBeUndefined();
   });
 });

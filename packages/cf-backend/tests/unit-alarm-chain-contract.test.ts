@@ -98,8 +98,8 @@ describe('the Proteus timer rides the SDK scheduler', () => {
   );
 
   test('trigger, peer-outbox and email-outbox wakes all arm the one timer row', () => {
-    expect(orchestrator).toContain("scheduleAt(ts: number) { orchestrator.scheduleTimerAt(ts); }");
-    expect(orchestrator).toContain('scheduleDispatch: (at) => orchestrator.scheduleTimerAt(at)');
+    expect(orchestrator).toContain('scheduleAt: (ts: number) => this.scheduleTimerAt(ts)');
+    expect(orchestrator).toContain('scheduleDispatch: (at) => this.scheduleTimerAt(at)');
     expect(orchestrator).toContain('new EmailOutbox(this.ctx.storage.sql, (at) => this.scheduleTimerAt(at))');
     expect(orchestrator).toContain('await this.schedule(new Date(desired * 1000), PROTEUS_TIMER_CALLBACK)');
     expect(orchestrator).toContain("const PROTEUS_TIMER_CALLBACK = '_proteusTimerTick'");

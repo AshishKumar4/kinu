@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
-index 63b65f4..5069517 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -187,7 +187,7 @@ function buildHostProvider(opts: {
-       if (typeof name !== 'string') return { error: 'host.callTool: name must be a string' };
+@@ -308,7 +308,7 @@
+       if (!name.success) return { error: 'host.callTool: name must be a string' };
        if (!callTool) return { error: 'host.callTool: unavailable in this runtime (parent provides ToolSet only when scaffold mode is enabled)' };
        const callId = `tc-${Math.random().toString(36).slice(2, 10)}`;
--      const parsedArgs = (args && typeof args === 'object' && !Array.isArray(args)) ? args as Record<string, unknown> : {};
-+      const parsedArgs = (args && typeof args === 'object' && Array.isArray(args)) ? args as Record<string, unknown> : {};
-       await pushEvent({ type: 'tool_call', name, args: parsedArgs, toolCallId: callId });
+-      const parsedArgs = v.safeParse(JsonObjectSchema, rawArgs[1]);
++      const parsedArgs = v.safeParse(JsonObjectSchema, null);
+       const toolArgs = parsedArgs.success ? parsedArgs.output : {};
+       await pushEvent({ type: 'tool_call', name: name.output, args: toolArgs, toolCallId: callId });
        try {
-         const result = await callTool(name, parsedArgs);

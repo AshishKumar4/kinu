@@ -8,6 +8,8 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { JsonValueSchema, type JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 
 const dir = mkdtempSync(join(tmpdir(), 'proteus-branch-test-'));
 const workerPath = join(dirname(fileURLToPath(import.meta.url)), '..', 'src', 'branch-worker.ts');
@@ -31,14 +33,19 @@ async function spawnWorker(): Promise<ChildProcess> {
   return child;
 }
 
-function rpc(proc: ChildProcess, method: string, args: unknown) {
-  return new Promise<{ method: string; result?: unknown; error?: string }>((resolve, reject) => {
+function rpc(proc: ChildProcess, method: string, args: JsonValue) {
+  return new Promise<{ method: string; result?: JsonValue; error?: string }>((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error('rpc timeout')), 10_000);
-    const handler = (msg: { method: string; result?: unknown; error?: string }) => {
-      if (msg.method === method) {
+    const handler = (message: JsonValue) => {
+      const parsed = v.safeParse(v.object({
+        method: v.string(),
+        result: v.optional(JsonValueSchema),
+        error: v.optional(v.string()),
+      }), message);
+      if (parsed.success && parsed.output.method === method) {
         clearTimeout(timeout);
         proc.off('message', handler);
-        resolve(msg);
+        resolve(parsed.output);
       }
     };
     proc.on('message', handler);

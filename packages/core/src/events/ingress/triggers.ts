@@ -9,16 +9,18 @@
  * agent's behaviour, not the host's.
  */
 
+import * as v from 'valibot';
 import type { EventLog } from '../hub/log.js';
 import type { TriggerRegistry } from '../hub/triggers.js';
 import type { TriggerRow, TrustLevel } from '../hub/types.js';
 import { nextCronFire } from '../hub/cron.js';
+import { JsonObjectSchema, type JsonObject } from '../../utils/json.js';
 
 export interface TimerTriggerOpts {
   cron?: string;
   atMs?: number;
   label?: string;
-  payload?: Record<string, unknown>;
+  payload?: JsonObject;
   trust?: 'authenticated' | 'owner';
   /** The mission budget every turn this schedule wakes spends against. */
   missionLabel?: string;
@@ -31,12 +33,13 @@ export interface TimerTrigger {
 }
 
 /** The trigger spec a timer registration writes and a firing reads back. */
-interface TimerSpec {
-  cron?: string;
-  label?: string;
-  payload?: unknown;
-  mission_label?: string;
-}
+const TimerSpecSchema = v.object({
+  cron: v.optional(v.string()),
+  label: v.optional(v.string()),
+  payload: v.optional(JsonObjectSchema),
+  mission_label: v.optional(v.string()),
+});
+type TimerSpec = v.InferOutput<typeof TimerSpecSchema>;
 
 /**
  * Register a timer trigger — `timer_cron` (recurring, from a cron expr) or
@@ -54,11 +57,14 @@ export function createTimerTrigger(
   const nextFireAt = opts.cron ? nextCronFire(opts.cron, now) : (opts.atMs ?? null);
   if (opts.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${opts.cron}`);
   if (!opts.cron && nextFireAt === null) throw new Error('Timer trigger requires cron or atMs');
+  const triggerSpec: JsonObject = {};
+  if (opts.cron !== undefined) Object.assign(triggerSpec, { cron: opts.cron });
+  if (opts.label !== undefined) Object.assign(triggerSpec, { label: opts.label });
+  if (opts.payload !== undefined) Object.assign(triggerSpec, { payload: opts.payload });
+  if (opts.missionLabel !== undefined) Object.assign(triggerSpec, { mission_label: opts.missionLabel });
   const id = registry.register({
     kind,
-    spec: {
-      cron: opts.cron, label: opts.label, payload: opts.payload, mission_label: opts.missionLabel,
-    } satisfies TimerSpec,
+    spec: triggerSpec satisfies TimerSpec,
     creator_trust: opts.trust ?? 'authenticated',
     next_fire_at: nextFireAt ?? undefined,
   }, now);
@@ -70,7 +76,7 @@ export function createTimerTrigger(
 export interface TriggerView {
   id: string;
   kind: string;
-  spec: Record<string, unknown>;
+  spec: JsonObject;
   creator_trust: TrustLevel;
   state: TriggerRow['state'];
   created_at: number;
@@ -82,7 +88,7 @@ export interface TriggerView {
   fire_count: number;
 }
 
-export function listTriggers(registry: TriggerRegistry): { triggers: TriggerView[] } {
+export function listTriggers(registry: TriggerRegistry) {
   return {
     triggers: registry.list().map((t) => ({
       id: t.id,
@@ -104,7 +110,7 @@ export function listTriggers(registry: TriggerRegistry): { triggers: TriggerView
 /** Cancel a trigger (revoke). Idempotent. */
 export function cancelTrigger(
   registry: TriggerRegistry, trigger_id: string, now: number,
-): { ok: true; changed: boolean } {
+) {
   return { ok: true, changed: registry.revoke(trigger_id, now) };
 }
 
@@ -120,14 +126,14 @@ export interface TimerFireDeps {
  * Crash-safe: hub dedupe on `(trigger_id, scheduled_fire_at)` makes a re-fire
  * after eviction a no-op publish.
  */
-export function fireDueTriggers(deps: TimerFireDeps, now: number): { fired: number } {
+export function fireDueTriggers(deps: TimerFireDeps, now: number) {
   let fired = 0;
   for (const trigger of deps.registry.due(now)) {
     // Only timers produce timer events. No other kind carries a next_fire_at
     // today, and one that did must not be published as an alarm.
     if (trigger.kind !== 'timer_cron' && trigger.kind !== 'timer_oneshot') continue;
     fired += 1;
-    const spec = trigger.spec as TimerSpec;
+    const spec = v.parse(TimerSpecSchema, trigger.spec);
 
     deps.log.publish({
       descriptor: {

@@ -4,11 +4,12 @@
 // `ctx` and `env` — so with the Agent SDK stubbed it runs against an in-memory
 // database. That lets the capability tests exercise the ACTUAL methods that
 // guard the owner's credentials rather than a re-description of them.
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import type { AgentContext } from 'agents';
 import { mockAgentsSdk } from './agents-sdk.js';
 import { sha256Hex } from '../../src/lib/crypto.js';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability.js';
-import type { SqlExec } from '@proteus/core';
+import type { SqlExec, SqlExecRow, SqlValue } from '@proteus/core';
 
 mockAgentsSdk();
 
@@ -18,13 +19,25 @@ type UserDOInstance = InstanceType<typeof UserDO>;
 /** A `SqlExec` over bun:sqlite — the same seam the Durable Object provides. */
 export function sqlExec(db: Database): SqlExec {
   return {
-    exec(query: string, ...bindings: unknown[]) {
-      const statement = db.prepare(query);
-      const trimmed = query.trim().toUpperCase();
-      const reads = trimmed.startsWith('SELECT') || trimmed.startsWith('PRAGMA');
-      if (reads) return { toArray: () => statement.all(...(bindings as never[])) as Array<Record<string, unknown>> };
-      statement.run(...(bindings as never[]));
-      return { toArray: () => [] as Array<Record<string, unknown>> };
+    exec(query: string, ...bindings: SqlValue[]) {
+      type NativeSqlValue = string | number | boolean | null | Uint8Array;
+      type NativeSqlRow = Record<string, NativeSqlValue>;
+      const bound: SQLQueryBindings[] = bindings.map((value) =>
+        value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+      const statement = db.prepare<NativeSqlRow, SQLQueryBindings[]>(query);
+      if (statement.columnNames.length === 0) {
+        statement.run(...bound);
+        return { toArray: () => [] };
+      }
+      const rows: SqlExecRow[] = statement.all(...bound).map((row) => Object.fromEntries(
+        Object.entries(row).map(([column, value]) => {
+          if (!(value instanceof Uint8Array)) return [column, value];
+          const copy = new Uint8Array(value.byteLength);
+          copy.set(value);
+          return [column, copy.buffer];
+        }),
+      ));
+      return { toArray: () => rows };
     },
   };
 }
@@ -67,6 +80,22 @@ export interface TestUserDOOptions {
   credentialEncryptionKeyPrevious?: string;
   /** Stand in for a different user's Durable Object. */
   durableObjectId?: string;
+  /** Make workspace teardown fail at the real UserDO -> Orchestrator seam. */
+  destroyWorkspaceError?: string;
+}
+
+interface TestUserEnvironment {
+  CREDENTIAL_ENCRYPTION_KEY: string;
+  CREDENTIAL_ENCRYPTION_KEY_PREVIOUS?: string;
+  OrchestratorAgent: {
+    idFromName(name: string): string;
+    get(name: string): {
+      destroyAgent(): Promise<void>;
+      installWorkspaceCapability(token: string): Promise<{ readonly ok: true }>;
+      getWorkspaceCapabilityHash(): Promise<string | null>;
+      awaitDeviceConsent(request: { method: string }): Promise<TestUserDO['consentDecision']>;
+    };
+  };
 }
 
 export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
@@ -87,11 +116,7 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
       }]
     : [];
 
-  const harness = {
-    db, sql, installed, destroyedWorkspaces, consentPrompts,
-    consentDecision: 'deny' as TestUserDO['consentDecision'],
-    close: () => db.close(),
-  } as TestUserDO;
+  let consentDecision: TestUserDO['consentDecision'] = 'deny';
 
   const ctx = {
     // Sealed values are bound to the Durable Object's id, so the harness has
@@ -101,17 +126,17 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
     getWebSockets: () => sockets,
     acceptWebSocket: () => {},
   };
-  const env = {
+  const env: TestUserEnvironment = {
     // The credential store refuses to operate without its key, so a harness
     // exercising the real methods has to supply one exactly as a deployment does.
     CREDENTIAL_ENCRYPTION_KEY: options.credentialEncryptionKey ?? TEST_CREDENTIAL_ENCRYPTION_KEY,
-    ...(options.credentialEncryptionKeyPrevious
-      ? { CREDENTIAL_ENCRYPTION_KEY_PREVIOUS: options.credentialEncryptionKeyPrevious }
-      : {}),
     OrchestratorAgent: {
       idFromName: (name: string) => name,
       get: (name: string) => ({
-        async destroyAgent() { destroyedWorkspaces.push(name); },
+        async destroyAgent() {
+          if (options.destroyWorkspaceError) throw new Error(options.destroyWorkspaceError);
+          destroyedWorkspaces.push(name);
+        },
         async installWorkspaceCapability(token: string) { installed.set(name, token); return { ok: true as const }; },
         async getWorkspaceCapabilityHash() {
           const token = installed.get(name);
@@ -119,13 +144,31 @@ export function createTestUserDO(options: TestUserDOOptions = {}): TestUserDO {
         },
         async awaitDeviceConsent(request: { method: string }) {
           consentPrompts.push({ workspace: name, method: request.method });
-          return harness.consentDecision;
+          return consentDecision;
         },
       }),
     },
   };
-  harness.userDO = new (UserDO as unknown as new (ctx: unknown, env: unknown) => UserDOInstance)(ctx, env);
-  return harness;
+  if (options.credentialEncryptionKeyPrevious) {
+    env.CREDENTIAL_ENCRYPTION_KEY_PREVIOUS = options.credentialEncryptionKeyPrevious;
+  }
+  const partialContext: Partial<AgentContext> = {};
+  Object.assign(partialContext, ctx);
+  // SAFETY: the Agent constructor contract stores this locally constructed
+  // context, and UserDO only reads its provided id, SQL, and WebSocket members.
+  const agentContext = partialContext as AgentContext;
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, env);
+  // SAFETY: the UserDO dependency contract reads only the locally constructed
+  // credential key and OrchestratorAgent binding in this harness.
+  const userEnv = partialEnv as Env;
+  const userDO = new UserDO(agentContext, userEnv);
+  return {
+    userDO, db, sql, installed, destroyedWorkspaces, consentPrompts,
+    get consentDecision() { return consentDecision; },
+    set consentDecision(decision) { consentDecision = decision; },
+    close: () => db.close(),
+  };
 }
 
 /** Register a workspace and provision its capability, returning the token the

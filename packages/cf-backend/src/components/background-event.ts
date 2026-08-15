@@ -20,7 +20,11 @@
  * message yet (or never will — a mid-turn splice is never persisted).
  */
 
-import { SIGNAL_ID_METADATA_KEY, type SignalCardEvent, type SignalCardState } from "@proteus/core";
+import {
+  JsonObjectSchema, SIGNAL_ID_METADATA_KEY,
+  type JsonObject, type SignalCardEvent, type SignalCardState,
+} from "@proteus/core";
+import * as v from 'valibot';
 
 /** A turn the backend enqueued, never typed by the operator. */
 export type ProgrammaticTurn =
@@ -28,14 +32,20 @@ export type ProgrammaticTurn =
   | { kind: "background_job"; jobKind: string; status: string }
   | { kind: "deferred_approval"; decision: string; count: number };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function str(source: Record<string, unknown>, key: string, fallback: string): string {
-  const value = source[key];
-  return typeof value === "string" && value ? value : fallback;
-}
+const ProgrammaticMetadataSchema = v.looseObject({
+  proteusEvent: v.optional(v.string()),
+  kind: v.optional(v.string()),
+  status: v.optional(v.string()),
+  decision: v.optional(v.string()),
+  count: v.optional(v.number()),
+});
+const SignalCardEventSchema = v.variant('state', [
+  v.object({ type: v.literal('signal_card'), id: v.string(), state: v.picklist(['shown', 'undelivered']) }),
+  v.object({
+    type: v.literal('signal_card'), id: v.string(), state: v.literal('pending'),
+    metadata: JsonObjectSchema, text: v.string(),
+  }),
+]);
 
 /**
  * The provenance of a message, or null when the operator really did type it.
@@ -50,22 +60,24 @@ function str(source: Record<string, unknown>, key: string, fallback: string): st
  * as something the owner typed would be the same misattribution the other
  * cards exist to prevent.
  */
-export function classifyProgrammaticTurn(metadata: unknown): ProgrammaticTurn | null {
-  if (!isRecord(metadata)) return null;
-  switch (metadata.proteusEvent) {
+export function classifyProgrammaticTurn<Metadata>(metadata: Metadata): ProgrammaticTurn | null {
+  const parsed = v.safeParse(ProgrammaticMetadataSchema, metadata);
+  if (!parsed.success) return null;
+  const turn = parsed.output;
+  switch (turn.proteusEvent) {
     case "event_drain":
       return { kind: "event_drain" };
     case "background_job":
       return {
         kind: "background_job",
-        jobKind: str(metadata, "kind", "task"),
-        status: str(metadata, "status", "completed"),
+        jobKind: turn.kind || "task",
+        status: turn.status || "completed",
       };
     case "deferred_approval":
       return {
         kind: "deferred_approval",
-        decision: str(metadata, "decision", "decided"),
-        count: typeof metadata.count === "number" ? metadata.count : 1,
+        decision: turn.decision || "decided",
+        count: turn.count ?? 1,
       };
     default:
       return null;
@@ -73,10 +85,10 @@ export function classifyProgrammaticTurn(metadata: unknown): ProgrammaticTurn | 
 }
 
 /** The signal id a programmatic message carries, joining it to its card. */
-export function messageSignalId(metadata: unknown): string | null {
-  if (!isRecord(metadata)) return null;
-  const id = metadata[SIGNAL_ID_METADATA_KEY];
-  return typeof id === "string" && id ? id : null;
+export function messageSignalId<Metadata>(metadata: Metadata): string | null {
+  const parsed = v.safeParse(v.looseObject({ [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()) }), metadata);
+  if (!parsed.success) return null;
+  return parsed.output[SIGNAL_ID_METADATA_KEY] || null;
 }
 
 /** One live background-event card: an event that has happened, and whether the
@@ -85,7 +97,7 @@ export interface SignalCard {
   readonly id: string;
   /** Classifier input — the same `proteusEvent` metadata a queued signal's
    *  durable message carries. */
-  readonly metadata: Readonly<Record<string, unknown>>;
+  readonly metadata: Readonly<JsonObject>;
   /** The signal as the agent will read it. */
   readonly text: string;
   readonly state: Exclude<SignalCardState, "undelivered">;
@@ -120,12 +132,9 @@ export function applySignalCard(
 }
 
 /** Parse a broadcast frame into a card event, or null when it is not one. */
-export function parseSignalCardEvent(value: unknown): SignalCardEvent | null {
-  if (!isRecord(value) || value.type !== "signal_card" || typeof value.id !== "string") return null;
-  const { id, state } = value;
-  if (state === "shown" || state === "undelivered") return { type: "signal_card", id, state };
-  if (state !== "pending" || !isRecord(value.metadata) || typeof value.text !== "string") return null;
-  return { type: "signal_card", id, state: "pending", metadata: value.metadata, text: value.text };
+export function parseSignalCardEvent<Value>(value: Value): SignalCardEvent | null {
+  const parsed = v.safeParse(SignalCardEventSchema, value);
+  return parsed.success ? parsed.output : null;
 }
 
 /** One hub event as the agent was shown it (core's `renderForLLM`). */
@@ -157,7 +166,9 @@ export function parseDrainedEvents(text: string): DrainedEvent[] {
   for (const line of text.split("\n")) {
     const match = EVENT_LINE.exec(line);
     if (match) {
-      events.push({ variant: match[1]!, source: match[2]!.trim(), brief: match[3]!, replyExpected: false });
+      const [, variant, source, brief] = match;
+      if (variant === undefined || source === undefined || brief === undefined) continue;
+      events.push({ variant, source: source.trim(), brief, replyExpected: false });
       continue;
     }
     // A brief can run to several lines (an inherited-context assignment does);
@@ -174,24 +185,24 @@ export function parseDrainedEvents(text: string): DrainedEvent[] {
   return events;
 }
 
-const VARIANT_LABELS: Record<string, string> = {
-  chat: "Chat message",
-  webhook: "Webhook",
-  process_done: "Process finished",
-  timer: "Scheduled trigger",
-  peer_agent: "Peer agent",
-  subordinate_task: "Subordinate task",
-  subordinate_report: "Subordinate report",
-  file_changed: "File changed",
-  email: "Email",
-  internal: "Internal",
-  reply_request: "Reply request",
-  mcp_chat: "MCP message",
-  mcp_third_party: "MCP client",
-};
+const VARIANT_LABELS = new Map([
+  ["chat", "Chat message"],
+  ["webhook", "Webhook"],
+  ["process_done", "Process finished"],
+  ["timer", "Scheduled trigger"],
+  ["peer_agent", "Peer agent"],
+  ["subordinate_task", "Subordinate task"],
+  ["subordinate_report", "Subordinate report"],
+  ["file_changed", "File changed"],
+  ["email", "Email"],
+  ["internal", "Internal"],
+  ["reply_request", "Reply request"],
+  ["mcp_chat", "MCP message"],
+  ["mcp_third_party", "MCP client"],
+]);
 
 /** Human label for a hub event variant; unknown variants are de-snaked rather
  *  than relabelled, so a new backend variant still reads sensibly. */
 export function eventVariantLabel(variant: string): string {
-  return VARIANT_LABELS[variant] ?? variant.replace(/_/g, " ");
+  return VARIANT_LABELS.get(variant) ?? variant.replace(/_/g, " ");
 }

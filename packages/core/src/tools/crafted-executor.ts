@@ -17,6 +17,7 @@
  */
 
 import type { CraftedTool } from '../types/craft.js';
+import type { JsonValue } from '../utils/json.js';
 
 /**
  * Input shape the executor needs from a crafted tool. Not a full CraftedTool
@@ -35,7 +36,7 @@ export interface CraftedToolSource {
  * Worker (CF) or an in-process eval (CLI). On error, returns a string-form
  * error so the caller's codemode proxy can surface it to the LLM.
  */
-export type CraftedToolExecuteFn = (arg: unknown) => Promise<unknown>;
+export type CraftedToolExecuteFn = (arg: JsonValue) => Promise<JsonValue | undefined>;
 
 /**
  * Platform factory. Given a crafted tool row, return the host-side execute

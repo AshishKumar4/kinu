@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { parseJsonValue, type JsonObject, type JsonValue } from '@proteus/core';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -18,7 +19,7 @@ afterEach(() => {
 
 /** Seed an agent.db carrying a recorded run, then read it back through the
  *  CLI's local-inspection module in a child process pinned to that home. */
-function readLocal(expression: string): unknown {
+function readLocal(expression: string): JsonValue {
   const home = mkdtempSync(join(tmpdir(), 'proteus-run-events-'));
   tempDirs.push(home);
   mkdirSync(join(home, 'jarvis'), { recursive: true });
@@ -26,7 +27,7 @@ function readLocal(expression: string): unknown {
   db.exec(`CREATE TABLE run_events (
     run_id TEXT NOT NULL, event_index INTEGER NOT NULL, type TEXT NOT NULL,
     payload TEXT NOT NULL, ts TEXT NOT NULL, PRIMARY KEY (run_id, event_index))`);
-  const row = (index: number, type: string, extra: Record<string, unknown> = {}) => {
+  const row = (index: number, type: string, extra: JsonObject = {}) => {
     const ts = new Date(1_700_000_000_000 + index * 1000).toISOString();
     const payload = { ...extra, type, eventIndex: index, runId: 'run-1', timestamp: ts };
     db.query(`INSERT INTO run_events VALUES (?, ?, ?, ?, ?)`)
@@ -48,7 +49,7 @@ function readLocal(expression: string): unknown {
     stderr: 'pipe',
   });
   if (proc.exitCode !== 0) throw new Error(proc.stderr.toString());
-  return JSON.parse(proc.stdout.toString());
+  return parseJsonValue(proc.stdout.toString());
 }
 
 describe('local run-event readers', () => {

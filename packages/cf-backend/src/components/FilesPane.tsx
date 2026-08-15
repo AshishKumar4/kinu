@@ -19,8 +19,11 @@ import {
 import { useParams } from "react-router";
 import type { Rpc } from "@/lib/protocol";
 import type { DirEntry } from "@proteus/core";
+import * as v from "valibot";
 
 interface FileState { content?: string; truncated?: boolean; error?: string }
+interface ExecutorDirectoryResponse { entries?: DirEntry[]; error?: string }
+const UploadErrorSchema = v.object({ error: v.optional(v.string()) });
 
 function fmtSize(n: number): string {
   if (n < 1024) return `${n}b`;
@@ -53,10 +56,10 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
     setLoading(true);
     setErr(null);
     try {
-      const r = await rpc("getExecutorFiles", [execName, p]) as { entries?: DirEntry[]; error?: string };
+      const r = await rpc<ExecutorDirectoryResponse>("getExecutorFiles", [execName, p]);
       if (r.error) { setErr(r.error); setEntries([]); }
       else setEntries(r.entries ?? []);
-    } catch (e) { setErr((e as Error).message); setEntries([]); }
+    } catch (e) { setErr(e instanceof Error ? e.message : String(e)); setEntries([]); }
     finally { setLoading(false); }
   }, [rpc, execName]);
 
@@ -65,8 +68,8 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
     setFile(null);
     setFileLoading(true);
     try {
-      setFile(await rpc("readExecutorFile", [execName, full]) as FileState);
-    } catch (e) { setFile({ error: (e as Error).message }); }
+      setFile(await rpc<FileState>("readExecutorFile", [execName, full]));
+    } catch (e) { setFile({ error: e instanceof Error ? e.message : String(e) }); }
     finally { setFileLoading(false); }
   }, [rpc, execName]);
 
@@ -89,8 +92,9 @@ export function FilesPane({ execName, rpc, initialPath = "/" }: { execName: stri
           { method: "PUT", body: f },
         );
         if (!res.ok) {
-          const detail = await res.json().catch(() => null) as { error?: string } | null;
-          throw new Error(detail?.error ?? `upload failed (${res.status})`);
+          const parsed = v.safeParse(UploadErrorSchema, await res.json().catch(() => null));
+          const detail = parsed.success ? parsed.output.error : undefined;
+          throw new Error(detail ?? `upload failed (${res.status})`);
         }
         setUploads((prev) => prev.filter((u) => u.name !== f.name));
       } catch (e) {

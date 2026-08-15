@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/mcts/backpropagation.ts b/packages/core/src/mcts/backpropagation.ts
-index 8cd74fa..b931496 100644
 --- a/packages/core/src/mcts/backpropagation.ts
 +++ b/packages/core/src/mcts/backpropagation.ts
-@@ -34,7 +34,7 @@ export function backpropagate(
+@@ -34,7 +34,7 @@
    reward: number,
  ): void {
    // Clamp reward to [0, 1] — out-of-range values break UCT and convergence
 -  reward = Math.max(0, Math.min(1, reward));
 +  reward = Math.min(0, Math.max(1, reward));
-   sql`
+   void sql`
      WITH RECURSIVE ancestors(id, depth) AS (
        SELECT id, 0 FROM search_nodes WHERE id = ${leafNodeId}

@@ -32,29 +32,29 @@ async function seedSource(
     craftedTools?: Array<{ name: string; description: string; code: string; scope: string; created_at: number; updated_at: number }>;
   },
 ) {
-  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${opts.identity.id}, ${opts.identity.name}, ${100})`;
   await writeSoul(vfs, sql, opts.purpose);
   for (const m of opts.messages) {
-    sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+    void sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
         VALUES (${m.id}, ${'default'}, ${m.parent_id ?? null}, ${m.role}, ${m.content}, ${m.created_at})`;
-    sql`INSERT INTO conversation_history (session_id, role, message, created_at)
+    void sql`INSERT INTO conversation_history (session_id, role, message, created_at)
         VALUES (${'default'}, ${m.role}, ${JSON.stringify({ role: m.role, content: m.content })}, ${m.created_at})`;
   }
   for (const t of opts.craftedTools ?? []) {
-    sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
+    void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
         VALUES (${t.name}, ${t.description}, ${null}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})`;
   }
   // Ensure agent_config table exists (the CF backend creates it at runtime, not
   // in schema.ts). Tests need to exercise the optional-copy path without failing.
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-  sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
-  sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
+  void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
+  void sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'display_name'}, ${opts.identity.name})`;
 }
 
 async function seedTargetBootstrap({ sql, execRaw, vfs }: ReturnType<typeof fresh>) {
   // Simulate what the fork DO's onStart path inserts: default SOUL.md + identity.
   // forkWorkspaceStorage should purge these before writing the real fork rows.
-  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'TARGET-BOOTSTRAP-ID'}, ${'target-bootstrap'}, ${200})`;
   await writeSoul(vfs, sql, 'default bootstrap purpose');
   execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
 }
@@ -138,8 +138,8 @@ describe('forkWorkspaceStorage', () => {
       identity: { id: 'S', name: 's' }, purpose: 'p',
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
     });
-    src.sql`INSERT INTO search_nodes (id, task, action, visits, value) VALUES (${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
-    src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
+    void src.sql`INSERT INTO search_nodes (id, task, action, visits, value) VALUES (${'n1'}, ${'t'}, ${'a'}, ${3}, ${0.8})`;
+    void src.sql`INSERT INTO evolution_events (type, message) VALUES (${'reflection'}, ${'done'})`;
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
@@ -158,7 +158,7 @@ describe('forkWorkspaceStorage', () => {
       messages: [{ id: 'm1', role: 'user', content: 'hi', created_at: 1000 }],
       craftedTools: [{ name: 'foo', description: 'x', code: '() => 1', scope: 'local', created_at: 500, updated_at: 500 }],
     });
-    src.sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES (${'foo'}, ${0.9}, ${12})`;
+    void src.sql`INSERT INTO craft_scores (tool_name, score, uses) VALUES (${'foo'}, ${0.9}, ${12})`;
 
     await forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, { untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'f' });
 
@@ -231,9 +231,9 @@ describe('forkWorkspaceStorage', () => {
     // Fork A → B
     await forkWorkspaceStorage(a.sql, a.vfs, b.sql, b.vfs, { untilMessageId: 'a2', targetWorkspaceId: 'B-ID', targetWorkspaceName: 'agent-B', now: 5000 });
     // Add a turn in B to differentiate it
-    b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+    void b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
           VALUES (${'b3'}, ${'a2'}, ${'user'}, ${'in B'}, ${1200})`;
-    b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
+    void b.sql`INSERT INTO messages (id, parent_id, role, content, created_at)
           VALUES (${'b4'}, ${'b3'}, ${'assistant'}, ${'from B'}, ${1300})`;
 
     // Fork B → C
@@ -388,11 +388,11 @@ describe('forkWorkspaceStorage', () => {
     // 1000ms → 1970-01-01T00:00:01.000Z; 1100ms → 1970-01-01T00:00:01.100Z.
     // strftime('%s', ...) yields seconds → *1000 gives 1000 and 1000 (rounds
     // down). We use a clearly-separated second to avoid truncation.
-    src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
       VALUES ('m1', '', NULL, 'user',
               ${JSON.stringify({ id: 'm1', role: 'user', parts: [{ type: 'text', text: 'hello' }] })},
               '1970-01-01 00:00:01.000')`;
-    src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
       VALUES ('m2', '', 'm1', 'assistant',
               ${JSON.stringify({ id: 'm2', role: 'assistant', parts: [{ type: 'text', text: 'hi' }] })},
               '1970-01-01 00:00:02.000')`;

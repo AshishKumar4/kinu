@@ -47,7 +47,8 @@ export class DrainScheduler {
       } catch (err) {
         // Never wedge: the window is already disarmed, the next schedule()
         // re-arms. Events stay pending in the EventLog for the next drain.
-        console.warn('[proteus] debounced drain failed:', (err as Error).message);
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn('[proteus] debounced drain failed:', message);
       }
     }, DRAIN_DEBOUNCE_MS);
   }

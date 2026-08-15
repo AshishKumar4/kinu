@@ -1,5 +1,5 @@
-import { Database } from "bun:sqlite";
-import type { SqlExecutor } from "../src/types";
+import { Database, type SQLQueryBindings } from "bun:sqlite";
+import type { SqlExecutor, SqlValue } from "../src/types";
 
 export interface TestDb {
 	db: Database;
@@ -11,14 +11,19 @@ export interface TestDb {
  *  (ArrayBuffer → Uint8Array coercion included). */
 export function createTestDb(): TestDb {
 	const db = new Database(":memory:");
-	const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] => {
+	const sql: SqlExecutor = function <T = unknown>(
+		strings: TemplateStringsArray,
+		...values: SqlValue[]
+	): T[] {
 		const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? "?" : ""), "");
-		const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
-		const stmt = db.prepare(query);
-		if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(bound as never[])) as T[];
-		stmt.run(...(bound as never[]));
+		const bound: SQLQueryBindings[] = values.map((value) => (
+			value instanceof ArrayBuffer ? new Uint8Array(value) : value
+		));
+		const stmt = db.prepare<T, SQLQueryBindings[]>(query);
+		if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
+		stmt.run(...bound);
 		return [];
-	}) as SqlExecutor;
+	};
 	return { db, sql, execRaw: (ddl: string) => db.exec(ddl) };
 }
 
@@ -37,21 +42,23 @@ export function createMemoryVfs(seed: Record<string, string> = {}) {
 		async readFile(path: string, options?: { encoding?: "utf8" }): Promise<Uint8Array | string> {
 			const content = files.get(path);
 			if (content === undefined) {
-				const err = new Error(`ENOENT: no such file or directory, open '${path}'`) as Error & { code: string };
-				err.code = "ENOENT";
-				throw err;
+				throw Object.assign(
+					new Error(`ENOENT: no such file or directory, open '${path}'`),
+					{ code: "ENOENT" },
+				);
 			}
 			return options?.encoding === "utf8" ? content : new TextEncoder().encode(content);
 		},
 		async writeFile(path: string, data: Uint8Array | string): Promise<void> {
-			files.set(path, typeof data === "string" ? data : new TextDecoder().decode(data));
+			files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
 		},
 		async readdir(path: string): Promise<string[]> {
 			const prefix = path === "" || path === "." ? "" : `${path}/`;
 			const names = new Set<string>();
 			for (const key of files.keys()) {
 				if (!key.startsWith(prefix)) continue;
-				names.add(key.slice(prefix.length).split("/")[0]!);
+				const name = key.slice(prefix.length).split("/").at(0);
+				if (name) names.add(name);
 			}
 			return [...names];
 		},

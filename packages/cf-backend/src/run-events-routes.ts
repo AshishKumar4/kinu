@@ -16,23 +16,25 @@
 
 import { getAgentByName } from "agents";
 import type { OrchestratorAgent } from "./orchestrator.js";
-import type { RunEventQuery, RunEvent, RunEventType } from "@proteus/core";
+import type { RunEventQuery, RunEventType } from "@proteus/core";
+import * as v from 'valibot';
+import { decodeRunEventWire, type RunEventWire } from './lib/orchestrator-wire.js';
 
 const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const SSE_HEARTBEAT_MS = 15_000;
-const ALLOWED_TYPES: ReadonlySet<RunEventType> = new Set<RunEventType>([
+const ALLOWED_TYPES = [
   'run_start', 'turn_start', 'text_delta', 'tool_call_start', 'tool_call_end',
   'step_finish', 'head_split', 'head_merge', 'scaffold_promotion',
   'scaffold_rollback', 'memory_write', 'fiber_recovered', 'error',
   'turn_end', 'run_end',
-]);
+] as const satisfies readonly RunEventType[];
 
 async function resolveAgent(env: Env, agentName: string) {
   // routeAgentRequest expects /agents/<class>/<name>; we use getAgentByName.
   // Class name is hardcoded to "OrchestratorAgent" (only one Think class).
   const stub = await getAgentByName<Env, OrchestratorAgent>(
-    (env as Env & { OrchestratorAgent: DurableObjectNamespace }).OrchestratorAgent,
+    env.OrchestratorAgent,
     agentName,
   );
   return stub;
@@ -41,7 +43,8 @@ async function resolveAgent(env: Env, agentName: string) {
 function parseTypesParam(s: string | null): RunEventType[] | undefined {
   if (!s) return undefined;
   const parsed = s.split(',').map((t) => t.trim()).filter(Boolean);
-  const valid = parsed.filter((t): t is RunEventType => ALLOWED_TYPES.has(t as RunEventType));
+  const valid = parsed.filter((eventType): eventType is RunEventType =>
+    v.is(v.picklist(ALLOWED_TYPES), eventType));
   return valid.length > 0 ? valid : undefined;
 }
 
@@ -62,7 +65,7 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
       const runs = await stub.listRuns(limit);
       return Response.json(runs);
     } catch (err) {
-      return Response.json({ error: (err as Error).message }, { status: 500 });
+      return Response.json({ error: errorMessage(err) }, { status: 500 });
     }
   }
 
@@ -77,10 +80,10 @@ export async function handleRunEventsRequest(request: Request, env: Env): Promis
     };
     try {
       const stub = await resolveAgent(env, agentName);
-      const events = await stub.getRunEvents(runId, opts);
+      const events = decodeRunEventWire(await stub.getRunEventsWire(runId, opts));
       return Response.json(events);
     } catch (err) {
-      return Response.json({ error: (err as Error).message }, { status: 500 });
+      return Response.json({ error: errorMessage(err) }, { status: 500 });
     }
   }
 
@@ -124,7 +127,7 @@ function streamRunEvents(
 
       const stub = await resolveAgent(env, agentName);
 
-      const send = (ev: RunEvent) => {
+      const send = (ev: RunEventWire) => {
         const lines = [
           `id: ${ev.eventIndex}`,
           `event: ${ev.type}`,
@@ -139,7 +142,9 @@ function streamRunEvents(
 
       try {
         // Initial replay — drain everything strictly after sinceIndex.
-        let backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: 500 });
+        let backlog = decodeRunEventWire(
+          await stub.getRunEventsWire(runId, { since: cursor + 1, limit: 500 }),
+        );
         for (const ev of backlog) send(ev);
 
         // Poll loop until run_end, client disconnect, or timeout. Cloudflare
@@ -148,7 +153,9 @@ function streamRunEvents(
         while (!closed && Date.now() - startedAt < SSE_TIMEOUT_MS) {
           await new Promise((r) => setTimeout(r, SSE_POLL_MS));
           if (closed) break;
-          backlog = await stub.getRunEvents(runId, { since: cursor + 1, limit: 200 });
+          backlog = decodeRunEventWire(
+            await stub.getRunEventsWire(runId, { since: cursor + 1, limit: 200 }),
+          );
           for (const ev of backlog) send(ev);
           const hasRunEnd = backlog.some((e) => e.type === 'run_end');
           if (hasRunEnd) break;
@@ -161,7 +168,7 @@ function streamRunEvents(
       } catch (err) {
         if (!closed) {
           controller.enqueue(encoder.encode(
-            `event: error\ndata: ${JSON.stringify({ error: (err as Error).message })}\n\n`,
+            `event: error\ndata: ${JSON.stringify({ error: errorMessage(err) })}\n\n`,
           ));
           controller.close();
         }
@@ -181,4 +188,8 @@ function streamRunEvents(
       'x-accel-buffering': 'no',
     },
   });
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }

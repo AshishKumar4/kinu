@@ -1,3 +1,6 @@
+import { parseNimbusPreviewLabel } from './nimbus-preview-host.js';
+import * as v from 'valibot';
+
 /**
  * Where previewed apps are served, and what they are allowed to do.
  *
@@ -15,19 +18,7 @@
  * ever minted there for hostile HTML to steal, and `__Host-`-prefixed cookies
  * are host-only so the app's session is never sent to a preview either.
  *
- * Two containment levels, because Proteus has two preview surfaces:
- *
- *   'own-host'  — sandbox containers, on their per-port hostname above. Each
- *                 preview is its own origin, isolated from the app *and* from
- *                 every other preview, so the document keeps that origin and
- *                 previewed apps work normally (storage, same-origin fetch).
- *
- *   'app-host'  — Nimbus session content under `/_nimbus/…`, which is fetched
- *                 with the owner's session (its tenant check needs it) and so
- *                 cannot move off the app's origin. Pinned to an opaque origin
- *                 instead: that is the only thing standing between it and the
- *                 owner's session.
- *
+ * Nimbus uses the same trust boundary with its own capability-host shape.
  * The pin is a response header, not just the iframe `sandbox` attribute: users
  * open preview URLs in new tabs, where the attribute does not exist. The
  * attribute and the header are built from the same token list so the two
@@ -48,23 +39,19 @@ const PREVIEW_SANDBOX_TOKENS = [
  * attribute and the CSP `sandbox` directive's argument.
  *
  * `allow-same-origin` is present here and only here. It voids the sandbox for
- * same-origin content, which is safe exactly when "same origin" means one
- * sandbox's own port and nothing else: the app is a different host, and every
- * other preview is a different host too, because the port, the sandbox id and
- * the port's secret token are all in this one's hostname.
+ * same-origin content, which is why every preview gets a distinct hostname:
+ * the app, its localStorage, and every other preview are different origins.
+ * Cookie-site isolation additionally requires PREVIEW_HOST_SUFFIX itself to be
+ * a Public Suffix List boundary; see the deployment configuration prerequisite.
  */
 export const PREVIEW_SANDBOX = [...PREVIEW_SANDBOX_TOKENS, 'allow-same-origin'].join(' ');
-
-/**
- * Sandbox tokens for preview content served on the app's own origin. No
- * `allow-same-origin`: with it the document would run *as* the app.
- */
-const APP_HOST_SANDBOX = PREVIEW_SANDBOX_TOKENS.join(' ');
 
 interface PreviewHostEnv {
   PREVIEW_HOST_SUFFIX?: string;
   CLI_PUBLIC_ORIGIN?: string;
 }
+
+const PREVIEW_SUFFIX_META = 'proteus-preview-host-suffix';
 
 function hostOf(origin: string | undefined): string | null {
   if (!origin) return null;
@@ -78,8 +65,22 @@ function hostOf(origin: string | undefined): string | null {
  */
 export function previewHostSuffix(env: PreviewHostEnv): string | null {
   const suffix = env.PREVIEW_HOST_SUFFIX?.trim().toLowerCase().replace(/^\.+|\.+$/g, '');
-  if (!suffix || !suffix.includes('.')) return null;
-  return suffix === hostOf(env.CLI_PUBLIC_ORIGIN) ? null : suffix;
+  if (!suffix || !suffix.includes('.')
+    || !/^[a-z0-9](?:[a-z0-9.-]*[a-z0-9])$/.test(suffix)
+    || suffix.split('.').some((label) => !label || label.length > 63 || label.startsWith('-') || label.endsWith('-'))) {
+    return null;
+  }
+  return suffix;
+}
+
+export function previewSuffixMetaName(): string {
+  return PREVIEW_SUFFIX_META;
+}
+
+function browserPreviewHostSuffix(): string | null {
+  if (globalThis.document === undefined) return null;
+  const configured = globalThis.document.querySelector<HTMLMetaElement>(`meta[name="${PREVIEW_SUFFIX_META}"]`)?.content;
+  return previewHostSuffix({ PREVIEW_HOST_SUFFIX: configured });
 }
 
 /**
@@ -97,14 +98,13 @@ export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
 }
 
 /**
- * Pin a preview response to the origin it is allowed to have, and stop the
- * container from writing cookies outside its own.
+ * Pin a preview response to its isolated origin and reject server-supplied
+ * Domain cookies.
  *
- * Cookies: on the app's origin a container `Set-Cookie` could overwrite the
- * session, so all of them are dropped. On its own host a preview's cookies are
- * its own — host-only ones are kept, which is what makes a previewed SPA's
- * login work — but a `Domain=` cookie spans the whole suffix and would be sent
- * to every other preview, so those are dropped.
+ * Host-only cookies are kept, which is what makes a previewed SPA's login
+ * work. A `Domain=` cookie would span the whole suffix and reach other
+ * previews, so it is dropped. This cannot intercept JavaScript's
+ * `document.cookie`; complete cookie isolation also needs a PSL-backed suffix.
  *
  * `Referer` is muzzled because the port's secret token is part of the hostname
  * now: the browser's default policy sends the origin cross-origin, and the
@@ -115,19 +115,16 @@ export function isPreviewHostRequest(url: URL, env: PreviewHostEnv): boolean {
  * untouched — a WebSocket handshake carries no document, and its headers are
  * immutable.
  */
-export function containPreviewResponse(response: Response, origin: 'own-host' | 'app-host'): Response {
+export function containPreviewResponse(response: Response): Response {
   if (response.status === 101) return response;
-  const ownHost = origin === 'own-host';
-  const keptCookies = ownHost
-    ? response.headers.getSetCookie().filter(c => !/;\s*domain\s*=/i.test(c))
-    : [];
+  const keptCookies = response.headers.getSetCookie().filter(c => !/;\s*domain\s*=/i.test(c));
 
   const headers = new Headers(response.headers);
   headers.delete('set-cookie');
   for (const cookie of keptCookies) headers.append('set-cookie', cookie);
   headers.delete('content-security-policy');
   headers.delete('content-security-policy-report-only');
-  headers.set('content-security-policy', `sandbox ${ownHost ? PREVIEW_SANDBOX : APP_HOST_SANDBOX}`);
+  headers.set('content-security-policy', `sandbox ${PREVIEW_SANDBOX}`);
   headers.set('referrer-policy', 'no-referrer');
   return new Response(response.body, {
     status: response.status,
@@ -137,7 +134,12 @@ export function containPreviewResponse(response: Response, origin: 'own-host' | 
 }
 
 /** `<port>-<sandbox-id>-<token>` — the SDK's preview hostname label. */
-const PREVIEW_HOST_LABEL = /^\d{4,5}-[a-z0-9][a-z0-9-]*-[a-z0-9_]+$/i;
+const PREVIEW_HOST_LABEL = /^(\d{1,5})-[a-z0-9][a-z0-9-]*-[a-z0-9_]+$/i;
+
+function validPort(value: string | undefined): boolean {
+  const port = Number(value);
+  return Number.isInteger(port) && port >= 1 && port <= 65_535;
+}
 
 /**
  * Whether a URL is a preview URL this app is willing to frame: an absolute
@@ -146,14 +148,20 @@ const PREVIEW_HOST_LABEL = /^\d{4,5}-[a-z0-9][a-z0-9-]*-[a-z0-9_]+$/i;
  * (`frame-src`), because only the server knows the configured suffix; this
  * rejects the shapes that never come from Proteus at all.
  */
-export function isPreviewUrl(value: string): boolean {
+export function isPreviewUrl(value: string, configuredSuffix: string | null = browserPreviewHostSuffix()): boolean {
   let url: URL;
   try { url = new URL(value); } catch { return false; }
-  if (url.protocol !== 'https:') return false;
   if (url.username || url.password) return false;
-  const dot = url.hostname.indexOf('.');
-  if (dot === -1) return false;
-  return PREVIEW_HOST_LABEL.test(url.hostname.slice(0, dot));
+  if (url.protocol !== 'https:') return false;
+  const suffix = previewHostSuffix({ PREVIEW_HOST_SUFFIX: configuredSuffix ?? undefined });
+  if (!suffix) return false;
+  const host = url.hostname.toLowerCase();
+  const suffixWithDot = `.${suffix}`;
+  if (!host.endsWith(suffixWithDot)) return false;
+  const label = host.slice(0, -suffixWithDot.length);
+  if (!label || label.includes('.')) return false;
+  const sandbox = PREVIEW_HOST_LABEL.exec(label);
+  return (sandbox !== null && validPort(sandbox[1])) || parseNimbusPreviewLabel(label) !== null;
 }
 
 /**
@@ -165,15 +173,16 @@ export function isPreviewUrl(value: string): boolean {
  * too — so candidates are parsed and checked against `isPreviewUrl` rather than
  * pattern-matched out of the surrounding prose.
  */
-export function extractPreviewUrl(output: unknown): string | null {
+export function extractPreviewUrl<Output>(
+  output: Output,
+  configuredSuffix: string | null = browserPreviewHostSuffix(),
+): string | null {
   const scan = (text: string): string | null =>
-    (text.match(/https:\/\/[^\s"'<>\\)]+/gi) ?? []).find(isPreviewUrl) ?? null;
+    (text.match(/https?:\/\/[^\s"'<>\\)]+/gi) ?? [])
+      .find((url) => isPreviewUrl(url, configuredSuffix)) ?? null;
 
-  if (typeof output === 'string') return scan(output);
-  if (output && typeof output === 'object') {
-    const url = (output as { url?: unknown }).url;
-    if (typeof url === 'string') return scan(url);
-    try { return scan(JSON.stringify(output)); } catch { return null; }
-  }
-  return null;
+  if (v.is(v.string(), output)) return scan(output);
+  const withUrl = v.safeParse(v.object({ url: v.string() }), output);
+  if (withUrl.success) return scan(withUrl.output.url);
+  try { return scan(JSON.stringify(output)); } catch { return null; }
 }

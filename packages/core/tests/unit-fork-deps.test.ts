@@ -21,32 +21,46 @@
 // value, so every phase of ONE fork call lands on the SAME run regardless
 // of how long the exploration takes or what runs after it.
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
 import { buildStrategyForkDeps, type ForkDepsWiring } from '../src/orchestrator/fork-deps.js';
-import type { SplitPhaseEvent } from '../src/heads/controller.js';
+import { HeadController, type SplitPhaseEvent } from '../src/heads/controller.js';
+import { HeadJournal } from '../src/heads/journal.js';
+import { MctsSearchStore } from '../src/mcts/search-store.js';
+import type { AgentsForkDeps } from '../src/tools/agents-tool.js';
 import { createTestRuntime } from './helpers.js';
 
-function wiring(overrides: Partial<ForkDepsWiring['heads']> = {}): {
-  wiring: ForkDepsWiring;
-  onPhaseFactoryCalls: number;
-} {
+function wiring(overrides: Partial<ForkDepsWiring['heads']> = {}) {
   const { rt } = createTestRuntime();
-  let onPhaseFactoryCalls = 0;
+  const controller = new HeadController({
+    spawnHead: async () => { throw new Error('not exercised by fork-deps tests'); },
+    mergeLLM: async () => { throw new Error('not exercised by fork-deps tests'); },
+  }, new HeadJournal(rt.storage.sql));
   const heads: ForkDepsWiring['heads'] = {
-    controller: () => ({}) as never,
+    controller: () => controller,
     inheritedContext: () => [],
-    onPhase: () => { onPhaseFactoryCalls++; return () => {}; },
+    onPhase: () => () => {},
     onComplete: () => {},
     ...overrides,
   };
   return {
     wiring: {
       rt,
-      model: rt.llm as never,
-      mcts: { session: () => ({}) as never, search: {} as never, overrides: () => ({}) },
+      model: new MockLanguageModelV3(),
+      mcts: {
+        session: () => ({ appendMessage: async () => {}, getHistory: () => [] }),
+        search: new MctsSearchStore(rt.storage.sql),
+        overrides: () => ({}),
+      },
       heads,
     },
-    onPhaseFactoryCalls: 0,
   };
+}
+
+function phaseSink(deps: AgentsForkDeps): (event: SplitPhaseEvent) => void {
+  const heads = deps.defaultOptions?.().heads;
+  const { onPhase } = v.parse(v.object({ onPhase: v.function() }), heads);
+  return (event) => { onPhase(event); };
 }
 
 describe('buildStrategyForkDeps — the onPhase factory is resolved once per fork call, at dispatch', () => {
@@ -55,12 +69,12 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
     const { wiring: w } = wiring({ onPhase: () => { calls++; return () => {}; } });
     const deps = buildStrategyForkDeps(w);
 
-    const options1 = deps.defaultOptions!() as { heads: { onPhase: (e: SplitPhaseEvent) => void } };
+    const onPhase = phaseSink(deps);
     expect(calls).toBe(1);
     // The SAME resolved closure fires for both 'split' and 'merge' — the
     // factory is not re-invoked per phase.
-    options1.heads.onPhase({ kind: 'split', rootId: 'r1', headIds: ['h1', 'h2'], rationale: 'x' });
-    options1.heads.onPhase({
+    onPhase({ kind: 'split', rootId: 'r1', headIds: ['h1', 'h2'], rationale: 'x' });
+    onPhase({
       kind: 'merge', rootId: 'r1', mergedNarrative: 'done',
       cost: { headCount: 2, headsWithFindings: 2, totalTokens: 10, totalWallClockMs: 500, maxDepth: 1 },
       fileChanges: [], blindSpots: [],
@@ -81,10 +95,10 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
       },
     });
     const deps = buildStrategyForkDeps(w);
-    const options = deps.defaultOptions!() as { heads: { onPhase: (e: SplitPhaseEvent) => void } };
+    const onPhase = phaseSink(deps);
 
     // 'split' fires while the run is still live.
-    options.heads.onPhase({ kind: 'split', rootId: 'r1', headIds: ['h1', 'h2'], rationale: 'x' });
+    onPhase({ kind: 'split', rootId: 'r1', headIds: ['h1', 'h2'], rationale: 'x' });
 
     // The calling turn closes its run — the live pointer moves on, exactly
     // like local-session's currentRunId going null or cf's _currentRunId
@@ -94,7 +108,7 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
     // 'merge' fires long after — but the ALREADY-RESOLVED closure still
     // reports the run id that was live at DISPATCH, not the (now different)
     // live value.
-    options.heads.onPhase({
+    onPhase({
       kind: 'merge', rootId: 'r1', mergedNarrative: 'done',
       cost: { headCount: 2, headsWithFindings: 2, totalTokens: 10, totalWallClockMs: 500, maxDepth: 1 },
       fileChanges: [], blindSpots: [],
@@ -121,12 +135,12 @@ describe('buildStrategyForkDeps — the onPhase factory is resolved once per for
     });
     const deps = buildStrategyForkDeps(w);
 
-    const first = deps.defaultOptions!() as { heads: { onPhase: (e: SplitPhaseEvent) => void } };
-    first.heads.onPhase({ kind: 'split', rootId: 'r1', headIds: ['h1'], rationale: 'first fork' });
+    const first = phaseSink(deps);
+    first({ kind: 'split', rootId: 'r1', headIds: ['h1'], rationale: 'first fork' });
 
     live = 'run-B'; // a second, later fork call dispatches under a different run
-    const second = deps.defaultOptions!() as { heads: { onPhase: (e: SplitPhaseEvent) => void } };
-    second.heads.onPhase({ kind: 'split', rootId: 'r2', headIds: ['h1'], rationale: 'second fork' });
+    const second = phaseSink(deps);
+    second({ kind: 'split', rootId: 'r2', headIds: ['h1'], rationale: 'second fork' });
 
     expect(seen).toEqual([
       { call: 1, runId: 'run-A' },

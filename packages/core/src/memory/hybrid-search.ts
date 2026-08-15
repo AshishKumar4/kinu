@@ -113,18 +113,17 @@ export async function hybridSearch(
   const finalK = options.finalK ?? 10;
   const rrfK = options.rrfK ?? 60;
 
-  const [lexical, semantic] = await Promise.all([
-    lexicalSearch(query, perSourceK).catch((err) => {
+  const lexicalPromise: Promise<LexicalHit[]> = lexicalSearch(query, perSourceK).catch((err) => {
       console.warn('[hybrid-search] lexical search failed:', err instanceof Error ? err.message : err);
-      return [] as LexicalHit[];
-    }),
-    vectorStore.available
-      ? vectorStore.search(query, perSourceK).catch((err) => {
+      return [];
+    });
+  const semanticPromise: Promise<VectorSearchHit[]> = vectorStore.available
+    ? vectorStore.search(query, perSourceK).catch((err) => {
           console.warn('[hybrid-search] semantic search failed:', err instanceof Error ? err.message : err);
-          return [] as VectorSearchHit[];
+          return [];
         })
-      : Promise.resolve([] as VectorSearchHit[]),
-  ]);
+    : Promise.resolve([]);
+  const [lexical, semantic] = await Promise.all([lexicalPromise, semanticPromise]);
 
   // RRF accepts any { id } shape; we feed both lists.
   const merged = reciprocalRankFusion<{ id: string }>([lexical, semantic], rrfK);

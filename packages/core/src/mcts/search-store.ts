@@ -12,14 +12,29 @@
 // SDK's recovery hook returns, so it can't drive a cross-activation resume; this
 // store is the source of truth when injected, keyed by the search's root id.
 
+import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { MCTSConfig } from '../types/mcts.js';
+import type { WorkMode } from '../prompting/surface.js';
 
 /** The serializable knobs of an MCTSConfig — everything a resumed loop needs,
  *  minus the live handles (AbortSignal, callbacks, the store itself, and the
  *  mission port, which is a live object whose JSON round-trip would come back
  *  as an empty stub and silently un-govern a resumed search). */
 export type PersistedMCTSConfig = Omit<MCTSConfig, 'signal' | 'onProgress' | 'search' | 'mission'>;
+const PersistedMCTSConfigSchema: v.GenericSchema<PersistedMCTSConfig> = v.object({
+  mode: v.optional(v.picklist(['build', 'plan'])),
+  budget: v.number(),
+  branches: v.number(),
+  maxDepth: v.optional(v.number()),
+  explorationWeight: v.optional(v.number()),
+  pruneThreshold: v.optional(v.number()),
+  minAcceptableScore: v.optional(v.number()),
+  maxCostUSD: v.optional(v.number()),
+  judgeSamples: v.optional(v.number()),
+  maxEvalLLMCalls: v.optional(v.number()),
+  takesEpsilon: v.optional(v.number()),
+});
 
 /** A resumable (interrupted) search: enough to continue the loop from checkpoint. */
 export interface ResumableSearch {
@@ -91,9 +106,9 @@ export class MctsSearchStore {
     rootId: string; task: string; rootMsgId: string;
     config: PersistedMCTSConfig; budget: number; now: number;
   }): void {
-    this.sql`DELETE FROM mcts_search_runs
+    void this.sql`DELETE FROM mcts_search_runs
       WHERE status != 'running' AND updated_at < ${opts.now - SETTLED_RETENTION_MS}`;
-    this.sql`INSERT OR REPLACE INTO mcts_search_runs
+    void this.sql`INSERT OR REPLACE INTO mcts_search_runs
       (root_id, task, root_msg_id, config_json, iteration, budget, status, epoch, created_at, updated_at)
       VALUES (${opts.rootId}, ${opts.task}, ${opts.rootMsgId}, ${JSON.stringify(opts.config)},
               0, ${opts.budget}, 'running', 0, ${opts.now}, ${opts.now})`;
@@ -102,28 +117,36 @@ export class MctsSearchStore {
   /** Persist loop progress. Fenced: a stale epoch (a zombie executor after a
    *  reclaim) is a no-op. */
   checkpoint(rootId: string, epoch: number, iteration: number, budget: number, now: number): void {
-    this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
+    void this.sql`UPDATE mcts_search_runs SET iteration=${iteration}, budget=${budget}, updated_at=${now}
       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   /** The most recently-updated still-running search for a task — the resume
    *  source when an evicted fork(settle=mcts) is re-driven. */
-  findResumable(task: string): ResumableSearch | null {
+  findResumable(task: string, mode: WorkMode = 'build'): ResumableSearch | null {
     const rows = this.sql<Row>`SELECT root_id, task, root_msg_id, config_json, iteration, budget, status, epoch
       FROM mcts_search_runs WHERE status='running' AND task=${task}
-      ORDER BY updated_at DESC LIMIT 1`;
-    const r = rows[0];
-    if (!r) return null;
-    return {
-      rootId: r.root_id, rootMsgId: r.root_msg_id, task: r.task,
-      config: safeParseConfig(r.config_json), iteration: r.iteration, budget: r.budget, epoch: r.epoch,
-    };
+      ORDER BY updated_at DESC`;
+    for (const row of rows) {
+      const config = safeParseConfig(row.config_json);
+      if ((config.mode ?? 'build') !== mode) continue;
+      return {
+        rootId: row.root_id,
+        rootMsgId: row.root_msg_id,
+        task: row.task,
+        config,
+        iteration: row.iteration,
+        budget: row.budget,
+        epoch: row.epoch,
+      };
+    }
+    return null;
   }
 
   /** Claim a still-running search for a resume: bump the lease epoch (fencing
    *  any executor still holding the old one) and return it. Null if not running. */
   reclaim(rootId: string): number | null {
-    this.sql`UPDATE mcts_search_runs SET epoch = epoch + 1 WHERE root_id=${rootId} AND status='running'`;
+    void this.sql`UPDATE mcts_search_runs SET epoch = epoch + 1 WHERE root_id=${rootId} AND status='running'`;
     const rows = this.sql<{ epoch: number; status: string }>`
       SELECT epoch, status FROM mcts_search_runs WHERE root_id=${rootId} LIMIT 1`;
     const row = rows[0];
@@ -132,13 +155,13 @@ export class MctsSearchStore {
 
   /** Mark a search converged (fenced on epoch). */
   converge(rootId: string, epoch: number, now: number): void {
-    this.sql`UPDATE mcts_search_runs SET status='converged', updated_at=${now}
+    void this.sql`UPDATE mcts_search_runs SET status='converged', updated_at=${now}
       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
   /** Mark a search failed (fenced on epoch). */
   fail(rootId: string, epoch: number, now: number): void {
-    this.sql`UPDATE mcts_search_runs SET status='failed', updated_at=${now}
+    void this.sql`UPDATE mcts_search_runs SET status='failed', updated_at=${now}
       WHERE root_id=${rootId} AND status='running' AND epoch=${epoch}`;
   }
 
@@ -174,8 +197,8 @@ export class MctsSearchStore {
 
 function safeParseConfig(json: string): PersistedMCTSConfig {
   try {
-    const parsed = JSON.parse(json) as unknown;
-    if (parsed && typeof parsed === 'object') return parsed as PersistedMCTSConfig;
+    const parsed = v.safeParse(PersistedMCTSConfigSchema, JSON.parse(json));
+    if (parsed.success) return parsed.output;
   } catch { /* fall through */ }
   return { budget: 0, branches: 1 };
 }

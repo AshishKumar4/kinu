@@ -10,6 +10,9 @@
  *   locally and dispatches each call back to `UserDO.callMcpTool(...)`.
  */
 
+import { JsonArraySchema, JsonObjectSchema, type JsonObject } from '@proteus/core';
+import * as v from 'valibot';
+
 export type McpTransport = 'auto' | 'sse' | 'streamable-http';
 
 /** What an MCP tool looks like once it has crossed the RPC seam. Mirrors the
@@ -33,9 +36,20 @@ export interface SerializableToolDescriptor {
   title?: string;
   /** JSON Schema (not a Zod schema) — survives RPC serialization. The
    *  orchestrator passes this straight to `tool({ inputSchema: jsonSchema(...) })`. */
-  inputSchema?: Record<string, unknown>;
-  outputSchema?: Record<string, unknown>;
+  inputSchema?: JsonObject;
+  outputSchema?: JsonObject;
 }
+
+export const SerializableToolDescriptorSchema = v.object({
+  serverId: v.string(),
+  serverName: v.string(),
+  name: v.string(),
+  toolKey: v.string(),
+  description: v.optional(v.string()),
+  title: v.optional(v.string()),
+  inputSchema: v.optional(JsonObjectSchema),
+  outputSchema: v.optional(JsonObjectSchema),
+});
 
 /** What the HTTP layer accepts when the user adds a server. */
 export interface McpServerInput {
@@ -85,9 +99,17 @@ export interface McpServerConfig {
   updatedAt: number;
 }
 
-const VALID_TRANSPORTS: ReadonlySet<McpTransport> = new Set<McpTransport>([
-  'auto', 'sse', 'streamable-http',
-]);
+const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
+function isJsonRecord<Value>(value: Value): value is Value & JsonObject {
+  return !Array.isArray(value) && v.is(JsonObjectSchema, value);
+}
+
+const RawMcpServerInputSchema = v.custom<JsonObject>(isJsonRecord, 'Expected a JSON object.');
+const HeaderRecordSchema = v.pipe(
+  RawMcpServerInputSchema,
+  v.record(v.string(), v.string()),
+);
+const StringArraySchema = v.array(v.string());
 
 /**
  * Validate an `McpServerInput`. Throws with a user-readable message on
@@ -96,20 +118,23 @@ const VALID_TRANSPORTS: ReadonlySet<McpTransport> = new Set<McpTransport>([
  * `MCPClientManager` already SSRF-checks; this is just a friendly upfront
  * pass so we don't store nonsense.
  */
-export function validateMcpServerInput(input: unknown): McpServerInput {
-  if (!input || typeof input !== 'object') {
+export function validateMcpServerInput<Input>(input: Input): McpServerInput {
+  const parsedInput = v.safeParse(RawMcpServerInputSchema, input);
+  if (!parsedInput.success) {
     throw new Error('Body must be a JSON object.');
   }
-  const obj = input as Record<string, unknown>;
+  const obj = parsedInput.output;
 
-  const name = obj.name;
-  if (typeof name !== 'string' || !name.trim()) throw new Error('`name` is required.');
+  const parsedName = v.safeParse(v.string(), obj.name);
+  if (!parsedName.success || !parsedName.output.trim()) throw new Error('`name` is required.');
+  const name = parsedName.output;
   if (name.length > 64) throw new Error('`name` must be ≤ 64 characters.');
 
-  const serverUrl = obj.serverUrl;
-  if (typeof serverUrl !== 'string' || !serverUrl.trim()) {
+  const parsedServerUrl = v.safeParse(v.string(), obj.serverUrl);
+  if (!parsedServerUrl.success || !parsedServerUrl.output.trim()) {
     throw new Error('`serverUrl` is required.');
   }
+  const serverUrl = parsedServerUrl.output;
   let parsed: URL;
   try { parsed = new URL(serverUrl); } catch { throw new Error('`serverUrl` is not a valid URL.'); }
   const isHttps = parsed.protocol === 'https:';
@@ -123,37 +148,40 @@ export function validateMcpServerInput(input: unknown): McpServerInput {
     throw new Error('`serverUrl` must use https:// (http:// allowed only for localhost).');
   }
 
-  const transport: McpTransport = (() => {
-    const t = obj.transport;
-    if (t === undefined || t === null) return 'auto';
-    if (typeof t !== 'string' || !VALID_TRANSPORTS.has(t as McpTransport)) {
-      throw new Error("`transport` must be one of 'auto', 'sse', 'streamable-http'.");
-    }
-    return t as McpTransport;
-  })();
+  const parsedTransport = v.safeParse(v.nullish(McpTransportSchema), obj.transport);
+  if (!parsedTransport.success) {
+    throw new Error("`transport` must be one of 'auto', 'sse', 'streamable-http'.");
+  }
+  const transport = parsedTransport.output ?? 'auto';
 
   let headers: Record<string, string> | undefined;
   if (obj.headers !== undefined && obj.headers !== null) {
-    if (typeof obj.headers !== 'object' || Array.isArray(obj.headers)) {
+    const parsedHeaderObject = v.safeParse(RawMcpServerInputSchema, obj.headers);
+    if (!parsedHeaderObject.success) {
       throw new Error('`headers` must be a flat object of string→string.');
     }
     headers = {};
-    for (const [k, v] of Object.entries(obj.headers as Record<string, unknown>)) {
-      if (typeof v !== 'string') throw new Error(`headers.${k} must be a string.`);
+    for (const [k, value] of Object.entries(parsedHeaderObject.output)) {
       if (k.length === 0 || k.length > 128) throw new Error(`headers.${k} — key length out of range.`);
-      headers[k] = v;
+      const parsedValue = v.safeParse(v.string(), value);
+      if (!parsedValue.success) throw new Error(`headers.${k} must be a string.`);
+      headers[k] = parsedValue.output;
     }
   }
 
   let allowedTools: string[] | undefined;
   if (obj.allowedTools !== undefined && obj.allowedTools !== null) {
-    if (!Array.isArray(obj.allowedTools)) {
+    const parsedAllowedTools = v.safeParse(JsonArraySchema, obj.allowedTools);
+    if (!parsedAllowedTools.success) {
       throw new Error('`allowedTools` must be a string[] (or omitted to allow all).');
     }
     allowedTools = [];
-    for (const t of obj.allowedTools) {
-      if (typeof t !== 'string' || !t.trim()) throw new Error('`allowedTools` entries must be non-empty strings.');
-      allowedTools.push(t);
+    for (const toolName of parsedAllowedTools.output) {
+      const parsedToolName = v.safeParse(v.pipe(v.string(), v.nonEmpty()), toolName);
+      if (!parsedToolName.success) {
+        throw new Error('`allowedTools` entries must be non-empty strings.');
+      }
+      allowedTools.push(parsedToolName.output);
     }
   }
 
@@ -165,8 +193,8 @@ export function validateMcpServerInput(input: unknown): McpServerInput {
 export function parseAllowedTools(raw: string | null | undefined): string[] | null {
   if (!raw) return null;
   try {
-    const arr = JSON.parse(raw) as unknown;
-    if (Array.isArray(arr) && arr.every((t) => typeof t === 'string')) return arr;
+    const parsed = v.safeParse(StringArraySchema, JSON.parse(raw));
+    if (parsed.success) return parsed.output;
   } catch { /* fall through */ }
   return null;
 }
@@ -176,13 +204,8 @@ export function parseAllowedTools(raw: string | null | undefined): string[] | nu
 export function parseMcpHeaders(raw: string | null | undefined): Record<string, string> | null {
   if (!raw) return null;
   try {
-    const obj = JSON.parse(raw) as unknown;
-    if (
-      obj && typeof obj === 'object' && !Array.isArray(obj)
-      && Object.values(obj as Record<string, unknown>).every((v) => typeof v === 'string')
-    ) {
-      return obj as Record<string, string>;
-    }
+    const parsed = v.safeParse(HeaderRecordSchema, JSON.parse(raw));
+    if (parsed.success) return parsed.output;
   } catch { /* fall through */ }
   return null;
 }
@@ -205,8 +228,11 @@ export function buildMcpHeaderTransportOpts(
   if (!headers || Object.keys(headers).length === 0) return undefined;
   return {
     eventSourceInit: {
-      fetch: (url: string | URL, init?: RequestInit) =>
-        fetch(url, { ...init, headers: { ...(init?.headers as Record<string, string> | undefined), ...headers } }),
+      fetch: (url: string | URL, init?: RequestInit) => {
+        const mergedHeaders = new Headers(init?.headers);
+        for (const [name, value] of Object.entries(headers)) mergedHeaders.set(name, value);
+        return fetch(url, { ...init, headers: mergedHeaders });
+      },
     },
     requestInit: { headers },
   };

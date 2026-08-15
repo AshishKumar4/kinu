@@ -22,8 +22,13 @@
  */
 
 import { createHash, createHmac } from 'node:crypto';
+import * as v from 'valibot';
 import { evidenceWindow } from '../../prompts/evidence-window.js';
 import type { PayloadPolicy, ProteusEvent } from './types.js';
+import {
+  isJsonObject, JsonObjectSchema, parseJsonValue,
+  type JsonObject, type JsonValue,
+} from '../../utils/json.js';
 
 // ── Secret-shape heuristics for `redact` ─────────────────────────
 
@@ -46,46 +51,53 @@ function looksLikeSecretField(name: string): boolean {
 }
 
 /** Recursively redact field values whose names look secret-shaped. */
-function redactPayload(value: unknown): unknown {
-  if (value === null || typeof value !== 'object') return value;
+function redactPayload(value: JsonValue): JsonValue {
+  if (!isJsonObject(value) && !Array.isArray(value)) return value;
   if (Array.isArray(value)) return value.map(redactPayload);
-  const out: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-    out[k] = looksLikeSecretField(k) ? `<redacted:${k}>` : redactPayload(v);
+  const redacted: JsonObject = {};
+  for (const [field, fieldValue] of Object.entries(value)) {
+    redacted[field] = looksLikeSecretField(field)
+      ? `<redacted:${field}>`
+      : redactPayload(fieldValue);
   }
-  return out;
+  return redacted;
 }
 
 // ── Storage transform ────────────────────────────────────────────
 
 export interface StorageTransform {
   /** What actually goes into the `payload` column. */
-  stored: unknown;
+  stored: JsonValue;
   /** Any opaque references created during the transform. */
   opaque_handles?: Array<{ handle: string; size: number; content_type?: string }>;
 }
 
-export function applyVisibilityForStorage(
-  payload: unknown,
+export function applyVisibilityForStorage<T>(
+  payload: T,
   policy: PayloadPolicy,
   hmacSecret?: string,
 ): StorageTransform {
+  const serializedPayload = JSON.stringify(payload);
+  if (serializedPayload === undefined) {
+    throw new Error('event payload must be JSON-serializable');
+  }
+  const admittedPayload = parseJsonValue(serializedPayload);
   switch (policy) {
     case 'full':
-      return { stored: payload };
+      return { stored: admittedPayload };
 
     case 'redact':
-      return { stored: redactPayload(payload) };
+      return { stored: redactPayload(admittedPayload) };
 
     case 'hash': {
-      const serialized = JSON.stringify(payload);
+      const serialized = JSON.stringify(admittedPayload);
       const digest = createHash('sha256').update(serialized).digest('hex');
       return {
         stored: {
           _visibility: 'hash',
           sha256: digest,
           size: serialized.length,
-          content_type: detectContentType(payload),
+          content_type: detectContentType(admittedPayload),
         },
       };
     }
@@ -95,14 +107,14 @@ export function applyVisibilityForStorage(
         // Without a secret, hmac collapses to hash. Log via the absence in stored.
         return applyVisibilityForStorage(payload, 'hash');
       }
-      const serialized = JSON.stringify(payload);
+      const serialized = JSON.stringify(admittedPayload);
       const mac = createHmac('sha256', hmacSecret).update(serialized).digest('hex');
       return {
         stored: {
           _visibility: 'hmac',
           hmac_sha256: mac,
           size: serialized.length,
-          content_type: detectContentType(payload),
+          content_type: detectContentType(admittedPayload),
         },
       };
     }
@@ -110,23 +122,24 @@ export function applyVisibilityForStorage(
     case 'opaque_handle': {
       // Payload itself is replaced; caller is responsible for the side-store
       // write (e.g. UserDO secret store) BEFORE calling publish.
-      const handle = `opaque:${createHash('sha256').update(JSON.stringify(payload)).digest('hex').slice(0, 16)}`;
+      const serialized = JSON.stringify(admittedPayload);
+      const handle = `opaque:${createHash('sha256').update(serialized).digest('hex').slice(0, 16)}`;
       return {
         stored: { _visibility: 'opaque_handle', handle },
         opaque_handles: [{
           handle,
-          size: JSON.stringify(payload).length,
-          content_type: detectContentType(payload),
+          size: serialized.length,
+          content_type: detectContentType(admittedPayload),
         }],
       };
     }
   }
 }
 
-function detectContentType(payload: unknown): string {
-  if (payload === null || payload === undefined) return 'null';
-  if (typeof payload === 'string') return 'text/plain';
-  if (typeof payload === 'number' || typeof payload === 'boolean') return 'primitive';
+function detectContentType(payload: JsonValue): string {
+  if (payload === null) return 'null';
+  if (v.is(v.string(), payload)) return 'text/plain';
+  if (v.is(v.union([v.number(), v.boolean()]), payload)) return 'primitive';
   if (Array.isArray(payload)) return 'array';
   return 'object';
 }
@@ -156,13 +169,7 @@ function briefWindow(text: string): string {
 /** Compact, human-readable representation of an event for injection into
  *  the LLM context. Never includes raw payload bytes for non-`full`
  *  visibility events. */
-export function renderForLLM(event: ProteusEvent): {
-  id: string;
-  variant: string;
-  is_self_caused: boolean;
-  triggered_by: string;
-  brief: string;
-} {
+export function renderForLLM(event: ProteusEvent) {
   return {
     id: event.id,
     variant: event.variant,
@@ -173,126 +180,122 @@ export function renderForLLM(event: ProteusEvent): {
 }
 
 function friendlySource(event: ProteusEvent): string {
+  const parsedPayload = v.safeParse(JsonObjectSchema, event.payload);
+  const payload = parsedPayload.success ? parsedPayload.output : {};
+  const text = (field: string, fallback: string): string => {
+    const value = payload[field];
+    return v.is(v.string(), value) ? value : fallback;
+  };
   switch (event.ingress) {
     case 'chat_ws':         return 'chat (operator)';
     case 'webhook_hmac':
     case 'webhook_bearer':
     case 'webhook_mtls': {
-      const wh = (event.payload as { webhook_id?: string }).webhook_id ?? 'unknown';
-      return `webhook (${wh})`;
+      return `webhook (${text('webhook_id', 'unknown')})`;
     }
-    case 'timer_alarm':     return `schedule (${(event.payload as { label?: string }).label ?? 'unlabeled'})`;
+    case 'timer_alarm':     return `schedule (${text('label', 'unlabeled')})`;
     case 'sandbox_cb':
-    case 'process_watch':   return `sandbox (${(event.payload as { command?: string }).command?.slice(0, 40) ?? 'process'})`;
-    case 'file_watch':      return `file (${(event.payload as { path?: string }).path ?? '?'})`;
-    case 'peer_async':      return `peer agent (${(event.payload as { from_agent_name?: string }).from_agent_name ?? '?'})`;
+    case 'process_watch':   return `sandbox (${text('command', 'process').slice(0, 40)})`;
+    case 'file_watch':      return `file (${text('path', '?')})`;
+    case 'peer_async':      return `peer agent (${text('from_agent_name', '?')})`;
     case 'subordinate':
       return event.variant === 'subordinate_report'
-        ? `subordinate (${(event.payload as { from_subordinate?: string }).from_subordinate ?? '?'})`
-        : `workspace orchestrator (${(event.payload as { from_workspace?: string }).from_workspace ?? '?'})`;
-    case 'email_inbound':   return `email (${(event.payload as { from?: string }).from ?? '?'})`;
+        ? `subordinate (${text('from_subordinate', '?')})`
+        : `workspace orchestrator (${text('from_workspace', '?')})`;
+    case 'email_inbound':   return `email (${text('from', '?')})`;
     case 'mcp_streamable':
       if (event.variant === 'mcp_chat') return `MCP (operator)`;
-      return `MCP (${(event.payload as { client_label?: string }).client_label ?? 'third party'})`;
+      return `MCP (${text('client_label', 'third party')})`;
     case 'self_emit':       return `your earlier action`;
     case 'reply_request':   return `operator reply`;
   }
 }
 
 function briefForVariant(event: ProteusEvent): string {
-  // `full` visibility events keep payload visible; non-`full` show a redacted
-  // / hashed brief. The render function always returns a string short enough
-  // for direct prompt injection.
-  if (event.payload_visibility !== 'full') {
-    const v = event.payload as { _visibility?: string; sha256?: string; size?: number };
-    if (v && v._visibility === 'hash') {
-      return `[redacted body: ${v.sha256?.slice(0, 16)}... size=${v.size}]`;
+  // Hash/HMAC/opaque policies replace the payload. Redaction preserves the
+  // domain shape and may continue through the variant renderer below.
+  if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
+    const parsed = v.safeParse(JsonObjectSchema, event.payload);
+    const visibilityPayload = parsed.success ? parsed.output : {};
+    const marker = visibilityPayload._visibility;
+    const size = visibilityPayload.size;
+    if (marker === 'hash') {
+      const digest = visibilityPayload.sha256;
+      return `[redacted body: ${v.is(v.string(), digest) ? digest.slice(0, 16) : undefined}... size=${size}]`;
     }
-    if (v && v._visibility === 'hmac') {
-      return `[opaque body verified by hmac, size=${v.size}]`;
+    if (marker === 'hmac') {
+      return `[opaque body verified by hmac, size=${size}]`;
     }
-    if (v && v._visibility === 'opaque_handle') {
+    if (marker === 'opaque_handle') {
       // The payload was replaced with a pointer into a side store the agent
       // cannot reach (applyVisibilityForStorage). Say so — do not invent a
       // read-back API. This line once instructed the model to call
       // `read_external_payload(event_id)`, which existed nowhere.
-      const handle = (v as { handle?: string }).handle ?? 'unknown';
+      const handle = v.is(v.string(), visibilityPayload.handle) ? visibilityPayload.handle : 'unknown';
       return `[opaque payload ${handle}: withheld by visibility policy; not readable from this agent]`;
     }
-    // `redact` keeps the structure visible.
+    return '[protected payload unavailable: malformed visibility envelope]';
   }
   switch (event.variant) {
     case 'chat':
-      return (event.payload as { text: string }).text.slice(0, 200);
+      return event.payload.text.slice(0, 200);
     case 'webhook': {
       // A webhook body IS the woken turn's input, so it gets the chat-scale
       // budget and an address for the rest. The old 200-char head slice of
       // stringified JSON handed the model syntactically invalid JSON with no
       // marker, no count, and nothing to read back.
-      const p = event.payload as { http_method: string; body: unknown; body_path?: string };
+      const p = event.payload;
       const body = JSON.stringify(p.body) ?? 'undefined';
       const full = p.body_path ? ` — full body: ${p.body_path}` : '';
       return `${p.http_method} body of ${briefWindow(body)}${full}`;
     }
     case 'process_done': {
-      const p = event.payload as { command: string; exit_code: number; stderr_excerpt: string };
+      const p = event.payload;
       return `${p.command.slice(0, 60)} exit=${p.exit_code}${p.stderr_excerpt ? ' stderr: ' + p.stderr_excerpt.slice(0, 100) : ''}`;
     }
     case 'timer': {
-      const p = event.payload as { label?: string; user_payload?: unknown };
-      return p.label ?? JSON.stringify(p.user_payload).slice(0, 100);
+      const p = event.payload;
+      return p.label ?? (JSON.stringify(p.user_payload) ?? 'undefined').slice(0, 100);
     }
     case 'peer_agent': {
       // Peer messages are delegated tasks/answers — the whole delivery, so an
       // oversize body names where its full text was spilled.
-      const p = event.payload as { topic: string; body: unknown; body_path?: string };
+      const p = event.payload;
       const full = p.body_path ? ` — full message: ${p.body_path}` : '';
       return `${p.topic}: ${briefWindow(JSON.stringify(p.body) ?? 'undefined')}${full}`;
     }
     case 'subordinate_task': {
       // Assignments are the subordinate's whole turn input — chat-scale
       // budget, same as peer messages.
-      const p = event.payload as {
-        kind: string;
-        body: string;
-        deliverable?: string;
-        inherited_context?: string;
-      };
+      const p = event.payload;
       const deliverable = p.deliverable ? ` [deliverable: ${p.deliverable.slice(0, 100)}]` : '';
       const inheritedContext = p.inherited_context ? `${p.inherited_context}\n\n` : '';
       return `${inheritedContext}${p.kind}: ${briefWindow(p.body)}${deliverable}`;
     }
     case 'subordinate_report': {
-      const p = event.payload as {
-        status: string; content: string; task?: string; content_path?: string;
-      };
+      const p = event.payload;
       const task = p.task ? ` [re: ${p.task.slice(0, 80)}]` : '';
       const full = p.content_path ? ` — full report: ${p.content_path}` : '';
       return `${p.status}${task}: ${briefWindow(p.content)}${full}`;
     }
     case 'file_changed':
-      return `${(event.payload as { change: string; path: string }).change} ${
-        (event.payload as { path: string }).path
-      }`;
+      return `${event.payload.change} ${event.payload.path}`;
     case 'email': {
       // Same treatment as a peer message: the mail IS the woken turn's input.
-      const p = event.payload as {
-        subject: string; body_text: string; attachments?: unknown[]; body_path?: string;
-      };
-      const attachNote = p.attachments && p.attachments.length > 0
+      const p = event.payload;
+      const attachNote = p.attachments?.length > 0
         ? ` [${p.attachments.length} attachment${p.attachments.length === 1 ? '' : 's'}]`
         : '';
       const full = p.body_path ? ` — full body: ${p.body_path}` : '';
       return `"${p.subject}"${attachNote}: ${briefWindow(p.body_text)}${full}`;
     }
     case 'internal':
-      return `${(event.payload as { kind: string }).kind}`;
+      return event.payload.kind;
     case 'reply_request':
-      return (event.payload as { question: string }).question.slice(0, 200);
+      return event.payload.question.slice(0, 200);
     case 'mcp_chat':
     case 'mcp_third_party': {
-      const p = event.payload as { method: string };
-      return `${p.method}(...)`;
+      return `${event.payload.method}(...)`;
     }
   }
 }

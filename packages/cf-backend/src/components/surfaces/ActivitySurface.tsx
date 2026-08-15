@@ -33,15 +33,15 @@ const IDLE_POLL_MS = 10_000;
 
 /** Planes read as one brass ramp rather than five hues — this is one quantity
  *  split by origin, not five unrelated series. */
-const PLANE_LABEL: Record<ContextPlane, string> = {
+const PLANE_LABEL = {
   system: "System prompt",
   tools: "Tool definitions",
   messages: "Conversation",
   ephemeral: "Live-state blocks",
-};
-const PLANE_ALPHA: Record<ContextPlane, number> = {
+} satisfies Record<ContextPlane, string>;
+const PLANE_ALPHA = {
   system: 1, tools: 0.72, messages: 0.46, ephemeral: 0.26,
-};
+} satisfies Record<ContextPlane, number>;
 const planeFill = (plane: ContextPlane): string =>
   `color-mix(in srgb, var(--c-accent) ${Math.round(PLANE_ALPHA[plane] * 100)}%, transparent)`;
 

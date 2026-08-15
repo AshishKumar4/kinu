@@ -11,10 +11,13 @@
 // depth-1 tree that carries NO scores, so nothing downstream can draw it as a
 // competition that picked a winner.
 import { describe, test, expect } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ForkRunSummary, HeadRunView } from '@proteus/core';
+import type { BackgroundJob } from '../src/lib/protocol.ts';
 import {
   FORK_IDLE_REVALIDATE_MS, FORK_REVALIDATE_MS, forkRunsRevalidateMs, hasLiveForkRun,
-  headRunToTree, findHead,
+  hasActiveForkWork, headRunToTree, findHead, selectForkRun,
 } from '../src/components/surfaces/fork-runs.ts';
 import { isCompeted, principalVariation, maxVisits } from '../src/components/fork-tree-model.ts';
 
@@ -48,6 +51,13 @@ function headRun(over: Partial<HeadRunView> = {}): HeadRunView {
     ],
     merge: { narrative: 'X, with Y’s guard rail', headCount: 2, totalTokens: 18 },
     ...over,
+  };
+}
+
+function backgroundJob(status: BackgroundJob['status']): BackgroundJob {
+  return {
+    id: 'job-1', kind: 'tool', label: null, workMode: 'build', status, result: null, error: null,
+    createdAt: 0, settledAt: null,
   };
 }
 
@@ -85,6 +95,49 @@ describe('fork revalidation policy', () => {
 
   test('the idle cadence is strictly slower than the live one — a keep-fresh tick, not a poll storm', () => {
     expect(FORK_IDLE_REVALIDATE_MS).toBeGreaterThan(FORK_REVALIDATE_MS);
+  });
+
+  test('detached workspace work keeps revalidation live without a streaming chat turn', () => {
+    expect(hasActiveForkWork(false, [backgroundJob('running')])).toBe(true);
+    expect(hasActiveForkWork(false, [backgroundJob('completed')])).toBe(false);
+    expect(hasActiveForkWork(true, [])).toBe(true);
+  });
+
+  test('the embedded and full-page explorers share the same live resource', () => {
+    const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
+    const embedded = source('src/components/surfaces/ExplorationSurface.tsx');
+    const fullPage = source('src/pages/MCTSExplorer.tsx');
+    const workSurface = source('src/components/surfaces/WorkSurface.tsx');
+
+    expect(embedded).toContain('useLiveForkRuns(rpc, isStreaming, backgroundJobs)');
+    expect(fullPage).toMatch(/useLiveForkRuns\(\s*state\.rpc,\s*state\.isStreaming,\s*state\.backgroundJobs,?\s*\)/);
+    expect(workSurface).toContain('backgroundJobs={props.backgroundJobs}');
+    expect(embedded).toContain('<LoadFailure what="fresh fork runs"');
+    expect(embedded).toContain('<LoadFailure what="the latest fork tree"');
+    expect(fullPage).toContain('<LoadFailure what="fresh fork runs"');
+    expect(fullPage).toContain('<LoadFailure what="the latest fork tree"');
+    expect(embedded).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
+    expect(fullPage).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
+    expect(embedded).toContain('rpc<HeadRunView | null>("getHeadRun", [run.id])');
+    expect(fullPage).toContain('useExactForkRun(state.rpc, runId, hasActiveWork)');
+  });
+});
+
+describe('fork permalink selection', () => {
+  const runs = [summary({ id: 'new' }), summary({ id: 'old' })];
+
+  test('an explicit unknown id never renders a different run', () => {
+    expect(selectForkRun(runs, 'missing')).toBeNull();
+  });
+
+  test('the newest run is the default only when no id was requested', () => {
+    expect(selectForkRun(runs, null)?.id).toBe('new');
+    expect(selectForkRun(runs, 'old')?.id).toBe('old');
+  });
+
+  test('loading and empty resources resolve to no selection', () => {
+    expect(selectForkRun(null, 'new')).toBeNull();
+    expect(selectForkRun([], null)).toBeNull();
   });
 });
 

@@ -21,6 +21,7 @@
 
 import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
 import { dirname, join, sep } from 'node:path';
+import { parseJsonObject } from '@proteus/core';
 
 /** The one documented way to prepare a checkout that has no node_modules. */
 const SETUP_COMMAND = 'bash scripts/setup-worktree.sh';
@@ -47,13 +48,17 @@ function workspacePackages(root: string): Map<string, string> {
     const dir = join(root, 'packages', entry.name);
     const manifestPath = join(dir, 'package.json');
     if (!existsSync(manifestPath)) continue;
-    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
-      name?: string; main?: string; exports?: unknown;
-    };
-    if (!manifest.name || (!manifest.main && !manifest.exports)) continue;
-    packages.set(manifest.name, dir);
+    const manifest = parseJsonObject(readFileSync(manifestPath, 'utf8'));
+    const name = manifest.name;
+    const main = manifest.main;
+    if (!isString(name) || (!isString(main) && manifest.exports === undefined)) continue;
+    packages.set(name, dir);
   }
   return packages;
+}
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
 }
 
 /**

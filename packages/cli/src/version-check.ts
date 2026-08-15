@@ -12,16 +12,24 @@
  */
 import { VERSION } from './display.js';
 import { loadConfigFile, updateConfigFile, type ProteusConfig } from './config.js';
+import * as v from 'valibot';
 
 export const CLI_VERSION_PATH = '/downloads/proteus-version.json';
 const FETCH_TIMEOUT_MS = 1_500;
 const CHECK_INTERVAL_MS = 24 * 60 * 60_000;
+const ServedVersionSchema = v.object({
+  version: v.pipe(v.string(), v.trim(), v.nonEmpty()),
+  sha: v.optional(v.string()),
+  builtAt: v.optional(v.string()),
+});
 
 export interface ServedVersion {
   version: string;
   sha?: string;
   builtAt?: string;
 }
+
+type FetchVersion = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 /** Build metadata is significant here: 0.1.0+aaa and 0.1.0+bbb are different
  *  builds even though semver treats the suffix as ignorable. */
@@ -32,7 +40,7 @@ export function isSameBuild(installed: string, served: string): boolean {
 /** Fetch the served build's version, or null on any failure/timeout. */
 export async function fetchServedVersion(
   origin: string,
-  fetchImpl: typeof fetch = fetch,
+  fetchImpl: FetchVersion = fetch,
   timeoutMs = FETCH_TIMEOUT_MS,
 ): Promise<ServedVersion | null> {
   const controller = new AbortController();
@@ -43,15 +51,12 @@ export async function fetchServedVersion(
       signal: controller.signal,
     });
     if (!res.ok) return null;
-    const body: unknown = await res.json();
-    if (typeof body !== 'object' || body === null) return null;
-    const { version, sha, builtAt } = body as Record<string, unknown>;
-    if (typeof version !== 'string' || !version.trim()) return null;
-    return {
-      version: version.trim(),
-      ...(typeof sha === 'string' ? { sha } : {}),
-      ...(typeof builtAt === 'string' ? { builtAt } : {}),
-    };
+    const parsed = v.safeParse(ServedVersionSchema, await res.json());
+    if (!parsed.success) return null;
+    const served: ServedVersion = { version: parsed.output.version };
+    if (parsed.output.sha !== undefined) served.sha = parsed.output.sha;
+    if (parsed.output.builtAt !== undefined) served.builtAt = parsed.output.builtAt;
+    return served;
   } catch {
     return null;
   } finally {
@@ -89,7 +94,7 @@ export async function runStartupUpdateCheck(opts: {
   log: (line: string) => void;
   isTTY?: boolean;
   now?: number;
-  fetchImpl?: typeof fetch;
+  fetchImpl?: FetchVersion;
 } ): Promise<string | null> {
   try {
     const config = loadConfigFile();

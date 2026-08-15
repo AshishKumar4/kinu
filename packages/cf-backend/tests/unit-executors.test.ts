@@ -12,7 +12,7 @@ const active = (...names: string[]) => names.map((name) => ({ name, available: t
 
 describe("pickDefaultExecutor", () => {
   test("prefers lastActive when it is active", () => {
-    expect(pickDefaultExecutor([...active("sandbox", "workspace", "nimbus")], "nimbus")).toBe("nimbus");
+    expect(pickDefaultExecutor([...active("sandbox", "workspace")], "sandbox")).toBe("sandbox");
     expect(pickDefaultExecutor([...avail("sandbox", "workspace")], "workspace")).toBe("workspace");
   });
 
@@ -21,14 +21,14 @@ describe("pickDefaultExecutor", () => {
     expect(pickDefaultExecutor(execs, "laptop")).toBe("sandbox");
   });
 
-  test("static priority favors active user's desktop when connected (laptop > nimbus > sandbox)", () => {
-    expect(pickDefaultExecutor([...active("nimbus", "laptop", "workspace")])).toBe("laptop");
+  test("static priority favors active user's desktop when connected (laptop > sandbox)", () => {
+    expect(pickDefaultExecutor([...active("sandbox", "laptop", "workspace")])).toBe("laptop");
     expect(pickDefaultExecutor([...active("laptop", "workspace")])).toBe("laptop");
-    expect(pickDefaultExecutor([...active("nimbus", "sandbox", "workspace")])).toBe("nimbus");
+    expect(pickDefaultExecutor([...active("sandbox", "workspace")])).toBe("sandbox");
   });
 
   test("available but idle remote executors do not become default targets", () => {
-    expect(pickDefaultExecutor([...avail("sandbox", "nimbus", "workspace")])).toBe("workspace");
+    expect(pickDefaultExecutor([...avail("sandbox", "workspace")])).toBe("workspace");
   });
 
   test("falls back to workspace when nothing else is available", () => {
@@ -62,7 +62,7 @@ describe("releaseSubstrate", () => {
   });
 
   test("a loaded list with no sandbox row at all is unavailable with a stated reason", () => {
-    const verdict = releaseSubstrate([exec({ name: "nimbus", kind: "nimbus" })]);
+    const verdict = releaseSubstrate([exec({ name: "workspace", kind: "workspace" })]);
     expect(verdict.state).toBe("unavailable");
     if (verdict.state === "unavailable") expect(verdict.reason.length).toBeGreaterThan(0);
   });
@@ -76,11 +76,8 @@ describe("releaseSubstrate", () => {
 
 /**
  * The Environment surface renders one chip per environment, each carrying this
- * label. Nimbus runs the workspace filesystem itself now
- * (core/src/vfs/nimbus-workspace.ts) while the `nimbus` executor is a SEPARATE
- * Nimbus session in its own DO (cf-backend/src/runtime.ts) — so a label set
- * where two rows say the same word draws two boxes for what reads as one
- * thing, which is exactly the complaint.
+ * label. Nimbus runs the workspace filesystem and resident process plane;
+ * there is deliberately no second Nimbus row.
  */
 describe("executor labels name one environment each", () => {
   test("no two environments share a name", () => {
@@ -98,17 +95,14 @@ describe("executor labels name one environment each", () => {
     }
   });
 
-  test("the executor that is a separate Nimbus session is not the one called Nimbus", () => {
-    // It shares software with the workspace, not bytes: calling it "Nimbus"
-    // beside a workspace Nimbus also powers is the duplicate the owner saw.
-    for (const label of Object.values(EXECUTOR_LABELS)) {
-      expect(label.toLowerCase()).not.toContain("nimbus");
-    }
+  test("there is no redundant Nimbus executor row", () => {
+    expect(EXECUTOR_ORDER).not.toContain("nimbus");
+    expect(Object.hasOwn(EXECUTOR_LABELS, "nimbus")).toBe(false);
   });
 
   test("every ordered executor has a name of its own — none falls back to its namespace", () => {
     for (const name of EXECUTOR_ORDER) {
-      expect(EXECUTOR_LABELS[name]).toBeDefined();
+      expect(Object.entries(EXECUTOR_LABELS).some(([key]) => key === name)).toBe(true);
       expect(executorLabel(name)).not.toBe(name);
     }
   });

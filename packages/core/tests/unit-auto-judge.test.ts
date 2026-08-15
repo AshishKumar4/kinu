@@ -41,7 +41,7 @@ function makeJudge(
   rationale = 'mock',
 ): StructuredJudgeFn {
   return async (prompt) => {
-    const [a, b] = judgePromptResponses(prompt);
+    const [a] = judgePromptResponses(prompt);
     const currentSlot = a.includes(currentOutput) ? 'a' : 'b';
     const pendingSlot = currentSlot === 'a' ? 'b' : 'a';
     const verdict: JudgeOutput['winner'] =
@@ -57,9 +57,9 @@ async function setup(): Promise<ReturnType<typeof createTestRuntime>['rt']> {
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
   // Bootstrap a pending scaffold v1, current v0.
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (0, ${Date.now()}, 'initial', 'current')`;
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
   // Write the pending scaffold's backup file (executor reads this).
   await rt.storage.vfs.writeFile(
@@ -123,7 +123,7 @@ describe('runAutoShadowEval', () => {
     const rt = await setup();
     // Seed 5 prior pending wins so this 6th call crosses the promote threshold.
     for (let i = 0; i < 5; i++) {
-      rt.storage.sql`INSERT INTO scaffold_evaluations
+      void rt.storage.sql`INSERT INTO scaffold_evaluations
         (id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
@@ -155,7 +155,7 @@ describe('runAutoShadowEval', () => {
     // gates auto-apply.
     for (let i = 0; i < 6; i++) {
       const winner = i < 5 ? 'pending' : 'current';
-      rt.storage.sql`INSERT INTO scaffold_evaluations
+      void rt.storage.sql`INSERT INTO scaffold_evaluations
         (id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, ${winner}, 'seed', ${Date.now()})`;
@@ -182,10 +182,10 @@ describe('runAutoShadowEval', () => {
     // a rollback cycle the numbering is non-contiguous (live=v0 while the new
     // pending is v3), so pending-1 pointed at a rolled_back row.
     const rt = await setup();
-    rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (2, ${Date.now()}, 'second attempt', 'rolled_back')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (3, ${Date.now()}, 'third attempt', 'pending')`;
     await rt.storage.vfs.writeFile(
       'scaffold/agent.js.v3',
@@ -214,9 +214,9 @@ describe('runAutoShadowEval', () => {
     // returns max(scaffold_versions.version)=1 which matches our pending=1,
     // so readScaffoldVersion follows the "read current" path; with no file,
     // it throws ENOENT, caught in the try/catch → returns null.
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (1, ${Date.now()}, 'alt', 'pending')`;
     // Explicitly DO NOT write 'scaffold/agent.js'.
 
@@ -263,10 +263,13 @@ describe('runAutoShadowEval', () => {
  * that sits directly upstream of the promotion rule.
  */
 describe('order-swapped double-win judging', () => {
+  interface RecordingJudge {
+    fn: StructuredJudgeFn;
+    prompts: string[];
+  }
+
   /** Records every prompt the judge saw and answers with a fixed slot. */
-  function recordingJudge(answer: (call: number) => JudgeOutput): {
-    fn: StructuredJudgeFn; prompts: string[];
-  } {
+  function recordingJudge(answer: (call: number) => JudgeOutput): RecordingJudge {
     const prompts: string[] = [];
     return {
       prompts,

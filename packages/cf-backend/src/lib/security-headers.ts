@@ -37,7 +37,7 @@ const PUBLIC_PAGE_CSP = [
   "frame-src 'none'",
 ].join('; ');
 
-export function publicHtmlHeaders(): Record<string, string> {
+export function publicHtmlHeaders() {
   return {
     'content-type': 'text/html; charset=utf-8',
     'cache-control': 'private, no-store',

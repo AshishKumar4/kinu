@@ -31,22 +31,40 @@ import { AGENT_RPC_ACCESS } from '../src/cli/rpc-gate.js';
 import { declaredClassMembers, isInternalMember } from './helpers/declared-members.js';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
+import { decodeJsonValue, type JsonValue } from '@proteus/core';
+import * as v from 'valibot';
+
+type UserDOInstance = ReturnType<typeof createTestUserDO>['userDO'];
+type RpcTarget = UserDOInstance | Leaf | Middle2;
 
 /** What a stub-holder gets. Denial reproduces workerd's own wording. */
-function callOverRpc(target: object, method: string, args: unknown[]): unknown {
+async function callOverRpc(target: RpcTarget, method: string, args: JsonValue[]) {
   if (!rpcReachableNames(target).includes(method)) {
     throw new Error(`The RPC receiver does not implement the method "${method}".`);
   }
-  return (target as Record<string, (...a: unknown[]) => unknown>)[method](...args);
+  let owner: object | null = target;
+  while (owner) {
+    const callable = v.safeParse(
+      v.function(),
+      Object.getOwnPropertyDescriptor(owner, method)?.value,
+    );
+    if (callable.success) {
+      return decodeJsonValue({ value: await callable.output.call(target, ...args) });
+    }
+    owner = Object.getPrototypeOf(owner);
+  }
+  throw new Error(`The RPC receiver does not implement the method "${method}".`);
 }
 
 /** Undo the seal on one instance — drops exactly the own properties that shadow
  *  a prototype member, restoring the pre-fix class. Sabotage in a function, so
  *  "the guard is what stops this" is asserted rather than assumed. */
-function unsealRpcSurface(instance: object): void {
+function unsealRpcSurface(instance: UserDOInstance): void {
+  const prototype = Object.getPrototypeOf(instance);
+  if (!prototype) throw new Error('UserDO prototype is missing');
   const shadowed = Object.getOwnPropertyNames(instance)
-    .filter((name) => name in Object.getPrototypeOf(instance));
-  for (const name of shadowed) delete (instance as Record<string, unknown>)[name];
+    .filter((name) => name in prototype);
+  for (const name of shadowed) Reflect.deleteProperty(instance, name);
 }
 
 describe('the UserDO capability gate is reachable-surface enforced, not advisory', () => {
@@ -61,17 +79,17 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     // sealed envelope rather than the token — but `readCredential` opens it,
     // so the reachable surface is still what has to hold.
     unsealRpcSurface(harness.userDO);
-    const stolenBySql = callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials WHERE key = ?', 'github']);
+    const stolenBySql = await callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials WHERE key = ?', 'github']);
     expect(JSON.stringify(stolenBySql)).not.toContain('ghp_the_owners_pat');
     const stolenByRow = await callOverRpc(harness.userDO, 'readCredential', ['github']);
     expect(stolenByRow).toMatchObject({ token: 'ghp_the_owners_pat' });
 
     // The same two calls, once the class's declared surface is enforced.
     sealRpcSurface(harness.userDO, USER_DO_RPC_SURFACE);
-    expect(() => callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials']))
-      .toThrow('The RPC receiver does not implement the method "sqlx".');
-    expect(() => callOverRpc(harness.userDO, 'readCredential', ['github']))
-      .toThrow('The RPC receiver does not implement the method "readCredential".');
+    await expect(callOverRpc(harness.userDO, 'sqlx', ['SELECT value FROM user_credentials']))
+      .rejects.toThrow('The RPC receiver does not implement the method "sqlx".');
+    await expect(callOverRpc(harness.userDO, 'readCredential', ['github']))
+      .rejects.toThrow('The RPC receiver does not implement the method "readCredential".');
     harness.close();
   });
 
@@ -79,7 +97,7 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     const harness = createTestUserDO();
     await harness.userDO.setCredential(await testOwner(), 'github', { kind: 'bearer', token: 'ghp_untouched' });
     for (const internal of ['sqlx', 'readCredential', 'writeCredential', 'requireTier', 'ensureInit']) {
-      expect(() => callOverRpc(harness.userDO, internal, [])).toThrow('does not implement');
+      await expect(callOverRpc(harness.userDO, internal, [])).rejects.toThrow('does not implement');
     }
     harness.close();
   });
@@ -92,7 +110,7 @@ describe('the UserDO capability gate is reachable-surface enforced, not advisory
     expect(await callOverRpc(harness.userDO, 'listWorkspaces', [await testOwner()]))
       .toMatchObject([{ name: 'alpha' }]);
     // A workspace presenting its capability token — same transport, still gated.
-    await expect(callOverRpc(harness.userDO, 'listCredentials', [{ workspaceToken: token }]) as Promise<unknown>)
+    await expect(callOverRpc(harness.userDO, 'listCredentials', [{ workspaceToken: token }]))
       .resolves.toEqual([]);
     harness.close();
   });
@@ -252,12 +270,25 @@ describe('every Durable Object that holds something worth stealing is sealed', (
 
 describe('the agent surfaces cannot drift from their classes', () => {
   const actorMembers = declaredClassMembers(source('actor-agent.ts'));
+  const internalOrchestratorWire = [
+    'getRunEventsWire',
+    'runScaffoldOnceWire',
+    'listTriggersWire',
+    'listRecentEventsWire',
+  ] as const;
 
   test('the orchestrator keeps every method the CLI transport dispatches onto it', () => {
     // cli/routes.ts calls `stub[method](...)` for each key of this table, so a
     // key missing from the surface is a broken CLI command, not a safe default.
     const missing = Object.keys(AGENT_RPC_ACCESS).filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name));
     expect(missing.sort()).toEqual([]);
+  });
+
+  test('internal cross-DO wire methods stay sealed from client RPC', () => {
+    expect(internalOrchestratorWire.filter((name) => !ORCHESTRATOR_RPC_SURFACE.includes(name)))
+      .toEqual([]);
+    expect(internalOrchestratorWire.filter((name) => Object.hasOwn(AGENT_RPC_ACCESS, name)))
+      .toEqual([]);
   });
 
   test.each([
@@ -330,12 +361,12 @@ class Leaf extends Middle {
 }
 
 describe('sealRpcSurface', () => {
-  test('an unsealed class exposes its whole chain, including the SDK query runner', () => {
+  test('an unsealed class exposes its whole chain, including the SDK query runner', async () => {
     const open = new Middle2();
     expect(rpcReachableNames(open)).toEqual([
       'baseUsesSql', 'liveState', 'overridable', 'publicApi', 'sharedWithSubclasses', 'sql',
     ]);
-    expect(callOverRpc(open, 'sql', [['SELECT * FROM user_credentials']]))
+    expect(await callOverRpc(open, 'sql', [['SELECT * FROM user_credentials']]))
       .toBe('RAN SELECT * FROM user_credentials []');
   });
 
@@ -343,17 +374,17 @@ describe('sealRpcSurface', () => {
     expect(rpcReachableNames(new Leaf())).toEqual(['markedCallable', 'overridable', 'publicApi']);
   });
 
-  test('inherited members, protected members and TypeScript privates are all denied', () => {
+  test('inherited members, protected members and TypeScript privates are all denied', async () => {
     const leaf = new Leaf();
     for (const name of ['sql', 'baseUsesSql', 'liveState', 'sharedWithSubclasses', 'leafInternal', 'selfCheck']) {
-      expect(() => callOverRpc(leaf, name, [])).toThrow(`does not implement the method "${name}"`);
+      await expect(callOverRpc(leaf, name, [])).rejects.toThrow(`does not implement the method "${name}"`);
     }
   });
 
   test('nothing about the instance changes from the inside', () => {
     const leaf = new Leaf();
     // Reached through the sealed `selfCheck` itself, so the call proves the point twice.
-    expect((leaf as { selfCheck(): Record<string, unknown> }).selfCheck()).toEqual({
+    expect(leaf.selfCheck()).toEqual({
       internal: 'hidden',
       protectedViaThis: 'protected value',
       baseUsesSql: 'RAN SELECT ? [7]',
@@ -369,11 +400,11 @@ describe('sealRpcSurface', () => {
     expect(Object.keys({ ...leaf })).toEqual([]);
   });
 
-  test('a surface entry the class does not have is ignored, not trusted', () => {
+  test('a surface entry the class does not have is ignored, not trusted', async () => {
     const open = new Middle2();
     sealRpcSurface(open, ['publicApi', 'noSuchMethod']);
     expect(rpcReachableNames(open)).toEqual(['publicApi']);
-    expect(() => callOverRpc(open, 'noSuchMethod', [])).toThrow('does not implement');
+    await expect(callOverRpc(open, 'noSuchMethod', [])).rejects.toThrow('does not implement');
   });
 });
 

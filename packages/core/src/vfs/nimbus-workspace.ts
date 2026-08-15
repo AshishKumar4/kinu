@@ -1,12 +1,12 @@
 /**
- * The workspace filesystem and shell. There is only this one.
+ * The embedded Nimbus workspace used by the local CLI.
  *
  * Nimbus (`@nimbus-sh/core`) owns the bytes: a durable POSIX filesystem over a
  * host-supplied SQLite port, with a real shell over it — pipelines, loops,
  * variables, redirection, a working directory that persists across commands,
  * and ~95 coreutils. The host supplies `sql` and `transactions` and nothing
- * else, which is why the SAME workspace runs inside a Durable Object
- * (`ctx.storage.sql`) and inside a bun process (`bun:sqlite`).
+ * else. New hosted workspaces use the remote Nimbus session adapter in
+ * execution/nimbus.ts; they do not create these embedded filesystem tables.
  *
  * ONE FILESYSTEM, ONE SET OF PATHS
  *
@@ -18,7 +18,7 @@
  * tool, to `workspace.readFile`, and to `grep`.
  *
  * There is deliberately no mount table. Other execution environments — the
- * sandbox container, a Nimbus session, the user's machine, a fork's parent
+ * sandbox container, the user's machine, a fork's parent
  * workspace — are EXECUTORS, reached through `run { runtime }` and their
  * codemode namespaces in their own native paths. Presenting them as
  * directories of this filesystem required a router above Nimbus and a second
@@ -27,7 +27,16 @@
 
 import { NimbusWorkspace } from '@nimbus-sh/core/workspace';
 import type { SqlDatabase } from '@nimbus-sh/core/runtime/os-contracts.js';
+import * as v from 'valibot';
 import type { VFS, Shell, ShellExecOptions } from '../types/primitives.js';
+import { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
+
+export { WORKSPACE_ROOT, workspacePath } from './workspace-path.js';
+
+const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
+  stdin: v.optional(v.string()),
+  signal: v.optional(v.instance(AbortSignal)),
+}));
 
 /**
  * The agent's home, the shell's initial working directory, and the base that
@@ -39,19 +48,17 @@ import type { VFS, Shell, ShellExecOptions } from '../types/primitives.js';
  * agent's own files" (archive, backup, the file browser) walk this path;
  * nothing rewrites addresses to fake it.
  */
-export const WORKSPACE_ROOT = '/home/user';
-
-/** Resolve a caller path the way a process with cwd={@link WORKSPACE_ROOT} would. */
-export function workspacePath(path: string): string {
-  if (path.startsWith('/')) return path;
-  const clean = path.replace(/^\.\//, '');
-  return clean === '' || clean === '.' ? WORKSPACE_ROOT : `${WORKSPACE_ROOT}/${clean}`;
-}
-
 /** ENOENT is how Nimbus reports a missing path; the core VFS contract stats it
  *  as `null` and answers `exists` with `false`. */
-function isEnoent(err: unknown): boolean {
-  return err instanceof Error && /^ENOENT/.test(err.message);
+function isEnoent({ error }: { error: unknown }): boolean {
+  return error instanceof Error && error.message.startsWith('ENOENT');
+}
+
+function shellExecOptions(input: { value: unknown }): ShellExecOptions | undefined {
+  const stdin = v.safeParse(v.string(), input.value);
+  if (stdin.success) return { stdin: stdin.output };
+  const options = v.safeParse(ShellExecOptionsSchema, input.value);
+  return options.success ? options.output : undefined;
 }
 
 /**
@@ -80,7 +87,7 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
         const st = await (await fs()).stat(workspacePath(path));
         return { size: st.size, mtimeMs: st.mtime, isDir: st.type === 'directory' };
       } catch (err) {
-        if (isEnoent(err)) return null;
+        if (isEnoent({ error: err })) return null;
         throw err;
       }
     },
@@ -127,11 +134,10 @@ function workspaceVfs(open: () => Promise<NimbusWorkspace>): WorkspaceVFS {
 function workspaceShell(open: () => Promise<NimbusWorkspace>): Shell {
   return {
     async exec(command, stdinOrOptions) {
-      const options: ShellExecOptions | undefined =
-        typeof stdinOrOptions === 'string' ? { stdin: stdinOrOptions } : stdinOrOptions;
+      const options = shellExecOptions({ value: stdinOrOptions });
       const result = await (await open()).exec(command, {
-        ...(options?.stdin === undefined ? {} : { stdin: options.stdin }),
-        ...(options?.signal === undefined ? {} : { signal: options.signal }),
+        stdin: options?.stdin,
+        signal: options?.signal,
       });
       return { stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode };
     },

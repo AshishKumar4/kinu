@@ -17,6 +17,9 @@ import type { EventLog } from '../events/hub/log.js';
 import { BACKGROUND_POLICY, type BackgroundPolicy, type DetachOutcome, type ThresholdDeps } from './threshold.js';
 import { BackgroundJobStore, serializeJobResult, type BackgroundJob } from './store.js';
 import { nanoid } from '../utils/nanoid.js';
+import type { WorkMode } from '../prompting/surface.js';
+import * as v from 'valibot';
+import { parseJsonValue, type JsonValue } from '../utils/json.js';
 
 /** The terminal error a non-recoverable job records when it is interrupted by a
  *  DO eviction (no durable checkpoint / not safe to re-run). */
@@ -39,7 +42,12 @@ export class JobNotResumable extends Error {
  *  result shape the original tool call produced (settled onto the job), or throws
  *  — `JobNotResumable` to fall back to the fail path, any other error to fail with
  *  that message. Provided by the backend, which owns the tool/runtime wiring. */
-export type JobResumer = (kind: string, input: unknown, signal: AbortSignal) => Promise<unknown>;
+export type JobResumer = (
+  kind: string,
+  input: JsonValue,
+  mode: WorkMode,
+  signal: AbortSignal,
+) => Promise<JsonValue | undefined>;
 
 /** Give up re-driving a job after this many evict-recovery attempts, so a job
  *  that evicts on every activation can't loop forever. MCTS makes monotonic
@@ -112,19 +120,27 @@ function refusalMessage(kind: string, running: readonly BackgroundJob[]): string
  *  it directly on the store). Truncated to match the short-snippet
  *  convention every other debug summary line already uses (task.slice(0,60)
  *  for head runs, etc.) — this is a label, not a payload dump. */
-function describeJobInput(kind: string, input: unknown): string | undefined {
-  if (typeof input !== 'object' || input === null) return undefined;
-  const rec = input as Record<string, unknown>;
-  if (kind === 'agents' && typeof rec.task === 'string') {
-    const settle = typeof rec.settle === 'string' ? rec.settle : 'merge';
-    return `fork(settle=${settle}): ${rec.task.slice(0, 80)}`;
+const ForkJobInputSchema = v.object({ task: v.string(), settle: v.optional(v.string()) });
+const RunJobInputSchema = v.object({ command: v.string(), runtime: v.optional(v.string()) });
+const ExecuteJobInputSchema = v.object({ code: v.string() });
+
+function describeJobInput<T>(kind: string, input: T): string | undefined {
+  if (kind === 'agents') {
+    const parsed = v.safeParse(ForkJobInputSchema, input);
+    if (parsed.success) {
+      return `fork(settle=${parsed.output.settle ?? 'merge'}): ${parsed.output.task.slice(0, 80)}`;
+    }
   }
-  if (kind === 'run' && typeof rec.command === 'string') {
-    const runtime = typeof rec.runtime === 'string' ? `${rec.runtime}: ` : '';
-    return `${runtime}${rec.command.slice(0, 80)}`;
+  if (kind === 'run') {
+    const parsed = v.safeParse(RunJobInputSchema, input);
+    if (parsed.success) {
+      const runtime = parsed.output.runtime ? `${parsed.output.runtime}: ` : '';
+      return `${runtime}${parsed.output.command.slice(0, 80)}`;
+    }
   }
-  if (kind === 'execute_tools' && typeof rec.code === 'string') {
-    return rec.code.trim().slice(0, 80);
+  if (kind === 'execute_tools') {
+    const parsed = v.safeParse(ExecuteJobInputSchema, input);
+    if (parsed.success) return parsed.output.code.trim().slice(0, 80);
   }
   return undefined;
 }
@@ -139,10 +155,10 @@ export class BackgroundJobRunner {
   /** Mint a job row (carrying the tool input for retry) + register its cancel
    *  handle. Returns the job id. Pure — callers log their own lifecycle event
    *  (threshold-detach logs 'bg_job_started'; retry logs 'bg_job_retry'). */
-  create(kind: string, input: unknown, controller: AbortController): string {
+  create<T>(kind: string, input: T, mode: WorkMode, controller: AbortController): string {
     const id = `bgjob-${nanoid()}`;
     this.deps.store.create({
-      id, kind, input: serializeJobResult(input), now: Date.now(),
+      id, kind, workMode: mode, input: serializeJobResult(input), now: Date.now(),
       label: describeJobInput(kind, input),
     });
     this.controllers.set(id, controller);
@@ -158,15 +174,15 @@ export class BackgroundJobRunner {
   /** ThresholdDeps for withBackgroundThreshold: on cross, mint a job and keep
    *  the live work alive durably — unless the concurrency cap is already full,
    *  in which case the work is cancelled and the model is told why. */
-  thresholdDeps(kind: string, input: unknown, controller: AbortController): ThresholdDeps {
+  thresholdDeps<T>(kind: string, input: T, mode: WorkMode, controller: AbortController): ThresholdDeps {
     return {
       thresholdMs: this.policy.detachAfterMs,
-      onThreshold: (k, promise) => this.onThreshold(k, input, controller, promise),
+      onThreshold: (k, promise) => this.onThreshold(k, input, mode, controller, promise),
     };
   }
 
-  private onThreshold(
-    kind: string, input: unknown, controller: AbortController, promise: Promise<unknown>,
+  private onThreshold<T>(
+    kind: string, input: T, mode: WorkMode, controller: AbortController, promise: Promise<T>,
   ): DetachOutcome {
     const running = this.deps.store.countRunning();
     if (running >= MAX_CONCURRENT_DETACHED_JOBS) {
@@ -174,7 +190,7 @@ export class BackgroundJobRunner {
       this.deps.logActivity?.('bg_job_refused', `${kind} — ${running} jobs already running`);
       return { detached: false, reason: refusalMessage(kind, this.deps.store.listRunning(MAX_CONCURRENT_DETACHED_JOBS)) };
     }
-    const jobId = this.create(kind, input, controller);
+    const jobId = this.create(kind, input, mode, controller);
     this.deps.logActivity?.('bg_job_started', `${kind} → ${jobId}`);
     this.detach(jobId, kind, promise);
     return { detached: true, jobId };
@@ -184,7 +200,7 @@ export class BackgroundJobRunner {
    *  result + wake the agent. Settle-vs-fail is driven ONLY by whether the work
    *  resolved — serializing happens separately so a non-serializable success
    *  (e.g. a BigInt) is never mislabelled a failure. */
-  detach(jobId: string, kind: string, promise: Promise<unknown>): void {
+  detach<T>(jobId: string, kind: string, promise: Promise<T>): void {
     this.runToSettlement(jobId, kind, () => promise);
   }
 
@@ -193,7 +209,7 @@ export class BackgroundJobRunner {
    *  backgrounded promise, or a resumer re-drive). The lease epoch is read once at
    *  fiber start and stamped on the terminal write, so an executor fenced by a
    *  concurrent reclaim (evict-recovery) can no longer settle the job (§5.3). */
-  private runToSettlement(jobId: string, kind: string, exec: () => Promise<unknown>): void {
+  private runToSettlement<T>(jobId: string, kind: string, exec: () => Promise<T>): void {
     void this.deps.fiber(`bg:${kind}`, async (ctx) => {
       ctx.stash({ phase: 'running', jobId, kind });
       try {
@@ -220,9 +236,9 @@ export class BackgroundJobRunner {
 
   /** exec → record the outcome → notify → wake. Throws only when a store write
    *  or the wake's durable retry breadcrumb fails; runToSettlement owns that. */
-  private async settleAndWake(jobId: string, exec: () => Promise<unknown>): Promise<void> {
+  private async settleAndWake<T>(jobId: string, exec: () => Promise<T>): Promise<void> {
     const epoch = this.deps.store.epochOf(jobId) ?? 0;
-    let outcome: { ok: true; result: unknown } | { ok: false; error: string };
+    let outcome: { ok: true; result: T } | { ok: false; error: string };
     try { outcome = { ok: true, result: await exec() }; }
     catch (err) {
       // A kind the resumer can't re-drive is a clean interruption, not a crash:
@@ -252,7 +268,7 @@ export class BackgroundJobRunner {
    *  and its result stays readable via agent.jobResult. No wake is attempted:
    *  the wake is what usually failed, and the settle notification (which never
    *  throws) already surfaces the job in the Tasks view. */
-  private failUnsettled(jobId: string, err: unknown): void {
+  private failUnsettled<T>(jobId: string, err: T): void {
     try {
       const job = this.deps.store.get(jobId);
       if (!job || job.status !== 'running') return;
@@ -288,7 +304,7 @@ export class BackgroundJobRunner {
     await this.deps.signals.deliver({
       kind: 'background_job',
       text,
-      metadata: { jobId, kind: job.kind, status: job.status },
+      metadata: { proteusMode: job.workMode, jobId, kind: job.kind, status: job.status },
       compensate: (reason) => {
         if (reason === 'preempted') {
           this.deps.logActivity?.('bg_job_wake_skipped', `${jobId} (${job.status}) — wake preempted; result retained`);
@@ -309,7 +325,8 @@ export class BackgroundJobRunner {
             scheduled_fire_at: job.settledAt ?? job.createdAt,
             label: text,
             user_payload: {
-              proteusEvent: 'background_job', jobId: job.id, kind: job.kind, status: job.status,
+              proteusEvent: 'background_job', proteusMode: job.workMode,
+              jobId: job.id, kind: job.kind, status: job.status,
             },
           },
           trigger_creator_trust: 'self',
@@ -357,11 +374,10 @@ export class BackgroundJobRunner {
    *  the backend's onFiberRecovered for bg:* fibers). The fiber row carries one
    *  fact the registry does not — that this job's executor is dead — which is
    *  what lets a job that already settled get its lost wake re-delivered. */
-  async recover(snapshot: unknown): Promise<void> {
-    const snap = (snapshot ?? {}) as { jobId?: unknown; phase?: unknown };
-    const jobId = typeof snap.jobId === 'string' ? snap.jobId : '';
-    if (!jobId || snap.phase !== 'running') return;
-    await this.recoverJob(jobId);
+  async recover<T>(snapshot: T): Promise<void> {
+    const parsed = v.safeParse(v.object({ jobId: v.string(), phase: v.literal('running') }), snapshot);
+    if (!parsed.success) return;
+    await this.recoverJob(parsed.output.jobId);
   }
 
   /**
@@ -444,9 +460,12 @@ export class BackgroundJobRunner {
     const controller = new AbortController();
     this.controllers.set(job.id, controller);
     const rawInput = this.deps.store.getInput(job.id);
-    let input: unknown;
-    if (rawInput != null) { try { input = JSON.parse(rawInput); } catch { input = rawInput; } }
-    this.runToSettlement(job.id, job.kind, () => this.deps.resume!(job.kind, input, controller.signal));
+    let input: JsonValue = null;
+    if (rawInput !== null) {
+      try { input = parseJsonValue(rawInput); }
+      catch { input = rawInput; }
+    }
+    this.runToSettlement(job.id, job.kind, () => this.deps.resume!(job.kind, input, job.workMode, controller.signal));
   }
 
   /** Deliver the settle notification without letting a sink error poison the

@@ -16,8 +16,8 @@ function result(
     strategyA: 'baseline',
     strategyB: 'candidate',
     verdict: { winner, scoreA, scoreB, rationale: `${caseId}-rationale` },
-    runA: { caseId, strategyId: 'baseline', output: 'a', durationMs: 10, ...(extra?.errorA ? { error: extra.errorA } : {}) },
-    runB: { caseId, strategyId: 'candidate', output: 'b', durationMs: 20, ...(extra?.errorB ? { error: extra.errorB } : {}) },
+    runA: { caseId, strategyId: 'baseline', output: 'a', durationMs: 10, error: extra?.errorA },
+    runB: { caseId, strategyId: 'candidate', output: 'b', durationMs: 20, error: extra?.errorB },
   };
 }
 

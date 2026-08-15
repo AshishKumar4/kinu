@@ -21,7 +21,9 @@ import {
 } from '@agentclientprotocol/sdk';
 import type { ShellApprovalHandler } from '@proteus/cli-backend';
 import { createAcpAgent } from '../src/acp/agent.js';
-import type { AgentClient, AgentClientEvent, AgentTurnResult } from '../src/agent-client.js';
+import { createCliSession } from '../src/session.js';
+import type { AgentClient, AgentClientEvent, AgentPrompt, AgentTurnResult } from '../src/agent-client.js';
+import * as v from 'valibot';
 
 const TURN: AgentTurnResult = { text: '', toolCalls: [], steps: 1, durationMs: 1, hadError: false };
 
@@ -35,10 +37,17 @@ interface FakeOptions {
 
 interface Fake {
   client: AgentClient;
-  sent: Array<{ prompt: unknown; cwd?: string }>;
+  sent: Array<{ prompt: AgentPrompt; cwd?: string }>;
+  readonly stopped: number;
+  readonly closed: number;
+  /** The approval channel the adapter installed on session/new. */
+  approval: ShellApprovalHandler | null;
+}
+
+interface FakeState {
+  sent: Array<{ prompt: AgentPrompt; cwd?: string }>;
   stopped: number;
   closed: number;
-  /** The approval channel the adapter installed on session/new. */
   approval: ShellApprovalHandler | null;
 }
 
@@ -46,37 +55,68 @@ interface Fake {
  *  a scripted event stream during send(). */
 function fakeClient(opts: FakeOptions = {}): Fake {
   const listeners = new Set<(e: AgentClientEvent) => void>();
-  const state: Fake = { client: null as unknown as AgentClient, sent: [], stopped: 0, closed: 0, approval: null };
-
-  state.client = {
+  const state: FakeState = { sent: [], stopped: 0, closed: 0, approval: null };
+  const agentClient: AgentClient = {
     mode: 'local',
     agentName: 'test',
-    cliSession: { id: 'sess-1' },
+    cliSession: createCliSession('test', { noSession: true }),
+    inlineAttachmentLimitBytes: 1024,
     consents: null,
     checkpoints: null,
     localControls: {
+      getAlwaysActiveSkills: () => [],
+      setAlwaysActiveSkills: () => {},
+      getShellApprovalMode: () => 'strict',
+      setShellApprovalMode: (mode) => mode,
       setShellApprovalHandler: (handler: ShellApprovalHandler | null) => {
         state.approval = handler;
         return () => { state.approval = null; };
       },
+      listModelProviders: async () => [],
     },
     connect: async () => {},
     subscribe: (listener: (e: AgentClientEvent) => void) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    send: async (prompt: unknown, sendOpts?: { cwd?: string }) => {
+    send: async (prompt, sendOpts) => {
       state.sent.push({ prompt, cwd: sendOpts?.cwd });
       if (opts.hold) await opts.hold;
-      for (const event of opts.events ?? []) for (const l of [...listeners]) l(event);
+      for (const event of opts.events ?? []) for (const listener of listeners) listener(event);
       return TURN;
     },
+    steer: () => false,
+    branch: () => false,
+    fork: async () => ({ client: agentClient, label: 'test' }),
     stop: () => { state.stopped += 1; return []; },
     close: async () => { state.closed += 1; },
     history: async () => (opts.history ?? []).map((m, i) => ({ id: String(i), role: m.role, content: m.content })),
-  } as unknown as AgentClient;
+    listSessions: () => [],
+    resumeConversation: async () => {},
+    status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
+    describeTools: async () => ({ builtIn: [], crafted: [] }),
+    changelog: async () => ({ entries: [], unseenCount: 0 }),
+    revertChangelogEntry: async () => ({ ok: false }),
+    readMemory: async () => '',
+    searchNodes: async () => [],
+    listJobs: async () => [],
+    latestTakes: async () => null,
+    pickTake: async () => { throw new Error('no takes'); },
+    getModelSpec: async () => null,
+    setModel: async (spec) => ({ spec }),
+    getReasoningEffort: async () => null,
+    setReasoningEffort: async (effort) => ({ effort }),
+    listModels: async () => ({ models: [], failures: [] }),
+  };
 
-  return state;
+  return {
+    client: agentClient,
+    sent: state.sent,
+    get stopped() { return state.stopped; },
+    get closed() { return state.closed; },
+    get approval() { return state.approval; },
+    set approval(handler) { state.approval = handler; },
+  };
 }
 
 /** Run `op` against a live ACP connection whose agent is backed by `fake`. */
@@ -161,7 +201,8 @@ describe('proteus acp — prompt turn', () => {
     const chunks = updates
       .map((u) => u.update)
       .filter((u) => u.sessionUpdate === 'agent_message_chunk');
-    expect(chunks.map((c) => (c.content as { text: string }).text)).toEqual(['Hello', ' world']);
+    expect(chunks.map((chunk) => v.parse(v.object({ text: v.string() }), chunk.content).text))
+      .toEqual(['Hello', ' world']);
     // The prompt reached the real session, carrying the ACP session's cwd.
     expect(fake.sent).toEqual([{ prompt: 'hi', cwd: '/work' }]);
   });
@@ -267,7 +308,10 @@ describe('proteus acp — prompt content', () => {
       return ctx.request(AGENT_METHODS.session_prompt, { sessionId, prompt });
     });
 
-    const sent = fake.sent[0]!.prompt as { text: string; files: Array<{ url: string; mediaType: string }> };
+    const sent = v.parse(v.object({
+      text: v.string(),
+      files: v.array(v.object({ url: v.string(), mediaType: v.string() })),
+    }), fake.sent[0]!.prompt);
     expect(sent.text).toContain('explain this');
     expect(sent.text).toContain('const a = 1;');
     expect(sent.text).toContain('file:///a.ts');

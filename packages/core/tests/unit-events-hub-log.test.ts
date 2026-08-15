@@ -2,20 +2,16 @@
 // In-memory SQLite via bun:sqlite as the storage backend.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
-  initEventsHubTables, EventLog, type IngressDescriptor,
+  buildDrainBatch, initEventsHubTables, EventLog, type IngressDescriptor,
 } from '../src/events/hub/index.ts';
 import type { SqlExec } from '../src/index.js';
+import type { JsonValue } from '../src/utils/json.js';
+import { makeSqlExec } from './helpers.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.query(query);
-      const rows = stmt.all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  return makeSqlExec(new Database(':memory:'));
 }
 
 function chatDescriptor(text: string): IngressDescriptor {
@@ -25,7 +21,7 @@ function chatDescriptor(text: string): IngressDescriptor {
   };
 }
 
-function webhookDescriptor(deliveryId: string, body: unknown): IngressDescriptor {
+function webhookDescriptor(deliveryId: string, body: JsonValue): IngressDescriptor {
   return {
     ingress: 'webhook_hmac', variant: 'webhook',
     payload: {
@@ -45,7 +41,10 @@ describe('EventLog.publish + dedupe', () => {
       received_at INTEGER NOT NULL, schema_version INTEGER NOT NULL, dedupe_key TEXT
     )`);
     initEventsHubTables(sql);
-    const columns = sql.exec(`PRAGMA table_info(agent_log)`).toArray() as Array<{ name: string }>;
+    const columns = v.parse(
+      v.array(v.object({ name: v.string() })),
+      sql.exec(`PRAGMA table_info(agent_log)`).toArray(),
+    );
     expect(columns.some((column) => column.name === 'consumed_at')).toBe(true);
   });
 
@@ -137,6 +136,33 @@ describe('EventLog.pending', () => {
     expect(new Set(log.unbindStale(500, 2_000))).toEqual(new Set([first, second]));
     expect(new Set(log.pending().map((event) => event.id))).toEqual(new Set([first, second]));
   });
+
+  test('protected cross-owner peer payloads retain delegated Plan mode', () => {
+    const sql = makeSql();
+    initEventsHubTables(sql);
+    const log = new EventLog(sql);
+    log.publish({
+      descriptor: {
+        ingress: 'peer_async',
+        variant: 'peer_agent',
+        payload: {
+          from_agent_name: 'planner',
+          from_user_id: 'another-owner',
+          topic: 'research',
+          body: { task: 'inspect only' },
+          sender_event_id: 'outbox-1',
+          proteus_mode: 'plan',
+        },
+        same_owner: false,
+        receiver_grant_present: true,
+      },
+      now: 2_000,
+    });
+
+    const pending = log.pending();
+    expect(pending[0]?.payload_visibility).toBe('hash');
+    expect(buildDrainBatch(pending)?.mode).toBe('plan');
+  });
 });
 
 describe('EventLog.defer + dismiss', () => {
@@ -174,7 +200,7 @@ describe('EventLog audit + non-event rows', () => {
       payload: { finished: true, tool_call_count: 0 },
       now: 1,
     });
-    expect(typeof id).toBe('string');
+    expect(id.length).toBeGreaterThan(0);
     const steps = log.turnSteps('turn-1');
     expect(steps).toHaveLength(1);
     expect(steps[0].kind).toBe('step');

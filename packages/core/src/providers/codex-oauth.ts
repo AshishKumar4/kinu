@@ -8,7 +8,9 @@
 //
 // Provider calls use the Codex CLI-style header bundle. Refresh ownership stays
 // with the credential store that calls createCodexOAuthClient().
+import * as v from 'valibot';
 import type { OAuthCredential } from '../credentials/store.js';
+import { isJsonObject, parseJsonObject, type JsonObject } from '../utils/json.js';
 
 export const CODEX_CLIENT_ID = 'app_EMoamEEZ73f0CkXaXp7hrann';
 export const CODEX_ISSUER = 'https://auth.openai.com';
@@ -19,6 +21,22 @@ export const CODEX_ORIGINATOR = 'codex_cli_rs';
 
 const DEVICE_CODE_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/usercode`;
 const DEVICE_POLL_URL = `${CODEX_ISSUER}/api/accounts/deviceauth/token`;
+
+const DeviceCodeStartResponseSchema = v.object({
+  user_code: v.pipe(v.string(), v.minLength(1)),
+  device_auth_id: v.pipe(v.string(), v.minLength(1)),
+  interval: v.optional(v.union([v.string(), v.number()])),
+});
+const DevicePollResponseSchema = v.object({
+  authorization_code: v.pipe(v.string(), v.minLength(1)),
+  code_verifier: v.pipe(v.string(), v.minLength(1)),
+});
+const TokenExchangeResponseSchema = v.object({
+  access_token: v.pipe(v.string(), v.minLength(1)),
+  refresh_token: v.pipe(v.string(), v.minLength(1)),
+  id_token: v.optional(v.string()),
+  expires_in: v.optional(v.number()),
+});
 
 function sanitizeErrorBody(body: string): string {
   return body
@@ -59,18 +77,14 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
       if (!res.ok) {
         throw new Error(`Codex device-code request failed: ${res.status} ${sanitizeErrorBody(await res.text())}`);
       }
-      const body = await res.json() as {
-        user_code?: string;
-        device_auth_id?: string;
-        interval?: string | number;
-      };
-      if (!body.user_code || !body.device_auth_id) {
+      const body = v.safeParse(DeviceCodeStartResponseSchema, await res.json());
+      if (!body.success) {
         throw new Error('Codex device-code response missing required fields');
       }
       return {
-        userCode: body.user_code,
-        deviceAuthId: body.device_auth_id,
-        pollIntervalSec: Math.max(3, Number(body.interval ?? 5)),
+        userCode: body.output.user_code,
+        deviceAuthId: body.output.device_auth_id,
+        pollIntervalSec: Math.max(3, Number(body.output.interval ?? 5)),
         portalURL: CODEX_DEVICE_PORTAL,
       };
     },
@@ -85,8 +99,8 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
       if (!pollRes.ok) {
         throw new Error(`Codex poll failed: ${pollRes.status} ${sanitizeErrorBody(await pollRes.text())}`);
       }
-      const poll = await pollRes.json() as { authorization_code?: string; code_verifier?: string };
-      if (!poll.authorization_code || !poll.code_verifier) {
+      const poll = v.safeParse(DevicePollResponseSchema, await pollRes.json());
+      if (!poll.success) {
         throw new Error('Codex poll response missing authorization_code/code_verifier');
       }
       const exchange = await fetchFn(CODEX_TOKEN_URL, {
@@ -94,29 +108,24 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
         body: new URLSearchParams({
           grant_type: 'authorization_code',
-          code: poll.authorization_code,
+          code: poll.output.authorization_code,
           redirect_uri: `${CODEX_ISSUER}/deviceauth/callback`,
           client_id: CODEX_CLIENT_ID,
-          code_verifier: poll.code_verifier,
+          code_verifier: poll.output.code_verifier,
         }).toString(),
       });
       if (!exchange.ok) {
         throw new Error(`Codex token exchange failed: ${exchange.status} ${sanitizeErrorBody(await exchange.text())}`);
       }
-      const tokens = await exchange.json() as {
-        access_token?: string;
-        refresh_token?: string;
-        id_token?: string;
-        expires_in?: number;
-      };
-      if (!tokens.access_token || !tokens.refresh_token) {
+      const tokens = v.safeParse(TokenExchangeResponseSchema, await exchange.json());
+      if (!tokens.success) {
         throw new Error('Codex token exchange missing access_token/refresh_token');
       }
       return {
-        accessToken: tokens.access_token,
-        refreshToken: tokens.refresh_token,
-        idToken: tokens.id_token,
-        expiresAt: tokens.expires_in ? Date.now() + tokens.expires_in * 1000 : undefined,
+        accessToken: tokens.output.access_token,
+        refreshToken: tokens.output.refresh_token,
+        idToken: tokens.output.id_token,
+        expiresAt: tokens.output.expires_in ? Date.now() + tokens.output.expires_in * 1000 : undefined,
       };
     },
 
@@ -133,20 +142,20 @@ export function createCodexOAuthClient(fetchFn: typeof fetch = fetch): CodexOAut
       if (!res.ok) {
         throw new Error(`Codex token refresh failed: ${res.status} ${sanitizeErrorBody(await res.text())}`);
       }
-      const body = await res.json() as { access_token?: string; refresh_token?: string; expires_in?: number };
-      if (!body.access_token || !body.refresh_token) {
+      const body = v.safeParse(TokenExchangeResponseSchema, await res.json());
+      if (!body.success) {
         throw new Error('Codex refresh response missing access_token/refresh_token');
       }
       return {
-        accessToken: body.access_token,
-        refreshToken: body.refresh_token,
-        expiresAt: body.expires_in ? Date.now() + body.expires_in * 1000 : undefined,
+        accessToken: body.output.access_token,
+        refreshToken: body.output.refresh_token,
+        expiresAt: body.output.expires_in ? Date.now() + body.output.expires_in * 1000 : undefined,
       };
     },
   };
 }
 
-export function tokensToCredential(t: DeviceCodeTokens, metadata?: Record<string, unknown>): OAuthCredential {
+export function tokensToCredential(t: DeviceCodeTokens, metadata?: JsonObject): OAuthCredential {
   return {
     kind: 'oauth',
     accessToken: t.accessToken,
@@ -157,18 +166,13 @@ export function tokensToCredential(t: DeviceCodeTokens, metadata?: Record<string
 }
 
 /** Decode a JWT's payload segment (base64url) — null when undecodable. */
-function decodeJwtPayload(token: string): Record<string, unknown> | null {
+function decodeJwtPayload(token: string): JsonObject | null {
   try {
     const parts = token.split('.');
     if (parts.length < 2) return null;
     const b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
     const padded = b64 + '='.repeat((4 - b64.length % 4) % 4);
-    const json: unknown = JSON.parse(typeof atob === 'function'
-      ? atob(padded)
-      : Buffer.from(padded, 'base64').toString('utf-8'));
-    return json && typeof json === 'object' && !Array.isArray(json)
-      ? json as Record<string, unknown>
-      : null;
+    return parseJsonObject(globalThis.atob(padded));
   } catch {
     return null;
   }
@@ -177,29 +181,33 @@ function decodeJwtPayload(token: string): Record<string, unknown> | null {
 export function decodeCodexAccountId(accessToken: string): string | null {
   const payload = decodeJwtPayload(accessToken);
   const auth = payload?.['https://api.openai.com/auth'];
-  const id = auth && typeof auth === 'object'
-    ? (auth as Record<string, unknown>).chatgpt_account_id
-    : undefined;
-  return typeof id === 'string' && id ? id : null;
+  if (auth === undefined || !isJsonObject(auth)) return null;
+  const id = v.safeParse(v.pipe(v.string(), v.minLength(1)), auth.chatgpt_account_id);
+  return id.success ? id.output : null;
 }
 
-export function codexCredentialToHeaders(cred: OAuthCredential): Record<string, string> {
-  const headers: Record<string, string> = {
+export function codexCredentialToHeaders(cred: OAuthCredential) {
+  const headers = {
     Authorization: `Bearer ${cred.accessToken}`,
     'User-Agent': CODEX_USER_AGENT,
     originator: CODEX_ORIGINATOR,
   };
   const metadataAccountId = cred.metadata?.accountId;
+  const parsedMetadataAccountId = v.safeParse(
+    v.pipe(v.string(), v.minLength(1)),
+    metadataAccountId,
+  );
   const accountId = decodeCodexAccountId(cred.accessToken)
-    ?? (typeof metadataAccountId === 'string' && metadataAccountId ? metadataAccountId : null);
-  if (accountId) headers['ChatGPT-Account-ID'] = accountId;
-  return headers;
+    ?? (parsedMetadataAccountId.success ? parsedMetadataAccountId.output : null);
+  if (!accountId) return headers;
+  return { ...headers, 'ChatGPT-Account-ID': accountId };
 }
 
 export function codexAccessTokenExpiring(accessToken: string, skewSec = 60): boolean {
   const payload = decodeJwtPayload(accessToken);
   if (!payload) return true;
-  const exp = typeof payload.exp === 'number' ? payload.exp : null;
+  const parsedExp = v.safeParse(v.number(), payload.exp);
+  const exp = parsedExp.success ? parsedExp.output : null;
   if (exp == null) return false;
   return Date.now() / 1000 + skewSec >= exp;
 }

@@ -16,12 +16,23 @@ import {
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from '../src/scaffold/executor.js';
+import type { Executor, ResolvedProvider } from '../src/types/primitives.js';
+import type { JsonObject } from '../src/utils/json.js';
 import { createTestRuntime } from './helpers.js';
 
-function makeRtWithMockedExecutor(executeImpl: (code: string, providers: unknown[]) => Promise<unknown>) {
+function makeRtWithMockedExecutor(execute: Executor['execute']) {
   const { rt } = createTestRuntime();
-  (rt as { executor: unknown }).executor = { execute: executeImpl };
+  rt.executor = { languages: ['javascript'], execute };
   return rt;
+}
+
+function hostProvider(
+  providers: Parameters<Executor['execute']>[1],
+): ResolvedProvider {
+  if (!Array.isArray(providers)) throw new Error('expected resolved providers');
+  const host = providers.find((provider) => provider.name === 'host');
+  if (!host) throw new Error('no host provider');
+  return host;
 }
 
 async function* asyncOf(...items: string[]): AsyncIterable<string> {
@@ -35,9 +46,7 @@ describe('runScaffold', () => {
 
     // Mock executor that calls the host provider's emit fn directly.
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
-      const host = (providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>)
-        .find((p) => p.name === 'host');
-      if (!host) throw new Error('no host provider');
+      const host = hostProvider(providers);
       await host.fns.emit({ type: 'text_delta', text: 'hello ' });
       await host.fns.emit({ type: 'text_delta', text: 'world' });
       await host.fns.emit({ type: 'done', result: { ok: true } });
@@ -90,8 +99,7 @@ describe('runScaffold', () => {
   test('synthesizes a done event if scaffold completes without emitting one', async () => {
     const events: ScaffoldEvent[] = [];
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
-      const host = (providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>)
-        .find((p) => p.name === 'host')!;
+      const host = hostProvider(providers);
       await host.fns.emit({ type: 'text_delta', text: 'partial' });
       return { result: undefined };
     });
@@ -128,10 +136,9 @@ describe('runScaffold', () => {
   });
 
   test('host.callTool dispatches to provided callTool fn', async () => {
-    const calls: Array<{ name: string; args: Record<string, unknown> }> = [];
+    const calls: Array<{ name: string; args: JsonObject }> = [];
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
-      const host = (providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>)
-        .find((p) => p.name === 'host')!;
+      const host = hostProvider(providers);
       const result = await host.fns.callTool('save_note', { content: 'hi' });
       return { result };
     });
@@ -154,8 +161,7 @@ describe('runScaffold', () => {
   test('host.llmStream forwards llmStream output as text_delta events', async () => {
     const events: ScaffoldEvent[] = [];
     const rt = makeRtWithMockedExecutor(async (_code, providers) => {
-      const host = (providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>)
-        .find((p) => p.name === 'host')!;
+      const host = hostProvider(providers);
       const text = await host.fns.llmStream({ system: 's', messages: [] });
       return { result: text };
     });
@@ -167,7 +173,7 @@ describe('runScaffold', () => {
       llmStream: () => asyncOf('one ', 'two ', 'three'),
     });
 
-    const deltas = events.filter((e) => e.type === 'text_delta').map((e) => (e as { text: string }).text);
+    const deltas = events.flatMap((event) => event.type === 'text_delta' ? [event.text] : []);
     expect(deltas).toEqual(['one ', 'two ', 'three']);
   });
 });

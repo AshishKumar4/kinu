@@ -32,6 +32,7 @@ import type {
   EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn, Verdict,
 } from '../packages/core/src/index.js';
 import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-model-resolver.js';
+import { createTestRuntime } from '@proteus/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const DEFAULT_CORPUS = join(REPO_ROOT, 'tests/eval/corpus/seed.jsonl');
@@ -106,13 +107,18 @@ Exit code: 0 when aggregate >= floor, 1 on regression or misconfiguration.`;
  *  case tagged with either of these asks for something the strategy cannot
  *  physically do, so scoring it measures the judge's tolerance for an apology
  *  rather than the model. They are excluded and counted, not silently run. */
-const UNRUNNABLE_TAGS = ['tool-use', 'multi-step'] as const;
+const UNRUNNABLE_TAGS: ReadonlySet<string> = new Set(['tool-use', 'multi-step']);
 
-export function partitionRunnable(cases: readonly EvalCase[]): { runnable: EvalCase[]; excluded: EvalCase[] } {
+export interface RunnablePartition {
+  runnable: EvalCase[];
+  excluded: EvalCase[];
+}
+
+export function partitionRunnable(cases: readonly EvalCase[]): RunnablePartition {
   const runnable: EvalCase[] = [];
   const excluded: EvalCase[] = [];
   for (const c of cases) {
-    const blocked = c.tags?.some((t) => (UNRUNNABLE_TAGS as readonly string[]).includes(t)) ?? false;
+    const blocked = c.tags?.some((tag) => UNRUNNABLE_TAGS.has(tag)) ?? false;
     (blocked ? excluded : runnable).push(c);
   }
   return { runnable, excluded };
@@ -121,7 +127,12 @@ export function partitionRunnable(cases: readonly EvalCase[]): { runnable: EvalC
 /** A single-shot strategy pinned to one resolved model. Single-shot is the
  *  harness's declared baseline and the only strategy that runs without a full
  *  DO runtime — the honest, cheap choice for a standalone benchmark. */
-function pinnedSingleShot(id: string, model: LanguageModel): { strategy: ExplorationStrategy; model: LanguageModel } {
+interface PinnedStrategy {
+  strategy: ExplorationStrategy;
+  model: LanguageModel;
+}
+
+function pinnedSingleShot(id: string, model: LanguageModel): PinnedStrategy {
   const strategy: ExplorationStrategy = {
     id,
     advertised: false,
@@ -173,6 +184,10 @@ export interface BenchmarkDeps {
   meta: { modelA?: string; modelB?: string; corpus?: string; ranAt?: number };
 }
 
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Run the harness + apply the gate. Pure of model resolution + IO, so tests
  *  drive it with stub strategies + a stub judge (no real LLM). */
 export async function runBenchmark(deps: BenchmarkDeps) {
@@ -200,7 +215,7 @@ async function main(): Promise<void> {
   try {
     cases = parseCorpus(readFileSync(opts.corpus, 'utf8'));
   } catch (err) {
-    console.error(`Failed to load corpus ${opts.corpus}: ${(err as Error).message}`);
+    console.error(`Failed to load corpus ${opts.corpus}: ${errorMessage(err)}`);
     process.exit(1);
   }
 
@@ -211,7 +226,7 @@ async function main(): Promise<void> {
   try {
     resolver = createConfiguredLocalModelResolver({ model: opts.model ?? undefined }).resolver;
   } catch (err) {
-    console.error(`Cannot run the benchmark: ${(err as Error).message}`);
+    console.error(`Cannot run the benchmark: ${errorMessage(err)}`);
     process.exit(1);
   }
 
@@ -250,12 +265,19 @@ async function main(): Promise<void> {
   const candidate = pinnedSingleShot('candidate', resolver.resolveModel(candidateSpec));
   const baseline = pinnedSingleShot('baseline', resolver.resolveModel(baselineSpec));
   const judge = makeJudge(resolver.resolveModel(judgeSpec));
+  const benchmarkRuntime = createTestRuntime().rt;
 
   const { report, gate } = await runBenchmark({
     cases: runnable,
     strategyA: baseline.strategy,
     strategyB: candidate.strategy,
-    buildContext: (c) => ({ task: c.task, rt: null as never, model: candidate.model, budget: { maxOutputTokens: 2048 } }),
+    buildContext: (c) => ({
+      task: c.task,
+      mode: 'build',
+      rt: benchmarkRuntime,
+      model: candidate.model,
+      budget: { maxOutputTokens: 2048 },
+    }),
     judge,
     threshold: opts.threshold,
     meta: { modelA: baselineSpec, modelB: candidateSpec, corpus: opts.corpus },

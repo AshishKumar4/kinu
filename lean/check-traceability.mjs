@@ -296,7 +296,7 @@ for (const requirement of requirements.values()) {
   for (const field of ["statement", "status", "theorems", "tsRefs", "remainingEvidence"]) {
     if (!requirement.fields.has(field)) fail(`${requirement.id}: missing required field ${field}`);
   }
-  if (typeof requirement.statement !== "string" || !/[.!?]$/.test(requirement.statement)) {
+  if (!/[.!?]$/.test(requirement.statement ?? "")) {
     fail(`${requirement.id}: statement must be one sentence ending in punctuation`);
   }
   if (!allowedStatuses.has(requirement.status)) {

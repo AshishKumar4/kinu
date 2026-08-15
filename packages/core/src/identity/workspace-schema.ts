@@ -34,6 +34,7 @@ import { initImportedExperienceTable } from '../experience/imports.js';
 import { initHeadsTables } from '../heads/schema.js';
 import { initBackgroundJobsTable } from '../jobs/store.js';
 import { initDeferredApprovalsTable } from '../safety/deferred-approval.js';
+import { initPlanReviewTable } from '../plans/review.js';
 import { initSearchTables } from '../mcts/schemas.js';
 import { initMctsSearchTable } from '../mcts/search-store.js';
 import { initFactsTable } from '../memory/facts.js';
@@ -196,6 +197,9 @@ export function initWorkspaceSchema(db: WorkspaceSchemaSql): void {
   // their standing decisions. Durable because the wait is a night, not a
   // prompt window.
   initDeferredApprovalsTable(execRaw);
+  // Plan revisions and reviewer state outlive both the submitting turn and DO
+  // eviction; the Outputs surface always reads this one authoritative stream.
+  initPlanReviewTable(execRaw);
   // The agent's own task list, written by the `tasks` tool.
   initTaskListTable(execRaw);
   // Durable MCTS search checkpoints: an evicted fork(settle=mcts) resumes here.

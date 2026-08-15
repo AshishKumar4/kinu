@@ -18,9 +18,12 @@
  * an `ext` bag if they want forward-compat.
  */
 
+import * as v from 'valibot';
+import { isJsonObject, type JsonObject, type JsonValue } from './json.js';
+
 /** Successful parse: full front-matter map + body. */
 export interface MarkdownDoc {
-  frontmatter: Record<string, unknown>;
+  frontmatter: JsonObject;
   body: string;
 }
 
@@ -76,9 +79,9 @@ export function stringifyMarkdownFrontmatter(
 
 // ── implementation ───────────────────────────────────────────────
 
-function parseFlatYaml(src: string): Record<string, unknown> {
+function parseFlatYaml(src: string): JsonObject {
   const lines = src.split('\n');
-  const out: Record<string, unknown> = {};
+  const out: JsonObject = {};
   let i = 0;
 
   while (i < lines.length) {
@@ -88,7 +91,7 @@ function parseFlatYaml(src: string): Record<string, unknown> {
     if (stripped.includes('\t')) {
       throw new MarkdownFrontmatterError({ message: 'tabs not allowed (use spaces)', line: i + 1 });
     }
-    const m = stripped.match(/^([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(.*)$/);
+    const m = stripped.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
     if (!m) {
       throw new MarkdownFrontmatterError({
         message: `expected \`key: value\`, got ${JSON.stringify(raw)}`,
@@ -110,7 +113,7 @@ function parseFlatYaml(src: string): Record<string, unknown> {
     if (peek == null) { out[key] = null; i++; continue; }
 
     if (peek.kind === 'list') {
-      const items: unknown[] = [];
+      const items: JsonValue[] = [];
       i++;
       while (i < lines.length) {
         const next = stripComment(lines[i]);
@@ -125,12 +128,12 @@ function parseFlatYaml(src: string): Record<string, unknown> {
     }
 
     // Nested map.
-    const nested: Record<string, unknown> = {};
+    const nested: JsonObject = {};
     i++;
     while (i < lines.length) {
       const next = stripComment(lines[i]);
       if (next.trim() === '') { i++; continue; }
-      const childMatch = next.match(/^(\s+)([A-Za-z_][A-Za-z0-9_\-]*)\s*:\s*(.*)$/);
+      const childMatch = next.match(/^(\s+)([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
       if (!childMatch) break;
       // Require at least 2-space indent — anything less is a top-level row.
       if (childMatch[1].length < 2) break;
@@ -144,6 +147,8 @@ function parseFlatYaml(src: string): Record<string, unknown> {
 }
 
 interface PeekResult { kind: 'list' | 'map' }
+
+type FrontmatterScalar = string | number | boolean | null | FrontmatterScalar[];
 
 function findNextIndentedLine(lines: string[], from: number): PeekResult | null {
   for (let j = from; j < lines.length; j++) {
@@ -168,7 +173,7 @@ function stripComment(line: string): string {
   return line;
 }
 
-function parseScalar(s: string): unknown {
+function parseScalar(s: string): FrontmatterScalar {
   const t = s.trim();
   if (t === '') return null;
   if (t === 'true') return true;
@@ -180,7 +185,7 @@ function parseScalar(s: string): unknown {
       .replace(/\\"/g, '"')
       .replace(/\\n/g, '\n')
       .replace(/\\t/g, '\t')
-      .replace(/\u0000/g, '\\');
+      .replaceAll('\u0000', '\\');
   }
   if (t.startsWith("'") && t.endsWith("'") && t.length >= 2) {
     return t.slice(1, -1).replace(/''/g, "'");
@@ -197,32 +202,37 @@ function parseScalar(s: string): unknown {
 
 // ── stringification ──────────────────────────────────────────────
 
-function renderEntry(key: string, value: unknown, indent: number): string[] {
+function renderEntry(key: string, value: JsonValue, indent: number): string[] {
   const pad = '  '.repeat(indent);
-  if (value === null || value === undefined) {
+  if (value === null) {
     return [`${pad}${key}: null`];
   }
-  if (typeof value === 'boolean' || typeof value === 'number') {
-    return [`${pad}${key}: ${String(value)}`];
+  const bool = v.safeParse(v.boolean(), value);
+  if (bool.success) {
+    return [`${pad}${key}: ${String(bool.output)}`];
   }
-  if (typeof value === 'string') {
-    return [`${pad}${key}: ${quoteIfNeeded(value)}`];
+  const number = v.safeParse(v.number(), value);
+  if (number.success) {
+    return [`${pad}${key}: ${String(number.output)}`];
+  }
+  const string = v.safeParse(v.string(), value);
+  if (string.success) {
+    return [`${pad}${key}: ${quoteIfNeeded(string.output)}`];
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return [`${pad}${key}: []`];
     const lines: string[] = [`${pad}${key}:`];
     for (const item of value) {
-      if (item !== null && typeof item === 'object' && !Array.isArray(item)) {
+      if (isJsonObject(item)) {
         lines.push(`${pad}  - ${JSON.stringify(item)}`);
-      } else if (typeof item === 'string') {
-        lines.push(`${pad}  - ${quoteIfNeeded(item)}`);
       } else {
-        lines.push(`${pad}  - ${String(item)}`);
+        const itemString = v.safeParse(v.string(), item);
+        lines.push(`${pad}  - ${itemString.success ? quoteIfNeeded(itemString.output) : String(item)}`);
       }
     }
     return lines;
   }
-  if (typeof value === 'object') {
+  if (isJsonObject(value)) {
     const inner = Object.entries(value);
     if (inner.length === 0) return [`${pad}${key}: {}`];
     const lines: string[] = [`${pad}${key}:`];

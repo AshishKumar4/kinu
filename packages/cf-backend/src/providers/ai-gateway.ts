@@ -21,7 +21,7 @@ export function createAIGatewayProvider(): ModelProvider {
     isAvailable: deps => {
       const url = deps.env.AI_GATEWAY_URL;
       const auth = deps.env.AI_GATEWAY_AUTH;
-      return typeof url === 'string' && !!url && typeof auth === 'string' && !!auth;
+      return Boolean(url && auth);
     },
     unavailableReason: () => 'AI_GATEWAY_URL var or AI_GATEWAY_AUTH secret missing.',
     async listModels(deps): Promise<ModelInfo[]> {

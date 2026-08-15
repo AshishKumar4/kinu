@@ -14,6 +14,16 @@ import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
 import { extractJsonArray, jsonArrayOnlyInstruction } from '../prompts/structured.js';
+import { parseJsonValue } from '../utils/json.js';
+
+const ProposedTaskStatusSchema = v.picklist([
+  'pending',
+  'accepted',
+  'rejected',
+  'completed',
+]);
+
+type ProposedTaskStatus = v.InferOutput<typeof ProposedTaskStatusSchema>;
 
 export interface ProposedTask {
   id: string;
@@ -24,7 +34,7 @@ export interface ProposedTask {
   /** Skills this task would exercise or extend. */
   targetsSkills: string[];
   proposedAt: number;
-  status: 'pending' | 'accepted' | 'rejected' | 'completed';
+  status: ProposedTaskStatus;
 }
 
 export interface CurriculumProposerOpts {
@@ -44,6 +54,21 @@ const ProposalListSchema = v.array(
     targetsSkills: v.array(v.string()),
   }),
 );
+
+const StringListSchema = v.array(v.string());
+
+function errorMessage({ error }: { error: unknown }): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function parseStringList(text: string): string[] {
+  try {
+    const result = v.safeParse(StringListSchema, parseJsonValue(text));
+    return result.success ? result.output : [];
+  } catch {
+    return [];
+  }
+}
 
 export function initCurriculumTable(execRaw: (ddl: string) => void): void {
   execRaw(`
@@ -67,11 +92,20 @@ interface RecentOutcome {
   craftedTools: string[];
 }
 
-function collectContext(rt: AgentRuntime, takeOutcomes = 20): {
-  skills: Array<{ name: string; description: string; score: number; uses: number }>;
+interface CurriculumSkill {
+  name: string;
+  description: string;
+  score: number;
+  uses: number;
+}
+
+interface CurriculumContext {
+  skills: CurriculumSkill[];
   recent: RecentOutcome[];
-} {
-  const skills: ReturnType<typeof collectContext>['skills'] = [];
+}
+
+function collectContext(rt: AgentRuntime, takeOutcomes = 20): CurriculumContext {
+  const skills: CurriculumSkill[] = [];
   try {
     const rows = rt.storage.sql<{ name: string; description: string; score: number; uses: number }>`
       SELECT ct.name, COALESCE(ct.description, '') as description,
@@ -90,9 +124,11 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): {
         FROM completed_turns
         ORDER BY ended_at DESC LIMIT ${takeOutcomes}`;
     for (const r of rows) {
-      let tools: string[] = [];
-      try { tools = JSON.parse(r.tools) as string[]; } catch { /* ignore */ }
-      recent.push({ task: r.task, succeeded: !!r.succeeded, craftedTools: tools });
+      recent.push({
+        task: r.task,
+        succeeded: Boolean(r.succeeded),
+        craftedTools: parseStringList(r.tools),
+      });
     }
   } catch { /* table may not exist yet */ }
 
@@ -100,7 +136,7 @@ function collectContext(rt: AgentRuntime, takeOutcomes = 20): {
 }
 
 function buildPrompt(
-  ctx: ReturnType<typeof collectContext>,
+  ctx: CurriculumContext,
   count: number,
   window: [number, number],
 ): string {
@@ -142,11 +178,11 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
 
   let text: string;
   try { text = await opts.judge.complete(prompt); }
-  catch (err) { throw new Error(`Curriculum LLM call failed: ${(err as Error).message}`); }
+  catch (error) { throw new Error(`Curriculum LLM call failed: ${errorMessage({ error })}`); }
 
   let parsed: unknown;
   try { parsed = extractJsonArray(text); }
-  catch (err) { throw new Error(`Curriculum response not JSON: ${(err as Error).message}`); }
+  catch (error) { throw new Error(`Curriculum response not JSON: ${errorMessage({ error })}`); }
 
   const result = v.safeParse(ProposalListSchema, parsed);
   if (!result.success) {
@@ -170,7 +206,7 @@ export async function proposeNextTasks(opts: CurriculumProposerOpts): Promise<Pr
   // Persist for the UI / autonomous loop to consume.
   for (const p of proposals) {
     try {
-      opts.rt.storage.sql`
+      void opts.rt.storage.sql`
         INSERT INTO proposed_tasks (id, task, rationale, predicted_success, targets_skills, proposed_at, status)
         VALUES (${p.id}, ${p.task}, ${p.rationale}, ${p.predictedSuccess},
                 ${JSON.stringify(p.targetsSkills)}, ${p.proposedAt}, ${p.status})`;
@@ -191,13 +227,19 @@ export function listProposedTasks(rt: AgentRuntime, status?: ProposedTask['statu
                          targets_skills: string; proposed_at: number; status: string }>`
           SELECT id, task, rationale, predicted_success, targets_skills, proposed_at, status
             FROM proposed_tasks ORDER BY proposed_at DESC LIMIT 50`;
-    return rows.map(r => ({
-      id: r.id, task: r.task, rationale: r.rationale,
-      predictedSuccess: r.predicted_success,
-      targetsSkills: (() => { try { return JSON.parse(r.targets_skills) as string[]; } catch { return []; } })(),
-      proposedAt: r.proposed_at,
-      status: r.status as ProposedTask['status'],
-    }));
+    return rows.flatMap((row) => {
+      const parsedStatus = v.safeParse(ProposedTaskStatusSchema, row.status);
+      if (!parsedStatus.success) return [];
+      return [{
+        id: row.id,
+        task: row.task,
+        rationale: row.rationale,
+        predictedSuccess: row.predicted_success,
+        targetsSkills: parseStringList(row.targets_skills),
+        proposedAt: row.proposed_at,
+        status: parsedStatus.output,
+      }];
+    });
   } catch { return []; }
 }
 
@@ -205,6 +247,6 @@ export function updateProposedTaskStatus(
   rt: AgentRuntime, id: string, status: ProposedTask['status'],
 ): void {
   try {
-    rt.storage.sql`UPDATE proposed_tasks SET status = ${status} WHERE id = ${id}`;
+    void rt.storage.sql`UPDATE proposed_tasks SET status = ${status} WHERE id = ${id}`;
   } catch { /* ignore */ }
 }

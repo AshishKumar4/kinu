@@ -189,12 +189,12 @@ const RULES: Rule[] = [
  * Severity rank for picking the dominant decision when multiple rules fire.
  * Higher number = more severe.
  */
-const SEVERITY: Record<ApprovalDecision, number> = {
+const SEVERITY = {
   allow: 0,
   warn: 1,
   gate: 2,
   deny: 3,
-};
+} satisfies Record<ApprovalDecision, number>;
 
 export function reviewCommand(command: string): ApprovalResult {
   const hits: ApprovalRuleHit[] = [];
@@ -320,7 +320,7 @@ export interface DeferredApprovalChannel {
  * command actually reaches a shell: `run`'s workspace/router dispatch and
  * every ExecutorProvider's `exec`/`startProcess` (see execution/approval.ts),
  * so `run { command }` and the same command reached through codemode
- * (`workspace.exec`, `nimbus.exec`, `sandbox.exec`, `laptop.exec`) answer to
+ * (`workspace.exec` and every registered executor's `exec`) answer to
  * the identical decision instead of one tool remembering to ask and the rest
  * not.
  *

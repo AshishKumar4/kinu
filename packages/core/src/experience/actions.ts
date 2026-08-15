@@ -10,6 +10,7 @@
  * the model's surface costs attention on all of them. The library kept
  * working; only its caller changed, from the model to the owner's RPCs.
  */
+import * as v from 'valibot';
 import {
   describePayload,
   findPublishable,
@@ -50,6 +51,15 @@ export interface ExperienceActionInput {
   id?: string;
 }
 
+const ExperienceActionInputSchema: v.GenericSchema<ExperienceActionInput> = v.object({
+  action: v.picklist(EXPERIENCE_ACTIONS),
+  kind: v.optional(v.picklist(['craft', 'lesson', 'fact'])),
+  key: v.optional(v.string()),
+  query: v.optional(v.string()),
+  limit: v.optional(v.number()),
+  id: v.optional(v.string()),
+});
+
 function summarize(entry: ExperienceEntry) {
   return {
     id: entry.id,
@@ -74,33 +84,36 @@ function summarizeCandidate(candidate: PublishableCandidate) {
 /** Dispatch one library action. Errors come back in the result rather than
  *  thrown: every caller is a surface that has to render a refusal ("nothing
  *  here qualifies yet") as an ordinary answer, not as a failure. */
-export async function runExperienceAction(
+export async function runExperienceAction<Input>(
   deps: ExperienceActionDeps,
-  input: ExperienceActionInput,
-): Promise<Record<string, unknown>> {
-  if (!(EXPERIENCE_ACTIONS as readonly string[]).includes(input.action)) {
-    return { error: `action "${String(input.action)}" is not available. Available: ${EXPERIENCE_ACTIONS.join(', ')}` };
+  input: Input,
+) {
+  const request = v.safeParse(ExperienceActionInputSchema, input);
+  if (!request.success) {
+    const attempted = v.safeParse(v.object({ action: v.string() }), input);
+    const subject = attempted.success ? `action "${attempted.output.action}"` : 'action';
+    return { error: `${subject} is not available. Available: ${EXPERIENCE_ACTIONS.join(', ')}` };
   }
   const sources = { sql: deps.rt.storage.sql, craftStore: deps.rt.craftStore, facts: deps.facts };
   try {
-    switch (input.action) {
+    switch (request.output.action) {
       case 'publish': {
-        if (!input.kind || !input.key) {
+        if (!request.output.kind || !request.output.key) {
           const candidates = listPublishable(sources);
           return candidates.length === 0
             ? { publishable: [], note: 'Nothing here has earned publication yet — a craft needs real uses, a lesson needs corroboration, a fact needs confidence.' }
             : { publishable: candidates.map(summarizeCandidate), note: 'Publish one with kind + key.' };
         }
-        const candidate = findPublishable(sources, input.kind, input.key);
+        const candidate = findPublishable(sources, request.output.kind, request.output.key);
         if ('refused' in candidate) return { error: candidate.refused };
         return { published: summarize(await deps.library.publish(candidate)) };
       }
 
       case 'search': {
         const hits = await deps.library.search({
-          ...(input.query ? { query: input.query } : {}),
-          ...(input.kind ? { kind: input.kind } : {}),
-          ...(input.limit !== undefined ? { limit: input.limit } : {}),
+          query: request.output.query,
+          kind: request.output.kind,
+          limit: request.output.limit,
         });
         return hits.length === 0
           ? { hits: [], note: 'The owner\'s other workspaces have published nothing matching this yet.' }
@@ -108,9 +121,9 @@ export async function runExperienceAction(
       }
 
       case 'import': {
-        if (!input.id) return { error: 'import requires the library entry id' };
-        const entry = await deps.library.get(input.id);
-        if (!entry) return { error: `no library entry with id "${input.id}"` };
+        if (!request.output.id) return { error: 'import requires the library entry id' };
+        const entry = await deps.library.get(request.output.id);
+        if (!entry) return { error: `no library entry with id "${request.output.id}"` };
         const staged = stageImport(deps.rt, entry);
         if (!staged.ok) return { error: staged.reason };
         return {

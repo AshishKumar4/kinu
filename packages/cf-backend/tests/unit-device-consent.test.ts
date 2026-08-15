@@ -4,9 +4,12 @@ import {
   DEVICE_CONSENT_SCOPE, DEVICE_CONSENT_SCOPE_FULL_FS,
   DEVICE_CONSENT_DENIED, DEVICE_CONSENT_UNANSWERED,
   mergeConsentScope, parseConsentScope, summarizeDeviceAction,
+  type JsonValue,
 } from '@proteus/core';
 import { handleUserRequest } from '../src/user/routes.js';
 import type { AuthIdentity } from '../src/auth/session.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
 
 describe('device consent prompt data', () => {
   test('exec consent shows the exact shell command', () => {
@@ -76,21 +79,29 @@ function consentRoutesSetup() {
   const calls: Array<{ agentName: string; deviceId: string; scope: string }> = [];
   const stub = {
     async ensureProfile() {},
-    async listDeviceConsents(_caller: unknown) {
+    async listDeviceConsents(_caller: UserCaller) {
       return [...scopes.entries()].map(([key, scope]) => {
         const [agentName, deviceId] = key.split('|');
         return { agentName, deviceId, policy: 'allow', scope, lastMethod: null, lastSummary: null };
       });
     },
-    async setDeviceConsentScope(_caller: unknown, agentName: string, deviceId: string, scope: string) {
+    async setDeviceConsentScope(_caller: UserCaller, agentName: string, deviceId: string, scope: string) {
       calls.push({ agentName, deviceId, scope });
       if (scope !== DEVICE_CONSENT_SCOPE && scope !== DEVICE_CONSENT_SCOPE_FULL_FS) return { ok: false };
       scopes.set(`${agentName}|${deviceId}`, scope);
       return { ok: true };
     },
   };
-  const env = { UserDO: { idFromName: (n: string) => n, get: () => stub }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
-  const call = (path: string, method: string, body?: unknown) =>
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, {
+    UserDO: { idFromName: (name: string) => name, get: () => stub },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
+  // SAFETY: The constructed environment provides exactly UserDO.idFromName,
+  // UserDO.get, and CREDENTIAL_ENCRYPTION_KEY, all constructed immediately
+  // above; no other Env binding is reachable on these request paths.
+  const env = partialEnv as Env;
+  const call = (path: string, method: string, body?: JsonValue) =>
     handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
       method,
       headers: { 'content-type': 'application/json' },
@@ -99,17 +110,26 @@ function consentRoutesSetup() {
   return { call, calls, scopes };
 }
 
+function requiredResponse(response: Response | null | undefined): Response {
+  if (!response) throw new Error('expected user route to return a response');
+  return response;
+}
+
 describe('device consent-tier routes (the full_filesystem grant path)', () => {
   test('PUT grants the full-filesystem tier and the flip is visible in the consent listing', async () => {
     const { call, calls } = consentRoutesSetup();
 
     const put = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
-    expect(put?.status).toBe(200);
+    expect(requiredResponse(put).status).toBe(200);
     expect(calls).toEqual([{ agentName: 'jarvis', deviceId: 'dev-1', scope: 'full_filesystem' }]);
 
     const list = await call('/devices/consents', 'GET');
-    expect(list?.status).toBe(200);
-    expect(await list?.json<unknown[]>()).toEqual([
+    expect(requiredResponse(list).status).toBe(200);
+    const consents = v.parse(
+      v.array(v.object({ agentName: v.string(), deviceId: v.string(), scope: v.string() })),
+      await requiredResponse(list).json(),
+    );
+    expect(consents).toEqual([
       expect.objectContaining({ agentName: 'jarvis', deviceId: 'dev-1', scope: 'full_filesystem' }),
     ]);
   });
@@ -118,16 +138,16 @@ describe('device consent-tier routes (the full_filesystem grant path)', () => {
     const { call, scopes } = consentRoutesSetup();
     await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'full_filesystem' });
     const reduce = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'all_local_actions' });
-    expect(reduce?.status).toBe(200);
+    expect(requiredResponse(reduce).status).toBe(200);
     expect(scopes.get('jarvis|dev-1')).toBe('all_local_actions');
   });
 
   test('an out-of-vocabulary scope or missing agent is refused before the DO call', async () => {
     const { call, calls } = consentRoutesSetup();
     const bad = await call('/devices/dev-1/consent', 'PUT', { agentName: 'jarvis', scope: 'root_of_everything' });
-    expect(bad?.status).toBe(400);
+    expect(requiredResponse(bad).status).toBe(400);
     const missing = await call('/devices/dev-1/consent', 'PUT', { scope: 'full_filesystem' });
-    expect(missing?.status).toBe(400);
+    expect(requiredResponse(missing).status).toBe(400);
     expect(calls).toEqual([]);
   });
 });

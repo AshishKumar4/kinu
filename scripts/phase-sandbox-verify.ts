@@ -66,7 +66,7 @@ async function main() {
     const clicked = await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
       const btn = btns.find(b => (b.textContent ?? '').trim() === 'Executors');
-      if (btn) { (btn as HTMLButtonElement).click(); return true; }
+      if (btn) { btn.click(); return true; }
       return false;
     });
     log(`  clicked: ${clicked}`);
@@ -78,7 +78,7 @@ async function main() {
     await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
       const btn = btns.find(b => (b.textContent ?? '').trim() === 'Sandbox');
-      if (btn) (btn as HTMLButtonElement).click();
+      if (btn) btn.click();
     });
     await new Promise(r => setTimeout(r, 1500));
     await page.screenshot({ path: `${OUT_DIR}/04-sandbox-active.png`, fullPage: true });
@@ -171,7 +171,7 @@ async function main() {
     process.exit(ok ? 0 : 1);
   } catch (err) {
     log(`FATAL: ${err instanceof Error ? err.message : String(err)}`);
-    log((err as Error).stack ?? '');
+    log(err instanceof Error ? err.stack ?? '' : '');
     await browser.close();
     process.exit(99);
   }

@@ -83,7 +83,7 @@ function toLF(text: string): string {
  * `\r\n` is the only place the two diverge: it costs two characters and yields
  * one, so a lone `\r` (same length) needs no special case.
  */
-function normalizeWithOrigin(original: string): { text: string; origin: number[] } {
+function normalizeWithOrigin(original: string) {
   const chars: string[] = [];
   const origin: number[] = [];
   for (let i = 0; i < original.length; i++) {

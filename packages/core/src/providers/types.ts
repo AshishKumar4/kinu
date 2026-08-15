@@ -131,7 +131,7 @@ export interface ModelProvider {
   createModel(modelId: string, deps: ProviderDeps): LanguageModel;
 }
 
-/** Split on the FIRST slash so `@cf/moonshotai/kimi-k2.6` survives intact. */
+/** Split on the FIRST slash so slashful ids such as `@cf/deepseek-ai/deepseek-v4-pro-0813` survive intact. */
 export function parseModelSpec(spec: string): ModelSpec {
   const s = (spec ?? '').trim();
   if (!s) throw new Error('Empty model spec');

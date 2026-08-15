@@ -21,6 +21,7 @@
  * `env.AI.toMarkdown`. Everything else is shared here.
  */
 
+import * as v from 'valibot';
 import { assertSafeUrl, isSafeUrl, UnsafeUrlError } from './url-safety.js';
 import { htmlToMarkdown as localHtmlToMarkdown, looksLikeHtml, stripBase64Images } from './markdown.js';
 import type { AuthResolver } from '../providers/types.js';
@@ -77,6 +78,16 @@ export interface DefaultWebSearchProviderDeps {
 const DEFAULT_TIMEOUT_MS = 15_000;
 const DEFAULT_SEARCH_LIMIT = 5;
 const MAX_SEARCH_LIMIT = 20;
+const TavilyResponseSchema = v.object({
+  answer: v.optional(v.string()),
+  results: v.optional(v.array(v.object({
+    title: v.optional(v.string()),
+    url: v.optional(v.string()),
+    content: v.optional(v.string()),
+    published_date: v.optional(v.string()),
+  }))),
+});
+const WebSearchOptionsSchema = v.object({ limit: v.optional(v.number()) });
 /** Body cap before conversion — protects against multi-MB pages. */
 const MAX_FETCH_BYTES = 2_000_000;
 
@@ -150,10 +161,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
       const body = await safeText(res);
       throw new WebFetchError(`Tavily search failed (${res.status}): ${body.slice(0, 200)}`);
     }
-    const json = (await res.json()) as {
-      answer?: string;
-      results?: Array<{ title?: string; url?: string; content?: string; published_date?: string }>;
-    };
+    const json = v.parse(TavilyResponseSchema, await res.json());
     const results: WebSearchResult[] = (json.results ?? [])
       .filter((r) => r.url && isSafeUrl(r.url))
       .slice(0, limit)
@@ -250,10 +258,7 @@ export function createDefaultWebSearchProvider(deps: DefaultWebSearchProviderDep
  *  `web.search(query, { limit })` / `web.fetch(url)`, so agents can loop
  *  searches and fetch in parallel from one JS block. Shape is the shared
  *  `{ name, tools }` codemode contract both backends already inject. */
-export function createWebCodemodeProvider(provider: WebSearchProvider): {
-  name: 'web';
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-} {
+export function createWebCodemodeProvider(provider: WebSearchProvider) {
   return {
     name: 'web',
     tools: {
@@ -261,7 +266,8 @@ export function createWebCodemodeProvider(provider: WebSearchProvider): {
         description: 'web.search(query, { limit? }) → { results: [{ title, url, snippet, date, position }], answer?, source }',
         execute: async (...args: unknown[]) => {
           const query = String(args[0] ?? '');
-          const opts = (args[1] && typeof args[1] === 'object' ? args[1] : undefined) as { limit?: number } | undefined;
+          const parsedOpts = v.safeParse(WebSearchOptionsSchema, args[1]);
+          const opts = parsedOpts.success ? parsedOpts.output : undefined;
           return provider.search(query, opts);
         },
       },

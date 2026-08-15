@@ -34,7 +34,8 @@
  * 'false' to require manual promotion via the RPC instead.
  */
 
-import type { ModelMessage } from 'ai';
+import { modelMessageSchema, type ModelMessage } from 'ai';
+import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import { nowMs } from '../utils/date.js';
@@ -275,7 +276,7 @@ export function queueShadowTrial(
   },
 ): 'queued' | 'queue_full' {
   if (countQueuedShadowTrials(sql, args.pendingVersion) >= MAX_QUEUED_SHADOW_TRIALS) return 'queue_full';
-  sql`INSERT INTO scaffold_trial_queue (id, pending_version, task, current_output, context, queued_at)
+  void sql`INSERT INTO scaffold_trial_queue (id, pending_version, task, current_output, context, queued_at)
       VALUES (${`trial-${nanoid()}`}, ${args.pendingVersion}, ${args.task}, ${args.currentOutput},
               ${JSON.stringify(trimTrialContext(args.context))}, ${args.now ?? nowMs()})`;
   return 'queued';
@@ -306,8 +307,8 @@ export function listQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number)
  *  default loop, exactly as it does for a host that held no context. */
 function parseTrialContext(raw: string): ModelMessage[] {
   try {
-    const parsed: unknown = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed as ModelMessage[] : [];
+    const parsed = modelMessageSchema.array().safeParse(JSON.parse(raw));
+    return parsed.success ? parsed.data : [];
   } catch {
     return [];
   }
@@ -323,7 +324,7 @@ export function countQueuedShadowTrials(sql: SqlExecutor, pendingVersion: number
 
 /** Trial executed (or thrown away) — the queue row's job is done. */
 export function dropQueuedShadowTrial(sql: SqlExecutor, id: string): void {
-  sql`DELETE FROM scaffold_trial_queue WHERE id = ${id}`;
+  void sql`DELETE FROM scaffold_trial_queue WHERE id = ${id}`;
 }
 
 /** Discard every queued trial that is not for `keepVersion`. A trial is
@@ -331,8 +332,8 @@ export function dropQueuedShadowTrial(sql: SqlExecutor, id: string): void {
  *  back, running it would score a version no longer under trial. Pass null to
  *  clear the queue entirely. */
 export function purgeQueuedShadowTrials(sql: SqlExecutor, keepVersion: number | null): void {
-  if (keepVersion === null) sql`DELETE FROM scaffold_trial_queue`;
-  else sql`DELETE FROM scaffold_trial_queue WHERE pending_version != ${keepVersion}`;
+  if (keepVersion === null) void sql`DELETE FROM scaffold_trial_queue`;
+  else void sql`DELETE FROM scaffold_trial_queue WHERE pending_version != ${keepVersion}`;
 }
 
 /**
@@ -455,8 +456,10 @@ export async function readScaffoldVersion(
   version: number,
 ): Promise<string | null> {
   try {
-    const content = await rt.storage.vfs.readFile(`scaffold/agent.js.v${version}`, { encoding: 'utf8' });
-    return typeof content === 'string' ? content : new TextDecoder().decode(content);
+    return v.parse(v.string(), await rt.storage.vfs.readFile(
+      `${rt.identity.scaffold.path}.v${version}`,
+      { encoding: 'utf8' },
+    ));
   } catch {
     // No versioned backup — happens for v0 (the bootstrap writes the live
     // file but not a versioned backup). Fall back to live ONLY when the
@@ -497,7 +500,7 @@ export function recordShadowEvaluation(
     judge_rationale: args.judgeResult.rationale,
     evaluated_at: nowMs(),
   };
-  sql`INSERT INTO scaffold_evaluations
+  void sql`INSERT INTO scaffold_evaluations
     (id, current_version, pending_version, task, current_output, pending_output,
      current_score, pending_score, winner, judge_rationale, evaluated_at)
     VALUES (${row.id}, ${row.current_version}, ${row.pending_version},
@@ -512,10 +515,15 @@ export function recordShadowEvaluation(
  * accumulated trial results. Returns:
  *   { decision: 'promote' | 'rollback' | 'continue', winRate: number }
  */
+export interface PromotionDecision {
+  decision: 'promote' | 'rollback' | 'continue';
+  winRate: number;
+}
+
 export function decidePromotion(
   pending: PendingScaffold,
   config: ShadowConfig,
-): { decision: 'promote' | 'rollback' | 'continue'; winRate: number } {
+): PromotionDecision {
   const decisiveTrials = pending.pendingWins + pending.currentWins;
   if (decisiveTrials === 0) {
     // All ties so far carries no signal in either direction — keep observing,
@@ -586,9 +594,9 @@ export async function applyPromotionDecision(
       return { ...result, vetoReason: `Misevolution veto (${misevolution.criterionId}): ${misevolution.reason}` };
     }
     await rt.identity.scaffold.write(pendingCode);
-    sql`UPDATE scaffold_versions SET status = 'historical'
+    void sql`UPDATE scaffold_versions SET status = 'historical'
         WHERE status = 'current' AND version != ${pending.version}`;
-    sql`UPDATE scaffold_versions SET status = 'current'
+    void sql`UPDATE scaffold_versions SET status = 'current'
         WHERE version = ${pending.version}`;
     return { newCurrentVersion: pending.version, action: 'promote' };
   }
@@ -602,7 +610,7 @@ export async function applyPromotionDecision(
   if (currentCode != null) {
     await rt.identity.scaffold.write(currentCode);
   }
-  sql`UPDATE scaffold_versions SET status = 'rolled_back'
+  void sql`UPDATE scaffold_versions SET status = 'rolled_back'
       WHERE version = ${pending.version}`;
   return { newCurrentVersion: currentVersion, action: 'rollback' };
 }

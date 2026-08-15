@@ -201,9 +201,14 @@ describe('mission budget — the governed model-call seam', () => {
     governor.activate(['mission']);
     governor.debit(1);
     const llm = governor.govern(scriptedLLM('x'));
-    const err = await llm.complete('x').then(() => null, (e: unknown) => e);
-    expect(err).toBeInstanceOf(MissionBudgetExhausted);
-    expect((err as MissionBudgetExhausted).refusal.seam).toBe('model_call');
+    let caught: MissionBudgetExhausted | null = null;
+    try {
+      await llm.complete('x');
+    } catch (error) {
+      if (error instanceof MissionBudgetExhausted) caught = error;
+    }
+    expect(caught).toBeInstanceOf(MissionBudgetExhausted);
+    expect(caught?.refusal.seam).toBe('model_call');
   });
 });
 

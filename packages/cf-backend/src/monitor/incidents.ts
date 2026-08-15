@@ -19,6 +19,7 @@ import { argumentDigest, type SqlExec } from '@proteus/core';
 import { sendOwnerEmail } from '../email/outbound.js';
 import type { EmailOutbox } from '../email/outbox.js';
 import type { ProbeOutcome } from './probes.js';
+import * as v from 'valibot';
 
 /** The From identity of alert mail. A dot is not legal in a workspace name, so
  *  this address can never be confused for a workspace's mission inbox. */
@@ -42,6 +43,13 @@ interface IncidentRow {
   alerted_at: number | null;
   failures: number;
 }
+const IncidentRowSchema = v.object({
+  probe: v.string(),
+  detail: v.string(),
+  opened_at: v.number(),
+  alerted_at: v.nullable(v.number()),
+  failures: v.number(),
+});
 
 export interface MonitorRunResult {
   /** Probes failing at the end of this tick. */
@@ -127,22 +135,23 @@ export async function recordProbeRun(deps: MonitorDeps, outcomes: ProbeOutcome[]
   // the outbox; the ledger only decides what deserves an email.
   if (deps.email) await deps.outbox.reconcile(deps.email, deps.now);
 
-  return {
+  const result: MonitorRunResult = {
     failing: failing.map((o) => o.probe),
     alerting: unalerted.map((row) => row.probe),
     recovered: recovered.map((row) => row.probe),
     emails,
-    ...(!canEmail && (unalerted.length > 0 || announced.length > 0)
-      ? { skipped: 'email not configured' as const }
-      : {}),
   };
+  if (!canEmail && (unalerted.length > 0 || announced.length > 0)) {
+    result.skipped = 'email not configured';
+  }
+  return result;
 }
 
 export function listIncidents(sql: SqlExec): IncidentRow[] {
   ensureMonitorSchema(sql);
-  return sql.exec(
+  return v.parse(v.array(IncidentRowSchema), sql.exec(
     `SELECT probe, detail, opened_at, alerted_at, failures FROM monitor_incidents ORDER BY opened_at`,
-  ).toArray() as unknown as IncidentRow[];
+  ).toArray());
 }
 
 interface Notice { subject: string; text: string; key: string }
@@ -155,7 +164,7 @@ function openedNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
     ...rows.map((row) => `• ${row.probe}: ${row.detail}`),
     '',
     'What this means for a user right now:',
-    ...rows.map((row) => `• ${row.probe}: ${IMPACT[row.probe] ?? 'this check is part of the public surface.'}`),
+    ...rows.map((row) => `• ${row.probe}: ${IMPACT.get(row.probe) ?? 'this check is part of the public surface.'}`),
     '',
     'Usual cause: a deploy that did not go through scripts/deploy.sh, which builds the',
     'CLI source archive into dist/client/downloads and re-runs these same checks before',
@@ -189,11 +198,11 @@ function recoveredNotice(deps: MonitorDeps, rows: IncidentRow[]): Notice {
 
 /** What a user hits when this probe is red — the part that makes an alert
  *  worth reading at 2am. */
-const IMPACT: Record<string, string> = {
-  health: 'the API is down, or the worker and its assets are from different deploys.',
-  downloads: 'a new install and every `proteus update` fail on the checksum.',
-  login: 'nobody can sign in to the web app.',
-};
+const IMPACT = new Map([
+  ['health', 'the API is down, or the worker and its assets are from different deploys.'],
+  ['downloads', 'a new install and every `proteus update` fail on the checksum.'],
+  ['login', 'nobody can sign in to the web app.'],
+]);
 
 async function send(deps: MonitorDeps, notice: Notice): Promise<boolean> {
   return sendOwnerEmail({

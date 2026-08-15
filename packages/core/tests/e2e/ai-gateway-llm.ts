@@ -7,11 +7,10 @@
  * Required env vars:
  *   AI_GATEWAY_BASE_URL  — Workers AI base URL
  *   AI_GATEWAY_AUTH      — Authorization header value (Bearer ...)
- *   AI_GATEWAY_MODEL     — Model ID (default: @cf/moonshotai/kimi-k2.6)
+ *   AI_GATEWAY_MODEL     — Model ID (default: @cf/deepseek-ai/deepseek-v4-pro-0813)
  */
 
 import { createVercelAILLM } from '../../src/llm.js';
-import type { LLM } from '../../src/types/primitives.js';
 
 function getRequiredEnv(name: string): string {
   const value = process.env[name];
@@ -33,10 +32,10 @@ export function isE2EConfigured(): boolean {
  * Create LLM providers for E2E tests.
  * Reads credentials from environment variables.
  */
-export function loadAIGatewayProviders(): { primary: LLM; judge: LLM } {
+export function loadAIGatewayProviders() {
   const baseURL = getRequiredEnv('AI_GATEWAY_BASE_URL');
   const auth = getRequiredEnv('AI_GATEWAY_AUTH');
-  const model = process.env.AI_GATEWAY_MODEL ?? '@cf/moonshotai/kimi-k2.6';
+  const model = process.env.AI_GATEWAY_MODEL ?? '@cf/deepseek-ai/deepseek-v4-pro-0813';
 
   const config = {
     name: 'workers-ai',

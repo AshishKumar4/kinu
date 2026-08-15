@@ -37,6 +37,7 @@
  * Idempotent inits via CREATE TABLE IF NOT EXISTS.
  */
 
+import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../../types/primitives.js';
 import { nanoid } from '../../utils/nanoid.js';
 import { nowMs } from '../../utils/date.js';
@@ -47,6 +48,10 @@ import { DEFAULT_GEPA_BUDGET } from './types.js';
 import type {
   EvalInstance, GepaBudget, GepaCandidate, GepaResult, GepaIterationState,
 } from './types.js';
+
+const GepaRunStatusSchema = v.picklist(['running', 'completed', 'aborted']);
+const ScoreMapSchema = v.record(v.string(), v.number());
+const FeedbackMapSchema = v.record(v.string(), v.string());
 
 export function initGepaTables(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS gepa_runs (
@@ -105,7 +110,7 @@ export function startGepaRun(
   const runId = `gepa-${nanoid()}`;
   const startedAt = nowMs();
   const budgetJson = JSON.stringify({ ...DEFAULT_GEPA_BUDGET, ...opts.budget });
-  sql`INSERT INTO gepa_runs
+  void sql`INSERT INTO gepa_runs
         (run_id, target, target_ref, started_at, ended_at, status, stop_reason,
          winner_id, metric_calls, iterations, budget_json)
         VALUES (${runId}, ${opts.target}, ${opts.targetRef ?? null}, ${startedAt},
@@ -125,7 +130,7 @@ export function persistGepaCandidate(
 ): void {
   const scoresJson = JSON.stringify(Object.fromEntries(args.candidate.scores));
   const feedbackJson = JSON.stringify(Object.fromEntries(args.candidate.feedback));
-  sql`INSERT INTO gepa_candidates
+  void sql`INSERT INTO gepa_candidates
         (id, run_id, parent_id, source, scores_json, feedback_json,
          aggregate, created_at, iteration, accepted)
         VALUES (${args.candidate.id}, ${args.runId}, ${args.candidate.parentId},
@@ -145,12 +150,12 @@ export function persistGepaParetoSnapshot(
     instanceIds: ReadonlyArray<string>;
   },
 ): void {
-  sql`DELETE FROM gepa_pareto_membership WHERE run_id = ${args.runId}`;
+  void sql`DELETE FROM gepa_pareto_membership WHERE run_id = ${args.runId}`;
   const { perInstanceBest } = computeParetoFront(args.pool, args.instanceIds);
   for (const [instanceId, bests] of perInstanceBest.entries()) {
     for (const c of bests) {
       const score = c.scores.get(instanceId) ?? 0;
-      sql`INSERT OR REPLACE INTO gepa_pareto_membership
+      void sql`INSERT OR REPLACE INTO gepa_pareto_membership
             (run_id, instance_id, candidate_id, score)
             VALUES (${args.runId}, ${instanceId}, ${c.id}, ${score})`;
     }
@@ -162,7 +167,7 @@ export function updateGepaRunCounters(
   sql: SqlExecutor,
   args: { runId: string; metricCalls: number; iterations: number },
 ): void {
-  sql`UPDATE gepa_runs SET metric_calls = ${args.metricCalls},
+  void sql`UPDATE gepa_runs SET metric_calls = ${args.metricCalls},
                             iterations   = ${args.iterations}
         WHERE run_id = ${args.runId}`;
 }
@@ -179,7 +184,7 @@ export function finishGepaRun(
     iterations: number;
   },
 ): void {
-  sql`UPDATE gepa_runs
+  void sql`UPDATE gepa_runs
         SET ended_at     = ${nowMs()},
             status       = ${args.status},
             stop_reason  = ${args.stopReason},
@@ -221,7 +226,7 @@ export function listGepaRuns(sql: SqlExecutor, limit = 20): GepaRunSummary[] {
     targetRef: r.target_ref,
     startedAt: r.started_at,
     endedAt: r.ended_at,
-    status: r.status as GepaRunSummary['status'],
+    status: v.parse(GepaRunStatusSchema, r.status),
     stopReason: r.stop_reason,
     winnerId: r.winner_id,
     metricCalls: r.metric_calls,
@@ -245,8 +250,8 @@ export function loadGepaCandidates(
                           WHERE run_id = ${runId}
                           ORDER BY iteration ASC, created_at ASC`;
   return rows.map(r => {
-    const scoresObj = JSON.parse(r.scores_json) as Record<string, number>;
-    const feedbackObj = JSON.parse(r.feedback_json) as Record<string, string>;
+    const scoresObj = v.parse(ScoreMapSchema, JSON.parse(r.scores_json));
+    const feedbackObj = v.parse(FeedbackMapSchema, JSON.parse(r.feedback_json));
     return {
       id: r.id,
       parentId: r.parent_id,

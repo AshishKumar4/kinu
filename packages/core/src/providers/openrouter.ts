@@ -7,6 +7,7 @@
 // request time via the AuthResolver.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
+import * as v from 'valibot';
 import type { ModelProvider, ModelInfo } from './types.js';
 import { authCacheKey, createAuthedFetch } from './util.js';
 
@@ -18,6 +19,15 @@ export interface OpenRouterOptions {
   appTitle?: string;
   catalogTtlMs?: number;
 }
+
+const OpenRouterCatalogSchema = v.object({
+  data: v.optional(v.array(v.object({
+    id: v.string(),
+    name: v.optional(v.string()),
+    context_length: v.optional(v.number()),
+    architecture: v.optional(v.object({ modality: v.optional(v.string()) })),
+  }))),
+});
 
 export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelProvider {
   const ttl = opts.catalogTtlMs ?? 5 * 60_000;
@@ -45,11 +55,9 @@ export function createOpenRouterProvider(opts: OpenRouterOptions = {}): ModelPro
       try {
         const res = await fetchFn(`${OPENROUTER_BASE_URL}/models`, { headers: auth.headers });
         if (!res.ok) return [];
-        const body = await res.json() as { data?: Array<{
-          id: string; name?: string; context_length?: number;
-          architecture?: { modality?: string };
-        }> };
-        const models: ModelInfo[] = (body.data ?? []).map(m => ({
+        const body = v.safeParse(OpenRouterCatalogSchema, await res.json());
+        if (!body.success) return [];
+        const models: ModelInfo[] = (body.output.data ?? []).map(m => ({
           id: m.id,
           label: m.name ?? m.id,
           contextWindow: m.context_length,

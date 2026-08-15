@@ -65,21 +65,21 @@ const FILTERS: Array<{ id: JournalFilter; label: string }> = [
  * do and where to do it is the whole of its detail line, and printing the
  * destination twice on one card reads as a stutter.
  */
-const PENDING_HOME: Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }> = {
+const PENDING_HOME = {
   release_approval: { surface: "Releases", cta: "decide in Releases" },
   scaffold_version: { surface: "Agent", cta: "decide in Agent → Evolution" },
   failed_job: { surface: null, cta: "retry or dismiss it in the journal below" },
   unseen_changes: { surface: null, cta: null },
   curriculum_task: { surface: null, cta: "decide in Supervise" },
-};
+} satisfies Record<Exclude<PendingActionKind, "deferred_action">, { surface: SurfaceKind | null; cta: string | null }>;
 
-const PENDING_ICON: Record<Exclude<PendingActionKind, "deferred_action">, typeof ClockIcon> = {
+const PENDING_ICON = {
   release_approval: RocketLaunchIcon,
   scaffold_version: GitBranchIcon,
   failed_job: WarningCircleIcon,
   unseen_changes: SparkleIcon,
   curriculum_task: PackageIcon,
-};
+} satisfies Record<Exclude<PendingActionKind, "deferred_action">, typeof ClockIcon>;
 
 export interface WorkTabProps {
   /** Polled by the hook so the tab badge and this queue are one read. */
@@ -288,7 +288,8 @@ function ParkedCommands({ actions, rpc }: { actions: PendingAction[]; rpc: Rpc }
       await rpc("decideDeferredApprovals", [[...chosen], decision]);
       setSelected(null);
     } catch (e) {
-      setError(`Could not record the decision: ${(e as Error).message}`);
+      const message = e instanceof Error ? e.message : String(e);
+      setError(`Could not record the decision: ${message}`);
     } finally {
       setBusy(false);
     }

@@ -5,35 +5,20 @@
 // real MemoryStore (bun:sqlite) and a fake VectorStore that records calls.
 import { describe, test, expect, setSystemTime } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createWorkspaceBundle } from '../../core/tests/helpers.js';
+import { createWorkspaceBundle, makeSql } from '../../core/tests/helpers.js';
 import { MemoryStore } from '@proteus/agent-utils/memory';
 import {
   createAgentConfigStore, createCloudflareVectorStore, VECTOR_BACKEND_COOLDOWN_MS,
   type Embedder, type VectorizeIndex, type VectorStore, type VectorMemoryChunk,
 } from '@proteus/core';
 import { adaptMemory, backfillMemoryVectors } from '../src/memory-sync';
-import type { SqlExecutor } from '@proteus/core';
-
-function createSql() {
-  const db = new Database(':memory:');
-  createdDb = db;
-  return (<T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] => {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
-    const stmt = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(bound as never[])) as T[];
-    stmt.run(...(bound as never[]));
-    return [];
-  }) as SqlExecutor;
-}
-
-let createdDb: Database | null = null;
 
 function createStore() {
-  const sql = createSql();
-  const store = new MemoryStore(createWorkspaceBundle(createdDb!).vfs, sql);
+  const database = new Database(':memory:');
+  const sql = makeSql(database);
+  const store = new MemoryStore(createWorkspaceBundle(database).vfs, sql);
   store.ensureSchema();
-  sql`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
+  void sql`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`;
   const config = createAgentConfigStore(sql);
   return { sql, store, config };
 }

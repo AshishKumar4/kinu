@@ -10,37 +10,50 @@
 // These pin both: the thrown message carries the provider's words, and the
 // turn does not write the payload to the console behind our back.
 import { describe, test, expect, spyOn } from 'bun:test';
-import type { ModelStreamPart } from '@proteus/test-utils';
+import { APICallError, type LanguageModelV3StreamPart } from '@ai-sdk/provider';
+import type { LanguageModel } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
 import { describeProviderError, runChat } from '../src/index.ts';
 
+interface CircularProviderError {
+  code: undefined;
+  self?: CircularProviderError;
+}
+
 /** OpenAI-shaped in-band stream failure: 200 OK, then an error object. */
-function inBandErrorModel(error: unknown) {
-  return {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
+function inBandErrorModel<ErrorPayload>(error: ErrorPayload): LanguageModel {
+  return new MockLanguageModelV3({
     doStream: async () => ({
-      stream: new ReadableStream<ModelStreamPart>({
+      stream: new ReadableStream<LanguageModelV3StreamPart>({
         start(c) {
           c.enqueue({ type: 'stream-start', warnings: [] });
-          c.enqueue({ type: 'error', error } as ModelStreamPart);
+          c.enqueue({ type: 'error', error });
           c.close();
         },
       }),
       response: { headers: {} },
     }),
-  };
+  });
 }
 
-async function runToCompletion(model: unknown): Promise<void> {
+async function runToCompletion(model: LanguageModel): Promise<void> {
   for await (const _ of runChat({
-    model: model as never,
+    model,
     system: 'sys',
     history: [{ role: 'user', content: 'go' }],
-    tools: {} as never,
+    tools: {},
     maxSteps: 1,
   })) { /* drain */ }
+}
+
+async function rejectionOf(action: () => Promise<void>): Promise<Error> {
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof Error) return error;
+    throw new Error(`expected Error rejection, received ${String(error)}`);
+  }
+  throw new Error('expected action to reject');
 }
 
 describe('describeProviderError', () => {
@@ -67,13 +80,24 @@ describe('describeProviderError', () => {
     expect(describeProviderError(new TypeError(''))).toBe('TypeError');
   });
 
+  test('keeps an AI SDK response body when its generic Error message carries no detail', () => {
+    const error = new APICallError({
+      message: 'AI_APICallError',
+      url: 'https://example.invalid/v1/chat/completions',
+      requestBodyValues: {},
+      responseBody: '{"error":"models.dev provider was not found"}',
+    });
+
+    expect(describeProviderError(error)).toContain('models.dev provider was not found');
+  });
+
   test('falls back to the JSON, never to [object Object]', () => {
     expect(describeProviderError({ status: 402, body: 'nope' })).toBe('{"status":402,"body":"nope"}');
     expect(describeProviderError({})).toBe('{}');
   });
 
   test('names the fields when JSON cannot serialize the payload', () => {
-    const circular: Record<string, unknown> = { code: undefined };
+    const circular: CircularProviderError = { code: undefined };
     circular.self = circular;
 
     const described = describeProviderError(circular);
@@ -91,16 +115,15 @@ describe('runChat provider failures', () => {
       code: 'billing_not_active',
     });
 
-    const thrown = await runToCompletion(model).then(() => null, (err: unknown) => err);
+    const thrown = await rejectionOf(() => runToCompletion(model));
 
-    expect(thrown).toBeInstanceOf(Error);
-    expect((thrown as Error).message).toContain('Your account is not active.');
-    expect((thrown as Error).message).not.toContain('[object Object]');
+    expect(thrown.message).toContain('Your account is not active.');
+    expect(thrown.message).not.toContain('[object Object]');
   });
 
   test('an Error payload is rethrown verbatim, so callers can still classify it', async () => {
     const cause = new Error('context length exceeded');
-    const thrown = await runToCompletion(inBandErrorModel(cause)).then(() => null, (err: unknown) => err);
+    const thrown = await rejectionOf(() => runToCompletion(inBandErrorModel(cause)));
 
     expect(thrown).toBe(cause);
   });

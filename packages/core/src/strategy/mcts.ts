@@ -9,11 +9,12 @@
 // The host injects the operator's stored MCTS overrides
 // (AgentConfigStore.getMctsOverrides) alongside the session; an explicit
 // caller budget (ctx.budget.maxIterations) still wins.
+import * as v from 'valibot';
 import { runMCTS } from '../mcts/engine.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
+import { strategyOption, type ExplorationStrategy, type StrategyContext, type StrategyResult } from './types.js';
 import type { SessionWriter } from '../mcts/record-node.js';
-import type { MctsSearchStore } from '../mcts/search-store.js';
+import { MctsSearchStore } from '../mcts/search-store.js';
 import type { MCTSProgressEvent } from '../types/mcts.js';
 
 interface MCTSStrategyOptions {
@@ -37,23 +38,47 @@ interface MCTSStrategyOptions {
   onProgress?: (event: MCTSProgressEvent) => void;
 }
 
+const SessionWriterSchema = v.custom<SessionWriter>((input) => v.safeParse(v.object({
+  appendMessage: v.function(),
+  getHistory: v.function(),
+}), input).success);
+const ProgressSinkSchema = v.custom<(event: MCTSProgressEvent) => void>(
+  (input) => v.safeParse(v.function(), input).success,
+);
+const MCTSStrategyOptionsSchema: v.GenericSchema<Partial<MCTSStrategyOptions>> = v.object({
+  budget: v.optional(v.number()),
+  branches: v.optional(v.number()),
+  maxDepth: v.optional(v.number()),
+  explorationWeight: v.optional(v.number()),
+  pruneThreshold: v.optional(v.number()),
+  minAcceptableScore: v.optional(v.number()),
+  maxCostUSD: v.optional(v.number()),
+  judgeSamples: v.optional(v.number()),
+  maxEvalLLMCalls: v.optional(v.number()),
+  takesEpsilon: v.optional(v.number()),
+  session: v.optional(SessionWriterSchema),
+  search: v.optional(v.instance(MctsSearchStore)),
+  onProgress: v.optional(ProgressSinkSchema),
+});
+
 export function createMCTSStrategy(): ExplorationStrategy {
   return {
     id: 'mcts',
     label: 'MCTS (parallel tree search)',
     description:
       'Monte Carlo Tree Search: compare competing approaches when the right path ' +
-      'is unclear. Branches propose text + code but cannot run tools mid-exploration; ' +
-      'proposed code IS executed during scoring, so runnable proposals score honestly.',
+      'is unclear. Build branches are execution-grounded; Plan branches remain read-only ' +
+      'and compare planning alternatives without executing proposals or evolving state.',
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
-      const o = (ctx.options?.mcts ?? {}) as Partial<MCTSStrategyOptions>;
+      const o = v.parse(MCTSStrategyOptionsSchema, strategyOption(ctx.options, 'mcts') ?? {});
       if (!o.session) {
         throw new Error("MCTS strategy requires options.mcts.session (SessionWriter).");
       }
       const defaults = DEFAULT_CONFIG.mcts;
       const budget = ctx.budget?.maxIterations ?? o.budget ?? defaults.budget;
       const result = await runMCTS(ctx.rt, o.session, ctx.task, {
+        mode: ctx.mode,
         budget,
         branches: o.branches ?? defaults.branches,
         maxDepth: o.maxDepth ?? defaults.maxDepth,
@@ -65,13 +90,13 @@ export function createMCTSStrategy(): ExplorationStrategy {
         maxEvalLLMCalls: o.maxEvalLLMCalls ?? defaults.maxEvalLLMCalls,
         takesEpsilon: o.takesEpsilon ?? defaults.takesEpsilon,
         signal: ctx.signal,
-        ...(o.search ? { search: o.search } : {}),
-        ...(o.onProgress ? { onProgress: o.onProgress } : {}),
+        search: o.search,
+        onProgress: o.onProgress,
         // Branch rollouts resolve their own model in another process, so the
         // governed `ctx.rt.llm` never sees them; the engine debits each rollout
         // from the report that comes back with it and stops opening expansions
         // once the ledger is spent.
-        ...(ctx.mission ? { mission: ctx.mission } : {}),
+        mission: ctx.mission,
       });
       // The winner's trajectory is the agent-readable answer.
       const text = result.trajectory.map(m => `${m.role}: ${m.content}`).join('\n');
@@ -84,7 +109,7 @@ export function createMCTSStrategy(): ExplorationStrategy {
           iterations: budget,
           // Every rollout was debited as it returned (mcts/engine.ts), so the
           // fork seam must record the spawn and nothing else.
-          ...(ctx.mission ? { selfMetered: true } : {}),
+          selfMetered: ctx.mission ? true : undefined,
         },
         trace: `MCTS converged=${result.converged} winnerValue=${result.winnerValue.toFixed(3)}`,
       };

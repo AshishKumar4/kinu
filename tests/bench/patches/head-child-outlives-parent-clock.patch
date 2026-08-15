@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/heads/types.ts b/packages/core/src/heads/types.ts
-index c2c289b..ef1631d 100644
 --- a/packages/core/src/heads/types.ts
 +++ b/packages/core/src/heads/types.ts
-@@ -277,7 +277,7 @@ export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()):
+@@ -322,7 +322,7 @@
+   }
+   return {
      maxDepth: parent.maxDepth - 1,
-     ...(parent.maxWallClockMs === undefined
-       ? {}
--      : { maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)) }),
-+      : { maxWallClockMs: parent.maxWallClockMs }),
+-    maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)),
++    maxWallClockMs: parent.maxWallClockMs,
      spawnedAt: now,
    };
  }

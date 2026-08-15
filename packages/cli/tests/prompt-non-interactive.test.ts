@@ -93,7 +93,7 @@ describe("TUI without a terminal", () => {
       expect(() => requireInteractiveTerminal()).toThrow(/interactive terminal/);
     } finally {
       if (stdinDesc) Object.defineProperty(process.stdin, "isTTY", stdinDesc);
-      else delete (process.stdin as { isTTY?: boolean }).isTTY;
+      else Reflect.deleteProperty(process.stdin, "isTTY");
     }
   });
 });

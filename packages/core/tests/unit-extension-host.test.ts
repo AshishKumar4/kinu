@@ -7,6 +7,9 @@
 //      and emit ordering across multiple extensions.
 import { describe, test, expect } from 'bun:test';
 import { tool, type ModelMessage } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
+import * as v from 'valibot';
 import { z } from 'zod';
 import {
   ExtensionHost,
@@ -22,37 +25,46 @@ import {
 function toolThenTextModel() {
   let step = 0;
   let toolNames: string[] = [];
-  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
-  const model = {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (options: { tools?: Array<{ name: string }> }) => {
+  const model = new MockLanguageModelV3({
+    doStream: async (options) => {
       step += 1;
       if (step === 1) toolNames = (options.tools ?? []).map((t) => t.name);
       const stream = step === 1
-        ? new ReadableStream({
+        ? new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: 'tc1', toolName: 'ping', input: '{}' });
-              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              c.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
               c.close();
             },
           })
-        : new ReadableStream({
+        : new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'text-start', id: 't1' });
               c.enqueue({ type: 'text-delta', id: 't1', delta: 'all done' });
               c.enqueue({ type: 'text-end', id: 't1' });
-              c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              c.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
               c.close();
             },
           });
       return { stream, response: { headers: {} } };
     },
-  };
+  });
   return { model, toolNames: () => toolNames };
 }
 
@@ -77,7 +89,7 @@ describe('extension seam through runChat', () => {
 
     const events: ChatEvent[] = [];
     for await (const ev of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: {},
@@ -104,7 +116,7 @@ describe('extension seam through runChat', () => {
     const { model } = toolThenTextModel();
     const texts: string[] = [];
     for await (const ev of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: { ping: tool({ description: 'ping', inputSchema: z.object({}), execute: async () => 'pong' }) },
@@ -118,38 +130,59 @@ describe('extension seam through runChat', () => {
 
 /** A one-step text model that captures the prompt it was handed. */
 function promptCapturingModel() {
-  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
-  let prompt: Array<{ role: string; content: unknown }> = [];
-  const model = {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (options: { prompt: Array<{ role: string; content: unknown }> }) => {
-      prompt = options.prompt;
+  let prompt: PromptMessage[] = [];
+  const model = new MockLanguageModelV3({
+    doStream: async (options) => {
+      prompt = parsePrompt({ value: options.prompt });
       return {
-        stream: new ReadableStream({
+        stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             c.enqueue({ type: 'text-start', id: 't1' });
             c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
             c.enqueue({ type: 'text-end', id: 't1' });
-            c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            c.enqueue({
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: undefined },
+              usage: {
+                inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 1, text: 1, reasoning: undefined },
+              },
+            });
             c.close();
           },
         }),
         response: { headers: {} },
       };
     },
-  };
+  });
   return { model, prompt: () => prompt };
 }
 
-function userTexts(prompt: Array<{ role: string; content: unknown }>): string[] {
+const ContentPartsSchema = v.array(v.object({
+  type: v.string(),
+  text: v.optional(v.string()),
+}));
+const PromptSchema = v.array(v.object({
+  role: v.string(),
+  content: v.union([v.string(), ContentPartsSchema]),
+}));
+type PromptMessage = v.InferOutput<typeof PromptSchema>[number];
+
+function parsePrompt(input: { value: unknown }): PromptMessage[] {
+  return v.parse(PromptSchema, input.value);
+}
+
+function userTexts(prompt: PromptMessage[]): string[] {
   return prompt
     .filter((m) => m.role === 'user')
-    .map((m) => (m.content as Array<{ type: string; text?: string }>)
-      .filter((p) => p.type === 'text').map((p) => p.text ?? '').join(''));
+    .map((m) => {
+      const text = v.safeParse(v.string(), m.content);
+      return text.success
+        ? text.output
+        : v.parse(ContentPartsSchema, m.content)
+          .filter((part) => part.type === 'text').map((part) => part.text ?? '').join('');
+    });
 }
 
 describe('transformContext through runChat', () => {
@@ -166,7 +199,7 @@ describe('transformContext through runChat', () => {
     };
 
     for await (const _ of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [
         { role: 'user', content: 'old-1' },
@@ -190,7 +223,7 @@ describe('transformContext through runChat', () => {
     let sawTokens: number | undefined;
     const stepTokens: Array<[number | undefined, number | undefined]> = [];
     for await (const ev of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: {},
@@ -220,12 +253,12 @@ describe('transformContext through runChat', () => {
     for (const transformTrigger of [undefined, 'force' as const]) {
       const { model } = promptCapturingModel();
       for await (const _ of runChat({
-        model: model as never,
+        model,
         system: 'sys',
         history: [{ role: 'user', content: 'go' }],
         tools: {},
         maxSteps: 1,
-        ...(transformTrigger ? { transformTrigger } : {}),
+        transformTrigger,
         extensions: new ExtensionHost().register(observer),
       })) { /* drain */ }
     }
@@ -236,7 +269,7 @@ describe('transformContext through runChat', () => {
     const { model, prompt } = promptCapturingModel();
     let doneText = '';
     for await (const ev of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       tools: {},
@@ -268,10 +301,12 @@ describe('composePrepareStep (the shared step pipeline)', () => {
     expect(out?.messages.map((m) => m.content)).toEqual(['a', 'b', 'steered']);
     // The marker rides the injected tail message — proof the markers were
     // applied AFTER the extension rewrite.
-    const tail = out!.messages[out!.messages.length - 1] as ModelMessage & {
-      providerOptions?: { anthropic?: { cacheControl?: unknown } };
-    };
-    expect(tail.providerOptions?.anthropic?.cacheControl).toEqual({ type: 'ephemeral' });
+    const tail = v.parse(v.object({
+      providerOptions: v.object({
+        anthropic: v.object({ cacheControl: v.object({ type: v.literal('ephemeral') }) }),
+      }),
+    }), out?.messages.at(-1));
+    expect(tail.providerOptions.anthropic.cacheControl).toEqual({ type: 'ephemeral' });
   });
 
   test('per-step system override rides the plan (Think TurnConfig is string-only)', () => {

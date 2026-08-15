@@ -4,7 +4,6 @@ import { generateText } from 'ai';
 import {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
   workspaceTitlePrompt,
-  createWorkspace,
   createAgentConfigStore,
   fallbackWorkspaceIdentity,
   initWorkspaceSchema,
@@ -13,6 +12,7 @@ import {
   type ReasoningEffort,
   type SuggestedWorkspaceIdentity,
 } from '@proteus/core';
+import { createWorkspace } from '@proteus/core/identity';
 import { makeWorkspaceSchemaSql } from '@proteus/cli-backend';
 import {
   agentDbPath,
@@ -109,13 +109,14 @@ export async function createCloudAgentFromMission(
         auth: input.auth,
         generate: options.generate,
       });
-  return options.create({
+  const createInput: CreateCloudAgentInput = {
     name: identity.name,
     displayName: identity.displayName,
     purpose: input.purpose,
-    ...(input.model ? { model: input.model } : {}),
-    ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
-  });
+  };
+  if (input.model) createInput.model = input.model;
+  if (input.reasoningEffort) createInput.reasoningEffort = input.reasoningEffort;
+  return options.create(createInput);
 }
 
 export function isCloudAuthConfigured(): boolean {

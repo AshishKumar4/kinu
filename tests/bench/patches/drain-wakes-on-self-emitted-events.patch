@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/events/hub/drain.ts b/packages/core/src/events/hub/drain.ts
-index e0b35bc..4c14b7e 100644
 --- a/packages/core/src/events/hub/drain.ts
 +++ b/packages/core/src/events/hub/drain.ts
-@@ -25,7 +25,7 @@ export interface DrainBatch {
+@@ -50,7 +50,7 @@
  /** Externally-triggered pending events → one drain batch, or null if there are
   *  none (the agent's own self-emitted/internal events never wake a new turn). */
  export function buildDrainBatch(events: ProteusEvent[]): DrainBatch | null {
--  const drainable = events.filter((e) => e.ingress !== 'self_emit' && e.variant !== 'internal');
-+  const drainable = events.filter((e) => e.ingress !== 'self_emit' || e.variant !== 'internal');
-   if (drainable.length === 0) return null;
-   const lines = drainable.map((e) => {
-     const r = renderForLLM(e);
+-  const pending = events.filter((e) => e.ingress !== 'self_emit' && e.variant !== 'internal');
++  const pending = events.filter((e) => e.ingress !== 'self_emit' || e.variant !== 'internal');
+   if (pending.length === 0) return null;
+   // A delegated Plan event can never share a turn with Build or neutral work.
+   // Select the oldest event's homogeneous mode group; the post-turn drain

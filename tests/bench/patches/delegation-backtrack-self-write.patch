@@ -1,10 +1,9 @@
 diff --git a/packages/core/src/evolution/delegation-features.ts b/packages/core/src/evolution/delegation-features.ts
-index f2eacaf..6a05cd6 100644
 --- a/packages/core/src/evolution/delegation-features.ts
 +++ b/packages/core/src/evolution/delegation-features.ts
-@@ -149,8 +149,8 @@ function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
+@@ -152,8 +152,8 @@
    for (const call of calls) {
-     const text = stringLeaves(call.args);
+     const text = stringLeaves(decodeJsonValue({ value: call.args }));
      const revisited = pathsMatching(text, REVISIT_PATTERNS);
 -    if ([...revisited].some((path) => written.has(path))) backtracks += 1;
      for (const path of pathsMatching(text, WRITE_PATTERNS)) written.add(path);

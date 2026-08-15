@@ -3,9 +3,10 @@
  */
 
 export {
-  createWorkspace, nextWorkspaceGeneration, workspacePath, WORKSPACE_ROOT,
+  createWorkspace, nextWorkspaceGeneration,
   type WorkspaceBundle, type WorkspaceOptions, type WorkspaceVFS,
 } from './nimbus-workspace.js';
+export { workspacePath, WORKSPACE_ROOT } from './workspace-path.js';
 export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
   type VfsError, type VfsErrorCode,

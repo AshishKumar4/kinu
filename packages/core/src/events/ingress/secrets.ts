@@ -7,6 +7,7 @@
  * are separate queries, and only the ingress path makes the second.
  */
 
+import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives.js';
 import type { SecretStore } from './webhook.js';
 
@@ -15,14 +16,17 @@ export interface WebhookSecretStore extends SecretStore {
   put(secretId: string, triggerId: string, secret: string, now: number): void;
 }
 
+const SecretRowSchema = v.object({ secret: v.string() });
+
 export function createWebhookSecretStore(sql: SqlExec): WebhookSecretStore {
   return {
     async get(secretId) {
       try {
-        const rows = sql.exec(
+        const row = sql.exec(
           `SELECT secret FROM webhook_secrets WHERE secret_id = ?`, secretId,
-        ).toArray() as Array<{ secret: string }>;
-        return rows[0]?.secret ?? null;
+        ).toArray()[0];
+        const parsed = v.safeParse(SecretRowSchema, row);
+        return parsed.success ? parsed.output.secret : null;
       } catch {
         // No webhook has ever been registered here, so the table does not
         // exist — indistinguishable, to a delivery, from a revoked secret.

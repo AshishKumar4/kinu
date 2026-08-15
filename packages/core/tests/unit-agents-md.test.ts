@@ -1,7 +1,7 @@
 // Behavior tests for the AGENTS.md prompt block — one renderer, both backends
 // feed it their discovered files (root-most first, nearest last).
 import { describe, test, expect } from 'bun:test';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createMemoryVfs, createTestRuntime } from '@proteus/test-utils';
 import {
   buildSystemPromptSync, collectWorkspaceAgentsMd, renderAgentsMdSection,
 } from '../src/index.ts';
@@ -81,82 +81,88 @@ describe('buildSystemPromptSync — agentsMd option', () => {
   });
 });
 
-function fakeVfs(files: Record<string, string>): VFS {
-  return {
-    readFile: async (path: string) => {
-      if (path in files) return files[path]!;
-      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
-    },
-  } as unknown as VFS;
+interface FakeVfs {
+  vfs: VFS;
+  reads: string[];
 }
 
-/** Only `getStatus().active` matters now — the sandbox file is read through
- *  the composite VFS, never the provider's tools. */
-function fakeSandbox(opts: { active: boolean }): ExecutorProvider {
+function fakeVfs(files: Readonly<Record<string, string>>): FakeVfs {
+  const memory = createMemoryVfs();
+  for (const [path, content] of Object.entries(files)) memory.files.set(path, content);
+  const reads: string[] = [];
+  return {
+    vfs: {
+      ...memory.vfs,
+      readFile: async (path, opts) => {
+        reads.push(path);
+        return memory.vfs.readFile(path, opts);
+      },
+    },
+    reads,
+  };
+}
+
+function fakeSandbox(opts: { active: boolean; files?: VFS }): ExecutorProvider {
   const status: ExecutorStatus = {
     configured: true, available: true, active: opts.active,
     status: opts.active ? 'active' : 'idle',
   };
-  return {
+  const provider: ExecutorProvider = {
     name: 'sandbox', kind: 'sandbox', capabilities: new Set(),
+    files: opts.files,
     isAvailable: () => true,
     getStatus: () => status,
     connect: async () => {}, disconnect: async () => {},
     tools: {},
-  } as unknown as ExecutorProvider;
+  };
+  return provider;
 }
 
 describe('collectWorkspaceAgentsMd — cloud discovery', () => {
-  test('reads the subordinate parent workspace between local defaults and sandbox rules', async () => {
+  test('reads canonical and active sandbox instructions from their own file planes', async () => {
+    const workspace = fakeVfs({
+      'AGENTS.md': 'workspace defaults',
+      '/workspace/AGENTS.md': 'must not be treated as a parent mount',
+      '/sandbox/workspace/AGENTS.md': 'must not be treated as sandbox bytes',
+    });
+    const sandbox = fakeVfs({ '/workspace/AGENTS.md': 'sandbox project rules' });
     const files = await collectWorkspaceAgentsMd(
-      fakeVfs({
-        'AGENTS.md': 'subordinate defaults',
-        '/workspace/AGENTS.md': 'parent workspace rules',
-        '/sandbox/workspace/AGENTS.md': 'sandbox project rules',
-      }),
-      fakeSandbox({ active: true }),
-    );
-    expect(files.map((f) => f.content)).toEqual([
-      'subordinate defaults',
-      'parent workspace rules',
-      'sandbox project rules',
-    ]);
-    expect(files[1]!.path).toContain('parent workspace');
-  });
-
-  test('reads the VFS root file and the active sandbox workspace, nearest last', async () => {
-    const files = await collectWorkspaceAgentsMd(
-      fakeVfs({
-        'AGENTS.md': 'workspace defaults',
-        '/sandbox/workspace/AGENTS.md': 'sandbox project rules',
-      }),
-      fakeSandbox({ active: true }),
+      workspace.vfs,
+      fakeSandbox({ active: true, files: sandbox.vfs }),
     );
     expect(files.map((f) => f.content)).toEqual(['workspace defaults', 'sandbox project rules']);
-    expect(files[0]!.path).toContain('agent workspace');
-    expect(files[1]!.path).toContain('sandbox');
+    expect(files.map((f) => f.path)).toEqual([
+      'AGENTS.md (workspace)',
+      '/workspace/AGENTS.md (sandbox)',
+    ]);
+    expect(workspace.reads).toEqual(['AGENTS.md']);
+    expect(sandbox.reads).toEqual(['/workspace/AGENTS.md']);
   });
 
-  test('never touches an inactive sandbox mount, even when its file exists', async () => {
+  test('never touches an inactive sandbox file plane', async () => {
+    const workspace = fakeVfs({});
+    const sandbox = fakeVfs({ '/workspace/AGENTS.md': 'should be ignored' });
     const files = await collectWorkspaceAgentsMd(
-      fakeVfs({ '/sandbox/workspace/AGENTS.md': 'should be ignored' }),
-      fakeSandbox({ active: false }),
+      workspace.vfs,
+      fakeSandbox({ active: false, files: sandbox.vfs }),
     );
     expect(files).toEqual([]);
+    expect(workspace.reads).toEqual(['AGENTS.md']);
+    expect(sandbox.reads).toEqual([]);
   });
 
   test('a missing or unreadable sandbox file falls back to defaults', async () => {
-    // No /sandbox entry → the composite read throws; the tool-string parsing
-    // that once let 'read error: …' masquerade as content is gone entirely.
+    const workspace = fakeVfs({ 'AGENTS.md': 'defaults' });
+    const sandbox = fakeVfs({});
     const files = await collectWorkspaceAgentsMd(
-      fakeVfs({ 'AGENTS.md': 'defaults' }),
-      fakeSandbox({ active: true }),
+      workspace.vfs,
+      fakeSandbox({ active: true, files: sandbox.vfs }),
     );
     expect(files.map((f) => f.content)).toEqual(['defaults']);
   });
 
   test('works with no sandbox provider at all', async () => {
-    const files = await collectWorkspaceAgentsMd(fakeVfs({ 'AGENTS.md': 'defaults' }));
+    const files = await collectWorkspaceAgentsMd(fakeVfs({ 'AGENTS.md': 'defaults' }).vfs);
     expect(files.map((f) => f.content)).toEqual(['defaults']);
   });
 });

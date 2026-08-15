@@ -25,11 +25,17 @@ import { useTheme, toggleTheme } from "../hooks/use-theme";
 import { CreateWorkspaceModal } from "./CreateWorkspaceModal";
 import { ModeToggle } from "./mode-toggle";
 import { Modal } from "./ui/Modal";
+import * as v from "valibot";
 
 /** Live per-workspace activity, bridged from the mounted WorkspacePage socket
  *  via a window event (only the open workspace has a live socket, so the roster
  *  reflects status for workspaces visited this session). */
 interface WorkspaceActivity { running: boolean; unseenChangelog: number; }
+const WorkspaceActivityEventSchema = v.object({
+  name: v.string(),
+  running: v.boolean(),
+  unseenChangelog: v.number(),
+});
 
 // Route families in App.tsx that mount a live useProteus/useAgent socket for
 // :agentId. Deleting that agent must first navigate away from ALL of them —
@@ -133,7 +139,10 @@ export default function Sidebar() {
 
   const refreshWorkspaces = useCallback(async () => {
     try { setWorkspaces(await listWorkspaces()); setListError(false); }
-    catch (err) { console.warn('[sidebar] listWorkspaces:', (err as Error).message); setListError(true); }
+    catch (err) {
+      console.warn('[sidebar] listWorkspaces:', err instanceof Error ? err.message : String(err));
+      setListError(true);
+    }
   }, []);
 
   useEffect(() => {
@@ -144,7 +153,10 @@ export default function Sidebar() {
   // Reflect the open workspace's live status on its roster row.
   useEffect(() => {
     const h = (e: Event) => {
-      const { name, running, unseenChangelog } = (e as CustomEvent<{ name: string } & WorkspaceActivity>).detail;
+      if (!(e instanceof CustomEvent)) return;
+      const parsed = v.safeParse(WorkspaceActivityEventSchema, e.detail);
+      if (!parsed.success) return;
+      const { name, running, unseenChangelog } = parsed.output;
       setActivity((prev) => ({ ...prev, [name]: { running, unseenChangelog } }));
     };
     window.addEventListener("proteus:workspace-activity", h);
@@ -163,7 +175,9 @@ export default function Sidebar() {
 
   useEffect(() => {
     const onClick = (e: MouseEvent) => {
-      if (userMenuRef.current && !userMenuRef.current.contains(e.target as Node)) setShowUserMenu(false);
+      if (userMenuRef.current && e.target instanceof Node && !userMenuRef.current.contains(e.target)) {
+        setShowUserMenu(false);
+      }
     };
     document.addEventListener('click', onClick);
     return () => document.removeEventListener('click', onClick);
@@ -183,7 +197,7 @@ export default function Sidebar() {
       await refreshWorkspaces();
       setDeleteTarget(null);
     } catch (err) {
-      setDeleteError((err as Error).message);
+      setDeleteError(err instanceof Error ? err.message : String(err));
     } finally {
       setDeleteBusy(false);
     }

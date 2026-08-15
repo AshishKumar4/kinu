@@ -5,13 +5,12 @@ import type { ChatResponseResult } from '@cloudflare/think';
 import {
   EvolutionEngine,
   bootstrapScaffold,
-  createParentExecutor, createParentWorkspaceVfs,
   initWorkspaceSchema,
-  seedSoul,
+  renderSoulMarkdown,
   snapshotCompletedTurn,
   type CompletedTurn,
-  type ParentWorkspaceHandle, type ParentRpcWrite,
   type SubordinateHandoff,
+  type WorkMode,
   type SubordinateReportStatus,
   // Read models — the same control-plane implementations the orchestrator uses.
   cancelCurrentWork, getStoredModelSpec, setModel, type CancelWorkOutcome,
@@ -46,6 +45,12 @@ export interface SetSubordinateIdentityInput {
   capabilityToken?: string;
 }
 
+function warnSubordinateFailure(label: string) {
+  return <Thrown,>(thrown: Thrown): void => {
+    console.warn(label, thrown);
+  };
+}
+
 export class SubordinateAgent extends ActorAgent {
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
@@ -75,6 +80,22 @@ export class SubordinateAgent extends ActorAgent {
     return parentWorkspace;
   }
 
+  protected scaffoldPath(): string {
+    return `.proteus/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`;
+  }
+
+  protected shellId(): string { return `subordinate:${this.name}`; }
+
+  protected async loadSoulText(): Promise<string> {
+    const identity = this.identity.read();
+    return identity
+      ? renderSoulMarkdown({
+        name: identity.displayName,
+        mission: `Role: ${identity.role}\n\n${identity.mission}`,
+      })
+      : '';
+  }
+
   protected get engine(): EvolutionEngine {
     if (!this._engine) {
       this._engine = new EvolutionEngine(this.rt, {
@@ -86,6 +107,7 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   protected actorToolDeps(): ActorToolDeps {
+    if (!this.lastUserTurnIsProgrammatic()) return {};
     return {
       report: {
         report: async (input) => {
@@ -97,11 +119,11 @@ export class SubordinateAgent extends ActorAgent {
     };
   }
 
-  /** `report.*` — the same ReportToolDeps the native `report` tool holds, so
-   *  a codemode-scripted report and a direct tool call reach the SAME
-   *  sendReport path. Unconditional here: every subordinate has one. */
+  /** `report.*` mirrors the native report surface only on a parent-assigned
+   * turn. Owner-driven subordinate chats are private to that chat. */
   protected extraCodemodeProviders(): CodemodeProvider[] {
-    return [createReportCodemodeProvider(() => this.actorToolDeps().report!)];
+    const report = this.actorToolDeps().report;
+    return report ? [createReportCodemodeProvider(() => report)] : [];
   }
 
   protected isClientRpcMethodDenied(method: string): boolean {
@@ -114,9 +136,7 @@ export class SubordinateAgent extends ActorAgent {
    *  against no assignment and stops at the parent's ingress. */
   protected notifyOwner(subject: string, body: string): void {
     void this.sendReport('progress', `${subject}\n\n${body}`, 'turn_end')
-      .catch((error: unknown) => {
-        console.warn('[subordinate] parent notification failed:', error);
-      });
+      .catch(warnSubordinateFailure('[subordinate] parent notification failed:'));
   }
 
   private ensureSchema(): void {
@@ -131,22 +151,6 @@ export class SubordinateAgent extends ActorAgent {
     // setSubordinateIdentity (declared per-root in core/conformance/manifest.ts).
     this.identity.ensureSchema();
     this._schemaReady = true;
-  }
-
-  private async registerParentWorkspace(): Promise<void> {
-    const parent = await this.parentAgent(OrchestratorAgent);
-    const handle: ParentWorkspaceHandle = {
-      read: (path: string) => parent.readWorkspaceFile(path),
-      write: (input: ParentRpcWrite) => parent.writeWorkspaceFile(input),
-      list: (path: string) => parent.listWorkspaceFiles(path),
-      stat: (path: string) => parent.statWorkspaceFile(path),
-      delete: (path: string) => parent.deleteWorkspaceFile(path),
-      exec: (command: string) => parent.execWorkspaceCommand(command),
-    };
-    // An executor named `parent`, not a directory of this subordinate's own
-    // filesystem: the parent workspace is another Durable Object reached over
-    // async RPC, exactly like the sandbox and the user's machine.
-    this.rt.executionRouter?.register(createParentExecutor({ handle }));
   }
 
   @callable()
@@ -172,10 +176,6 @@ export class SubordinateAgent extends ActorAgent {
       parentWorkspace: bootstrap.parentWorkspace,
       ownerUserId: bootstrap.ownerUserId,
     });
-    await seedSoul(this.rt.storage.vfs, this.boundSql, {
-      name: input.displayName,
-      mission: `Role: ${input.role}\n\n${input.mission}`,
-    });
     this.config.setDisplayName(input.displayName);
     if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);
     const model = input.model ?? bootstrap.model;
@@ -183,7 +183,6 @@ export class SubordinateAgent extends ActorAgent {
     this._cachedSoulText = null;
     this._cachedSystemPrompt = null;
     this.invalidateModelCaches();
-    await this.registerParentWorkspace();
     if (!(await this.rt.identity.scaffold.exists())) await bootstrapScaffold(this.rt);
     return { ok: true };
   }
@@ -191,7 +190,6 @@ export class SubordinateAgent extends ActorAgent {
   async onStart(): Promise<void> {
     this.ensureSchema();
     if (this.identity.read()) {
-      await this.registerParentWorkspace();
       if (!(await this.rt.identity.scaffold.exists())) await bootstrapScaffold(this.rt);
     }
   }
@@ -200,29 +198,31 @@ export class SubordinateAgent extends ActorAgent {
    * Admit work from the parent and tell it what happened to it.
    *
    * The delivery branch is decided here and not guessed by the caller: this DO
-   * is the only place that knows whether a turn is live right now, and the
-   * drain it schedules will splice into that turn rather than queue behind it
-   * (BackendHost.turnInFlight). Reading `_inFlight` before admission
-   * keeps the answer about the turn the batch will actually reach.
+   * is the only place that knows whether a turn is live right now. Delegated
+   * work keeps its trusted Plan/Build mode and therefore queues as its own turn
+   * when the subordinate is busy.
    */
   async enqueueSubordinateTask(input: {
     kind: 'task' | 'message';
     body: string;
+    mode: WorkMode;
     deliverable?: string;
     deadlineHint?: string;
     inheritedContext?: string;
   }): Promise<{ id: string; admitted: boolean } & SubordinateHandoff> {
     this.ensureSchema();
     const busy = this._inFlight;
-    const result = admitSubordinateTask(this.eventLog, {
+    const admission: Parameters<typeof admitSubordinateTask>[1] = {
       fromWorkspace: this.workspaceName(),
       kind: input.kind,
       body: input.body,
-      ...(input.deliverable ? { deliverable: input.deliverable } : {}),
-      ...(input.deadlineHint ? { deadlineHint: input.deadlineHint } : {}),
-      ...(input.inheritedContext ? { inheritedContext: input.inheritedContext } : {}),
+      mode: input.mode,
       now: Date.now(),
-    });
+    };
+    if (input.deliverable) admission.deliverable = input.deliverable;
+    if (input.deadlineHint) admission.deadlineHint = input.deadlineHint;
+    if (input.inheritedContext) admission.inheritedContext = input.inheritedContext;
+    const result = admitSubordinateTask(this.eventLog, admission);
     if (result.admitted) this.orch.scheduleDrain();
     return {
       ...result,
@@ -266,7 +266,7 @@ export class SubordinateAgent extends ActorAgent {
   }
 
   @callable()
-  async setModel(spec: string): Promise<{ ok: true; spec: string }> {
+  async setModel(spec: string) {
     this.ensureSchema();
     return setModel({
       config: this.config,
@@ -289,7 +289,7 @@ export class SubordinateAgent extends ActorAgent {
     status: SubordinateReportStatus,
     content: string,
     origin: SubordinateReportOrigin,
-  ): Promise<unknown> {
+  ): Promise<{ id: string; admitted: boolean }> {
     const identity = this.identity.read();
     if (!identity) throw new Error('Subordinate identity is not initialized.');
     const parent = this.env.OrchestratorAgent.get(
@@ -300,10 +300,12 @@ export class SubordinateAgent extends ActorAgent {
       status,
       content,
       origin,
+      mode: this.turnPromptMode() === 'plan' ? 'plan' : 'build',
     });
   }
 
   async onChatResponse(result: ChatResponseResult): Promise<void> {
+    const turnMode = this.turnPromptMode();
     const { programmaticUserMessage, errorText, completed } = this.settleTurnEvents(result);
     this.recordTurnTelemetry(result, { errorText, completed, programmaticUserMessage });
     if (!completed) {
@@ -331,19 +333,19 @@ export class SubordinateAgent extends ActorAgent {
     // and whether its answer is the parent's to hear.
     const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();
 
-    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, {
+    const completedTurn: Parameters<typeof snapshotCompletedTurn>[1] = {
       userMessage: userText,
       assistantResponse: assistantText,
-      ...(result.message.id ? { turnId: result.message.id } : {}),
       sessionId: 'default',
       origin: ownerDriven ? 'user' : 'programmatic',
-    });
-    this.settleCompletedTurn(turn);
+    };
+    if (result.message.id) completedTurn.turnId = result.message.id;
+    const turn: CompletedTurn = snapshotCompletedTurn(this.acc, completedTurn);
+    if (turnMode !== 'plan') this.settleCompletedTurn(turn);
 
     if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText })) {
-      void this.sendReport('progress', assistantText, 'turn_end').catch((error: unknown) => {
-        console.warn('[subordinate] turn-end report failed:', error);
-      });
+      void this.sendReport('progress', assistantText, 'turn_end')
+        .catch(warnSubordinateFailure('[subordinate] turn-end report failed:'));
     }
     this.reportedThisTurn = false;
     void this.orch.drainPendingEvents();

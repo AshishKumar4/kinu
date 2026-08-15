@@ -33,10 +33,11 @@
  */
 
 import { appendFileSync, chmodSync, writeFileSync } from 'node:fs';
-import type {
-  BackgroundJob, ChatHistoryEntry, EvolutionChangelogView, HeadRunView,
-  MctsSearchRunSummary, RunEvent, RunListEntry, ScaffoldVersionView,
+import {
+  decodeJsonValue, JsonObjectSchema, JsonValueSchema,
+  type JsonObject, type JsonValue,
 } from '@proteus/core';
+import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target.js';
 import { requireAuthConfig } from '../config.js';
 import { callAgentRpc } from '../cloud-api.js';
@@ -59,83 +60,179 @@ export interface DebugOpts {
  *  them — root_id may be null on legacy rows written before the column
  *  existed (see mcts/schemas.ts), which is why grouping keys on it verbatim
  *  rather than assuming every row belongs to a known search. */
-interface RawMctsNode {
+interface RawMctsNode extends JsonObject {
   id: string; parent_id: string | null; root_id: string | null; depth: number;
   visits: number; value: number; status: string; action: string; created_at: number;
 }
+
+interface DebugRun extends JsonObject {
+  runId: string;
+}
+
+interface DebugRunEvent {
+  eventIndex: number;
+  runId: string;
+  type: string;
+  timestamp: string;
+  caused_by?: string;
+  userMessage?: string;
+  name?: string;
+  args?: JsonObject;
+  result?: JsonValue;
+  error?: string;
+  message?: string;
+  tokenUsage?: { input: number; output: number; cached?: number };
+  reason?: string;
+}
+
+interface DebugHead extends JsonObject {
+  status: string;
+}
+
+interface DebugHeadRun extends JsonObject {
+  rootId: string;
+  task: string;
+  status: string;
+  spawnedAt: number;
+  heads: DebugHead[];
+}
+
+interface DebugMctsSearchRun extends JsonObject {
+  rootId: string;
+  task: string;
+  status: string;
+  iteration: number;
+  budget: number;
+  updatedAt: number;
+}
+
+interface DebugBackgroundJob extends JsonObject {
+  id: string;
+  kind: string;
+  label: string | null;
+  status: string;
+  error: string | null;
+  createdAt: number;
+  settledAt: number | null;
+}
+
+interface DebugChangelogView {
+  entries: JsonObject[];
+  unseenCount: number;
+  seenAt?: number;
+}
+
+const JsonRowsSchema = v.array(JsonObjectSchema);
+const DebugRunSchema: v.GenericSchema<DebugRun> = v.objectWithRest({ runId: v.string() }, JsonValueSchema);
+const DebugRunEventSchema: v.GenericSchema<DebugRunEvent> = v.objectWithRest({
+  eventIndex: v.number(), runId: v.string(), type: v.string(), timestamp: v.string(),
+  caused_by: v.optional(v.string()), userMessage: v.optional(v.string()), name: v.optional(v.string()),
+  args: v.optional(JsonObjectSchema), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
+  message: v.optional(v.string()),
+  tokenUsage: v.optional(v.object({ input: v.number(), output: v.number(), cached: v.optional(v.number()) })),
+  reason: v.optional(v.string()),
+}, JsonValueSchema);
+const DebugHeadSchema: v.GenericSchema<DebugHead> = v.objectWithRest({ status: v.string() }, JsonValueSchema);
+const DebugHeadRunSchema: v.GenericSchema<DebugHeadRun> = v.objectWithRest({
+  rootId: v.string(), task: v.string(), status: v.string(), spawnedAt: v.number(), heads: v.array(DebugHeadSchema),
+}, JsonValueSchema);
+const DebugMctsSearchRunSchema: v.GenericSchema<DebugMctsSearchRun> = v.objectWithRest({
+  rootId: v.string(), task: v.string(), status: v.string(), iteration: v.number(), budget: v.number(), updatedAt: v.number(),
+}, JsonValueSchema);
+const RawMctsNodeSchema: v.GenericSchema<RawMctsNode> = v.objectWithRest({
+  id: v.string(), parent_id: v.nullable(v.string()), root_id: v.nullable(v.string()), depth: v.number(),
+  visits: v.number(), value: v.number(), status: v.string(), action: v.string(), created_at: v.number(),
+}, JsonValueSchema);
+const DebugBackgroundJobSchema: v.GenericSchema<DebugBackgroundJob> = v.objectWithRest({
+  id: v.string(), kind: v.string(), label: v.nullable(v.string()), status: v.string(),
+  error: v.nullable(v.string()), createdAt: v.number(), settledAt: v.nullable(v.number()),
+}, JsonValueSchema);
+const DebugChangelogViewSchema: v.GenericSchema<DebugChangelogView> = v.object({
+  entries: JsonRowsSchema, unseenCount: v.number(), seenAt: v.optional(v.number()),
+});
+const WorkspaceSnapshotSchema = v.object({ status: JsonObjectSchema });
 
 /** The one fetch surface `writeBundle` walks — implemented once per backend,
  *  never duplicated by the writer itself. Every method already exists as a
  *  read model somewhere in the codebase; this interface just names the width
  *  a full debug bundle needs from it. */
 interface DebugSource {
-  identity(): Promise<Record<string, unknown>>;
-  messages(limit: number): Promise<ChatHistoryEntry[]>;
-  runs(limit: number): Promise<RunListEntry[]>;
-  runEvents(runId: string, since: number, limit: number): Promise<RunEvent[]>;
-  headRuns(limit: number): Promise<HeadRunView[]>;
-  mctsSearchRuns(limit: number): Promise<MctsSearchRunSummary[]>;
+  identity(): Promise<JsonObject>;
+  messages(limit: number): Promise<JsonObject[]>;
+  runs(limit: number): Promise<DebugRun[]>;
+  runEvents(runId: string, since: number, limit: number): Promise<DebugRunEvent[]>;
+  headRuns(limit: number): Promise<DebugHeadRun[]>;
+  mctsSearchRuns(limit: number): Promise<DebugMctsSearchRun[]>;
   mctsNodes(): Promise<RawMctsNode[]>;
-  backgroundJobs(limit: number): Promise<BackgroundJob[]>;
-  changelog(limit: number): Promise<EvolutionChangelogView>;
-  scaffoldVersions(limit: number): Promise<ScaffoldVersionView[]>;
-  gepaRuns(limit: number): Promise<unknown[]>;
-  releaseBoard(limit: number): Promise<unknown>;
-  triggers(): Promise<unknown>;
-  toolDescriptions(): Promise<unknown>;
-  facts(limit: number): Promise<unknown[]>;
+  backgroundJobs(limit: number): Promise<DebugBackgroundJob[]>;
+  changelog(limit: number): Promise<DebugChangelogView>;
+  scaffoldVersions(limit: number): Promise<JsonObject[]>;
+  gepaRuns(limit: number): Promise<JsonObject[]>;
+  releaseBoard(limit: number): Promise<JsonValue>;
+  triggers(): Promise<JsonValue>;
+  toolDescriptions(): Promise<JsonValue>;
+  facts(limit: number): Promise<JsonObject[]>;
   memoryContent(): Promise<string>;
   /** Best-effort telemetry rollup (percentiles, remaining budgets, the
    *  activity log). Cloud-only today — `getActivitySnapshot` has no local
    *  peer; local sources return null and the section is omitted rather than
    *  faked. `run_events`' own `context_budget`/`turn_steering` rows (fetched
    *  per-run above) carry the same telemetry at full fidelity either way. */
-  activitySnapshot(): Promise<Record<string, unknown> | null>;
+  activitySnapshot(): Promise<JsonObject | null>;
 }
 
 function cloudDebugSource(cloudName: string, auth: { origin: string; token: string }): DebugSource {
-  const rpc = <T>(method: string, args: unknown[] = []) => callAgentRpc<T>(auth.origin, auth.token, cloudName, method, args);
+  const rpc = <T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []) =>
+    callAgentRpc(auth.origin, auth.token, cloudName, method, schema, args);
   return {
-    identity: () => rpc('getWorkspaceSnapshot').then((s) => (s as { status?: unknown }).status as Record<string, unknown> ?? {}),
-    messages: (limit) => rpc('getChatHistory', [limit]),
-    runs: (limit) => rpc('listRuns', [limit]),
-    runEvents: (runId, since, limit) => rpc('getRunEvents', [runId, { since, limit }]),
-    headRuns: (limit) => rpc('getHeadRuns', [limit]),
-    mctsSearchRuns: (limit) => rpc('getMctsSearchRuns', [limit]),
-    mctsNodes: () => rpc('getMctsTree'),
-    backgroundJobs: (limit) => rpc('listBackgroundJobs', [limit]),
-    changelog: (limit) => rpc('getEvolutionChangelog', [{ limit }]),
-    scaffoldVersions: (limit) => rpc('listScaffoldVersions', [limit]),
-    gepaRuns: (limit) => rpc('getGepaRuns', [limit]),
-    releaseBoard: (limit) => rpc('getReleaseBoard', [limit]),
-    triggers: () => rpc('listTriggers'),
-    toolDescriptions: () => rpc('getToolDescriptions'),
-    facts: (limit) => rpc('getFacts', [limit]),
-    memoryContent: () => rpc('getMemoryContent'),
-    activitySnapshot: () => rpc('getActivitySnapshot', [{}]),
+    identity: () => rpc('getWorkspaceSnapshot', WorkspaceSnapshotSchema).then((snapshot) => snapshot.status),
+    messages: (limit) => rpc('getChatHistory', JsonRowsSchema, [limit]),
+    runs: (limit) => rpc('listRuns', v.array(DebugRunSchema), [limit]),
+    runEvents: (runId, since, limit) => rpc('getRunEvents', v.array(DebugRunEventSchema), [runId, { since, limit }]),
+    headRuns: (limit) => rpc('getHeadRuns', v.array(DebugHeadRunSchema), [limit]),
+    mctsSearchRuns: (limit) => rpc('getMctsSearchRuns', v.array(DebugMctsSearchRunSchema), [limit]),
+    mctsNodes: () => rpc('getMctsTree', v.array(RawMctsNodeSchema)),
+    backgroundJobs: (limit) => rpc('listBackgroundJobs', v.array(DebugBackgroundJobSchema), [limit]),
+    changelog: (limit) => rpc('getEvolutionChangelog', DebugChangelogViewSchema, [{ limit }]),
+    scaffoldVersions: (limit) => rpc('listScaffoldVersions', JsonRowsSchema, [limit]),
+    gepaRuns: (limit) => rpc('getGepaRuns', JsonRowsSchema, [limit]),
+    releaseBoard: (limit) => rpc('getReleaseBoard', JsonValueSchema, [limit]),
+    triggers: () => rpc('listTriggers', JsonValueSchema),
+    toolDescriptions: () => rpc('getToolDescriptions', JsonValueSchema),
+    facts: (limit) => rpc('getFacts', JsonRowsSchema, [limit]),
+    memoryContent: () => rpc('getMemoryContent', v.string()),
+    activitySnapshot: () => rpc('getActivitySnapshot', v.nullable(JsonObjectSchema), [{}]),
   };
 }
 
 function localDebugSource(localName: string): DebugSource {
   return {
-    identity: async () => getLocalAgentInfo(localName) as unknown as Record<string, unknown>,
-    messages: async (limit) => getLocalChatHistory(localName, limit),
-    runs: async (limit) => listLocalRuns(localName, limit),
-    runEvents: async (runId, since, limit) => listLocalRunEvents(localName, runId, { since, limit }),
-    headRuns: async (limit) => listLocalHeads(localName, limit) as HeadRunView[],
-    mctsSearchRuns: async (limit) => listLocalMctsSearchRuns(localName, limit),
-    mctsNodes: async () => listLocalMcts(localName) as unknown as RawMctsNode[],
-    backgroundJobs: async (limit) => listLocalJobs(localName, limit) as BackgroundJob[],
-    changelog: async (limit) => getLocalChangelog(localName, limit),
-    scaffoldVersions: async (limit) => getLocalScaffoldVersions(localName, limit),
-    gepaRuns: async (limit) => listLocalGepaRuns(localName, limit),
-    releaseBoard: async (limit) => getLocalReleaseBoard(localName, limit),
-    triggers: async () => listLocalTriggers(localName),
-    toolDescriptions: async () => getLocalToolSurface(localName),
-    facts: async (limit) => getLocalFacts(localName, limit),
+    identity: async () => parseLocal(JsonObjectSchema, { value: getLocalAgentInfo(localName) }),
+    messages: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalChatHistory(localName, limit) }),
+    runs: async (limit) => parseLocal(v.array(DebugRunSchema), { value: listLocalRuns(localName, limit) }),
+    runEvents: async (runId, since, limit) => parseLocal(
+      v.array(DebugRunEventSchema), { value: listLocalRunEvents(localName, runId, { since, limit }) },
+    ),
+    headRuns: async (limit) => parseLocal(v.array(DebugHeadRunSchema), { value: listLocalHeads(localName, limit) }),
+    mctsSearchRuns: async (limit) => parseLocal(
+      v.array(DebugMctsSearchRunSchema), { value: listLocalMctsSearchRuns(localName, limit) },
+    ),
+    mctsNodes: async () => parseLocal(v.array(RawMctsNodeSchema), { value: listLocalMcts(localName) }),
+    backgroundJobs: async (limit) => parseLocal(v.array(DebugBackgroundJobSchema), { value: listLocalJobs(localName, limit) }),
+    changelog: async (limit) => parseLocal(DebugChangelogViewSchema, { value: getLocalChangelog(localName, limit) }),
+    scaffoldVersions: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalScaffoldVersions(localName, limit) }),
+    gepaRuns: async (limit) => parseLocal(JsonRowsSchema, { value: listLocalGepaRuns(localName, limit) }),
+    releaseBoard: async (limit) => decodeJsonValue({ value: getLocalReleaseBoard(localName, limit) }),
+    triggers: async () => decodeJsonValue({ value: listLocalTriggers(localName) }),
+    toolDescriptions: async () => decodeJsonValue({ value: getLocalToolSurface(localName) }),
+    facts: async (limit) => parseLocal(JsonRowsSchema, { value: getLocalFacts(localName, limit) }),
     memoryContent: async () => readLocalMemory(localName),
     activitySnapshot: async () => null,
   };
+}
+
+function parseLocal<T>(schema: v.GenericSchema<T>, input: { value: unknown }): T {
+  return v.parse(schema, decodeJsonValue(input));
 }
 
 // ── Redaction ────────────────────────────────────────────────────
@@ -167,20 +264,23 @@ export function redactSecrets(text: string): string {
 
 /** Deep-walk a value, redacting every string leaf. Applied once, at the
  *  serialization boundary, so no fetch path can forget it. */
-function redactDeep<T>(value: T): T {
-  if (typeof value === 'string') return redactSecrets(value) as unknown as T;
-  if (Array.isArray(value)) return value.map(redactDeep) as unknown as T;
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) out[k] = redactDeep(v);
-    return out as T;
-  }
-  return value;
+function redactDeep(value: JsonValue): JsonValue {
+  const string = v.safeParse(v.string(), value);
+  if (string.success) return redactSecrets(string.output);
+  const array = v.safeParse(v.array(JsonValueSchema), value);
+  if (array.success) return array.output.map(redactDeep);
+  const object = v.safeParse(JsonObjectSchema, value);
+  if (!object.success) return value;
+  const redacted: JsonObject = {};
+  for (const [key, child] of Object.entries(object.output)) redacted[key] = redactDeep(child);
+  return redacted;
 }
 
 // ── Bundle records ──────────────────────────────────────────────
 
-type BundleRecord = { t: string; [key: string]: unknown };
+interface BundleRecord extends JsonObject {
+  t: string;
+}
 
 interface BundleWriter {
   write(record: BundleRecord): void;
@@ -241,12 +341,12 @@ interface MctsSearchSummary {
 }
 
 interface DebugSummary {
-  identity: Record<string, unknown>;
+  identity: JsonObject;
   messageCount: number;
   runs: RunStats[];
-  headRuns: HeadRunView[];
+  headRuns: DebugHeadRun[];
   mctsSearches: MctsSearchSummary[];
-  backgroundJobs: BackgroundJob[];
+  backgroundJobs: DebugBackgroundJob[];
   changelogUnseen: number;
   scaffoldVersionCount: number;
   gepaRunCount: number;
@@ -259,7 +359,7 @@ interface DebugSummary {
  *  agent poll a background job instead of ending its turn" — every
  *  `agent.jobResult` tool call that happened AFTER this run's own events
  *  already contain a `background: true` handle for that job. */
-function summarizeRun(runId: string, events: RunEvent[]): RunStats {
+function summarizeRun(runId: string, events: DebugRunEvent[]): RunStats {
   const stats: RunStats = {
     runId, eventCount: events.length, toolCalls: 0, errors: [], causedBy: null, userMessage: null,
     startedAt: null, endedAt: null, endReason: null, tokensIn: 0, tokensOut: 0,
@@ -274,19 +374,20 @@ function summarizeRun(runId: string, events: RunEvent[]): RunStats {
       stats.startedAt = ts;
     } else if (e.type === 'tool_call_start') {
       stats.toolCalls++;
-      if (e.name === 'agent' && isRecord(e.args) && e.args.jobResult !== undefined) {
-        const jobId = String((e.args as { jobResult?: unknown }).jobResult ?? '');
+      if (e.name === 'agent' && e.args?.jobResult !== undefined) {
+        const jobId = String(e.args.jobResult ?? '');
         if (handledJobIds.has(jobId)) stats.jobPollsAfterHandle++;
       }
     } else if (e.type === 'tool_call_end') {
-      const result = e.result;
-      if (isRecord(result) && result.background === true && typeof result.jobId === 'string') {
-        stats.backgroundHandles.push(result.jobId);
-        handledJobIds.add(result.jobId);
+      const result = v.safeParse(JsonObjectSchema, e.result);
+      const jobId = result.success ? v.safeParse(v.string(), result.output.jobId) : null;
+      if (result.success && result.output.background === true && jobId?.success) {
+        stats.backgroundHandles.push(jobId.output);
+        handledJobIds.add(jobId.output);
       }
-      if (e.error) stats.errors.push(`tool_call_end(${e.name}): ${e.error}`);
+      if (e.error) stats.errors.push(`tool_call_end(${e.name ?? 'tool'}): ${e.error}`);
     } else if (e.type === 'error') {
-      stats.errors.push(e.message);
+      if (e.message) stats.errors.push(e.message);
     } else if (e.type === 'turn_end' && e.tokenUsage) {
       stats.tokensIn += e.tokenUsage.input;
       stats.tokensOut += e.tokenUsage.output;
@@ -299,17 +400,13 @@ function summarizeRun(runId: string, events: RunEvent[]): RunStats {
   return stats;
 }
 
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null;
-}
-
 /** Group the flat, unscoped node list `getMctsTree` returns into one summary
  *  per root_id — the fix for the client bug in use-proteus.ts's `buildTree`,
  *  which picks whichever depth-0 node sorts first (oldest by created_at) and
  *  silently drops every node not reachable from it. Nodes with a null
  *  root_id (legacy rows) are grouped under the sentinel key so they are
  *  reported rather than dropped. */
-function summarizeMctsSearches(nodes: RawMctsNode[], searches: MctsSearchRunSummary[]): MctsSearchSummary[] {
+function summarizeMctsSearches(nodes: RawMctsNode[], searches: DebugMctsSearchRun[]): MctsSearchSummary[] {
   const byRoot = new Map<string, RawMctsNode[]>();
   for (const n of nodes) {
     const key = n.root_id ?? '(legacy: no root_id)';
@@ -381,7 +478,7 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
     const runs = await safe(source.runs(runLimit), []);
     for (const run of runs) {
       writer.write({ t: 'run', ...run });
-      const events: RunEvent[] = [];
+      const events: DebugRunEvent[] = [];
       let since = 0;
       for (;;) {
         const page = await safe(source.runEvents(run.runId, since, DEFAULT_EVENT_PAGE), []);
@@ -422,20 +519,20 @@ export async function debugCommand(name: string, opts: DebugOpts = {}): Promise<
 
     const gepaRuns = await safe(source.gepaRuns(sectionLimit), []);
     summary.gepaRunCount = gepaRuns.length;
-    for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...asRecord(g) });
+    for (const g of gepaRuns) writer.write({ t: 'gepa_run', ...g });
 
     const releaseBoard = await safe(source.releaseBoard(sectionLimit), null);
-    if (releaseBoard) writer.write({ t: 'release_board', ...asRecord(releaseBoard) });
+    if (releaseBoard) writer.write({ t: 'release_board', ...asRecord({ value: releaseBoard }) });
 
     const triggers = await safe(source.triggers(), null);
-    if (triggers) writer.write({ t: 'triggers', ...asRecord(triggers) });
+    if (triggers) writer.write({ t: 'triggers', ...asRecord({ value: triggers }) });
 
     const tools = await safe(source.toolDescriptions(), null);
-    if (tools) writer.write({ t: 'tools', ...asRecord(tools) });
+    if (tools) writer.write({ t: 'tools', ...asRecord({ value: tools }) });
 
     const facts = await safe(source.facts(sectionLimit), []);
     summary.factCount = facts.length;
-    for (const f of facts) writer.write({ t: 'fact', ...asRecord(f) });
+    for (const f of facts) writer.write({ t: 'fact', ...f });
 
     const memory = await safe(source.memoryContent(), '');
     if (memory) writer.write({ t: 'memory', content: memory });
@@ -459,8 +556,9 @@ async function safe<T>(p: Promise<T>, fallback: T): Promise<T> {
   try { return await p; } catch { return fallback; }
 }
 
-function asRecord(v: unknown): Record<string, unknown> {
-  return isRecord(v) ? v : { value: v };
+function asRecord(input: { value: JsonValue }): JsonObject {
+  const parsed = v.safeParse(JsonObjectSchema, input.value);
+  return parsed.success ? parsed.output : { value: input.value };
 }
 
 /** Human-readable elapsed duration ("45s", "12m", "3h 4m", "2d 1h") — the
@@ -487,16 +585,29 @@ function parsePositiveInt(value: string, label: string): number {
 }
 
 function printJsonSummary(summary: DebugSummary, outPath: string): void {
-  console.log(JSON.stringify(redactDeep({ bundle: outPath, ...summary }), null, 2));
+  console.log(JSON.stringify(redactDeep(decodeJsonValue({ value: { bundle: outPath, ...summary } })), null, 2));
+}
+
+function stringField(record: JsonObject, key: string): string | undefined {
+  const parsed = v.safeParse(v.string(), record[key]);
+  return parsed.success ? parsed.output : undefined;
+}
+
+function numberField(record: JsonObject, key: string): number | undefined {
+  const parsed = v.safeParse(v.number(), record[key]);
+  return parsed.success ? parsed.output : undefined;
 }
 
 function printHumanSummary(name: string, mode: string, summary: DebugSummary, outPath: string): void {
   console.log(`\n${ACCENT(name)} ${DIM(`(${mode})`)} — bundle: ${DIM(outPath)}\n`);
 
-  const id = summary.identity as { displayName?: string; purpose?: string; scaffoldVersion?: number; model?: string };
-  if (id.displayName || id.purpose) {
-    console.log(`${DIM('identity')}  ${id.displayName ?? name} — ${DIM(String(id.purpose ?? '').slice(0, 80))}`);
-    console.log(`${DIM('scaffold')}  v${id.scaffoldVersion ?? 0}  ${DIM(id.model ?? '')}`);
+  const displayName = stringField(summary.identity, 'displayName');
+  const purpose = stringField(summary.identity, 'purpose');
+  const scaffoldVersion = numberField(summary.identity, 'scaffoldVersion');
+  const model = stringField(summary.identity, 'model');
+  if (displayName || purpose) {
+    console.log(`${DIM('identity')}  ${displayName ?? name} — ${DIM((purpose ?? '').slice(0, 80))}`);
+    console.log(`${DIM('scaffold')}  v${scaffoldVersion ?? 0}  ${DIM(model ?? '')}`);
   }
   console.log(`${DIM('messages')} ${summary.messageCount}`);
 

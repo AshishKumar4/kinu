@@ -42,7 +42,7 @@ describe('use-proteus chat-error wiring', () => {
   test('retry re-sends the last user message parts', () => {
     const retry = hook.slice(hook.indexOf('const retryLastMessage'), hook.indexOf('const searchMemory'));
     expect(retry).toContain('.find((m) => m.role === "user")');
-    expect(retry).toContain('sendMessage({ role: "user", parts: lastUser.parts })');
+    expect(retry).toContain('sendMessage({ role: "user", parts: lastUser.parts, metadata: lastUser.metadata })');
   });
 });
 

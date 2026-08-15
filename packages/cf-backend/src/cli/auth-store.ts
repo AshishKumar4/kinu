@@ -247,6 +247,7 @@ export async function pollCliAuth(env: CliAuthEnv, deviceToken: string, clientKe
     return { status: 'expired', message: 'CLI auth token was already delivered. Run proteus auth again if it was not saved.' };
   }
 
+  // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
   const userDO = env.UserDO.get(env.UserDO.idFromName(consumed.user_id)) as DurableObjectStub<UserDO>;
   const minted = await userDO.mintCliToken(await ownerCaller(env), consumed.user_id, consumed.device_name);
   const tokenExpiresAt = new Date(minted.expiresAt).toISOString();
@@ -300,6 +301,7 @@ export async function approveCliAuth(
     throw new CliAuthCodeError('CLI auth code expired. Run proteus auth again.');
   }
 
+  // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
   const userDO = env.UserDO.get(env.UserDO.idFromName(identity.userId)) as DurableObjectStub<UserDO>;
   await userDO.ensureProfile(await ownerCaller(env), identity.email);
   await session.prepare(
@@ -348,7 +350,7 @@ function primarySession(db: D1Database): D1DatabaseSession {
   return db.withSession('first-primary');
 }
 
-function isUniqueConstraintError(e: unknown): boolean {
+function isUniqueConstraintError<Thrown>(e: Thrown): boolean {
   return e instanceof Error && /UNIQUE constraint failed/i.test(e.message);
 }
 
@@ -382,4 +384,3 @@ function createUserCode(): string {
   for (const b of bytes) out += alphabet[b % alphabet.length];
   return `${out.slice(0, 4)}-${out.slice(4)}`;
 }
-

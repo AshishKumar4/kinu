@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { parseArgs, partitionRunnable, runBenchmark } from './eval.ts';
 import { parseCorpus } from '../packages/core/src/index.js';
 import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index.js';
+import { createTestRuntime } from '@proteus/test-utils';
+import { MockLanguageModelV3 } from 'ai/test';
 
 function stubStrategy(id: string, output: string): ExplorationStrategy {
   return {
@@ -59,7 +61,16 @@ describe('parseArgs', () => {
 });
 
 describe('runBenchmark (stubbed model + judge — no real LLM)', () => {
-  const buildContext = (c: EvalCase): StrategyContext => ({ task: c.task, rt: null as never, model: null as never });
+  const runtime = createTestRuntime().rt;
+  const model = new MockLanguageModelV3({
+    doGenerate: async () => { throw new Error('stub strategy must not call the model'); },
+  });
+  const buildContext = (c: EvalCase): StrategyContext => ({
+    task: c.task,
+    mode: 'build',
+    rt: runtime,
+    model,
+  });
   const judge: JudgeFn = async (c) => ({
     winner: c.id === 'q1' ? 'b' : 'tie',
     scoreA: 0.6,

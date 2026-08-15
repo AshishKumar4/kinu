@@ -9,7 +9,7 @@
  * piling into one failure mode while others went unexplored.
  *
  * Identity here is deterministic and model-free: a pathology id IS its
- * feature signature, `<complaint>/<shape>` — WHY the user pushed back ×
+ * feature signature, `<complaint>/<responseMode>` — WHY the user pushed back ×
  * WHAT the agent had produced. The same failure therefore always lands in the
  * same cell, `describePathology` re-derives the human sentence from the id
  * alone (no label store, no join), and no model can rename a cell out from
@@ -23,8 +23,10 @@
  * negative outcomes it wants clustered and passes them in.
  */
 
+import * as v from 'valibot';
 import type { LLM } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import type { JsonObject } from '../utils/json.js';
 
 /** WHY the user pushed back. Ordered: the first match wins, so explicit
  *  lexical evidence outranks the inferred `repeat`, and `other` is the honest
@@ -36,8 +38,8 @@ export type ComplaintClass = (typeof COMPLAINT_CLASSES)[number];
 
 /** WHAT the agent had produced when the user pushed back. Ordered the same
  *  way — a fenced answer is a code answer even if it also ends in a question. */
-export const RESPONSE_SHAPES = ['code', 'question', 'prose', 'terse'] as const;
-export type ResponseShape = (typeof RESPONSE_SHAPES)[number];
+export const RESPONSE_MODES = ['code', 'question', 'prose', 'terse'] as const;
+export type ResponseMode = (typeof RESPONSE_MODES)[number];
 
 const COMPLAINT_PATTERNS: ReadonlyArray<readonly [Exclude<ComplaintClass, 'repeat' | 'other'>, RegExp]> =
   Object.freeze([
@@ -85,7 +87,7 @@ export function complaintClass(userMessage: string, followup: string | null): Co
  *  rather than an answer they could act on. */
 const PROSE_CHARS = 600;
 
-export function responseShape(assistantResponse: string): ResponseShape {
+export function classifyResponseMode(assistantResponse: string): ResponseMode {
   if (/```/.test(assistantResponse)) return 'code';
   const trimmed = assistantResponse.trimEnd();
   if (trimmed.endsWith('?')) return 'question';
@@ -108,10 +110,10 @@ export interface PathologyInput {
 
 /** One named failure cell, with the evidence behind it. */
 export interface PathologyCluster {
-  /** `<complaint>/<shape>` — deterministic, and the only identity. */
+  /** `<complaint>/<responseMode>` — deterministic, and the only identity. */
   id: string;
   complaint: ComplaintClass;
-  shape: ResponseShape;
+  responseMode: ResponseMode;
   /** Negative outcomes in this cell. */
   size: number;
   /** How many of them were the stronger `frustrated` signal. */
@@ -125,21 +127,38 @@ export interface PathologyCluster {
   title: string;
 }
 
-export function pathologyId(complaint: ComplaintClass, shape: ResponseShape): string {
-  return `${complaint}/${shape}`;
+export function pathologyId(complaint: ComplaintClass, responseMode: ResponseMode): string {
+  return `${complaint}/${responseMode}`;
+}
+
+interface ParsedPathologyId {
+  complaint: ComplaintClass;
+  responseMode: ResponseMode;
+}
+
+const ComplaintClassSchema = v.picklist(COMPLAINT_CLASSES);
+const ResponseModeSchema = v.picklist(RESPONSE_MODES);
+
+function parsePathologyId(id: string): ParsedPathologyId | null {
+  const [complaint, responseMode, ...rest] = id.split('/');
+  if (rest.length !== 0) return null;
+  const parsedComplaint = v.safeParse(ComplaintClassSchema, complaint);
+  const parsedResponseMode = v.safeParse(ResponseModeSchema, responseMode);
+  if (!parsedComplaint.success || !parsedResponseMode.success) return null;
+  return {
+    complaint: parsedComplaint.output,
+    responseMode: parsedResponseMode.output,
+  };
 }
 
 /** True for a well-formed cell id — both halves drawn from the closed
  *  vocabularies. A proposal may legitimately name a cell nothing has landed
  *  in yet, so membership in the CURRENT clusters is not the test. */
 export function isPathologyId(id: string): boolean {
-  const [complaint, shape, ...rest] = id.split('/');
-  return rest.length === 0 &&
-    COMPLAINT_CLASSES.includes(complaint as ComplaintClass) &&
-    RESPONSE_SHAPES.includes(shape as ResponseShape);
+  return parsePathologyId(id) !== null;
 }
 
-const COMPLAINT_PHRASE: Record<ComplaintClass, string> = {
+const COMPLAINT_PHRASE = {
   error: 'the user reported an error or that it did not work',
   wrong_target: 'the user said this was not what they asked for',
   incomplete: 'the user said the work was left unfinished',
@@ -147,14 +166,14 @@ const COMPLAINT_PHRASE: Record<ComplaintClass, string> = {
   overreach: 'the user said it did more than they asked for',
   repeat: 'the user had to re-state the same request',
   other: 'the user pushed back without a legible reason',
-};
+} satisfies Record<ComplaintClass, string>;
 
-const SHAPE_PHRASE: Record<ResponseShape, string> = {
+const MODE_PHRASE = {
   code: 'after a code answer',
   question: 'after a clarifying question',
   prose: 'after a long prose answer',
   terse: 'after a short answer',
-};
+} satisfies Record<ResponseMode, string>;
 
 /**
  * The human sentence for a cell id. Derived from the id alone, so a stamped
@@ -162,9 +181,9 @@ const SHAPE_PHRASE: Record<ResponseShape, string> = {
  * An unrecognized id renders as itself rather than as a fabricated sentence.
  */
 export function describePathology(id: string): string {
-  const [complaint, shape] = id.split('/');
-  if (!isPathologyId(id)) return id;
-  return `${COMPLAINT_PHRASE[complaint as ComplaintClass]} ${SHAPE_PHRASE[shape as ResponseShape]}`;
+  const parsed = parsePathologyId(id);
+  if (!parsed) return id;
+  return `${COMPLAINT_PHRASE[parsed.complaint]} ${MODE_PHRASE[parsed.responseMode]}`;
 }
 
 const EXAMPLE_CHARS = 160;
@@ -189,12 +208,12 @@ export function clusterPathologies(
 
   for (const row of rows) {
     const complaint = complaintClass(row.userMessage, row.followup);
-    const shape = responseShape(row.assistantResponse);
-    const id = pathologyId(complaint, shape);
+    const responseMode = classifyResponseMode(row.assistantResponse);
+    const id = pathologyId(complaint, responseMode);
     let cell = cells.get(id);
     if (!cell) {
       cell = {
-        id, complaint, shape, size: 0, frustrated: 0, turnIds: [],
+        id, complaint, responseMode, size: 0, frustrated: 0, turnIds: [],
         scaffoldVersions: [], examples: [], title: describePathology(id),
         versions: new Set<number>(),
       };
@@ -228,12 +247,13 @@ export function buildPathologyLabelPrompt(clusters: ReadonlyArray<PathologyClust
     `${cells.join('\n')}\n\n` +
     `Give each cluster a short name (at most 8 words) describing the failure ` +
     `pattern an agentic loop would have to fix. Use the cluster ids as keys.\n` +
-    `JSON shape: {"<cluster id>":"<short name>"}\n` +
+    `JSON response: {"<cluster id>":"<short name>"}\n` +
     jsonObjectOnlyInstruction()
   );
 }
 
 const TITLE_CHARS = 70;
+const PathologyTitleSchema = v.pipe(v.string(), v.trim(), v.minLength(1));
 
 /**
  * Refine cluster TITLES with one small LLM call. Identity, membership and
@@ -245,18 +265,16 @@ export async function labelPathologyClusters(
   clusters: ReadonlyArray<PathologyCluster>,
 ): Promise<PathologyCluster[]> {
   if (clusters.length === 0) return [];
-  let parsed: unknown;
+  let titles: JsonObject;
   try {
-    parsed = extractJsonObject(await llm.complete(buildPathologyLabelPrompt(clusters)));
+    titles = extractJsonObject(await llm.complete(buildPathologyLabelPrompt(clusters)));
   } catch {
     return [...clusters];
   }
-  if (typeof parsed !== 'object' || parsed === null) return [...clusters];
-  const titles = parsed as Record<string, unknown>;
   return clusters.map((cluster) => {
-    const title = titles[cluster.id];
-    if (typeof title !== 'string' || title.trim().length === 0) return cluster;
-    return { ...cluster, title: title.trim().slice(0, TITLE_CHARS) };
+    const title = v.safeParse(PathologyTitleSchema, titles[cluster.id]);
+    if (!title.success) return cluster;
+    return { ...cluster, title: title.output.slice(0, TITLE_CHARS) };
   });
 }
 

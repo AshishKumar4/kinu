@@ -3,8 +3,44 @@
    uses, and its components render half-styled (e.g. the combobox's clear
    button, positioned with `right-5`, lands on top of the input's text). */
 @source "../../../node_modules/@cloudflare/kumo/dist/**/*.{js,jsx,ts,tsx}";
+/* Plannotator ships source. Scan the reachable plan-review surface without
+   loading its global theme pack or unrelated editor/server UI. */
+@source "../../../node_modules/@plannotator/ui/components/Viewer.tsx";
+@source "../../../node_modules/@plannotator/ui/components/AnnotationPanel.tsx";
 @import "tailwindcss";
 @import "@cloudflare/kumo/styles/tailwind";
+@import "katex/dist/katex.min.css";
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-surface-1: var(--surface-1);
+  --color-annotation-comment: var(--annotation-comment);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
 
 /* ════════════════════════════════════════════════════════════════════
    Proteus design language — the landing page, applied to the app.
@@ -701,4 +737,83 @@ body { background: var(--c-bg); color: var(--c-text); }
   .p-shimmer { animation: none; color: var(--c-text-2); -webkit-text-fill-color: currentColor; }
   .animate-fade-in, .animate-scale-in { animation: none; }
   .p-btn:active, .p-btn-quiet:active { transform: none; }
+}
+
+/* Plannotator is hosted as a document primitive, not as a second app or theme.
+   Its semantic contract is confined to this surface and resolves through the
+   same Proteus tokens as the rest of Outputs. */
+[data-proteus-plan-review],
+body > [data-comment-popover="true"],
+body > .annotation-toolbar {
+  --background: var(--c-bg);
+  --foreground: var(--c-text);
+  --card: var(--c-surface);
+  --card-foreground: var(--c-text);
+  --popover: var(--c-overlay);
+  --popover-foreground: var(--c-text);
+  --primary: var(--c-accent);
+  --primary-foreground: var(--c-accent-on);
+  --secondary: var(--c-fill);
+  --secondary-foreground: var(--c-text);
+  --muted: var(--c-fill);
+  --muted-foreground: var(--c-text-2);
+  --accent: var(--c-accent);
+  --accent-foreground: var(--c-accent-on);
+  --destructive: var(--c-danger);
+  --destructive-foreground: var(--c-text);
+  --border: var(--c-border);
+  --input: var(--c-input-border);
+  --ring: var(--c-accent);
+  --success: var(--c-success);
+  --warning: var(--c-warning);
+  --warning-foreground: var(--c-accent-on);
+  --surface-1: var(--c-fill);
+  --annotation-comment: var(--c-info);
+  --focus-highlight: var(--c-info);
+  --radius: var(--r-card);
+  color: var(--foreground);
+  background: var(--background);
+  font-family: var(--font-ui);
+}
+
+@layer components {
+  [data-proteus-plan-review] .annotation-highlight { border-radius: 2px; padding: 0 2px; margin: 0 -2px; }
+  [data-proteus-plan-review] .annotation-highlight.math-inline-annotation { display: inline-flex; align-items: center; line-height: 1; }
+  [data-proteus-plan-review] .annotation-highlight.math-block-annotation { display: block; }
+  [data-proteus-plan-review] .annotation-highlight.deletion {
+    background: color-mix(in oklab, var(--destructive) 35%, transparent);
+    text-decoration: line-through 2px var(--destructive);
+  }
+  [data-proteus-plan-review] .annotation-highlight.comment {
+    background: color-mix(in oklab, var(--annotation-comment) 22%, transparent);
+    border-bottom: 2px solid var(--annotation-comment);
+  }
+  [data-proteus-plan-review] .annotation-highlight.focused {
+    background: color-mix(in oklab, var(--focus-highlight) 32%, transparent) !important;
+    border-bottom: 2px solid var(--focus-highlight);
+    box-shadow: 0 0 8px color-mix(in oklab, var(--focus-highlight) 40%, transparent);
+    filter: none;
+  }
+  [data-proteus-plan-review] .annotation-highlight:hover { cursor: pointer; filter: brightness(1.15); }
+
+  [data-proteus-plan-review] .alert-note { border-left-color: var(--c-info); }
+  [data-proteus-plan-review] .alert-note .alert-title { color: var(--c-info); }
+  [data-proteus-plan-review] .alert-tip { border-left-color: var(--c-success); }
+  [data-proteus-plan-review] .alert-tip .alert-title { color: var(--c-success); }
+  [data-proteus-plan-review] .alert-warning { border-left-color: var(--c-warning); }
+  [data-proteus-plan-review] .alert-warning .alert-title { color: var(--c-warning); }
+  [data-proteus-plan-review] .alert-caution { border-left-color: var(--c-danger); }
+  [data-proteus-plan-review] .alert-caution .alert-title { color: var(--c-danger); }
+  [data-proteus-plan-review] .alert-important { border-left-color: var(--c-accent); }
+  [data-proteus-plan-review] .alert-important .alert-title { color: var(--c-accent-fg); }
+
+  [data-proteus-plan-review] .directive { border-color: var(--border); background: color-mix(in srgb, var(--muted) 50%, transparent); }
+  [data-proteus-plan-review] .directive-title { color: var(--muted-foreground); }
+  [data-proteus-plan-review] .directive-note,
+  [data-proteus-plan-review] .directive-info { border-color: color-mix(in srgb, var(--c-info) 40%, transparent); background: color-mix(in srgb, var(--c-info) 10%, transparent); }
+  [data-proteus-plan-review] .directive-tip,
+  [data-proteus-plan-review] .directive-success { border-color: color-mix(in srgb, var(--c-success) 40%, transparent); background: color-mix(in srgb, var(--c-success) 10%, transparent); }
+  [data-proteus-plan-review] .directive-warning { border-color: color-mix(in srgb, var(--c-warning) 40%, transparent); background: color-mix(in srgb, var(--c-warning) 10%, transparent); }
+  [data-proteus-plan-review] .directive-danger,
+  [data-proteus-plan-review] .directive-caution { border-color: color-mix(in srgb, var(--c-danger) 40%, transparent); background: color-mix(in srgb, var(--c-danger) 10%, transparent); }
 }

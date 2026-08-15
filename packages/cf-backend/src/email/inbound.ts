@@ -111,8 +111,12 @@ function htmlToText(html: string): string {
     .trim();
 }
 
+function isStringContent(content: ArrayBuffer | Uint8Array | string): content is string {
+  return typeof content === 'string';
+}
+
 function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
-  if (typeof content === 'string') return content.length;
+  if (isStringContent(content)) return content.length;
   return content.byteLength;
 }
 

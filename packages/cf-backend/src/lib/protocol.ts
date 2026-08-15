@@ -96,6 +96,13 @@ export interface MemoryEntry {
 	updatedAt: string;
 }
 
+export interface ExecutorCommandResult {
+	stdout?: string;
+	stderr?: string;
+	exitCode?: number;
+	error?: string;
+}
+
 /** One agent in the workspace roster (getWorkspaceAgents). The orchestrator
  *  is the workspace's default agent; durable subordinate facets follow it. */
 export interface WorkspaceAgent {
@@ -141,6 +148,7 @@ export interface BackgroundJob {
 	id: string;
 	kind: string;
 	label: string | null;
+	workMode: "plan" | "build";
 	status: "running" | "completed" | "failed" | "cancelled";
 	result: string | null;
 	error: string | null;

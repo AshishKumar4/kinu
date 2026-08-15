@@ -20,8 +20,13 @@ import {
   AGENT_RPC_ACCESS, cliScopesConnectionTag, rejectOutOfScopeRpc, requiredRpcAccess,
 } from '../src/cli/rpc-gate.js';
 
+interface WorkspaceFixture {
+  sql: SqlExec;
+  db: Database;
+}
+
 /** A workspace whose storage is reached exactly as the DO reaches its own. */
-function workspace(): { sql: SqlExec; db: Database } {
+function workspace(): WorkspaceFixture {
   const db = new Database(':memory:');
   db.exec(`CREATE TABLE messages (id TEXT PRIMARY KEY, content TEXT NOT NULL)`);
   db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY, token TEXT NOT NULL)`);
@@ -35,12 +40,12 @@ function workspace(): { sql: SqlExec; db: Database } {
 }
 
 /** What the CLI and the browser both do: walk `next` until it is null. */
-function drain(sql: SqlExec, maxBytes: number): { lines: string[]; pages: number } {
+async function drain(sql: SqlExec, maxBytes: number): Promise<{ lines: string[]; pages: number }> {
   const lines: string[] = [];
   let cursor: ArchiveCursor | null = null;
   let pages = 0;
   do {
-    const page = readWorkspaceArchivePage(sql, { workspace: 'scout', source: 'cloud', cursor, maxBytes });
+    const page = await readWorkspaceArchivePage(sql, { workspace: 'scout', source: 'cloud', cursor, maxBytes });
     lines.push(...page.lines);
     cursor = page.next;
     pages++;
@@ -49,35 +54,37 @@ function drain(sql: SqlExec, maxBytes: number): { lines: string[]; pages: number
 }
 
 describe('cloud workspace export', () => {
-  test('pages bound the response and reassemble into one restorable archive', () => {
+  test('pages bound the response and reassemble into one restorable archive', async () => {
     const source = workspace();
-    const { lines, pages } = drain(source.sql, 4096);
+    const { lines, pages } = await drain(source.sql, 4096);
     expect(pages).toBeGreaterThan(1);
 
     const target = new Database(':memory:');
-    const result = restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
+    const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(target), lines);
     expect(result.source).toBe('cloud');
     expect(target.query(`SELECT COUNT(*) AS n FROM messages`).get()).toEqual({ n: 450 });
   });
 
-  test('neither the capability secret nor Durable Object internals are exported', () => {
-    const { lines } = drain(workspace().sql, 1_000_000);
+  test('neither the capability secret nor Durable Object internals are exported', async () => {
+    const { lines } = await drain(workspace().sql, 1_000_000);
     expect(lines.some((l) => l.includes('pwc_secret'))).toBe(false);
     expect(lines.some((l) => l.includes('_cf_KV'))).toBe(false);
   });
 
-  test('a resume cursor naming a table that is gone is refused, not guessed', () => {
+  test('a resume cursor naming a table that is gone is refused, not guessed', async () => {
     const source = workspace();
-    expect(() => readWorkspaceArchivePage(source.sql, {
-      workspace: 'scout', source: 'cloud', cursor: { table: 'gone', after: 0, rows: 0 },
-    })).toThrow(/no longer exists/);
+    await expect(readWorkspaceArchivePage(source.sql, {
+      workspace: 'scout', source: 'cloud', cursor: { phase: 'sql', table: 'gone', after: 0, rows: 0 },
+    })).rejects.toThrow(/no longer exists/);
   });
 
   test('exporting a workspace database needs an interactive session, not a CI token', () => {
     expect(AGENT_RPC_ACCESS.exportWorkspaceArchive).toBe('interactive');
     expect(requiredRpcAccess('exportWorkspaceArchive')).toBe('interactive');
 
-    const execToken = [cliScopesConnectionTag('workspace.exec')!];
+    const scopeTag = cliScopesConnectionTag('workspace.exec');
+    if (!scopeTag) throw new Error('workspace.exec must have a connection tag');
+    const execToken = [scopeTag];
     const frame = JSON.stringify({ type: 'rpc', id: '1', method: 'exportWorkspaceArchive', args: [] });
     const denial = rejectOutOfScopeRpc(execToken, frame);
     expect(denial).not.toBeNull();

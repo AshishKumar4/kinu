@@ -1,6 +1,12 @@
 import type { AgentClientEvent, AgentClientMode } from './agent-client.js';
 import type { CliSession } from './session.js';
 
+interface AssistantTurnMetadata {
+  steps: number;
+  durationMs: number;
+  hadError: boolean;
+}
+
 /**
  * Records an AgentClientEvent stream to the JSONL terminal log, preserving the
  * CHRONOLOGICAL interleaving of assistant text and tool calls. Both backend
@@ -63,7 +69,7 @@ export class SessionRecorder {
    * buffer is empty (no streamed deltas) so a mid-turn flush keeps exactly what
    * streamed up to the tool boundary.
    */
-  private flushText(session: CliSession, finalText?: string, meta?: Record<string, unknown>): void {
+  private flushText(session: CliSession, finalText?: string, meta?: AssistantTurnMetadata): void {
     const text = this.pendingText || (finalText ?? '');
     this.pendingText = '';
     if (!text.trim()) return;

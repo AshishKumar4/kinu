@@ -83,7 +83,7 @@ describe('assembleTurnMessages', () => {
       transformContext: async (ctx) => {
         seen.push({
           sessionKey: ctx.sessionKey, contextWindow: ctx.contextWindow, trigger: ctx.trigger,
-          ...(ctx.providerReportedTokens !== undefined ? { providerReportedTokens: ctx.providerReportedTokens } : {}),
+          providerReportedTokens: ctx.providerReportedTokens,
         });
         return undefined;
       },

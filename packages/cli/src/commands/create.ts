@@ -4,6 +4,11 @@ import { ACCENT, DIM, OK, WARN, createSpinner, printCreatedCard, printFailure } 
 import { findUnusableModel } from '../local-model-resolver.js';
 import { ask, canPrompt } from '../prompt.js';
 
+interface ModelWarningInput {
+  model?: string;
+  agentName: string;
+}
+
 export async function createCommand(name: string | undefined, opts: {
   purpose?: string; model?: string; baseUrl?: string; auth?: string;
   mode?: string; alias?: string; aliasShim?: boolean; origin?: string;
@@ -47,7 +52,9 @@ export async function createCommand(name: string | undefined, opts: {
     const created = await createCliAgent({ ...opts, name, purpose, mode, alias, allowInteractiveAuth: true });
     spinner.stop('Workspace created');
     printCreatedCard(name, purpose, created.model ?? opts.model ?? 'configured provider', created.dbPath ?? '');
-    await warnUnusableModel({ ...(opts.model ? { model: opts.model } : {}), agentName: name });
+    const warningInput: ModelWarningInput = { agentName: name };
+    if (opts.model) warningInput.model = opts.model;
+    await warnUnusableModel(warningInput);
     const hint = pathHint();
     if (hint) console.log(DIM(hint));
   } catch (err) {
@@ -59,7 +66,7 @@ export async function createCommand(name: string | undefined, opts: {
 
 /** The workspace exists either way — this is the difference between learning
  *  the model is unusable now and learning it when the first turn dies. */
-async function warnUnusableModel(opts: { model?: string; agentName: string }): Promise<void> {
+async function warnUnusableModel(opts: ModelWarningInput): Promise<void> {
   const unusable = await findUnusableModel(opts);
   if (!unusable) return;
   console.log(`\n${WARN('!')} ${unusable.spec} ${DIM('has no connected provider.')} ${unusable.reason}`);

@@ -8,10 +8,9 @@
  * native paths, listed straight off the executor router
  * (core/src/read-models/files.ts listEnvironments), and the chip's namespace
  * (`sandbox.*`) is how the agent reaches it. The workspace is one of these
- * rows, not a base the others hang off: Nimbus over this Durable Object's own
- * SQLite, durable, with a real shell. The row named `nimbus.*` is a DIFFERENT
- * machine — a separate Nimbus session in its own NimbusSession DO — which is
- * why it is not called "Nimbus" here (lib/executors.ts).
+ * rows, not a base the others hang off. `workspace.*` is the authoritative
+ * Nimbus session: its file browser, shell, processes and ports all address the
+ * same bytes. There is no second Nimbus environment.
  *
  * Two things left. The Agents chips were an inert roster — informational only,
  * duplicating chat's SubordinateTabs, which is the roster that can actually
@@ -32,11 +31,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { Badge, Loader } from "@cloudflare/kumo";
 import {
-  HardDrivesIcon, CircleIcon, ArrowsClockwiseIcon,
+  HardDrivesIcon, CircleIcon,
   LockSimpleIcon, TerminalIcon, FolderOpenIcon, PlugIcon, GearSixIcon,
 } from "@phosphor-icons/react";
 import type { MountInfo } from "@proteus/core";
-import type { Rpc } from "@/lib/protocol";
+import type { ExecutorCommandResult, Rpc } from "@/lib/protocol";
 import {
   executorForMount, executorLabel, isExecutorActive, pickDefaultExecutor,
   type ExecutorInfo,
@@ -49,18 +48,18 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { EmptyState } from "./shared";
 
-const CONSISTENCY_HINT: Record<MountInfo["policy"]["consistency"], string> = {
+const CONSISTENCY_HINT = {
   durable: "durable, survives everything",
   ephemeral: "ephemeral, dies with the container",
   "live-shared": "live, your own machine",
-};
+} satisfies Record<MountInfo["policy"]["consistency"], string>;
 
 export interface EnvironmentSurfaceProps {
   rpc: Rpc;
   executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
-  onExecute: (id: string, cmd: string) => Promise<unknown>;
+  onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
 }
 
 type Pane = { kind: "files" } | { kind: "terminal" };
@@ -91,7 +90,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
   const mounts = loaded ?? [];
 
   // Executor availability is polled live; when it flips (PC connects, sandbox
-  // wakes) the mount table's live flags are stale — refetch them.
+  // wakes) the environment rows' live flags are stale — refetch them.
   const availabilitySignature = executors.map((e) => `${e.name}:${e.available}:${e.status ?? ""}`).join("|");
   const lastSignature = useRef(availabilitySignature);
   useEffect(() => {
@@ -119,7 +118,7 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
           <LoadFailure what="the environments" message={resource.message} onRetry={reload} className="p-card rounded-lg px-3 py-2" />
         )}
 
-        {/* Mount table — the spine. One chip per environment. */}
+        {/* One identity-stable chip per environment. */}
         <section>
           <div className="flex items-center gap-2 mb-2">
             <HardDrivesIcon size={14} className="p-accent" />
@@ -146,13 +145,13 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
                 </button>
               );
             })}
-            {mounts.length === 0 && loaded !== null && <span className="text-xs p-text-3">No environments mounted.</span>}
+            {mounts.length === 0 && loaded !== null && <span className="text-xs p-text-3">No environments available.</span>}
             {mounts.length === 0 && resource.status === "loading" && <span className="text-xs p-text-3">loading…</span>}
           </div>
         </section>
       </div>
 
-      {/* Per-mount pane */}
+      {/* Selected environment pane. */}
       {selectedMount === null ? (
         <div className="flex-1 min-h-0" />
       ) : !selectedMount.live ? (
@@ -188,14 +187,8 @@ export function EnvironmentSurface(props: EnvironmentSurfaceProps) {
 
           <div className="flex-1 min-h-0">
             {pane.kind === "files" && (
-              /* The SELECTED environment's own file view, opened at its own
-                 working directory. It used to browse the `workspace` executor
-                 at `selectedMount.prefix` — correct while one CompositeVFS
-                 addressed every mount under `/sandbox`, `/nimbus`, …; since
-                 that went, `prefix` is a display string (`sandbox.*`), not a
-                 path, so every row listed the workspace at a directory that
-                 does not exist. `cwd` is the read model's answer to exactly
-                 this question (core/src/read-models/files.ts). */
+              /* The selected environment's own file view, opened at the
+                 working directory returned by the file read model. */
               <FilesPane key={selectedMount.name} execName={executorForMount(selectedMount.name)}
                 rpc={rpc} initialPath={selectedMount.cwd ?? "."} />
             )}
@@ -240,10 +233,8 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
   // `laptop`, not `pc`: rows are named by their EXECUTOR now, and the old
   // mount name left this branch — the whole connect call-to-action — dead.
   if (mount.name === "laptop") return <PcConnectCta />;
-  const docs = mount.name === "nimbus"
-    ? { text: "A lightweight Linux machine of its own, separate from this workspace, for package installs and anything that needs real binaries. It isn't enabled on this deployment. Your agent can still use the Sandbox, or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/NIMBUS-INTEGRATION.md" }
-    : mount.name === "sandbox"
-      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use a Linux session (if available), or its own workspace shell.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
+  const docs = mount.name === "sandbox"
+      ? { text: "The Sandbox gives your agent a full Linux container with live previews. It isn't enabled on this deployment. Your agent can still use the Workspace shell and every capability listed for it.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" }
       : { text: mount.reason ?? exec?.reason ?? "This environment isn't enabled on this deployment.", href: "https://github.com/AshishKumar4/Proteus/blob/main/docs/EXECUTION-LAYER-SPEC.md" };
   return (
     <div className="h-full flex items-center justify-center p-6">

@@ -11,7 +11,9 @@
   },
   "include": [
     "bench.ts", "bench.test.ts", "bench-corpus.ts", "bench-sandbox.ts", "bench-solvers.ts",
-    "bench-agent-worker.ts", "bench-longhorizon.ts", "bench-longhorizon-check.ts",
+    "bench-agent-worker.ts", "bench-pi-worker.ts", "bench-panel-worker.ts",
+    "bench-worker-protocol.ts", "bench-inference-proxy.ts", "bench-inference-proxy.test.ts", "bench-pi-worker.test.ts",
+    "bench-pilot.ts", "bench-validation.ts", "bench-longhorizon.ts", "bench-longhorizon-check.ts",
     "secret-scan.ts", "secret-scan.test.ts"
   ]
 }

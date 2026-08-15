@@ -13,7 +13,7 @@ export function assistant(content: AssistantModelMessage['content']): ModelMessa
   return { role: 'assistant', content };
 }
 
-export function toolCall(id: string, toolName: string, input: unknown): ToolCallPart {
+export function toolCall<Input>(id: string, toolName: string, input: Input): ToolCallPart {
   return { type: 'tool-call', toolCallId: id, toolName, input };
 }
 

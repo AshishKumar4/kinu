@@ -1,10 +1,9 @@
 diff --git a/packages/core/src/scaffold/ui-stream.ts b/packages/core/src/scaffold/ui-stream.ts
-index 88f0be2..94a2117 100644
 --- a/packages/core/src/scaffold/ui-stream.ts
 +++ b/packages/core/src/scaffold/ui-stream.ts
-@@ -79,7 +79,7 @@ export async function* scaffoldEventsToUIStream(
-         const chunk = ev.chunk as UIMessageChunk | undefined;
-         if (chunk && typeof chunk === 'object' && 'type' in chunk) {
+@@ -64,7 +64,7 @@
+         if (validation?.success) {
+           const chunk = validation.value;
            // Strip the inner envelope — we own start/finish.
 -          if (chunk.type !== 'start' && chunk.type !== 'finish') yield chunk;
 +          if (chunk.type !== 'start' || chunk.type !== 'finish') yield chunk;

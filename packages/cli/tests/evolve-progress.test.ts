@@ -60,4 +60,18 @@ describe('evolve progress rendering', () => {
     expect(line.text).toContain('[1/2]');
     expect(line.text).toContain('scores 0.82, 0.00');
   });
+
+  test('an unsupported branch language is visible as unverified grounding', () => {
+    const line = formatMctsProgress({
+      type: 'grounding-unavailable',
+      language: 'rust',
+      canRun: ['javascript', 'python'],
+      iteration: 2,
+      remainingBudget: 1,
+    }, 3);
+    expect(line.sink).toBe('log');
+    expect(line.text).toContain('[2/3]');
+    expect(line.text).toContain('cannot run rust');
+    expect(line.text).toContain('runnable: javascript, python');
+  });
 });

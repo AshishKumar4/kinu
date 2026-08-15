@@ -10,11 +10,14 @@ import { mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { LanguageModel } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
+import type { LanguageModelV2, LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   HeadController, HeadJournal, initHeadsTables, buildHeadToolSet, HeadCapture,
   MissionGovernor,
-  type HeadInput, type WebSearchProvider, type AgentRuntime,
+  type HeadInput, type WebSearchProvider, type AgentRuntime, type JsonObject,
 } from '@proteus/core';
+import { toolExecute } from '@proteus/test-utils';
 import { createCLIHeadRuntime, type CLIHeadRuntimeDeps } from '../src/head-runtime.js';
 import { makeSql, makeExecRaw, createCLIRuntime, buildCLIHeadRuntime } from '../src/runtime.js';
 
@@ -31,13 +34,13 @@ function scratchStores(): string[] {
 
 /** A never-called web provider — the surface tests only inspect tool NAMES. */
 const stubWeb: WebSearchProvider = {
-  search: async () => ({ query: '', results: [], source: 'stub' as never }),
+  search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
   fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
 };
 
 /** A parent CLI runtime — the real execution surface every head forks. */
 function makeParent(): AgentRuntime {
-  return createCLIRuntime(new Database(':memory:') as never, {
+  return createCLIRuntime(new Database(':memory:'), {
     dbPath: '/tmp/parent.db', llm: { name: 'x', baseURL: 'http://l', headers: {}, model: 'm' },
   });
 }
@@ -59,42 +62,47 @@ function headDeps(model: LanguageModel, over?: Partial<CLIHeadRuntimeDeps>): CLI
 }
 
 /** Records the tool names the SDK hands a head's generateText call. */
-function capturingHeadModel(answer: string, sink: (names: string[]) => void): LanguageModel {
-  return {
-    specificationVersion: 'v2', provider: 'fake', modelId: 'fake', supportedUrls: {},
-    doGenerate: async (opts: { tools?: Array<{ name: string }> }) => {
+function capturingHeadModel(
+  answer: string,
+  sink: (names: string[]) => void,
+  promptSink?: (prompt: string) => void,
+  runSchemaSink?: (schema: string) => void,
+): LanguageModel {
+  return new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake',
+    doGenerate: async (opts) => {
       sink((opts.tools ?? []).map((t) => t.name));
+      promptSink?.(JSON.stringify(opts.prompt));
+      if (runSchemaSink) {
+        runSchemaSink(JSON.stringify((opts.tools ?? []).find((candidate) => candidate.name === 'run')));
+      }
       return {
         content: [{ type: 'text', text: answer }],
         finishReason: 'stop' as const,
-        usage: { inputTokens: 1, outputTokens: 1 },
+        usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
         response: { id: 'r', modelId: 'fake', timestamp: new Date(0) },
         warnings: [],
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 const aHeadInput = (over?: Partial<HeadInput>): HeadInput => ({
   id: 'h1', rootId: 'r1', parentId: null, depth: 0, task: 't', rationale: 'r',
   inheritedContext: [], budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
-  mergeStrategy: 'synthesize', ...over,
+  mergeStrategy: 'synthesize', ...over, mode: over?.mode ?? 'build',
 });
 
 /** A v2 generateText model that answers differently for a head run vs the merge
  *  synthesis (the merge prompt says "merging the findings of N … heads"). */
 function fakeHeadsModel(capture?: (options: {
   maxOutputTokens?: number;
-  providerOptions?: Record<string, Record<string, unknown>>;
+  providerOptions?: LanguageModelV2CallOptions['providerOptions'];
 }, isMerge: boolean) => void): LanguageModel {
-  const usage = { inputTokens: 8, outputTokens: 12 };
-  return {
-    specificationVersion: 'v2', provider: 'fake', modelId: 'fake', supportedUrls: {},
-    doGenerate: async (opts: {
-      prompt?: unknown;
-      maxOutputTokens?: number;
-      providerOptions?: Record<string, Record<string, unknown>>;
-    }) => {
+  const usage = { inputTokens: 8, outputTokens: 12, totalTokens: 20 };
+  return new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake',
+    doGenerate: async (opts) => {
       const isMerge = JSON.stringify(opts.prompt ?? '').includes('merging the findings');
       capture?.(opts, isMerge);
       const text = isMerge
@@ -108,7 +116,7 @@ function fakeHeadsModel(capture?: (options: {
         warnings: [],
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 function controllerWithCLIRuntime(model: LanguageModel, providerFamily?: string) {
@@ -122,6 +130,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('two heads run in-process and the merge synthesizes their findings', async () => {
     const controller = controllerWithCLIRuntime(fakeHeadsModel());
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: [{ id: 'm', role: 'user', content: 'is the parser sound?', createdAt: 1 }],
       request: {
@@ -143,13 +152,14 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
   test('merge synthesis uses low provider effort without an output cap', async () => {
     let mergeOptions: {
       maxOutputTokens?: number;
-      providerOptions?: Record<string, Record<string, unknown>>;
+      providerOptions?: LanguageModelV2CallOptions['providerOptions'];
     } | undefined;
     const controller = controllerWithCLIRuntime(
       fakeHeadsModel((options, isMerge) => { if (isMerge) mergeOptions = options; }),
       'openai',
     );
     await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: [],
       request: {
@@ -174,6 +184,24 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     ]));
   });
 
+  test('the prompt names private scratch and the parent workspace exactly as the CLI exposes them', async () => {
+    let prompt = '';
+    let runSchema = '';
+    const runtime = createCLIHeadRuntime(headDeps(capturingHeadModel(
+      'done',
+      () => {},
+      (value) => { prompt = value; },
+      (value) => { runSchema = value; },
+    )));
+    await (await runtime.spawnHead(aHeadInput())).run();
+
+    expect(prompt).toContain('workspace.*` is your private scratch');
+    expect(prompt).toContain('parent.*` is the canonical parent workspace');
+    expect(prompt).toContain('runtime `parent`');
+    expect(prompt).not.toContain('`workspace.*` is the canonical workspace you were forked from');
+    expect(runSchema).toContain('"parent"');
+  });
+
   test('allowedTools maps the PARENT vocabulary onto real tools (never empties)', async () => {
     // The old bug: a fork with allowedTools:["run"] was filtered against a
     // disjoint sandbox_* head surface and silently ran with ZERO tools. Now the
@@ -188,6 +216,7 @@ describe('createCLIHeadRuntime — full split → run → merge', () => {
     const controller = controllerWithCLIRuntime(fakeHeadsModel());
     const phases: string[] = [];
     await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: [],
       request: { rationale: 'r', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
@@ -205,7 +234,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
     const parent = makeParent();
     await parent.storage.vfs.writeFile('hello.txt', 'from the parent workspace');
     const headDb = new Database(':memory:');
-    const rt = buildCLIHeadRuntime(headDb as never, {
+    const rt = buildCLIHeadRuntime(headDb, {
       parentRuntime: parent, cwd: dir, agentId: 'h', agentName: 'head-h',
     });
 
@@ -232,7 +261,7 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
   test('the head run tool reaches the real host with runtime=laptop', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'proteus-head-'));
     writeFileSync(join(dir, 'note.txt'), 'real file content');
-    const rt = buildCLIHeadRuntime(new Database(':memory:') as never, {
+    const rt = buildCLIHeadRuntime(new Database(':memory:'), {
       parentRuntime: makeParent(), cwd: dir, agentId: 'h2', agentName: 'head-h2',
     });
     const capture = new HeadCapture();
@@ -241,9 +270,10 @@ describe('a local head forks the parent runtime (the caffe-fork capability)', ()
       executeTool: { description: 'x', inputSchema: {}, execute: async () => ({ result: 'unused' }) },
       webSearch: stubWeb,
       split: async () => ({ narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }),
-    }) as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
+    });
 
-    const out = await tools.run!.execute({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' }, {});
+    const run = toolExecute<{ command: string; runtime: string }, string>(tools.run);
+    const out = await run({ command: `cat ${join(dir, 'note.txt')}`, runtime: 'laptop' });
     expect(String(out)).toContain('real file content');
   });
 });
@@ -269,22 +299,25 @@ function barrier(n: number, onRelease: () => void): () => Promise<void> {
  */
 function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
   const stepsByHead = new Map<string, number>();
-  const envelope = (content: unknown[], finishReason: 'tool-calls' | 'stop') => ({
+  const envelope = (
+    content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
+    finishReason: 'tool-calls' | 'stop',
+  ): Awaited<ReturnType<LanguageModelV2['doGenerate']>> => ({
     content,
     finishReason,
-    usage: { inputTokens: 1, outputTokens: 1 },
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     response: { id: 'r', modelId: 'fake-scratch', timestamp: new Date(0) },
     warnings: [],
   });
-  return {
-    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-scratch', supportedUrls: {},
-    doGenerate: async (opts: { prompt?: unknown }) => {
+  return new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake-scratch',
+    doGenerate: async (opts) => {
       // Which head this is: its own system prompt names its task, and every
       // later step re-sends it.
       const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
-      const fileCall = (input: unknown) => envelope([{
+      const fileCall = (input: JsonObject) => envelope([{
         type: 'tool-call' as const, toolCallId: `${marker}-${step}`, toolName: 'file',
         input: JSON.stringify(input),
       }], 'tool-calls');
@@ -292,7 +325,7 @@ function scratchProbeModel(arrive: () => Promise<void>): LanguageModel {
       if (step === 2) { await arrive(); return fileCall({ action: 'read', path: 'note.txt' }); }
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 /** What a head's `file` read returned, from its own step trace. */
@@ -331,10 +364,10 @@ describe("a local head's scratch is a real store, private to it, and swept when 
 
   test('a head that throws still leaves no scratch behind', async () => {
     const before = scratchStores();
-    const exploding = {
-      specificationVersion: 'v2', provider: 'fake', modelId: 'boom', supportedUrls: {},
+    const exploding = new TestLanguageModelV2({
+      provider: 'fake', modelId: 'boom',
       doGenerate: async () => { throw new Error('provider exploded'); },
-    } as unknown as LanguageModel;
+    });
     const report = await (await createCLIHeadRuntime(headDeps(exploding)).spawnHead(aHeadInput())).run();
     expect(report.status).toBe('errored');
     expect(scratchStores()).toEqual(before);
@@ -350,16 +383,19 @@ describe("a local head's scratch is a real store, private to it, and swept when 
  */
 function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
   const stepsByHead = new Map<string, number>();
-  const envelope = (content: unknown[], finishReason: 'tool-calls' | 'stop') => ({
+  const envelope = (
+    content: Awaited<ReturnType<LanguageModelV2['doGenerate']>>['content'],
+    finishReason: 'tool-calls' | 'stop',
+  ): Awaited<ReturnType<LanguageModelV2['doGenerate']>> => ({
     content,
     finishReason,
-    usage: { inputTokens: 1, outputTokens: 1 },
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     response: { id: 'r', modelId: 'fake-shared', timestamp: new Date(0) },
     warnings: [],
   });
-  return {
-    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-shared', supportedUrls: {},
-    doGenerate: async (opts: { prompt?: unknown }) => {
+  return new TestLanguageModelV2({
+    provider: 'fake', modelId: 'fake-shared',
+    doGenerate: async (opts) => {
       const marker = /Your task: (\w+)/.exec(JSON.stringify(opts.prompt ?? ''))?.[1] ?? 'unknown';
       const step = (stepsByHead.get(marker) ?? 0) + 1;
       stepsByHead.set(marker, step);
@@ -375,7 +411,7 @@ function sharedWorkspaceProbeModel(arrive: () => Promise<void>): LanguageModel {
       if (step === 2) { await arrive(); return write('one\ntwo\nthree\n'); }
       return envelope([{ type: 'text' as const, text: 'done' }], 'stop');
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 describe('a head reports the files IT changed, with concurrent siblings on the same plane', () => {
@@ -478,19 +514,19 @@ describe('createCLIHeadRuntime — the mission ledger', () => {
 describe('createCLIHeadRuntime — a fork runs the model it was given', () => {
   /** Answers like a head and reports which model id served the call. */
   function labelledModel(id: string, seen: string[]): LanguageModel {
-    return {
-      specificationVersion: 'v2', provider: 'fake', modelId: id, supportedUrls: {},
+    return new TestLanguageModelV2({
+      provider: 'fake', modelId: id,
       doGenerate: async () => {
         seen.push(id);
         return {
           content: [{ type: 'text', text: `${id} looked at its angle.` }],
           finishReason: 'stop' as const,
-          usage: { inputTokens: 1, outputTokens: 1 },
+          usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
           response: { id: 'r', modelId: id, timestamp: new Date(0) },
           warnings: [],
         };
       },
-    } as unknown as LanguageModel;
+    });
   }
 
   test('each head resolves its OWN spec; a head that named none inherits the session model', async () => {

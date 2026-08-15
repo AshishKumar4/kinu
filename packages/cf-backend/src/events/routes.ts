@@ -27,6 +27,19 @@ import { readWebhookBodyText } from './body.js';
 import { normalizeWebhookRateLimitPerMin } from '@proteus/core';
 import { err, json, safeJson } from '../lib/http.js';
 import { isFreshAuthTime } from '../auth/session.js';
+import { decodeJsonWire } from '../lib/orchestrator-wire.js';
+import * as v from 'valibot';
+
+const WebhookRequestSchema = v.object({
+  label: v.optional(v.string()),
+  auth_mode: v.optional(v.picklist(['hmac', 'bearer', 'mtls'])),
+  secret: v.optional(v.string()),
+  accepted_content_type: v.optional(v.string()),
+  rate_limit_per_min: v.optional(v.number()),
+});
+const RequestCfSchema = v.object({
+  tlsClientAuth: v.optional(v.object({ certVerified: v.optional(v.string()) })),
+});
 
 function requestAuthTimeMs(request: Request): number | null {
   const forwarded = Number(request.headers.get('x-proteus-auth-time') ?? '');
@@ -89,14 +102,14 @@ async function handleEmailConfigRoute(
     if (!isFreshAuthTime(requestAuthTimeMs(request))) {
       return err(401, 'step-up auth required (re-login within 5 minutes)');
     }
-    const body = await safeJson<{ allow?: string[]; notifications?: boolean }>(request);
+    const body = await safeJson(request, v.object({
+      allow: v.optional(v.array(v.string())),
+      notifications: v.optional(v.boolean()),
+    }));
     if (!body || (body.allow === undefined && body.notifications === undefined)) {
       return err(400, 'allow (string[]) and/or notifications (boolean) required');
     }
     if (body.allow !== undefined) {
-      if (!Array.isArray(body.allow) || body.allow.some((a) => typeof a !== 'string')) {
-        return err(400, 'allow must be an array of email addresses');
-      }
       await agent.setEmailAllowlist(body.allow);
     }
     if (body.notifications !== undefined) {
@@ -116,6 +129,7 @@ async function handleWebhookDelivery(
   trigger_id: string,
 ): Promise<Response> {
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  const parsedCf = v.safeParse(RequestCfSchema, request.cf);
 
   // The ingress needs an EventLog + ReplyChannelStore + TriggerRegistry view
   // of the agent's state. We invoke an RPC on the orchestrator that runs the
@@ -126,8 +140,7 @@ async function handleWebhookDelivery(
     method: request.method,
     headers: extractHeaders(request),
     body_text: await readWebhookBodyText(request),
-    cf_mtls_verified: ((request as Request & { cf?: { tlsClientAuth?: { certVerified?: string } } }).cf
-      ?.tlsClientAuth?.certVerified) === 'SUCCESS',
+    cf_mtls_verified: parsedCf.success && parsedCf.output.tlsClientAuth?.certVerified === 'SUCCESS',
     delivery_id: request.headers.get('idempotency-key')
       ?? request.headers.get('x-delivery-id')
       ?? null,
@@ -164,7 +177,7 @@ async function handleTriggersRoute(
 
   if (rest === '' || rest === '/') {
     if (method === 'GET') {
-      return json(await agent.listTriggers());
+      return json(decodeJsonWire(await agent.listTriggersWire()));
     }
     if (method === 'POST') {
       // Step-up auth required for trigger creation (shared rule with the
@@ -172,13 +185,7 @@ async function handleTriggersRoute(
       if (!isFreshAuthTime(requestAuthTimeMs(request))) {
         return err(401, 'step-up auth required (re-login within 5 minutes)');
       }
-      const body = await safeJson<{
-        label?: string;
-        auth_mode?: 'hmac' | 'bearer' | 'mtls';
-        secret?: string;
-        accepted_content_type?: string;
-        rate_limit_per_min?: number;
-      }>(request);
+      const body = await safeJson(request, WebhookRequestSchema);
       if (!body || !body.label || !body.auth_mode) {
         return err(400, 'label and auth_mode required');
       }
@@ -197,7 +204,7 @@ async function handleTriggersRoute(
           rate_limit_per_min: rateLimit,
         }), { status: 201 });
       } catch (e) {
-        return err(500, (e as Error).message);
+        return err(500, e instanceof Error ? e.message : String(e));
       }
     }
     return err(405, 'GET or POST');
@@ -223,7 +230,7 @@ async function handleEventsList(request: Request, env: Env, agentName: string): 
   const limit = limitRaw ? parseInt(limitRaw, 10) : undefined;
 
   const agent = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
-  return json(await agent.listRecentEvents({ variant, since, limit }));
+  return json(decodeJsonWire(await agent.listRecentEventsWire({ variant, since, limit })));
 }
 
 // ── helpers ──────────────────────────────────────────────────────
@@ -232,8 +239,12 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-function extractHeaders(request: Request): Record<string, string> {
-  const out: Record<string, string> = {};
+interface WebhookHeaders {
+  [name: string]: string;
+}
+
+function extractHeaders(request: Request): WebhookHeaders {
+  const out: WebhookHeaders = {};
   request.headers.forEach((value, key) => { out[key] = value; });
   return out;
 }

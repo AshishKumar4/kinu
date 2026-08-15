@@ -39,7 +39,14 @@ export class UnsafeUrlError extends Error {
 function parseIPv4(host: string): [number, number, number, number] | null {
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
   if (!m) return null;
-  const octets = m.slice(1, 5).map(Number) as [number, number, number, number];
+  const first = m[1];
+  const second = m[2];
+  const third = m[3];
+  const fourth = m[4];
+  if (first === undefined || second === undefined || third === undefined || fourth === undefined) return null;
+  const octets: [number, number, number, number] = [
+    Number(first), Number(second), Number(third), Number(fourth),
+  ];
   return octets.every((o) => o >= 0 && o <= 255) ? octets : null;
 }
 

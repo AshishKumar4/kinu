@@ -1,4 +1,6 @@
 import type { CompletedTurn, ToolCallRecord } from './types.js';
+import * as v from 'valibot';
+import { decodeJsonValue, isJsonObject, type JsonValue } from '../utils/json.js';
 import { stableStringify } from '../safety/argument-digest.js';
 
 /** Execution-path validity: three things a trace proves on its own, with no
@@ -42,7 +44,7 @@ const MAX_CYCLE_LENGTH = 4;
 function fingerprint(call: ToolCallRecord): string | null {
   const keys = Object.keys(call.args);
   if (keys.length === 0) return null;
-  return `${call.name}:${stableStringify(call.args)}`;
+  return `${call.name}:${stableStringify(decodeJsonValue({ value: call.args }))}`;
 }
 
 /** Repeats of an identical fingerprint, beyond each fingerprint's first use. */
@@ -111,10 +113,11 @@ const REVISIT_PATTERNS: ReadonlyArray<RegExp> = [
 ];
 
 /** Every string leaf of an arguments object — the only place a path can hide. */
-function stringLeaves(value: unknown, into: string[] = []): string[] {
-  if (typeof value === 'string') into.push(value);
+function stringLeaves(value: JsonValue, into: string[] = []): string[] {
+  const text = v.safeParse(v.string(), value);
+  if (text.success) into.push(text.output);
   else if (Array.isArray(value)) for (const item of value) stringLeaves(item, into);
-  else if (typeof value === 'object' && value !== null) {
+  else if (isJsonObject(value)) {
     for (const item of Object.values(value)) stringLeaves(item, into);
   }
   return into;
@@ -147,7 +150,7 @@ function countBacktracks(calls: ReadonlyArray<ToolCallRecord>): number {
   const written = new Set<string>();
   let backtracks = 0;
   for (const call of calls) {
-    const text = stringLeaves(call.args);
+    const text = stringLeaves(decodeJsonValue({ value: call.args }));
     const revisited = pathsMatching(text, REVISIT_PATTERNS);
     if ([...revisited].some((path) => written.has(path))) backtracks += 1;
     for (const path of pathsMatching(text, WRITE_PATTERNS)) written.add(path);
@@ -171,8 +174,8 @@ export function executionPathSignals(calls: ReadonlyArray<ToolCallRecord>): Exec
  *  before the unification report the same signal. */
 function agentsAction(call: ToolCallRecord): string | null {
   if (call.name !== 'agents') return null;
-  const action = (call.args as { action?: unknown }).action;
-  return typeof action === 'string' ? action : null;
+  const input = v.safeParse(v.object({ action: v.optional(v.string()) }), call.args);
+  return input.success ? input.output.action ?? null : null;
 }
 
 const STAFFING_ACTIONS = new Set(['staff', 'list', 'dismiss']);

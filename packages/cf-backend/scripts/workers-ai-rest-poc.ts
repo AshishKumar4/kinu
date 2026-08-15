@@ -8,18 +8,25 @@
  *
  * Optional:
  *   CLOUDFLARE_AI_GATEWAY_ID=default
- *   CLOUDFLARE_AI_MODEL=@cf/moonshotai/kimi-k2.6
+ *   CLOUDFLARE_AI_MODEL=@cf/deepseek-ai/deepseek-v4-pro-0813
  *
  * Run:
  *   bun packages/cf-backend/scripts/workers-ai-rest-poc.ts
  */
+
+import {
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  isJsonObject,
+  parseJsonValue,
+  type JsonValue,
+} from '@proteus/core';
 
 const accountId = cleanEnv("CLOUDFLARE_ACCOUNT_ID");
 const token = cleanEnv("CLOUDFLARE_API_TOKEN")
   ?? cleanEnv("CLOUDFLARE_OAUTH_ACCESS_TOKEN")
   ?? cleanEnv("AI_GATEWAY_AUTH")?.replace(/^Bearer\s+/i, "");
 const gatewayId = cleanEnv("CLOUDFLARE_AI_GATEWAY_ID") ?? "default";
-const model = cleanEnv("CLOUDFLARE_AI_MODEL") ?? "@cf/moonshotai/kimi-k2.6";
+const model = cleanEnv("CLOUDFLARE_AI_MODEL") ?? DEFAULT_WORKERS_AI_MODEL_ID;
 
 if (!accountId || !token) {
   console.error([
@@ -56,9 +63,9 @@ const response = await fetch(endpoint, {
 });
 
 const text = await response.text();
-let body: unknown = text;
+let body: JsonValue = text;
 try {
-  body = JSON.parse(text);
+  body = parseJsonValue(text);
 } catch {
   // Keep raw body.
 }
@@ -80,19 +87,20 @@ function cleanEnv(name: string): string | null {
   return value ? value : null;
 }
 
-function summarize(value: unknown): unknown {
-  if (!value || typeof value !== "object") return value;
-  const obj = value as Record<string, unknown>;
-  const choices = Array.isArray(obj.choices) ? obj.choices : [];
-  const first = choices[0] as Record<string, unknown> | undefined;
-  const message = first?.message as Record<string, unknown> | undefined;
+function summarize(value: JsonValue): JsonValue {
+  if (!isJsonObject(value)) return value;
+  const choices = Array.isArray(value.choices) ? value.choices : [];
+  const first = choices[0];
+  const firstObject = first !== undefined && isJsonObject(first) ? first : null;
+  const message = firstObject?.message;
+  const messageObject = message !== undefined && isJsonObject(message) ? message : null;
   return {
-    id: obj.id,
-    object: obj.object,
-    created: obj.created,
-    usage: obj.usage,
-    content: message?.content ?? first?.text ?? null,
-    errors: obj.errors,
-    messages: obj.messages,
+    id: value.id ?? null,
+    object: value.object ?? null,
+    created: value.created ?? null,
+    usage: value.usage ?? null,
+    content: messageObject?.content ?? firstObject?.text ?? null,
+    errors: value.errors ?? null,
+    messages: value.messages ?? null,
   };
 }

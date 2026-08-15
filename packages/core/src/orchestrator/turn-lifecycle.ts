@@ -29,7 +29,7 @@ import type { SignalDeliverer } from '../types/signals.js';
 /** The recorder slice this spine writes through — structural (both backends
  *  pass their RunEventRecorder). */
 export interface TurnRunRecorder {
-  emit(runId: string, input: RunEventInput): unknown;
+  emit(runId: string, input: RunEventInput): void;
 }
 
 /** Open the turn's run in the durable event log: run_start (provenance) then
@@ -104,11 +104,12 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
       turnIndex: opts.turnIndex,
       tokenUsage: { input: opts.usage.input, output: opts.usage.output, cached: opts.usage.cached },
     });
-    recorder.emit(runId, {
+    const runEnd: Extract<RunEventInput, { type: 'run_end' }> = {
       type: 'run_end',
       reason: opts.reason,
-      ...(opts.error ? { error: opts.error } : {}),
-    });
+    };
+    if (opts.error) runEnd.error = opts.error;
+    recorder.emit(runId, runEnd);
   } catch (err) {
     console.warn('[proteus] event emit failed at turn end:', err);
   }
@@ -125,7 +126,7 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
   origin: 'user' | 'programmatic';
 }): CompletedTurn {
   const usage = acc.reportedUsage();
-  return {
+  const completed: CompletedTurn = {
     userMessage: opts.userMessage,
     assistantResponse: opts.assistantResponse,
     toolCalls: acc.toolCalls,
@@ -134,11 +135,12 @@ export function snapshotCompletedTurn(acc: TurnAccumulator, opts: {
     durationMs: acc.startedAt > 0 ? Date.now() - acc.startedAt : 0,
     feedback: null,
     hadError: acc.hadError,
-    ...(opts.turnId ? { turnId: opts.turnId } : {}),
     sessionId: opts.sessionId,
     origin: opts.origin,
-    ...(usage ? { usage } : {}),
   };
+  if (opts.turnId !== undefined) completed.turnId = opts.turnId;
+  if (usage !== undefined) completed.usage = usage;
+  return completed;
 }
 
 /** The compaction-state slice this module needs — structural, because the
@@ -189,7 +191,7 @@ export function applyOverflowRecovery(opts: {
       void opts.signals.deliver({
         kind: OVERFLOW_RETRY_EVENT,
         text: OVERFLOW_RETRY_TEXT,
-      }).catch((err: unknown) => console.warn('[proteus] overflow retry enqueue failed:', err));
+      }).catch((error) => console.warn('[proteus] overflow retry enqueue failed:', error));
     }
   }
   return recovery;

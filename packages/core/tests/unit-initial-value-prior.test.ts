@@ -91,9 +91,9 @@ describe('BUG-1: the initial value prior', () => {
     const defaultsOf = (init: (db: Database) => void): Record<string, string | null> => {
       const db = new Database(':memory:');
       init(db);
-      const cols = db.query(`PRAGMA table_info('search_nodes')`).all() as Array<{
-        name: string; dflt_value: string | null;
-      }>;
+      const cols = db.query<{ name: string; dflt_value: string | null }, []>(
+        `PRAGMA table_info('search_nodes')`,
+      ).all();
       return Object.fromEntries(cols.map((c) => [c.name, c.dflt_value]));
     };
 

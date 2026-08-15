@@ -9,10 +9,11 @@
 import type {
   EvalInstance, GepaCandidate, GepaMetric, MetricOutcome, ReflectionLM,
 } from './types.js';
-import { stripMarkdownFences, truncate } from './text.js';
+import { renderInput, truncate } from './text.js';
+import { stripMarkdownFences } from '../../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../../prompts/evidence-window.js';
 
-export { stripMarkdownFences } from './text.js';
+export { stripMarkdownFences } from '../../prompts/structured.js';
 
 export interface MutationContext<I = unknown, E = unknown> {
   parent: GepaCandidate;
@@ -62,7 +63,7 @@ export function renderReflectionPrompt<I, E>(opts: {
   for (const inst of opts.minibatch) {
     const o = outcomeById.get(inst.id);
     if (!o) continue;
-    const inputStr = typeof inst.input === 'string' ? inst.input : JSON.stringify(inst.input);
+    const inputStr = renderInput(inst.input);
     traceLines.push(
       `--- instance ${inst.id} (score ${o.score.toFixed(2)}) ---`,
       // Windows, not head truncations: a rollout's decisive step is usually

@@ -93,8 +93,8 @@ interface SeenContent {
 export class TurnFileLedger {
   /** Digest of every file content the model has been shown this turn, with how
    *  far into it the reads reached. Keyed on CONTENT, not on the path spelling,
-   *  so reading `/src/a.ts` and then editing `src/a.ts` — the same file through
-   *  the same mount table — is not a spurious refusal. */
+   *  so reading `/src/a.ts` and then editing `src/a.ts` — two spellings of the
+   *  same canonical file — is not a spurious refusal. */
   private readonly seen = new Map<string, SeenContent>();
   /** Paths observed at all, kept only to tell a file that moved on ("read it
    *  again") from one never read ("read it first"). */
@@ -176,10 +176,12 @@ export class TurnFileLedger {
   snapshot(): FileEditSnapshot {
     let abandoned = 0;
     for (const path of this.failedPaths) if (!this.recoveredPaths.has(path)) abandoned++;
+    const failures: Partial<Record<FileEditOutcomeReason, number>> = {};
+    for (const [reason, count] of this.failures) failures[reason] = count;
     return {
       attempts: this.attempts,
       applied: this.applied,
-      failures: Object.fromEntries(this.failures) as Partial<Record<FileEditOutcomeReason, number>>,
+      failures,
       recoveredPaths: this.recoveredPaths.size,
       abandonedPaths: abandoned,
     };
@@ -201,7 +203,7 @@ export class TurnFileLedger {
    * folded into `snapshot()` because that snapshot is the durable `file_edit`
    * row's shape and must not grow fields nothing writes.
    */
-  get progress(): { filesTouched: number; editsApplied: number } {
+  get progress() {
     return { filesTouched: this.seenPaths.size, editsApplied: this.applied };
   }
 }

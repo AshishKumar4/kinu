@@ -9,6 +9,7 @@ import type {
 } from '@proteus/core';
 import { createTestSql, type TestSql } from './sql.js';
 import { createEchoLLM } from './llm.js';
+import { createMemoryVfs } from './vfs.js';
 
 export interface TestRuntimeOptions {
   /** Override the LLM. Default: echo LLM. */
@@ -32,36 +33,41 @@ export interface TestRuntime {
 
 function emptyMemory(): Memory {
   return {
+    async write() { /* no-op */ },
     async append() { /* no-op */ },
+    async index() { /* no-op */ },
     async search() { return []; },
-    async list() { return []; },
-  } as unknown as Memory;
+    async read() { return null; },
+  };
 }
 
 function emptyCraftStore(): CraftStore {
   return {
+    create: () => {},
+    update: () => {},
     list: () => [],
-    get: () => null,
-    upsert: () => {},
+    get: () => undefined,
     delete: () => {},
     search: () => [],
     getAll: () => [],
-  } as unknown as CraftStore;
+  };
 }
 
 function emptyExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute() { return { result: undefined }; },
-  } as unknown as Executor;
+  };
 }
 
 function emptyRouter(): ExecutionRouter {
   return {
     register: () => {},
+    unregister: () => {},
     listExecutors: () => [],
-    getProvider: () => null,
+    getProvider: () => undefined,
     getProviders: () => [],
-  } as unknown as ExecutionRouter;
+  };
 }
 
 function syntheticSchedule(): Schedule {
@@ -79,6 +85,7 @@ function syntheticIdentity(): Identity {
     id: 'test-agent',
     name: 'test',
     scaffold: {
+      path: 'scaffold/agent.js',
       exists: async () => false,
       read: async () => '',
       write: async () => {},
@@ -89,7 +96,7 @@ function syntheticIdentity(): Identity {
 
 function emptyBranchHandle(): BranchHandle {
   return {
-    explore: async () => ({ text: '', codeUsed: null }),
+    explore: async () => ({ text: '' }),
     generateReflection: async () => ({ text: '' }),
   };
 }
@@ -99,16 +106,10 @@ function emptyBranchHandle(): BranchHandle {
 export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
   const testSql = createTestSql();
   const llm = opts.llm ?? createEchoLLM();
+  const workspace = createMemoryVfs();
   const rt: AgentRuntime = {
     storage: {
-      vfs: {
-        readFile: async () => '',
-        writeFile: async () => {},
-        readdir: async () => [],
-        exists: async () => false,
-        delete: async () => {},
-        listAll: async () => [],
-      } as never,
+      vfs: workspace.vfs,
       sql: testSql.sql,
       execRaw: testSql.execRaw,
     },
@@ -121,7 +122,6 @@ export function createTestRuntime(opts: TestRuntimeOptions = {}): TestRuntime {
     spawnBranch: async () => emptyBranchHandle(),
     abortBranch: async () => {},
     executionRouter: opts.executionRouter ?? emptyRouter(),
-    shell: undefined as never,
-  } as AgentRuntime;
+  };
   return { rt, testSql, llm };
 }

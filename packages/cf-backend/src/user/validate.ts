@@ -1,45 +1,57 @@
 // Runtime validator for credential payloads sent over HTTP. Mirrors the
 // `Credential` union from @proteus/core but rejects unknown shapes so a bad
 // request can't write garbage into UserDO storage.
-import type { Credential } from '@proteus/core';
+import {
+  JsonObjectSchema,
+  JsonValueSchema,
+  type Credential,
+} from '@proteus/core';
+import * as v from 'valibot';
 
-export function validateCredential(input: unknown): Credential {
-  if (!input || typeof input !== 'object') throw new Error('credential must be an object');
-  const obj = input as Record<string, unknown>;
-  const kind = obj.kind;
+const CredentialKindSchema = v.object({
+  kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
+});
+const BearerCredentialSchema = v.object({
+  kind: v.literal('bearer'),
+  token: v.pipe(v.string(), v.minLength(1)),
+});
+const OAuthCredentialSchema = v.object({
+  kind: v.literal('oauth'),
+  accessToken: v.pipe(v.string(), v.minLength(1)),
+  refreshToken: v.optional(v.string()),
+  expiresAt: v.optional(v.number()),
+  metadata: v.optional(JsonObjectSchema),
+});
+const OpenAICompatCredentialSchema = v.object({
+  kind: v.literal('openai-compat'),
+  baseURL: v.pipe(v.string(), v.minLength(1)),
+  apiKey: v.pipe(v.string(), v.minLength(1)),
+  extraHeaders: v.optional(v.record(v.string(), JsonValueSchema)),
+});
 
-  if (kind === 'bearer') {
-    if (typeof obj.token !== 'string' || !obj.token) throw new Error('bearer.token (string) required');
-    return { kind: 'bearer', token: obj.token };
-  }
-
+export function validateCredential<Input>(input: Input): Credential {
+  const kind = v.parse(CredentialKindSchema, input).kind;
+  if (kind === 'bearer') return v.parse(BearerCredentialSchema, input);
   if (kind === 'oauth') {
-    if (typeof obj.accessToken !== 'string' || !obj.accessToken) throw new Error('oauth.accessToken (string) required');
-    return {
-      kind: 'oauth',
-      accessToken: obj.accessToken,
-      refreshToken: typeof obj.refreshToken === 'string' && obj.refreshToken ? obj.refreshToken : undefined,
-      expiresAt: typeof obj.expiresAt === 'number' ? obj.expiresAt : undefined,
-      metadata: typeof obj.metadata === 'object' && obj.metadata !== null
-        ? obj.metadata as Record<string, unknown>
-        : undefined,
-    };
+    const parsed = v.parse(OAuthCredentialSchema, input);
+    const credential: Credential = { kind: 'oauth', accessToken: parsed.accessToken };
+    if (parsed.refreshToken) credential.refreshToken = parsed.refreshToken;
+    if (parsed.expiresAt !== undefined) credential.expiresAt = parsed.expiresAt;
+    if (parsed.metadata !== undefined) credential.metadata = parsed.metadata;
+    return credential;
   }
 
-  if (kind === 'openai-compat') {
-    if (typeof obj.baseURL !== 'string' || !obj.baseURL) throw new Error('openai-compat.baseURL required');
-    if (typeof obj.apiKey !== 'string' || !obj.apiKey) throw new Error('openai-compat.apiKey required');
-    const extraHeaders: Record<string, string> | undefined =
-      obj.extraHeaders && typeof obj.extraHeaders === 'object'
-        ? Object.fromEntries(
-            Object.entries(obj.extraHeaders as Record<string, unknown>)
-              .filter(([, v]) => typeof v === 'string'),
-          ) as Record<string, string>
-        : undefined;
-    return { kind: 'openai-compat', baseURL: obj.baseURL, apiKey: obj.apiKey, extraHeaders };
-  }
-
-  throw new Error(`unknown credential kind: ${String(kind)}`);
+  const parsed = v.parse(OpenAICompatCredentialSchema, input);
+  const extraHeaders = parsed.extraHeaders === undefined
+    ? undefined
+    : Object.fromEntries(Object.entries(parsed.extraHeaders).filter((entry): entry is [string, string] =>
+      v.is(v.string(), entry[1])));
+  return {
+    kind: 'openai-compat',
+    baseURL: parsed.baseURL,
+    apiKey: parsed.apiKey,
+    extraHeaders,
+  };
 }
 
 /** Credential keys must be `[a-zA-Z0-9._-]{1,128}` — alphanumerics, dot,

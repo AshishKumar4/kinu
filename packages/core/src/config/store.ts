@@ -7,11 +7,19 @@
 // The store is a deep module (small interface, real behavior): typed getters
 // for known keys, generic get/set/delete for everything else, all() for fork.
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import * as v from 'valibot';
 import type { DirectoryBackup } from '../execution/sandbox.js';
 import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
 import {
   DEFAULT_CACHE_RETENTION, isCacheRetention, type CacheRetention,
 } from '../prompting/cache-breakpoints.js';
+import { parseJsonValue } from '../utils/json.js';
+
+const DirectoryBackupSchema: v.GenericSchema<DirectoryBackup> = v.object({
+  id: v.string(),
+  dir: v.string(),
+  localBucket: v.optional(v.boolean()),
+});
 
 export type ShellApprovalMode = 'strict' | 'allow_all' | 'deny_all';
 
@@ -234,13 +242,13 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     } catch { return null; }
   };
   const set = (key: string, value: string): void => {
-    sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
+    void sql`INSERT INTO agent_config (key, value) VALUES (${key}, ${value})
         ON CONFLICT(key) DO UPDATE SET value = excluded.value`;
   };
   return {
     get,
     set,
-    delete(key) { sql`DELETE FROM agent_config WHERE key = ${key}`; },
+    delete(key) { void sql`DELETE FROM agent_config WHERE key = ${key}`; },
     all() {
       try {
         const rows = sql<{ key: string; value: string }>`SELECT key, value FROM agent_config`;
@@ -308,13 +316,13 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     setReviewModel(spec) {
       const trimmed = spec?.trim();
       if (trimmed) set(AGENT_CONFIG_KEYS.reviewModel, trimmed);
-      else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.reviewModel}`;
+      else void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.reviewModel}`;
     },
     getFastModel() { return get(AGENT_CONFIG_KEYS.fastModel); },
     setFastModel(spec) {
       const trimmed = spec?.trim();
       if (trimmed) set(AGENT_CONFIG_KEYS.fastModel, trimmed);
-      else sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.fastModel}`;
+      else void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.fastModel}`;
     },
     getAlwaysActiveSkills() {
       const v = get(AGENT_CONFIG_KEYS.alwaysActiveSkills);
@@ -323,7 +331,7 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
     },
     setAlwaysActiveSkills(names) {
       const v = Array.from(new Set(names.map(n => n.trim()).filter(Boolean))).join(',');
-      if (v.length === 0) sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.alwaysActiveSkills}`;
+      if (v.length === 0) void sql`DELETE FROM agent_config WHERE key = ${AGENT_CONFIG_KEYS.alwaysActiveSkills}`;
       else set(AGENT_CONFIG_KEYS.alwaysActiveSkills, v);
     },
     getLastActiveExecutor() { return get(AGENT_CONFIG_KEYS.lastActiveExecutor); },
@@ -334,13 +342,11 @@ export function createAgentConfigStore(sql: SqlExecutor): AgentConfigStore {
       if (/^[a-z0-9_-]{1,32}$/i.test(name)) set(AGENT_CONFIG_KEYS.lastActiveExecutor, name);
     },
     getWorkspaceBackup() {
-      const v = get(AGENT_CONFIG_KEYS.workspaceBackup);
-      if (!v) return null;
+      const stored = get(AGENT_CONFIG_KEYS.workspaceBackup);
+      if (!stored) return null;
       try {
-        const o = JSON.parse(v) as Partial<DirectoryBackup>;
-        if (typeof o?.id === 'string' && typeof o?.dir === 'string') {
-          return { id: o.id, dir: o.dir, localBucket: o.localBucket };
-        }
+        const backup = v.safeParse(DirectoryBackupSchema, parseJsonValue(stored));
+        if (backup.success) return backup.output;
       } catch { /* malformed → treat as no backup */ }
       return null;
     },

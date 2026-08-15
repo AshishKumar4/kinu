@@ -12,20 +12,10 @@ import {
   type SubordinateTaskPayload, type SubordinateReportPayload,
 } from '../src/events/hub/index.ts';
 import type { SqlExec } from '../src/index.js';
+import { makeSqlExec } from './helpers.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        const rows = stmt.all(...bindings as never[]) as Array<Record<string, unknown>>;
-        return { toArray: () => rows };
-      }
-      stmt.run(...bindings as never[]);
-      return { toArray: () => [] };
-    },
-  };
+  return makeSqlExec(new Database(':memory:'));
 }
 
 const taskPayload: SubordinateTaskPayload = {
@@ -33,6 +23,7 @@ const taskPayload: SubordinateTaskPayload = {
   kind: 'task',
   body: 'Survey the auth module and report the seams.',
   deliverable: 'a findings note in /workspace/notes/auth.md',
+  proteus_mode: 'build',
 };
 
 const reportPayload: SubordinateReportPayload = {
@@ -40,6 +31,7 @@ const reportPayload: SubordinateReportPayload = {
   status: 'completed',
   content: 'Survey done — three seams found; note written.',
   task: 'Survey the auth module',
+  proteus_mode: 'build',
 };
 
 const taskDescriptor: IngressDescriptor = {
@@ -70,13 +62,17 @@ describe('subordinate event derivation', () => {
   });
 
   test('no dedupe key — one-shot same-machine facet RPC', () => {
-    const asEvent = (variant: 'subordinate_task' | 'subordinate_report', payload: unknown) => ({
-      id: 'e', trace_id: 'e', caused_by: null, ingress: 'subordinate', variant,
+    const base = {
+      id: 'e', trace_id: 'e', caused_by: null, ingress: 'subordinate',
       trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-      received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null, payload,
-    } as ProteusEvent);
-    expect(dedupeKeyFor(asEvent('subordinate_task', taskPayload))).toBeNull();
-    expect(dedupeKeyFor(asEvent('subordinate_report', reportPayload))).toBeNull();
+      received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+    } satisfies Pick<ProteusEvent,
+      'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
+      | 'payload_visibility' | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
+    const taskEvent: ProteusEvent = { ...base, variant: 'subordinate_task', payload: taskPayload };
+    const reportEvent: ProteusEvent = { ...base, variant: 'subordinate_report', payload: reportPayload };
+    expect(dedupeKeyFor(taskEvent)).toBeNull();
+    expect(dedupeKeyFor(reportEvent)).toBeNull();
   });
 });
 

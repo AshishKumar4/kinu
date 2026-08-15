@@ -22,6 +22,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
 import { createTestRuntime } from './helpers.js';
@@ -52,8 +53,9 @@ function failingSuiteShell(stderr = ''): Shell {
 
 function runToolOver(shell: Shell): RunTool {
   const { rt } = createTestRuntime();
-  const tools = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime });
-  return tools.run as unknown as RunTool;
+  const runtime: AgentRuntime = { ...rt, shell };
+  const tools = buildBuiltinTools({ rt: runtime });
+  return { execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run) };
 }
 
 describe('a failed `run` tells the model what actually happened', () => {

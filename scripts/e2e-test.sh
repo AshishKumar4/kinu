@@ -100,8 +100,8 @@ echo ""
 echo -e "${BOLD}§2. Architecture Verification${NC}"
 
 # Execution layer completeness: the barrel must resolve (every module it
-# re-exports still exists) and must still expose the router plus a factory for
-# each ExecutorKind — workspace/nimbus/sandbox/laptop.
+# re-exports still exists) and must still expose the router plus the four
+# reusable provider factories checked below.
 EXEC_DIR="packages/core/src/execution"
 EXEC_BARREL="$EXEC_DIR/index.ts"
 EXEC_MISSING=""

@@ -14,6 +14,7 @@ import {
   type AgentSignal, type CompactionTriggerState,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
+import type { TurnRunRecorder } from '../src/orchestrator/turn-lifecycle.js';
 
 function recorder(): RunEventRecorder {
   const db = new Database(':memory:');
@@ -21,8 +22,11 @@ function recorder(): RunEventRecorder {
   return new RunEventRecorder(makeSql(db));
 }
 
-function recordingState(): CompactionTriggerState & { saved: unknown[]; armed: string[] } {
-  const saved: unknown[] = [];
+function recordingState(): CompactionTriggerState & {
+  saved: Array<[key: string, tokens: number, length: number]>;
+  armed: string[];
+} {
+  const saved: Array<[key: string, tokens: number, length: number]> = [];
   const armed: string[] = [];
   return {
     saved, armed,
@@ -43,13 +47,16 @@ describe('openTurnRun / closeTurnRun', () => {
     });
     const events = rec.read('run-1');
     expect(events.map((e) => e.type)).toEqual(['run_start', 'turn_start', 'turn_end', 'run_end']);
-    const start = events[0] as Extract<typeof events[number], { type: 'run_start' }>;
+    const start = events[0];
+    if (start?.type !== 'run_start') throw new Error('Expected run_start as the first event');
     expect(start.agentId).toBe('ws');
     expect(start.caused_by).toBe('chat');
     expect(start.userMessage?.length).toBe(500); // bounded at the spine, not per backend
-    const turnEnd = events[2] as Extract<typeof events[number], { type: 'turn_end' }>;
+    const turnEnd = events[2];
+    if (turnEnd?.type !== 'turn_end') throw new Error('Expected turn_end as the third event');
     expect(turnEnd.tokenUsage).toEqual({ input: 10, output: 5, cached: 2 });
-    const runEnd = events[3] as Extract<typeof events[number], { type: 'run_end' }>;
+    const runEnd = events[3];
+    if (runEnd?.type !== 'run_end') throw new Error('Expected run_end as the fourth event');
     expect(runEnd.reason).toBe('error');
     expect(runEnd.error).toBe('boom');
   });
@@ -74,7 +81,8 @@ describe('openTurnRun / closeTurnRun', () => {
 
     const events = rec.read('run-2');
     expect(events.map((e) => e.type)).toEqual(['run_start', 'turn_start', 'context_budget', 'turn_end', 'run_end']);
-    const row = events[2] as Extract<typeof events[number], { type: 'context_budget' }>;
+    const row = events[2];
+    if (row?.type !== 'context_budget') throw new Error('Expected context_budget before turn_end');
     expect(row.admittedChars).toBe(41_000);
     expect(row.omittedChars).toBe(160_000);
     expect(row.trips).toEqual({ run: 1 });
@@ -108,7 +116,8 @@ describe('openTurnRun / closeTurnRun', () => {
     });
     const events = rec.read('run-n');
     expect(events.map((e) => e.type)).toEqual(['turn_steering', 'turn_end', 'run_end']);
-    const row = events[0] as Extract<typeof events[number], { type: 'turn_steering' }>;
+    const row = events[0];
+    if (row?.type !== 'turn_steering') throw new Error('Expected turn_steering before turn_end');
     expect(row.trigger).toBe('repeated_failure');
     expect(row.tool).toBe('run');
     expect(row.step).toBe(4);
@@ -150,7 +159,8 @@ describe('openTurnRun / closeTurnRun', () => {
     });
     const events = rec.read('run-c');
     expect(events.map((e) => e.type)).toEqual(['craft_cycle', 'turn_end', 'run_end']);
-    const row = events[0] as Extract<typeof events[number], { type: 'craft_cycle' }>;
+    const row = events[0];
+    if (row?.type !== 'craft_cycle') throw new Error('Expected craft_cycle before turn_end');
     expect(row.crafted).toEqual(['sum']);
     expect(row.reused).toEqual(['sum']);
     expect(row.returned).toBe(1);
@@ -170,7 +180,7 @@ describe('openTurnRun / closeTurnRun', () => {
   });
 
   test('a recorder failure never throws into the turn', () => {
-    const broken = { emit: () => { throw new Error('db locked'); } } as unknown as RunEventRecorder;
+    const broken: TurnRunRecorder = { emit: () => { throw new Error('db locked'); } };
     expect(() => openTurnRun(broken, 'r', { agentId: 'a', causedBy: 'chat', userMessage: 'm', turnIndex: 0 })).not.toThrow();
     expect(() => closeTurnRun(broken, 'r', { turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed' })).not.toThrow();
   });

@@ -39,10 +39,14 @@ export interface ConsentWatchOptions {
   pollMs?: number;
 }
 
+export interface ConsentWatcher {
+  stop(): void;
+}
+
 export function watchDeviceConsents(
   consents: DeviceConsentSurface,
   opts: ConsentWatchOptions,
-): { stop(): void } {
+): ConsentWatcher {
   const abort = new AbortController();
   const handled = new Set<string>();
   let presenting = false;

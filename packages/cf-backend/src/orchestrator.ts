@@ -14,6 +14,7 @@
 
 import { callable, type AgentContext } from "agents";
 import { ORCHESTRATOR_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
+import { writeNimbusWorkspaceSoul } from "./nimbus-route.js";
 import { getSandbox } from "@cloudflare/sandbox";
 import { generateText, convertToModelMessages } from "ai";
 import type {
@@ -33,12 +34,11 @@ import {
   shouldBackupWorkspace, workspaceBackupOptions,
   BUILTIN_TOOLS,
   BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS,
-  argumentDigest,
   updateCraftScores,
   feedbackToQuality,
   migrateCraftedToolDuplicates,
   // Fork feature
-  forkWorkspace, writeForkSnapshot, readForkLineage,
+  forkWorkspace, writeForkSnapshot,
   type ForkTransport, type ForkSnapshot,
   // Workspace archive — the owner's portable copy of this workspace's storage
   readWorkspaceArchivePage, type ArchiveCursor, type ArchivePage,
@@ -60,12 +60,12 @@ import {
   readScaffoldVersion, readShadowVerdict, type ShadowVerdict,
   type RunEvent, type RunEventQuery,
   // agent_facts world model
-  DEFAULT_CONFIG, AGENT_CONFIG_KEYS,
+  AGENT_CONFIG_KEYS,
   // Voyager curriculum + Absolute Zero learnability proposer
   listProposedTasks, updateProposedTaskStatus,
   // Hybrid search (FTS5 + Vectorize via RRF)
   hybridSearch, memorySnippetRehydrator, type HybridHit,
-  type CompletedTurn, type ToolCallRecord, type SqlExecutor,
+  type CompletedTurn, type ToolCallRecord,
   // Adaptive reasoning_effort per stage
   effortFor,
   type BackgroundJob, type AgentTaskTree, TriggerRegistry, ReplyChannelStore,
@@ -111,9 +111,6 @@ import {
   type CheckpointAvailability, type FileCheckpointEntry, type FileRestorePlan, type FileRestoreResult,
   // Shared turn lifecycle
   snapshotCompletedTurn,
-  spillEventContent,
-  type DynamicApproval,
-  type MissingCapability,
   type DynamicContext,
   type DynamicDelegate,
   // Ingress — core owns the gates; this actor owns the transports in front
@@ -128,12 +125,12 @@ import {
   PeerHub, type PeerMessage, type ReceiveResult,
   // ── Read models: the folds a surface asks for, one implementation each ──
   getAgentStatus, getChatHistory, getToolList, readLatestSearchTree, readSearchTree,
-  listForkRuns, type ForkRunSummary,
+  listForkRuns, readForkRun, type ForkRunSummary,
   buildPendingActions, type PendingAction,
   type ChatHistoryEntry,
   getRunTimeline, type TimelineSpan,
   getRunEvents, getRunSummaries, listRuns, type RunListEntry, type RunSummary,
-  getWorkspaceDiff, getExecutorDiff, resetWorkspaceBaseline,
+  getWorkspaceDiff, getExecutorDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
   type ExecutorDiffResult, type WorkspaceDiffResult,
   diffLines, type DiffLine,
   getExecutorFiles, readExecutorFile, writeExecutorFileOp, listEnvironments,
@@ -146,16 +143,20 @@ import {
   setMctsConfig, setModel, setReasoningEffort, setShellApprovalMode,
   type EvolutionConfigView, type MctsConfigView,
   getEvolutionChangelog, getUnseenChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
+  PlanReviewStore, formatPlanWithLineNumbers,
+  planReviewAwaitingDecision,
+  JsonValueSchema, type JsonValue,
+  admitPlanReviewAnnotations,
+  type PlanEdit, type PlanReview, type PlanReviewAnnotation, type PlanReviewDecision,
+  type PlanReviewResult, type PromptMode, type WorkMode,
 } from "@proteus/core";
+import * as v from 'valibot';
 import { ActorAgent, type ActorToolDeps } from "./actor-agent.js";
 import { resolveEnsembleJudgeSelection } from "./providers/judge-model.js";
 import { SubordinateAgent } from "./subordinate-agent.js";
 import {
   SubordinateRosterStore,
-  admitSubordinateReport,
   createTeamToolDeps,
-  normalizeReportContent,
-  parentAdmitsSubordinateReport,
   type SubordinateReportOrigin,
   type SubordinatesChangedEvent,
   createAgentSelfProvider,
@@ -169,6 +170,8 @@ import {
 } from "@proteus/core";
 import type { CodemodeProvider, MctsSearchRunSummary } from "@proteus/core";
 import { createCloudWorkspaceForUser } from "./user/workspace-create.js";
+import { deliverCloudFork } from "./user/workspace-fork.js";
+import { createNimbusWorkspaceSandbox, nimbusWorkspaceArchiveFiles } from './nimbus-route.js';
 import { agentEmailAddress } from "./email/inbound.js";
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
@@ -194,10 +197,46 @@ const STALE_SCHEDULE_HORIZON_MS = 24 * 60 * 60 * 1000;
 const ACTIVITY_STEP_WINDOW = 400;
 const ACTIVITY_LOG_WINDOW = 200;
 
+const FileRestoreChangeSchema = v.object({
+  path: v.string(),
+  kind: v.picklist(['modify', 'create', 'delete']),
+});
+const FileCheckpointEntrySchema = v.object({
+  id: v.string(), dir: v.string(), at: v.number(), turnId: v.nullable(v.string()),
+  sessionId: v.nullable(v.string()), reason: v.string(),
+});
+const FileRestorePlanSchema = v.object({
+  dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema),
+});
+const FileRestoreResultSchema = v.object({
+  dir: v.string(), id: v.string(), files: v.array(FileRestoreChangeSchema),
+  preRestoreId: v.nullable(v.string()),
+});
+const CheckpointAvailabilitySchema = v.object({
+  available: v.boolean(), reason: v.optional(v.string()),
+});
+const EventVariantSchema = v.picklist([
+  'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subordinate_task',
+  'subordinate_report', 'file_changed', 'email', 'internal', 'reply_request',
+  'mcp_chat', 'mcp_third_party',
+]);
+const ArchiveCursorSchema = v.variant('phase', [
+  v.object({
+    phase: v.literal('sql'), table: v.pipe(v.string(), v.nonEmpty()),
+    after: v.nullable(v.pipe(v.number(), v.safeInteger())),
+    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  }),
+  v.object({
+    phase: v.literal('files'), after: v.pipe(v.string(), v.nonEmpty()),
+    rows: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+    files: v.pipe(v.number(), v.safeInteger(), v.minValue(0)),
+  }),
+]);
+
 /** A caller-supplied row limit, clamped to [1, max]. */
 function clampLimit(requested: number | undefined, max: number): number {
-  if (!Number.isFinite(requested)) return max;
-  return Math.min(Math.max(Math.floor(requested as number), 1), max);
+  if (requested === undefined || !Number.isFinite(requested)) return max;
+  return Math.min(Math.max(Math.floor(requested), 1), max);
 }
 
 function executorOutputIsError(output: string): boolean {
@@ -207,9 +246,39 @@ function executorOutputIsError(output: string): boolean {
 }
 
 export class OrchestratorAgent extends ActorAgent {
+  private _planReviews: PlanReviewStore | null = null;
+
   constructor(ctx: AgentContext, env: Env) {
     super(ctx, env);
     sealRpcSurface(this, ORCHESTRATOR_RPC_SURFACE);
+  }
+
+  /** One SQL-backed review stream. Constructed lazily because ActorAgent's
+   * constructor seals the RPC surface before onStart initializes the schema. */
+  private get planReviews(): PlanReviewStore {
+    if (!this._planReviews) this._planReviews = new PlanReviewStore(this.boundSql);
+    return this._planReviews;
+  }
+
+  protected override turnPromptMode(): PromptMode {
+    const requested = super.turnPromptMode();
+    const approvedHandoff = this._activeProgrammaticUserMessage !== null
+      && this.turnUserMessageEvent(this._activeProgrammaticUserMessage) === 'plan_approved';
+    return requested === 'build'
+      && !approvedHandoff
+      && planReviewAwaitingDecision(this.planReviews.getActive('default'))
+      ? 'plan'
+      : requested;
+  }
+
+  private submitPlanEdits(edits: readonly PlanEdit[]): PlanReviewResult {
+    const result = this.planReviews.submit('default', edits);
+    if (result.ok) this.broadcastPlanUpdate(result.plan);
+    return result;
+  }
+
+  private broadcastPlanUpdate(plan: PlanReview): void {
+    this.host.broadcast({ type: 'plan_updated', plan });
   }
 
   override async onBeforeSubAgent(
@@ -279,7 +348,7 @@ export class OrchestratorAgent extends ActorAgent {
       task: entry.currentTask,
     }));
     const deafInbox = this.emailInbox.dropNotice(Date.now());
-    return {
+    const context: DynamicContext = {
       ...base,
       delegates: [...subordinates, ...(base.delegates ?? [])],
       // Both kinds of decision parked on the human, in one roster: a consent
@@ -287,8 +356,9 @@ export class OrchestratorAgent extends ActorAgent {
       // parked for hours. The second is also the structural reminder that its
       // effect has NOT happened — restated on every step until it is decided.
       approvals: [...this._consents.approvals(), ...this.deferrals.approvals()],
-      ...(deafInbox ? { missingCapabilities: [...(base.missingCapabilities ?? []), deafInbox] } : {}),
     };
+    if (deafInbox) context.missingCapabilities = [...(base.missingCapabilities ?? []), deafInbox];
+    return context;
   }
 
 
@@ -310,9 +380,9 @@ export class OrchestratorAgent extends ActorAgent {
         id: event.id ?? nanoid(),
         kind: event.kind,
         subordinate: event.subordinate,
-        ...(event.status ? { status: event.status } : {}),
+        status: event.status,
         content: event.content,
-        ...(event.task ? { task: event.task } : {}),
+        task: event.task,
         timestamp: event.timestamp,
       } satisfies SubordinateActivityEvent));
     } catch { /* no connected clients */ }
@@ -341,11 +411,10 @@ export class OrchestratorAgent extends ActorAgent {
 
   protected get triggerRegistry(): TriggerRegistry {
     if (!this._triggerRegistry) {
-      const orchestrator = this;
       const alarmScheduler: AlarmScheduler = {
         // Idempotent: pick the soonest of (existing alarm, new ts).
-        scheduleAt(ts: number) { orchestrator.scheduleTimerAt(ts); },
-        currentAlarm(): number | null { return null; },
+        scheduleAt: (ts: number) => this.scheduleTimerAt(ts),
+        currentAlarm: (): number | null => null,
       };
       this._triggerRegistry = new TriggerRegistry(this.ctx.storage.sql, alarmScheduler);
     }
@@ -353,32 +422,28 @@ export class OrchestratorAgent extends ActorAgent {
   }
   protected get replyChannels(): ReplyChannelStore {
     if (!this._replyChannels) {
-      const orchestrator = this;
       // ws_session dispatcher: push the reply back through Think's chat
       // broadcast. The reply() tool's content becomes a synthetic assistant
       // message visible to connected WS clients.
       const wsDispatcher: ReplyDispatcher = {
-        async dispatch(_channel: ReplyChannelRow, payload: unknown) {
+        dispatch: async (_channel: ReplyChannelRow, payload: JsonValue) => {
           try {
-            const text = typeof payload === 'string'
-              ? payload
-              : JSON.stringify((payload as { content?: unknown })?.content ?? payload);
-            const broadcast = (orchestrator as unknown as {
-              broadcastChatMessage?: (msg: {
-                role: 'assistant';
-                parts: Array<{ type: 'text'; text: string }>;
-              }) => Promise<void> | void;
-            }).broadcastChatMessage;
-            if (broadcast) {
-              await broadcast({
-                role: 'assistant',
-                parts: [{ type: 'text', text }],
-              });
-              return { delivered: true };
-            }
-            return { delivered: false, detail: 'no broadcast channel' };
+            const parsedText = v.safeParse(v.string(), payload);
+            const parsedContent = v.safeParse(v.looseObject({ content: v.optional(JsonValueSchema) }), payload);
+            const content = parsedContent.success ? parsedContent.output.content ?? payload : payload;
+            const text = parsedText.success ? parsedText.output : JSON.stringify(content);
+            const message = {
+              id: nanoid(),
+              role: 'assistant',
+              parts: [{ type: 'text', text }],
+            } as const;
+            this.broadcast(JSON.stringify({
+              type: 'cf_agent_chat_messages',
+              messages: [...this.messages, message],
+            }));
+            return { delivered: true };
           } catch (err) {
-            return { delivered: false, detail: (err as Error).message };
+            return { delivered: false, detail: err instanceof Error ? err.message : String(err) };
           }
         },
       };
@@ -386,16 +451,16 @@ export class OrchestratorAgent extends ActorAgent {
       // the inbound mail's thread via the send_email binding. Context resolves
       // per dispatch so binding/display-name changes never go stale.
       const emailDispatcher = createEmailThreadDispatcher(() => ({
-        email: orchestrator.env.EMAIL,
-        agentDisplayName: orchestrator.safeDisplayName(),
-        outbox: orchestrator.emailOutbox,
+        email: this.env.EMAIL,
+        agentDisplayName: this.safeDisplayName(),
+        outbox: this.emailOutbox,
       }));
       this._replyChannels = new ReplyChannelStore(this.ctx.storage.sql, {
         ws_session: wsDispatcher,
         // peer_back: route the answer to a peer ask back over the outbox
         // transport. Lazily bound — PeerHub needs this store to construct.
         peer_back: {
-          dispatch: (channel, payload) => orchestrator.peerHub.dispatchPeerBack(channel, payload),
+          dispatch: (channel, payload) => this.peerHub.dispatchPeerBack(channel, payload),
         },
         email_thread: emailDispatcher,
       });
@@ -416,36 +481,35 @@ export class OrchestratorAgent extends ActorAgent {
   private _peerHub: PeerHub | null = null;
   protected get peerHub(): PeerHub {
     if (!this._peerHub) {
-      const orchestrator = this;
       this._peerHub = new PeerHub({
         sql: this.ctx.storage.sql,
         log: this.eventLog,
         replyChannels: this.replyChannels,
-        vfs: () => orchestrator.rt.storage.vfs,
-        selfAgentName: () => orchestrator.name,
+        vfs: () => this.rt.storage.vfs,
+        selfAgentName: () => this.name,
         selfUserId: () => {
-          const userId = orchestrator.getOwnerUserId();
+          const userId = this.getOwnerUserId();
           if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
           return userId;
         },
         deliver: async (receiverAgentName, msg) => {
-          const stub = orchestrator.env.OrchestratorAgent.get(
-            orchestrator.env.OrchestratorAgent.idFromName(receiverAgentName),
-          ) as DurableObjectStub<OrchestratorAgent>;
+          const stub = this.env.OrchestratorAgent.get(
+            this.env.OrchestratorAgent.idFromName(receiverAgentName),
+          );
           return await stub.receivePeerMessage(msg);
         },
-        isSameOwner: async (senderUserId) => senderUserId === orchestrator.getOwnerUserId(),
+        isSameOwner: async (senderUserId) => senderUserId === this.getOwnerUserId(),
         hasGrant: async (senderAgentName, senderUserId) => {
           try {
-            const { stub, caller } = await orchestrator.userHub();
+            const { stub, caller } = await this.userHub();
             return await stub.hasPeerGrant(caller, senderAgentName, senderUserId);
           } catch (err) {
-            console.warn('[proteus] hasPeerGrant lookup failed:', (err as Error).message);
+            console.warn('[proteus] hasPeerGrant lookup failed:', err instanceof Error ? err.message : String(err));
             return false;   // default deny on lookup failure
           }
         },
-        scheduleDispatch: (at) => orchestrator.scheduleTimerAt(at),
-        onAdmitted: () => { orchestrator.orch.scheduleDrain(); },
+        scheduleDispatch: (at) => this.scheduleTimerAt(at),
+        onAdmitted: () => { this.orch.scheduleDrain(); },
       });
     }
     return this._peerHub;
@@ -459,8 +523,8 @@ export class OrchestratorAgent extends ActorAgent {
    *  write is held open with `waitUntil` so it lands even if the caller's
    *  invocation ends first. */
   private scheduleTimerAt(ts: number): void {
-    this.ctx.waitUntil(this.armTimer(ts).catch((err: unknown) => {
-      console.error('[proteus] timer arm failed:', (err as Error).message);
+    this.ctx.waitUntil(this.armTimer(ts).catch((err) => {
+      console.error('[proteus] timer arm failed:', err instanceof Error ? err.message : String(err));
     }));
   }
 
@@ -552,7 +616,7 @@ export class OrchestratorAgent extends ActorAgent {
         const stub = await this.subAgent(SubordinateAgent, entry.name);
         await stub.installWorkspaceCapability(token);
       } catch (err) {
-        console.warn(`[proteus] capability push to subordinate ${entry.name} failed:`, (err as Error).message);
+        console.warn(`[proteus] capability push to subordinate ${entry.name} failed:`, err instanceof Error ? err.message : String(err));
       }
     }
     return result;
@@ -567,14 +631,23 @@ export class OrchestratorAgent extends ActorAgent {
     } catch { return null; }
   }
 
+  /** The hosted file plane is owner-namespaced. Never touch it while the
+   * workspace is unclaimed; the creation claim and owned activations converge
+   * here so scaffold bootstrap cannot lose an onStart/RPC race. */
+  private async ensureOwnedScaffold(): Promise<void> {
+    if (!this.getOwnerUserId()) return;
+    if (await this.rt.identity.scaffold.exists()) return;
+    await bootstrapScaffold(this.rt);
+    console.log('[proteus] Bootstrapped initial scaffold');
+  }
+
   /** The agents tool's peer deps over the cross-workspace transport. Owner
    *  resolution is lazy inside each action (the toolset is cached across
    *  turns — including a pre-claim build — so deps must not capture owner
    *  state at construction). */
   private getPeersToolDeps(): PeersToolDeps {
-    const orchestrator = this;
     const requireOwner = () => {
-      const userId = orchestrator.getOwnerUserId();
+      const userId = this.getOwnerUserId();
       if (!userId) throw new Error('Agent has no owner yet — peer messaging needs an owned agent.');
       return userId;
     };
@@ -582,41 +655,39 @@ export class OrchestratorAgent extends ActorAgent {
      *  materializing a fresh unowned DO that rejects the message. */
     const requirePeer = async (agent: string): Promise<void> => {
       requireOwner();
-      if (agent === orchestrator.name) throw new Error('that is this agent — pick another peer (action:"list")');
-      const { stub, caller } = await orchestrator.userHub();
+      if (agent === this.name) throw new Error('that is this agent — pick another peer (action:"list")');
+      const { stub, caller } = await this.userHub();
       const known = await stub.hasWorkspace(caller, agent);
       if (!known) throw new Error(`unknown peer "${agent}" — list your team with action:"list"`);
     };
     return {
       listPeers: async () => {
         requireOwner();
-        const { stub, caller } = await orchestrator.userHub();
-        return teamPeers(orchestrator.name, await stub.listWorkspaces(caller));
+        const { stub, caller } = await this.userHub();
+        return teamPeers(this.name, await stub.listWorkspaces(caller));
       },
-      ask: async ({ agent, topic, message, timeoutMs }) => {
+      ask: async ({ agent, topic, message, timeoutMs, mode }) => {
         await requirePeer(agent);
-        return orchestrator.peerHub.ask({ agent, userId: requireOwner(), topic, message, timeoutMs });
+        return this.peerHub.ask({ agent, userId: requireOwner(), topic, message, timeoutMs, mode });
       },
-      send: async ({ agent, topic, message }) => {
+      send: async ({ agent, topic, message, mode }) => {
         await requirePeer(agent);
-        return orchestrator.peerHub.send({ agent, userId: requireOwner(), topic, message });
+        return this.peerHub.send({ agent, userId: requireOwner(), topic, message, mode });
       },
-      reply: async ({ eventId, message }) => orchestrator.peerHub.reply({ eventId, message }),
-      spawnWorkspace: async ({ name, purpose, message, timeoutMs }): Promise<PeerSpawnOutcome> => {
+      reply: async ({ eventId, message }) => this.peerHub.reply({ eventId, message }),
+      spawnWorkspace: async ({ name, purpose, message, timeoutMs, mode }): Promise<PeerSpawnOutcome> => {
         const userId = requireOwner();
-        const { stub: userDO, caller } = await orchestrator.userHub();
+        const { stub: userDO, caller } = await this.userHub();
         let agentName = name;
         let created = false;
         if (!agentName || !(await userDO.hasWorkspace(caller, agentName))) {
-          const entry = await createCloudWorkspaceForUser(orchestrator.env, userId, userDO, caller, {
-            ...(agentName ? { name: agentName } : {}),
-            purpose,
-          });
+          const workspaceInput = { name: agentName || undefined, purpose };
+          const entry = await createCloudWorkspaceForUser(this.env, userId, userDO, caller, workspaceInput);
           agentName = entry.name;
           created = true;
         }
-        const outcome = await orchestrator.peerHub.ask({
-          agent: agentName, userId, topic: 'task', message, timeoutMs,
+        const outcome = await this.peerHub.ask({
+          agent: agentName, userId, topic: 'task', message, timeoutMs, mode,
         });
         return { agent: agentName, created, ...outcome };
       },
@@ -624,59 +695,59 @@ export class OrchestratorAgent extends ActorAgent {
   }
 
   private getTeamToolDeps(): TeamToolDeps {
-    const orchestrator = this;
     return createTeamToolDeps({
       roster: this.subordinateRoster,
       now: () => Date.now(),
-      inheritedContext: () => orchestrator.readInheritedContext(),
+      inheritedContext: () => this.readInheritedContext(),
       createName: (role) => {
         const base = slugifyName(role).slice(0, 48) || 'subordinate';
         return `${base}-${nanoid(6)}`;
       },
-      broadcast: (event) => orchestrator.broadcastSubordinatesChanged(event),
-      broadcastTask: (event) => orchestrator.broadcastSubordinateEvent({
+      broadcast: (event) => this.broadcastSubordinatesChanged(event),
+      broadcastTask: (event) => this.broadcastSubordinateEvent({
         kind: 'task',
         ...event,
       }),
       runtime: {
-        async spawn(input) {
-          const ownerUserId = orchestrator.getOwnerUserId();
+        spawn: async (input) => {
+          const ownerUserId = this.getOwnerUserId();
           if (!ownerUserId) throw new Error('Agent has no owner yet — subordinate creation needs an owned workspace.');
-          const stub = await orchestrator.subAgent(SubordinateAgent, input.name);
-          const capabilityToken = await orchestrator.workspaceCapabilityToken();
+          const stub = await this.subAgent(SubordinateAgent, input.name);
+          const capabilityToken = await this.workspaceCapabilityToken();
           try {
-            await stub.setSubordinateIdentity({
+            const identity = {
               name: input.name,
               displayName: input.displayName,
               role: input.role,
               mission: input.mission,
-              ...(input.model ? { model: input.model } : {}),
-              ...(capabilityToken ? { capabilityToken } : {}),
-            });
+              model: input.model,
+              capabilityToken: capabilityToken ?? undefined,
+            };
+            await stub.setSubordinateIdentity(identity);
           } catch (error) {
-            await orchestrator.deleteSubAgent(SubordinateAgent, input.name).catch(() => {});
+            await this.deleteSubAgent(SubordinateAgent, input.name).catch(() => {});
             throw error;
           }
         },
-        async assign(name, input) {
-          const stub = await orchestrator.subAgent(SubordinateAgent, name);
-          return stub.enqueueSubordinateTask({
+        assign: async (name, input) => {
+          const stub = await this.subAgent(SubordinateAgent, name);
+          const task = {
             kind: 'task',
             body: input.body,
-            ...(input.deliverable ? { deliverable: input.deliverable } : {}),
-            ...(input.deadlineHint ? { deadlineHint: input.deadlineHint } : {}),
-            ...(input.inheritedContext ? { inheritedContext: input.inheritedContext } : {}),
-          });
+            mode: input.mode,
+            deliverable: input.deliverable,
+            deadlineHint: input.deadlineHint,
+            inheritedContext: input.inheritedContext,
+          } as const;
+          return stub.enqueueSubordinateTask(task);
         },
-        async status(name) {
-          return (await orchestrator.subAgent(SubordinateAgent, name)).getSubordinateStatus();
+        status: async (name) => (await this.subAgent(SubordinateAgent, name)).getSubordinateStatus(),
+        message: async (name, content, mode) => {
+          return (await this.subAgent(SubordinateAgent, name))
+            .enqueueSubordinateTask({ kind: 'message', body: content, mode });
         },
-        async message(name, content) {
-          return (await orchestrator.subAgent(SubordinateAgent, name))
-            .enqueueSubordinateTask({ kind: 'message', body: content });
-        },
-        async dismiss(name, keepHistory) {
-          if (!keepHistory) await orchestrator.deleteSubAgent(SubordinateAgent, name);
+        dismiss: async (name, keepHistory) => {
+          if (!keepHistory) await this.deleteSubAgent(SubordinateAgent, name);
         },
       },
     });
@@ -711,7 +782,7 @@ export class OrchestratorAgent extends ActorAgent {
    * name, and import stages into this workspace's ledger.
    */
   @callable()
-  async experienceAction(input: ExperienceActionInput): Promise<Record<string, unknown>> {
+  async experienceAction(input: ExperienceActionInput) {
     this.ensureSchema();
     const deps = this.getExperienceDeps();
     if (!deps) {
@@ -791,6 +862,7 @@ export class OrchestratorAgent extends ActorAgent {
       team: this.getTeamToolDeps(),
       releases: this.getReleaseToolDeps(),
       peers: this.getPeersToolDeps(),
+      submitPlan: { submit: (edits) => this.submitPlanEdits(edits) },
     };
   }
 
@@ -823,7 +895,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       this.ensureSchema();
     } catch (err) {
-      console.error('[orchestrator] claimOwner ensureSchema failed:', (err as Error).message);
+      console.error('[orchestrator] claimOwner ensureSchema failed:', err instanceof Error ? err.message : String(err));
     }
     // The HASH, not a boolean: the owner's UserDO compares it against what it
     // has registered, so any disagreement — a workspace holding nothing, or one
@@ -835,19 +907,25 @@ export class OrchestratorAgent extends ActorAgent {
       // Unclaimed — first touch. Ensure identity has the owner marker.
       const exists = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
       if (exists.length === 0) {
-        this.sql`
+        void this.sql`
           INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
           VALUES (${this.ctx.id.toString()}, ${this.name}, ${userId}, ${Date.now()})
         `;
       } else {
-        this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
+        void this.sql`UPDATE workspace_identity SET owner_user_id = ${userId}`;
       }
       this.invalidateModelCaches();
+      await this.ensureOwnedScaffold();
       return { owner: userId, capabilityHash };
     }
     if (current !== userId) {
       throw new Error(`Agent owned by a different user (stored=${current.slice(0, 8)}…, caller=${userId.slice(0, 8)}…)`);
     }
+    // Ownership is persisted before the external filesystem bootstrap. If a
+    // transient Nimbus failure interrupted that first claim, the next
+    // authenticated touch must finish the invariant instead of treating the
+    // owner row as proof that initialization completed.
+    await this.ensureOwnedScaffold();
     return { owner: current, capabilityHash };
   }
 
@@ -864,7 +942,7 @@ export class OrchestratorAgent extends ActorAgent {
     this._lastWorkspaceBackupAt = now;          // optimistic gate (concurrency within activation)
     void handle.createBackup(workspaceBackupOptions())
       .then((b) => this.config.setWorkspaceBackup(b))
-      .catch((err) => console.warn('[proteus] workspace backup failed:', (err as Error).message));
+      .catch((err) => console.warn('[proteus] workspace backup failed:', err instanceof Error ? err.message : String(err)));
   }
 
   // The reactor (drain-then-stop) now lives on the core AgentOrchestrator
@@ -874,6 +952,7 @@ export class OrchestratorAgent extends ActorAgent {
   // immediately via `this.orch.drainPendingEvents()`.
 
   async onChatResponse(result: ChatResponseResult) {
+    const turnMode = this.turnPromptMode();
     // The actor-generic settle spine lives on ActorAgent; everything after it
     // here is orchestrator sequencing (takes, branches, evolution, naming).
     const { drainTurnId, programmaticUserMessage, errorText, completed, injectedSignals } =
@@ -892,12 +971,12 @@ export class OrchestratorAgent extends ActorAgent {
     const lastUserMsg = programmaticUserMessage ?? userMessages[userMessages.length - 1];
     const userText = lastUserMsg?.parts
       ?.filter(p => p.type === "text")
-      .map(p => (p as { type: "text"; text: string }).text)
+      .map(p => p.text)
       .join("") ?? "";
 
     const assistantText = result.message.parts
       ?.filter(p => p.type === "text")
-      .map(p => (p as { type: "text"; text: string }).text)
+      .map(p => p.text)
       .join("") ?? "";
 
     // Extension seam: the turn settled and was durably persisted — the same
@@ -916,17 +995,20 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       if (lastUserMsg?.id) {
         const userCreatedAt = (() => {
-          const ts = (lastUserMsg as { createdAt?: string | number | Date }).createdAt;
-          if (typeof ts === "number") return ts;
-          if (typeof ts === "string") { const p = Date.parse(ts); if (!Number.isNaN(p)) return p; }
+          const parsed = v.safeParse(v.looseObject({
+            createdAt: v.optional(v.union([v.number(), v.string(), v.instance(Date)])),
+          }), lastUserMsg);
+          const ts = parsed.success ? parsed.output.createdAt : undefined;
+          if (v.is(v.number(), ts)) return ts;
+          if (v.is(v.string(), ts)) { const p = Date.parse(ts); if (!Number.isNaN(p)) return p; }
           if (ts instanceof Date) return ts.getTime();
           return this.acc.startedAt || Date.now();
         })();
-        this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+        void this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
                  VALUES (${lastUserMsg.id}, ${'default'}, ${null}, ${'user'}, ${userText}, ${userCreatedAt})`;
       }
       if (result.message.id) {
-        this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
+        void this.sql`INSERT OR IGNORE INTO messages (id, session_id, parent_id, role, content, created_at)
                  VALUES (${result.message.id}, ${'default'}, ${lastUserMsg?.id ?? null}, ${'assistant'}, ${assistantText}, ${Date.now()})`;
       }
     } catch (err) {
@@ -939,7 +1021,7 @@ export class OrchestratorAgent extends ActorAgent {
     // after the turn completes — so turn.feedback is null here; the outcome
     // review (engine.reviewTurn, dispatched when the NEXT user message
     // arrives) populates it from explicit thumbs or the follow-up classifier.
-    const msgId = (result.message as { id?: string } | null | undefined)?.id;
+    const msgId = result.message.id;
     if (!msgId) {
       // Completed but unattributable — without a message id the takes cannot
       // credit this turn, and they must not leak into the next one's claim.
@@ -960,7 +1042,7 @@ export class OrchestratorAgent extends ActorAgent {
       // below reads this row to write craft_scores.
       const craftNames = this.acc.craftedToolsUsed();
       if (craftNames.length > 0) {
-        this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
+        void this.sql`INSERT INTO turn_craft_usage (message_id, tool_names, created_at)
                  VALUES (${msgId}, ${JSON.stringify(craftNames)}, ${Date.now()})
                  ON CONFLICT(message_id) DO UPDATE SET
                    tool_names = excluded.tool_names, created_at = excluded.created_at`;
@@ -974,7 +1056,7 @@ export class OrchestratorAgent extends ActorAgent {
     // Mission Inbox: a turn injected by the event drain carries the synthetic
     // turn id its events were bound to — reply their open email_thread
     // channels with this turn's answer (threaded outbound email). Detached.
-    if (typeof drainTurnId === 'string') {
+    if (drainTurnId) {
       this._pendingDrainReplyTurns.set(result.requestId, drainTurnId);
       void this.completeEventBatch(drainTurnId, assistantText).then((completed) => {
         if (completed && this._pendingDrainReplyTurns.get(result.requestId) === drainTurnId) {
@@ -1005,29 +1087,31 @@ export class OrchestratorAgent extends ActorAgent {
     // that outlives Think's turn wrapper, plus the sampled shadow trial that
     // gives the promotion gate its evidence about whatever that cadence
     // proposed.
-    this.settleCompletedTurn(turn);
+    if (turnMode !== 'plan') {
+      this.settleCompletedTurn(turn);
 
-    // Sleep-time compute — between-turn background memory compression.
-    // Reads recent turn, asks a judge to upsert/decay the agent_facts world
-    // model. Letta-style; ~50% test-time token reduction reported. Gated by
-    // agent_config.sleep_time_compute (default ON; fact upserts land in the
-    // Evolution Changelog and are revertable).
-    void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
+      // Sleep-time compute — between-turn background memory compression.
+      // Reads recent turn, asks a judge to upsert/decay the agent_facts world
+      // model. Letta-style; ~50% test-time token reduction reported. Gated by
+      // agent_config.sleep_time_compute (default ON; fact upserts land in the
+      // Evolution Changelog and are revertable).
+      void this.runSleepTimeCompute(userText, assistantText, this.acc.toolCalls);
 
-    // Title the workspace from what it is FOR — its mission — not from
-    // whatever it was asked to do first. A workspace with no mission of its
-    // own has only the opening request to go on. Fire-and-forget; once-only
-    // (persisting an auto title marks name_origin).
-    const mission = readMission(this.boundSql);
-    void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!);
+      // Title the workspace from what it is FOR — its mission — not from
+      // whatever it was asked to do first. A workspace with no mission of its
+      // own has only the opening request to go on. Fire-and-forget; once-only
+      // (persisting an auto title marks name_origin).
+      const mission = readMission(this.boundSql);
+      void this.maybeAutoTitleWorkspace(isPlaceholderMission(mission) ? userText : mission!);
 
-    // Persist /workspace to R2 if the agent used the sandbox this turn — so the
-    // work survives the container sleeping. Debounced + fire-and-forget.
-    this.backupWorkspaceIfDue();
+      // Persist /workspace to R2 if the agent used the sandbox this turn — so the
+      // work survives the container sleeping. Debounced + fire-and-forget.
+      this.backupWorkspaceIfDue();
 
-    // Trace-driven continuous self-optimization (when enabled): run GEPA once
-    // enough new turns have accrued. Fire-and-forget; no-op when disabled.
-    this.maybeRunAutoGepa();
+      // Trace-driven continuous self-optimization (when enabled): run GEPA once
+      // enough new turns have accrued. Fire-and-forget; no-op when disabled.
+      this.maybeRunAutoGepa();
+    }
 
     // Reactor drain-then-stop: handle any external events still pending (arrived
     // during this turn, or queued before a chat turn). No-op when none — so this
@@ -1145,7 +1229,7 @@ export class OrchestratorAgent extends ActorAgent {
     return retryBackgroundJob({
       jobs: this.jobs,
       jobRunner: this.jobRunner,
-      rawTools: () => this.getRawTools(),
+      rawTools: (mode) => this.getRawToolsForWorkMode(mode),
       logActivity: (event, detail) => this.logActivity(event, detail),
     }, jobId);
   }
@@ -1297,6 +1381,117 @@ export class OrchestratorAgent extends ActorAgent {
     return { decided: decided.map((a) => a.id) };
   }
 
+  // ── Plan review — durable revisions + serialized mode handoff ────────
+
+  @callable()
+  async getActivePlanReview(): Promise<PlanReview | null> {
+    return this.planReviews.getActive('default');
+  }
+
+  @callable()
+  async savePlanReviewAnnotations(
+    id: string,
+    revision: number,
+    annotations: PlanReviewAnnotation[],
+  ): Promise<PlanReviewResult> {
+    const admitted = admitPlanReviewAnnotations(annotations);
+    if (!admitted.ok) return { ok: false, error: admitted.error, plan: this.planReviews.get(id, revision) };
+    const result = this.planReviews.saveAnnotations(id, revision, admitted.annotations);
+    if (result.ok) this.broadcastPlanUpdate(result.plan);
+    return result;
+  }
+
+  /** Persist the owner's verdict before starting the next turn. This is a
+   * mode boundary, so it deliberately enqueues behind the planning turn
+   * instead of splicing into that turn's next step: implementation must never
+   * begin under the Plan prompt/tool surface. */
+  @callable()
+  async decidePlanReview(
+    id: string,
+    revision: number,
+    decision: PlanReviewDecision,
+    feedback?: string,
+  ): Promise<PlanReviewResult | {
+    readonly ok: true;
+    readonly plan: PlanReview;
+    readonly queued: boolean;
+    readonly queueError?: string;
+  }> {
+    const result = this.planReviews.decide(id, revision, decision, feedback);
+    if (!result.ok) return result;
+    if (result.plan.handoffAccepted) {
+      return { ok: true, plan: result.plan, queued: true };
+    }
+    this.broadcastPlanUpdate(result.plan);
+
+    const plan = result.plan;
+    const text = decision === 'request_changes'
+      ? [
+          `The owner requested changes to plan ${plan.id} revision ${plan.revision}.`,
+          '',
+          '## Review feedback',
+          plan.feedback ?? '',
+          '',
+          `## Current plan (${plan.content.split('\n').length} lines)`,
+          'Use these exact pre-edit line numbers in the next submit_plan call:',
+          '',
+          '```',
+          formatPlanWithLineNumbers(plan.content),
+          '```',
+          '',
+          'Revise the plan with targeted submit_plan edits. Do not implement or create previews.',
+        ].join('\n')
+      : [
+          `The owner approved plan ${plan.id} revision ${plan.revision}.`,
+          ...(plan.feedback ? ['', 'Approval notes:', plan.feedback] : []),
+          '',
+          'Implement the exact approved plan below. Verify the result and report any necessary deviation explicitly.',
+          '',
+          '<approved-plan>',
+          plan.content,
+          '</approved-plan>',
+        ].join('\n');
+    const metadata = {
+      proteusEvent: decision === 'approve' ? 'plan_approved' : 'plan_feedback',
+      proteusMode: decision === 'approve' ? 'build' : 'plan',
+      planId: plan.id,
+      revision: plan.revision,
+      decision,
+    };
+    const enqueue = (attempt: number) => this.host.enqueueTurn({
+        text,
+        metadata,
+        idempotencyKey: `plan:${plan.id}:${plan.revision}:${decision}:${attempt}`,
+      });
+    try {
+      let attempt = this.planReviews.handoffAttempt(plan.id, plan.revision);
+      let queued = await enqueue(attempt);
+      if (queued.status === 'skipped'
+        && queued.durable
+        && !queued.durable.accepted
+        && (queued.durable.status === 'aborted'
+          || queued.durable.status === 'skipped'
+          || queued.durable.status === 'error')) {
+        attempt = this.planReviews.advanceHandoffAttempt(plan.id, plan.revision, attempt);
+        queued = await enqueue(attempt);
+      }
+      if (queued.status !== 'queued') {
+        return { ok: true, plan, queued: false, queueError: 'the durable turn submission was skipped' };
+      }
+      const accepted = this.planReviews.markHandoffAccepted(plan.id, plan.revision);
+      if (!accepted.ok) return accepted;
+      this.broadcastPlanUpdate(accepted.plan);
+      return { ok: true, plan: accepted.plan, queued: true };
+    } catch (error) {
+      return {
+        ok: true,
+        plan,
+        queued: false,
+        queueError: error instanceof Error ? error.message : String(error),
+      };
+    }
+  }
+
   // ── DO initialization ──────────────────────────────────────────
 
   // Device connection moved to the user level (UserDO owns the tunnel socket +
@@ -1316,6 +1511,7 @@ export class OrchestratorAgent extends ActorAgent {
 
     // Every table a workspace has, on any backend — one list, in core.
     initWorkspaceSchema({ execRaw, sql: this.boundSql, exec: this.ctx.storage.sql });
+    initWorkspaceBaselineTable(execRaw);
 
     // ── planes this root alone carries (declared per-root in
     //    core/conformance/manifest.ts, observed against sqlite_master) ──
@@ -1323,8 +1519,6 @@ export class OrchestratorAgent extends ActorAgent {
     this.subordinateRoster.ensureSchema();
 
     // Workspace-diff baseline (path → content snapshot) for the Output surface's
-    // cumulative change-set. Captured lazily / re-markable via resetWorkspaceBaseline.
-    execRaw(`CREATE TABLE IF NOT EXISTS vfs_baseline (path TEXT PRIMARY KEY, content TEXT)`);
 
     // Per-turn user feedback (thumbs up/down). The chat UI's thumbs button
     // writes here via setTurnFeedback, which re-scores the crafted tools used
@@ -1355,7 +1549,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       this.sweepUnrunnableSchedules();
     } catch (err) {
-      console.warn('[proteus] stale schedule sweep failed:', (err as Error).message);
+      console.warn('[proteus] stale schedule sweep failed:', err instanceof Error ? err.message : String(err));
     }
     let reconciledEventIds: string[] = [];
     try {
@@ -1368,16 +1562,7 @@ export class OrchestratorAgent extends ActorAgent {
     // duplicates in crafted_tools + craft_scores left over from older
     // code that lowercased names. Gated by _v2_codegen_migration_done.
     try {
-      // Wrap `this.sql` in a closure that preserves the `this` binding.
-      // `.bind()` produces a function whose `this` is the agent, but the
-      // agents SDK sql method dereferences `this.ctx` which loses the
-      // Think-class this somehow when routed through the bound function;
-      // a direct closure side-steps that.
-      const agent = this;
-      const sqlForMigration = ((strings: TemplateStringsArray, ...values: unknown[]) =>
-        agent.sql(strings, ...values as Parameters<typeof agent.sql>[1][])
-      ) as unknown as Parameters<typeof migrateCraftedToolDuplicates>[0];
-      const report = migrateCraftedToolDuplicates(sqlForMigration, execRaw);
+      const report = migrateCraftedToolDuplicates(this.boundSql, execRaw);
       if (report.ranMigration && report.mergedGroups > 0) {
         console.log(
           `[proteus] duplicate migration: merged ${report.mergedGroups} group(s), ` +
@@ -1395,14 +1580,9 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       const identity = this.sql<{ id: string }>`SELECT id FROM workspace_identity LIMIT 1`;
       if (identity.length === 0) {
-        this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
+        void this.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${this.ctx.id.toString()}, ${this.name}, ${Date.now()})`;
       }
-      // Bootstrap scaffold if it doesn't exist — needed for scaffold mutation to work
-      const scaffoldExists = await this.rt.identity.scaffold.exists();
-      if (!scaffoldExists) {
-        await bootstrapScaffold(this.rt);
-        console.log("[proteus] Bootstrapped initial scaffold");
-      }
+      await this.ensureOwnedScaffold();
     } catch (err) {
       console.error("[proteus] onStart init failed:", err);
     }
@@ -1415,8 +1595,12 @@ export class OrchestratorAgent extends ActorAgent {
     // slug. Title them from SOUL.md's mission the first time one is opened —
     // every other workspace is already titled, so it costs a config read.
     // Fire-and-forget: boot never waits on a model call.
-    if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
-      void readSoul(this.rt.storage.vfs).then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')));
+    if (this.getOwnerUserId() && isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name)) {
+      void readSoul(this.rt.storage.vfs)
+        .then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))
+        .catch((error) => {
+          console.warn('[proteus] workspace auto-title read failed:', error instanceof Error ? error.message : String(error));
+        });
     }
   }
 
@@ -1442,7 +1626,7 @@ export class OrchestratorAgent extends ActorAgent {
       const { fired } = fireDueTriggers({ registry: this.triggerRegistry, log: this.eventLog }, now);
       if (fired > 0) this.orch.scheduleDrain();
     } catch (err) {
-      console.error('[proteus] alarm handler failed:', (err as Error).message);
+      console.error('[proteus] alarm handler failed:', err instanceof Error ? err.message : String(err));
     }
 
     // Re-drive pending outbound peer messages (crash/eviction recovery + the
@@ -1451,7 +1635,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       await this.peerHub.dispatchOutbox(now);
     } catch (err) {
-      console.warn('[proteus] peer outbox dispatch failed:', (err as Error).message);
+      console.warn('[proteus] peer outbox dispatch failed:', err instanceof Error ? err.message : String(err));
     }
 
     // Reconcile indeterminate outbound email: an intent left `pending` (crash
@@ -1460,7 +1644,7 @@ export class OrchestratorAgent extends ActorAgent {
     try {
       if (this.env.EMAIL) await this.emailOutbox.reconcile(this.env.EMAIL, now);
     } catch (err) {
-      console.warn('[proteus] email outbox reconcile failed:', (err as Error).message);
+      console.warn('[proteus] email outbox reconcile failed:', err instanceof Error ? err.message : String(err));
     }
 
     // Re-arm for the next-soonest wake (triggers ∪ peer-outbox ∪ email-outbox
@@ -1477,7 +1661,7 @@ export class OrchestratorAgent extends ActorAgent {
       );
       if (next !== null) await this.armTimer(next);
     } catch (err) {
-      console.warn('[proteus] timer re-arm failed:', (err as Error).message);
+      console.warn('[proteus] timer re-arm failed:', err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -1560,6 +1744,11 @@ export class OrchestratorAgent extends ActorAgent {
    *  for a merge); this is the list they are both reached from. */
   @callable() async listForkRuns(limit: number = 20): Promise<ForkRunSummary[]> {
     return listForkRuns(this.boundSql, limit);
+  }
+
+  /** One named fork for a permalink, independent of the recent-list window. */
+  @callable() async getForkRun(rootId: string): Promise<ForkRunSummary | null> {
+    return readForkRun(this.boundSql, rootId);
   }
 
   /**
@@ -1676,7 +1865,7 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** The operator viewed the changelog — zero the unseen badge. */
   @callable()
-  async markChangelogSeen(): Promise<{ ok: true; seenAt: number }> {
+  async markChangelogSeen() {
     return markChangelogSeen(this.config);
   }
 
@@ -1692,7 +1881,7 @@ export class OrchestratorAgent extends ActorAgent {
       this._cachedTools = null;
       this._cachedToolsKey = '';
       try {
-        this.sql`INSERT INTO evolution_events (type, message, created_at)
+        void this.sql`INSERT INTO evolution_events (type, message, created_at)
           VALUES ('reflection', ${`Operator reverted changelog entry ${id}: ${result.detail ?? 'done'}`}, ${Date.now()})`;
       } catch { /* event log is best-effort */ }
     }
@@ -1728,10 +1917,13 @@ export class OrchestratorAgent extends ActorAgent {
    */
   @callable()
   async branchTurn(text: string): Promise<{ accepted: boolean; branchId?: string; reason?: string }> {
-    const task = typeof text === 'string' ? text.trim() : '';
+    const task = text.trim();
     if (!task) throw new Error('branchTurn requires the redirect text');
     if (!this._inFlight) {
       return { accepted: false, reason: 'No turn is running — send it as a normal message instead.' };
+    }
+    if (this.turnPromptMode() === 'plan') {
+      return { accepted: false, reason: 'Plan turns cannot start mutating branches. Review or finish the plan first.' };
     }
     const runtime = this.getCFHeadRuntime();
     if (!runtime) {
@@ -1816,6 +2008,14 @@ export class OrchestratorAgent extends ActorAgent {
     opts?: { useShadowOverride?: boolean; timeoutMs?: number },
   ): Promise<ScaffoldRunResult> {
     return runScaffoldOnce(this.scaffoldControl, task, opts);
+  }
+
+  /** Cross-DO wire form for the MCP Worker adapter. */
+  async runScaffoldOnceWire(
+    task: string,
+    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+  ): Promise<string> {
+    return JSON.stringify(await this.runScaffoldOnce(task, opts));
   }
 
   /**
@@ -1925,7 +2125,7 @@ export class OrchestratorAgent extends ActorAgent {
    *   deny_all   — reject gate AND warn (env-dump, secret-file-read).
    */
   @callable()
-  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all'): Promise<{ ok: true; mode: ShellApprovalMode }> {
+  async setShellApprovalMode(mode: 'strict' | 'allow_all' | 'deny_all') {
     return setShellApprovalMode({
       config: this.config,
       // Force a tool cache rebuild on the next getTools().
@@ -1946,7 +2146,7 @@ export class OrchestratorAgent extends ActorAgent {
    * explicitly wants to avoid.
    */
   @callable()
-  async setAlwaysActiveSkills(names: string[]): Promise<{ ok: true; names: string[] }> {
+  async setAlwaysActiveSkills(names: string[]) {
     return setAlwaysActiveSkills(this.config, names);
   }
 
@@ -1966,7 +2166,8 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this.getOwnerUserDO()) return { available: false, reason: 'agent has no owner user yet' };
     try {
       const { stub, caller } = await this.userHub();
-      return await stub.deviceRpc(caller, 'checkpointStatus', []) as CheckpointAvailability;
+      const result = await stub.deviceRpc(caller, 'checkpointStatus', []);
+      return v.parse(CheckpointAvailabilitySchema, result === undefined ? undefined : JSON.parse(result));
     } catch (err) {
       if (isDeviceNotConnectedError(err)) {
         return { available: false, reason: 'no device connected — connect one with `proteus connect`' };
@@ -1980,7 +2181,13 @@ export class OrchestratorAgent extends ActorAgent {
     if (!this.getOwnerUserDO()) return [];
     try {
       const { stub, caller } = await this.userHub();
-      return await stub.deviceRpc(caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))]) as FileCheckpointEntry[];
+      const result = await stub.deviceRpc(
+        caller, 'checkpointList', [this.name, Math.max(1, Math.min(500, limit))],
+      );
+      return v.parse(
+        v.array(FileCheckpointEntrySchema),
+        result === undefined ? undefined : JSON.parse(result),
+      );
     } catch (err) {
       if (isDeviceNotConnectedError(err)) return [];
       throw err;
@@ -1990,13 +2197,15 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
     const { stub, caller } = await this.userHub();
-    return await stub.deviceRpc(caller, 'checkpointPlan', [this.name, dir, id]) as FileRestorePlan;
+    const result = await stub.deviceRpc(caller, 'checkpointPlan', [this.name, dir, id]);
+    return v.parse(FileRestorePlanSchema, result === undefined ? undefined : JSON.parse(result));
   }
 
   @callable()
   async restoreFileCheckpoint(dir: string, id: string): Promise<FileRestoreResult> {
     const { stub, caller } = await this.userHub();
-    return await stub.deviceRpc(caller, 'checkpointRestore', [this.name, dir, id]) as FileRestoreResult;
+    const result = await stub.deviceRpc(caller, 'checkpointRestore', [this.name, dir, id]);
+    return v.parse(FileRestoreResultSchema, result === undefined ? undefined : JSON.parse(result));
   }
 
   /**
@@ -2015,17 +2224,17 @@ export class OrchestratorAgent extends ActorAgent {
     messageId: string,
     feedback: 'positive' | 'negative' | null,
   ): Promise<{ ok: true; messageId: string; feedback: 'positive' | 'negative' | null; rescored: number }> {
-    if (typeof messageId !== 'string' || messageId.length === 0) {
+    if (messageId.length === 0) {
       throw new Error('messageId must be a non-empty string');
     }
     if (feedback === null) {
-      this.sql`DELETE FROM turn_feedback WHERE message_id = ${messageId}`;
+      void this.sql`DELETE FROM turn_feedback WHERE message_id = ${messageId}`;
       return { ok: true, messageId, feedback: null, rescored: 0 };
     }
     if (feedback !== 'positive' && feedback !== 'negative') {
       throw new Error(`feedback must be 'positive', 'negative', or null; got ${JSON.stringify(feedback)}`);
     }
-    this.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
+    void this.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
              VALUES (${messageId}, ${feedback}, ${Date.now()})
              ON CONFLICT(message_id) DO UPDATE SET
                feedback   = excluded.feedback,
@@ -2037,7 +2246,8 @@ export class OrchestratorAgent extends ActorAgent {
     const usageRows = this.sql<{ tool_names: string }>`
       SELECT tool_names FROM turn_craft_usage WHERE message_id = ${messageId} LIMIT 1`;
     if (usageRows[0]?.tool_names) {
-      const names = JSON.parse(usageRows[0].tool_names) as string[];
+      const parsedNames = v.safeParse(v.array(v.string()), JSON.parse(usageRows[0].tool_names));
+      const names = parsedNames.success ? parsedNames.output : [];
       if (names.length > 0) {
         updateCraftScores(this.boundSql, names, feedbackToQuality(feedback));
         rescored = names.length;
@@ -2204,8 +2414,8 @@ export class OrchestratorAgent extends ActorAgent {
   /**
    * The cumulative workspace change-set since the baseline — what the agent has
    * created/changed/deleted, for review on the Output surface. The baseline is
-   * captured lazily on first call (returns empty + baselineJustCaptured) and
-   * re-markable via resetWorkspaceBaseline ("mark reviewed").
+   * captured at workspace birth and re-markable via resetWorkspaceBaseline
+   * ("mark reviewed"). A read never changes the review boundary.
    */
   async getWorkspaceDiff(): Promise<WorkspaceDiffResult> {
     return getWorkspaceDiff(this.rt);
@@ -2230,7 +2440,13 @@ export class OrchestratorAgent extends ActorAgent {
    *  synthesis — drives the Exploration surface's Branches strip. */
   @callable()
   async getHeadRuns(limit: number = 20): Promise<HeadRunView[]> {
-    try { return this.headJournal.listRuns(limit); } catch { return []; }
+    return this.headJournal.listRuns(limit);
+  }
+
+  /** One merged fork's journal, independent of unrelated recent head runs. */
+  @callable()
+  async getHeadRun(rootId: string): Promise<HeadRunView | null> {
+    return this.headJournal.readRun(rootId);
   }
 
   /**
@@ -2238,43 +2454,47 @@ export class OrchestratorAgent extends ActorAgent {
    * everything the workspace durably holds, in the same format the local
    * backend writes and `proteus import` reads.
    *
-   * Paged because a workspace's SQLite (transcripts, run events, VFS blobs) has
-   * no bounded size, and neither a DO response nor an isolate's memory should
-   * have to hold all of it: the caller walks `next` until it is null and
-   * appends each page's lines to a file. Owner-scoped by the RPC access table
+   * Paged because a workspace's SQL rows and Nimbus files have no bounded
+   * size, and neither a DO response nor an isolate's memory should have to hold
+   * all of it: the caller walks `next` until it is null and appends each page's
+   * lines to a file. Owner-scoped by the RPC access table
    * ('interactive' — a scoped CI token is denied on every transport) on top of
    * the ownership check every workspace route already makes. Workspace
    * capability tiers do not gate it: this reads the workspace's own storage
    * for the owner who asked, and reaches nothing in the wider account.
    */
   @callable()
-  async exportWorkspaceArchive(cursor?: unknown): Promise<ArchivePage> {
+  async exportWorkspaceArchive(cursor?: ArchiveCursor): Promise<ArchivePage> {
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('Cannot export an unclaimed workspace.');
+    const workspace = createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name);
     return readWorkspaceArchivePage(this.ctx.storage.sql, {
       workspace: this.name,
       source: 'cloud',
       cursor: parseArchiveCursor(cursor),
+      files: nimbusWorkspaceArchiveFiles(workspace),
     });
   }
 
   /** Tear down every per-agent resource, then wipe this Durable Object. Called
    *  by UserDO.removeWorkspace on delete so a same-name recreate starts clean and no
-   *  orphaned alarm / container / triggers linger. Best-effort on the sandbox;
-   *  the DO wipe (storage + alarm) always runs. Deliberately NOT @callable:
+   *  orphaned alarm / process / port lingers. Every external plane is
+   *  fail-closed: the optional Sandbox goes first because its teardown can
+   *  fail without deleting the authoritative Nimbus workspace; Nimbus then
+   *  goes before actor storage so a retry never reconnects to stale bytes.
+   *  Deliberately NOT @callable:
    *  destruction goes through UserDO's ownership check, never the raw websocket. */
   async destroyAgent(expectedOwnerUserId: string): Promise<{ ok: true }> {
     if (!/^[a-f0-9]{32}$/.test(expectedOwnerUserId)) throw new Error('invalid expected owner user id');
     const ownerUserId = this.getOwnerUserId();
     if (ownerUserId !== expectedOwnerUserId) throw new Error('Agent owner mismatch; refusing to destroy.');
-    try {
-      const sb = getSandbox(
-        this.env.Sandbox as Parameters<typeof getSandbox>[0],
-        `proteus-${this.name}`,
-        { normalizeId: true },
-      ) as unknown as { destroy(): Promise<unknown> };
+    if (this.env.Sandbox) {
+      const sb = getSandbox(this.env.Sandbox, `proteus-${this.name}`, { normalizeId: true });
       await sb.destroy();
-    } catch (err) {
-      console.warn('[proteus] destroyAgent: sandbox teardown failed:', err instanceof Error ? err.message : err);
     }
+    await createNimbusWorkspaceSandbox(this.env, ownerUserId, this.name).destroy({
+      reason: 'Proteus workspace deleted',
+    });
     // The R2 /workspace snapshot self-expires via the BACKUP_TTL lifecycle rule
     // on the bucket (there is no SDK deleteBackup and the key scheme is internal).
     await this.destroy(); // agents base: drops SDK tables + deleteAlarm + deleteAll + aborts the isolate
@@ -2312,6 +2532,11 @@ export class OrchestratorAgent extends ActorAgent {
    */
   async getRunEvents(runId: string, opts?: RunEventQuery): Promise<RunEvent[]> {
     return getRunEvents(this.eventRecorder, runId, opts);
+  }
+
+  /** Cross-DO wire form for Worker HTTP and MCP adapters. */
+  async getRunEventsWire(runId: string, opts?: RunEventQuery): Promise<string> {
+    return JSON.stringify(await this.getRunEvents(runId, opts));
   }
 
   /** List the agent's recent runs with their latest timestamp + event count. */
@@ -2376,7 +2601,7 @@ export class OrchestratorAgent extends ActorAgent {
   /** MCP `run_task`: deliver a task signal through the SAME seam the event→turn
    *  reactor and background-job wake use. Not a new execution path. */
   async runTaskFromMcp(text: string): Promise<EnqueueTurnResult> {
-    const trimmed = typeof text === 'string' ? text.trim() : '';
+    const trimmed = text.trim();
     if (!trimmed) throw new Error('run_task requires non-empty text');
     const outcome = await this.orch.signals.deliver({
       kind: 'mcp', text: trimmed,
@@ -2393,6 +2618,7 @@ export class OrchestratorAgent extends ActorAgent {
       agent: input.agent,
       topic: (input.topic ?? '').trim() || 'message',
       message: input.message,
+      mode: 'build',
     });
   }
 
@@ -2465,6 +2691,7 @@ export class OrchestratorAgent extends ActorAgent {
     // codemode without a literal saying so, and a builtin that moves behind
     // codemode flips here on its own.
     const nativeNames = new Set(Object.keys(this.getRawTools()));
+    const exposureOf = (name: string): 'native' | 'codemode' => nativeNames.has(name) ? 'native' : 'codemode';
     const builtIn = BUILTIN_TOOLS.map(name => ({
       name,
       // Both registers, from the one spec: the headline a list row shows and
@@ -2472,7 +2699,7 @@ export class OrchestratorAgent extends ActorAgent {
       // the other by splitting text.
       summary: BUILTIN_TOOL_SPECS[name].summary,
       description: BUILTIN_TOOL_DESCRIPTIONS[name],
-      exposure: (nativeNames.has(name) ? "native" : "codemode") as "native" | "codemode",
+      exposure: exposureOf(name),
     }));
     const craftedRaw = this.rt.craftStore.list();
     const crafted = craftedRaw.map(t => {
@@ -2482,7 +2709,7 @@ export class OrchestratorAgent extends ActorAgent {
         name: t.name,
         description: t.description || "Crafted tool",
         isLearned: true,
-        exposure: (nativeNames.has(t.name) ? "native" : "codemode") as "native" | "codemode",
+        exposure: exposureOf(t.name),
         qualityScore: scoreRow[0]?.score ?? 0.5,
         usageCount: scoreRow[0]?.uses ?? 0,
       };
@@ -2541,8 +2768,9 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async spawnSubordinate(role: string, mission: string): Promise<{
     name: string;
     displayName: string;
+    subordinate: SubordinateRosterEntry;
   }> {
-    return this.getTeamToolDeps().spawn({ role, mission, createdBy: 'user' });
+    return this.getTeamToolDeps().create({ role, mission });
   }
 
   @callable() async dismissSubordinate(name: string): Promise<{
@@ -2550,7 +2778,7 @@ export class OrchestratorAgent extends ActorAgent {
     name: string;
     historyKept: boolean;
   }> {
-    return this.getTeamToolDeps().dismiss({ name });
+    return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });
   }
 
   async getExecutorOutput(executorId: string, limit: number = 50) {
@@ -2575,14 +2803,14 @@ export class OrchestratorAgent extends ActorAgent {
       this.getAgentStatus(),
       safe(this.getToolDescriptions(), { builtIn: [], crafted: [], executors: [] }),
       this.getMemoryContent(),
-      safe(this.getMctsTree(), [] as unknown[]),
-      safe(this.getRunTimeline({ limit: 250 }), [] as TimelineSpan[]),
+      safe(this.getMctsTree(), []),
+      safe(this.getRunTimeline({ limit: 250 }), []),
       safe(this.getExecutors(), []),
     ]);
     const executorOutputs = await Promise.all(
       executors.map(async (e) => ({
         name: e.name,
-        outputs: await safe(this.getExecutorOutput(e.name, 50), [] as unknown[]),
+        outputs: await safe(this.getExecutorOutput(e.name, 50), []),
       })),
     );
     const lastActiveExecutor = this.config.getLastActiveExecutor();
@@ -2599,10 +2827,10 @@ export class OrchestratorAgent extends ActorAgent {
 
     try {
       const result = await execTool.execute(command);
-      const stdout = typeof result === 'string' ? result : JSON.stringify(result);
+      const stdout = v.is(v.string(), result) ? result : JSON.stringify(result);
       const isError = executorOutputIsError(stdout);
 
-      this.sql`INSERT INTO executor_output (executor, command, stdout, stderr, exit_code)
+      void this.sql`INSERT INTO executor_output (executor, command, stdout, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${stdout}, ${isError ? stdout : ''}, ${isError ? 1 : 0})`;
 
       this.broadcast(JSON.stringify({
@@ -2613,7 +2841,7 @@ export class OrchestratorAgent extends ActorAgent {
       return { stdout, stderr: isError ? stdout : '', exitCode: isError ? 1 : 0 };
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
-      this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
+      void this.sql`INSERT INTO executor_output (executor, command, stderr, exit_code)
         VALUES (${executorId}, ${command}, ${errMsg}, ${1})`;
       // Broadcast on error too — symmetric with the success branch above.
       // Without this, the UI terminal silently swallows failures because
@@ -2649,36 +2877,35 @@ export class OrchestratorAgent extends ActorAgent {
     return writeExecutorFileOp(this.rt.executionRouter, executorId, path, bytes);
   }
 
-  /**
-   * Return the current list of exposed ports for a given executor. Powers
-   * the auto-refreshing preview grid in the Executors tab. Sandbox returns
-   * its active `exposePort(...)` registrations; other executors return [].
-   */
-  @callable() async getExposedPorts(executorId: string) {
+  /** Return exposed ports for one executor. Workspace registrations live in
+   * Nimbus, so they remain authoritative after this actor restarts. */
+  @callable() async getExposedPorts(executorId: string): Promise<{
+    ports: Array<{ port: number; name?: string; url: string }>;
+    error?: string;
+  }> {
     const provider = this.rt.executionRouter?.getProvider(executorId);
-    if (!provider) return { ports: [] as Array<{ port: number; name?: string; url?: string }> };
+    if (!provider) {
+      return executorId === 'sandbox'
+        ? { ports: [] }
+        : { ports: [], error: `${executorId} preview provider is unavailable` };
+    }
     const status = provider.getStatus?.();
-    if (status && !status.active) return { ports: [] as Array<{ port: number; name?: string; url?: string }> };
-    const listPorts = provider.tools.listPorts;
-    if (!listPorts) return { ports: [] };
-    try {
-      const raw = await listPorts.execute();
-      // sandbox.ts returns JSON-encoded text; parse defensively
-      if (typeof raw === 'string') {
-        try {
-          const arr = JSON.parse(raw);
-          if (Array.isArray(arr)) {
-            return { ports: arr.map(p => ({
-              port: Number(p.port),
-              name: p.name,
-              url: p.exposedUrl ?? p.url,
-            })) };
-          }
-        } catch { /* fall through */ }
-      }
-      return { ports: Array.isArray(raw) ? raw : [] };
-    } catch {
+    if (status && !status.active && provider.kind !== 'workspace') {
       return { ports: [] };
+    }
+    if (!provider.listExposedPorts) {
+      return { ports: [], error: `${executorId} cannot list exposed ports` };
+    }
+    try {
+      const ports = await provider.listExposedPorts();
+      return { ports: ports.map(({ port, name, url }) => ({ port, url, name })) };
+    } catch (error) {
+      return {
+        ports: [],
+        error: error instanceof Error && error.message
+          ? error.message
+          : `Couldn't list ${executorId} preview ports`,
+      };
     }
   }
 
@@ -2701,7 +2928,7 @@ export class OrchestratorAgent extends ActorAgent {
     return getReasoningEffort(this.config);
   }
 
-  @callable() async setReasoningEffort(effort: unknown): Promise<{ ok: true; effort: ReasoningEffort }> {
+  @callable() async setReasoningEffort<Effort>(effort: Effort) {
     return setReasoningEffort(this.config, effort);
   }
 
@@ -2725,7 +2952,14 @@ export class OrchestratorAgent extends ActorAgent {
   @callable() async setSoul(soul: string) {
     const text = soul.trim();
     if (!text) throw new Error('SOUL.md cannot be empty.');
-    await writeSoul(this.rt.storage.vfs, this.boundSql, text);
+    const ownerUserId = this.getOwnerUserId();
+    if (!ownerUserId) throw new Error('SOUL.md is unavailable until the workspace owner claim completes.');
+    await writeSoul(
+      this.rt.storage.vfs,
+      this.boundSql,
+      text,
+      (_path, content) => writeNimbusWorkspaceSoul(this.env, ownerUserId, this.name, content),
+    );
     // Invalidate the cached SOUL.md + system prompt so the next turn
     // picks up the new identity.
     this._cachedSoulText = null;
@@ -2787,36 +3021,25 @@ export class OrchestratorAgent extends ActorAgent {
   /** Reaching a workspace that does not exist yet: a Durable Object addressed
    *  by name, and the raw-copy RPC that carries the snapshot to it. */
   private get forkTransport(): ForkTransport {
-    const ns = (this.env as unknown as {
-      OrchestratorAgent: {
-        idFromName(name: string): DurableObjectId;
-        get(id: DurableObjectId): DurableObjectStub<OrchestratorAgent>;
-      };
-    }).OrchestratorAgent;
+    const ns = this.env.OrchestratorAgent;
     const stubFor = (name: string) => ns.get(ns.idFromName(name));
     return {
-      async occupied(name) {
-        try {
-          // A bare getAgentStatus on a fresh DO may create workspace_identity,
-          // but it does not seed SOUL.md. An agent that exists has either chat
-          // history or a SOUL.md written by the creation path.
-          const status = await (stubFor(name) as unknown as {
-            getAgentStatus(): Promise<{ messageCount: number; soul: string }>;
-          }).getAgentStatus();
-          return status.messageCount > 0 || status.soul.length > 0;
-        } catch {
-          // A transient RPC failure must not block a fork — the copy below
-          // surfaces anything real.
-          return false;
-        }
+      occupied: async (name) => {
+        const { stub, caller } = await this.userHub();
+        return stub.hasWorkspace(caller, name);
       },
-      async deliver(name, snapshot) {
-        // The name rides along: a DO reached by cross-DO stub has not been
-        // routed through the agent router, so it cannot read its own name.
-        const result = await (stubFor(name) as unknown as {
-          rawCopyFromFork(n: string, s: ForkSnapshot): Promise<{ ok: true; agentId: string }>;
-        }).rawCopyFromFork(name, snapshot);
-        return { workspaceId: result.agentId };
+      deliver: async (name, snapshot) => {
+        const ownerUserId = this.getOwnerUserId();
+        if (!ownerUserId) throw new Error('cannot fork an unclaimed workspace');
+        const { stub, caller } = await this.userHub();
+        return deliverCloudFork({
+          registry: stub,
+          caller,
+          target: stubFor(name),
+          name,
+          snapshot,
+          ownerUserId,
+        });
       },
     };
   }
@@ -2827,12 +3050,38 @@ export class OrchestratorAgent extends ActorAgent {
    * RPC never needed the decorator, and this is a raw storage write that must
    * never be reachable over the public agents WS/HTTP transport.
    */
-  async rawCopyFromFork(forkName: string, snapshot: ForkSnapshot): Promise<{ ok: true; agentId: string }> {
+  async rawCopyFromFork(
+    forkName: string,
+    snapshot: ForkSnapshot,
+    ownerUserId: string,
+  ): Promise<
+    | { ok: true; agentId: string; capabilityHash: string | null }
+    | { ok: false; reason: 'owned_by_another_user' }
+  > {
+    if (!ownerUserId) throw new Error('fork owner is required');
     // Apply the FULL schema before copying rows. onStart runs on first access,
     // but this RPC can be invoked before it completes — ensureSchema creates
     // every table so the copy's events-hub/heads/shadow/etc. rows never hit a
     // missing table.
     this.ensureSchema();
+
+    // The Nimbus namespace is derived from this row, so ownership must exist
+    // before the first file write. Refuse any pre-existing cross-owner target
+    // instead of copying bytes into a namespace the source does not own.
+    const currentOwner = this.getOwnerUserId();
+    if (currentOwner && currentOwner !== ownerUserId) {
+      return { ok: false, reason: 'owned_by_another_user' };
+    }
+    const identity = this.sql<{ x: number }>`SELECT 1 AS x FROM workspace_identity LIMIT 1`;
+    if (identity.length === 0) {
+      void this.sql`
+        INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+        VALUES (${this.ctx.id.toString()}, ${forkName}, ${ownerUserId}, ${Date.now()})
+      `;
+    } else {
+      void this.sql`UPDATE workspace_identity SET owner_user_id = ${ownerUserId}`;
+    }
+    this.invalidateModelCaches();
 
     // The row copy is atomic; the file copy cannot be inside that transaction
     // (a host transaction is synchronous, the filesystem is not) and does not
@@ -2842,10 +3091,19 @@ export class OrchestratorAgent extends ActorAgent {
     await writeForkSnapshot(this.boundSql, this.rt.storage.vfs, snapshot, {
       workspaceId: this.ctx.id.toString(),
       workspaceName: forkName,
+      ownerUserId,
+      writeSoulFile: (content) => writeNimbusWorkspaceSoul(this.env, ownerUserId, forkName, content),
       transaction: (rows) => this.ctx.storage.transactionSync(rows),
     });
+    await this.ensureOwnedScaffold();
+    // Inherited files are the fork's starting state, not changes it produced.
+    await resetWorkspaceBaseline(this.rt);
 
-    return { ok: true, agentId: this.ctx.id.toString() };
+    return {
+      ok: true,
+      agentId: this.ctx.id.toString(),
+      capabilityHash: await this.workspaceCapabilityHash(),
+    };
   }
 
   // ── EventsHub RPCs — triggers + events for UI ──────────────────
@@ -2855,6 +3113,11 @@ export class OrchestratorAgent extends ActorAgent {
   @callable()
   async listTriggers() {
     return listTriggers(this.triggerRegistry);
+  }
+
+  /** Cross-DO wire form for the Worker HTTP adapter. */
+  async listTriggersWire(): Promise<string> {
+    return JSON.stringify(await this.listTriggers());
   }
 
   /** Create a durable webhook trigger. Returns the public URL.
@@ -2891,15 +3154,9 @@ export class OrchestratorAgent extends ActorAgent {
 
   /** Register a timer trigger — the `agent.schedule` tool's and the auto-GEPA
    *  scheduler's one way to create one. */
-  createTimerTrigger(opts: {
-    cron?: string;
-    atMs?: number;
-    label?: string;
-    payload?: Record<string, unknown>;
-    trust?: 'authenticated' | 'owner';
-    /** The mission budget every turn this schedule wakes spends against. */
-    missionLabel?: string;
-  }): { id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null } {
+  createTimerTrigger(opts: Parameters<typeof createTimerTrigger>[1]): {
+    id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null;
+  } {
     return createTimerTrigger(this.triggerRegistry, opts, Date.now());
   }
 
@@ -2920,7 +3177,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null) {
       this.config.setAutoGepaEveryNTurns(everyN);
       try {
-        this.sql`INSERT INTO evolution_events (type, message, created_at)
+        void this.sql`INSERT INTO evolution_events (type, message, created_at)
           VALUES ('reflection', ${
             `Auto-GEPA enabled by the autonomous default (every ${everyN} turns of new traces). ` +
             `A disable set before autonomy defaults flipped on was stored as "unset" and is ` +
@@ -2933,7 +3190,7 @@ export class OrchestratorAgent extends ActorAgent {
     if (getPendingScaffold(this.boundSql)) return;  // wait for the slot; keep the counter
     this._turnsSinceGepa = 0;
     void this.runScaffoldGepaOptimization()
-      .catch((err) => console.warn('[proteus] auto-GEPA failed:', (err as Error).message));
+      .catch((err) => console.warn('[proteus] auto-GEPA failed:', err instanceof Error ? err.message : String(err)));
   }
 
   /** Run a webhook delivery through the hub from within the agent DO. This
@@ -3000,6 +3257,7 @@ export class OrchestratorAgent extends ActorAgent {
     status: SubordinateReportStatus;
     content: string;
     origin: SubordinateReportOrigin;
+    mode: WorkMode;
   }): Promise<{ id: string; admitted: boolean }> {
     this.ensureSchema();
     return receiveSubordinateEvent({
@@ -3106,8 +3364,9 @@ export class OrchestratorAgent extends ActorAgent {
   /** Recent events for the operator UI's events sidebar. Mirrors
    *  events_v ordering (received_at desc). */
   async listRecentEvents(opts?: { variant?: string; since?: number; limit?: number }) {
+    const parsedVariant = v.safeParse(EventVariantSchema, opts?.variant);
     const events = this.eventLog.query({
-      variant: opts?.variant as never,
+      variant: parsedVariant.success ? parsedVariant.output : undefined,
       since: opts?.since,
       limit: opts?.limit ?? 100,
     });
@@ -3127,6 +3386,15 @@ export class OrchestratorAgent extends ActorAgent {
     };
   }
 
+  /** Cross-DO wire form for the Worker HTTP adapter. */
+  async listRecentEventsWire(opts?: {
+    variant?: string;
+    since?: number;
+    limit?: number;
+  }): Promise<string> {
+    return JSON.stringify(await this.listRecentEvents(opts));
+  }
+
   // ── Internal: timing-safe string compare for webhook auth ──────
 
   // (Defined at module scope at the bottom of the file.)
@@ -3138,11 +3406,7 @@ export class OrchestratorAgent extends ActorAgent {
 /** An export cursor arrives from a client, so it is claimed, not trusted:
  *  anything that is not the shape the previous page returned starts a fresh
  *  archive rather than binding junk into the row query. */
-function parseArchiveCursor(value: unknown): ArchiveCursor | null {
-  if (value === null || typeof value !== 'object') return null;
-  const { table, after, rows } = value as Record<string, unknown>;
-  if (typeof table !== 'string' || !table) return null;
-  if (after !== null && !Number.isSafeInteger(after)) return null;
-  if (!Number.isSafeInteger(rows) || (rows as number) < 0) return null;
-  return { table, after: after as number | null, rows: rows as number };
+function parseArchiveCursor<Value>(value: Value): ArchiveCursor | null {
+  const parsed = v.safeParse(ArchiveCursorSchema, value);
+  return parsed.success ? parsed.output : null;
 }

@@ -71,8 +71,8 @@ export interface ProviderRegistry {
  *  owns that failure. */
 export const CATALOG_SOURCE_ID = 'catalog';
 
-export function providerFailureReason(err: unknown): string {
-  const message = err instanceof Error ? err.message : String(err);
+export function providerFailureReason({ error }: { error: unknown }): string {
+  const message = error instanceof Error ? error.message : String(error);
   return message.trim() || 'unknown error';
 }
 
@@ -103,7 +103,7 @@ export function createProviderRegistry(): ProviderRegistry {
         failures: [{
           provider: CATALOG_SOURCE_ID,
           label: 'models.dev catalog',
-          reason: providerFailureReason(err),
+          reason: providerFailureReason({ error: err }),
         }],
       };
     }
@@ -139,7 +139,7 @@ export function createProviderRegistry(): ProviderRegistry {
           if (!available && p.unavailableReason) info.unavailableReason = await p.unavailableReason(deps);
           out.push(info);
         } catch (err) {
-          out.push({ id: p.id, label: p.label, available: false, unavailableReason: providerFailureReason(err) });
+          out.push({ id: p.id, label: p.label, available: false, unavailableReason: providerFailureReason({ error: err }) });
         }
       }
       for (const failure of failures) {
@@ -157,7 +157,7 @@ export function createProviderRegistry(): ProviderRegistry {
           if (!(await p.isAvailable(deps))) continue;
           for (const m of await p.listModels(deps)) models.push({ ...m, provider: p.id });
         } catch (err) {
-          failures.push({ provider: p.id, label: p.label, reason: providerFailureReason(err) });
+          failures.push({ provider: p.id, label: p.label, reason: providerFailureReason({ error: err }) });
         }
       }
       return { models, failures };

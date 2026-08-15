@@ -10,9 +10,14 @@
 import type { ToolCallRecord, TurnUsage } from '../evolution/types.js';
 import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
 import { TurnContextMeter, type ContextComposition } from '../context-meter.js';
-import type { StepUsage } from '../events/types.js';
+import type { RunEventInput, StepUsage } from '../events/types.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
 import { priceCall, type MissionGovernor } from '../mission-budget.js';
+import * as v from 'valibot';
+import { projectJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
+
+const UndefinedSchema = v.undefined();
+const StringSchema = v.string();
 
 /** ai-SDK v6 step shape we read for accounting (loosely typed — the SDK's
  *  StepResult, minus the fields we don't use). */
@@ -30,10 +35,10 @@ export interface StepLike {
  *  + added a success discriminator + durationMs). */
 export interface ToolResultLike {
   toolName: string;
-  input?: Record<string, unknown>;
+  input?: JsonObject;
   durationMs?: number;
   success: boolean;
-  output?: unknown;
+  output?: JsonValue;
   error?: unknown;
 }
 
@@ -43,7 +48,7 @@ export interface TurnSinks {
   /** Human-readable activity line (cf: activity_log row; cli: debug log). */
   logActivity?(event: string, detail?: string): void;
   /** A completed tool call, for a durable run-event log (cf RunEventRecorder). */
-  onToolCallEvent?(e: { name: string; toolCallId: string; result: unknown; error?: string; durationMs?: number }): void;
+  onToolCallEvent?(e: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'>): void;
   /** A finished step, for the durable run-event log. `usage` is the provider's
    *  own report; `context` is the local measurement of the request that
    *  produced it. Either may be absent — neither is ever fabricated. */
@@ -147,14 +152,17 @@ export class TurnAccumulator {
     if (citesSpillAddress(c.input)) this.context.noteFollowUp();
     const dur = c.durationMs != null ? ` (${c.durationMs}ms)` : '';
     this.sinks.logActivity?.('tool_call_end', `${c.toolName}${dur}`);
-    this.toolCalls.push({ name: c.toolName, args: (c.input ?? {}) as Record<string, unknown>, result: recorded });
-    this.sinks.onToolCallEvent?.({
+    this.toolCalls.push({ name: c.toolName, args: c.input ?? {}, result: recorded });
+    const event: Omit<Extract<RunEventInput, { type: 'tool_call_end' }>, 'type'> = {
       name: c.toolName,
       toolCallId: `tc-${this.toolCalls.length}`,
-      result: recorded,
-      error: c.success === false ? String(c.error ?? '') : undefined,
-      durationMs: c.durationMs,
-    });
+    };
+    if (!v.safeParse(UndefinedSchema, recorded).success) {
+      event.result = projectJsonValue({ value: recorded });
+    }
+    if (c.success === false) event.error = String(c.error ?? '');
+    if (c.durationMs !== undefined) event.durationMs = c.durationMs;
+    this.sinks.onToolCallEvent?.(event);
   }
 
   /** A model step finished. Accumulates usage + fires the step sinks. */
@@ -180,7 +188,7 @@ export class TurnAccumulator {
     // so the ledger can charge it at the model's cache-read rate.
     this.budget?.debit(inTok + outTok, {
       calls: 1,
-      usage: { input: inTok, output: outTok, ...(cached > 0 ? { cached } : {}) },
+      usage: { input: inTok, output: outTok, cached: cached > 0 ? cached : undefined },
     });
     // Each step is one request, so the newest reporting step carries the
     // whole current prompt (ai v6 usage.inputTokens is the cache-inclusive
@@ -206,22 +214,39 @@ export class TurnAccumulator {
     // that looks like a measurement.
     const pricing = this.budget?.pricing() ?? null;
     const reported = inTok > 0 || outTok > 0;
-    const stepUsage: StepUsage | undefined = reported
-      ? {
+    let stepUsage: StepUsage | undefined;
+    if (reported) {
+      const modelId = v.safeParse(StringSchema, ctx.response?.modelId);
+      const baseUsage = {
         input: inTok,
         output: outTok,
         cached,
         reasoning,
-        ...(pricing ? { usd: priceCall({ input: inTok, output: outTok, cached }, pricing) } : {}),
-        ...(ctx.response?.modelId ? { modelId: ctx.response.modelId } : {}),
+      };
+      const pricedUsd = pricing
+        ? priceCall({ input: inTok, output: outTok, cached }, pricing)
+        : null;
+      const reportedModel = modelId.success && modelId.output.length > 0
+        ? modelId.output
+        : null;
+      if (pricedUsd !== null && reportedModel !== null) {
+        stepUsage = { ...baseUsage, usd: pricedUsd, modelId: reportedModel };
+      } else if (pricedUsd !== null) {
+        stepUsage = { ...baseUsage, usd: pricedUsd };
+      } else if (reportedModel !== null) {
+        stepUsage = { ...baseUsage, modelId: reportedModel };
+      } else {
+        stepUsage = baseUsage;
       }
-      : undefined;
+    }
     const composition = this.composition.take();
-    this.sinks.onStepEvent?.({
+    const stepEvent: Parameters<NonNullable<TurnSinks['onStepEvent']>>[0] = {
       stepIndex: this.stepCount,
-      reason: typeof ctx.finishReason === 'string' ? ctx.finishReason : undefined,
-      ...(stepUsage ? { usage: stepUsage } : {}),
-      ...(composition ? { context: composition } : {}),
-    });
+    };
+    const reason = v.safeParse(StringSchema, ctx.finishReason);
+    if (reason.success) stepEvent.reason = reason.output;
+    if (stepUsage) stepEvent.usage = stepUsage;
+    if (composition) stepEvent.context = composition;
+    this.sinks.onStepEvent?.(stepEvent);
   }
 }

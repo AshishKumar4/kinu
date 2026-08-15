@@ -57,6 +57,7 @@ import type { EventLog } from '../events/hub/log.js';
 import type { ExecutionRecoveryRecord } from '../events/types.js';
 import type { PrepareStepContext, ProteusExtension } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
+import type { AgentSignal } from '../types/signals.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
 import type { ClaimedWindow } from '../evolution/session-window.js';
 import type { RecoveryFinding } from '../evolution/recovery.js';
@@ -65,6 +66,12 @@ import {
   MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
 } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
+import { promptModeForTurnMetadata, workModeForPromptMode, type WorkMode } from '../prompting/surface.js';
+import type { JsonObject } from '../utils/json.js';
+
+function errorMessage<Failure>(failure: Failure): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}
 
 /**
  * Whether an arriving user message is a genuine conversational follow-up —
@@ -96,7 +103,16 @@ export const DEFAULT_SETTLE_TIMEOUT_MS = 120_000;
 
 export interface AgentOrchestratorDeps {
   host: BackendHost;
-  engine: EvolutionEngine;
+  engine: Pick<
+    EvolutionEngine,
+    | 'enabled'
+    | 'sessionWindow'
+    | 'craftLedger'
+    | 'recordRecovery'
+    | 'reviewTurn'
+    | 'onSessionComplete'
+    | 'runDueShadowTrials'
+  >;
   eventLog: EventLog;
   /** Per-turn accounting side-effects (activity log, durable run-event recorder). */
   sinks?: TurnSinks;
@@ -167,6 +183,8 @@ export class AgentOrchestrator {
    *  `--no-auto-evolve` run records no evolution state, and a recovery finding
    *  is evolution state. */
   private observeRecoveries = false;
+  private turnEvolutionEnabled = false;
+  private activeWorkMode: WorkMode = 'build';
   private readonly reflectionInterval: number;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -189,7 +207,12 @@ export class AgentOrchestrator {
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
-    this.signals = new SignalDelivery(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d));
+    this.turnEvolutionEnabled = deps.engine.enabled;
+    this.signals = new SignalDelivery(
+      deps.host,
+      (e, d) => deps.sinks?.logActivity?.(e, d),
+      () => this.activeWorkMode,
+    );
     this.reflectionInterval = deps.sessionReflectionInterval ?? DEFAULT_SESSION_REFLECTION_INTERVAL;
     this.settleTimeoutMs = deps.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;
     this.drains = new DrainScheduler(
@@ -219,16 +242,20 @@ export class AgentOrchestrator {
    *  is exactly here. `continuation` marks a turn that continues the previous
    *  one (Think auto-continue / recovery): its signals ride in again rather
    *  than being dropped as answered. */
-  beginTurn(now: number, metadata?: unknown, continuation = false): void {
+  beginTurn<Metadata>(now: number, metadata?: Metadata, continuation = false): void {
     this.acc.reset(now);
     this.steering.reset();
     // Decided once, here, for the whole turn: a `--no-auto-evolve` run records
     // no evolution state at all, and a crafted tool's execution score is
     // evolution state — so a bench arm with evolution off measures the
     // in-episode loop's absence along with the rest of it.
-    this.craft.reset(this.deps.engine.enabled);
+    const promptMode = promptModeForTurnMetadata(metadata);
+    this.activeWorkMode = workModeForPromptMode(promptMode);
+    const evolutionEnabled = this.deps.engine.enabled && promptMode !== 'plan';
+    this.turnEvolutionEnabled = evolutionEnabled;
+    this.craft.reset(evolutionEnabled);
     this.turnRecoveries = [];
-    this.observeRecoveries = this.deps.engine.enabled;
+    this.observeRecoveries = evolutionEnabled;
     this.signals.beginTurn(continuation, readSignalId(metadata));
     this.deps.budget?.activate(readMissionLabels(metadata));
   }
@@ -270,7 +297,7 @@ export class AgentOrchestrator {
    * the whole point of the durable window.
    */
   observeUserTurn(userText: string, continuity: TurnContinuity): void {
-    if (!this.deps.engine.enabled) return;
+    if (!this.turnEvolutionEnabled) return;
     const previous = this.window.takePendingReview();
     if (!previous) return;
     const followup = continuity === 'conversation' ? userText : null;
@@ -301,7 +328,7 @@ export class AgentOrchestrator {
    * host (the scheduler daemon, a chat session) to evolve on its behalf.
    */
   recordTurn(turn: CompletedTurn, continuity: TurnContinuity): void {
-    if (!this.deps.engine.enabled) return;
+    if (!this.turnEvolutionEnabled) return;
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
     this.window.append(turn, { awaitsFollowup });
     if (!awaitsFollowup) {
@@ -412,7 +439,7 @@ export class AgentOrchestrator {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.all([...this.inFlight.keys()]),
+        Promise.all(this.inFlight.keys()),
         new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
       ]);
     } finally {
@@ -484,22 +511,26 @@ export class AgentOrchestrator {
       if (!batch) return;
       for (const id of batch.ids) this.deps.eventLog.markConsumed(id, turnId, 0);
     } catch (err) {
-      console.warn('[proteus] drainPendingEvents (select) failed:', (err as Error).message);
+      console.warn('[proteus] drainPendingEvents (select) failed:', errorMessage(err));
       return;
     }
     const ids = batch.ids;
-    await this.signals.deliver({
+    let metadata: JsonObject | undefined;
+    if (batch.mode !== null || batch.missions.length > 0) {
+      metadata = {};
+      if (batch.mode !== null) metadata.proteusMode = batch.mode;
+      if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
+    }
+    const signal: AgentSignal = {
       kind: 'event_drain',
       text: batch.text,
       stepText: batch.midTurnText,
       replyTurnId: turnId,
-      // The mission scope the woken turn spends under — the link between a
-      // schedule that declared a budget and the ledger its turn debits.
-      ...(batch.missions.length > 0
-        ? { metadata: { [MISSION_LABELS_METADATA_KEY]: batch.missions } }
-        : {}),
       compensate: () => this.returnEventsToPending(ids),
-    });
+      metadata,
+      requiresOwnTurn: batch.mode !== null,
+    };
+    await this.signals.deliver(signal);
   }
 
   /** Convenience for backends that don't need to interleave: cadence + drain. */

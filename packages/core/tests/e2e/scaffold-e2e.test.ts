@@ -7,6 +7,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm.js';
 import { modifyScaffold } from '../../src/scaffold/modify.js';
 import { rollbackScaffold } from '../../src/scaffold/rollback.js';
@@ -33,14 +34,15 @@ function createScaffoldTestRuntime(llm: LLM) {
     identity: {
       id: 'scaffold-test', name: 'scaffold-test',
       scaffold: {
+        path: 'scaffold/agent.js',
         exists: () => vfs.exists('scaffold/agent.js'),
-        read: () => vfs.readFile('scaffold/agent.js', { encoding: 'utf8' }) as Promise<string>,
+        read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
         write: (code) => vfs.writeFile('scaffold/agent.js', code),
         version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
       },
     },
     craftStore: createMemoryCraftStore(db),
-    spawnBranch: async () => ({ explore: async () => ({ text: '', codeUsed: null }), generateReflection: async () => ({ text: '' }) }),
+    spawnBranch: async () => ({ explore: async () => ({ text: '' }), generateReflection: async () => ({ text: '' }) }),
     abortBranch: async () => {},
   };
   return { rt };
@@ -68,7 +70,7 @@ describe.skipIf(!isE2EConfigured())('E2E scaffold evolution', () => {
     );
 
     console.log(`4-gate result: ${result.ok ? 'ACCEPTED' : 'REJECTED'} (stage=${result.stage ?? 'n/a'})`);
-    expect(typeof result.ok).toBe('boolean');
+    expect([true, false]).toContain(result.ok);
   }, 60_000);
 
   test('full scaffold lifecycle: bootstrap -> modify -> rollback', async () => {

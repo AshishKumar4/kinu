@@ -14,6 +14,7 @@ import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { initTurnOutcomeTables, recordTurnOutcome, seededRandom } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
+import * as v from 'valibot';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -23,7 +24,7 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function runCli(home: string, args: string[]): { stdout: string; exitCode: number } {
+function runCli(home: string, args: string[]) {
   const result = Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
     cwd: repoRoot,
@@ -32,7 +33,9 @@ function runCli(home: string, args: string[]): { stdout: string; exitCode: numbe
     env: { ...process.env, PROTEUS_HOME: home, NO_COLOR: '1' },
   });
   return {
-    stdout: `${result.stdout.toString()}${result.stderr.toString()}`.replace(/\x1b\[[0-9;]*m/g, ''),
+    stdout: `${result.stdout.toString()}${result.stderr.toString()}`.replace(
+      new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '',
+    ),
     exitCode: result.exitCode,
   };
 }
@@ -117,15 +120,24 @@ describe('proteus label', () => {
     expect(ingested.stdout).toMatch(/You disagreed with the classifier on \d+ of 100\./);
 
     const report = runCli(home, ['label', 'report', 'demo', '--json']);
-    const { calibration: parsed, ensemble } = JSON.parse(report.stdout) as {
-      calibration: {
-        universe: number; labeled: number; gap: unknown;
-        accuracy: { sensitivity: { mean: number }; specificity: { mean: number } };
-        overall: { raw: number; corrected: { mean: number; lo: number; hi: number } };
-        segments: Array<{ scaffoldVersion: number; rate: { corrected: { mean: number } } }>;
-      };
-      ensemble: { gap: { kind: string } | null; standIn: unknown };
-    };
+    const { calibration: parsed, ensemble } = v.parse(v.object({
+      calibration: v.object({
+        universe: v.number(), labeled: v.number(), gap: v.nullable(v.object({})),
+        accuracy: v.object({
+          sensitivity: v.object({ mean: v.number() }), specificity: v.object({ mean: v.number() }),
+        }),
+        overall: v.object({
+          raw: v.number(), corrected: v.object({ mean: v.number(), lo: v.number(), hi: v.number() }),
+        }),
+        segments: v.array(v.object({
+          scaffoldVersion: v.number(), rate: v.object({ corrected: v.object({ mean: v.number() }) }),
+        })),
+      }),
+      ensemble: v.object({
+        gap: v.nullable(v.object({ kind: v.string() })),
+        standIn: v.nullable(v.object({})),
+      }),
+    }), JSON.parse(report.stdout));
     // The panel has not been run, and the report says so rather than implying
     // the classifier has been checked by anything but the owner.
     expect(ensemble.gap?.kind).toBe('not_run');

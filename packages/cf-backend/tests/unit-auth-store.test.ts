@@ -2,12 +2,42 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { createSession, verifySession, type OAuthProfile } from '../src/auth/d1-store.js';
 import { createAuthDatabase, makeD1 } from './helpers/d1.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
+
+const AuthUserSchema = v.object({ id: v.string(), email: v.string() });
+const AuthEmailLinkSchema = v.object({ email: v.string(), user_id: v.string() });
+const AuthSessionSchema = v.object({
+  user_id: v.string(),
+  provider: v.string(),
+  provider_account_id: v.string(),
+});
+const AuthAccountSchema = v.object({ user_id: v.string() });
+
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface AuthStoreTestBindings<Stub> {
+  AUTH_DB: D1Database;
+  UserDO: TestNamespace<Stub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<Stub>(bindings: AuthStoreTestBindings<Stub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: createSession and verifySession read exactly the constructed D1
+  // database, UserDO namespace, and credential key; every reachable binding is present.
+  return env as Env;
+}
 
 function setupEnv() {
   const db = createAuthDatabase();
   const ensuredProfiles: string[] = [];
   const userDO = {
-    async ensureProfile(_caller: unknown, email: string, displayName?: string) {
+    async ensureProfile(_caller: UserCaller, email: string, displayName?: string) {
       ensuredProfiles.push(`${email}:${displayName ?? ''}`);
       return { email, displayName };
     },
@@ -16,12 +46,12 @@ function setupEnv() {
   return {
     db,
     ensuredProfiles,
-    env: {
+    env: testEnv({
       AUTH_DB: makeD1(db),
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env,
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }),
   };
 }
 
@@ -42,11 +72,12 @@ describe('D1-backed browser auth store', () => {
     expect(created.identity.email).toBe('ashish@example.com');
     expect(ensuredProfiles).toEqual(['ashish@example.com:Ashish']);
 
-    const user = db.prepare('SELECT id, email FROM auth_users').get() as { id: string; email: string };
-    const link = db.prepare('SELECT email, user_id FROM auth_email_links').get() as { email: string; user_id: string };
-    const session = db.prepare('SELECT user_id, provider, provider_account_id FROM auth_sessions').get() as {
-      user_id: string; provider: string; provider_account_id: string;
-    };
+    const user = v.parse(AuthUserSchema, db.prepare('SELECT id, email FROM auth_users').get());
+    const link = v.parse(AuthEmailLinkSchema, db.prepare('SELECT email, user_id FROM auth_email_links').get());
+    const session = v.parse(
+      AuthSessionSchema,
+      db.prepare('SELECT user_id, provider, provider_account_id FROM auth_sessions').get(),
+    );
 
     expect(user.id).toBe(created.identity.userId);
     expect(user.email).toBe('ashish@example.com');
@@ -87,9 +118,11 @@ function profile(provider: OAuthProfile['provider'], providerSub: string, email:
 describe('resolveOrCreateIdentity efficiency and orphan safety', () => {
   function envWithCounter(db: ReturnType<typeof createAuthDatabase>, onQuery?: (q: string) => void) {
     const userDO = { async ensureProfile() {} };
-    return {
+    return testEnv({
       AUTH_DB: makeD1(db, onQuery),
-      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
   }
 
   test('exactly one auth_users upsert per login', async () => {
@@ -128,7 +161,10 @@ describe('resolveOrCreateIdentity efficiency and orphan safety', () => {
     expect(created.identity.userId).toBe(winnerId);
     // The provisional row minted by the losing login must be gone.
     expect(db.prepare('SELECT COUNT(*) as count FROM auth_users').get()).toEqual({ count: 1 });
-    const account = db.prepare('SELECT user_id FROM auth_accounts WHERE provider = ?').get('github') as { user_id: string };
+    const account = v.parse(
+      AuthAccountSchema,
+      db.prepare('SELECT user_id FROM auth_accounts WHERE provider = ?').get('github'),
+    );
     expect(account.user_id).toBe(winnerId);
   });
 });

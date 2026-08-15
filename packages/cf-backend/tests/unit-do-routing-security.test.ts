@@ -98,7 +98,7 @@ describe('F1 defense 2 — @callable surface reduction (worker-side stubs preser
     // the account-takeover-adjacent methods must still exist, just unexposed.
     const src = source('src/user/user-do.ts');
     for (const m of ['getAuthHeaders', 'mintCliToken', 'setCredential', 'listWorkspaces', 'ensureProfile', 'ensureWorkspaceCapability']) {
-      expect(src).toContain(`async ${m}(`);
+      expect(src).toMatch(new RegExp(`async ${m}(?:<[^>]+>)?\\(`));
     }
   });
 

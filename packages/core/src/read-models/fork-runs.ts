@@ -17,11 +17,11 @@
  * Steer-as-Branch runs are journaled through the same HeadRuntime seam but are
  * NOT fork runs — they are a user redirect anchored to the message they forked,
  * and they already render as chips in chat. They are filtered out by the id
- * prefix their only writer stamps (`isSteerBranchRunId`).
+ * prefix their only writer stamps (`STEER_BRANCH_RUN_ID_PREFIX`).
  */
 
 import type { SqlExecutor } from '../types/primitives.js';
-import { isSteerBranchRunId } from '../steer-branch.js';
+import { STEER_BRANCH_RUN_ID_PREFIX } from '../steer-branch.js';
 
 /** How the fork settled: `merged` synthesised its heads, `competed` scored
  *  branches against each other and kept a winner. */
@@ -55,9 +55,15 @@ export interface ForkRunSummary {
  * most recent forks however they settled.
  */
 export function listForkRuns(sql: SqlExecutor, limit = 20): ForkRunSummary[] {
-  return [...listMergedRuns(sql, limit), ...listCompetedRuns(sql, limit)]
+  return [...queryMergedRuns(sql, limit, null), ...queryCompetedRuns(sql, limit, null)]
     .sort((a, b) => b.startedAt - a.startedAt)
     .slice(0, limit);
+}
+
+/** One exact fork, including runs older than the recent-list window. */
+export function readForkRun(sql: SqlExecutor, rootId: string): ForkRunSummary | null {
+  return [...queryMergedRuns(sql, 1, rootId), ...queryCompetedRuns(sql, 1, rootId)]
+    .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
 /* ── merged (settle=merge → branching heads) ───────────────────────── */
@@ -71,7 +77,11 @@ export function listForkRuns(sql: SqlExecutor, limit = 20): ForkRunSummary[] {
  * synthesis, no evidence. A list row only has to say when it forked, into how
  * many, and whether it landed.
  */
-function listMergedRuns(sql: SqlExecutor, limit: number): ForkRunSummary[] {
+function queryMergedRuns(
+  sql: SqlExecutor,
+  limit: number,
+  rootId: string | null,
+): ForkRunSummary[] {
   const rows = sql<{
     root_id: string; spawned_at: number; heads: number;
     running: number; errored: number; root_status: string | null;
@@ -89,20 +99,20 @@ function listMergedRuns(sql: SqlExecutor, limit: number): ForkRunSummary[] {
     FROM head_journal j
     LEFT JOIN head_runs r ON r.root_id = j.root_id
     LEFT JOIN head_merge_results m ON m.root_id = j.root_id
+    WHERE j.root_id NOT LIKE ${`${STEER_BRANCH_RUN_ID_PREFIX}%`}
+      AND (${rootId} IS NULL OR j.root_id = ${rootId})
     GROUP BY j.root_id
     ORDER BY spawned_at DESC LIMIT ${limit}`;
 
-  return rows
-    .filter((row) => !isSteerBranchRunId(row.root_id))
-    .map((row) => ({
-      id: row.root_id,
-      task: row.root_task?.trim() || row.rationale?.trim() || '(fork)',
-      startedAt: row.spawned_at,
-      status: mergedStatus(row),
-      settle: 'merged' as const,
-      branches: row.heads,
-      winnerScore: null,
-    }));
+  return rows.map((row) => ({
+    id: row.root_id,
+    task: row.root_task?.trim() || row.rationale?.trim() || '(fork)',
+    startedAt: row.spawned_at,
+    status: mergedStatus(row),
+    settle: 'merged' as const,
+    branches: row.heads,
+    winnerScore: null,
+  }));
 }
 
 /**
@@ -138,7 +148,11 @@ function mergedStatus(row: {
  * Legacy pre-`root_id` rows are NULL-scoped and stay invisible, as everywhere
  * else that reads this table.
  */
-function listCompetedRuns(sql: SqlExecutor, limit: number): ForkRunSummary[] {
+function queryCompetedRuns(
+  sql: SqlExecutor,
+  limit: number,
+  rootId: string | null,
+): ForkRunSummary[] {
   const roots = sql<{
     root_id: string; started_at: number; branches: number;
     task: string | null; status: string | null;
@@ -154,6 +168,7 @@ function listCompetedRuns(sql: SqlExecutor, limit: number): ForkRunSummary[] {
     FROM search_nodes n
     LEFT JOIN mcts_search_runs r ON r.root_id = n.root_id
     WHERE n.root_id IS NOT NULL
+      AND (${rootId} IS NULL OR n.root_id = ${rootId})
     GROUP BY n.root_id
     ORDER BY started_at DESC LIMIT ${limit}`;
 

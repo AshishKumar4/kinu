@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/scaffold/misevolution.ts b/packages/core/src/scaffold/misevolution.ts
-index a77dca4..88df998 100644
 --- a/packages/core/src/scaffold/misevolution.ts
 +++ b/packages/core/src/scaffold/misevolution.ts
-@@ -62,7 +62,7 @@ interface MisevolutionCriterion {
+@@ -71,7 +71,7 @@
  const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
-   {
+   criterion({
      id: 'network-egress',
 -    pattern: /\bfetch\s*\(|\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bsendBeacon\s*\(|\bEventSource\b/,
 +    pattern: /\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bsendBeacon\s*\(|\bEventSource\b/,
      reason: 'direct network egress — evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
-   },
-   {
+   }),
+   criterion({

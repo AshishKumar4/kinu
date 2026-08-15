@@ -13,15 +13,16 @@
  */
 
 import { createHash } from 'node:crypto';
+import { isJsonObject, type JsonValue } from '../utils/json.js';
 
 /** Deterministic JSON serializer: object keys sorted, so structurally equal
  *  values always serialize identically regardless of key insertion order. */
-export function stableStringify(value: unknown): string {
-  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+export function stableStringify(value: JsonValue): string {
+  if (value === null) return 'null';
   if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
-  const obj = value as Record<string, unknown>;
-  const keys = Object.keys(obj).sort();
-  return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+  if (!isJsonObject(value)) return JSON.stringify(value);
+  const keys = Object.keys(value).sort();
+  return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key]!)).join(',') + '}';
 }
 
 /** Hex SHA-256 of a string. `hexChars` truncates the output (dedupe keys use a
@@ -33,6 +34,6 @@ export function sha256Hex(text: string, hexChars?: number): string {
 
 /** The full-strength argument digest an approval binds and a resume verifies:
  *  SHA-256 over the deterministic serialization of the action arguments. */
-export function argumentDigest(args: unknown): string {
+export function argumentDigest(args: JsonValue): string {
   return sha256Hex(stableStringify(args));
 }

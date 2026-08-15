@@ -9,14 +9,22 @@
  */
 
 import type { AgentConfigStore } from '../config/store.js';
+import * as v from 'valibot';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
-import { isRecord } from '../providers/util.js';
 import { BUILTIN_TOOLS } from '../tools/registry.js';
 import type { CraftStore } from '../types/agent-runtime.js';
 import type { VFS, SqlExecutor } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import type { ReasoningEffort } from '../strategy/effort.js';
+import { parseJsonValue } from '../utils/json.js';
+
+const UiMessageSchema = v.object({
+  parts: v.optional(v.array(v.object({
+    type: v.string(),
+    text: v.optional(v.string()),
+  }))),
+});
 
 /** Widest transcript page a surface may ask for. */
 const MAX_HISTORY_LIMIT = 200;
@@ -70,10 +78,10 @@ export interface AgentStatusDeps {
  *  (`assistant_messages` rows hold the serialized UI message, not text). */
 export function uiMessageText(content: string): string {
   try {
-    const parsed = JSON.parse(content) as { parts?: unknown };
-    if (Array.isArray(parsed.parts)) {
-      return parsed.parts
-        .flatMap((part) => isRecord(part) && part.type === 'text' && typeof part.text === 'string' ? [part.text] : [])
+    const parsed = v.safeParse(UiMessageSchema, parseJsonValue(content));
+    if (parsed.success && parsed.output.parts) {
+      return parsed.output.parts
+        .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
         .join('');
     }
   } catch { /* plain text fallback */ }
@@ -175,9 +183,7 @@ export function getChatHistory(sql: SqlExecutor, limit = 100): ChatHistoryEntry[
 
 /** The agent's tool inventory: the fixed builtins plus every crafted tool with
  *  its live fitness score. */
-export function getToolList(sql: SqlExecutor, craftStore: CraftStore): {
-  builtIn: string[]; crafted: ToolListEntry[];
-} {
+export function getToolList(sql: SqlExecutor, craftStore: CraftStore) {
   const crafted = craftStore.list().map((t) => {
     const scoreRow = sql<{ score: number; uses: number }>`
       SELECT score, uses FROM craft_scores WHERE tool_name = ${t.name} LIMIT 1`;

@@ -20,6 +20,14 @@ function source(path: string): string {
   return readFileSync(join(root, path), 'utf8');
 }
 
+function publicRouteEnv(): Env {
+  const env: Partial<Env> = {};
+  // SAFETY: These public static routes return before reading any Worker binding.
+  return env as Env;
+}
+
+const PUBLIC_ROUTE_ENV = publicRouteEnv();
+
 describe('auth and desktop security invariants', () => {
   test('browser CLI auth approval is an explicit POST, not GET side effect', () => {
     const routes = source('src/cli/routes.ts');
@@ -317,7 +325,7 @@ describe('auth and desktop security invariants', () => {
   });
 
   test('browser install page is HTML while the terminal installer stays raw shell', async () => {
-    const installPage = await handleCliRequest(new Request('https://proteus.example.com/install'), {} as Env);
+    const installPage = await handleCliRequest(new Request('https://proteus.example.com/install'), PUBLIC_ROUTE_ENV);
     expect(installPage?.status).toBe(200);
     expect(installPage?.headers.get('content-type')).toContain('text/html');
     expect(installPage?.headers.get('content-security-policy')).toContain('https://static.cloudflareinsights.com');
@@ -330,7 +338,7 @@ describe('auth and desktop security invariants', () => {
     expect(html).not.toContain('View the raw installer');
     expect(html).not.toContain('href="/install.sh"');
 
-    const installScript = await handleCliRequest(new Request('https://proteus.example.com/install.sh'), {} as Env);
+    const installScript = await handleCliRequest(new Request('https://proteus.example.com/install.sh'), PUBLIC_ROUTE_ENV);
     expect(installScript?.status).toBe(200);
     expect(installScript?.headers.get('content-type')).toContain('text/x-shellscript');
     const script = await installScript!.text();
@@ -340,14 +348,17 @@ describe('auth and desktop security invariants', () => {
     expect(script).toContain("grep -Eq '^[[:space:]]+setup[[:space:]]'");
     expect(script).toContain("grep -F '$HOME/.proteus/bin'");
 
-    const installScriptHead = await handleCliRequest(new Request('https://proteus.example.com/install.sh', { method: 'HEAD' }), {} as Env);
+    const installScriptHead = await handleCliRequest(
+      new Request('https://proteus.example.com/install.sh', { method: 'HEAD' }),
+      PUBLIC_ROUTE_ENV,
+    );
     expect(installScriptHead?.status).toBe(200);
     expect(installScriptHead?.headers.get('content-type')).toContain('text/x-shellscript');
     expect(await installScriptHead!.text()).toBe('');
   });
 
   test('CLI shim does not hardcode GitHub archive directory names and verifies the source checksum by default', async () => {
-    const shim = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus'), {} as Env);
+    const shim = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus'), PUBLIC_ROUTE_ENV);
     expect(shim?.status).toBe(200);
     const script = await shim!.text();
     expect(script).toContain('SRC_DIR="$SOURCE_ROOT/current"');
@@ -362,7 +373,10 @@ describe('auth and desktop security invariants', () => {
     const syntaxCheck = Bun.spawnSync(['bash', '-n'], { stdin: Buffer.from(script) });
     expect(syntaxCheck.exitCode).toBe(0);
 
-    const shimHead = await handleCliRequest(new Request('https://proteus.example.com/downloads/proteus', { method: 'HEAD' }), {} as Env);
+    const shimHead = await handleCliRequest(
+      new Request('https://proteus.example.com/downloads/proteus', { method: 'HEAD' }),
+      PUBLIC_ROUTE_ENV,
+    );
     expect(shimHead?.status).toBe(200);
     expect(shimHead?.headers.get('content-type')).toContain('text/x-shellscript');
     expect(await shimHead!.text()).toBe('');

@@ -2,6 +2,12 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import * as v from 'valibot';
+
+const WorkspaceConfigSchema = v.object({
+  agents: v.record(v.string(), v.object({ mode: v.string() })),
+  aliases: v.record(v.string(), v.string()),
+});
 
 const repoRoot = resolve(__dirname, '../../..');
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
@@ -55,10 +61,7 @@ describe('proteus workspace delete', () => {
         authorization: 'Bearer ptc_stored_session',
       });
 
-      const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as {
-        agents: Record<string, { mode: string }>;
-        aliases: Record<string, string>;
-      };
+      const config = v.parse(WorkspaceConfigSchema, JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')));
       expect(config.agents['web-agent']).toBeUndefined();
       expect(config.agents.localbot).toMatchObject({ mode: 'local' });
       expect(config.aliases).toEqual({ local: 'localbot' });
@@ -80,7 +83,7 @@ describe('proteus workspace delete', () => {
 
     expect(exitCode).toBe(1);
     expect(stderr).toContain('--yes');
-    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as { agents: Record<string, unknown> };
+    const config = v.parse(WorkspaceConfigSchema, JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')));
     expect(config.agents['web-agent']).toBeDefined();
   });
 });

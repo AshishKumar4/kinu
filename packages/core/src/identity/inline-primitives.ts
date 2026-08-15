@@ -14,18 +14,19 @@ import type {
 } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import { nanoid } from '../utils/nanoid.js';
+import { decodeJsonValue } from '../utils/json.js';
 
 /** Database interface — satisfied by bun:sqlite Database */
 export interface AgentDatabase {
-  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
+  prepare<T = unknown>(sql: string): { all(...params: unknown[]): T[]; run(...params: unknown[]): void };
   exec(sql: string): void;
   run(sql: string, params?: unknown[]): void;
-  query(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown[] };
+  transaction?<T>(fn: () => T): () => T;
 }
 
 /** Wrap a database into our SqlExecutor interface */
-export function wrapDatabase(db: AgentDatabase): { sql: SqlExecutor; execRaw: RawSqlExec } {
-  const sql = function <T = unknown>(
+export function wrapDatabase(db: AgentDatabase) {
+  const sql: SqlExecutor = function <T = unknown>(
     strings: TemplateStringsArray,
     ...values: unknown[]
   ): T[] {
@@ -34,11 +35,11 @@ export function wrapDatabase(db: AgentDatabase): { sql: SqlExecutor; execRaw: Ra
     // native type); bun:sqlite only binds TypedArrays — coerce.
     const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
-    const stmt = db.prepare(query);
-    if (isRead) return stmt.all(...bound) as T[];
+    const stmt = db.prepare<T>(query);
+    if (isRead) return stmt.all(...bound);
     stmt.run(...bound);
     return [];
-  } as SqlExecutor;
+  };
 
   const execRaw: RawSqlExec = (ddl: string) => db.exec(ddl);
   return { sql, execRaw };
@@ -54,18 +55,17 @@ export function createInlineWorkspace(db: AgentDatabase): WorkspaceBundle {
     exec(query: string, ...bindings: unknown[]) {
       const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
       const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound) as never[];
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return db.prepare<never>(query).all(...bound);
       stmt.run(...bound);
-      return [] as never[];
+      return [];
     },
   };
-  const tx = (db as { transaction?: (fn: () => unknown) => () => unknown }).transaction;
   return createWorkspaceFilesystem({
     sql,
     transactions: {
       storage: {
         transactionSync: <T,>(cb: () => T): T =>
-          typeof tx === 'function' ? (tx.call(db, cb) as () => T)() : cb(),
+          db.transaction ? db.transaction(cb)() : cb(),
       },
     },
     generation: nextWorkspaceGeneration(sql),
@@ -82,6 +82,7 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS): Memory {
     async write(path, content) { await vfs.writeFile(path, content); },
     async append(path, content) {
       try {
+        // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
         const existing = await vfs.readFile(path, { encoding: 'utf8' }) as string;
         await vfs.writeFile(path, existing + content);
       } catch {
@@ -90,20 +91,25 @@ export function createInlineMemory(db: AgentDatabase, vfs: VFS): Memory {
     },
     async index(path) {
       try {
+        // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
         const content = await vfs.readFile(path, { encoding: 'utf8' }) as string;
         db.run('INSERT INTO memory_chunks (path, content) VALUES (?, ?)', [path, content]);
       } catch { /* file may not exist */ }
     },
     async search(query, limit = 10) {
-      const rows = db.query('SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?')
-        .all(`%${query}%`, limit) as { path: string; content: string }[];
+      const rows = db.prepare<{ path: string; content: string }>(
+        'SELECT path, content FROM memory_chunks WHERE content LIKE ? LIMIT ?',
+      ).all(`%${query}%`, limit);
       return rows.map((r, i) => ({
         path: r.path, startLine: 0, endLine: 0,
         snippet: r.content.slice(0, 200), score: 1 - i * 0.1,
       }));
     },
     async read(path) {
-      try { return await vfs.readFile(path, { encoding: 'utf8' }) as string; }
+      try {
+        // SAFETY: The VFS contract returns text when the caller requests utf8 encoding.
+        return await vfs.readFile(path, { encoding: 'utf8' }) as string;
+      }
       catch { return null; }
     },
   };
@@ -121,27 +127,35 @@ export function createInlineCraftStore(db: AgentDatabase): CraftStore {
       if (patch.code !== undefined) db.run('UPDATE crafted_tools SET code = ?, updated_at = ? WHERE name = ?', [patch.code, Date.now(), name]);
       if (patch.description !== undefined) db.run('UPDATE crafted_tools SET description = ?, updated_at = ? WHERE name = ?', [patch.description, Date.now(), name]);
     },
-    get(name) { return db.query('SELECT * FROM crafted_tools WHERE name = ?').get(name) as CraftedTool | undefined; },
+    get(name) { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools WHERE name = ?').all(name)[0]; },
     delete(name) { db.run('DELETE FROM crafted_tools WHERE name = ?', [name]); },
-    list() { return db.query('SELECT * FROM crafted_tools').all() as CraftedTool[]; },
+    list() { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all(); },
     search(query, limit = 10) {
       const words = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-      const all = db.query('SELECT * FROM crafted_tools').all() as CraftedTool[];
+      const all = db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all();
       return all.filter(t => words.some(w => t.description.toLowerCase().includes(w))).slice(0, limit);
     },
-    getAll() { return db.query('SELECT * FROM crafted_tools').all() as CraftedTool[]; },
+    getAll() { return db.prepare<CraftedTool>('SELECT * FROM crafted_tools').all(); },
   };
 }
 
 export function createInlineExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute(code) {
       try {
         // Execute the code, not just parse it. Wrap in async IIFE to support await.
         const fn = new Function(`return (async () => { ${code} })()`);
-        const result = await fn();
-        return { result: result === undefined ? '(no return value)' : result };
-      } catch (e) { return { result: undefined, error: (e as Error).message }; }
+        const result: unknown = await fn();
+        return {
+          result: result === undefined ? '(no return value)' : decodeJsonValue({ value: result }),
+        };
+      } catch (error) {
+        return {
+          result: undefined,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
   };
 }
@@ -152,12 +166,12 @@ export function createInlineSchedule(sql: SqlExecutor): Schedule {
     cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
       const id = nanoid();
-      sql`INSERT INTO fibers (id, name, snapshot, created_at) VALUES (${id}, ${name}, ${null}, ${Date.now()})`;
-      const stash = (data: unknown) => {
-        sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)} WHERE id = ${id}`;
+      void sql`INSERT INTO fibers (id, name, snapshot, created_at) VALUES (${id}, ${name}, ${null}, ${Date.now()})`;
+      const stash: FiberCtx['stash'] = (data) => {
+        void sql`UPDATE fibers SET snapshot = ${JSON.stringify(data)} WHERE id = ${id}`;
       };
       try { return await fn({ stash, snapshot: null }); }
-      finally { sql`DELETE FROM fibers WHERE id = ${id}`; }
+      finally { void sql`DELETE FROM fibers WHERE id = ${id}`; }
     },
   };
 }

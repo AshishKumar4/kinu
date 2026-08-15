@@ -19,16 +19,16 @@ import { formatBytes } from './display.js';
 /** File types worth inlining as model-visible parts. Everything else is
  *  reachable through the agent's read tools, so inlining would only burn
  *  context. */
-const INLINE_MEDIA_TYPES: Record<string, string> = {
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.bmp': 'image/bmp',
-  '.svg': 'image/svg+xml',
-  '.pdf': 'application/pdf',
-};
+const INLINE_MEDIA_TYPES = new Map([
+  ['.png', 'image/png'],
+  ['.jpg', 'image/jpeg'],
+  ['.jpeg', 'image/jpeg'],
+  ['.gif', 'image/gif'],
+  ['.webp', 'image/webp'],
+  ['.bmp', 'image/bmp'],
+  ['.svg', 'image/svg+xml'],
+  ['.pdf', 'application/pdf'],
+]);
 
 export interface PathToken {
   /** Exact matched substring (including the @ / quotes). */
@@ -135,7 +135,7 @@ export async function resolvePromptAttachments(
     seen.add(found.path);
 
     const filename = basename(found.path);
-    const mediaType = INLINE_MEDIA_TYPES[extname(found.path).toLowerCase()] ?? null;
+    const mediaType = INLINE_MEDIA_TYPES.get(extname(found.path).toLowerCase()) ?? null;
     if (!mediaType) {
       attached.push({ path: found.path, filename, mediaType: null, size: found.size });
       continue;

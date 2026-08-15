@@ -1,13 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { LanguageModel } from 'ai';
 import { asFetchFunction } from '@proteus/core';
-
-/** `LanguageModel` is `string | LanguageModelV3`; a provider hands back the
- *  object half, and this suite drives its `doStream` directly. */
-function resolvedModel(model: LanguageModel): Exclude<LanguageModel, string> {
-  if (typeof model === 'string') throw new Error(`expected a resolved model, got the spec "${model}"`);
-  return model;
-}
 import { Database } from 'bun:sqlite';
 import { generateText, streamText, stepCountIs, tool } from 'ai';
 import { z } from 'zod';
@@ -77,7 +69,13 @@ interface FakeProc {
   hangUntilAbort?: boolean;
 }
 
-function fakeSpawn(handler: (args: string[]) => FakeProc): { spawn: ClaudeSpawn; calls: string[][]; killed: number } {
+interface FakeSpawn {
+  spawn: ClaudeSpawn;
+  readonly calls: string[][];
+  readonly killed: number;
+}
+
+function fakeSpawn(handler: (args: string[]) => FakeProc): FakeSpawn {
   const calls: string[][] = [];
   const state = { killed: 0 };
   const spawn: ClaudeSpawn = (args, opts) => {
@@ -228,7 +226,7 @@ describe('claude-cli provider — abort', () => {
       return { hangUntilAbort: true };
     });
     const provider = createClaudeCliProvider({ spawn: fake.spawn });
-    const model = resolvedModel(provider.createModel('claude-opus-4-x', { env: {}, getAuth: async () => null, hasCredential: async () => false }));
+    const model = provider.createModel('claude-opus-4-x');
     const controller = new AbortController();
     const { stream } = await model.doStream({
       prompt: [{ role: 'user', content: [{ type: 'text', text: 'q' }] }],
@@ -312,7 +310,7 @@ describe('claude-cli provider — availability', () => {
 
   test('lists the three subscription model families', () => {
     const provider = createClaudeCliProvider({ probe: async () => ({ binary: true, loggedIn: true }) });
-    const ids = (provider.listModels(deps()) as { id: string }[]).map((m) => m.id);
+    const ids = provider.listModels(deps()).map((m) => m.id);
     expect(ids).toEqual(['claude-opus-4-x', 'claude-sonnet-4-x', 'claude-haiku-4-x']);
   });
 });
@@ -383,7 +381,7 @@ describe('claude-cli provider — tool loop composition', () => {
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
       role TEXT NOT NULL, content TEXT NOT NULL,
       created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-    const rt = createCLIRuntime(db as never, { dbPath: `/tmp/proteus-claude-${Math.floor(performance.now())}.db`, llm: openaiLlm });
+    const rt = createCLIRuntime(db, { dbPath: `/tmp/proteus-claude-${Math.floor(performance.now())}.db`, llm: openaiLlm });
     const events: SessionEvent[] = [];
     const session = new LocalAgentSession({
       rt, db,
@@ -396,7 +394,8 @@ describe('claude-cli provider — tool loop composition', () => {
     expect(session.setModel('claude/claude-opus-4-x')).toEqual({ ok: true, spec: 'claude/claude-opus-4-x' });
     await session.send('What is the capital of France?');
 
-    const turnEnd = events.find((e) => e.type === 'turn-end') as Extract<SessionEvent, { type: 'turn-end' }>;
+    const turnEnd = events.find((event) => event.type === 'turn-end');
+    if (!turnEnd || turnEnd.type !== 'turn-end') throw new Error('turn-end event was not emitted');
     expect(turnEnd.turn.assistantResponse).toBe('The capital of France is Paris.');
 
     // The model was driven through the real `claude -p` invocation (opus alias).

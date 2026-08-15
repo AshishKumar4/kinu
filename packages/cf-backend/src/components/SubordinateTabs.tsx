@@ -1,5 +1,5 @@
 import { useState, type FormEvent, type ReactNode } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import { HouseIcon, PlusIcon, TrashIcon, UserPlusIcon } from "@phosphor-icons/react";
@@ -67,7 +67,7 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
       footer={<>
         <Button size="sm" variant="ghost" onClick={onClose} disabled={saving}>Cancel</Button>
         <button className={`p-btn ${btnSmCls}`} type="submit" form="spawn-subordinate" disabled={!role.trim() || !mission.trim() || saving}>
-          {saving ? "Starting…" : "Start mission"}
+          {saving ? "Creating…" : "Create agent"}
         </button>
       </>}
     >
@@ -95,7 +95,7 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
           />
         </label>
         <p className="text-[11px] leading-relaxed p-text-3">
-          Proteus names the subordinate automatically and sends the mission as its first turn.
+          The mission defines this agent’s standing role. It stays idle until you open its tab and send the first message.
         </p>
         {error && <div role="alert" className="rounded-md px-2.5 py-2 text-xs p-notice-danger">{error}</div>}
       </form>
@@ -104,12 +104,18 @@ function SpawnSubordinateDialog({ onClose, onSpawn }: {
 }
 
 export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, onDismiss, trailing }: SubordinateTabsProps) {
+  const navigate = useNavigate();
   const [showSpawn, setShowSpawn] = useState(false);
   const [dismissTarget, setDismissTarget] = useState<SubordinateRosterEntry | null>(null);
   const [dismissing, setDismissing] = useState(false);
   const [dismissError, setDismissError] = useState<string | null>(null);
 
   const mainPath = `/workspace/${workspace}`;
+  const createAndOpen = async (role: string, mission: string): Promise<SpawnResult> => {
+    const created = await onSpawn(role, mission);
+    navigate(`${mainPath}/agents/${created.name}`);
+    return created;
+  };
 
   return (
     <>
@@ -171,7 +177,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
         )}
       </div>
 
-      {showSpawn && <SpawnSubordinateDialog onClose={() => setShowSpawn(false)} onSpawn={onSpawn} />}
+      {showSpawn && <SpawnSubordinateDialog onClose={() => setShowSpawn(false)} onSpawn={createAndOpen} />}
 
       {dismissTarget && (
         <Modal
@@ -189,6 +195,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
                 setDismissError(null);
                 try {
                   await onDismiss(dismissTarget.name);
+                  if (dismissTarget.name === activeName) navigate(mainPath);
                   setDismissTarget(null);
                 } catch (cause) {
                   setDismissError(cause instanceof Error ? cause.message : String(cause));
@@ -202,7 +209,7 @@ export function SubordinateTabs({ workspace, subordinates, activeName, onSpawn, 
           </>}
         >
           <p className="text-xs leading-relaxed p-text-2">
-            This removes the tab and permanently deletes its conversation and private agent state. Shared workspace files are kept.
+            This archives the agent and removes its tab. Its conversation and private state are preserved.
           </p>
           {dismissError && <div role="alert" className="rounded-md px-2.5 py-2 text-xs p-notice-danger">{dismissError}</div>}
         </Modal>

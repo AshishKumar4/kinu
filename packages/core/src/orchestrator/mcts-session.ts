@@ -16,7 +16,7 @@ export function createDurableMctsSession(sql: SqlExecutor): SessionWriter {
   return {
     async appendMessage(msg: SessionMessage, parentId?: string | null): Promise<void> {
       const content = msg.parts.map((p) => p.text).join('');
-      sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+      void sql`INSERT INTO messages (id, session_id, parent_id, role, content)
         VALUES (${msg.id}, ${'mcts'}, ${parentId ?? null}, ${msg.role}, ${content})`;
     },
     getHistory(leafId?: string | null): Array<{ role: string; content: string }> {

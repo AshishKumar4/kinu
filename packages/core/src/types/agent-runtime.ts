@@ -14,11 +14,13 @@ import type {
   Identity,
   Shell,
 } from './primitives.js';
-import type { CraftedTool, CraftScoreEntry } from './craft.js';
+import type { CraftedTool } from './craft.js';
 import type { MissionCallUsage } from '../mission-budget.js';
 import type { ExecutionRouter } from '../execution/types.js';
 import type { FileCheckpoints } from '../checkpoints/types.js';
 import type { ShellApprovalRequest, ShellApprovalOutcome } from '../safety/approval-gate.js';
+import type { WorkMode } from '../prompting/surface.js';
+import type { TurnFileLedger } from '../tools/file-ledger.js';
 
 /** A live channel a surface that owns a user (ACP's `session/request_permission`)
  *  offers for 'gate'-tier shell approvals — see AgentRuntime.setShellApprovalChannel. */
@@ -50,10 +52,9 @@ export interface CraftStore {
  */
 export type BranchUsage = MissionCallUsage;
 
-/** One rollout: the proposal, the code it offered, and what it cost. */
+/** One rollout: the proposal and what it cost. Code is parsed centrally. */
 export interface BranchExploration {
   text: string;
-  codeUsed: string | null;
   usage?: BranchUsage;
 }
 
@@ -72,6 +73,10 @@ export interface BranchHandle {
   explore(
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
+    /** What the parent executor can run, in preference order. */
+    languages: readonly [string, ...string[]],
+    /** Trusted parent mode. A branch cannot select or downgrade this value. */
+    mode: WorkMode,
     /** Distinct solution angles assigned to this branch's siblings in the same
      *  expansion. Threaded so each branch proposes something DISTINCT (MCTS
      *  branches explore in parallel and never see a sibling's output). Optional
@@ -140,4 +145,8 @@ export interface AgentRuntime {
    * keeps its explanatory refusal there, same as before this field existed.
    */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
+  /** Bind the current turn's file ledger after the backend loop exists. The
+   * execution router is built first and reads this provider lazily, so native
+   * `file` and codemode `workspace.*` enforce one read-before-write history. */
+  setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
 }

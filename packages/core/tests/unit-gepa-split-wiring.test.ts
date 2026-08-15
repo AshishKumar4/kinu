@@ -24,7 +24,9 @@ describe('runScaffoldGepaOptimization — split wiring', () => {
   test('passes the disjoint sets through and reports what selection rested on', () => {
     expect(gepaCall).toContain('const { train: trainSet, val: evalSet } = split');
     expect(gepaCall).toContain('heldOutNegatives: split.heldOutNegatives');
-    expect(gepaCall).toContain('selectionWarning: describeSplitDegeneracy(split.degeneracy)');
+    expect(gepaCall).toContain(
+      'if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy)',
+    );
   });
 
   test('the split it consumes really is disjoint on the ledger it reads', () => {

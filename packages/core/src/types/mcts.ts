@@ -19,8 +19,10 @@ export interface SearchNode {
   task: string;
   action: string;
   observation: string;
-  /** Code extracted from exploration branch (JS code blocks). Used for CraftStore extraction. */
+  /** Runnable source extracted from the proposal. */
   code_used: string | null;
+  /** Executor language for code_used. */
+  code_language: string | null;
   visits: number;
   /** Mean return in [0, 1]. Initialized to 0 (BUG-1 fix). */
   value: number;
@@ -63,6 +65,13 @@ export type MCTSProgressEvent =
       error: string;
     }
   | {
+      type: 'grounding-unavailable';
+      language: string;
+      canRun: readonly string[];
+      iteration: number;
+      remainingBudget: number;
+    }
+  | {
       type: 'iteration-complete';
       iteration: number;
       remainingBudget: number;
@@ -70,6 +79,8 @@ export type MCTSProgressEvent =
     };
 
 export interface MCTSConfig {
+  /** Trusted caller mode. Direct/eval callers default to Build. */
+  mode?: import('../prompting/surface.js').WorkMode;
   budget: number;
   branches: number;
   maxDepth?: number;
@@ -106,7 +117,7 @@ export interface MCTSConfig {
    *  config are persisted per iteration under a lease epoch, so a DO eviction can
    *  re-enter runMCTS and continue the remaining budget against the persisted
    *  tree instead of discarding the search (B6). Absent ⇒ fiber-snapshot resume
-   *  only (tests / inline fast path). Typed loosely here to avoid a mcts→store
+   *  only (tests / inline fast path). Typed loosely here to avoid an mcts→store
    *  import cycle; the concrete type is MctsSearchStore. */
   search?: import('../mcts/search-store.js').MctsSearchStore;
 }

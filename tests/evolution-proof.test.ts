@@ -17,10 +17,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import * as v from 'valibot';
 
 import {
-  createWorkspace,
-  openWorkspace,
   buildBuiltinTools,
   collectStepText,
   EvolutionEngine,
@@ -28,11 +27,14 @@ import {
   initScaffoldTables,
   initCraftScoreTables,
   readSoul,
+  JsonObjectSchema,
+  projectJsonValue,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
+import { createWorkspace } from '../packages/core/src/identity/index.js';
 import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
 
 // These suites prove behaviour against a real model. Without a token they
@@ -45,7 +47,7 @@ const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
   headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.6',
+  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-evolution-proof-' + Date.now());
@@ -73,7 +75,7 @@ async function chatTurn(
   sessionId: string,
 ): Promise<TurnResult> {
   const start = Date.now();
-  const soul = readSoul(rt.storage.sql) ?? '';
+  const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 3000) ?? '';
 
   const tcRecords: ToolCallRecord[] = [];
@@ -93,15 +95,19 @@ async function chatTurn(
       stepCount++;
       if (step.toolCalls) {
         for (const tc of step.toolCalls) {
-          const args = (tc as any).input ?? (tc as any).args ?? {};
-          tcRecords.push({ name: tc.toolName, args: args as Record<string, unknown>, result: null });
+          tcRecords.push({
+            name: tc.toolName,
+            args: v.parse(JsonObjectSchema, tc.input),
+            result: null,
+          });
         }
       }
       if (step.toolResults) {
         for (let i = 0; i < step.toolResults.length; i++) {
-          const tr = step.toolResults[i] as any;
+          const toolResult = step.toolResults[i];
           const idx = tcRecords.length - step.toolResults.length + i;
-          if (tcRecords[idx]) tcRecords[idx]!.result = tr?.output ?? tr?.result ?? null;
+          const record = tcRecords[idx];
+          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
         }
       }
     },
@@ -110,8 +116,8 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${sessionId}, ${'user'}, ${userMessage})`;
-  rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${sessionId}, ${id}, ${'assistant'}, ${responseText})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${sessionId}, ${'user'}, ${userMessage})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${sessionId}, ${id}, ${'assistant'}, ${responseText})`;
 
   return { text: responseText, toolCalls: tcRecords, steps: stepCount, durationMs: Date.now() - start };
 }
@@ -190,11 +196,11 @@ describe('Evolution Proof', () => {
   let engine: EvolutionEngine;
   let model: ReturnType<typeof createModel>;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = createWorkspace(db, {
+    rt = await createWorkspace(db, {
       name: 'evolution-proof',
       purpose: 'A crypto and algorithm expert that solves CTF-style challenges using code execution.',
       llm: LLM_CONFIG,
@@ -291,17 +297,23 @@ describe('Evolution Proof', () => {
     });
 
     // End session 1 — triggers session reflection
+    const challenges = [RSA_CHALLENGE_1, DIJKSTRA_CHALLENGE_1, CIPHER_CHALLENGE];
+    const turns: CompletedTurn[] = session1Results.map((result, index) => {
+      const userMessage = challenges[index];
+      if (!userMessage) throw new Error(`missing challenge for session result ${index}`);
+      return {
+        userMessage,
+        assistantResponse: result.text,
+        toolCalls: result.toolCalls,
+        steps: result.steps,
+        durationMs: result.durationMs,
+        feedback: 'positive',
+        hadError: false,
+      };
+    });
     await engine.onSessionComplete({
       sessionId: 'session-1',
-      turns: session1Results.map((r, i) => ({
-        userMessage: [RSA_CHALLENGE_1, DIJKSTRA_CHALLENGE_1, CIPHER_CHALLENGE][i]!,
-        assistantResponse: r.text,
-        toolCalls: r.toolCalls,
-        steps: r.steps,
-        durationMs: r.durationMs,
-        feedback: 'positive' as const,
-        hadError: false,
-      })),
+      turns,
       startedAt: Date.now() - 60000,
       endedAt: Date.now(),
     });
@@ -312,8 +324,8 @@ describe('Evolution Proof', () => {
   liveTest('evolution artifacts exist after session 1', async () => {
     // Check memory has reflections
     const memory = await rt.memory.read('memory/MEMORY.md');
-    expect(memory).toBeTruthy();
-    console.log(`    Memory size: ${memory!.length} chars`);
+    if (!memory) throw new Error('session reflection did not write memory');
+    console.log(`    Memory size: ${memory.length} chars`);
 
     // Check for crafted tools
     const crafted = rt.craftStore.list();
@@ -332,7 +344,7 @@ describe('Evolution Proof', () => {
     console.log(`    Messages: ${msgCount}`);
 
     // At minimum, memory should have content and reflections should exist
-    expect(memory!.length).toBeGreaterThan(100);
+    expect(memory.length).toBeGreaterThan(100);
   });
 
   // ── SESSION 2: Similar challenges — should benefit from evolution ──
@@ -390,8 +402,9 @@ describe('Evolution Proof', () => {
     console.log(`    Session 2 (evolved):  ${s2Steps} steps, ${s2Tools} tool calls, ${(s2Time / 1000).toFixed(1)}s`);
 
     // Compare RSA specifically
-    const rsa1 = session1Results[0]!;
-    const rsa2 = session2Results[0]!;
+    const rsa1 = session1Results[0];
+    const rsa2 = session2Results[0];
+    if (!rsa1 || !rsa2) throw new Error('RSA comparison requires one result from each session');
     console.log(`\n    RSA Challenge 1: ${rsa1.steps} steps, ${rsa1.toolCalls.length} tools, ${(rsa1.durationMs / 1000).toFixed(1)}s`);
     console.log(`    RSA Challenge 2: ${rsa2.steps} steps, ${rsa2.toolCalls.length} tools, ${(rsa2.durationMs / 1000).toFixed(1)}s`);
 
@@ -410,9 +423,6 @@ describe('Evolution Proof', () => {
       const hasCode = t.code && !t.code.startsWith('//');
       console.log(`      ${t.name} ${hasCode ? '✓ executable' : '✗ no code'}: ${t.description.slice(0, 50)}`);
     }
-
-    // Memory reflections
-    const memory = rt.memory.read('memory/MEMORY.md');
 
     // DB state
     const msgCount = rt.storage.sql<{ c: number }>`SELECT COUNT(*) as c FROM messages`[0]?.c ?? 0;

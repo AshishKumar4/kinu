@@ -25,10 +25,13 @@ import {
 } from '../utils/markdown-frontmatter.js';
 import type { ParsedSkill, SkillParseResult, SkillSource } from './types.js';
 import { SkillError } from './types.js';
+import * as v from 'valibot';
+import type { JsonObject, JsonValue } from '../utils/json.js';
 
 const NAME_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/;
 const NAME_MAX_LEN = 64;
 const DESCRIPTION_MAX_LEN = 1024;
+
 /** Names containing these substrings are rejected by Anthropic's spec.
  *  Whole-substring match — `claudette` would NOT match because the spec
  *  defines whole-token reservation; we approximate with substring since
@@ -50,7 +53,7 @@ export function parseSkillFile(
     if (err instanceof MarkdownFrontmatterError) {
       return { ok: false, error: err.detail.message, line: err.detail.line };
     }
-    return { ok: false, error: (err as Error).message };
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }
 
   if (Object.keys(doc.frontmatter).length === 0) {
@@ -117,7 +120,7 @@ export function parseSkillFile(
     'disable-model-invocation', 'disable_model_invocation',
     'user-invocable', 'user_invocable',
   ]);
-  const ext: Record<string, unknown> = {};
+  const ext: JsonObject = {};
   for (const [k, v] of Object.entries(fm)) if (!known.has(k)) ext[k] = v;
 
   return {
@@ -132,7 +135,7 @@ export function parseSkillFile(
 
 /** Serialize a ParsedSkill back to a SKILL.md string. Round-trippable. */
 export function stringifySkillFile(skill: ParsedSkill): string {
-  const fm: Record<string, unknown> = {
+  const fm: JsonObject = {
     name: skill.name,
     description: skill.description,
   };
@@ -148,7 +151,7 @@ export function stringifySkillFile(skill: ParsedSkill): string {
 /** Validation used by `skills({action: 'create'|'edit'})` before write.
  *  Enforces the same Anthropic-spec constraints the parser does. */
 export function validateSkillName(name: string): void {
-  if (typeof name !== 'string' || name.length === 0) {
+  if (name.length === 0) {
     throw new SkillError('invalid_name', 'name must be a non-empty string');
   }
   if (name.length > NAME_MAX_LEN) {
@@ -169,8 +172,9 @@ export function validateSkillName(name: string): void {
 
 // ── helpers ──────────────────────────────────────────────────────
 
-function asString(v: unknown): string {
-  return typeof v === 'string' ? v : v == null ? '' : String(v);
+function asString(value: JsonValue | undefined): string {
+  const parsed = v.safeParse(v.string(), value);
+  return parsed.success ? parsed.output : value == null ? '' : String(value);
 }
 
 /**
@@ -183,8 +187,9 @@ function asString(v: unknown): string {
  * fails to match the one bogus giant pattern. Splitting on whitespace handles
  * both dialects with one rule, since our own values never contain spaces.
  */
-function asStringArray(v: unknown): string[] {
-  if (Array.isArray(v)) return v.map((x) => String(x).trim()).filter(Boolean);
-  if (typeof v === 'string' && v.trim()) return v.trim().split(/\s+/).filter(Boolean);
+function asStringArray(value: JsonValue): string[] {
+  if (Array.isArray(value)) return value.map((item) => String(item).trim()).filter(Boolean);
+  const parsed = v.safeParse(v.string(), value);
+  if (parsed.success && parsed.output.trim()) return parsed.output.trim().split(/\s+/).filter(Boolean);
   return [];
 }

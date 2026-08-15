@@ -6,7 +6,11 @@
 
 import { describe, test, expect } from 'bun:test';
 import { diversityAngle, siblingAngles, diversityDirective } from '../src/mcts/diversity.js';
-import { explorePrompt, reflectionPrompt, extractCodeBlock } from '../src/mcts/explore-prompt.js';
+import {
+  explorePrompt,
+  reflectionPrompt,
+  type ExplorePromptInput,
+} from '../src/mcts/explore-prompt.js';
 import { EVIDENCE_BUDGETS } from '../src/prompts/evidence-window.js';
 
 describe('diversity angles', () => {
@@ -37,16 +41,22 @@ describe('diversity angles', () => {
     expect(directive).toMatch(/DISTINCT/);
   });
 });
-
 describe('explorePrompt — the one question every substrate asks', () => {
-  const base = { context: 'user: fix the parser', craftedTools: [], siblings: [] };
+  const base = {
+    mode: 'build' as const,
+    context: 'user: fix the parser', craftedTools: [], siblings: [],
+    languages: ['javascript'],
+  } satisfies ExplorePromptInput;
 
-  test('asks for a fenced js block, which is what makes a branch groundable', () => {
+  test('asks for a fence in a language the executor declared, which is what makes a branch groundable', () => {
     // The grounded evaluator scores a branch by EXECUTING its code. It only
     // has code to run because the prompt asked for a fence, so this is a
-    // correctness property of the prompt, not a style choice.
-    const { system } = explorePrompt(base);
-    expect(system).toContain('```js code block');
+    // correctness property of the prompt, not a style choice — and asking for
+    // a language nothing can run is how a whole search ends up ungrounded.
+    expect(explorePrompt(base).system).toContain('```javascript code block');
+    const polyglot = explorePrompt({ ...base, languages: ['python', 'javascript'] });
+    expect(polyglot.system).toContain('```python code block');
+    expect(polyglot.system).toContain('javascript, which also run here');
   });
 
   test('crafted tools ride as prior art; none means no empty heading', () => {
@@ -69,6 +79,13 @@ describe('explorePrompt — the one question every substrate asks', () => {
 
   test('the parent context is carried verbatim', () => {
     expect(explorePrompt(base).user).toContain('user: fix the parser');
+  });
+
+  test('Plan branches ask for a read-only planning alternative without runnable code', () => {
+    const prompt = explorePrompt({ ...base, mode: 'plan' });
+    expect(prompt.system).toContain('read-only planning approach');
+    expect(prompt.system).not.toContain('code block');
+    expect(prompt.user).toContain('Do not implement it');
   });
 });
 
@@ -94,22 +111,5 @@ describe('reflectionPrompt', () => {
     expect(prompt).toContain('START');
     expect(prompt).toContain('FAILED HERE');
     expect(prompt.length).toBeLessThan(attempt.length);
-  });
-});
-
-describe('extractCodeBlock', () => {
-  test('pulls the fenced implementation out of a branch answer', () => {
-    expect(extractCodeBlock('Here is my approach:\n```js\nconst a = 1;\n```\nDone'))
-      .toBe('const a = 1;');
-  });
-
-  test('accepts every fence language a branch may answer in', () => {
-    for (const lang of ['js', 'javascript', 'typescript', 'ts', '']) {
-      expect(extractCodeBlock('```' + lang + '\nconst a = 1;\n```')).toBe('const a = 1;');
-    }
-  });
-
-  test('a prose-only answer has no code, not an empty string', () => {
-    expect(extractCodeBlock('I would rewrite the tokenizer by hand.')).toBeNull();
   });
 });

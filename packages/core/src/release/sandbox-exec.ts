@@ -19,8 +19,8 @@ export function createSandboxReleaseExec(
   return {
     async exec(command, opts) {
       const res = await withSandboxRetry(() => handle.exec(command, {
-        ...(opts?.cwd ? { cwd: opts.cwd } : {}),
-        ...(opts?.timeout != null ? { timeout: opts.timeout } : {}),
+        cwd: opts?.cwd,
+        timeout: opts?.timeout,
       }));
       return {
         stdout: res.stdout ?? res.output ?? '',

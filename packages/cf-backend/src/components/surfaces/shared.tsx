@@ -108,11 +108,11 @@ export function EmptyState({ icon, title, hint, children }: {
 }
 
 /** Default hints for empty surfaces. */
-export const EMPTY_HINTS: Record<string, string> = {
+export const EMPTY_HINTS = {
   memory: "Ask your agent to remember something and it keeps it here.",
   tools: "Tools your agent learns appear here, extracted from successful conversations.",
   forks: "When the agent forks itself to try more than one approach, each fork appears here as a tree, one branch per approach.",
-  preview: "When the agent exposes a port (sandbox.exposePort), the running app appears here as a live preview.",
+  preview: "When the agent exposes a Workspace or Sandbox port, the running app appears here as a live preview.",
 };
 
 /* ── small readouts shared by the fork tree's inspector and the evolution

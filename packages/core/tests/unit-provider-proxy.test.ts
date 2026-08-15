@@ -13,6 +13,7 @@ import {
   createProviderProxyFetch, providerProxyBaseURL, providerProxyForwardURL,
   proxyAuthResolution, proxyTargetAllowed,
 } from '../src/providers/proxy.js';
+import { asFetchFunction } from '../src/providers/fetch-shim.js';
 
 const CATALOG = {
   groq: { id: 'groq', name: 'Groq', npm: '@ai-sdk/groq', models: {} },
@@ -26,7 +27,7 @@ const CATALOG = {
 /** A fetch identity of its own so the models.dev module cache never bleeds
  *  between tests (it keys on the function object). */
 function catalogFetch(): typeof fetch {
-  return (async () => Response.json(CATALOG)) as unknown as typeof fetch;
+  return asFetchFunction(async () => Response.json(CATALOG));
 }
 
 describe('proxied auth resolution', () => {
@@ -44,12 +45,12 @@ describe('proxied auth resolution', () => {
 });
 
 describe('provider proxy fetch', () => {
-  function capture(): { seen: Array<{ url: string; init?: RequestInit }>; fetch: typeof fetch } {
+  function capture() {
     const seen: Array<{ url: string; init?: RequestInit }> = [];
-    const impl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const impl = asFetchFunction(async (input, init) => {
       seen.push({ url: String(input), init });
       return new Response('ok');
-    }) as unknown as typeof fetch;
+    });
     return { seen, fetch: impl };
   }
 

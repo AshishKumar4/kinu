@@ -7,7 +7,7 @@
  */
 
 import { existsSync } from 'node:fs';
-import { Readable, Writable } from 'node:stream';
+import { Writable } from 'node:stream';
 import { ndJsonStream } from '@agentclientprotocol/sdk';
 import { createAcpAgent } from '../acp/agent.js';
 import { createAgentClient } from '../client-factory.js';
@@ -50,8 +50,31 @@ export async function acpCommand(name: string, opts: AcpCommandOptions): Promise
   // which do not unify with the lib.dom ones the SDK is typed against. The
   // conversion is real at this one boundary; the byte streams are the same.
   const connection = app.connect(ndJsonStream(
-    Writable.toWeb(process.stdout) as unknown as WritableStream<Uint8Array>,
-    Readable.toWeb(process.stdin) as unknown as ReadableStream<Uint8Array>,
+    Writable.toWeb(process.stdout),
+    stdinBytes(),
   ));
   await connection.closed;
+}
+
+function stdinBytes(): ReadableStream<Uint8Array> {
+  let dataListener: ((chunk: Buffer) => void) | null = null;
+  let endListener: (() => void) | null = null;
+  let errorListener: ((error: Error) => void) | null = null;
+  return new ReadableStream<Uint8Array>({
+    start(controller) {
+      dataListener = (chunk) => controller.enqueue(chunk);
+      endListener = () => controller.close();
+      errorListener = (error) => controller.error(error);
+      process.stdin.on('data', dataListener);
+      process.stdin.once('end', endListener);
+      process.stdin.once('error', errorListener);
+      process.stdin.resume();
+    },
+    cancel() {
+      if (dataListener) process.stdin.off('data', dataListener);
+      if (endListener) process.stdin.off('end', endListener);
+      if (errorListener) process.stdin.off('error', errorListener);
+      process.stdin.pause();
+    },
+  });
 }

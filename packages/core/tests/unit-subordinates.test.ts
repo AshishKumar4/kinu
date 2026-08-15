@@ -4,6 +4,7 @@
 // cf-backend, because those read that backend's source.
 import { Database } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   buildDrainBatch,
   EventLog,
@@ -31,39 +32,26 @@ import {
   type SubordinateReportStatus,
   type SubordinateRosterEntry,
   type SubordinateRuntime,
+  type ProteusEvent,
 } from '../src/index.js';
 import { createMemoryVfs } from '@proteus/test-utils';
-
-type SqlBinding = string | number | bigint | boolean | null | Uint8Array;
-
-function sqlBinding(value: unknown): SqlBinding {
-  if (value === null || typeof value === 'string' || typeof value === 'number'
-    || typeof value === 'bigint' || typeof value === 'boolean' || value instanceof Uint8Array) {
-    return value;
-  }
-  throw new TypeError(`unsupported sqlite binding: ${typeof value}`);
-}
-
-function recordRow(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new TypeError('sqlite returned a non-record row');
-  }
-  return Object.fromEntries(Object.entries(value));
-}
+import { makeSqlExec } from './helpers.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.prepare(query);
-      const values = bindings.map(sqlBinding);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...values).map(recordRow) };
-      }
-      stmt.run(...values);
-      return { toArray: () => [] };
-    },
-  };
+  return makeSqlExec(new Database(':memory:'));
+}
+
+function reportPayload(event: ProteusEvent | undefined): SubordinateReportPayload {
+  if (!event) throw new Error('expected subordinate report event');
+  if (event.variant !== 'subordinate_report') throw new Error('expected subordinate report payload');
+  return v.parse(v.object({
+    from_subordinate: v.string(),
+    status: v.picklist(['progress', 'completed', 'blocked']),
+    content: v.string(),
+    task: v.optional(v.string()),
+    content_path: v.optional(v.string()),
+    proteus_mode: v.picklist(['build', 'plan']),
+  }), event.payload);
 }
 const identityInput = {
   name: 'researcher',
@@ -181,7 +169,7 @@ describe('subordinate live status', () => {
 const fakeHandoff = (delivery: SubordinateDelivery): SubordinateHandoff => ({
   eventId: `evt-${delivery}`,
   delivery,
-  phase: { busy: delivery === 'steering_live_turn', lastActivityAt: null, workingOn: null },
+  phase: { busy: delivery === 'queued', lastActivityAt: null, workingOn: null },
 });
 
 interface TeamHarness {
@@ -223,7 +211,7 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
     async message(name, content) {
       calls.push(`message:${name}:${content}`);
       fail('message');
-      return fakeHandoff('steering_live_turn');
+      return fakeHandoff('queued');
     },
     async dismiss(name, keepHistory) { calls.push(`dismiss:${name}:${keepHistory}`); fail('dismiss'); },
   };
@@ -240,6 +228,39 @@ function makeTeamHarness(inheritedContext: SerializedMessage[] = []): TeamHarnes
 }
 
 describe('team action routing', () => {
+  test('owner creation seeds an idle identity without starting work or mirroring a task', async () => {
+    const h = makeTeamHarness();
+
+    expect(await h.team.create({ role: 'research partner', mission: 'Understand the domain.' })).toEqual({
+      name: 'researcher-a1b2c3', displayName: 'Research Partner',
+      subordinate: {
+        name: 'researcher-a1b2c3', displayName: 'Research Partner', role: 'research partner',
+        createdBy: 'user', status: 'idle', currentTask: null,
+        createdAt: 1_700_000_000_000, dismissedAt: null,
+      },
+    });
+    expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
+      createdBy: 'user', status: 'idle', currentTask: null,
+    });
+    expect(h.calls).toEqual(['spawn:researcher-a1b2c3:Understand the domain.']);
+    expect(h.assignments).toEqual([]);
+    expect(h.tasks).toEqual([]);
+    expect(h.broadcasts).toHaveLength(1);
+  });
+
+  test('only the owner can dismiss an owner-created subordinate', async () => {
+    const h = makeTeamHarness();
+    await h.team.create({ role: 'researcher', mission: 'Own this role.' });
+
+    await expect(h.team.dismiss({ name: 'researcher-a1b2c3' }))
+      .rejects.toThrow('only the owner can dismiss it');
+    expect(h.roster.requireActive('researcher-a1b2c3').status).toBe('idle');
+    expect(h.calls).not.toContain('dismiss:researcher-a1b2c3:true');
+
+    await expect(h.team.dismiss({ name: 'researcher-a1b2c3', requestedBy: 'user' }))
+      .resolves.toMatchObject({ ok: true, historyKept: true });
+  });
+
   test('spawn gives the subordinate a filtered inherited-context digest before its first mission', async () => {
     const inheritedContext: SerializedMessage[] = [
       { id: 's1', role: 'system', content: 'Internal system policy', createdAt: 1 },
@@ -249,7 +270,7 @@ describe('team action routing', () => {
     ];
     const h = makeTeamHarness(inheritedContext);
 
-    await h.team.spawn({ role: 'auth engineer', mission: 'Repair the auth flow.' });
+    await h.team.spawn({ mode: 'build', role: 'auth engineer', mission: 'Repair the auth flow.' });
 
     const digest = h.assignments[0]?.inheritedContext;
     expect(digest).toContain('<inherited_context>');
@@ -267,6 +288,7 @@ describe('team action routing', () => {
       kind: 'task',
       body: 'Repair the auth flow.',
       inheritedContext: digest,
+      mode: 'build',
       now: 10,
     });
     const turn = buildDrainBatch(log.pending({ variant: 'subordinate_task' }));
@@ -278,7 +300,7 @@ describe('team action routing', () => {
   test('successful actions expose one canonical roster and nested live status', async () => {
     const h = makeTeamHarness();
 
-    expect(await h.team.spawn({ role: 'market researcher', mission: 'Map the market.' })).toEqual({
+    expect(await h.team.spawn({ mode: 'build', role: 'market researcher', mission: 'Map the market.' })).toEqual({
       name: 'researcher-a1b2c3', displayName: 'Market Researcher',
     });
     expect(await h.team.list()).toEqual([{
@@ -294,7 +316,7 @@ describe('team action routing', () => {
       subordinate: 'researcher-a1b2c3', content: 'Map the market.', timestamp: 1_700_000_000_000,
     }]);
 
-    await h.team.assign({ name: 'researcher-a1b2c3', task: 'Compare vendors' });
+    await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Compare vendors' });
     expect(h.tasks.at(-1)).toEqual({
       subordinate: 'researcher-a1b2c3', content: 'Compare vendors', timestamp: 1_700_000_000_000,
     });
@@ -307,7 +329,7 @@ describe('team action routing', () => {
     });
 
     h.roster.applyReport('researcher-a1b2c3', 'blocked');
-    await h.team.message({ name: 'researcher-a1b2c3', content: 'Include pricing.' });
+    await h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Include pricing.' });
     expect(h.roster.requireActive('researcher-a1b2c3').status).toBe('working');
 
     await h.team.dismiss({ name: 'researcher-a1b2c3', keepHistory: false });
@@ -323,18 +345,18 @@ describe('team action routing', () => {
 
     for (const operation of operations) {
       const h = makeTeamHarness();
-      if (operation !== 'spawn') await h.team.spawn({ role: 'researcher', mission: 'Initial mission' });
+      if (operation !== 'spawn') await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
       if (operation === 'message') h.roster.applyReport('researcher-a1b2c3', 'blocked');
       const before = h.roster.get('researcher-a1b2c3');
       const broadcastsBefore = h.broadcasts.length;
       h.failures.add(operation);
 
       const action = operation === 'spawn'
-        ? h.team.spawn({ role: 'researcher', mission: 'Mission' })
+        ? h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' })
         : operation === 'assign'
-          ? h.team.assign({ name: 'researcher-a1b2c3', task: 'Replacement' })
+          ? h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' })
           : operation === 'message'
-            ? h.team.message({ name: 'researcher-a1b2c3', content: 'Continue' })
+            ? h.team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' })
             : h.team.dismiss({ name: 'researcher-a1b2c3' });
 
       await expect(action).rejects.toThrow(`${operation} failed`);
@@ -348,7 +370,7 @@ describe('team action routing', () => {
     const h = makeTeamHarness();
     h.failures.add('assign');
 
-    await expect(h.team.spawn({ role: 'researcher', mission: 'Mission' }))
+    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }))
       .rejects.toThrow('assign failed');
     expect(h.roster.get('researcher-a1b2c3')).toBeNull();
     expect(h.calls).toEqual([
@@ -364,7 +386,7 @@ describe('team action routing', () => {
     h.failures.add('assign');
     h.failures.add('dismiss');
 
-    await expect(h.team.spawn({ role: 'researcher', mission: 'Mission' }))
+    await expect(h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' }))
       .rejects.toThrow('facet cleanup also failed');
     expect(h.roster.get('researcher-a1b2c3')).toMatchObject({
       status: 'working',
@@ -383,7 +405,7 @@ describe('team action routing', () => {
         observed.push({ operation: 'assign', roster: roster.get(name) });
         return fakeHandoff('starts_now');
       },
-      async status() { return null; },
+      async status() { return { lastActivity: null, recentSteps: [] }; },
       async message(name) {
         observed.push({ operation: 'message', roster: roster.get(name) });
         return fakeHandoff('starts_now');
@@ -400,10 +422,10 @@ describe('team action routing', () => {
       broadcastTask: () => {},
     });
 
-    await team.spawn({ role: 'researcher', mission: 'Initial mission' });
-    await team.assign({ name: 'researcher-a1b2c3', task: 'Replacement' });
+    await team.spawn({ mode: 'build', role: 'researcher', mission: 'Initial mission' });
+    await team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'Replacement' });
     roster.applyReport('researcher-a1b2c3', 'blocked');
-    await team.message({ name: 'researcher-a1b2c3', content: 'Continue' });
+    await team.message({ mode: 'build', name: 'researcher-a1b2c3', content: 'Continue' });
     await team.dismiss({ name: 'researcher-a1b2c3' });
 
     expect(observed).toEqual([
@@ -416,7 +438,7 @@ describe('team action routing', () => {
 
   test('status preserves roster authority and isolates an unavailable facet', async () => {
     const h = makeTeamHarness();
-    await h.team.spawn({ role: 'researcher', mission: 'Mission' });
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
     h.failures.add('status');
 
     expect(await h.team.status({})).toEqual([{
@@ -432,14 +454,14 @@ describe('team action routing', () => {
     // addressable — and a follow-up assignment must run on the SAME facet
     // with its context intact (no respawn, no deletion anywhere).
     const h = makeTeamHarness();
-    await h.team.spawn({ role: 'researcher', mission: 'Map the market.' });
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Map the market.' });
 
     h.roster.applyReport('researcher-a1b2c3', 'completed');
     const afterCompletion = await h.team.list();
     expect(afterCompletion).toHaveLength(1);
     expect(afterCompletion[0]).toMatchObject({ name: 'researcher-a1b2c3', status: 'idle', currentTask: null });
 
-    await h.team.assign({ name: 'researcher-a1b2c3', task: 'One more comparison' });
+    await h.team.assign({ mode: 'build', name: 'researcher-a1b2c3', task: 'One more comparison' });
     expect(h.roster.requireActive('researcher-a1b2c3')).toMatchObject({
       status: 'working', currentTask: 'One more comparison',
     });
@@ -453,7 +475,7 @@ describe('team action routing', () => {
 
   test('EVICTION FIX: dismissal archives by default — storage wipe only on explicit keepHistory=false', async () => {
     const h = makeTeamHarness();
-    await h.team.spawn({ role: 'researcher', mission: 'Mission' });
+    await h.team.spawn({ mode: 'build', role: 'researcher', mission: 'Mission' });
 
     expect(await h.team.dismiss({ name: 'researcher-a1b2c3' }))
       .toEqual({ ok: true, name: 'researcher-a1b2c3', historyKept: true });
@@ -471,10 +493,10 @@ describe('subordinate event admission', () => {
 
     const task = admitSubordinateTask(log, {
       fromWorkspace: 'proteus-main', kind: 'task', body: 'Investigate',
-      deliverable: 'Report', deadlineHint: 'today', now: 10,
+      deliverable: 'Report', deadlineHint: 'today', mode: 'build', now: 10,
     });
     const report = admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', now: 11,
+      fromSubordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', mode: 'build', now: 11,
     });
 
     expect(task.admitted).toBe(true);
@@ -483,13 +505,13 @@ describe('subordinate event admission', () => {
       trust: 'authenticated', priority: 'normal',
       payload: {
         from_workspace: 'proteus-main', kind: 'task', body: 'Investigate',
-        deliverable: 'Report', deadline_hint: 'today',
+        deliverable: 'Report', deadline_hint: 'today', proteus_mode: 'build',
       },
     });
     expect(log.pending({ variant: 'subordinate_report' })[0]).toMatchObject({
       trust: 'authenticated', priority: 'background',
       payload: {
-        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate',
+        from_subordinate: 'researcher', status: 'completed', content: 'Done', task: 'Investigate', proteus_mode: 'build',
       },
     });
   });
@@ -501,7 +523,7 @@ describe('subordinate event admission', () => {
     initEventsHubTables(sql);
     const log = new EventLog(sql);
     const admission = admitSubordinateTask(log, {
-      fromWorkspace: 'proteus-main', kind: 'task', body: 'Investigate', now: 10,
+      fromWorkspace: 'proteus-main', kind: 'task', body: 'Investigate', mode: 'build', now: 10,
     });
 
     const handoff = describeSubordinateHandoff({
@@ -513,13 +535,13 @@ describe('subordinate event admission', () => {
     expect(handoff.eventId).toBe(admission.id);
   });
 
-  test('a busy subordinate is steered, an idle one starts now', () => {
+  test('a busy subordinate queues a mode-homogeneous turn, while an idle one starts now', () => {
     const live = { lastActivity: 34, recentSteps: [{ event: 'beforeturn', summary: 'reading src/auth.ts', elapsedMs: 12, createdAt: 34 }] };
     const admission = { id: 'evt-1', admitted: true };
 
     expect(describeSubordinateHandoff({ admission, turnInFlight: true, live })).toEqual({
       eventId: 'evt-1',
-      delivery: 'steering_live_turn',
+      delivery: 'queued',
       phase: { busy: true, lastActivityAt: 34, workingOn: 'reading src/auth.ts' },
     });
     expect(describeSubordinateHandoff({ admission, turnInFlight: false, live }).delivery).toBe('starts_now');
@@ -554,13 +576,13 @@ describe('subordinate event admission', () => {
     const log = new EventLog(sql);
 
     expect(() => admitSubordinateTask(log, {
-      fromWorkspace: ' ', kind: 'task', body: 'work', now: 1,
+      fromWorkspace: ' ', kind: 'task', body: 'work', mode: 'build', now: 1,
     })).toThrow('fromWorkspace');
     expect(() => admitSubordinateTask(log, {
-      fromWorkspace: 'main', kind: 'task', body: ' ', now: 1,
+      fromWorkspace: 'main', kind: 'task', body: ' ', mode: 'build', now: 1,
     })).toThrow('body');
     expect(() => admitSubordinateReport(log, {
-      fromSubordinate: 'researcher', status: 'progress', content: ' ', now: 1,
+      fromSubordinate: 'researcher', status: 'progress', content: ' ', mode: 'build', now: 1,
     })).toThrow('content');
     expect(log.pending()).toEqual([]);
   });
@@ -591,8 +613,8 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
       status: SubordinateReportStatus,
     ) => {
       const entry = roster.requireActive('researcher');
-      if (!parentAdmitsSubordinateReport({ origin, entry })) return;
-      admitSubordinateReport(log, { fromSubordinate: 'researcher', status, content, now: 1 });
+      if (!parentAdmitsSubordinateReport({ entry })) return;
+      admitSubordinateReport(log, { fromSubordinate: 'researcher', status, content, mode: 'build', now: 1 });
       roster.applyReport('researcher', status);
     };
 
@@ -610,7 +632,7 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
       jobSettles: (content: string) => arrivesAtParent('turn_end', content, 'progress'),
       /** What the parent was actually woken with. */
       woken: () => log.pending({ variant: 'subordinate_report' })
-        .map((event) => (event.payload as SubordinateReportPayload).content),
+        .map((event) => reportPayload(event).content),
     };
   }
 
@@ -636,7 +658,7 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     expect(scene.woken()).toEqual(['Mapped 14 competitors.']);
   });
 
-  test('a subordinate that decides to report is heard mid owner-conversation', () => {
+  test('a report tool cannot wake the parent after the assignment is complete', () => {
     const scene = scenario();
     scene.reportTool('Market mapped.', 'completed');
     expect(scene.roster.requireActive('researcher').currentTask).toBeNull();
@@ -644,10 +666,7 @@ describe('the owner talking to a subordinate does not wake its parent', () => {
     scene.turnEnds({ ownerDriven: true, assistantText: 'Sure, I can dig into pricing.' });
     scene.reportTool('You should see this: incumbent pricing just moved.');
 
-    expect(scene.woken()).toEqual([
-      'Market mapped.',
-      'You should see this: incumbent pricing just moved.',
-    ]);
+    expect(scene.woken()).toEqual(['Market mapped.']);
   });
 
   test('work the owner’s conversation detached cannot smuggle it upward one hop later', () => {
@@ -692,10 +711,12 @@ describe('oversize subordinate reports stay reachable', () => {
   async function admitFromSubordinate(log: EventLog, vfs: Parameters<typeof spillEventContent>[0], raw: string) {
     const content = normalizeReportContent(raw);
     const contentPath = await spillEventContent(vfs, content);
-    return admitSubordinateReport(log, {
+    const input = {
       fromSubordinate: 'researcher', status: 'completed', content,
-      task: 'Survey auth', ...(contentPath ? { contentPath } : {}), now: 11,
-    });
+      task: 'Survey auth', mode: 'build', now: 11,
+    } satisfies Parameters<typeof admitSubordinateReport>[1];
+    if (contentPath) Object.assign(input, { contentPath });
+    return admitSubordinateReport(log, input);
   }
 
   function freshLog(): EventLog {
@@ -713,14 +734,17 @@ describe('oversize subordinate reports stay reachable', () => {
     expect((await admitFromSubordinate(log, vfs, `${content}\n`)).admitted).toBe(true);
 
     const event = log.pending({ variant: 'subordinate_report' })[0];
-    const path = (event.payload as SubordinateReportPayload).content_path;
+    const path = reportPayload(event).content_path;
     // Normalized before spilling: the cited file is byte-for-byte the content
     // the brief truncates, never the untrimmed wire text.
     expect(path).toBe(eventContentPath(content));
-    expect(await vfs.readFile(path!)).toBe(content);
+    if (!path) throw new Error('expected spilled report path');
+    expect(await vfs.readFile(path)).toBe(content);
 
     expect(renderForLLM(event).brief).toEndWith(` — full report: ${path}`);
-    expect(buildDrainBatch([event])!.text).toContain(path!);
+    const batch = buildDrainBatch([event]);
+    if (!batch) throw new Error('expected subordinate report drain batch');
+    expect(batch.text).toContain(path);
   });
 
   test('a report within the brief budget writes nothing and renders exactly as before', async () => {
@@ -730,7 +754,7 @@ describe('oversize subordinate reports stay reachable', () => {
     await admitFromSubordinate(log, vfs, 'Survey done — three seams found; note written.');
 
     const event = log.pending({ variant: 'subordinate_report' })[0];
-    expect((event.payload as SubordinateReportPayload).content_path).toBeUndefined();
+    expect(reportPayload(event).content_path).toBeUndefined();
     expect(files.size).toBe(0);
     expect(renderForLLM(event).brief)
       .toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
@@ -780,7 +804,7 @@ describe('the parent ingress, in the order it runs', () => {
 
     const result = await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'completed', content: `${content}\n`,
-      origin: 'report_tool',
+      origin: 'report_tool', mode: 'build',
     }, 11);
 
     expect(result.admitted).toBe(true);
@@ -788,7 +812,7 @@ describe('the parent ingress, in the order it runs', () => {
     // truncates, never the untrimmed wire text.
     expect(await scene.files.get(spilled)).toBe(content);
     const event = scene.log.pending({ variant: 'subordinate_report' })[0];
-    expect((event.payload as SubordinateReportPayload).content_path).toBe(spilled);
+    expect(reportPayload(event).content_path).toBe(spilled);
     // …and the roster write shares the transaction the admit opened.
     expect(scene.seen).toEqual(['transaction', 'announce', 'drain']);
     expect(scene.roster.requireActive('researcher')).toMatchObject({ status: 'idle', currentTask: null });
@@ -800,7 +824,7 @@ describe('the parent ingress, in the order it runs', () => {
 
     const result = await receiveSubordinateEvent(scene.deps, {
       fromSubordinate: 'researcher', status: 'progress', content: 'x'.repeat(4000),
-      origin: 'turn_end',
+      origin: 'turn_end', mode: 'build',
     }, 12);
 
     expect(result).toEqual({ id: '', admitted: false });
@@ -812,7 +836,7 @@ describe('the parent ingress, in the order it runs', () => {
   test('a report from a subordinate this parent does not have is refused, not admitted', async () => {
     const scene = parent();
     await expect(receiveSubordinateEvent(scene.deps, {
-      fromSubordinate: 'ghost', status: 'progress', content: 'hello', origin: 'report_tool',
+      fromSubordinate: 'ghost', status: 'progress', content: 'hello', origin: 'report_tool', mode: 'build',
     }, 13)).rejects.toThrow('unknown subordinate "ghost"');
     expect(scene.files.size).toBe(0);
   });

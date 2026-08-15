@@ -12,16 +12,52 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHostCheckpoints } from '../src/checkpoints.js';
+import * as v from 'valibot';
 
 const require = createRequire(import.meta.url);
-const daemon = require('../../pc-agent/src/index.js') as {
-  createCheckpoints: (opts?: { base?: string; keep?: number; gitBin?: string }) => {
-    ensure(hint: { agent: string; dir: string; turnId?: string; sessionId?: string }, fallbackDir?: string): string | null;
-    list(agent: string, limit?: number): Array<{ id: string; dir: string; at: number; turnId: string | null; sessionId: string | null; reason: string }>;
-    plan(agent: string, dir: string, id: string): { dir: string; id: string; files: Array<{ path: string; kind: string }> };
-    restore(agent: string, dir: string, id: string): { dir: string; id: string; preRestoreId: string | null };
+const rawDaemonModule: unknown = require('../../pc-agent/src/index.js');
+const daemon = v.parse(v.object({ createCheckpoints: v.function() }), rawDaemonModule);
+
+const checkpointEntrySchema = v.object({
+  id: v.string(), dir: v.string(), at: v.number(),
+  turnId: v.nullable(v.string()), sessionId: v.nullable(v.string()), reason: v.string(),
+});
+const checkpointPlanSchema = v.object({
+  dir: v.string(), id: v.string(),
+  files: v.array(v.object({ path: v.string(), kind: v.string() })),
+});
+const checkpointRestoreSchema = v.object({
+  dir: v.string(), id: v.string(), preRestoreId: v.nullable(v.string()),
+});
+
+interface DeviceCheckpointOptions {
+  base?: string;
+  keep?: number;
+  gitBin?: string;
+}
+
+interface DeviceCheckpointHint {
+  agent: string;
+  dir: string;
+  turnId?: string;
+  sessionId?: string;
+}
+
+function createDeviceCheckpoints(options?: DeviceCheckpointOptions) {
+  const raw = v.parse(v.object({
+    ensure: v.function(), list: v.function(), plan: v.function(), restore: v.function(),
+  }), daemon.createCheckpoints(options));
+  return {
+    ensure: (hint: DeviceCheckpointHint, fallbackDir?: string) =>
+      v.parse(v.nullable(v.string()), raw.ensure(hint, fallbackDir)),
+    list: (agent: string, limit?: number) =>
+      v.parse(v.array(checkpointEntrySchema), raw.list(agent, limit)),
+    plan: (agent: string, dir: string, id: string) =>
+      v.parse(checkpointPlanSchema, raw.plan(agent, dir, id)),
+    restore: (agent: string, dir: string, id: string) =>
+      v.parse(checkpointRestoreSchema, raw.restore(agent, dir, id)),
   };
-};
+}
 
 const AGENT = 'parity-agent';
 
@@ -31,7 +67,7 @@ function setup() {
   mkdirSync(work, { recursive: true });
   const base = join(root, 'shadow');
   const host = createHostCheckpoints({ agent: AGENT, base });
-  const device = daemon.createCheckpoints({ base });
+  const device = createDeviceCheckpoints({ base });
   return { root, work, host, device, cleanup: () => rmSync(root, { recursive: true, force: true }) };
 }
 

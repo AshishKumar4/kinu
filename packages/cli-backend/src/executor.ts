@@ -8,12 +8,34 @@
  * provider functions cannot be passed across process boundaries.
  */
 
-import type { Executor, ExecuteResult, ResolvedProvider } from '@proteus/core';
+import { decodeJsonValue, JsonValueSchema } from '@proteus/core';
+import type { Executor, ExecuteResult, JsonValue, ResolvedProvider } from '@proteus/core';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { writeFileSync, unlinkSync } from 'node:fs';
+import * as v from 'valibot';
 
 const TIMEOUT_MS = 30_000;
+const subprocessResultSchema = v.variant('ok', [
+  v.object({ ok: v.literal(true), result: v.optional(JsonValueSchema) }),
+  v.object({ ok: v.literal(false), error: v.optional(v.string()) }),
+]);
+
+type ProviderFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
+interface ExecutorNamespace {
+  [toolName: string]: ProviderFunction;
+}
+
+const INTERPRETERS: ReadonlyMap<string, { readonly command: string; readonly extension: string }> = new Map([
+  ['python', { command: 'python3', extension: '.py' }],
+]);
+
+function detectLanguages(): readonly [string, ...string[]] {
+  const installed = [...INTERPRETERS]
+    .filter(([, { command }]) => Bun.which(command) !== null)
+    .map(([language]) => language);
+  return ['javascript', ...installed];
+}
 
 /**
  * If the last non-empty line of code doesn't start with a keyword that
@@ -39,10 +61,24 @@ export function addImplicitReturn(code: string): string {
 }
 
 export function createSandboxedExecutor(): Executor {
+  let detectedLanguages: readonly [string, ...string[]] | undefined;
   return {
+    get languages() { return detectedLanguages ??= detectLanguages(); },
     async execute(code, providers, opts): Promise<ExecuteResult> {
       const providerList: ResolvedProvider[] = normalizeProviders(providers);
       const timeoutMs = opts?.timeoutMs ?? TIMEOUT_MS;
+      const language = opts?.language ?? 'javascript';
+
+      if (!this.languages.includes(language)) {
+        return { result: undefined, error: `Executor does not support language "${language}"` };
+      }
+      if (language !== 'javascript') {
+        const interpreter = INTERPRETERS.get(language);
+        if (!interpreter) {
+          return { result: undefined, error: `Executor does not support language "${language}"` };
+        }
+        return executeWithInterpreter(code, interpreter, timeoutMs);
+      }
 
       // If providers are needed, we can't pass functions across process
       // boundaries. Fall back to in-process vm for tool-backed execution.
@@ -53,6 +89,33 @@ export function createSandboxedExecutor(): Executor {
       return executeInSubprocess(code, timeoutMs);
     },
   };
+}
+
+async function executeWithInterpreter(
+  code: string,
+  interpreter: { readonly command: string; readonly extension: string },
+  timeoutMs: number,
+): Promise<ExecuteResult> {
+  const tmpFile = join(tmpdir(), `proteus-exec-${Date.now()}-${Math.random().toString(36).slice(2)}${interpreter.extension}`);
+  writeFileSync(tmpFile, code);
+  try {
+    const proc = Bun.spawn([interpreter.command, tmpFile], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', HOME: '/tmp' },
+    });
+    const timeout = setTimeout(() => proc.kill(), timeoutMs);
+    const exitCode = await proc.exited;
+    clearTimeout(timeout);
+
+    const stdout = (await new Response(proc.stdout).text()).trim();
+    const stderr = (await new Response(proc.stderr).text()).trim();
+    return exitCode === 0
+      ? { result: stdout || null }
+      : { result: undefined, error: stderr || `Process exited with code ${exitCode}` };
+  } finally {
+    try { unlinkSync(tmpFile); } catch { /* cleanup best-effort */ }
+  }
 }
 
 /** Execute in a Bun subprocess with timeout. */
@@ -98,7 +161,7 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
 
     const lastLine = stdout.trim().split('\n').pop() ?? '';
     try {
-      const parsed = JSON.parse(lastLine) as { ok: boolean; result?: unknown; error?: string };
+      const parsed = v.parse(subprocessResultSchema, JSON.parse(lastLine));
       if (parsed.ok) return { result: parsed.result };
       return { result: undefined, error: parsed.error ?? 'Unknown error' };
     } catch {
@@ -110,7 +173,7 @@ async function executeInSubprocess(code: string, timeoutMs: number): Promise<Exe
 }
 
 function normalizeProviders(
-  providers?: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
+  providers?: ResolvedProvider[] | Record<string, ProviderFunction>,
 ): ResolvedProvider[] {
   if (!providers) return [];
   if (Array.isArray(providers)) return providers;
@@ -121,15 +184,15 @@ function normalizeProviders(
 async function executeInProcess(
   code: string, providers: ResolvedProvider[], timeoutMs: number,
 ): Promise<ExecuteResult> {
-  const context: Record<string, unknown> = {};
+  const context: Record<string, ExecutorNamespace> = {};
 
   for (const p of providers) {
-    context[p.name] = new Proxy({}, {
+    context[p.name] = new Proxy<ExecutorNamespace>({}, {
       get: (_target, toolName: string) => {
         // Every argument is forwarded: the host bridge a scaffold runs against
         // is multi-arg (host.callTool(name, args), host.appendMemory(path,
         // content)), and dropping all but the first silently truncated them.
-        return async (...args: unknown[]) => {
+        return async (...args: JsonValue[]) => {
           const fn = p.fns[toolName];
           if (!fn) throw new Error(`Tool "${toolName}" not found in "${p.name}"`);
           return fn(...args);
@@ -147,10 +210,11 @@ async function executeInProcess(
   try {
     const fn = new Function(wrapped);
     const result = await Promise.race([
-      fn(...argValues),
+      Promise.resolve(fn(...argValues)).then((value) =>
+        value === undefined ? undefined : decodeJsonValue({ value })),
       // Cleared in the finally — a scaffold turn's budget is minutes, and a
       // live timer would hold the process open long after the code settled.
-      new Promise((_, reject) => {
+      new Promise<JsonValue>((_, reject) => {
         timer = setTimeout(
           () => reject(new Error(`Execution timeout (${Math.round(timeoutMs / 1000)}s)`)), timeoutMs);
       }),

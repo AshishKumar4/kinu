@@ -32,8 +32,9 @@ proteus providers list                    # see what's connected, with status in
 proteus providers connect openai          # or: anthropic, openrouter, codex, openai-compatible
 ```
 
-Signed in, a **local** workspace gets free Workers AI with no key (it defaults to
-`workers-ai/@cf/moonshotai/kimi-k2.6`). Your AI Gateway shows up as
+Signed in, a **local** workspace gets Workers AI with no separate key (it defaults to
+`workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`, which requires paid Workers
+access or prepaid AI Gateway credits). Your AI Gateway shows up as
 `my-gateway/{author}/{model}` once the OAuth grant includes the `aig.write`
 scope — run `proteus auth` again if you connected before it was added.
 

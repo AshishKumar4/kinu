@@ -7,15 +7,15 @@
  * detail the arguments do not carry: when they say nothing the summary is
  * empty and the card falls back to the tool name alone.
  */
-import { isFailingToolResult } from "@proteus/core";
+import {
+  JsonObjectSchema, JsonValueSchema, isFailingToolResult,
+  type JsonObject, type JsonValue,
+} from "@proteus/core";
+import * as v from 'valibot';
 
 /** Chip budget — long enough for a command or a short task, short enough to
  *  stay on one line next to the name, runtime badge and duration. */
 const MAX = 72;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 /**
  * Whether a tool call is a failure, as the agent itself would read it — not
@@ -30,25 +30,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  * the SAME predicate core's turn-steering already keys the agent's own
  * self-correction hints on, so the UI and the agent see failure the same way.
  */
-export function isToolCallFailed(toolName: string, input: unknown, output: unknown, protocolFailed: boolean): boolean {
+export function isToolCallFailed<Input, Output>(
+  toolName: string, input: Input, output: Output, protocolFailed: boolean,
+): boolean {
   if (protocolFailed) return true;
   if (output == null) return false;
-  const result = typeof output === "string" ? output : jsonOrString(output);
-  return isFailingToolResult({ toolName, args: isRecord(input) ? input : {}, result, success: true });
+  const parsedOutput = v.safeParse(JsonValueSchema, output);
+  if (!parsedOutput.success) return false;
+  const result = v.is(v.string(), parsedOutput.output) ? parsedOutput.output : jsonOrString(parsedOutput.output);
+  const parsedInput = v.safeParse(JsonObjectSchema, input);
+  return isFailingToolResult({ toolName, args: parsedInput.success ? parsedInput.output : {}, result, success: true });
 }
 
-function jsonOrString(value: unknown): string {
+function jsonOrString(value: JsonValue): string {
   try { return JSON.stringify(value); } catch { return String(value); }
 }
 
-function str(input: Record<string, unknown>, key: string): string {
+function str(input: JsonObject, key: string): string {
   const value = input[key];
-  return typeof value === "string" ? value.trim() : "";
+  return v.is(v.string(), value) ? value.trim() : "";
 }
 
-function nested(input: Record<string, unknown>, key: string): Record<string, unknown> {
+function nested(input: JsonObject, key: string): JsonObject {
   const value = input[key];
-  return isRecord(value) ? value : {};
+  return v.is(JsonObjectSchema, value) ? value : {};
 }
 
 /** Collapse whitespace and clip, marking the clip so nothing reads as complete
@@ -85,7 +90,7 @@ function firstCodeLine(code: string): string {
   return "";
 }
 
-function summarizeThink(input: Record<string, unknown>): string {
+function summarizeThink(input: JsonObject): string {
   const heads = Array.isArray(input.heads) ? input.heads.length : 0;
   const label = heads > 0 ? `${heads} heads` : str(input, "strategy");
   const task = quoted(str(input, "task"), 56);
@@ -94,7 +99,7 @@ function summarizeThink(input: Record<string, unknown>): string {
 
 /** The unified delegation tool — one line per action, shaped like the
  *  summaries its three predecessors produced. */
-function summarizeAgents(input: Record<string, unknown>): string {
+function summarizeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
   switch (action) {
@@ -119,7 +124,7 @@ function summarizeAgents(input: Record<string, unknown>): string {
 
 /** The unified durable-state tool — prose actions read by their content or
  *  query, keyed-fact actions by their key. */
-function summarizeMemory(input: Record<string, unknown>): string {
+function summarizeMemory(input: JsonObject): string {
   const action = str(input, "action");
   if (action === "save") return actionOn(action, undefined, str(input, "content"));
   const key = str(input, "key");
@@ -130,7 +135,7 @@ function summarizeMemory(input: Record<string, unknown>): string {
 
 /** The file plane — every action reads by its path, and an edit says how many
  *  replacements it carried, which is the one thing the path does not tell you. */
-function summarizeFile(input: Record<string, unknown>): string {
+function summarizeFile(input: JsonObject): string {
   const action = str(input, "action");
   const path = str(input, "path");
   const edits = input.edits;
@@ -141,7 +146,7 @@ function summarizeFile(input: Record<string, unknown>): string {
 }
 
 /** The unified web tool — a search reads by its query, a fetch by its url. */
-function summarizeWeb(input: Record<string, unknown>): string {
+function summarizeWeb(input: JsonObject): string {
   const action = str(input, "action");
   const url = str(input, "url");
   if (url) return `${action} ${clip(url, 56)}`;
@@ -149,7 +154,7 @@ function summarizeWeb(input: Record<string, unknown>): string {
   return query ? `${action} ${quoted(query, 56)}` : action;
 }
 
-function summarizeTeam(input: Record<string, unknown>): string {
+function summarizeTeam(input: JsonObject): string {
   const action = str(input, "action");
   const name = str(input, "name");
   switch (action) {
@@ -160,7 +165,7 @@ function summarizeTeam(input: Record<string, unknown>): string {
   }
 }
 
-function summarizePeers(input: Record<string, unknown>): string {
+function summarizePeers(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
   switch (action) {
@@ -174,20 +179,20 @@ function summarizePeers(input: Record<string, unknown>): string {
 
 /** The task list — an add reads by what it wrote, an update by which item it
  *  moved and where to. */
-function summarizeTasks(input: Record<string, unknown>): string {
+function summarizeTasks(input: JsonObject): string {
   const action = str(input, "action");
   if (action === "add") {
-    const titles = Array.isArray(input.titles) ? input.titles.filter((t) => typeof t === "string") : [];
+    const titles = Array.isArray(input.titles) ? input.titles.filter((title): title is string => v.is(v.string(), title)) : [];
     const parent = str(input, "parent");
     const head = titles.length > 1 ? `add ${titles.length} tasks` : "add";
     const target = parent ? `${head} under ${parent}` : head;
-    return titles.length === 1 ? actionOn(target, undefined, titles[0] as string) : target;
+    return titles.length === 1 ? actionOn(target, undefined, titles[0]) : target;
   }
   if (action === "update") return actionOn(action, str(input, "id"), str(input, "status"));
   return action;
 }
 
-function summarizeRelease(input: Record<string, unknown>): string {
+function summarizeRelease(input: JsonObject): string {
   const action = str(input, "action");
   const changeId = str(input, "changeId").slice(0, 8);
   switch (action) {
@@ -206,13 +211,13 @@ function summarizeRelease(input: Record<string, unknown>): string {
     case "run_checks": {
       const checks = Array.isArray(input.checks) ? input.checks : [];
       const names = checks
-        .map((c) => (isRecord(c) ? str(c, "name") : ""))
+        .map((check) => (v.is(JsonObjectSchema, check) ? str(check, "name") : ""))
         .filter(Boolean)
         .join(", ");
       return names ? `${action} — ${clip(names, 48)}` : actionOn(action, changeId);
     }
     case "preview": {
-      const port = typeof input.port === "number" ? `:${input.port}` : "";
+      const port = v.is(v.number(), input.port) ? `:${input.port}` : "";
       return words(actionOn(action, changeId), port || undefined);
     }
     case "deploy":
@@ -228,7 +233,8 @@ function summarizeRelease(input: Record<string, unknown>): string {
   }
 }
 
-const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = {
+type ToolSummarizer = (input: JsonObject) => string;
+const SUMMARIZERS = new Map<string, ToolSummarizer>(Object.entries({
   execute_tools: (input) => clip(firstCodeLine(str(input, "code"))),
   run: (input) => clip(str(input, "command")),
   file: summarizeFile,
@@ -255,7 +261,7 @@ const SUMMARIZERS: Record<string, (input: Record<string, unknown>) => string> = 
   skills: (input) => actionOn(str(input, "action"), str(input, "name")),
   release: summarizeRelease,
   product_change: summarizeRelease,
-};
+} satisfies Record<string, ToolSummarizer>));
 
 /* ══════════════════════════════════════════════════════════════════════
    What the call DOES, as opposed to what it was passed.
@@ -313,19 +319,19 @@ export function describeCommand(command: string): string {
   return "";
 }
 
-const FILE_VERBS: Record<string, string> = {
+const FILE_VERBS = new Map(Object.entries({
   read: "Read", write: "Wrote", edit: "Edited", append: "Appended to",
   delete: "Deleted", list: "Listed", search: "Searched", move: "Moved", copy: "Copied",
-};
+}));
 
-const TASK_VERBS: Record<string, string> = {
+const TASK_VERBS = new Map(Object.entries({
   add: "Planned the work", update: "Updated the task list", list: "Read the task list",
-};
+}));
 
-const MEMORY_VERBS: Record<string, string> = {
+const MEMORY_VERBS = new Map(Object.entries({
   save: "Saved to memory", search: "Searched memory", get: "Recalled",
   set: "Recorded a fact", delete: "Forgot", list: "Listed memory",
-};
+}));
 
 /** The last path segment — the part a person reads. */
 function basename(path: string): string {
@@ -333,7 +339,7 @@ function basename(path: string): string {
   return trimmed.split("/").pop() || trimmed;
 }
 
-function describeAgents(input: Record<string, unknown>): string {
+function describeAgents(input: JsonObject): string {
   const action = str(input, "action");
   const agent = str(input, "agent");
   switch (action) {
@@ -355,17 +361,18 @@ function describeAgents(input: Record<string, unknown>): string {
   }
 }
 
-const DESCRIBERS: Record<string, (input: Record<string, unknown>) => string> = {
+type ToolDescriber = (input: JsonObject) => string;
+const DESCRIBERS = new Map<string, ToolDescriber>(Object.entries({
   run: (input) => describeCommand(str(input, "command")),
   file: (input) => {
-    const verb = FILE_VERBS[str(input, "action")];
+    const verb = FILE_VERBS.get(str(input, "action"));
     if (!verb) return "";
     const path = str(input, "path");
     return path ? `${verb} ${basename(path)}` : verb;
   },
   agents: describeAgents,
-  memory: (input) => MEMORY_VERBS[str(input, "action")] ?? "",
-  tasks: (input) => TASK_VERBS[str(input, "action")] ?? "",
+  memory: (input) => MEMORY_VERBS.get(str(input, "action")) ?? "",
+  tasks: (input) => TASK_VERBS.get(str(input, "action")) ?? "",
   web: (input) => (str(input, "action") === "fetch" ? "Fetched a page" : str(input, "query") ? "Searched the web" : ""),
   web_search: () => "Searched the web",
   web_fetch: () => "Fetched a page",
@@ -385,7 +392,7 @@ const DESCRIBERS: Record<string, (input: Record<string, unknown>) => string> = {
     return "";
   },
   report: (input) => (str(input, "status") ? `Reported ${str(input, "status")}` : "Reported back"),
-};
+} satisfies Record<string, ToolDescriber>));
 
 /**
  * A plain-English phrase for what a tool call is doing, derived only from
@@ -393,9 +400,10 @@ const DESCRIBERS: Record<string, (input: Record<string, unknown>) => string> = {
  * shows the tool name and the argument summary alone, which is the honest
  * fallback for an MCP or crafted tool whose contract we do not know.
  */
-export function describeToolCall(toolName: string, input: unknown): string {
-  if (!isRecord(input)) return "";
-  return DESCRIBERS[toolName]?.(input) ?? "";
+export function describeToolCall<Input>(toolName: string, input: Input): string {
+  const parsed = v.safeParse(JsonObjectSchema, input);
+  if (!parsed.success) return "";
+  return DESCRIBERS.get(toolName)?.(parsed.output) ?? "";
 }
 
 /**
@@ -412,7 +420,7 @@ export function describeToolCall(toolName: string, input: unknown): string {
  * A tally rather than a sentence: a run mixes verbs, and five clauses joined
  * into prose reads worse at a glance than the counts do.
  */
-export function summarizeToolRun(calls: ReadonlyArray<{ toolName: string; input: unknown }>): string {
+export function summarizeToolRun<Input>(calls: ReadonlyArray<{ toolName: string; input: Input }>): string {
   const counts = new Map<string, number>();
   for (const { toolName, input } of calls) {
     const key = describeToolCall(toolName, input).split(" ")[0] || toolName;
@@ -425,9 +433,10 @@ export function summarizeToolRun(calls: ReadonlyArray<{ toolName: string; input:
 /** MCP and crafted tools have no known argument contract. A single string
  *  argument IS the call's subject, so it can be shown as-is; anything else
  *  would be a guess. */
-function summarizeUnknownTool(input: Record<string, unknown>): string {
-  const strings = Object.values(input).filter((v): v is string => typeof v === "string" && v.trim().length > 0);
-  return strings.length === 1 ? clip(strings[0]!) : "";
+function summarizeUnknownTool(input: JsonObject): string {
+  const strings = Object.values(input).filter((value): value is string =>
+    v.is(v.string(), value) && value.trim().length > 0);
+  return strings.length === 1 ? clip(strings[0] ?? '') : "";
 }
 
 /**
@@ -435,8 +444,9 @@ function summarizeUnknownTool(input: Record<string, unknown>): string {
  * arguments. Empty when the arguments carry nothing worth showing (a bare
  * `agents({action:'list'})` still yields "list"; a call with no input yields "").
  */
-export function summarizeToolCall(toolName: string, input: unknown): string {
-  if (!isRecord(input)) return "";
-  const summarize = SUMMARIZERS[toolName];
-  return summarize ? summarize(input) : summarizeUnknownTool(input);
+export function summarizeToolCall<Input>(toolName: string, input: Input): string {
+  const parsed = v.safeParse(JsonObjectSchema, input);
+  if (!parsed.success) return "";
+  const summarize = SUMMARIZERS.get(toolName);
+  return summarize ? summarize(parsed.output) : summarizeUnknownTool(parsed.output);
 }

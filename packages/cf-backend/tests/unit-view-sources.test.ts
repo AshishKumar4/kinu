@@ -78,8 +78,9 @@ describe('view data sources', () => {
       // authorising a deploy. A view able to draw it could counterfeit it.
       'listPendingActions',
     ];
+    const permitted = new Set<string>(VIEW_DATA_SOURCES);
     for (const method of withheld) {
-      expect(VIEW_DATA_SOURCES as readonly string[]).not.toContain(method);
+      expect(permitted.has(method)).toBe(false);
     }
   });
 
@@ -97,14 +98,19 @@ describe('reserved view titles', () => {
   test('cover every host work surface, so no agent tab can wear one of their names', () => {
     const source = read('components/surfaces/WorkSurface.tsx');
     const tuple = /export const SURFACES = \[([^\]]+)\]/.exec(source);
-    expect(tuple).not.toBeNull();
-    const surfaces = [...tuple![1]!.matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    const surfaceList = tuple?.[1];
+    if (!surfaceList) throw new Error('WorkSurface.tsx must declare SURFACES');
+    const surfaces = [...surfaceList.matchAll(/"([^"]+)"/g)].flatMap((match) => {
+      const name = match[1];
+      return name ? [name] : [];
+    });
     expect(surfaces.length).toBeGreaterThan(3);
 
     const activity = /const ACTIVITY_SURFACE = "([^"]+)"/.exec(source);
-    expect(activity).not.toBeNull();
+    const activityName = activity?.[1];
+    if (!activityName) throw new Error('WorkSurface.tsx must declare ACTIVITY_SURFACE');
 
-    for (const name of [...surfaces, activity![1]!]) {
+    for (const name of [...surfaces, activityName]) {
       expect(RESERVED_VIEW_TITLES).toContain(normalizeViewTitle(name));
     }
   });

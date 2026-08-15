@@ -77,11 +77,11 @@ export {
   renderScaffoldHandbook, indexScaffoldSites, type ScaffoldSite,
 } from './scaffold-handbook.js';
 export {
-  COMPLAINT_CLASSES, RESPONSE_SHAPES, PATHOLOGY_TAG_EXAMPLE,
-  clusterPathologies, complaintClass, responseShape, pathologyId, isPathologyId,
+  COMPLAINT_CLASSES, RESPONSE_MODES, PATHOLOGY_TAG_EXAMPLE,
+  clusterPathologies, complaintClass, classifyResponseMode, pathologyId, isPathologyId,
   describePathology, labelPathologyClusters, buildPathologyLabelPrompt,
   parsePathologyTag, renderPathologyBlock,
-  type ComplaintClass, type ResponseShape, type PathologyInput, type PathologyCluster,
+  type ComplaintClass, type ResponseMode, type PathologyInput, type PathologyCluster,
 } from './pathology.js';
 export {
   initReplayTables, runReplayEval, listReplayEvals,

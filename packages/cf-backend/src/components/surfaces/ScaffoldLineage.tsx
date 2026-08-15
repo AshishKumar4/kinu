@@ -26,12 +26,14 @@ interface ScaffoldDiff { version: number; previousVersion: number | null; added:
 interface ShadowTrial { id: string; task: string; currentScore: number | null; pendingScore: number | null; winner: "current" | "pending" | "tie" | null; rationale: string | null; evaluatedAt: number }
 interface ShadowVerdict { version: number | null; trials: ShadowTrial[]; summary: { trials: number; pendingWins: number; currentWins: number; ties: number; winRate: number } }
 
-const STATUS_TONE: Record<string, string> = {
-  current: "p-badge-success",
-  pending: "p-badge-warning",
-  rolled_back: "p-badge-danger",
-  historical: "p-fill p-text-3",
-};
+function statusTone(status: string): string {
+  switch (status) {
+    case "current": return "p-badge-success";
+    case "pending": return "p-badge-warning";
+    case "rolled_back": return "p-badge-danger";
+    default: return "p-fill p-text-3";
+  }
+}
 
 function DiffView({ diff }: { diff: ScaffoldDiff }) {
   return (
@@ -153,7 +155,7 @@ export function ScaffoldLineage({ rpc, currentVersion }: ScaffoldLineageProps) {
               <button key={v.version} onClick={() => select(v.version)}
                 className={`w-full flex items-center gap-2 px-2.5 py-1.5 rounded-md text-left transition-colors ${selected === v.version ? "p-fill" : "hover:p-card"}`}>
                 <span className="font-mono text-xs p-text shrink-0">v{v.version}</span>
-                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${STATUS_TONE[v.status] ?? "p-fill p-text-3"}`}>{v.status}</span>
+                <span className={`text-[10px] px-1.5 py-0.5 rounded-full shrink-0 ${statusTone(v.status)}`}>{v.status}</span>
                 <span className="text-[11px] p-text-2 truncate flex-1" title={v.rationale}>{v.rationale}</span>
                 <span className="text-[10px] p-text-3 shrink-0">{new Date(v.written_at).toLocaleDateString()}</span>
               </button>

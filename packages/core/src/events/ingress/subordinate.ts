@@ -12,6 +12,7 @@ import type { EventLog } from '../hub/log.js';
 import type { VFS } from '../../types/primitives.js';
 import { spillEventContent } from '../hub/content-spill.js';
 import type { SubordinateReportStatus } from '../hub/types.js';
+import type { WorkMode } from '../../prompting/surface.js';
 import {
   admitSubordinateReport, normalizeReportContent, parentAdmitsSubordinateReport,
   type SubordinateReportOrigin, type SubordinateRosterStore,
@@ -22,6 +23,7 @@ export interface SubordinateEventInput {
   status: SubordinateReportStatus;
   content: string;
   origin: SubordinateReportOrigin;
+  mode: WorkMode;
 }
 
 /** An admitted report, as the operator surfaces announce it. */
@@ -60,7 +62,7 @@ export async function receiveSubordinateEvent(
   }
   // Before the spill: a relay this workspace is not the audience for must not
   // leave a file behind on its file plane either. No event exists, so no id.
-  if (!parentAdmitsSubordinateReport({ origin: input.origin, entry: subordinate })) {
+  if (!parentAdmitsSubordinateReport({ entry: subordinate })) {
     return { id: '', admitted: false };
   }
   // Before the transaction: the VFS write is async, admission is not.
@@ -71,8 +73,9 @@ export async function receiveSubordinateEvent(
       fromSubordinate: input.fromSubordinate,
       status: input.status,
       content,
-      ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
-      ...(contentPath ? { contentPath } : {}),
+      mode: input.mode,
+      task: subordinate.currentTask ?? undefined,
+      contentPath: contentPath || undefined,
       now,
     });
     if (published.admitted) {
@@ -86,7 +89,7 @@ export async function receiveSubordinateEvent(
       subordinate: input.fromSubordinate,
       status: input.status,
       content: input.content,
-      ...(subordinate.currentTask ? { task: subordinate.currentTask } : {}),
+      task: subordinate.currentTask ?? undefined,
       timestamp: now,
     });
     deps.onAdmitted();

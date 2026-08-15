@@ -13,6 +13,9 @@
  * the library stores it as one JSON column rather than a sparse table.
  */
 
+import * as v from 'valibot';
+import { JsonValueSchema, type JsonValue } from '../utils/json.js';
+
 /** The kinds of experience a workspace can transfer. Order is the canonical
  *  one — the CHECK constraint and every enum surface derive from this list. */
 export const EXPERIENCE_KINDS = ['craft', 'lesson', 'fact'] as const;
@@ -34,7 +37,7 @@ export type ExperiencePayload =
       score: number;
     }
   | { kind: 'lesson'; text: string }
-  | { kind: 'fact'; key: string; value: unknown; confidence: number };
+  | { kind: 'fact'; key: string; value: JsonValue; confidence: number };
 
 /** What a workspace offers the owner's library, before the library stamps
  *  identity and provenance onto it. */
@@ -93,38 +96,31 @@ export function experienceSearchText(candidate: PublishableCandidate): string {
     .join('\n');
 }
 
-function isStringRecord(value: unknown): value is Record<string, string> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    && Object.values(value).every((v) => typeof v === 'string');
-}
+const ExperiencePayloadSchema: v.GenericSchema<ExperiencePayload> = v.variant('kind', [
+  v.object({
+    kind: v.literal('craft'),
+    name: v.string(),
+    description: v.string(),
+    params: v.nullable(v.record(v.string(), v.string())),
+    code: v.string(),
+    score: v.number(),
+  }),
+  v.object({ kind: v.literal('lesson'), text: v.string() }),
+  v.object({
+    kind: v.literal('fact'),
+    key: v.string(),
+    value: JsonValueSchema,
+    confidence: v.number(),
+  }),
+]);
 
 /** Parse a stored payload back into its union. Returns null for anything that
  *  does not match the kind's shape — a malformed row is skipped, never coerced
  *  into a half-populated craft. */
 export function parseExperiencePayload(json: string): ExperiencePayload | null {
-  let parsed: unknown;
-  try { parsed = JSON.parse(json); } catch { return null; }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const p = parsed as Record<string, unknown>;
-  if (p.kind === 'craft') {
-    if (typeof p.name !== 'string' || typeof p.description !== 'string'
-      || typeof p.code !== 'string' || typeof p.score !== 'number') return null;
-    if (p.params !== null && !isStringRecord(p.params)) return null;
-    return {
-      kind: 'craft',
-      name: p.name,
-      description: p.description,
-      params: p.params,
-      code: p.code,
-      score: p.score,
-    };
+  try {
+    return v.parse(ExperiencePayloadSchema, JSON.parse(json));
+  } catch {
+    return null;
   }
-  if (p.kind === 'lesson') {
-    return typeof p.text === 'string' ? { kind: 'lesson', text: p.text } : null;
-  }
-  if (p.kind === 'fact') {
-    if (typeof p.key !== 'string' || typeof p.confidence !== 'number' || !('value' in p)) return null;
-    return { kind: 'fact', key: p.key, value: p.value, confidence: p.confidence };
-  }
-  return null;
 }

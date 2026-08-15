@@ -23,7 +23,8 @@
 import type {
   GepaCandidate, EvalInstance, ReflectionLM,
 } from './types.js';
-import { stripMarkdownFences, truncate } from './text.js';
+import { renderInput, truncate } from './text.js';
+import { stripMarkdownFences } from '../../prompts/structured.js';
 
 export interface MergePair {
   a: GepaCandidate;
@@ -89,9 +90,7 @@ export function renderMergePrompt<I, E>(opts: {
     const out: string[] = [`${label} wins on:`];
     for (const id of wins) {
       const inst = instanceById.get(id);
-      const inputStr = inst
-        ? (typeof inst.input === 'string' ? inst.input : JSON.stringify(inst.input))
-        : '(unknown)';
+      const inputStr = inst ? renderInput(inst.input) : '(unknown)';
       const wText = label === 'A'
         ? `score(A)=${opts.pair.a.scores.get(id)?.toFixed(2) ?? '0'} vs score(B)=${opts.pair.b.scores.get(id)?.toFixed(2) ?? '0'}`
         : `score(B)=${opts.pair.b.scores.get(id)?.toFixed(2) ?? '0'} vs score(A)=${opts.pair.a.scores.get(id)?.toFixed(2) ?? '0'}`;

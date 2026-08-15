@@ -31,7 +31,6 @@ import {
   type ModelProvider,
   type ProviderDeps,
   type ProviderInfo,
-  type ProviderRegistry,
 } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
 import { generateText, streamText } from 'ai';
@@ -40,6 +39,27 @@ import type { LLM } from '@proteus/core';
 import { createClaudeCliProvider, type ClaudeCliProviderOptions } from './claude-cli-provider.js';
 import { createOpenCodeProvider, type OpenCodeProviderOptions } from './opencode-provider.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
+import * as v from 'valibot';
+
+const cloudMenuSchema = v.object({
+  models: v.optional(v.array(v.object({
+    spec: v.string(),
+    label: v.optional(v.string()),
+    provider: v.string(),
+    capabilities: v.optional(v.array(v.string())),
+    contextWindow: v.optional(v.number()),
+  })), []),
+  failures: v.optional(v.array(v.object({
+    provider: v.string(),
+    reason: v.string(),
+  })), []),
+});
+const proxiedCredentialsSchema = v.object({
+  credentials: v.optional(v.array(v.object({
+    key: v.string(),
+    baseURL: v.optional(v.string()),
+  })), []),
+});
 
 export interface LocalOpenAICompatCredential {
   baseURL: string;
@@ -161,25 +181,27 @@ export function createLocalProviderLLM(opts: LocalModelResolverConfig & { spec?:
   const model = () => resolver.resolveModel(spec);
   return {
     async *stream(input) {
-      const result = streamText({
+      const request: Parameters<typeof streamText>[0] = {
         model: model(),
         system: input.system,
         messages: input.messages.map(m => ({
-          role: m.role as 'user' | 'assistant',
+          role: m.role,
           content: m.content,
         })),
-        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
-      });
+      };
+      if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
+      if (providerOptions) request.providerOptions = providerOptions;
+      const result = streamText(request);
       for await (const chunk of result.textStream) yield chunk;
     },
     async complete(prompt) {
-      const result = await generateText({
+      const request: Parameters<typeof generateText>[0] = {
         model: model(),
         prompt,
-        ...(maxOutputTokens !== undefined ? { maxOutputTokens } : {}),
-        ...(providerOptions ? { providerOptions } : {}),
-      });
+      };
+      if (maxOutputTokens !== undefined) request.maxOutputTokens = maxOutputTokens;
+      if (providerOptions) request.providerOptions = providerOptions;
+      const result = await generateText(request);
       return result.text.trim();
     },
   };
@@ -422,6 +444,11 @@ interface CloudMenu {
   failures: Map<string, string>;
 }
 
+interface CloudProxyHeaders {
+  [header: string]: string;
+  Authorization: string;
+}
+
 const EMPTY_CLOUD_MENU: CloudMenu = { entries: [], failures: new Map() };
 
 /** Server-driven model menu (GET /api/cli/models) shared by the cloud
@@ -439,25 +466,18 @@ function createCloudModelMenu(cloud: LocalCloudSession, fetchImpl?: typeof fetch
         headers: { authorization: `Bearer ${cloud.token}`, accept: 'application/json' },
       });
       if (!res.ok) return EMPTY_CLOUD_MENU;
-      const body: unknown = await res.json();
-      const source = body && typeof body === 'object' ? body as Record<string, unknown> : {};
-      const rows = source.models;
-      const entries = (Array.isArray(rows) ? rows : []).flatMap((row): CloudMenuEntry[] => {
-        if (!row || typeof row !== 'object') return [];
-        const item = row as Record<string, unknown>;
-        if (typeof item.spec !== 'string' || typeof item.provider !== 'string') return [];
-        return [{
-          spec: item.spec,
-          label: typeof item.label === 'string' ? item.label : item.spec,
-          provider: item.provider,
-          capabilities: Array.isArray(item.capabilities)
-            ? MODEL_CAPABILITIES.filter((cap) => (item.capabilities as unknown[]).includes(cap))
-            : undefined,
-          contextWindow: typeof item.contextWindow === 'number' && item.contextWindow > 0
-            ? Math.floor(item.contextWindow)
-            : undefined,
-        }];
-      });
+      const source = v.parse(cloudMenuSchema, await res.json());
+      const entries = source.models.map((item): CloudMenuEntry => ({
+        spec: item.spec,
+        label: item.label ?? item.spec,
+        provider: item.provider,
+        capabilities: item.capabilities
+          ? MODEL_CAPABILITIES.filter((capability) => item.capabilities?.includes(capability))
+          : undefined,
+        contextWindow: item.contextWindow && item.contextWindow > 0
+          ? Math.floor(item.contextWindow)
+          : undefined,
+      }));
       const menu: CloudMenu = { entries, failures: cloudMenuFailures(source.failures) };
       cached = { at: Date.now(), menu };
       return menu;
@@ -528,14 +548,11 @@ function createProxyCredentialSource(
         return value;
       }
       if (!res.ok) throw new Error(`the Proteus provider proxy returned HTTP ${res.status}`);
-      const body: unknown = await res.json();
-      const rows = (body as { credentials?: unknown } | null)?.credentials;
+      const body = v.parse(proxiedCredentialsSchema, await res.json());
       const byKey = new Map<string, { baseURL?: string }>();
-      for (const row of Array.isArray(rows) ? rows : []) {
-        if (!row || typeof row !== 'object') continue;
-        const { key, baseURL } = row as Record<string, unknown>;
-        if (typeof key !== 'string' || !key) continue;
-        byKey.set(key, typeof baseURL === 'string' && baseURL ? { baseURL } : {});
+      for (const { key, baseURL } of body.credentials) {
+        if (!key) continue;
+        byKey.set(key, baseURL ? { baseURL } : {});
       }
       const value: ProxiedCredentials = { byKey, error: null };
       cached = { at: Date.now(), value };
@@ -552,13 +569,10 @@ function createProxyCredentialSource(
   return { load, providerIds: () => providerIds };
 }
 
-function cloudMenuFailures(rows: unknown): Map<string, string> {
+function cloudMenuFailures(rows: v.InferOutput<typeof cloudMenuSchema>['failures']): Map<string, string> {
   const out = new Map<string, string>();
-  if (!Array.isArray(rows)) return out;
-  for (const row of rows) {
-    if (!row || typeof row !== 'object') continue;
-    const { provider, reason } = row as Record<string, unknown>;
-    if (typeof provider === 'string' && typeof reason === 'string' && provider && reason) {
+  for (const { provider, reason } of rows) {
+    if (provider && reason) {
       out.set(provider, reason);
     }
   }
@@ -578,10 +592,8 @@ function createCloudProxyProvider(opts: {
   fetch?: typeof fetch;
 }): ModelProvider {
   const baseURL = cloudProxyBaseURL(opts.cloud.origin);
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${opts.cloud.token}`,
-    ...(opts.cloud.sessionAffinity ? { 'x-session-affinity': opts.cloud.sessionAffinity } : {}),
-  };
+  const headers: CloudProxyHeaders = { Authorization: `Bearer ${opts.cloud.token}` };
+  if (opts.cloud.sessionAffinity) headers['x-session-affinity'] = opts.cloud.sessionAffinity;
   const prefix = `${opts.id}/`;
   return {
     id: opts.id,
@@ -642,6 +654,16 @@ function defaultProviderFor(llm: LLMProviderConfig): 'workers-ai' | 'codex' | 'o
   return 'openai-compat';
 }
 
+interface LocalAuthStore {
+  has(key: string): boolean;
+  keys(): string[];
+  get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
+}
+
+interface OpenAICompatHeaders {
+  [header: string]: string;
+}
+
 function buildAuthStore(
   localEndpoint: LLMProviderConfig,
   credentials: LocalProviderCredentials,
@@ -650,11 +672,7 @@ function buildAuthStore(
     fetch?: typeof fetch;
     onCodexRefresh?: (credential: OAuthCredential) => void;
   } = {},
-): {
-  has(key: string): boolean;
-  keys(): string[];
-  get(key: string, authOpts?: { forceRefresh?: boolean }): Promise<AuthResolution | null>;
-} {
+): LocalAuthStore {
   const store = new Map<string, AuthResolution>();
   let codexCredential = credentials.codexOAuth;
 
@@ -699,11 +717,11 @@ function buildAuthStore(
   }
 
   for (const [name, compat] of Object.entries(credentials.openaiCompat ?? {})) {
-    const headers = {
-      ...(compat.headers ?? {}),
-      ...(compat.apiKey ? { Authorization: `Bearer ${compat.apiKey}` } : {}),
-      ...(compat.extraHeaders ?? {}),
+    const headers: OpenAICompatHeaders = {
+      ...compat.headers,
+      ...compat.extraHeaders,
     };
+    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
     store.set(`openai-compat.${name}`, {
       headers,
       baseURL: compat.baseURL,

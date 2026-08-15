@@ -1,7 +1,8 @@
 // Prompt-cache breakpoints — the pure provider-agnostic layer both backends
 // apply at their message-assembly seam (prompting/cache-breakpoints.ts).
 import { describe, test, expect } from 'bun:test';
-import type { ModelMessage, SystemModelMessage, ToolSet } from 'ai';
+import { jsonSchema, tool, type ModelMessage, type ToolSet } from 'ai';
+import * as v from 'valibot';
 import {
   applyCacheBreakpoints,
   cacheableSystem,
@@ -12,9 +13,33 @@ import {
   promptCachePlan,
   resolvePromptCacheStrategy,
   ANTHROPIC_MAX_BREAKPOINTS,
+  JsonObjectSchema,
+  type JsonObject,
 } from '../src/index.ts';
 
 const EPHEMERAL = { type: 'ephemeral' };
+const ProviderOptionsCarrierSchema = v.object({
+  providerOptions: v.optional(JsonObjectSchema),
+});
+const MessagePartsSchema = v.array(v.object({
+  providerOptions: v.optional(JsonObjectSchema),
+}));
+
+function providerOptions(input: { value: unknown }): JsonObject | undefined {
+  return v.parse(ProviderOptionsCarrierSchema, input.value).providerOptions;
+}
+
+function messageParts(message: ModelMessage): Array<{ providerOptions?: JsonObject }> {
+  return v.parse(MessagePartsSchema, message.content);
+}
+
+function cacheTool(description: string) {
+  return tool({
+    description,
+    inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+    execute: async () => ({}),
+  });
+}
 
 function history(n: number): ModelMessage[] {
   return Array.from({ length: n }, (_, i): ModelMessage =>
@@ -99,7 +124,10 @@ describe('cacheableSystem', () => {
 
   test('openrouter claude: marker rides the openaiCompatible namespace', () => {
     const s = cacheableSystem('sys', { kind: 'openai-compat', bodyNamespace: 'openrouter', markers: true });
-    expect((s as SystemModelMessage).providerOptions).toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
+    expect(s).toEqual({
+      role: 'system', content: 'sys',
+      providerOptions: { openaiCompatible: { cache_control: EPHEMERAL } },
+    });
   });
 
   test('no-marker strategies keep the plain string', () => {
@@ -140,12 +168,13 @@ describe('markCacheTail', () => {
   });
 
   test('total anthropic breakpoints (tool + system + tail) stay within the API limit', () => {
-    const tools = { a: {}, b: {} } as unknown as ToolSet;
+    const tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
     markLastToolForAnthropicCache(tools);
     const toolMarkers = Object.values(tools)
-      .filter((t) => (t as { providerOptions?: { anthropic?: unknown } }).providerOptions?.anthropic).length;
+      .filter((entry) => providerOptions({ value: entry })?.anthropic).length;
     const system = cacheableSystem('sys', anthropic);
-    const systemMarkers = typeof system === 'string' ? 0 : 1;
+    v.parse(v.object({ role: v.literal('system') }), system);
+    const systemMarkers = 1;
     const marked = markCacheTail(history(30), anthropic);
     expect(toolMarkers + systemMarkers + anthropicMarkerCount(marked)).toBe(ANTHROPIC_MAX_BREAKPOINTS);
   });
@@ -184,12 +213,11 @@ describe('markCacheTail', () => {
     const marked = markCacheTail(input, openrouterClaude);
     // The @ai-sdk/openai-compatible converter only reads part metadata for
     // tool results and single-text user messages — markers must sit there.
-    const toolParts = (marked[1] as Extract<ModelMessage, { role: 'tool' }>).content;
-    expect((toolParts as Array<{ providerOptions?: unknown }>)[0]!.providerOptions)
+    const toolParts = messageParts(marked[1]);
+    expect(toolParts[0]?.providerOptions)
       .toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
-    const userParts = (marked[2] as Extract<ModelMessage, { role: 'user' }>).content;
-    expect(typeof userParts).not.toBe('string');
-    expect((userParts as Array<{ providerOptions?: unknown }>)[1].providerOptions)
+    const userParts = messageParts(marked[2]);
+    expect(userParts[1]?.providerOptions)
       .toEqual({ openaiCompatible: { cache_control: EPHEMERAL } });
     expect(marked[0].providerOptions).toBeUndefined();
 
@@ -197,8 +225,8 @@ describe('markCacheTail', () => {
     const rolled = markCacheTail([...marked, { role: 'user', content: 'next' }], openrouterClaude);
     const markerCount = JSON.stringify(rolled).match(/"cache_control"/g)?.length ?? 0;
     expect(markerCount).toBe(2);
-    const rolledToolParts = (rolled[1] as Extract<ModelMessage, { role: 'tool' }>).content as Array<{ providerOptions?: unknown }>;
-    expect(rolledToolParts[0]!.providerOptions).toBeUndefined();
+    const rolledToolParts = messageParts(rolled[1]);
+    expect(rolledToolParts[0]?.providerOptions).toBeUndefined();
   });
 
   test('no-marker strategies return an untouched copy', () => {
@@ -238,7 +266,7 @@ describe('applyCacheBreakpoints', () => {
     });
     expect(plan.strategy).toEqual({ kind: 'anthropic' });
     expect(hasCacheMarkers(plan.strategy)).toBe(true);
-    expect((plan.system as SystemModelMessage).providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(providerOptions({ value: plan.system })).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
     expect(anthropicMarkerCount(plan.messages)).toBe(2);
     expect(plan.providerOptions).toBeUndefined();
   });
@@ -275,41 +303,36 @@ describe('applyCacheBreakpoints', () => {
 
 // Moved from cf-backend (providers/anthropic-cache.ts was folded into this module).
 describe('markLastToolForAnthropicCache', () => {
-  const tool = (description: string) =>
-    ({ description, inputSchema: { type: 'object' }, execute: async () => ({}) }) as unknown;
-
   test('sets an ephemeral anthropic cache breakpoint on the LAST tool only', () => {
-    const tools = { a: tool('a'), b: tool('b'), c: tool('c') } as unknown as ToolSet;
+    const tools: ToolSet = { a: cacheTool('a'), b: cacheTool('b'), c: cacheTool('c') };
     markLastToolForAnthropicCache(tools);
-    const c = tools.c as { providerOptions?: Record<string, unknown> };
-    const a = tools.a as { providerOptions?: Record<string, unknown> };
-    expect(c.providerOptions).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
-    expect(a.providerOptions).toBeUndefined();
+    expect(providerOptions({ value: tools.c })).toEqual({ anthropic: { cacheControl: EPHEMERAL } });
+    expect(providerOptions({ value: tools.a })).toBeUndefined();
   });
 
   test('preserves any existing providerOptions on the last tool', () => {
-    const last = { ...(tool('z') as object), providerOptions: { openai: { x: 1 } } };
-    const tools = { z: last } as unknown as ToolSet;
+    const last = { ...cacheTool('z'), providerOptions: { openai: { x: 1 } } };
+    const tools: ToolSet = { z: last };
     markLastToolForAnthropicCache(tools);
-    expect((tools.z as { providerOptions?: Record<string, unknown> }).providerOptions).toEqual({
+    expect(providerOptions({ value: tools.z })).toEqual({
       openai: { x: 1 },
       anthropic: { cacheControl: EPHEMERAL },
     });
   });
 
   test('empty tool set is a no-op', () => {
-    const tools = {} as ToolSet;
+    const tools: ToolSet = {};
     expect(() => markLastToolForAnthropicCache(tools)).not.toThrow();
   });
 
   test('retention drives the tool-surface breakpoint: long extends it, none omits it', () => {
-    const long = { a: tool('a'), b: tool('b') } as unknown as ToolSet;
+    const long: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
     markLastToolForAnthropicCache(long, 'long');
-    expect((long.b as { providerOptions?: Record<string, unknown> }).providerOptions)
+    expect(providerOptions({ value: long.b }))
       .toEqual({ anthropic: { cacheControl: { type: 'ephemeral', ttl: '1h' } } });
 
-    const off = { a: tool('a'), b: tool('b') } as unknown as ToolSet;
+    const off: ToolSet = { a: cacheTool('a'), b: cacheTool('b') };
     markLastToolForAnthropicCache(off, 'none');
-    expect((off.b as { providerOptions?: Record<string, unknown> }).providerOptions).toBeUndefined();
+    expect(providerOptions({ value: off.b })).toBeUndefined();
   });
 });

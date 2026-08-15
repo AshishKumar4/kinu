@@ -31,16 +31,23 @@ const TOKEN_HASH = 'a'.repeat(64);
 // the gate must fail loudly rather than dial out.
 const realFetch = globalThis.fetch;
 beforeAll(() => {
-  globalThis.fetch = (async () => { throw new Error('network disabled in tests'); }) as unknown as typeof fetch;
+  globalThis.fetch = Object.assign(
+    async (): Promise<Response> => { throw new Error('network disabled in tests'); },
+    { preconnect: realFetch.preconnect },
+  );
 });
 afterAll(() => { globalThis.fetch = realFetch; });
 
 type UserDOInstance = TestUserDO['userDO'];
+type AsyncUserDOResult = {
+  [Method in keyof UserDOInstance]: UserDOInstance[Method] extends
+    (...args: never[]) => Promise<infer Result> ? Result : never;
+}[keyof UserDOInstance];
 
 interface GatedCall {
   capability: WorkspaceCapability;
   name: string;
-  run(userDO: UserDOInstance, caller: UserCaller): Promise<unknown>;
+  run(userDO: UserDOInstance, caller: UserCaller): Promise<AsyncUserDOResult>;
 }
 
 /**
@@ -94,6 +101,8 @@ const GATED_CALLS: GatedCall[] = [
   { capability: 'workspaces.read', name: 'hasWorkspace', run: (u, c) => u.hasWorkspace(c, OTHER_WORKSPACE) },
 
   { capability: 'workspaces.write', name: 'registerWorkspace', run: (u, c) => u.registerWorkspace(c, 'spawned') },
+  { capability: 'workspaces.write', name: 'reserveWorkspace', run: (u, c) => u.reserveWorkspace(c, 'reserved') },
+  { capability: 'workspaces.write', name: 'releaseWorkspaceReservation', run: (u, c) => u.releaseWorkspaceReservation(c, 'reserved', 1) },
   { capability: 'workspaces.write', name: 'touchWorkspace', run: (u, c) => u.touchWorkspace(c, WORKSPACE) },
   { capability: 'workspaces.write', name: 'removeWorkspace', run: (u, c) => u.removeWorkspace(c, OTHER_WORKSPACE, USER_ID) },
   { capability: 'workspaces.write', name: 'backfillWorkspaceCapabilities', run: (u, c) => u.backfillWorkspaceCapabilities(c) },
@@ -114,7 +123,13 @@ const GATED_CALLS: GatedCall[] = [
     }),
   },
 
-  { capability: 'release', name: 'upsertReleaseSource', run: (u, c) => u.upsertReleaseSource(c, { kind: 'github', repo: 'o/r' } as never) },
+  {
+    capability: 'release',
+    name: 'upsertReleaseSource',
+    run: (u, c) => u.upsertReleaseSource(c, {
+      kind: 'github', label: 'o/r', repoUrl: 'https://github.com/o/r',
+    }),
+  },
   { capability: 'release', name: 'createReleaseChange', run: (u, c) => u.createReleaseChange(c, WORKSPACE, { bindingId: 'b1', userPrompt: 'x' }) },
   { capability: 'release', name: 'updateReleaseChange', run: (u, c) => u.updateReleaseChange(c, 'pc_1', { plan: 'x' }) },
   { capability: 'release', name: 'transitionReleaseChange', run: (u, c) => u.transitionReleaseChange(c, 'pc_1', 'planning') },
@@ -293,7 +308,8 @@ describe('a full workspace behaves exactly as before', () => {
 });
 
 describe('the boundary fails closed', () => {
-  const badCallers: Array<{ name: string; caller: unknown }> = [
+  type MalformedCaller = string | { workspaceToken: string } | undefined;
+  const badCallers: Array<{ name: string; caller: MalformedCaller }> = [
     { name: 'no token at all', caller: undefined },
     { name: 'an empty token', caller: { workspaceToken: '' } },
     { name: 'a token-shaped string in the wrong place', caller: 'pwc_whatever' },
@@ -305,7 +321,11 @@ describe('the boundary fails closed', () => {
       const harness = await setupWorkspaces();
       const allowed: string[] = [];
       for (const call of GATED_CALLS) {
-        if (!(await refused(call, harness.userDO, caller as UserCaller))) allowed.push(`${call.capability}:${call.name}`);
+        // SAFETY: `badCallers` is the locally constructed fixture union above;
+        // this deliberate type violation crosses only the runtime trust gate
+        // under test, which must reject every value before using its fields.
+        const untrustedCaller = caller as UserCaller;
+        if (!(await refused(call, harness.userDO, untrustedCaller))) allowed.push(`${call.capability}:${call.name}`);
       }
       expect(allowed).toEqual([]);
       harness.close();
@@ -433,6 +453,41 @@ describe('capability provisioning', () => {
     const rows = harness.db.prepare('SELECT * FROM workspace_capability_tokens').all();
     expect(JSON.stringify(rows)).not.toContain(harness.fullToken);
     expect(JSON.stringify(rows)).not.toContain(harness.otherToken);
+    harness.close();
+  });
+});
+
+describe('workspace name reservation', () => {
+  test('a fork conflict leaves an archived roster row byte-for-byte unchanged', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    await harness.userDO.registerWorkspace(owner, 'archived-name', 'Archived title');
+    harness.db.prepare(
+      'UPDATE user_workspaces SET archived_at = ?, last_visited = ? WHERE name = ?',
+    ).run(777, 123, 'archived-name');
+
+    const before = harness.db.prepare(
+      'SELECT * FROM user_workspaces WHERE name = ?',
+    ).get('archived-name');
+    const result = await harness.userDO.reserveWorkspace(owner, 'archived-name', 'Fork title');
+    const after = harness.db.prepare(
+      'SELECT * FROM user_workspaces WHERE name = ?',
+    ).get('archived-name');
+
+    expect(result.reserved).toBe(false);
+    expect(after).toEqual(before);
+    harness.close();
+  });
+
+  test('releases only the exact row created by the reservation', async () => {
+    const harness = createTestUserDO();
+    const owner = await testOwner();
+    const reserved = await harness.userDO.reserveWorkspace(owner, 'fork-reservation', 'Fork title');
+
+    expect(await harness.userDO.releaseWorkspaceReservation(owner, 'fork-reservation', reserved.entry.createdAt + 1)).toBe(false);
+    expect((await harness.userDO.listWorkspaces(owner)).map((row) => row.name)).toContain('fork-reservation');
+    expect(await harness.userDO.releaseWorkspaceReservation(owner, 'fork-reservation', reserved.entry.createdAt)).toBe(true);
+    expect((await harness.userDO.listWorkspaces(owner)).map((row) => row.name)).not.toContain('fork-reservation');
     harness.close();
   });
 });
@@ -569,7 +624,9 @@ describe('no privileged UserDO method escapes the gate', () => {
 
   test('every capability in the matrix has at least one call behind it', () => {
     const covered = new Set(GATED_CALLS.map((c) => c.capability));
-    const declared = Object.keys(WORKSPACE_CAPABILITY_TIERS) as WorkspaceCapability[];
+    const declared = Object.keys(WORKSPACE_CAPABILITY_TIERS).filter(
+      (name): name is WorkspaceCapability => Object.hasOwn(WORKSPACE_CAPABILITY_TIERS, name),
+    );
     expect(declared.filter((c) => !covered.has(c))).toEqual([]);
   });
 });

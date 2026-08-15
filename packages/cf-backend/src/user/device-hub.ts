@@ -9,7 +9,8 @@
  * policy (tagging, attachment marking, replace-on-reconnect, rebuild) in a
  * unit-testable home — the UserDO just wires tickets, SQL, and consent.
  */
-import { DeviceTunnel, type TunnelSocket } from '@proteus/core';
+import { DeviceTunnel, type JsonValue, type TunnelSocket } from '@proteus/core';
+import * as v from 'valibot';
 
 /** WebSocket.OPEN is 1 across every implementation. */
 const WS_OPEN = 1;
@@ -18,9 +19,11 @@ const DEVICE_WS_TAG_PREFIX = 'device:';
 /** The socket surface the hub needs — satisfied by the platform WebSocket. */
 export interface DeviceSocket extends TunnelSocket {
   close(code?: number, reason?: string): void;
-  serializeAttachment(attachment: unknown): void;
-  deserializeAttachment(): unknown;
+  serializeAttachment(attachment: JsonValue): void;
+  deserializeAttachment(): JsonValue | undefined;
 }
+
+const DeviceAttachmentSchema = v.object({ device: v.string() });
 
 /** The DurableObjectState subset the hub needs. */
 export interface DeviceSocketCtx {
@@ -36,8 +39,8 @@ export function deviceTag(deviceId: string): string {
  *  owned by the agents SDK (their attachments carry `__pk`, not `device`). */
 export function deviceIdFromSocket(ws: DeviceSocket): string | null {
   try {
-    const attachment = ws.deserializeAttachment() as { device?: unknown } | null;
-    return attachment && typeof attachment.device === 'string' ? attachment.device : null;
+    const attachment = v.safeParse(DeviceAttachmentSchema, ws.deserializeAttachment());
+    return attachment.success ? attachment.output.device : null;
   } catch {
     return null;
   }

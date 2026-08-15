@@ -17,6 +17,7 @@ import PC_AGENT_DAEMON_SOURCE from "../../pc-agent/src/index.js?raw";
 import { DEVICE_CONNECT_PATH } from "@proteus/core";
 import { json, safeJson } from "./lib/http.js";
 import { ownerCaller } from "./user/workspace-capability.js";
+import * as v from "valibot";
 
 const DAEMON_JS_URL = "/pc/daemon.js";
 
@@ -47,22 +48,22 @@ function installScriptResponse(origin: string): Response {
 set -eu
 PROTEUS_ORIGIN="\${PROTEUS_ORIGIN:-${origin}}"
 
-DIR="\$HOME/.proteus"
-mkdir -p "\$DIR"
-chmod 700 "\$DIR"
-if [ ! -f "\$DIR/device.json" ]; then
-  echo "No Proteus device config found at \$DIR/device.json."
-  echo "Run: proteus auth --origin \$PROTEUS_ORIGIN && proteus connect"
+DIR="$HOME/.proteus"
+mkdir -p "$DIR"
+chmod 700 "$DIR"
+if [ ! -f "$DIR/device.json" ]; then
+  echo "No Proteus device config found at $DIR/device.json."
+  echo "Run: proteus auth --origin $PROTEUS_ORIGIN && proteus connect"
   exit 1
 fi
 echo "Downloading Proteus device daemon…"
-curl -fsSL "\$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "\$DIR/pc-agent.js"
-chmod 600 "\$DIR/device.json"
+curl -fsSL "$PROTEUS_ORIGIN${DAEMON_JS_URL}" -o "$DIR/pc-agent.js"
+chmod 600 "$DIR/device.json"
 
 if command -v node >/dev/null 2>&1; then
   echo "Starting daemon (node)…"
-  nohup node "\$DIR/pc-agent.js" > "\$DIR/pc-agent.log" 2>&1 &
-  echo "  PID=\$! log=\$DIR/pc-agent.log"
+  nohup node "$DIR/pc-agent.js" > "$DIR/pc-agent.log" 2>&1 &
+  echo "  PID=$! log=$DIR/pc-agent.log"
 else
   echo "Node.js required. Install https://nodejs.org/ then re-run."
   exit 1
@@ -86,7 +87,10 @@ function daemonJsResponse(): Response {
 
 async function handlePcConnectTicket(request: Request, env: Env): Promise<Response> {
   if (request.method !== "POST") return new Response("Method not allowed", { status: 405 });
-  const body = await safeJson<{ user?: string; token?: string }>(request);
+  const body = await safeJson(request, v.object({
+    user: v.optional(v.string()),
+    token: v.optional(v.string()),
+  }));
   if (!body?.user || !body.token) return json({ error: "user and token required" }, { status: 400 });
   if (!/^[a-f0-9]{32}$/.test(body.user)) return json({ error: "invalid user" }, { status: 400 });
 

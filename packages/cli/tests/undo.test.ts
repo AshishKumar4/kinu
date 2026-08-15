@@ -11,6 +11,38 @@ import { createHostCheckpoints } from '@proteus/cli-backend';
 import type { FileCheckpointEntry } from '@proteus/core';
 import { commandsForClient, executeSlashCommand, groupCheckpointsByTurn, performUndo } from '../src/slash-commands.js';
 import type { AgentClient, FileCheckpointSurface } from '../src/agent-client.js';
+import { createCliSession } from '../src/session.js';
+
+function inertCheckpointSurface(): FileCheckpointSurface {
+  return {
+    list: async () => [],
+    plan: async () => { throw new Error('not used'); },
+    restore: async () => { throw new Error('not used'); },
+    status: async () => ({ available: true }),
+  };
+}
+
+function slashClient(checkpoints: FileCheckpointSurface | null): AgentClient {
+  const client: AgentClient = {
+    mode: 'local', agentName: 'test', cliSession: createCliSession('test', { noSession: true }),
+    consents: null, localControls: null, checkpoints, inlineAttachmentLimitBytes: 1024,
+    connect: async () => {}, subscribe: () => () => {},
+    send: async () => ({ text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false }),
+    steer: () => false, branch: () => false,
+    fork: async () => ({ client, label: 'test' }), stop: () => [], close: async () => {},
+    history: async () => [], listSessions: () => [], resumeConversation: async () => {},
+    status: async () => ({ name: 'test', purpose: 'test', model: null, reasoningEffort: null }),
+    describeTools: async () => ({ builtIn: [], crafted: [] }),
+    changelog: async () => ({ entries: [], unseenCount: 0 }),
+    revertChangelogEntry: async () => ({ ok: false }), readMemory: async () => '',
+    searchNodes: async () => [], listJobs: async () => [], latestTakes: async () => null,
+    pickTake: async () => { throw new Error('not used'); },
+    getModelSpec: async () => null, setModel: async (spec) => ({ spec }),
+    getReasoningEffort: async () => null, setReasoningEffort: async (effort) => ({ effort }),
+    listModels: async () => ({ models: [], failures: [] }),
+  };
+  return client;
+}
 
 function realEngineClient(opts: { gitBin?: string } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'proteus-undo-'));
@@ -137,17 +169,17 @@ describe('/undo command surface', () => {
   });
 
   test('is offered only when the client has a checkpoint surface', async () => {
-    const withSurface = { localControls: null, consents: null, checkpoints: {} as FileCheckpointSurface };
+    const withSurface = { localControls: null, consents: null, checkpoints: inertCheckpointSurface() };
     const without = { localControls: null, consents: null, checkpoints: null };
     expect(commandsForClient(withSurface).some((c) => c.name === '/undo')).toBe(true);
     expect(commandsForClient(without).some((c) => c.name === '/undo')).toBe(false);
 
-    const outcome = await executeSlashCommand({ ...without } as AgentClient, '/undo 2');
+    const outcome = await executeSlashCommand(slashClient(null), '/undo 2');
     expect(outcome).toEqual({ kind: 'unknown', command: '/undo' });
   });
 
   test('parses /undo [n] into the surface-owned outcome', async () => {
-    const client = { checkpoints: {} as FileCheckpointSurface } as AgentClient;
+    const client = slashClient(inertCheckpointSurface());
     expect(await executeSlashCommand(client, '/undo')).toEqual({ kind: 'undo', ref: undefined });
     expect(await executeSlashCommand(client, '/undo 3')).toEqual({ kind: 'undo', ref: '3' });
   });

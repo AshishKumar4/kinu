@@ -11,7 +11,7 @@
  *                       Absent → returns a 'NOT CONFIGURED' error. Core
  *                       itself does NO codegen.
  *   2. run            — shell via executionRouter; `runtime` param explicitly
- *                       chooses workspace / nimbus / sandbox / laptop, with
+ *                       chooses workspace / sandbox / laptop, with
  *                       workspace (rt.shell) as the conservative default.
  *   3. file           — the ONE file plane: read / edit / write over the same
  *                       workspace filesystem every other surface addresses. The edit is
@@ -59,7 +59,6 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
   MEMORY_NOTE_ACTIONS, MEMORY_FACT_ACTIONS, TASKS_TOOL_ACTIONS,
-  type MemoryToolAction, type TasksToolAction,
 } from './registry.js';
 import { TaskListStore, TASK_STATUSES } from '../tasks/store.js';
 import { clampToolResult, withClampedToolResult } from './clamp.js';
@@ -77,10 +76,15 @@ import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool.js';
 import { WebFetchError, type WebSearchProvider, type WebSearchResponse } from '../web/index.js';
+import type { PlanEdit, SubmitPlanToolDeps } from '../plans/review.js';
+import type { JsonValue } from '../utils/json.js';
+
+type ToolExecutionOptions = Parameters<NonNullable<ToolSet[string]['execute']>>[1];
+type ExecutableToolEntry = NonNullable<ToolSet[string]>;
 
 /** The crafted tools a sandbox may call, keyed by name. */
 export type CraftedToolSet =
-  Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  Record<string, { description: string; execute: (arg: JsonValue) => Promise<JsonValue | undefined> }>;
 
 /**
  * Narrow local shape of the CLI's codemode tool factory
@@ -93,9 +97,9 @@ export type CreateExecuteToolFactory = (opts: {
    *  is what the tool's own description promises and what the in-episode loop
    *  is for. Cheap to call — compiled bodies are memoised by name and code. */
   craftedTools: () => CraftedToolSet;
-  providers: unknown[];
-  loader: unknown;
-}) => unknown;
+  providers: ReturnType<NonNullable<AgentRuntime['executionRouter']>['getProviders']>;
+  loader: object | undefined;
+}) => ToolSet[string];
 
 export interface BuiltinToolDeps {
   rt: AgentRuntime;
@@ -104,7 +108,7 @@ export interface BuiltinToolDeps {
    * an opaque sentinel that keeps the factory branch active. Core does not
    * inspect it. Unused on CF, which supplies `preBuiltExecuteTool` instead.
    */
-  codemodeLoader?: unknown;
+  codemodeLoader?: object;
   /**
    * Optional factory that BUILDS the execute_tools tool from the crafted-tool
    * set and the runtime's execution providers. The CLI wires it; CF hands a
@@ -170,6 +174,9 @@ export interface BuiltinToolDeps {
    *  codemode `web.*` namespace is wired by the same provider in each backend's
    *  execute_tools assembly. */
   webSearch?: WebSearchProvider;
+  /** Plan-mode-only review submission. Structural absence is the gate: normal
+   *  Build/Chat toolsets do not contain submit_plan at all. */
+  submitPlan?: SubmitPlanToolDeps;
   /** The turn's file ledger — what the model has read (so `file` can refuse a
    *  blind edit) and what its edits did (the durable `file_edit` row). Same
    *  ownership rule as contextBudget: backends pass their TurnAccumulator's, and
@@ -203,7 +210,7 @@ export interface ReportToolDeps {
   report(input: {
     status: import('../events/hub/types.js').SubordinateReportStatus;
     content: string;
-  }): Promise<unknown>;
+  }): Promise<JsonValue | undefined>;
 }
 
 // ReleaseToolDeps lives in tools/release-tool.ts now — the release lane's
@@ -222,7 +229,7 @@ function buildCraftedToolSetFromExecute(
   factory: CraftedToolExecute,
   minScore: number,
   surfacing?: { mode: 'all' | 'relevant'; query?: string; maxRelevant?: number },
-): CraftedToolSet {
+) {
   const out: CraftedToolSet = {};
   let list;
   try {
@@ -270,16 +277,19 @@ function buildCraftedToolSetFromExecute(
         description,
         // Stamped with the tool's identity so a failure is attributable to the
         // artifact rather than to the code around it (craft/in-episode.ts).
-        execute: async (arg: unknown) => {
+        execute: async (arg: JsonValue) => {
           try {
             return await execute(arg);
           } catch (err) {
-            throw craftInvocationError(t.name, err);
+            throw craftInvocationError(t.name, err instanceof Error ? err : String(err));
           }
         },
       };
     } catch (err) {
-      console.warn(`[proteus] Skipping broken crafted tool "${t.name}":`, (err as Error).message);
+      console.warn(
+        `[proteus] Skipping broken crafted tool "${t.name}":`,
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -312,6 +322,10 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   const memory = rt.memory;
   const router = rt.executionRouter;
   const shell = rt.shell;
+  const runRuntimes = [...new Set([
+    'workspace',
+    ...(router?.listExecutors().map(({ name }) => name) ?? []),
+  ])];
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
@@ -342,8 +356,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       )
     : {};
 
-  if (deps.preBuiltExecuteTool) {
-    tools.execute_tools = deps.preBuiltExecuteTool as ToolSet[string];
+  const prebuilt = { value: deps.preBuiltExecuteTool };
+  if (isExecutableToolEntry(prebuilt)) {
+    tools.execute_tools = prebuilt.value;
   } else if (deps.createExecuteTool) {
     try {
       const providers = router?.getProviders() ?? [];
@@ -351,9 +366,12 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         craftedTools,
         providers,
         loader: deps.codemodeLoader,
-      }) as ToolSet[string];
+      });
     } catch (err) {
-      console.error('[proteus] createExecuteTool FAILED:', (err as Error).message);
+      console.error(
+        '[proteus] createExecuteTool FAILED:',
+        err instanceof Error ? err.message : String(err),
+      );
     }
   }
 
@@ -395,8 +413,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // Shell command tool. The `runtime` parameter dispatches through the
   // ExecutionRouter — workspace (default) hits the workspace's own Nimbus
   // shell, over the same bytes the `file` tool addresses; every other runtime
-  // is a different machine, provisioned on demand via ExecutorProvider (the
-  // `nimbus` one is a separate Nimbus session, not this shell). No fallback
+  // is a different machine, provisioned on demand via ExecutorProvider. No fallback
   // chain: if you ask for "sandbox" and sandbox isn't ready, you get a
   // structured error pointing at the install card, not silently routed
   // somewhere else.
@@ -408,24 +425,23 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         command: { type: 'string', description: 'Shell command to run' },
         runtime: {
           type: 'string',
-          enum: ['workspace', 'nimbus', 'sandbox', 'laptop'],
+          enum: runRuntimes,
           description:
             'Execution runtime. Use one of the environments listed in the system prompt — that list is live for this turn; check it instead of assuming availability. ' +
             'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
-            "laptop is the user's own PC, available when their device is connected; its first use may pause for a user consent prompt (expected, not an error). " +
-            'Choose nimbus, sandbox, or laptop explicitly when that environment is the right execution target.',
+            'Every other value names a registered environment; the live prompt states which files it addresses and any provisioning or consent semantics. Choose that runtime explicitly when the work lives there.',
         },
       },
       required: ['command'],
     }),
-    execute: async (args: { command: string; runtime?: string }, options?: unknown) => {
-      const signal = readAbortSignal(options);
+    execute: async (args: { command: string; runtime?: string }, options?: ToolExecutionOptions) => {
+      const signal = options?.abortSignal;
       // No gate here — the approval ladder (reviewCommand / shellApprovalMode
       // / the interactive channel) lives at the execution seam this tool
       // dispatches to: the `shell` a workspace command runs through, and
       // every ExecutionRouter provider's `exec` for everything else (see
       // execution/approval.ts). That is also where codemode's
-      // `workspace.exec()` / `nimbus.exec()` / `sandbox.exec()` /
+      // `workspace.exec()` / `sandbox.exec()` /
       // `laptop.exec()` land, so the same command answers to the identical
       // decision whichever path reached it — not a check re-derived here.
 
@@ -460,9 +476,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               ? 'The "laptop" runtime requires the Proteus PC daemon. Ask the user to install it from the Executors tab.'
               : runtimeKey === 'sandbox'
                 ? 'The full Cloudflare Sandbox is not active yet. It will be auto-provisioned on first use — retry.'
-                : runtimeKey === 'nimbus'
-                  ? 'Nimbus sandbox is not reachable. Check the NIMBUS_SESSION Durable Object binding.'
-                  : `Runtime "${runtimeKey}" is not registered.`,
+                : `Runtime "${runtimeKey}" is not registered.`,
         });
       }
       const execTool = provider.tools.exec;
@@ -641,7 +655,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
               return { error: `unknown web action '${String(args.action)}'` };
           }
         } catch (err) {
-          return webErrorResult(err);
+          return webErrorResult(err instanceof Error ? err : String(err));
         }
       },
     });
@@ -671,6 +685,51 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         } catch (err) {
           return { error: err instanceof Error ? err.message : String(err) };
         }
+      },
+    });
+  }
+
+  // ── submit_plan — Plan mode's one completion surface ─────────────────────
+  // It is intentionally outside BUILTIN_TOOLS: that registry describes the
+  // stable surface every turn can build. This tool exists only on a Plan turn,
+  // where ActorAgent wires this dependency and adds the name to activeTools.
+  if (deps.submitPlan) {
+    tools.submit_plan = tool({
+      description: [
+        'Submit the current Markdown implementation plan for interactive owner review.',
+        'On the first call, write the full plan with one edit starting at line 1. After changes are requested, use the line numbers in the feedback turn to make targeted edits.',
+        'Line numbers are one-indexed and inclusive; omit end to replace through the end of the plan. Do not implement after submission — end the turn and await the owner decision.',
+      ].join('\n'),
+      inputSchema: jsonSchema<{ edits: PlanEdit[] }>({
+        type: 'object',
+        properties: {
+          edits: {
+            type: 'array', minItems: 1, maxItems: 100,
+            items: {
+              type: 'object',
+              properties: {
+                start: { type: 'integer', minimum: 1, description: 'First affected line, one-indexed.' },
+                end: { type: ['integer', 'null'], minimum: 1, description: 'Last affected line, inclusive. Omit to replace through end of plan.' },
+                content: { type: 'string', description: 'Replacement Markdown. Empty with an explicit end deletes the range.' },
+              },
+              required: ['start', 'content'],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ['edits'],
+        additionalProperties: false,
+      }),
+      execute: async ({ edits }: { edits: PlanEdit[] }) => {
+        const result = await deps.submitPlan!.submit(edits);
+        if (!result.ok) return result;
+        return {
+          ok: true,
+          planId: result.plan.id,
+          revision: result.plan.revision,
+          status: result.plan.status,
+          message: 'Plan submitted and awaiting review. Do not implement or produce a preview; end this turn now.',
+        };
       },
     });
   }
@@ -707,19 +766,19 @@ function formatSearchResults(res: WebSearchResponse): string {
 }
 
 /** Map a web tool failure to an honest, model-actionable error object. */
-function webErrorResult(err: unknown): { error: string; retriable?: boolean } {
+function webErrorResult(err: Error | string) {
   if (err instanceof WebFetchError) {
     return err.retriable ? { error: err.message, retriable: true } : { error: err.message };
   }
-  return { error: err instanceof Error ? err.message : String(err) };
+  return { error: err instanceof Error ? err.message : err };
 }
 
-function readAbortSignal(options: unknown): AbortSignal | undefined {
-  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
-  const signal = (options as { abortSignal?: unknown }).abortSignal;
-  return isAbortSignal(signal) ? signal : undefined;
-}
-
-function isAbortSignal(value: unknown): value is AbortSignal {
-  return typeof value === 'object' && value !== null && 'aborted' in value && 'addEventListener' in value;
+function isExecutableToolEntry(
+  input: { value: unknown },
+): input is { value: ExecutableToolEntry } {
+  return input.value !== null
+    && typeof input.value === 'object'
+    && 'inputSchema' in input.value
+    && 'execute' in input.value
+    && typeof input.value.execute === 'function';
 }

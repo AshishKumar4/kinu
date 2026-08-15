@@ -2,6 +2,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { delimiter, join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { parseJsonObject, type JsonObject } from '@proteus/core';
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
@@ -16,7 +17,7 @@ afterEach(() => {
 function runProviders(
   args: string[],
   opts: { claude?: 'ready' | 'logged-out'; home: string; env?: Record<string, string> },
-): { stdout: string; stderr: string; exitCode: number | null } {
+) {
   const binDir = mkdtempSync(join(tmpdir(), 'proteus-claude-bin-'));
   tempDirs.push(binDir);
   // Controlled PATH excludes the user's real `claude` so "absent" is honest;
@@ -51,7 +52,7 @@ function runProviders(
       OPENAI_API_KEY: '', ANTHROPIC_API_KEY: '', OPENROUTER_API_KEY: '', CODEX_ACCESS_TOKEN: '',
       PROTEUS_BASE_URL: '', PROTEUS_AUTH: '', PROTEUS_MODEL: '',
       PATH: path, PROTEUS_HOME: opts.home, NO_COLOR: '1',
-      ...(opts.env ?? {}),
+      ...opts.env,
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -109,14 +110,14 @@ describe('providers command — Claude subscription', () => {
 /** `provider disconnect` is the inverse of `provider connect`: it must remove
  *  the credential from disk, not merely stop showing it. */
 describe('providers command — disconnect', () => {
-  function homeWith(config: Record<string, unknown>): string {
+  function homeWith(config: JsonObject): string {
     const home = freshHome();
     writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
     return home;
   }
 
-  function readConfig(home: string): Record<string, unknown> {
-    return JSON.parse(readFileSync(join(home, 'config.json'), 'utf8')) as Record<string, unknown>;
+  function readConfig(home: string): JsonObject {
+    return parseJsonObject(readFileSync(join(home, 'config.json'), 'utf8'));
   }
 
   test('removes the stored credential from disk and clears the default model', () => {

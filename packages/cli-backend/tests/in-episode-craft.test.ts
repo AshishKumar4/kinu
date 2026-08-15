@@ -9,6 +9,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
 import type { LLMProviderConfig, RunEvent } from '@proteus/core';
 import { CRAFT_NEUTRAL_PRIOR } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
@@ -24,11 +25,9 @@ const DUMMY_LLM: LLMProviderConfig = {
 function scriptedEpisode(blocks: readonly string[]): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   let step = 0;
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
     doStream: async () => {
       const code = blocks[step];
       step += 1;
@@ -54,7 +53,7 @@ function scriptedEpisode(blocks: readonly string[]): LanguageModel {
         response: { headers: {} },
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 function episode(blocks: readonly string[]) {
@@ -63,7 +62,7 @@ function episode(blocks: readonly string[]) {
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db as never, {
+  const rt = createCLIRuntime(db, {
     dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
   });
   const events: SessionEvent[] = [];
@@ -74,15 +73,18 @@ function episode(blocks: readonly string[]) {
 }
 
 function craftScore(db: Database, name: string): { score: number; uses: number } | null {
-  return db.query('SELECT score, uses FROM craft_scores WHERE tool_name = ?')
-    .get(name) as { score: number; uses: number } | null;
+  return db.query<{ score: number; uses: number }, [string]>(
+    'SELECT score, uses FROM craft_scores WHERE tool_name = ?',
+  ).get(name);
 }
 
 /** The turn's craft record, read back the way an analysis would: through the
  *  session's own run-event reader. The run id is not on the session event
  *  stream, so it comes from the durable log the reader indexes. */
 function craftCycleRow(session: LocalAgentSession, db: Database) {
-  const runId = (db.query('SELECT run_id FROM run_events LIMIT 1').get() as { run_id: string }).run_id;
+  const row = db.query<{ run_id: string }, []>('SELECT run_id FROM run_events LIMIT 1').get();
+  if (!row) throw new Error('craft run-event row is missing');
+  const runId = row.run_id;
   return session.getRunEvents(runId)
     .find((e: RunEvent): e is Extract<RunEvent, { type: 'craft_cycle' }> => e.type === 'craft_cycle');
 }
@@ -158,7 +160,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
   }, 20_000);
 
   test('with auto-evolution off the tool still works and nothing is scored', async () => {
-    const { db, session, events } = episode([]);
+    const { session } = episode([]);
     await session.end();
 
     const off = (() => {
@@ -167,7 +169,7 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
         id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
         role TEXT NOT NULL, content TEXT NOT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-      const rt = createCLIRuntime(dbOff as never, {
+      const rt = createCLIRuntime(dbOff, {
         dbPath: `/tmp/proteus-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
       });
       const evs: SessionEvent[] = [];
@@ -193,6 +195,6 @@ describe('in-episode craft loop — one turn, no user, no turn boundary', () => 
     expect(craftScore(off.db, 'doubleIt')).toEqual({ score: CRAFT_NEUTRAL_PRIOR, uses: 0 });
 
     await off.session.end();
-    db.close();
+    off.db.close();
   }, 20_000);
 });

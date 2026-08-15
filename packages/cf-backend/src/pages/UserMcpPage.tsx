@@ -23,12 +23,11 @@ import {
   type McpServerSummary, type McpTransport,
 } from "../lib/user-api";
 import { inputCls } from "@/components/ui/form";
+import * as v from "valibot";
 
 const POLL_MS = 5000;
 
-function statusBadge(status: McpServerSummary['status']): {
-  label: string; classes: string; Icon: React.ComponentType<{ size?: number; className?: string }>;
-} {
+function statusBadge(status: McpServerSummary['status']) {
   switch (status) {
     case 'ready':
     case 'connected':
@@ -58,7 +57,7 @@ export default function UserMcpPage() {
       setErr(null);
       const rows = await listMcpServers();
       setServers(rows);
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(errorMessage(e)); }
     finally { setLoading(false); }
   }, []);
 
@@ -85,7 +84,7 @@ export default function UserMcpPage() {
 
   const remove = useCallback(async (id: string, name: string) => {
     if (!confirm(`Remove "${name}"? All workspaces will lose access to its tools.`)) return;
-    try { await removeMcpServer(id); refresh(); } catch (e) { alert((e as Error).message); }
+    try { await removeMcpServer(id); refresh(); } catch (e) { alert(errorMessage(e)); }
   }, [refresh]);
 
   return (
@@ -228,13 +227,8 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
       let headers: Record<string, string> | undefined;
       if (headersText.trim()) {
         try {
-          const parsed = JSON.parse(headersText) as unknown;
-          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('headers must be a flat object');
-          for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
-            if (typeof v !== 'string') throw new Error(`headers.${k} must be a string`);
-          }
-          headers = parsed as Record<string, string>;
-        } catch (e) { throw new Error(`Bad headers JSON: ${(e as Error).message}`); }
+          headers = v.parse(v.record(v.string(), v.string()), JSON.parse(headersText));
+        } catch (e) { throw new Error(`Bad headers JSON: ${errorMessage(e)}`); }
       }
       const tools = allowedTools.trim()
         ? allowedTools.split(',').map((s) => s.trim()).filter(Boolean)
@@ -246,7 +240,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
         window.open(result.authUrl, '_blank', 'noopener,noreferrer');
       }
       onAdded();
-    } catch (e) { setErr((e as Error).message); }
+    } catch (e) { setErr(errorMessage(e)); }
     finally { setSaving(false); }
   }, [name, serverUrl, transport, headersText, allowedTools, onAdded]);
 
@@ -263,7 +257,7 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
         </div>
         <div className="space-y-1">
           <label className="text-xs p-text-3">Transport</label>
-          <select value={transport} onChange={(e) => setTransport(e.target.value as McpTransport)} className={inputCls}>
+          <select value={transport} onChange={(e) => setTransport(v.parse(McpTransportSchema, e.target.value))} className={inputCls}>
             <option value="auto">auto (recommended)</option>
             <option value="streamable-http">streamable-http</option>
             <option value="sse">sse</option>
@@ -298,4 +292,10 @@ function AddServerCard({ onCancel, onAdded }: { onCancel: () => void; onAdded: (
       </div>
     </section>
   );
+}
+
+const McpTransportSchema = v.picklist(['auto', 'sse', 'streamable-http']);
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }

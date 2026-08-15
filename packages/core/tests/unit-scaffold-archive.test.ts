@@ -37,7 +37,7 @@ function scaffoldSrc(tag: string): string {
 
 async function seedV0(rt: AgentRuntime): Promise<void> {
   await rt.identity.scaffold.write(scaffoldSrc('v0'));
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
 }
 
@@ -137,16 +137,16 @@ describe('selectEvolutionBase — the exploration-share policy', () => {
     // Sample the policy's distribution with a deterministic LCG.
     let s = 7;
     const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
-    const picks = { 0: 0, 1: 0, 2: 0 } as Record<number, number>;
+    const picks = new Map([[0, 0], [1, 0], [2, 0]]);
     for (let i = 0; i < 600; i++) {
       const pick = selectEvolutionBase(archive, { exploreShare: 1, random: rng })!;
-      picks[pick.version] = (picks[pick.version] ?? 0) + 1;
+      picks.set(pick.version, (picks.get(pick.version) ?? 0) + 1);
     }
     // The untried root (max novelty bonus) and the strong v2 must both beat
     // the twice-beaten v1 — yet v1 stays reachable (DGM: no variant is dead).
-    expect(picks[0]).toBeGreaterThan(picks[1]);
-    expect(picks[2]).toBeGreaterThan(picks[1]);
-    expect(picks[1]).toBeGreaterThan(0);
+    expect(picks.get(0) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
+    expect(picks.get(2) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
+    expect(picks.get(1) ?? 0).toBeGreaterThan(0);
   });
 
   test('the exploit path ignores lineage entirely — exploreShare still governs', () => {
@@ -220,16 +220,18 @@ describe('selectEvolutionBase — clade-metaproductivity', () => {
   test('over the whole distribution the productive lineage wins the compute', () => {
     let s = 11;
     const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
-    const clade: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
-    const legacy: Record<number, number> = { 1: 0, 2: 0, 3: 0, 4: 0 };
+    const clade = new Map([[1, 0], [2, 0], [3, 0], [4, 0]]);
+    const legacy = new Map([[1, 0], [2, 0], [3, 0], [4, 0]]);
     for (let i = 0; i < 800; i++) {
-      clade[selectEvolutionBase(lineage, { exploreShare: 1, random: rng })!.version]! += 1;
-      legacy[legacyExplorePick(lineage, rng())]! += 1;
+      const cladeVersion = selectEvolutionBase(lineage, { exploreShare: 1, random: rng })!.version;
+      clade.set(cladeVersion, (clade.get(cladeVersion) ?? 0) + 1);
+      const legacyVersion = legacyExplorePick(lineage, rng());
+      legacy.set(legacyVersion, (legacy.get(legacyVersion) ?? 0) + 1);
     }
-    expect(clade[3]!).toBeGreaterThan(clade[1]!);
-    expect(legacy[1]!).toBeGreaterThan(legacy[3]!);
+    expect(clade.get(3) ?? 0).toBeGreaterThan(clade.get(1) ?? 0);
+    expect(legacy.get(1) ?? 0).toBeGreaterThan(legacy.get(3) ?? 0);
     // The dead-end lineage keeps a share — no variant is ever unreachable.
-    expect(clade[1]!).toBeGreaterThan(0);
+    expect(clade.get(1) ?? 0).toBeGreaterThan(0);
   });
 
   test('cold start: with no scored descendants the policy is the old one exactly', () => {
@@ -302,15 +304,16 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     ];
     let s = 7;
     const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
-    const picks: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    const picks = new Map([[1, 0], [2, 0], [3, 0]]);
     for (let i = 0; i < 600; i++) {
-      picks[selectEvolutionBase(crowded, { exploreShare: 1, random: rng })!.version]! += 1;
+      const version = selectEvolutionBase(crowded, { exploreShare: 1, random: rng })!.version;
+      picks.set(version, (picks.get(version) ?? 0) + 1);
     }
     // v1 owns a cell of its own; v2 and v3 share theirs with the live current.
-    expect(picks[1]!).toBeGreaterThan(picks[2]!);
-    expect(picks[1]!).toBeGreaterThan(picks[3]!);
+    expect(picks.get(1) ?? 0).toBeGreaterThan(picks.get(2) ?? 0);
+    expect(picks.get(1) ?? 0).toBeGreaterThan(picks.get(3) ?? 0);
     // …and the crowded cell keeps a real share — this is a tilt, not a filter.
-    expect(picks[2]! + picks[3]!).toBeGreaterThan(picks[1]!);
+    expect((picks.get(2) ?? 0) + (picks.get(3) ?? 0)).toBeGreaterThan(picks.get(1) ?? 0);
   });
 
   test('diversity never overrides a clade score', () => {
@@ -324,12 +327,13 @@ describe('pathology coverage — the diversity signal beside the clade score', (
     ];
     let s = 3;
     const rng = () => { s = (s * 1664525 + 1013904223) % 0xffffffff; return s / 0xffffffff; };
-    const picks: Record<number, number> = { 1: 0, 2: 0, 3: 0 };
+    const picks = new Map([[1, 0], [2, 0], [3, 0]]);
     for (let i = 0; i < 600; i++) {
-      picks[selectEvolutionBase(archive, { exploreShare: 1, random: rng })!.version]! += 1;
+      const version = selectEvolutionBase(archive, { exploreShare: 1, random: rng })!.version;
+      picks.set(version, (picks.get(version) ?? 0) + 1);
     }
-    expect(picks[2]!).toBeGreaterThan(picks[1]!);
-    expect(picks[3]!).toBeGreaterThan(picks[1]!);
+    expect(picks.get(2) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
+    expect(picks.get(3) ?? 0).toBeGreaterThan(picks.get(1) ?? 0);
   });
 
   test('a version that named no cell claims no coverage credit', () => {
@@ -375,7 +379,7 @@ describe('rejected proposals are queryable evidence', () => {
   test('a proposal discarded before any decisive trial says so', async () => {
     const rt = setupRt();
     await seedV0(rt);
-    const result = await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
+    await modifyScaffold(rt, RATIONALE, scaffoldSrc('v1'));
     await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'rollback');
 
     const [rejected] = listRejectedProposals(rt.storage.sql);

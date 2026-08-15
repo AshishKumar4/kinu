@@ -100,8 +100,8 @@ Consent is asked once per workspace and remembered. By default the agent sees
 the folder you consented to; the wider grant (whole filesystem) is a deliberate
 switch in the web app's workspace settings, under Device access.
 
-`proteus executors <name>` lists the places a workspace can run commands (your
-machine, a sandbox container, a Nimbus sandbox), and
+`proteus executors <name>` lists the places a workspace can run commands (the
+canonical workspace, a sandbox container, or your connected machine), and
 `proteus executors <name> <executor> <command…>` runs one directly.
 
 ## 5. Making it work while you're away
@@ -121,8 +121,11 @@ Each workspace also has an email address —
 (see [docs/EMAIL-INGRESS.md](EMAIL-INGRESS.md)). Mail from your verified address
 starts a turn, and the reply comes back on the thread.
 
-Anything that arrives while a turn is running is spliced into that turn at its
-next step rather than queued behind it, so a busy workspace still hears you.
+Compatible background signals that arrive while a turn is running are spliced
+into its next step. Delegated Plan or Build work keeps its trusted mode and is
+queued immediately for its own homogeneous turn instead of being mixed into
+unrelated work, so a busy workspace still admits the message without blocking
+the sender.
 
 ## 6. Watching it think
 

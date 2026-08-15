@@ -23,7 +23,7 @@ describe('subordinate wiring', () => {
     expect(subordinate).toContain('const bootstrap = await parent.getSubordinateBootstrapIdentity();');
     expect(subordinate).toContain('parentWorkspace: bootstrap.parentWorkspace');
     expect(subordinate).toContain('ownerUserId: bootstrap.ownerUserId');
-    expect(orchestrator).toContain('inheritedContext: () => orchestrator.readInheritedContext()');
+    expect(orchestrator).toContain('inheritedContext: () => this.readInheritedContext()');
   });
 
   test('a subordinate holds the parent workspace capability token, pushed never pulled', () => {
@@ -37,7 +37,7 @@ describe('subordinate wiring', () => {
     expect(actor).toContain('async installWorkspaceCapability(token: string)');
 
     // Push, both at spawn and whenever the parent's token is (re)issued.
-    expect(orchestrator).toContain('const capabilityToken = await orchestrator.workspaceCapabilityToken();');
+    expect(orchestrator).toContain('const capabilityToken = await this.workspaceCapabilityToken();');
     expect(orchestrator).toContain('await stub.installWorkspaceCapability(token);');
     expect(subordinate).toContain('if (input.capabilityToken) await this.installWorkspaceCapability(input.capabilityToken);');
 
@@ -52,6 +52,20 @@ describe('subordinate wiring', () => {
     for (const file of ['actor-agent.ts', 'orchestrator.ts', 'subordinate-agent.ts']) {
       expect(source(file)).not.toMatch(/async get\w*CapabilityToken\w*\(\)/);
     }
+  });
+
+  test('a subordinate shares workspace bytes without overwriting workspace identity or duplicating the executor', () => {
+    const actor = source('actor-agent.ts');
+    const subordinate = source('subordinate-agent.ts');
+
+    expect(actor).toContain('scaffoldPath: this.scaffoldPath()');
+    expect(actor).toContain('shellId: this.shellId()');
+    expect(subordinate).toContain('`.proteus/agents/${encodeURIComponent(this.name)}/scaffold/agent.js`');
+    expect(subordinate).toContain('protected shellId(): string { return `subordinate:${this.name}`; }');
+    expect(subordinate).toContain('renderSoulMarkdown({');
+    expect(subordinate).not.toContain('seedSoul(');
+    expect(subordinate).not.toContain('createParentExecutor');
+    expect(subordinate).not.toContain("registerParentWorkspace");
   });
 
   test('subordinate tools are structurally confined to report, without team, peers, or release changes', () => {
@@ -81,11 +95,42 @@ describe('subordinate wiring', () => {
     const orchestrator = source('orchestrator.ts');
     const subordinate = source('subordinate-agent.ts');
     expect(orchestrator).toContain('return this.getTeamToolDeps().list();');
-    expect(orchestrator).toContain("return this.getTeamToolDeps().spawn({ role, mission, createdBy: 'user' });");
-    expect(orchestrator).toContain('return this.getTeamToolDeps().dismiss({ name });');
+    expect(orchestrator).toContain('return this.getTeamToolDeps().create({ role, mission });');
+    expect(orchestrator).toContain("return this.getTeamToolDeps().dismiss({ name, requestedBy: 'user' });");
     expect(subordinate).not.toContain('spawnSubordinate(');
     expect(subordinate).not.toContain('dismissSubordinate(');
     expect(subordinate).not.toContain('listSubordinates(');
+  });
+
+  test('manual creation is identity-only and opens the durable agent directly', () => {
+    const tabs = source('components/SubordinateTabs.tsx');
+    expect(tabs).toContain('The mission defines this agent’s standing role.');
+    expect(tabs).toContain('navigate(`${mainPath}/agents/${created.name}`)');
+    expect(tabs).toContain('if (dismissTarget.name === activeName) navigate(mainPath);');
+    expect(tabs).not.toContain('sends the mission as its first turn');
+    expect(tabs).not.toContain('permanently deletes its conversation');
+  });
+
+  test('manual create and dismiss reconcile the roster from their successful RPC result', () => {
+    const hook = source('hooks/use-proteus.ts');
+    expect(hook).toContain('result.subordinate');
+    expect(hook).toContain('entry.name !== result.subordinate.name');
+    expect(hook).toContain('entry.name !== result.name');
+    const mutations = hook.slice(hook.indexOf('spawnSubordinate: async'), hook.indexOf('\n  };', hook.indexOf('spawnSubordinate: async')));
+    expect(mutations).not.toContain('await refreshSubordinates()');
+    expect(mutations.match(/\+\+subordinateRefreshGeneration\.current;/g)).toHaveLength(2);
+  });
+
+  test('stale roster reads cannot overwrite a mutation, broadcast, or actor reset', () => {
+    const hook = source('hooks/use-proteus.ts');
+    const refresh = hook.slice(
+      hook.indexOf('const refreshSubordinates = useCallback'),
+      hook.indexOf('\n\n  useEffect(() => {', hook.indexOf('const refreshSubordinates = useCallback')),
+    );
+    expect(refresh).toContain('const generation = ++subordinateRefreshGeneration.current;');
+    expect(refresh.match(/generation !== subordinateRefreshGeneration\.current/g)).toHaveLength(2);
+    expect(hook).toContain('msg.type === "subordinates_changed"');
+    expect(hook).toContain('++subordinateRefreshGeneration.current;');
   });
 
   // The ingress sequence itself is core's, and its ordering is proven there by
@@ -128,6 +173,8 @@ describe('subordinate wiring', () => {
       'const ownerDriven = !programmaticUserMessage && !this.lastUserTurnIsProgrammatic();');
     expect(subordinate).toContain(
       'if (subordinateRelaysTurnEnd({ reportedThisTurn: this.reportedThisTurn, ownerDriven, assistantText }))');
+    expect(subordinate).toContain('if (!this.lastUserTurnIsProgrammatic()) return {};');
+    expect(subordinate).toContain('return report ? [createReportCodemodeProvider(() => report)] : [];');
 
     // The parent half — the drop, and that it happens before any file is
     // written — is core's (core/tests/unit-subordinates.test.ts).
@@ -139,7 +186,7 @@ describe('subordinate wiring', () => {
     // subordinates_changed is the webUI's roster feed and is emitted from the
     // team policy on every spawn/assign/message/dismiss, independently of
     // whether any report was admitted.
-    expect(orchestrator).toContain('broadcast: (event) => orchestrator.broadcastSubordinatesChanged(event),');
+    expect(orchestrator).toContain('broadcast: (event) => this.broadcastSubordinatesChanged(event),');
     const changed = orchestrator.slice(
       orchestrator.indexOf('private broadcastSubordinatesChanged('),
       orchestrator.indexOf('private broadcastSubordinateEvent('),

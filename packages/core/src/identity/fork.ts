@@ -31,6 +31,7 @@
  * Formal spec + rationale: docs/WORKSPACES.md.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor, VFS } from '../types/primitives.js';
 import { SOUL_PATH, summarizeSoul } from './soul.js';
 
@@ -180,6 +181,13 @@ export async function writeForkSnapshot(
   snapshot: ForkSnapshot,
   opts: {
     workspaceId: string; workspaceName: string; now?: number;
+    /** Hosted workspaces establish their owner before the external VFS copy;
+     *  carry it through the identity rewrite so the row and file namespace
+     *  cannot diverge. Local backends omit it. */
+    ownerUserId?: string;
+    /** Hosted workspaces use their owner-only filesystem writer for SOUL.md;
+     *  every other inherited file remains an ordinary workspace write. */
+    writeSoulFile?: (content: string) => Promise<void>;
     /**
      * Runs the ROW half atomically. Files are written outside it and cannot be
      * inside it: a host transaction is synchronous, and the filesystem is not —
@@ -199,23 +207,40 @@ export async function writeForkSnapshot(
   for (const f of snapshot.files) {
     const dir = f.path.slice(0, f.path.lastIndexOf('/'));
     if (dir) await targetVfs.mkdir(dir, { recursive: true });
-    await targetVfs.writeFile(f.path, f.content);
+    if (f.path === SOUL_PATH && opts.writeSoulFile) await opts.writeSoulFile(f.content);
+    else await targetVfs.writeFile(f.path, f.content);
   }
 
   const rows = (): void => {
-  // 1. Purge any default-bootstrap identity rows the target's boot path
-  //    may have inserted. This makes the write idempotent across retries.
-  target`DELETE FROM workspace_identity`;
+  // 1. Replace every copied row set. The target is reserved but not exposed
+  //    until this operation succeeds, so a repeated delivery must converge on
+  //    the same snapshot rather than duplicate conversation rows or retain a
+  //    partial attempt.
+  void target`DELETE FROM messages`;
+  void target`DELETE FROM conversation_history`;
+  void target`DELETE FROM crafted_tools`;
+  try { void target`DELETE FROM assistant_messages`; } catch { /* lazily created */ }
+  try { void target`DELETE FROM memory_chunks`; } catch { /* optional index */ }
+  try { void target`DELETE FROM agent_config`; } catch { /* optional configuration */ }
+  void target`DELETE FROM fork_lineage`;
+  void target`DELETE FROM workspace_identity`;
 
   // 2. Rewrite workspace_identity — new id, new name, fresh created_at.
-  target`
-    INSERT INTO workspace_identity (id, name, created_at)
-    VALUES (${opts.workspaceId}, ${opts.workspaceName}, ${now})
-  `;
+  if (opts.ownerUserId) {
+    void target`
+      INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+      VALUES (${opts.workspaceId}, ${opts.workspaceName}, ${opts.ownerUserId}, ${now})
+    `;
+  } else {
+    void target`
+      INSERT INTO workspace_identity (id, name, created_at)
+      VALUES (${opts.workspaceId}, ${opts.workspaceName}, ${now})
+    `;
+  }
 
   // 3. Messages, PKs preserved.
   for (const m of snapshot.messages) {
-    target`
+    void target`
       INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
       VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
     `;
@@ -223,7 +248,7 @@ export async function writeForkSnapshot(
 
   // 4. conversation_history. `id` is auto-increment so fresh rowids are fine.
   for (const c of snapshot.conversationHistory) {
-    target`
+    void target`
       INSERT INTO conversation_history (session_id, role, message, created_at)
       VALUES (${c.session_id}, ${c.role}, ${c.message}, ${c.created_at})
     `;
@@ -232,7 +257,7 @@ export async function writeForkSnapshot(
   // 5. assistant_messages. The table is created lazily by Session.ensureTable()
   //    on first append, so ensure it exists before inserting (idempotent).
   try {
-    target`
+    void target`
       CREATE TABLE IF NOT EXISTS assistant_messages (
         id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL DEFAULT '',
@@ -242,10 +267,10 @@ export async function writeForkSnapshot(
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `;
-    target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
-    target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
+    void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_parent  ON assistant_messages(parent_id)`;
+    void target`CREATE INDEX IF NOT EXISTS idx_assistant_msg_session ON assistant_messages(session_id)`;
     for (const m of snapshot.assistantMessages) {
-      target`
+      void target`
         INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
         VALUES (${m.id}, ${m.session_id}, ${m.parent_id}, ${m.role}, ${m.content}, ${m.created_at})
       `;
@@ -254,14 +279,14 @@ export async function writeForkSnapshot(
 
   // 6. SOUL.md + memory/* are FILES and are written before this, outside the
   //    row transaction — see writeForkFiles at the top of this function.
-  target`UPDATE workspace_identity SET mission = ${
+  void target`UPDATE workspace_identity SET mission = ${
     summarizeSoul(snapshot.files.find((f) => f.path === SOUL_PATH)?.content ?? '')
   }`;
 
   // 7. memory_chunks — skipped silently when the target has no such table yet.
   try {
     for (const c of snapshot.memoryChunks) {
-      target`
+      void target`
         INSERT OR REPLACE INTO memory_chunks (id, path, start_line, end_line, hash, text, updated_at)
         VALUES (${c.id}, ${c.path}, ${c.start_line}, ${c.end_line}, ${c.hash}, ${c.text}, ${c.updated_at})
       `;
@@ -270,7 +295,7 @@ export async function writeForkSnapshot(
 
   // 8. crafted_tools (snapshot — independent evolution from this point).
   for (const t of snapshot.craftedTools) {
-    target`
+    void target`
       INSERT OR REPLACE INTO crafted_tools
       (name, description, params, code, scope, created_at, updated_at)
       VALUES (${t.name}, ${t.description}, ${t.params}, ${t.code}, ${t.scope}, ${t.created_at}, ${t.updated_at})
@@ -280,14 +305,13 @@ export async function writeForkSnapshot(
   // 9. agent_config, with display_name overwritten so the UI shows the fork.
   try {
     for (const row of snapshot.agentConfig) {
-      target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
+      void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${row.key}, ${row.value})`;
     }
-    target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
+    void target`INSERT OR REPLACE INTO agent_config (key, value) VALUES ('display_name', ${opts.workspaceName})`;
   } catch { /* agent_config may not exist in target — non-fatal */ }
 
   // 10. Lineage — single row.
-  target`DELETE FROM fork_lineage WHERE id = 1`;
-  target`
+  void target`
     INSERT INTO fork_lineage
     (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
     VALUES
@@ -308,7 +332,7 @@ export async function writeForkSnapshot(
     + `Your current tool set and memory are authoritative; ignore any tools or context `
     + `referenced before the fork that you don't see in your active tool list.`;
 
-  target`
+  void target`
     INSERT INTO conversation_history (session_id, role, message, created_at)
     VALUES ('default', 'system', ${JSON.stringify({ role: 'system', content: syntheticText })}, ${forkPointMs + 1})
   `;
@@ -325,7 +349,7 @@ export async function writeForkSnapshot(
     // ISO8601 with ms, one ms after the cut point — guaranteed to be the latest
     // leaf in the fork's session tree.
     const syntheticCreatedAt = new Date(forkPointMs + 1).toISOString().replace('T', ' ').replace('Z', '');
-    target`
+    void target`
       INSERT OR IGNORE INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
       VALUES (${syntheticId}, ${''}, ${snapshot.cut.messageId}, ${'system'}, ${syntheticContent}, ${syntheticCreatedAt})
     `;
@@ -355,7 +379,7 @@ export async function forkWorkspaceStorage(
   return writeForkSnapshot(target, targetVfs, snapshot, {
     workspaceId: opts.targetWorkspaceId,
     workspaceName: opts.targetWorkspaceName,
-    ...(opts.now !== undefined ? { now: opts.now } : {}),
+    now: opts.now,
   });
 }
 
@@ -402,8 +426,8 @@ export function readForkLineage(sql: SqlExecutor): ForkLineageRow | null {
 async function readForkFiles(vfs: VFS): Promise<ForkSnapshot['files']> {
   const out: ForkSnapshot['files'] = [];
   const readText = async (path: string): Promise<void> => {
-    const content = await vfs.readFile(path, { encoding: 'utf8' });
-    if (typeof content === 'string') out.push({ path, content });
+    const content = v.parse(v.string(), await vfs.readFile(path, { encoding: 'utf8' }));
+    out.push({ path, content });
   };
   if (await vfs.exists(SOUL_PATH)) await readText(SOUL_PATH);
   const walk = async (dir: string): Promise<void> => {

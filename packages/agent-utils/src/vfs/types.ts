@@ -40,6 +40,10 @@ export interface ReadWriteVFS {
 	readdir(path: string): Promise<string[]>;
 }
 
+export interface MkdirOptions {
+	recursive?: boolean;
+}
+
 export interface VFS extends ReadWriteVFS {
 	/** Self-reference for Node FS compat (isomorphic-git). */
 	promises: VFS;
@@ -48,7 +52,7 @@ export interface VFS extends ReadWriteVFS {
 	stat(path: string): Promise<VFSStat>;
 	lstat(path: string): Promise<VFSStat>;
 	unlink(path: string): Promise<void>;
-	mkdir(path: string, options?: unknown): Promise<void>;
+	mkdir(path: string, options?: MkdirOptions): Promise<void>;
 	rmdir(path: string): Promise<void>;
 	removeRecursive(path: string): Promise<void>;
 	symlink(target: string, path: string): Promise<void>;

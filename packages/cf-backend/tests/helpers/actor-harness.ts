@@ -15,13 +15,25 @@
  * harness is for observing composition output, not for driving inference.
  */
 
-import { Database } from 'bun:sqlite';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import type { AgentContext } from 'agents';
+import type { ToolSet } from 'ai';
+import type { SqlExecRow, SqlValue } from '@proteus/core';
 import { mockAgentsSdk } from './agents-sdk.js';
 
 mockAgentsSdk();
 
 const { OrchestratorAgent } = await import('../../src/orchestrator.js');
 const { SubordinateAgent } = await import('../../src/subordinate-agent.js');
+
+class HarnessOrchestratorAgent extends OrchestratorAgent {
+  observeRawTools(): ToolSet { return this.getRawTools(); }
+  setObservedSoul(text: string): void { this._cachedSoulText = text; }
+}
+
+class HarnessSubordinateAgent extends SubordinateAgent {
+  observeRawTools(): ToolSet { return this.getRawTools(); }
+}
 
 export interface ActorHarness<T> {
   readonly agent: T;
@@ -30,17 +42,23 @@ export interface ActorHarness<T> {
   tableNames(): string[];
 }
 
-function makeCtx(db: Database): unknown {
-  const sqlExec = (query: string, ...bindings: unknown[]) => {
-    const stmt = db.prepare(query);
+function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
+  return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
+}
+
+function makeCtx(db: Database): AgentContext {
+  const sqlExec = (query: string, ...bindings: SqlValue[]) => {
+    const stmt = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
+    const bound = nativeBindings(bindings);
     if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-      const rows = stmt.all(...(bindings as never[])) as Array<Record<string, unknown>>;
+      const rows = stmt.all(...bound);
       return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
     }
-    stmt.run(...(bindings as never[]));
-    return { toArray: () => [] as Array<Record<string, unknown>>, [Symbol.iterator]: () => [][Symbol.iterator]() };
+    stmt.run(...bound);
+    const rows: SqlExecRow[] = [];
+    return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
   };
-  return {
+  const context = {
     storage: {
       sql: { exec: sqlExec },
       // Real, not a callback passthrough: the durable filesystem's atomicity
@@ -55,17 +73,26 @@ function makeCtx(db: Database): unknown {
     },
     id: { toString: () => 'harness-actor', name: 'harness-actor' },
     waitUntil: () => {},
-    blockConcurrencyWhile: async (fn: () => Promise<unknown>) => fn(),
+    blockConcurrencyWhile: <Result>(fn: () => Promise<Result>): Promise<Result> => fn(),
     abort: () => {},
   };
+  const partialContext: Partial<AgentContext> = {};
+  Object.assign(partialContext, context);
+  // SAFETY: the Agent constructor contract stores this locally constructed
+  // context, and actor schema initialization only calls the implemented SQL,
+  // transaction, identity, alarm, and concurrency members above.
+  return partialContext as AgentContext;
 }
 
 /** Env with the bindings actor construction reaches. LOADER and UserDO are
  *  present-but-inert: deps construction captures them; using them throws. */
-function makeEnv(): unknown {
-  return {
+function makeEnv(): Env {
+  const bindings = {
     PROTEUS_MAX_STEPS: '10',
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
+    // Runtime construction now requires the hosted-workspace binding. The
+    // handle remains lazy, so surface-composition tests do not call this stub.
+    NIMBUS_SESSION: {},
     AI_GATEWAY_URL: 'https://gateway.invalid/v1',
     AI_GATEWAY_AUTH: 'harness-token',
     UserDO: {
@@ -78,47 +105,60 @@ function makeEnv(): unknown {
       }),
     },
   };
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: the ActorAgent dependency contract only reads the constructed
+  // LOADER, NIMBUS_SESSION, UserDO, and gateway bindings in this harness; each
+  // unsupported operation throws if schema composition begins invoking it.
+  return env as Env;
 }
 
-function instantiate<T>(Actor: new (ctx: never, env: never) => T, db: Database): ActorHarness<T> {
-  const agent = new Actor(makeCtx(db) as never, makeEnv() as never);
-  const dynamic = agent as unknown as Record<string, unknown>;
-  // The agents-SDK members the stub base class does not provide: the `sql`
-  // tagged template, and the DO's stable `name`.
-  dynamic.sql = (strings: TemplateStringsArray, ...values: unknown[]) => {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    const stmt = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(values as never[]));
-    stmt.run(...(values as never[]));
-    return [];
-  };
-  Object.defineProperty(agent, 'name', { value: 'harness-actor', configurable: true });
+function instantiate<T extends object>(Actor: new (ctx: AgentContext, env: Env) => T, db: Database): ActorHarness<T> {
+  const agent = new Actor(makeCtx(db), makeEnv());
   return {
     agent,
     db,
-    tableNames: () => (db.prepare("SELECT name FROM sqlite_master WHERE type IN ('table','view') AND type='table' ORDER BY name")
-      .all() as Array<{ name: string }>).map((r) => r.name),
+    tableNames: () => db.prepare<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type IN ('table','view') AND type='table' ORDER BY name",
+    ).all().map((row) => row.name),
   };
 }
 
+function ensureActorSchema(
+  agent: InstanceType<typeof OrchestratorAgent> | InstanceType<typeof SubordinateAgent>,
+): void {
+  // Think wraps `onStart` with asynchronous SDK initialization. Invoke the
+  // production overrides directly: both create their complete schema before
+  // their first await, which is the lifecycle behavior this harness observes.
+  if (agent instanceof OrchestratorAgent) {
+    void OrchestratorAgent.prototype.onStart.call(agent);
+  } else {
+    void SubordinateAgent.prototype.onStart.call(agent);
+  }
+}
+
 /** A real OrchestratorAgent with a claimed owner, schema ensured. */
-export function orchestratorHarness(): ActorHarness<InstanceType<typeof OrchestratorAgent>> {
-  const harness = instantiate(OrchestratorAgent as never, new Database(':memory:')) as ActorHarness<InstanceType<typeof OrchestratorAgent>>;
-  (harness.agent as unknown as { ensureSchema(): void }).ensureSchema();
+export function orchestratorHarness(): ActorHarness<HarnessOrchestratorAgent> {
+  const harness = instantiate(HarnessOrchestratorAgent, new Database(':memory:'));
+  ensureActorSchema(harness.agent);
   harness.db.prepare(
-    "INSERT OR REPLACE INTO workspace_identity (id, name, owner_user_id, created_at) VALUES ('harness-id', 'harness-actor', 'harness-owner', ?)",
-  ).run(Date.now());
+    "UPDATE workspace_identity SET owner_user_id = 'harness-owner' WHERE id = 'harness-actor'",
+  ).run();
   return harness;
 }
 
 /** A real SubordinateAgent with a claimed owner and a seeded identity (what
  *  the parent's setSubordinateIdentity RPC installs), schema ensured. */
-export function subordinateHarness(): ActorHarness<InstanceType<typeof SubordinateAgent>> {
-  const harness = instantiate(SubordinateAgent as never, new Database(':memory:')) as ActorHarness<InstanceType<typeof SubordinateAgent>>;
-  (harness.agent as unknown as { ensureSchema(): void }).ensureSchema();
+export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
+  const harness = instantiate(HarnessSubordinateAgent, new Database(':memory:'));
+  Object.defineProperty(harness.agent, 'messages', {
+    value: [{ role: 'user', metadata: { proteusEvent: 'subordinate_task' } }],
+    configurable: true,
+  });
+  ensureActorSchema(harness.agent);
   harness.db.prepare(
-    "INSERT OR REPLACE INTO workspace_identity (id, name, owner_user_id, created_at) VALUES ('harness-id', 'harness-actor', 'harness-owner', ?)",
-  ).run(Date.now());
+    "UPDATE workspace_identity SET owner_user_id = 'harness-owner' WHERE id = 'harness-actor'",
+  ).run();
   harness.db.prepare(
     `INSERT OR REPLACE INTO subordinate_identity
        (id, name, display_name, role, mission, parent_workspace, owner_user_id)

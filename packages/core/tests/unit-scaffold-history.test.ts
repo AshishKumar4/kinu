@@ -8,6 +8,7 @@
 // asked, hands an unbounded page back across the sandbox boundary).
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import {
   SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
   SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
@@ -15,17 +16,32 @@ import {
   type ScaffoldHistoryPage,
 } from '../src/index.js';
 import { SCAFFOLD_HOST_TYPES } from '../src/scaffold/executor.js';
+import type { Executor } from '../src/types/primitives.js';
+import type { JsonValue } from '../src/utils/json.js';
 import { createTestRuntime } from './helpers.js';
 
 function conversation(n: number): ModelMessage[] {
-  return Array.from({ length: n }, (_, i) => ({
+  return Array.from({ length: n }, (_, i): ModelMessage => ({
     role: i % 2 === 0 ? 'user' : 'assistant',
     content: `message ${i} body`,
-  } as ModelMessage));
+  }));
 }
 
+const ScaffoldHistoryPageSchema: v.GenericSchema<ScaffoldHistoryPage> = v.object({
+  total: v.number(),
+  offset: v.number(),
+  entries: v.array(v.object({
+    index: v.number(),
+    role: v.string(),
+    chars: v.number(),
+    text: v.string(),
+    truncated: v.boolean(),
+  })),
+  clipped: v.boolean(),
+});
+
 const read = (messages: ModelMessage[]) =>
-  createScaffoldHistory(() => messages) as (q?: object) => Promise<ScaffoldHistoryPage>;
+  createScaffoldHistory(() => messages);
 
 describe('createScaffoldHistory', () => {
   test('defaults to the tail — the recent end is what a turn is usually about', async () => {
@@ -33,8 +49,8 @@ describe('createScaffoldHistory', () => {
     expect(page.total).toBe(50);
     expect(page.entries).toHaveLength(SCAFFOLD_HISTORY_DEFAULT_LIMIT);
     expect(page.offset).toBe(50 - SCAFFOLD_HISTORY_DEFAULT_LIMIT);
-    expect(page.entries.at(-1)!.index).toBe(49);
-    expect(page.entries.at(-1)!.text).toBe('message 49 body');
+    expect(page.entries.at(-1)?.index).toBe(49);
+    expect(page.entries.at(-1)?.text).toBe('message 49 body');
   });
 
   test('a negative offset counts back from the end without asking how long it is', async () => {
@@ -107,19 +123,32 @@ describe('the budget cannot be argued out of', () => {
 
 describe('rendering', () => {
   test('prose is verbatim; tool traffic is named rather than dumped', async () => {
-    const page = await read([
+    const messages = [
       { role: 'user', content: [{ type: 'text', text: 'find it' }] },
       { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 't1', toolName: 'run', input: { cmd: 'ls' } }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'run', output: { ok: true } }] },
-    ] as ModelMessage[])({ offset: 0 });
+      {
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: 't1',
+          toolName: 'run',
+          output: { type: 'json', value: { ok: true } },
+        }],
+      },
+    ] satisfies ModelMessage[];
+    const page = await read(messages)({ offset: 0 });
     expect(page.entries[0]!.text).toBe('find it');
     expect(page.entries[1]!.text).toBe('[tool-call run {"cmd":"ls"}]');
-    expect(page.entries[2]!.text).toBe('[tool-result run {"ok":true}]');
+    expect(page.entries[2]!.text).toBe('[tool-result run {"type":"json","value":{"ok":true}}]');
   });
 
   test('an unknown part is named, not dropped silently', async () => {
-    const page = await read([{ role: 'user', content: [{ type: 'image', image: 'x' }] }] as ModelMessage[])({ offset: 0 });
-    expect(page.entries[0]!.text).toBe('[image]');
+    const messages = [{
+      role: 'user',
+      content: [{ type: 'file', data: 'data:text/plain;base64,eA==', mediaType: 'text/plain' }],
+    }] satisfies ModelMessage[];
+    const page = await read(messages)({ offset: 0 });
+    expect(page.entries[0]!.text).toBe('[file]');
   });
 
   test('the view is read-only — a page is a copy, and mutating it cannot reach the history', async () => {
@@ -144,18 +173,23 @@ describe('rendering', () => {
 describe('the sandbox bridge', () => {
   async function callHostHistory(
     opts: { history?: NonNullable<Parameters<typeof runScaffold>[0]['history']> },
-    query: unknown,
-  ): Promise<unknown> {
+    query: JsonValue,
+  ): Promise<JsonValue | undefined> {
     const { rt } = createTestRuntime();
-    let returned: unknown;
-    (rt as { executor: unknown }).executor = {
-      execute: async (_code: string, providers: unknown[]) => {
-        const host = (providers as Array<{ name: string; fns: Record<string, (...a: unknown[]) => Promise<unknown>> }>)
-          .find((p) => p.name === 'host')!;
-        returned = await host.fns.history!(query);
+    let returned: JsonValue | undefined;
+    const executor: Executor = {
+      languages: ['javascript'],
+      execute: async (_code, providers) => {
+        if (!Array.isArray(providers)) throw new Error('expected resolved scaffold providers');
+        const host = providers.find((provider) => provider.name === 'host');
+        if (!host) throw new Error('expected host provider');
+        const history = host.fns.history;
+        if (!history) throw new Error('expected host.history provider function');
+        returned = await history(query);
         return { result: undefined };
       },
     };
+    rt.executor = executor;
     await runScaffold({
       rt, task: 'anything', emit: () => undefined, llmStream: async function* () { yield ''; },
       scaffoldCodeOverride: 'async function run() {}',
@@ -170,9 +204,9 @@ describe('the sandbox bridge', () => {
   });
 
   test('the scaffold reaches a real page through host.history', async () => {
-    const page = await callHostHistory(
+    const page = v.parse(ScaffoldHistoryPageSchema, await callHostHistory(
       { history: createScaffoldHistory(() => conversation(4)) }, { offset: 0 },
-    ) as ScaffoldHistoryPage;
+    ));
     expect(page.total).toBe(4);
     expect(page.entries.map((e) => e.text)).toEqual([
       'message 0 body', 'message 1 body', 'message 2 body', 'message 3 body',
@@ -180,9 +214,9 @@ describe('the sandbox bridge', () => {
   });
 
   test('a junk query is defaulted, not thrown across the boundary', async () => {
-    const page = await callHostHistory(
+    const page = v.parse(ScaffoldHistoryPageSchema, await callHostHistory(
       { history: createScaffoldHistory(() => conversation(4)) }, 'not-an-object',
-    ) as ScaffoldHistoryPage;
+    ));
     expect(page.entries).toHaveLength(4);
   });
 

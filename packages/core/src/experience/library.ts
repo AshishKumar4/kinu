@@ -25,6 +25,8 @@ import {
   type PublishableCandidate,
 } from './types.js';
 import type { SqlExec } from '../types/primitives.js';
+import type { SqlValue } from '../types/primitives.js';
+import * as v from 'valibot';
 
 export function initExperienceLibraryTables(sql: SqlExec): void {
   sql.exec(`
@@ -95,16 +97,17 @@ export interface ExperienceLibraryStore {
 const DEFAULT_SEARCH_LIMIT = 10;
 
 
-interface LibraryRow extends Record<string, unknown> {
-  id: string;
-  kind: ExperienceKind;
-  source_workspace: string;
-  key: string;
-  title: string;
-  payload_json: string;
-  evidence: string;
-  published_at: number;
-}
+const LibraryRowSchema = v.object({
+  id: v.string(),
+  kind: v.picklist(EXPERIENCE_KINDS),
+  source_workspace: v.string(),
+  key: v.string(),
+  title: v.string(),
+  payload_json: v.string(),
+  evidence: v.string(),
+  published_at: v.number(),
+});
+type LibraryRow = v.InferOutput<typeof LibraryRowSchema>;
 
 function toEntry(row: LibraryRow): ExperienceEntry | null {
   const payload = parseExperiencePayload(row.payload_json);
@@ -131,8 +134,8 @@ function ftsQuery(query: string): string | null {
 }
 
 export function createExperienceLibrary(sql: SqlExec): ExperienceLibraryStore {
-  const rows = (query: string, ...bindings: unknown[]): LibraryRow[] =>
-    sql.exec(query, ...bindings).toArray() as LibraryRow[];
+  const rows = (query: string, ...bindings: SqlValue[]): LibraryRow[] =>
+    sql.exec(query, ...bindings).toArray().map((row) => v.parse(LibraryRowSchema, row));
 
   return {
     publish(candidate, sourceWorkspace) {

@@ -14,7 +14,7 @@
 // contract: a model-chosen stop ends the turn; a dead or stalled stream
 // throws so the caller records the failure.
 import { describe, test, expect } from 'bun:test';
-import { tool } from 'ai';
+import { tool, type ToolSet } from 'ai';
 import { z } from 'zod';
 import { runChat, createChatModel, type ChatEvent } from '../src/index.ts';
 
@@ -53,7 +53,7 @@ async function driveTurn(
     baseURL: `http://localhost:${server.port}/v1`,
     headers: { Authorization: 'Bearer test' }, modelId: 'test-model',
   });
-  const tools = {
+  const tools: ToolSet = {
     run: tool({
       description: 'shell',
       inputSchema: z.object({ command: z.string() }),
@@ -65,8 +65,8 @@ async function driveTurn(
   try {
     for await (const ev of runChat({
       model, system: 'sys', history: [{ role: 'user', content: 'go' }],
-      tools: tools as never, maxSteps: opts.maxSteps ?? 500,
-      ...(opts.stallTimeoutMs !== undefined ? { stallTimeoutMs: opts.stallTimeoutMs } : {}),
+      tools, maxSteps: opts.maxSteps ?? 500,
+      stallTimeoutMs: opts.stallTimeoutMs,
     })) events.push(ev);
   } catch (e) {
     threw = e instanceof Error ? e : new Error(String(e));

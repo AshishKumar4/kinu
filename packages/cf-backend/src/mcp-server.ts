@@ -52,19 +52,25 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 import { z } from "zod";
 import { getAgentByName } from "agents";
 import type {
-  ScaffoldRunResult,
   EnqueueTurnResult,
+  HybridHit,
   PeerSendOutcome,
   ReleaseBoard,
   ReleaseChange,
+  ReleaseStatus,
+  RunEventQuery,
+  RunListEntry,
+  ShadowStatus,
+  ToolListEntry,
 } from "@proteus/core";
 import { RELEASE_STATUSES, isEngineOwnedTransitionTarget } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import { AuthError, authenticateRequest } from "./auth/session.js";
 import { authenticateCliToken, readBearer } from "./cli/auth-store.js";
 import { claimOwnedWorkspace } from "./user/workspace-access.js";
+import { decodeRunEventWire, decodeScaffoldRunWire } from './lib/orchestrator-wire.js';
 
-const corsHeaders: Record<string, string> = {
+const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
   "Access-Control-Allow-Headers":
@@ -72,15 +78,58 @@ const corsHeaders: Record<string, string> = {
   "Access-Control-Expose-Headers": "mcp-session-id",
   "Access-Control-Max-Age": "86400",
 };
+interface PeerMessageInput { agent: string; message: string; topic?: string }
+
+/** The callable surface this HTTP adapter uses. Keeping the boundary explicit
+ * avoids asking the Agents SDK to recursively serialize the entire agent class
+ * (including recursive run-event JSON) at each method access. */
+interface McpAgentClient {
+  searchMemoryHybrid(query: string, limit: number): Promise<HybridHit[]>;
+  saveNoteFromMcp(content: string): Promise<{ ok: true }>;
+  getToolList(): Promise<{ builtIn: string[]; crafted: ToolListEntry[] }>;
+  runScaffoldOnceWire(
+    task: string,
+    opts?: { useShadowOverride?: boolean; timeoutMs?: number },
+  ): Promise<string>;
+  getShadowStatus(): Promise<ShadowStatus>;
+  listRuns(limit: number): Promise<RunListEntry[]>;
+  getRunEventsWire(runId: string, opts?: RunEventQuery): Promise<string>;
+  runTaskFromMcp(text: string): Promise<EnqueueTurnResult>;
+  sendPeerFromMcp(input: PeerMessageInput): Promise<PeerSendOutcome>;
+  listPeersFromMcp(): Promise<Array<{ name: string; displayName?: string }>>;
+  getReleaseBoard(limit: number): Promise<ReleaseBoard>;
+  createReleaseChange(input: {
+    bindingId: string;
+    userPrompt: string;
+    plan?: string | null;
+  }): Promise<ReleaseChange>;
+  transitionReleaseChange(changeId: string, status: ReleaseStatus): Promise<ReleaseChange>;
+  getMemoryContent(): Promise<string>;
+}
 
 function withCors(response: Response): Response {
   for (const [k, v] of Object.entries(corsHeaders)) response.headers.set(k, v);
   return response;
 }
 
-async function resolveAgent(env: Env, agentName: string) {
-  const ns = (env as Env & { OrchestratorAgent: DurableObjectNamespace }).OrchestratorAgent;
-  return getAgentByName<Env, OrchestratorAgent>(ns, agentName);
+async function resolveAgent(env: Env, agentName: string): Promise<McpAgentClient> {
+  const stub = await getAgentByName<Env, OrchestratorAgent>(env.OrchestratorAgent, agentName);
+  return {
+    searchMemoryHybrid: (query, limit) => stub.searchMemoryHybrid(query, limit),
+    saveNoteFromMcp: (content) => stub.saveNoteFromMcp(content),
+    getToolList: () => stub.getToolList(),
+    runScaffoldOnceWire: (task, opts) => stub.runScaffoldOnceWire(task, opts),
+    getShadowStatus: () => stub.getShadowStatus(),
+    listRuns: (limit) => stub.listRuns(limit),
+    getRunEventsWire: (runId, opts) => stub.getRunEventsWire(runId, opts),
+    runTaskFromMcp: (text) => stub.runTaskFromMcp(text),
+    sendPeerFromMcp: (input) => stub.sendPeerFromMcp(input),
+    listPeersFromMcp: () => stub.listPeersFromMcp(),
+    getReleaseBoard: (limit) => stub.getReleaseBoard(limit),
+    createReleaseChange: (input) => stub.createReleaseChange(input),
+    transitionReleaseChange: (changeId, status) => stub.transitionReleaseChange(changeId, status),
+    getMemoryContent: () => stub.getMemoryContent(),
+  };
 }
 
 function buildServer(env: Env, agentName: string): McpServer {
@@ -115,7 +164,7 @@ function buildServer(env: Env, agentName: string): McpServer {
             ).join("\n\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `search_memory error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `search_memory error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -132,7 +181,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         await agent.saveNoteFromMcp(content);
         return { content: [{ type: "text", text: "Note saved." }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `save_note error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `save_note error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -157,7 +206,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         }
         return { content: [{ type: "text", text: lines.join("\n") }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_skills error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `list_skills error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -176,8 +225,11 @@ function buildServer(env: Env, agentName: string): McpServer {
         const agent = await resolveAgent(env, agentName);
         // The agents-SDK stub doesn't resolve the @callable's return type, so
         // annotate from the source-of-truth ScaffoldRunResult shape.
-        const result: ScaffoldRunResult = await agent.runScaffoldOnce(
-          task, useShadowOverride ? { useShadowOverride: true } : undefined,
+        const result = decodeScaffoldRunWire(
+          await agent.runScaffoldOnceWire(
+            task,
+            useShadowOverride ? { useShadowOverride: true } : undefined,
+          ),
         );
         const summary = [
           `ok=${result.ok}, doneEmitted=${result.doneEmitted}, emits=${result.emitCount}, ms=${result.durationMs}`,
@@ -187,7 +239,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         ].filter(Boolean).join("\n");
         return { content: [{ type: "text", text: summary }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `run_scaffold_once error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `run_scaffold_once error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -204,7 +256,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const status = await agent.getShadowStatus();
         return { content: [{ type: "text", text: JSON.stringify(status, null, 2) }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `get_shadow_status error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `get_shadow_status error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -222,7 +274,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const lines = runs.map((r) => `- ${r.runId} — ${r.eventCount} events @ ${r.lastTs}`);
         return { content: [{ type: "text", text: lines.length ? lines.join("\n") : "(no runs yet)" }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_runs error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `list_runs error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -240,13 +292,15 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ runId, since, limit }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        const events = await agent.getRunEvents(runId, { since, limit: limit ?? 100 });
+        const events = decodeRunEventWire(
+          await agent.getRunEventsWire(runId, { since, limit: limit ?? 100 }),
+        );
         const text = events.length === 0
           ? "(no events)"
           : events.map((e) => `[${e.eventIndex}] ${e.type}: ${JSON.stringify(e).slice(0, 200)}`).join("\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_run_events error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `list_run_events error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -276,7 +330,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : "Task skipped — a newer turn pre-empted it, or the turn queue rejected it. Nothing ran.";
         return { content: [{ type: "text", text: msg }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `run_task error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `run_task error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -296,13 +350,15 @@ function buildServer(env: Env, agentName: string): McpServer {
     async ({ agent: peer, message, topic }) => {
       try {
         const agent = await resolveAgent(env, agentName);
-        const outcome: PeerSendOutcome = await agent.sendPeerFromMcp({ agent: peer, message, ...(topic ? { topic } : {}) });
+        const peerMessage: PeerMessageInput = { agent: peer, message };
+        if (topic) peerMessage.topic = topic;
+        const outcome: PeerSendOutcome = await agent.sendPeerFromMcp(peerMessage);
         const text = outcome.status === "rejected"
           ? `send_peer rejected: ${outcome.reason}`
           : `Message ${outcome.status} to ${peer} (id ${outcome.message_id}).`;
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `send_peer error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `send_peer error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -322,7 +378,7 @@ function buildServer(env: Env, agentName: string): McpServer {
           : peers.map((p) => `- ${p.name}${p.displayName ? ` (${p.displayName})` : ""}`).join("\n");
         return { content: [{ type: "text", text }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `list_peers error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `list_peers error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -378,7 +434,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const advanced: ReleaseChange = await agent.transitionReleaseChange(changeId, status);
         return { content: [{ type: "text", text: `Change ${advanced.id} → ${advanced.status}.` }] };
       } catch (err) {
-        return { content: [{ type: "text", text: `release error: ${(err as Error).message}` }] };
+        return { content: [{ type: "text", text: `release error: ${errorMessage(err)}` }] };
       }
     },
   );
@@ -399,7 +455,7 @@ function buildServer(env: Env, agentName: string): McpServer {
         const content = await agent.getMemoryContent();
         return { contents: [{ uri: uri.href, text: content, mimeType: "text/markdown" }] };
       } catch (err) {
-        return { contents: [{ uri: uri.href, text: `(error: ${(err as Error).message})`, mimeType: "text/plain" }] };
+        return { contents: [{ uri: uri.href, text: `(error: ${errorMessage(err)})`, mimeType: "text/plain" }] };
       }
     },
   );
@@ -461,6 +517,10 @@ export async function handleMcpRequest(request: Request, env: Env): Promise<Resp
     const resp = await transport.handleRequest(request);
     return withCors(resp);
   } catch (err) {
-    return withCors(Response.json({ error: (err as Error).message }, { status: 500 }));
+    return withCors(Response.json({ error: errorMessage(err) }, { status: 500 }));
   }
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }

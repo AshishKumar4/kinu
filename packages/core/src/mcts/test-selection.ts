@@ -44,19 +44,23 @@ export async function selectWinnerByTest(
   if (rivals.length === 0) return winner.id;
   const candidates = [winner, ...rivals];
 
-  // Only candidates that carry runnable code can be discriminated by execution.
-  const runnable = candidates.filter((n) => (n.code_used ?? '').trim().length > 0);
+  // One assertion harness can compare candidates written in one language.
+  const language = candidates.find((node) => (node.code_used ?? '').trim().length > 0)?.code_language;
+  if (!language) return winner.id;
+  const runnable = candidates.filter((node) =>
+    (node.code_used ?? '').trim().length > 0 && node.code_language === language);
   if (runnable.length < 2) return winner.id;
 
   // One harness, written against the task using the value-argmax winner's code
   // as the reference shape, then run against EACH candidate's own code.
-  const assertions = await generateAssertions(deps.judge, winner.task, runnable[0]!.code_used!.trim());
+  const assertions = await generateAssertions(
+    deps.judge, winner.task, runnable[0]!.code_used!.trim(), language);
   if (!assertions) return winner.id;
 
   const verdicts = await Promise.all(
     runnable.map(async (n) => ({
       node: n,
-      passed: (await runForVerdict(deps.executor, n.code_used!.trim(), assertions)).passed,
+      passed: (await runForVerdict(deps.executor, n.code_used!.trim(), assertions, language)).passed,
     })),
   );
 

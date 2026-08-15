@@ -9,7 +9,7 @@ import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials.js';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
-import { agentAffinityKey } from '@proteus/core';
+import { agentAffinityKey, asFetchFunction } from '@proteus/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
@@ -38,11 +38,11 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
   const reg = createAgentProviderRegistry({
     env: {},
     userDO: fakeUserDOStub(),
-    fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    fetch: asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = new Request(input).url;
       captured.push({ url, headers: new Headers(init?.headers) });
       return chatCompletionResponse();
-    }) as unknown as typeof fetch,
+    }),
     workersAI,
   });
   await generateText({
@@ -50,7 +50,9 @@ async function captureWorkersAIRequest(workersAI?: { sessionAffinity?: string })
     prompt: 'ping',
   });
   expect(captured).toHaveLength(1);
-  return captured[0];
+  const request = captured[0];
+  if (!request) throw new Error('Workers AI request was not captured');
+  return request;
 }
 
 describe('Workers AI session affinity (REST path)', () => {
@@ -76,12 +78,12 @@ describe('Workers AI session affinity (REST path)', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub(),
-      fetch: (async () => {
+      fetch: asFetchFunction(async () => {
         calls++;
         return calls === 1
           ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
           : chatCompletionResponse();
-      }) as unknown as typeof fetch,
+      }),
     });
 
     const result = await generateText({

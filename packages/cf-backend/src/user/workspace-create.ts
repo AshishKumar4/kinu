@@ -12,9 +12,22 @@ import {
 } from '@proteus/core';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import { createAgentProviderRegistry } from '../providers/agent-registry.js';
+import type { UserCredentialClient } from '../providers/agent-registry.js';
 import type { UserCaller } from './workspace-capability.js';
 import { listAvailableModels, type ModelMenuEntry } from './available-models.js';
-import type { WorkspaceEntry, UserDO } from './user-do.js';
+import type { WorkspaceEntry } from './user-do.js';
+
+export interface CloudWorkspaceRegistry extends UserCredentialClient {
+  getConfig(caller: UserCaller, key: string): Promise<string | null>;
+  registerWorkspace(
+    caller: UserCaller,
+    name: string,
+    displayName?: string,
+    purpose?: string,
+  ): Promise<{ entry: WorkspaceEntry; existed: boolean }>;
+  removeWorkspace(caller: UserCaller, name: string, ownerUserId: string): Promise<void>;
+  ensureWorkspaceCapability(name: string, presentedHash: string | null): Promise<void>;
+}
 
 export interface CreateCloudWorkspaceInput {
   name?: string;
@@ -32,7 +45,7 @@ export interface CreateCloudWorkspaceOptions {
 export async function createCloudWorkspaceForUser(
   env: Env,
   userId: string,
-  userDO: DurableObjectStub<UserDO>,
+  userDO: CloudWorkspaceRegistry,
   caller: UserCaller,
   input: CreateCloudWorkspaceInput,
   options: CreateCloudWorkspaceOptions = {},
@@ -51,12 +64,12 @@ export async function createCloudWorkspaceForUser(
 
   const { entry, existed } = await userDO.registerWorkspace(caller, identity.name, identity.displayName, purpose);
   try {
-    await initializeOrchestrator({
-      env, userId, userDO, agentName: entry.name, displayName: entry.displayName,
-      ...(purpose ? { mission: purpose } : {}),
-      ...(model ? { model } : {}),
-      ...(input.reasoningEffort ? { reasoningEffort: input.reasoningEffort } : {}),
-    });
+    const initialization: InitializeOrchestratorInput = {
+      env, userId, userDO, agentName: entry.name, displayName: entry.displayName, model,
+    };
+    if (purpose) initialization.mission = purpose;
+    if (input.reasoningEffort) initialization.reasoningEffort = input.reasoningEffort;
+    await initializeOrchestrator(initialization);
     if (identity.nameOrigin === 'auto' && purpose) {
       scheduleCloudAgentDisplayNameGeneration(env, userDO, caller, entry.name, purpose, model, options);
     }
@@ -76,10 +89,16 @@ export async function createCloudWorkspaceForUser(
   }
 }
 
+interface InitialCloudAgentIdentity {
+  name: string;
+  displayName: string;
+  nameOrigin: 'auto' | 'user';
+}
+
 function createInitialCloudAgentIdentity(
   input: CreateCloudWorkspaceInput,
   purpose: string | undefined,
-): { name: string; displayName: string; nameOrigin: 'auto' | 'user' } {
+): InitialCloudAgentIdentity {
   const requestedName = input.name?.trim();
   if (requestedName) {
     return {
@@ -98,7 +117,7 @@ function createInitialCloudAgentIdentity(
 
 function scheduleCloudAgentDisplayNameGeneration(
   env: Env,
-  userDO: DurableObjectStub<UserDO>,
+  userDO: CloudWorkspaceRegistry,
   caller: UserCaller,
   agentName: string,
   mission: string,
@@ -115,7 +134,7 @@ function scheduleCloudAgentDisplayNameGeneration(
 
 async function applyGeneratedDisplayName(
   env: Env,
-  userDO: DurableObjectStub<UserDO>,
+  userDO: CloudWorkspaceRegistry,
   caller: UserCaller,
   agentName: string,
   mission: string,
@@ -126,6 +145,7 @@ async function applyGeneratedDisplayName(
     ? await suggestDisplayName(mission)
     : await suggestCloudAgentDisplayName(env, userDO, caller, mission, modelSpec);
   if (!displayName) return;
+  // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   ) as DurableObjectStub<OrchestratorAgent>;
@@ -134,7 +154,7 @@ async function applyGeneratedDisplayName(
 
 async function suggestCloudAgentDisplayName(
   env: Env,
-  userDO: DurableObjectStub<UserDO>,
+  userDO: CloudWorkspaceRegistry,
   caller: UserCaller,
   mission: string,
   modelSpec: string,
@@ -151,17 +171,20 @@ async function suggestCloudAgentDisplayName(
   return parseWorkspaceTitle(result.text);
 }
 
-async function initializeOrchestrator(input: {
+interface InitializeOrchestratorInput {
   env: Env;
   userId: string;
-  userDO: DurableObjectStub<UserDO>;
+  userDO: CloudWorkspaceRegistry;
   agentName: string;
   displayName: string;
   mission?: string;
   model?: string;
   reasoningEffort?: ReasoningEffort;
-}): Promise<void> {
+}
+
+async function initializeOrchestrator(input: InitializeOrchestratorInput): Promise<void> {
   const { env, userId, userDO, agentName, displayName, mission, model, reasoningEffort } = input;
+  // SAFETY: Env.OrchestratorAgent is generated from the OrchestratorAgent binding and exposes its RPC methods.
   const orchestrator = env.OrchestratorAgent.get(
     env.OrchestratorAgent.idFromName(agentName),
   ) as DurableObjectStub<OrchestratorAgent>;
@@ -172,6 +195,10 @@ async function initializeOrchestrator(input: {
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
   await orchestrator.setProvisionalDisplayName(displayName);
   await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
+  // The Output diff is relative to workspace birth, never to the first time
+  // somebody happens to open the tab. Capture after identity seeding and
+  // before any user/peer turn can change files.
+  await orchestrator.resetWorkspaceBaseline();
   if (model) await orchestrator.setModel(model);
   if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
 }

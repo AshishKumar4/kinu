@@ -4,6 +4,8 @@
 // through the real file surface, so nothing is irrecoverable.
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
+import { jsonSchema, tool } from 'ai';
+import * as v from 'valibot';
 import {
   clampToolResult,
   clampSerializedToolResult,
@@ -14,16 +16,19 @@ import {
 } from '../src/tools/clamp.js';
 import { TurnContextBudget } from '../src/context-budget.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
-import { createTestRuntime, createWorkspaceBundle, makeSql } from './helpers.js';
+import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { ToolSet } from 'ai';
+import { parseJsonValue, type JsonValue } from '../src/utils/json.js';
 
-type RunTool = { execute: (args: { command: string; runtime?: string }, options?: unknown) => Promise<string> };
+interface RunInput {
+  command: string;
+  runtime?: string;
+}
 
 function markerPath(clamped: string): string {
   const m = clamped.match(/full output saved to (\S+) —/);
-  expect(m).not.toBeNull();
-  return m![1]!;
+  if (!m?.[1]) throw new Error('clamped result did not include a restorable output path');
+  return m[1];
 }
 
 describe('clampToolResult', () => {
@@ -68,28 +73,39 @@ describe('clampToolResult', () => {
 describe('clampSerializedToolResult', () => {
   test('structured results within budget pass through with their shape intact', async () => {
     const value = { result: [1, 2, 3], logs: ['ok'] };
-    expect(await clampSerializedToolResult(value, {})).toBe(value);
-    expect(await clampSerializedToolResult(null, {})).toBeNull();
+    expect(await clampSerializedToolResult({ output: value }, {})).toBe(value);
+    expect(await clampSerializedToolResult({ output: null }, {})).toBeNull();
+  });
+
+  test('normalizes undefined object fields with JSON omission semantics', async () => {
+    const output = { result: undefined, error: '[crafted:brokenIt] nope' };
+    expect(await clampSerializedToolResult({ output }, {})).toEqual({
+      error: '[crafted:brokenIt] nope',
+    });
   });
 
   test('oversize structured results are offloaded as JSON and clamped', async () => {
     const { rt } = createTestRuntime();
     const value = { result: 'r'.repeat(200_000), logs: [] };
-    const clamped = await clampSerializedToolResult(value, { vfs: rt.storage.vfs });
-    expect(typeof clamped).toBe('string');
-    expect(clamped as string).toContain('chars omitted');
-    const restored = await rt.storage.vfs.readFile(markerPath(clamped as string), { encoding: 'utf8' });
-    expect(JSON.parse(restored as string)).toEqual(value);
+    const clamped = await clampSerializedToolResult({ output: value }, { vfs: rt.storage.vfs });
+    const clampedText = v.parse(v.string(), clamped);
+    expect(clampedText).toContain('chars omitted');
+    const restored = v.parse(
+      v.string(),
+      await rt.storage.vfs.readFile(markerPath(clampedText), { encoding: 'utf8' }),
+    );
+    expect(parseJsonValue(restored)).toEqual(value);
   });
 
   test('withClampedToolResult wraps execute without touching schema/description', async () => {
     const { rt } = createTestRuntime();
-    const entry = {
-      description: 'desc', inputSchema: { type: 'object' },
+    const entry = tool({
+      description: 'desc',
+      inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
       execute: async () => 'b'.repeat(120_000),
-    } as unknown as ToolSet[string];
+    });
     const wrapped = withClampedToolResult(entry, { vfs: rt.storage.vfs });
-    expect((wrapped as { description?: string }).description).toBe('desc');
+    expect(wrapped.description).toBe('desc');
     const out = await toolExecute(wrapped)({});
     expect(String(out)).toContain('chars omitted');
   });
@@ -97,21 +113,22 @@ describe('clampSerializedToolResult', () => {
 
 describe('run tool result budget (behavior through the public tool surface)', () => {
   test('a huge stdout is clamped and the full output is readable back via the file surface', async () => {
-    const { rt, db } = createTestRuntime();
+    const { rt } = createTestRuntime();
     const original = 'BEGIN UNIQUE-MIDDLE-MARKER-' + 'log line\n'.repeat(80_000) + ' FINAL-ERROR-LINE';
+    // The runtime's OWN shell, over the same bytes `rt.storage.vfs` reads.
+    const realShell = rt.shell;
+    if (!realShell) throw new Error('test runtime did not provide its workspace shell');
     const fakeShellExec = async (command: string) => {
       // First call: the huge command output. Filtered reads of the marker
       // path go through the REAL workspace shell over the same VFS.
       if (command.startsWith('grep ')) return realShell.exec(command);
       return { stdout: original, stderr: '', exitCode: 0 };
     };
-    // The runtime's OWN shell, over the same bytes `rt.storage.vfs` reads.
-    const realShell = rt.shell!;
-    const rtWithShell = { ...rt, shell: { exec: fakeShellExec } } as AgentRuntime;
+    const rtWithShell: AgentRuntime = { ...rt, shell: { exec: fakeShellExec } };
     const tools = buildBuiltinTools({ rt: rtWithShell });
-    const run = tools.run as unknown as RunTool;
+    const run = toolExecute<RunInput, string>(tools.run);
 
-    const clamped = await run.execute({ command: 'generate-huge-log' });
+    const clamped = await run({ command: 'generate-huge-log' });
     expect(clamped.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
     expect(clamped).toContain('FINAL-ERROR-LINE'); // the tail survives
     expect(clamped).toContain('chars omitted');
@@ -122,7 +139,7 @@ describe('run tool result budget (behavior through the public tool surface)', ()
     const path = markerPath(clamped);
     const restored = await rt.storage.vfs.readFile(path, { encoding: 'utf8' });
     expect(restored).toBe(original);
-    const grepped = await run.execute({ command: `grep UNIQUE-MIDDLE-MARKER ${path}` });
+    const grepped = await run({ command: `grep UNIQUE-MIDDLE-MARKER ${path}` });
     expect(grepped).toContain('UNIQUE-MIDDLE-MARKER');
   });
 
@@ -131,9 +148,10 @@ describe('run tool result budget (behavior through the public tool surface)', ()
     const shell = {
       exec: async () => ({ stdout: '', stderr: 'E'.repeat(150_000), exitCode: 2 }),
     };
-    const tools = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime });
-    const run = tools.run as unknown as RunTool;
-    const out = await run.execute({ command: 'boom' });
+    const rtWithShell: AgentRuntime = { ...rt, shell };
+    const tools = buildBuiltinTools({ rt: rtWithShell });
+    const run = toolExecute<RunInput, string>(tools.run);
+    const out = await run({ command: 'boom' });
     expect(out).toStartWith('Error (exit 2)\n--- stderr ---');
     expect(out.length).toBeLessThanOrEqual(DEFAULT_TOOL_RESULT_MAX_CHARS + 300);
     expect(out).toContain('chars omitted');
@@ -148,11 +166,12 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
   function runToolWithBudget(budget: TurnContextBudget, output: () => string) {
     const { rt } = createTestRuntime();
     const shell = { exec: async () => ({ stdout: output(), stderr: '', exitCode: 0 }) };
+    const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({
-      rt: { ...rt, shell } as AgentRuntime,
+      rt: rtWithShell,
       contextBudget: budget,
     });
-    return { run: tools.run as unknown as RunTool, rt };
+    return { run: toolExecute<RunInput, string>(tools.run), rt };
   }
 
   test('the first results keep full fidelity; once the turn is heavy the rest clamp to the floor', async () => {
@@ -160,7 +179,7 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 
     const sizes: number[] = [];
-    for (let i = 0; i < 5; i++) sizes.push((await run.execute({ command: `big-${i}` })).length);
+    for (let i = 0; i < 5; i++) sizes.push((await run({ command: `big-${i}` })).length);
 
     // 40k per result until 120k cumulative is admitted → three full, then floor.
     expect(sizes.slice(0, 3).every((n) => n > 39_000)).toBe(true);
@@ -174,14 +193,15 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
   test('the tightened result still spills the whole output and keeps the same recipe', async () => {
     const budget = new TurnContextBudget();
     const { run, rt } = runToolWithBudget(budget, () => `UNIQUE-${'M'.repeat(200_000)}-END`);
-    for (let i = 0; i < 4; i++) await run.execute({ command: `big-${i}` });
-    const tightened = await run.execute({ command: 'big-last' });
+    for (let i = 0; i < 4; i++) await run({ command: `big-${i}` });
+    const tightened = await run({ command: 'big-last' });
 
     expect(tightened.length).toBeLessThan(9_000);
     expect(tightened).toContain('slice + llm.query each slice, aggregate');
     const restored = await rt.storage.vfs.readFile(markerPath(tightened), { encoding: 'utf8' });
-    expect(restored as string).toStartWith('UNIQUE-');
-    expect(restored as string).toEndWith('-END');
+    const restoredText = v.parse(v.string(), restored);
+    expect(restoredText).toStartWith('UNIQUE-');
+    expect(restoredText).toEndWith('-END');
   });
 
   test('the tightened result says WHY it tightened, and an ordinary clamp does not', async () => {
@@ -193,12 +213,12 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
     const budget = new TurnContextBudget();
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
 
-    const first = await run.execute({ command: 'big-0' });
+    const first = await run({ command: 'big-0' });
     expect(first).toContain('output truncated');
     expect(first).not.toContain('the cap tightened');
 
-    for (let i = 1; i < 4; i++) await run.execute({ command: `big-${i}` });
-    const tightened = await run.execute({ command: 'big-last' });
+    for (let i = 1; i < 4; i++) await run({ command: `big-${i}` });
+    const tightened = await run({ command: 'big-last' });
     expect(tightened).toContain('This turn has already admitted enough tool output that the cap tightened');
     // And it names the lever, at the moment the signal is real.
     expect(tightened).toContain('hand the bulk to a fork');
@@ -207,24 +227,25 @@ describe('turn-cumulative egress budget (through the run tool)', () => {
   test('a fresh turn starts at full fidelity again', async () => {
     const budget = new TurnContextBudget();
     const { run } = runToolWithBudget(budget, () => 'L'.repeat(200_000));
-    for (let i = 0; i < 4; i++) await run.execute({ command: `big-${i}` });
+    for (let i = 0; i < 4; i++) await run({ command: `big-${i}` });
     budget.reset();
-    expect((await run.execute({ command: 'next-turn' })).length).toBeGreaterThan(39_000);
+    expect((await run({ command: 'next-turn' })).length).toBeGreaterThan(39_000);
   });
 
   test('small results accumulate toward the budget without ever tripping the counters', async () => {
     const budget = new TurnContextBudget();
     const { run } = runToolWithBudget(budget, () => 'ok'.repeat(10));
-    await run.execute({ command: 'small' });
+    await run({ command: 'small' });
     expect(budget.snapshot()).toMatchObject({ admittedChars: 20, omittedChars: 0, trips: {} });
   });
 
   test('a toolset built without a budget still budgets — per root, by construction', async () => {
     const { rt } = createTestRuntime();
     const shell = { exec: async () => ({ stdout: 'L'.repeat(200_000), stderr: '', exitCode: 0 }) };
-    const run = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime }).run as unknown as RunTool;
-    for (let i = 0; i < 3; i++) await run.execute({ command: `big-${i}` });
-    expect((await run.execute({ command: 'big-4' })).length).toBeLessThan(9_000);
+    const rtWithShell: AgentRuntime = { ...rt, shell };
+    const run = toolExecute<RunInput, string>(buildBuiltinTools({ rt: rtWithShell }).run);
+    for (let i = 0; i < 3; i++) await run({ command: `big-${i}` });
+    expect((await run({ command: 'big-4' })).length).toBeLessThan(9_000);
   });
 });
 
@@ -232,9 +253,11 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
   test('every entry rides the same budget, and the counters name the producer', async () => {
     const { rt } = createTestRuntime();
     const budget = new TurnContextBudget();
-    const entry = (payload: unknown) => ({
-      description: 'd', inputSchema: { type: 'object' }, execute: async () => payload,
-    } as unknown as ToolSet[string]);
+    const entry = (payload: JsonValue) => tool({
+      description: 'd',
+      inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+      execute: async () => payload,
+    });
 
     const wrapped = withClampedToolResults(
       { mcp_srv_a: entry('A'.repeat(300_000)), mcp_srv_b: entry({ rows: 'B'.repeat(300_000) }) },
@@ -252,7 +275,10 @@ describe('withClampedToolResults (external/MCP tool surfaces)', () => {
 
   test('an entry with no execute (a provider-native tool) passes through untouched', () => {
     const budget = new TurnContextBudget();
-    const declarative = { description: 'd', inputSchema: { type: 'object' } } as unknown as ToolSet[string];
+    const declarative = tool({
+      description: 'd',
+      inputSchema: jsonSchema<Record<string, never>>({ type: 'object', properties: {} }),
+    });
     const wrapped = withClampedToolResults({ native: declarative }, { budget });
     expect(wrapped.native).toBe(declarative);
   });

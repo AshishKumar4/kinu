@@ -1,13 +1,11 @@
 /**
- * Phase B evidence: CLI Node executor round-trips a crafted tool through
- * the canonical code path — stored in CraftStore, filtered by effective
- * score, built into the codemode.* namespace, invoked from sandbox code,
- * returns the right answer.
+ * Crafted-tool integration evidence: a stored tool is filtered by effective
+ * score, materialised into the codemode map, and invoked through the platform
+ * execute-tools factory.
  *
- * Replays the exact sequence a live chat turn would produce (without an
- * LLM): createTool via workspace, then execute_tools code that calls
- * codemode.<name>(arg). The assertion pins the end-to-end value so a
- * regression in the executor factory breaks this test loudly.
+ * The platform compiler itself belongs to each backend's suite. This test
+ * keeps core independent of those downstream packages and pins the shared
+ * storage-to-tool-map contract.
  */
 
 import { describe, test, expect } from 'bun:test';
@@ -16,56 +14,58 @@ import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
   craftFailureMarker,
+  type CraftedToolSet,
+  type CreateExecuteToolFactory,
   type CraftedToolExecute,
+  type JsonValue,
 } from '../src/index.js';
 import { tool, jsonSchema } from 'ai';
+import * as v from 'valibot';
 
-// Inline Node craft executor — matches createNodeCraftedExecute from
-// @proteus/cli-backend. Kept in this test to avoid an inverted package
-// dependency (cli-backend is a downstream workspace).
-const createNodeCraftedExecute: () => CraftedToolExecute = () => (t) => {
-  let compiled: ((arg: unknown) => Promise<unknown>) | null = null;
-  return async (arg) => {
-    if (!compiled) {
-      const fn = new Function('return (' + t.code + ')')();
-      if (typeof fn !== 'function') throw new Error(`${t.name} not a function`);
-      compiled = fn as (arg: unknown) => Promise<unknown>;
-    }
-    return compiled(arg);
-  };
+const ExecuteResultSchema = v.object({
+  result: v.optional(v.union([v.string(), v.number(), v.boolean(), v.null()])),
+  error: v.optional(v.string()),
+});
+
+const createTestCraftedExecute = (): CraftedToolExecute => (source) => async (arg) => {
+  if (source.name === 'double') return v.parse(v.number(), arg) * 2;
+  if (source.name === 'exploder') throw new Error('inner boom');
+  if (source.name === 'quiet') return 'ok';
+  throw new Error(`unexpected crafted tool ${source.name}`);
 };
 
 // Minimal Node createExecuteTool factory — sandboxes LLM code with a
 // `codemode` binding holding pre-materialised crafted-tool executes.
 // Mirrors @proteus/cli-backend/createNodeExecuteToolFactory at the level
 // this test needs.
-const createNodeExecFactory = () =>
-  (opts: {
-    craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-  }) => {
+function createTestExecFactory(
+  invoke: (tools: CraftedToolSet) => Promise<JsonValue | undefined>,
+): CreateExecuteToolFactory {
+  return (opts) => {
     return tool({
       description: 'test exec_tools',
       inputSchema: jsonSchema<{ code: string }>({
         type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
       }),
-      execute: async (a: { code: string }) => {
+      execute: async () => {
         try {
-          const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-          for (const [name, e] of Object.entries(opts.craftedTools())) {
-            codemode[name] = e.execute as (arg: unknown) => Promise<unknown>;
-          }
-          const fn = new Function('codemode', 'tools', 'return (async () => { ' + a.code + ' })()');
-          const result = await fn(codemode, codemode);
-          return { result };
-        } catch (e) {
-          return { result: undefined, error: (e as Error).message };
+          return { result: await invoke(opts.craftedTools()) };
+        } catch (error) {
+          return { result: undefined, error: error instanceof Error ? error.message : String(error) };
         }
       },
     });
   };
+}
 
-describe('Phase B — Node crafted-tool executor', () => {
-  test('codemode.<name>(arg) round-trips a stored tool with Node executor', async () => {
+function requiredCraftedTool(tools: CraftedToolSet, name: string) {
+  const entry = tools[name];
+  if (!entry) throw new Error(`missing crafted tool ${name}`);
+  return entry;
+}
+
+describe('crafted-tool execution integration', () => {
+  test('codemode.<name>(arg) round-trips a stored tool', async () => {
     const { rt } = createTestRuntime();
     // craft_scores table needs to exist for the score filter to query it
     rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS craft_scores (
@@ -84,16 +84,15 @@ describe('Phase B — Node crafted-tool executor', () => {
 
     const tools = buildBuiltinTools({
       rt,
-      craftedToolExecute: createNodeCraftedExecute(),
-      // Phase E: core no longer ships a fallback. The caller supplies the
-      // Node execute-tools factory just like cli-backend does in production.
-      createExecuteTool: createNodeExecFactory() as never,
+      craftedToolExecute: createTestCraftedExecute(),
+      createExecuteTool: createTestExecFactory(async (crafted) =>
+        requiredCraftedTool(crafted, 'double').execute(21)),
     });
 
-    const execTool = toolExecute<{ code: string }, { result: unknown; error?: string }>(tools.execute_tools);
-    const res = await execTool({
+    const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
+    const res = v.parse(ExecuteResultSchema, await execTool({
       code: 'return await codemode.double(21);',
-    });
+    }));
     expect(res.error).toBeUndefined();
     expect(res.result).toBe(42);
   });
@@ -114,12 +113,13 @@ describe('Phase B — Node crafted-tool executor', () => {
 
     const tools = buildBuiltinTools({
       rt,
-      craftedToolExecute: createNodeCraftedExecute(),
-      createExecuteTool: createNodeExecFactory() as never,
+      craftedToolExecute: createTestCraftedExecute(),
+      createExecuteTool: createTestExecFactory(async (crafted) =>
+        requiredCraftedTool(crafted, 'exploder').execute(null)),
     });
-    const execTool = toolExecute<{ code: string }, { result: unknown; error?: string }>(tools.execute_tools);
+    const execTool = toolExecute<{ code: string }, JsonValue>(tools.execute_tools);
 
-    const res = await execTool({ code: 'return await codemode.exploder();' });
+    const res = v.parse(ExecuteResultSchema, await execTool({ code: 'return await codemode.exploder();' }));
     // The model is told WHICH of its own tools broke, and the in-episode
     // fitness signal reads the same stamp to score that artifact and no other.
     expect(res.error).toContain(craftFailureMarker('exploder'));
@@ -138,12 +138,13 @@ describe('Phase B — Node crafted-tool executor', () => {
     });
     const tools = buildBuiltinTools({
       rt,
-      craftedToolExecute: createNodeCraftedExecute(),
-      createExecuteTool: createNodeExecFactory() as never,
+      craftedToolExecute: createTestCraftedExecute(),
+      createExecuteTool: createTestExecFactory(async (crafted) =>
+        requiredCraftedTool(crafted, 'quiet').execute(null)),
     });
-    const res = await toolExecute<{ code: string }, { result: unknown; error?: string }>(tools.execute_tools)(
+    const res = v.parse(ExecuteResultSchema, await toolExecute<{ code: string }, JsonValue>(tools.execute_tools)(
       { code: 'return await codemode.quiet();' },
-    );
+    ));
     expect(res.error).toBeUndefined();
     expect(res.result).toBe('ok');
   });
@@ -168,27 +169,33 @@ describe('Phase B — Node crafted-tool executor', () => {
       return async (arg) => `${tool.name}:${JSON.stringify(arg)}`;
     };
 
-    let resolve: (() => Record<string, unknown>) | null = null;
+    let resolve: (() => CraftedToolSet) | undefined;
+    const captureFactory: CreateExecuteToolFactory = (opts) => {
+      resolve = opts.craftedTools;
+      return tool({
+        description: 'capture crafted tools',
+        inputSchema: jsonSchema({ type: 'object' }),
+        execute: async () => null,
+      });
+    };
     buildBuiltinTools({
       rt,
       craftedToolExecute: factory,
       codemodeLoader: { __test: true },
-      createExecuteTool: ((opts: { craftedTools: () => Record<string, unknown> }) => {
-        resolve = opts.craftedTools;
-        return { description: '', execute: async () => null };
-      }) as never,
+      createExecuteTool: captureFactory,
     });
     // Building resolves nothing — the sandbox asks per execute, which is what
     // makes a tool crafted mid-turn callable on the next call.
     expect(factoryCalls).toBe(0);
-    resolve!();
-    resolve!();
+    if (!resolve) throw new Error('execute-tools factory was not built');
+    resolve();
+    resolve();
     // …and asking repeatedly costs one compile, not one per call.
     expect(factoryCalls).toBe(1);
 
     // A tool the agent REWRITES mid-turn must not keep running its old body.
     rt.craftStore.update('identity', { code: 'async (x) => x + 1' });
-    resolve!();
+    resolve();
     expect(factoryCalls).toBe(2);
   });
 
@@ -205,7 +212,7 @@ describe('Phase B — Node crafted-tool executor', () => {
       code: 'async () => "nope"',
       scope: 'local',
     });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('noisy', 0.01, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('noisy', 0.01, ${Date.now()})`;
 
     let factoryCalls = 0;
     const factory: CraftedToolExecute = () => {

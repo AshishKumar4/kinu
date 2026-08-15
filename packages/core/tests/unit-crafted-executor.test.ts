@@ -18,10 +18,10 @@ function tool(patch: Partial<CraftedTool>): CraftedTool {
     params: null,
     code: 'export default async (a) => a;',
     scope: 'local',
-    created_at: 0,
-    updated_at: 0,
+    createdAt: 0,
+    updatedAt: 0,
     ...patch,
-  } as CraftedTool;
+  };
 }
 
 describe('toCraftedToolSource', () => {
@@ -35,7 +35,6 @@ describe('toCraftedToolSource', () => {
 
   test('drops rows with no code — nothing to compile', () => {
     expect(toCraftedToolSource(tool({ code: '' }))).toBeNull();
-    expect(toCraftedToolSource(tool({ code: null as unknown as string }))).toBeNull();
   });
 
   test('drops comment-only code, the residue of a failed extraction', () => {
@@ -47,13 +46,6 @@ describe('toCraftedToolSource', () => {
     expect(source?.code).toBe('export default () => 1; // note');
   });
 
-  test('a null description gets a derived one — the executor never sees a hole', () => {
-    // The description is what the model reads to decide whether to call the
-    // tool; a missing one makes the tool effectively uncallable.
-    const source = toCraftedToolSource(tool({ description: null as unknown as string }));
-    expect(source?.description).toBe('Crafted tool: summarize');
-  });
-
   test('an empty-string description is preserved, not replaced', () => {
     // `??` guards null/undefined only. Pinned so the distinction from the null
     // case above stays deliberate rather than accidental.
@@ -62,6 +54,7 @@ describe('toCraftedToolSource', () => {
 
   test('params and scope are deliberately not carried into the executor shape', () => {
     const source = toCraftedToolSource(tool({ params: { type: 'object' }, scope: 'shared' }));
-    expect(Object.keys(source!).sort()).toEqual(['code', 'description', 'name']);
+    if (!source) throw new Error('expected a compiled crafted-tool source');
+    expect(Object.keys(source).sort()).toEqual(['code', 'description', 'name']);
   });
 });

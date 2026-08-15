@@ -25,7 +25,7 @@ describe('agent_facts', () => {
   test('same-value re-observation preserves the changelog timestamp', () => {
     const { facts, testSql } = createTestFactsStore();
     facts.upsert('sandbox.npm_version', 'npm v10');
-    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+    void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
                 WHERE key = 'sandbox.npm_version'`;
 
     expect(facts.upsert('sandbox.npm_version', 'npm v10', {
@@ -42,7 +42,7 @@ describe('agent_facts', () => {
   test('value change advances the changelog timestamp', () => {
     const { facts, testSql } = createTestFactsStore();
     facts.upsert('sandbox.npm_version', 'npm v9');
-    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+    void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
                 WHERE key = 'sandbox.npm_version'`;
 
     expect(facts.upsert('sandbox.npm_version', 'npm v10')).toBe('changed');

@@ -14,7 +14,7 @@ import {
 } from "@phosphor-icons/react";
 import {
   WORKSPACE_ARCHIVE_EXTENSION, formatScoreInterval,
-  type ArchiveCursor, type ArchivePage, type ScoreInterval,
+  type ArchiveCursor, type ArchivePage, type JsonValue,
 } from "@proteus/core";
 import { useProteus } from "@/hooks/use-proteus";
 import {
@@ -26,6 +26,27 @@ import { Card, inputCls } from "@/components/ui/form";
 import { CopyButton } from "@/components/ui/CopyButton";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { type AsyncResource, lastValue, loadFailed, loadSucceeded, useAsyncResource } from "@/hooks/use-async-resource";
+import type { Rpc } from '@/lib/protocol';
+import * as v from 'valibot';
+
+const ArchiveCursorSchema = v.variant('phase', [
+  v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
+  v.object({ phase: v.literal('files'), after: v.string(), rows: v.number(), files: v.number() }),
+]);
+const ArchivePageSchema = v.object({ lines: v.array(v.string()), next: v.nullable(ArchiveCursorSchema) });
+const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
+const GepaRunSchema = v.object({
+  runId: v.string(), target: v.string(), status: v.picklist(['running', 'completed', 'aborted']),
+  stopReason: v.nullable(v.string()), iterations: v.number(), metricCalls: v.number(), startedAt: v.number(),
+});
+const GepaOptimizationResultSchema = v.object({
+  ok: v.boolean(), error: v.optional(v.string()), proposed: v.optional(v.boolean()),
+  pendingVersion: v.nullable(v.optional(v.number())), skipReason: v.optional(v.string()),
+  bestScore: v.optional(ScoreIntervalSchema), seedScore: v.optional(ScoreIntervalSchema),
+  selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
+  selectionWarning: v.optional(v.string()),
+});
+const SkillNamesSchema = v.object({ names: v.array(v.string()) });
 
 type ApprovalMode = "strict" | "allow_all" | "deny_all";
 
@@ -53,7 +74,7 @@ interface SettingField<T> {
   dirty: boolean;
   edit: (value: T) => void;
   hydrate: (value: T) => void;
-  fail: (error: unknown) => void;
+  fail: <Failure>(error: Failure) => void;
   /** Commit a written value: it is now both the stored value and clean. */
   markSaved: (value: T) => void;
 }
@@ -67,7 +88,7 @@ function useSettingField<T>(): SettingField<T> {
   // A later refresh updates the stored value without disturbing the edit in
   // progress — the form keeps showing what the user typed.
   const hydrate = useCallback((next: T) => setResource(loadSucceeded(next)), []);
-  const fail = useCallback((error: unknown) => setResource((prev) => loadFailed(prev, error)), []);
+  const fail = useCallback(<Failure,>(error: Failure) => setResource((prev) => loadFailed(prev, error)), []);
   const markSaved = useCallback((saved: T) => {
     setResource(loadSucceeded(saved));
     setEdited(null);
@@ -165,9 +186,9 @@ export default function SettingsPage() {
   const save = useCallback(async () => {
     // Only edited fields are written. Everything else is either still loading
     // or failed to load, and the form has no authority over it.
-    const writes: Array<Promise<unknown>> = [];
+    const writes: Array<Promise<JsonValue | undefined | void>> = [];
     const commits: Array<() => void> = [];
-    const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<unknown>) => {
+    const write = <T,>(field: SettingField<T>, put: (value: T) => Promise<JsonValue | undefined | void>) => {
       const { value } = field;
       if (!field.dirty || value === null) return;
       writes.push(put(value));
@@ -188,7 +209,7 @@ export default function SettingsPage() {
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(errorMessage(e));
     } finally {
       setSaving(false);
     }
@@ -293,7 +314,7 @@ export default function SettingsPage() {
           <FieldState field={approval} what="the approval mode" onRetry={() => void load()}>
             {(value) => (
               <div className="grid grid-cols-3 gap-2">
-                {(['strict', 'allow_all', 'deny_all'] as ApprovalMode[]).map((m) => (
+                {(['strict', 'allow_all', 'deny_all'] satisfies ApprovalMode[]).map((m) => (
                   <button
                     key={m}
                     onClick={() => approval.edit(m)}
@@ -372,7 +393,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
       await setDeviceConsentScope(current.device.id, agentName, full ? "all_local_actions" : "full_filesystem");
       reload();
     } catch (e) {
-      setErr((e as Error).message);
+      setErr(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -426,7 +447,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
 function WorkspaceBackupCard({
   rpc, workspace,
 }: {
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
   workspace: string;
 }) {
   const [busy, setBusy] = useState(false);
@@ -442,7 +463,7 @@ function WorkspaceBackupCard({
       let cursor: ArchiveCursor | null = null;
       let records = 0;
       do {
-        const page = await rpc("exportWorkspaceArchive", [cursor]) as ArchivePage;
+        const page: ArchivePage = v.parse(ArchivePageSchema, await rpc("exportWorkspaceArchive", [cursor]));
         parts.push(page.lines.map((line) => `${line}\n`).join(""));
         records += page.lines.length;
         cursor = page.next;
@@ -461,7 +482,7 @@ function WorkspaceBackupCard({
       setStatus(`Downloaded ${records} records.`);
     } catch (e) {
       setStatus(null);
-      setErr((e as Error).message);
+      setErr(errorMessage(e));
     } finally {
       setBusy(false);
     }
@@ -502,7 +523,7 @@ interface GepaRunRow {
 function GepaOptimizationCard({
   rpc,
 }: {
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
 }) {
   const [runs, setRuns] = useState<GepaRunRow[]>([]);
   const [running, setRunning] = useState(false);
@@ -510,8 +531,7 @@ function GepaOptimizationCard({
 
   const refresh = useCallback(async () => {
     try {
-      const r = await rpc('getGepaRuns', [10]) as GepaRunRow[];
-      setRuns(Array.isArray(r) ? r : []);
+      setRuns(v.parse(v.array(GepaRunSchema), await rpc('getGepaRuns', [10])));
     } catch { /* table may be empty */ }
   }, [rpc]);
 
@@ -523,11 +543,8 @@ function GepaOptimizationCard({
     try {
       // No evalSize override — the agent's configured budget is the one
       // tuned against cost, and a smaller one cannot resolve a winner.
-      const r = await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }]) as {
-        ok: boolean; error?: string; proposed?: boolean; pendingVersion?: number | null;
-        skipReason?: string; bestScore?: ScoreInterval; seedScore?: ScoreInterval;
-        selection?: { heldOutNegatives: number; guards: number }; selectionWarning?: string;
-      };
+      const r = v.parse(GepaOptimizationResultSchema,
+        await rpc('runScaffoldGepaOptimization', [{ maxIterations: 4 }]));
       const scores = r.bestScore && r.seedScore
         ? `best ${formatScoreInterval(r.bestScore)} vs seed ${formatScoreInterval(r.seedScore)}`
         : '';
@@ -543,7 +560,7 @@ function GepaOptimizationCard({
       }
       await refresh();
     } catch (e) {
-      setMsg(`Error: ${(e as Error).message}`);
+      setMsg(`Error: ${errorMessage(e)}`);
     } finally {
       setRunning(false);
     }
@@ -586,7 +603,7 @@ function GepaOptimizationCard({
 function AlwaysActiveSkillsCard({
   rpc,
 }: {
-  rpc: (method: string, args?: unknown[]) => Promise<unknown>;
+  rpc: Rpc;
 }) {
   const [names, setNames] = useState<string[]>([]);
   const [input, setInput] = useState('');
@@ -595,9 +612,9 @@ function AlwaysActiveSkillsCard({
 
   const refresh = useCallback(async () => {
     try {
-      const r = await rpc('getAlwaysActiveSkills', []) as { names: string[] };
-      setNames(r?.names ?? []);
-    } catch (e) { setErr((e as Error).message); }
+      const r = v.parse(SkillNamesSchema, await rpc('getAlwaysActiveSkills', []));
+      setNames(r.names);
+    } catch (e) { setErr(errorMessage(e)); }
   }, [rpc]);
 
   useEffect(() => { void refresh(); }, [refresh]);
@@ -606,9 +623,9 @@ function AlwaysActiveSkillsCard({
     setBusy(true);
     setErr(null);
     try {
-      const r = await rpc('setAlwaysActiveSkills', [next]) as { names: string[] };
-      setNames(r?.names ?? []);
-    } catch (e) { setErr((e as Error).message); }
+      const r = v.parse(SkillNamesSchema, await rpc('setAlwaysActiveSkills', [next]));
+      setNames(r.names);
+    } catch (e) { setErr(errorMessage(e)); }
     finally { setBusy(false); }
   }, [rpc]);
 
@@ -659,6 +676,10 @@ function AlwaysActiveSkillsCard({
       {err && <div className="p-meta p-danger mt-1">{err}</div>}
     </Card>
   );
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }
 
 function NumField({ label, value, step, onChange }: { label: string; value: number; step: number; onChange: (v: number) => void }) {

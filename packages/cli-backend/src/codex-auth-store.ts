@@ -1,11 +1,14 @@
 import {
   CODEX_CRED_KEY,
+  JsonObjectSchema,
+  JsonValueSchema,
   codexAccessTokenExpiring,
   codexCredentialToHeaders,
   createCodexOAuthClient,
   type AuthResolution,
   type OAuthCredential,
 } from '@proteus/core';
+import * as v from 'valibot';
 import {
   chmodSync,
   closeSync,
@@ -20,19 +23,19 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
-interface ProteusConfigFile {
-  providers?: {
-    codex?: StoredCodexCredential;
-  };
-  [key: string]: unknown;
-}
-
-interface StoredCodexCredential {
-  accessToken?: string;
-  refreshToken?: string;
-  expiresAt?: number;
-  metadata?: Record<string, unknown>;
-}
+const storedCodexCredentialSchema = v.object({
+  accessToken: v.optional(v.string()),
+  refreshToken: v.optional(v.string()),
+  expiresAt: v.optional(v.number()),
+  metadata: v.optional(JsonObjectSchema),
+});
+type StoredCodexCredential = v.InferOutput<typeof storedCodexCredentialSchema>;
+const proteusConfigSchema = v.objectWithRest({
+  providers: v.optional(v.objectWithRest({
+    codex: v.optional(storedCodexCredentialSchema),
+  }, JsonValueSchema)),
+}, JsonValueSchema);
+type ProteusConfigFile = v.InferOutput<typeof proteusConfigSchema>;
 
 export interface LocalCodexAuthStore {
   hasCredential(): boolean;
@@ -63,7 +66,7 @@ export function createFileCodexAuthStore(configPath: string, opts: { fetch?: typ
         writeConfig(configPath, {
           ...config,
           providers: {
-            ...(config.providers ?? {}),
+            ...config.providers,
             codex: credentialToConfig(credential),
           },
         });
@@ -96,7 +99,7 @@ async function refreshUnderLock(
     writeConfig(configPath, {
       ...config,
       providers: {
-        ...(config.providers ?? {}),
+        ...config.providers,
         codex: credentialToConfig(credential),
       },
     });
@@ -134,7 +137,7 @@ function credentialToConfig(credential: OAuthCredential): StoredCodexCredential 
 function readConfig(configPath: string): ProteusConfigFile {
   if (!existsSync(configPath)) return {};
   try {
-    return JSON.parse(readFileSync(configPath, 'utf-8')) as ProteusConfigFile;
+    return v.parse(proteusConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
   } catch {
     return {};
   }
@@ -169,7 +172,7 @@ function acquireLock(lockPath: string): number {
       writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
       return fd;
     } catch (err) {
-      if (!isAlreadyExists(err)) throw err;
+      if (!isAlreadyExists({ error: err })) throw err;
       try {
         const ageMs = Date.now() - statSync(lockPath).mtimeMs;
         if (ageMs > 30_000) unlinkSync(lockPath);
@@ -182,8 +185,8 @@ function acquireLock(lockPath: string): number {
   }
 }
 
-function isAlreadyExists(err: unknown): boolean {
-  return typeof err === 'object' && err !== null && 'code' in err && (err as { code?: unknown }).code === 'EEXIST';
+function isAlreadyExists(input: { error: unknown }): boolean {
+  return v.safeParse(v.object({ code: v.literal('EEXIST') }), input.error).success;
 }
 
 export { CODEX_CRED_KEY };

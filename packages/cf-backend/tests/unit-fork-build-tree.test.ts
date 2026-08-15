@@ -14,7 +14,7 @@ function row(partial: Partial<MctsRow> & { id: string; created_at: number }): Mc
   return {
     parent_id: null, depth: 0, visits: 1, value: 0.5, status: 'open', action: 'act',
     ...partial,
-  } as MctsRow;
+  };
 }
 
 describe('buildTree', () => {

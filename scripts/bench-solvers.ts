@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { unitHash } from '../packages/core/src/index.js';
 import type { LLMProviderConfig, Solver, SolverContext, SolverResult } from '../packages/core/src/index.js';
 import { applyPatch, sandboxEnv } from './bench-sandbox.js';
+import { parseWorkerOutput } from './bench-worker-protocol.js';
 
 export type PatchLookup = ReadonlyMap<string, string>;
 
@@ -18,7 +19,7 @@ export const nullSolver: Solver = {
   id: 'null',
   description: 'no-op control — must fail every task',
   async solve(): Promise<SolverResult> {
-    return {};
+    return { modelCalls: 0 };
   },
 };
 
@@ -29,7 +30,7 @@ export function createOracleSolver(patches: PatchLookup): Solver {
     description: 'reverse-applies the defect — must pass every task',
     async solve(ctx: SolverContext): Promise<SolverResult> {
       applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
-      return {};
+      return { modelCalls: 0 };
     },
   };
 }
@@ -48,7 +49,7 @@ export function createNoisyOracleSolver(patches: PatchLookup, rate: number, labe
     async solve(ctx: SolverContext): Promise<SolverResult> {
       const draw = unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`);
       if (draw < rate) applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
-      return {};
+      return { modelCalls: 0 };
     },
   };
 }
@@ -72,15 +73,6 @@ export interface AgentSolverOptions {
   repoRoot: string;
   /** Home for the 'shared' arm. Ignored when state is 'fresh'. */
   sharedHome?: string;
-}
-
-interface WorkerOutput {
-  tokens: number;
-  steps: number;
-  hadError: boolean;
-  budgetBreach: 'tokens' | null;
-  peakPromptTokens: number;
-  error?: string;
 }
 
 export interface AgentWorkerOptions extends Omit<AgentSolverOptions, 'id' | 'description'> {
@@ -120,6 +112,56 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
     script: join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts'),
     home, ctx, input,
   });
+}
+
+export interface PiWorkerOptions {
+  ctx: SolverContext;
+  llm: LLMProviderConfig;
+  repoRoot: string;
+  asks: readonly string[];
+  removeAfterAsk: ReadonlyArray<string | null>;
+  verifierRetry: boolean;
+}
+
+/** Official Pi coding-agent SDK over its native read/bash/edit/write surface.
+ *  The retry arm differs only by one machine-check feedback turn. */
+export function runPiWorker(opts: PiWorkerOptions): Promise<SolverResult> {
+  return spawnWorker({
+    script: join(opts.repoRoot, 'scripts', 'bench-pi-worker.ts'),
+    home: opts.ctx.proteusHome,
+    ctx: opts.ctx,
+    input: {
+      agentDir: join(opts.ctx.proteusHome, 'pi-agent'),
+      asks: opts.asks,
+      removeAfterAsk: opts.removeAfterAsk,
+      maxTokens: opts.ctx.budget.maxTokens,
+      llm: opts.llm,
+      task: opts.ctx.task,
+      repoRoot: opts.repoRoot,
+      verifierRetry: opts.verifierRetry,
+    },
+  });
+}
+
+export interface PiSolverOptions {
+  id: 'pi:vanilla' | 'pi:retry';
+  description: string;
+  verifierRetry: boolean;
+  llm: LLMProviderConfig;
+  repoRoot: string;
+}
+
+export function createPiSolver(opts: PiSolverOptions): Solver {
+  return {
+    id: opts.id,
+    description: opts.description,
+    solve: (ctx) => runPiWorker({
+      ...opts,
+      ctx,
+      asks: [ctx.task.prompt],
+      removeAfterAsk: [null],
+    }),
+  };
 }
 
 export interface PanelSolverOptions {
@@ -192,17 +234,21 @@ async function spawnWorker(opts: {
   if (!line) {
     return { error: `worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
   }
-  let parsed: WorkerOutput;
+  let parsed;
   try {
-    parsed = JSON.parse(line) as WorkerOutput;
-  } catch {
-    return { error: `worker emitted unparseable output: ${line.slice(0, 400)}` };
+    parsed = parseWorkerOutput(line);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { error: `worker emitted invalid output: ${detail}; ${line.slice(0, 400)}` };
   }
-  return {
+  const error = parsed.error ?? (parsed.hadError ? 'worker reported an error without a diagnostic' : undefined);
+  const result: SolverResult = {
     tokens: parsed.tokens,
     peakPromptTokens: parsed.peakPromptTokens,
-    ...(parsed.error ? { error: parsed.error } : {}),
   };
+  if (parsed.modelCalls !== undefined) result.modelCalls = parsed.modelCalls;
+  if (error) result.error = error;
+  return result;
 }
 
 /** The real thing: one Proteus turn against the sandbox, in its own process. */

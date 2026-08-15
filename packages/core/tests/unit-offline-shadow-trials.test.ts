@@ -13,16 +13,19 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
 import {
   DEFAULT_SHADOW_CONFIG, EvolutionEngine, MAX_QUEUED_SHADOW_TRIALS, SHADOW_TRIAL_CONTEXT_CHARS,
   applyScaffoldDecision, decidePromotion, getPendingScaffold, getShadowStatus,
   initScaffoldTables, initShadowTables, listQueuedShadowTrials, queueTurnShadowTrial,
   runQueuedShadowTrials,
-  type AgentConfigStore, type CompletedTurn, type JudgeOutput, type ScaffoldControl,
+  type CompletedTurn, type JudgeOutput, type ScaffoldControl,
   type ScaffoldReplayContext,
 } from '../src/index.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Executor } from '../src/types/primitives.js';
+import type { Executor, ResolvedProvider } from '../src/types/primitives.js';
+import { decodeJsonValue } from '../src/utils/json.js';
 import type { ModelMessage } from 'ai';
 import { createTestRuntime } from './helpers.js';
 
@@ -37,11 +40,18 @@ const CONTEXT: ModelMessage[] = [
 /** DynamicWorkerExecutor semantics: providers visible as globals. */
 function evalExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute(code, providers) {
-      const arr = providers as Array<{ name: string; fns: Record<string, (...a: unknown[]) => Promise<unknown>> }>;
+      const resolved: ResolvedProvider[] = Array.isArray(providers)
+        ? providers
+        : [{ name: 'workspace', fns: providers }];
       try {
-        const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
-        return { result: await fn(...arr.map((p) => p.fns)) };
+        const fn = new Function(
+          ...resolved.map((provider) => provider.name),
+          `return (async () => {\n${code}\n})();`,
+        );
+        const result = await fn(...resolved.map((provider) => provider.fns));
+        return { result: result === undefined ? undefined : decodeJsonValue({ value: result }) };
       } catch (err) {
         return { result: undefined, error: err instanceof Error ? err.message : String(err) };
       }
@@ -55,10 +65,10 @@ async function setup(): Promise<AgentRuntime> {
   const { rt } = createTestRuntime();
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
-  (rt as { executor: Executor }).executor = evalExecutor();
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  rt.executor = evalExecutor();
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (0, ${Date.now()}, 'initial', 'current')`;
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (1, ${Date.now()}, 'candidate', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', PENDING_SOURCE);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "live" }; }');
@@ -86,24 +96,25 @@ function countedControl(
     config: {
       getShadowSampleRate: () => opts?.sampleRate ?? 1,
       getAutoPromoteScaffold: () => opts?.autoPromote ?? false,
-    } as unknown as AgentConfigStore,
+      getGepaEvalBudget: () => 2,
+    },
     surface: (_task, context) => {
       counts.surface++;
       contexts.push(context ?? []);
       return {
         llmStream: async function* () { yield ''; },
-        defaultInference: async function* () { counts.defaultInference++; yield ''; },
+        defaultInference: async function* () { counts.defaultInference++; yield { value: '' }; },
       };
     },
-    model: () => ({}) as never,
-    judge: async () => {
+    model: () => new MockLanguageModelV3(),
+    judge: async ({ schema }) => {
       counts.judge++;
       // Content-blind, but the protocol is order-swapped, so a fixed slot would
       // flip and tie. Attribute by the pending's known output instead.
       const out: JudgeOutput = verdict === 'tie'
         ? { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 }
         : { winner: 'a', rationale: 'm', scoreA: 0.8, scoreB: 0.4 };
-      return out as never;
+      return v.parse(schema, out);
     },
   };
   return { control, counts, contexts };
@@ -111,13 +122,21 @@ function countedControl(
 
 /** A judge that decides by CONTENT, so it survives the order swap and yields a
  *  decisive trial. `pendingText` is what the candidate scaffold emits. */
-function contentJudge(pendingText: string, winner: 'pending' | 'current') {
-  return async ({ prompt }: { prompt: string }) => {
+function contentJudge(
+  pendingText: string,
+  winner: 'pending' | 'current',
+): ScaffoldControl['judge'] {
+  return async ({ prompt, schema }) => {
     const bMark = prompt.indexOf('\n\nResponse B:\n');
     const a = prompt.slice(prompt.indexOf('\nResponse A:\n'), bMark);
     const pendingIsA = a.includes(pendingText);
     const pick = winner === 'pending' ? (pendingIsA ? 'a' : 'b') : (pendingIsA ? 'b' : 'a');
-    return { winner: pick, rationale: 'content', scoreA: pick === 'a' ? 0.8 : 0.4, scoreB: pick === 'b' ? 0.8 : 0.4 } as never;
+    return v.parse(schema, {
+      winner: pick,
+      rationale: 'content',
+      scoreA: pick === 'a' ? 0.8 : 0.4,
+      scoreB: pick === 'b' ? 0.8 : 0.4,
+    });
   };
 }
 
@@ -150,7 +169,7 @@ describe('the interactive path runs no trial', () => {
     })).toBe('not_sampled');
     expect(listQueuedShadowTrials(rt.storage.sql, 1)).toHaveLength(0);
 
-    rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
     const resolved = countedControl(rt);
     expect(queueTurnShadowTrial(resolved.control, {
       task: TASK, currentOutput: LIVE_ANSWER, context: CONTEXT,
@@ -176,7 +195,7 @@ describe('a queued trial is not evidence', () => {
     const { control } = countedControl(rt);
     // Four decisive wins recorded — one short of the ladder's minimum.
     for (let i = 0; i < 4; i++) {
-      rt.storage.sql`INSERT INTO scaffold_evaluations
+      void rt.storage.sql`INSERT INTO scaffold_evaluations
         (id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
@@ -224,13 +243,16 @@ describe('the offline drain is what executes trials', () => {
   test('a conclusive gate promotes from the drain, and the stale queue is discarded', async () => {
     const rt = await setup();
     for (let i = 0; i < 5; i++) {
-      rt.storage.sql`INSERT INTO scaffold_evaluations
+      void rt.storage.sql`INSERT INTO scaffold_evaluations
         (id, current_version, pending_version, task, current_output, pending_output,
          current_score, pending_score, winner, judge_rationale, evaluated_at)
         VALUES (${`seed-${i}`}, 0, 1, 't', 'c', 'p', 0.4, 0.8, 'pending', 'seed', ${Date.now()})`;
     }
-    const { control } = countedControl(rt, { autoPromote: true });
-    (control as { judge: ScaffoldControl['judge'] }).judge = contentJudge(`pending: ${TASK}`, 'pending');
+    const counted = countedControl(rt, { autoPromote: true });
+    const control: ScaffoldControl = {
+      ...counted.control,
+      judge: contentJudge(`pending: ${TASK}`, 'pending'),
+    };
     for (let i = 0; i < 3; i++) {
       queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] });
     }
@@ -251,7 +273,7 @@ describe('the offline drain is what executes trials', () => {
     const { control, counts } = countedControl(rt);
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] });
     // The operator resolved it by hand while the trial sat in the queue.
-    rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
+    void rt.storage.sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = 1`;
 
     const drain = await runQueuedShadowTrials(control);
 
@@ -262,8 +284,11 @@ describe('the offline drain is what executes trials', () => {
 
   test('a trial that throws is dropped rather than wedging the queue', async () => {
     const rt = await setup();
-    const { control } = countedControl(rt);
-    (control as { judge: ScaffoldControl['judge'] }).judge = async () => { throw new Error('judge down'); };
+    const counted = countedControl(rt);
+    const control: ScaffoldControl = {
+      ...counted.control,
+      judge: async () => { throw new Error('judge down'); },
+    };
     queueTurnShadowTrial(control, { task: TASK, currentOutput: LIVE_ANSWER, context: [] });
 
     const drain = await runQueuedShadowTrials(control);

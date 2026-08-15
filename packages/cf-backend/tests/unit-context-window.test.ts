@@ -3,11 +3,29 @@
 import { describe, test, expect } from "bun:test";
 import { userCredentialSource } from './helpers/user-credentials.js';
 import { createAgentProviderRegistry } from "../src/providers/agent-registry";
-import { catalogModelInfo, contextWindowForModel, type ModelProvider, type ProviderDeps } from "@proteus/core";
+import { WORKERS_AI_FALLBACK_MODEL_CATALOG } from "../src/providers/workers-ai-catalog";
+import {
+  catalogModelInfo,
+  contextWindowForModel,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
+  type ModelProvider,
+  type ProviderDeps,
+} from "@proteus/core";
 
 describe("contextWindowForModel", () => {
+  test("the offline Workers AI catalog keeps DeepSeek V4 Pro as the first default", () => {
+    expect(WORKERS_AI_FALLBACK_MODEL_CATALOG[0]).toEqual({
+      id: "@cf/deepseek-ai/deepseek-v4-pro-0813",
+      label: "DeepSeek V4 Pro 0813",
+      capabilities: ["tools", "streaming", "reasoning"],
+      contextWindow: 1_048_576,
+      inputModalities: ["text"],
+    });
+  });
+
   test("matches known model families on their spec", () => {
     expect(contextWindowForModel("minimax/m3")).toBe(1_000_000);
+    expect(contextWindowForModel("workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813")).toBe(1_048_576);
     expect(contextWindowForModel("@cf/moonshotai/kimi-k2.6")).toBe(262_144);
     expect(contextWindowForModel("@cf/meta/llama-4-scout")).toBe(131_072);
     expect(contextWindowForModel("anthropic/claude-opus-4-7")).toBe(1_000_000);
@@ -22,9 +40,9 @@ describe("contextWindowForModel", () => {
     expect(contextWindowForModel("some/unknown-model")).toBe(128_000);
   });
 
-  test("a default-configured agent (no stored model) resolves to the real Kimi window", () => {
+  test("a default-configured agent resolves to the real DeepSeek V4 Pro window", () => {
     // The C3 regression: sizing from the RAW stored spec gave "" → the 128k
-    // default window → compaction at 41% of Kimi's real 262,144 window. The
+    // default window could drift from the selected model. The
     // orchestrator resolves the EFFECTIVE spec first (the same
     // normalizeSpecSync resolution getModel() uses) before sizing.
     const userDOStub = userCredentialSource({
@@ -34,13 +52,17 @@ describe("contextWindowForModel", () => {
     });
     const reg = createAgentProviderRegistry({ env: {}, userDO: userDOStub });
     const effectiveSpec = reg.normalizeSpecSync(null);
-    expect(effectiveSpec).toBe("workers-ai/@cf/moonshotai/kimi-k2.6");
-    expect(contextWindowForModel(effectiveSpec)).toBe(262_144);
+    expect(effectiveSpec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(contextWindowForModel(effectiveSpec)).toBe(1_048_576);
   });
 });
 
 describe("catalogModelInfo", () => {
-  const deps = {} as ProviderDeps;
+  const deps: ProviderDeps = {
+    env: {},
+    getAuth: async () => null,
+    hasCredential: async () => false,
+  };
 
   test("returns the catalog entry (window + input modalities) for a known model id", async () => {
     const provider: Pick<ModelProvider, 'listModels'> = {

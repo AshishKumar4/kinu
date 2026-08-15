@@ -1,22 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { initUserTables } from '../src/user/schema.js';
-
-function sqlExec(db: Database) {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const statement = db.prepare(query);
-      const trimmed = query.trim().toUpperCase();
-      const reads = trimmed.startsWith('SELECT') || trimmed.startsWith('PRAGMA');
-      if (reads) return { toArray: () => statement.all(...(bindings as never[])) as Array<Record<string, unknown>> };
-      statement.run(...(bindings as never[]));
-      return { toArray: () => [] as Array<Record<string, unknown>> };
-    },
-  };
-}
+import { sqlExec } from './helpers/user-do.js';
 
 function columns(db: Database, table: string): string[] {
-  return db.prepare(`PRAGMA table_info(${table})`).all().map((r) => String((r as { name: string }).name));
+  return db.prepare<{ name: string }, []>(`PRAGMA table_info(${table})`).all().map((row) => row.name);
+}
+
+function required<Row>(row: Row | null): Row {
+  if (row === null) throw new Error('expected query to return one row');
+  return row;
 }
 
 describe('UserDO schema bootstrap', () => {
@@ -44,9 +37,10 @@ describe('UserDO schema bootstrap', () => {
 
     expect(columns(db, 'user_devices')).toContain('token_hash');
     expect(columns(db, 'user_devices')).not.toContain('token');
-    expect((db.prepare('SELECT COUNT(*) AS n FROM user_devices').get() as { n: number } | null)!.n).toBe(0);
-    expect((db.prepare('SELECT email FROM user_profile WHERE id = 1').get() as { email: string } | null)!.email)
-      .toBe('person@example.com');
+    const devices = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_devices').get();
+    const profile = db.prepare<{ email: string }, []>('SELECT email FROM user_profile WHERE id = 1').get();
+    expect(required(devices).n).toBe(0);
+    expect(required(profile).email).toBe('person@example.com');
     db.close();
   });
 
@@ -66,7 +60,8 @@ describe('UserDO schema bootstrap', () => {
 
     expect(columns(db, 'user_cli_tokens')).toContain('token_hash');
     expect(columns(db, 'user_cli_tokens')).not.toContain('token');
-    expect((db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get() as { n: number } | null)!.n).toBe(0);
+    const tokens = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_cli_tokens').get();
+    expect(required(tokens).n).toBe(0);
     db.close();
   });
 
@@ -80,7 +75,8 @@ describe('UserDO schema bootstrap', () => {
 
     initUserTables(sqlExec(db));
 
-    expect((db.prepare('SELECT COUNT(*) AS n FROM user_cli_tokens').get() as { n: number } | null)!.n).toBe(1);
+    const tokens = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_cli_tokens').get();
+    expect(required(tokens).n).toBe(1);
     db.close();
   });
 
@@ -99,15 +95,16 @@ describe('UserDO schema bootstrap', () => {
     initUserTables(sqlExec(db));
 
     expect(columns(db, 'user_devices')).toContain('token');
-    expect((db.prepare('SELECT COUNT(*) AS n FROM user_devices').get() as { n: number } | null)!.n).toBe(1);
+    const devices = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_devices').get();
+    expect(required(devices).n).toBe(1);
     db.close();
   });
 
   test('records the schema version after the first boot', () => {
     const db = new Database(':memory:');
     initUserTables(sqlExec(db));
-    const row = db.prepare(`SELECT value FROM user_schema_meta WHERE key = 'version'`).get() as { value: string } | null;
-    expect(Number(row!.value)).toBeGreaterThanOrEqual(1);
+    const row = db.prepare<{ value: string }, []>(`SELECT value FROM user_schema_meta WHERE key = 'version'`).get();
+    expect(Number(required(row).value)).toBeGreaterThanOrEqual(1);
     db.close();
   });
 
@@ -123,8 +120,8 @@ describe('UserDO schema bootstrap', () => {
     expect(ticketColumns).toContain('cli_token_hash');
     expect(ticketColumns).toContain('capabilities');
     expect(ticketColumns).not.toContain('ticket');
-    const indexes = db.prepare(`PRAGMA index_list(cli_agent_connect_tickets)`).all()
-      .map((row) => String((row as { name: string }).name));
+    const indexes = db.prepare<{ name: string }, []>(`PRAGMA index_list(cli_agent_connect_tickets)`).all()
+      .map((row) => row.name);
     expect(indexes).toContain('idx_cli_agent_connect_tickets_exp');
     db.close();
   });
@@ -147,7 +144,8 @@ describe('UserDO schema bootstrap', () => {
     grant.run(foreign, 'scout', Date.now());         // idempotent
     expect(has(foreign, 'scout')).toBe(true);
     expect(has(foreign, 'other-agent')).toBe(false); // grants are per-agent
-    expect((db.prepare('SELECT COUNT(*) AS n FROM user_peer_grants').get() as { n: number } | null)!.n).toBe(1);
+    const grants = db.prepare<{ n: number }, []>('SELECT COUNT(*) AS n FROM user_peer_grants').get();
+    expect(required(grants).n).toBe(1);
 
     db.prepare(`DELETE FROM user_peer_grants WHERE sender_user_id = ? AND sender_agent_name = ?`)
       .run(foreign, 'scout');

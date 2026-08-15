@@ -11,14 +11,16 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   DEFAULT_FORK_POLICY, TriggerRegistry, initEventsHubTables,
   type AlarmScheduler, type RegisterSpec, type TriggerKind,
 } from '../src/events/hub/index.ts';
 import {
-  EventLog, cancelTrigger, createTimerTrigger, fireDueTriggers, listTriggers,
-  type SqlExec, type TimerPayload,
+  EventLog, JsonObjectSchema, cancelTrigger, createTimerTrigger, fireDueTriggers, listTriggers,
+  type ProteusEvent, type TimerPayload,
 } from '../src/index.js';
+import { makeSqlExec } from './helpers.js';
 
 /** Records every wake request so the alarm contract is assertable, and models
  *  the real scheduler's "converge on the soonest pending time" semantics. */
@@ -35,15 +37,25 @@ class RecordingAlarm implements AlarmScheduler {
 }
 
 const NOW = 1_700_000_000_000;
+const TRIGGER_KINDS: TriggerKind[] = [
+  'webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
+  'process_watch', 'file_watch', 'peer_inbox', 'mcp_route', 'email_route',
+];
+
+function timerPayload(event: ProteusEvent): TimerPayload {
+  if (event.variant !== 'timer') throw new Error('expected timer event');
+  return v.parse(v.object({
+    trigger_id: v.string(),
+    scheduled_fire_at: v.number(),
+    label: v.optional(v.string()),
+    user_payload: v.optional(JsonObjectSchema),
+    mission_label: v.optional(v.string()),
+  }), event.payload);
+}
 
 function setup() {
   const db = new Database(':memory:');
-  const sql: SqlExec = {
-    exec(query: string, ...bindings: unknown[]) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  const sql = makeSqlExec(db);
   initEventsHubTables(sql);
   const alarm = new RecordingAlarm();
   return { registry: new TriggerRegistry(sql, alarm), alarm };
@@ -360,14 +372,19 @@ describe('TriggerRegistry.forkPlan', () => {
   test('routes each kind by its documented default policy', () => {
     const { registry } = setup();
     const ids = new Map<TriggerKind, string>();
-    for (const kind of Object.keys(DEFAULT_FORK_POLICY) as TriggerKind[]) {
+    expect(Object.keys(DEFAULT_FORK_POLICY)).toEqual(TRIGGER_KINDS);
+    for (const kind of TRIGGER_KINDS) {
       ids.set(kind, registry.register(spec({ kind }), NOW));
     }
 
     const { copy, share } = registry.forkPlan();
-    const expected = (policy: string) => (Object.keys(DEFAULT_FORK_POLICY) as TriggerKind[])
+    const expected = (policy: string) => TRIGGER_KINDS
       .filter(k => DEFAULT_FORK_POLICY[k] === policy)
-      .map(k => ids.get(k)!)
+      .map((kind) => {
+        const id = ids.get(kind);
+        if (!id) throw new Error(`expected registered trigger id for ${kind}`);
+        return id;
+      })
       .sort();
 
     expect(copy.map(t => t.id).sort()).toEqual(expected('copy'));
@@ -419,12 +436,7 @@ describe('TriggerRegistry.forkPlan', () => {
 describe('timer ingress', () => {
   function timers() {
     const db = new Database(':memory:');
-    const sql: SqlExec = {
-      exec(query: string, ...bindings: unknown[]) {
-        const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-        return { toArray: () => rows };
-      },
-    };
+    const sql = makeSqlExec(db);
     initEventsHubTables(sql);
     const alarm = new RecordingAlarm();
     const registry = new TriggerRegistry(sql, alarm);
@@ -432,7 +444,7 @@ describe('timer ingress', () => {
     return {
       registry, alarm, log,
       fire: (now: number) => fireDueTriggers({ registry, log }, now),
-      fired: () => log.pending({ variant: 'timer' }).map((e) => e.payload as TimerPayload),
+      fired: () => log.pending({ variant: 'timer' }).map(timerPayload),
     };
   }
 

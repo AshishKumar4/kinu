@@ -45,7 +45,7 @@ export function checkpointSubject(meta: CheckpointTurnMeta | null, reason: strin
  *  the reason with no turn attribution. */
 export function parseCheckpointSubject(
   subject: string,
-): { turnId: string | null; sessionId: string | null; reason: string } {
+) {
   const m = /^turn=(\S+) session=(\S+) (.*)$/.exec(subject);
   if (!m) return { turnId: null, sessionId: null, reason: subject };
   return {

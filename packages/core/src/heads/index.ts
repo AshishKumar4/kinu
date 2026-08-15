@@ -50,7 +50,7 @@ export {
 export {
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  type HeadInferenceDeps,
+  type HeadInferenceDeps, type HeadWorkspaceLayout,
 } from './head-inference.js';
 export {
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,

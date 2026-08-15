@@ -172,7 +172,7 @@ export type SubjectName = keyof PipelineSubjects;
 
 /** Where each subject is defined, relative to `packages/core/src`. The
  *  dependency-closure proof walks the import graph from these files. */
-export const SUBJECT_SOURCE: Record<SubjectName, string> = {
+export const SUBJECT_SOURCE = {
   buildSystemPromptSync: 'prompt.ts',
   compilePromptSurface: 'prompting/surface.ts',
   renderAgentsMdSection: 'prompting/agents-md.ts',
@@ -245,7 +245,7 @@ export const SUBJECT_SOURCE: Record<SubjectName, string> = {
   devicePresence: 'execution/device-status.ts',
   deviceChangeNotice: 'execution/device-status.ts',
   parseDevicePresence: 'execution/device-status.ts',
-};
+} satisfies Record<SubjectName, string>;
 
 /**
  * Bind the live turn pipeline. `rt` satisfies `buildSystemPromptSync`'s

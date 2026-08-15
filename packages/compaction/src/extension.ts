@@ -415,7 +415,7 @@ function latestUserAsk(messages: readonly ModelMessage[]): string | undefined {
     const message = messages[i];
     if (message.role !== 'user') continue;
     const text =
-      typeof message.content === 'string'
+      isString(message.content)
         ? message.content
         : message.content
             .filter((part): part is TextPart => part.type === 'text')
@@ -424,4 +424,8 @@ function latestUserAsk(messages: readonly ModelMessage[]): string | undefined {
     if (text.trim()) return text;
   }
   return undefined;
+}
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
 }

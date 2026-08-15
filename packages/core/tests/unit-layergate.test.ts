@@ -33,6 +33,10 @@ for (const layer of LAYERS) {
   for (const subject of layer.subjects) layerOf.set(subject, layer.id);
 }
 
+function isSubjectName(value: string): value is SubjectName {
+  return Object.hasOwn(SUBJECT_SOURCE, value);
+}
+
 // ── import-graph analysis ────────────────────────────────────────
 
 const IMPORT = /import\s+(type\s+)?([\s\S]*?)\s+from\s+['"]([^'"]+)['"]/g;
@@ -80,8 +84,8 @@ function reachableSubjects(entry: string): Map<SubjectName, string> {
     seen.add(file);
     for (const imported of importsOf(file)) {
       for (const value of imported.values) {
-        if (layerOf.has(value as SubjectName) && !found.has(value as SubjectName)) {
-          found.set(value as SubjectName, file.slice(SRC.length + 1));
+        if (isSubjectName(value) && layerOf.has(value) && !found.has(value)) {
+          found.set(value, file.slice(SRC.length + 1));
         }
       }
       const target = resolveImport(file, imported.spec);
@@ -95,7 +99,7 @@ function reachableSubjects(entry: string): Map<SubjectName, string> {
 
 describe('layer gate — decomposition', () => {
   test('every subject is owned by exactly one layer', () => {
-    const registry = Object.keys(SUBJECT_SOURCE) as SubjectName[];
+    const registry = Object.keys(SUBJECT_SOURCE).filter(isSubjectName);
     const owned = LAYERS.flatMap((layer) => layer.subjects);
     expect([...owned].sort()).toEqual([...registry].sort());
     expect(new Set(owned).size).toBe(owned.length);
@@ -117,7 +121,9 @@ describe('layer gate — decomposition', () => {
     // code does not have.
     const byModule = new Map<string, Set<string>>();
     for (const [subject, module] of Object.entries(SUBJECT_SOURCE)) {
-      const layer = layerOf.get(subject as SubjectName)!;
+      if (!isSubjectName(subject)) throw new Error(`unknown layer-gate subject: ${subject}`);
+      const layer = layerOf.get(subject);
+      if (layer === undefined) throw new Error(`unowned layer-gate subject: ${subject}`);
       byModule.set(module, (byModule.get(module) ?? new Set()).add(layer));
     }
     const split = [...byModule]
@@ -139,7 +145,9 @@ describe('layer gate — decomposition', () => {
   test('no layer\'s production code reaches another layer\'s subject', () => {
     const violations: string[] = [];
     for (const [subject, relative] of Object.entries(SUBJECT_SOURCE)) {
-      const owner = layerOf.get(subject as SubjectName)!;
+      if (!isSubjectName(subject)) throw new Error(`unknown layer-gate subject: ${subject}`);
+      const owner = layerOf.get(subject);
+      if (owner === undefined) throw new Error(`unowned layer-gate subject: ${subject}`);
       for (const [reached, where] of reachableSubjects(resolve(SRC, relative))) {
         const reachedOwner = layerOf.get(reached)!;
         if (reachedOwner !== owner) {
@@ -163,6 +171,40 @@ describe('layer gate — decomposition', () => {
 // ── coverage honesty ─────────────────────────────────────────────
 
 describe('layer gate — coverage honesty', () => {
+  test('observation digests use JSON wire semantics without collapsing root undefined', async () => {
+    const jsonProjection = await observePipeline({}, [{
+      id: 'projection', owns: 'test projection', subjects: [],
+      probes: [{
+        id: 'projection/value', asserts: 'JSON projection is deterministic',
+        observe: () => ({ capabilities: new Set(['tools']), omitted: undefined }),
+      }],
+    }]);
+    const canonical = await observePipeline({}, [{
+      id: 'projection', owns: 'test projection', subjects: [],
+      probes: [{
+        id: 'projection/value', asserts: 'JSON projection is deterministic',
+        observe: () => ({ capabilities: {} }),
+      }],
+    }]);
+    const undefinedRoot = await observePipeline({}, [{
+      id: 'projection', owns: 'test projection', subjects: [],
+      probes: [{
+        id: 'projection/value', asserts: 'root undefined stays distinct',
+        observe: () => undefined,
+      }],
+    }]);
+    const undefinedString = await observePipeline({}, [{
+      id: 'projection', owns: 'test projection', subjects: [],
+      probes: [{
+        id: 'projection/value', asserts: 'the string is ordinary JSON',
+        observe: () => 'undefined',
+      }],
+    }]);
+
+    expect(jsonProjection).toEqual(canonical);
+    expect(undefinedRoot).not.toEqual(undefinedString);
+  });
+
   test('an unmeasured layer reports null, never 100%', async () => {
     const report = await runLayerGate({ subjects, baseline: LOCKED_BASELINE });
     const unmeasured = report.layers.filter((score) => score.probes === 0);
@@ -223,7 +265,9 @@ describe('layer gate — fault localization', () => {
     expect(FAULTS.map((fault) => fault.layer).sort())
       .toEqual(measuredLayers.map((layer) => layer.id).sort());
     for (const fault of FAULTS) {
-      const owned = LAYERS.find((layer) => layer.id === fault.layer)!.subjects;
+      const owner = LAYERS.find((layer) => layer.id === fault.layer);
+      if (!owner) throw new Error(`fault has no layer: ${fault.layer}`);
+      const owned = owner.subjects;
       expect(fault.patches.every((subject) => owned.includes(subject))).toBe(true);
       expect(fault.patches.length).toBeGreaterThan(0);
     }
@@ -232,7 +276,7 @@ describe('layer gate — fault localization', () => {
   test('a fault replaces exactly the subjects it declares', () => {
     for (const fault of FAULTS) {
       const faulted = fault.inject(subjects);
-      const changed = (Object.keys(SUBJECT_SOURCE) as SubjectName[])
+      const changed = Object.keys(SUBJECT_SOURCE).filter(isSubjectName)
         .filter((subject) => faulted[subject] !== subjects[subject]);
       expect(changed.sort()).toEqual([...fault.patches].sort());
     }

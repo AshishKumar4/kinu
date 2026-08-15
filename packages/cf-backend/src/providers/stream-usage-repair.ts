@@ -20,6 +20,14 @@
  * ever reports 0 stays 0.
  */
 
+import * as v from 'valibot';
+
+const UsageChunkSchema = v.looseObject({
+  usage: v.looseObject({
+    prompt_tokens_details: v.looseObject({ cached_tokens: v.optional(v.number()) }),
+  }),
+});
+
 /** Wrap an upstream response so its SSE usage chunks are repaired. Non-SSE
  *  and bodyless responses are returned unchanged. */
 export function repairSseCachedUsage(res: Response): Response {
@@ -30,12 +38,6 @@ export function repairSseCachedUsage(res: Response): Response {
     statusText: res.statusText,
     headers: res.headers,
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 /** Byte→byte transform: split the SSE stream into lines, repair `data:` lines
@@ -51,18 +53,16 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
     const crlf = line.endsWith('\r');
     const payload = line.slice(5, crlf ? -1 : undefined).trim();
     if (!payload.startsWith('{')) return line; // e.g. "data: [DONE]"
-    let parsed: unknown;
-    try { parsed = JSON.parse(payload); } catch { return line; }
-    const chunk = asRecord(parsed);
-    const usage = asRecord(chunk?.usage);
-    if (!chunk || !usage) return line;
-    const details = asRecord(usage.prompt_tokens_details);
-    const cached = typeof details?.cached_tokens === 'number' ? details.cached_tokens : 0;
+    const parsed = v.safeParse(UsageChunkSchema, parseJsonObject(payload));
+    if (!parsed.success) return line;
+    const chunk = parsed.output;
+    const details = chunk.usage.prompt_tokens_details;
+    const cached = details.cached_tokens ?? 0;
     if (cached >= maxCached) {
       maxCached = cached;
       return line;
     }
-    usage.prompt_tokens_details = { ...details, cached_tokens: maxCached };
+    chunk.usage.prompt_tokens_details = { ...details, cached_tokens: maxCached };
     return `data: ${JSON.stringify(chunk)}${crlf ? '\r' : ''}`;
   };
 
@@ -78,4 +78,8 @@ function cachedUsageRepairTransform(): TransformStream<Uint8Array, Uint8Array> {
       if (buffer.length > 0) controller.enqueue(encoder.encode(repairLine(buffer)));
     },
   });
+}
+
+function parseJsonObject(value: string): object | null {
+  try { return v.parse(v.looseObject({}), JSON.parse(value)); } catch { return null; }
 }

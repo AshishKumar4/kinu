@@ -26,22 +26,65 @@
  * assistant message, so the durable history never loses the reply the user saw.
  */
 
-import type { ModelMessage } from 'ai';
+import { modelMessageSchema, type ModelMessage } from 'ai';
+import * as v from 'valibot';
 import type { ChatEvent } from '../chat.js';
-import { runScaffold, type ScaffoldRunOptions } from './executor.js';
+import { JsonObjectSchema, projectJsonValue, type JsonValue } from '../utils/json.js';
+import {
+  runScaffold,
+  type ScaffoldDefaultInferenceChunk,
+  type ScaffoldRunOptions,
+} from './executor.js';
 import { pumpScaffoldEvents } from './event-pump.js';
 
 /** A `host.callTool` result is the tool's own output, or `{ error }` when the
  *  dispatch threw — the shape `buildHostProvider` guarantees. */
-function toolOutcome(result: unknown): { result: string; success: boolean; error?: string } {
-  const error = (result && typeof result === 'object' && 'error' in result)
-    ? (result as { error: unknown }).error
-    : undefined;
-  const text = typeof result === 'string' ? result : JSON.stringify(result ?? null);
-  return typeof error === 'string'
-    ? { result: text, success: false, error }
+const ToolErrorSchema = v.object({ error: v.string() });
+const StringResultSchema = v.string();
+
+function toolOutcome(result: JsonValue | undefined): { result: string; success: boolean; error?: string } {
+  const error = v.safeParse(ToolErrorSchema, result);
+  const stringResult = v.safeParse(StringResultSchema, result);
+  const text = stringResult.success ? stringResult.output : JSON.stringify(result ?? null) ?? 'null';
+  return error.success
+    ? { result: text, success: false, error: error.output.error }
     : { result: text, success: true };
 }
+
+const ModelMessagesSchema = v.custom<ModelMessage[]>((input) =>
+  modelMessageSchema.array().safeParse(input).success,
+);
+
+const ChatEventSchema: v.GenericSchema<ChatEvent> = v.variant('type', [
+  v.object({ type: v.literal('text-delta'), delta: v.string() }),
+  v.object({
+    type: v.literal('tool-call'),
+    toolName: v.string(),
+    toolCallId: v.string(),
+    args: JsonObjectSchema,
+  }),
+  v.object({
+    type: v.literal('tool-result'),
+    toolName: v.string(),
+    toolCallId: v.string(),
+    result: v.string(),
+    success: v.boolean(),
+    error: v.optional(v.string()),
+  }),
+  v.object({
+    type: v.literal('step-finish'),
+    stepIndex: v.number(),
+    inputTokens: v.optional(v.number()),
+    outputTokens: v.optional(v.number()),
+    cachedInputTokens: v.optional(v.number()),
+  }),
+  v.object({ type: v.literal('error'), message: v.string() }),
+  v.object({
+    type: v.literal('done'),
+    text: v.string(),
+    responseMessages: ModelMessagesSchema,
+  }),
+]);
 
 /**
  * Route a prepared default-turn stream through the agent's evolved scaffold.
@@ -64,7 +107,7 @@ async function* scaffoldTurn(
   run: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'>,
 ): AsyncGenerator<ChatEvent> {
   const pump = pumpScaffoldEvents((emit) =>
-    runScaffold({ ...run, emit, defaultInference: () => chat }));
+    runScaffold({ ...run, emit, defaultInference: () => wrapDefaultChat(chat) }));
 
   const toolNames = new Map<string, string>();
   let text = '';
@@ -84,8 +127,9 @@ async function* scaffoldTurn(
       case 'ui_chunk': {
         // The delegated `runChat` stream, verbatim — except its `done`, whose
         // response messages become ours (this seam owns the envelope).
-        const inner = ev.chunk as ChatEvent | undefined;
-        if (!inner || typeof inner !== 'object' || !('type' in inner)) break;
+        const parsed = v.safeParse(ChatEventSchema, ev.chunk);
+        if (!parsed.success) break;
+        const inner = parsed.output;
         if (inner.type === 'done') {
           delegated = inner.responseMessages;
           if (!text.trim()) text = inner.text;
@@ -130,4 +174,10 @@ async function* scaffoldTurn(
       ? [...delegated, { role: 'assistant', content: nativeText }]
       : delegated,
   };
+}
+
+async function* wrapDefaultChat(
+  chat: AsyncIterable<ChatEvent>,
+): AsyncGenerator<ScaffoldDefaultInferenceChunk> {
+  for await (const event of chat) yield { value: projectJsonValue({ value: event }) };
 }

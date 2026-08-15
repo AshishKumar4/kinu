@@ -2,22 +2,23 @@
  * Approval gating at the execution seam — the two places a command actually
  * reaches a shell: the `run` tool's workspace shortcut (a raw `Shell`) and
  * every `ExecutorProvider`'s `exec`/`startProcess` tool (workspace, sandbox,
- * nimbus, laptop — reached both by `run`'s router dispatch AND by codemode's
+ * laptop — reached both by `run`'s router dispatch AND by codemode's
  * `<name>.exec()` namespace calls inside `execute_tools`).
  *
  * Before this, the gate lived inside the `run` TOOL's own executor — one
  * call site out of the many that reach the same shells. `execute_tools`
- * calling `workspace.exec()` / `nimbus.exec()` / `sandbox.exec()` /
+ * calling `workspace.exec()` / `sandbox.exec()` /
  * `laptop.exec()` skipped it entirely: same shell, same permissions, no
  * review. Moving the gate here closes that hole with ONE implementation
  * (safety/approval-gate.ts's `gateExec`) applied at construction, not N
  * copies re-derived at each call site.
  *
- * `workspace` is gated once, at its `Shell` (withApprovalGatedShell) —
- * `createInlineExecutor`'s `exec` tool is a thin wrapper over that same
- * `Shell.exec`, so it inherits the gate for free and `gateProviderExec`
- * below explicitly skips it to avoid reviewing the command twice. Every
- * other executor kind has no shared primitive underneath it (sandbox/nimbus
+ * `workspace.exec` is gated once, at its `Shell` (withApprovalGatedShell) —
+ * `createInlineExecutor` is a thin wrapper over that same `Shell.exec`, so
+ * the provider gate skips that tool to avoid reviewing the command twice.
+ * A hosted workspace's `startProcess` reaches the remote session directly,
+ * however, and is gated here like every other background process surface.
+ * Every other executor kind has no shared primitive underneath it (sandbox
  * talk to a remote SDK, laptop forwards over a device-tunnel RPC), so those
  * are gated at the ExecutorProvider boundary instead — the ExecutionRouter's
  * `register()` calls `gateProviderExec` for everything it accepts, so a
@@ -26,8 +27,21 @@
  */
 
 import { gateExec, STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate.js';
-import type { ExecutorProvider } from './types.js';
+import * as v from 'valibot';
+import type { ExecutorProvider, ExecutorTool } from './types.js';
 import type { Shell, ShellExecOptions } from '../types/primitives.js';
+
+const ShellExecOptionsSchema: v.GenericSchema<ShellExecOptions | undefined> = v.optional(v.object({
+  stdin: v.optional(v.string()),
+  signal: v.optional(v.instance(AbortSignal)),
+}));
+
+function parseShellExecOptions(input: { value: unknown }): string | ShellExecOptions | undefined {
+  const text = v.safeParse(v.string(), input.value);
+  if (text.success) return text.output;
+  const options = v.safeParse(ShellExecOptionsSchema, input.value);
+  return options.success ? options.output : undefined;
+}
 
 /**
  * Gate a `Shell`'s `exec` — the primitive the `run` tool's workspace branch
@@ -41,12 +55,13 @@ export function withApprovalGatedShell(
   shell: Shell,
   policy: ShellApprovalPolicy = STRICT_NO_CHANNEL_POLICY,
 ): Shell {
+  const execute = gateExec(
+    (command, ...rest) => shell.exec(command, parseShellExecOptions({ value: rest[0] })),
+    (message) => ({ stdout: '', stderr: message, exitCode: 1 }),
+    policy,
+  );
   return {
-    exec: gateExec(
-      (command, ...rest) => shell.exec(command, rest[0] as string | ShellExecOptions | undefined),
-      (message) => ({ stdout: '', stderr: message, exitCode: 1 }),
-      policy,
-    ),
+    exec: (command, stdinOrOptions) => execute(command, stdinOrOptions),
   };
 }
 
@@ -68,7 +83,7 @@ const GATED_TOOL_NAMES = ['exec', 'startProcess'] as const;
  *  Checking the INCOMING `execute` reference against this set makes
  *  `gateProviderExec` idempotent no matter how many routers see the same
  *  provider object. */
-const GATED_EXECUTES = new WeakSet<(...args: unknown[]) => Promise<unknown>>();
+const GATED_EXECUTES = new WeakSet<ExecutorTool['execute']>();
 
 /**
  * Gate an ExecutorProvider's shell-reaching tools with the live approval
@@ -78,10 +93,10 @@ const GATED_EXECUTES = new WeakSet<(...args: unknown[]) => Promise<unknown>>();
  * is excluded and why re-registration of the same provider is a no-op.
  */
 export function gateProviderExec(provider: ExecutorProvider, policy: ShellApprovalPolicy): ExecutorProvider {
-  if (provider.kind === 'workspace') return provider;
   let changed = false;
   const tools = { ...provider.tools };
   for (const name of GATED_TOOL_NAMES) {
+    if (provider.kind === 'workspace' && name === 'exec') continue;
     const entry = provider.tools[name];
     if (!entry || GATED_EXECUTES.has(entry.execute)) continue;
     const gated = gateExec(

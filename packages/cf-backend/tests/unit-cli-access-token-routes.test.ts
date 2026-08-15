@@ -4,6 +4,9 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
+import type { JsonValue } from '@proteus/core';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
@@ -11,24 +14,76 @@ const EXEC_TOKEN = `pta_${USER_ID}_${'e'.repeat(44)}`;
 const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 const BOTH_TOKEN = `pta_${USER_ID}_${'b'.repeat(44)}`;
 
-const ACCESS_TOKENS: Record<string, { hash: string; scopes: string[] }> = {
-  [EXEC_TOKEN]: { hash: 'exec-hash', scopes: ['workspace.exec'] },
-  [READ_TOKEN]: { hash: 'read-hash', scopes: ['workspace.read'] },
-  [BOTH_TOKEN]: { hash: 'both-hash', scopes: ['workspace.read', 'workspace.exec'] },
-};
+const ACCESS_TOKENS = new Map([
+  [EXEC_TOKEN, { hash: 'exec-hash', scopes: ['workspace.exec'] }],
+  [READ_TOKEN, { hash: 'read-hash', scopes: ['workspace.read'] }],
+  [BOTH_TOKEN, { hash: 'both-hash', scopes: ['workspace.read', 'workspace.exec'] }],
+]);
+
+const ErrorResponseSchema = v.object({ error: v.string() });
+const RpcStatusResponseSchema = v.object({ result: v.object({ name: v.string() }) });
+const MeResponseSchema = v.object({
+  user: v.object({ id: v.string() }),
+  token: v.object({
+    kind: v.string(),
+    scopes: v.union([v.literal('all'), v.array(v.string())]),
+  }),
+});
+const MintedTokenSchema = v.object({
+  token: v.string(),
+  name: v.string(),
+  scopes: v.array(v.string()),
+});
+const TokenListSchema = v.object({
+  tokens: v.array(v.object({
+    tokenHash: v.string(),
+    name: v.string(),
+    scopes: v.array(v.string()),
+    createdAt: v.number(),
+    lastUsedAt: v.nullable(v.number()),
+  })),
+});
+
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface AccessTokenTestBindings<UserStub, AgentStub> {
+  UserDO: TestNamespace<UserStub>;
+  OrchestratorAgent: TestNamespace<AgentStub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<UserStub, AgentStub>(bindings: AccessTokenTestBindings<UserStub, AgentStub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: The scoped-token paths reach only the two constructed namespaces
+  // and credential key; every typed binding reachable in these tests is present.
+  return env as Env;
+}
+
+function handled(response: Response | null): Response {
+  if (!response) throw new Error('CLI route did not handle the request');
+  return response;
+}
+
+async function errorBody(response: Response | null) {
+  return v.parse(ErrorResponseSchema, await handled(response).json());
+}
 
 function setupEnv(opts: { sessionMintedAt?: number } = {}) {
   const calls: string[] = [];
   const userDO = {
-    async verifyCliToken(_caller: unknown, token: string) {
+    async verifyCliToken(_caller: UserCaller, token: string) {
       return {
         ok: token === SESSION_TOKEN,
         tokenHash: 'session-hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async verifyAccessToken(_caller: unknown, token: string) {
-      const entry = ACCESS_TOKENS[token];
+    async verifyAccessToken(_caller: UserCaller, token: string) {
+      const entry = ACCESS_TOKENS.get(token);
       if (!entry) return { ok: false, error: 'invalid token' };
       return {
         ok: true,
@@ -37,7 +92,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async listCliTokens(_caller: unknown) {
+    async listCliTokens(_caller: UserCaller) {
       return [{
         tokenHash: 'session-hash',
         label: 'terminal',
@@ -46,7 +101,7 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         lastUsedAt: null,
       }];
     },
-    async mintAccessToken(_caller: unknown, userId: string, name: string, scopes: string[]) {
+    async mintAccessToken(_caller: UserCaller, userId: string, name: string, scopes: string[]) {
       calls.push(`tokens:mint:${userId}:${name}:${scopes.join('+')}`);
       if (name === 'dup') return { ok: false as const, error: 'An active access token named "dup" already exists.' };
       return {
@@ -55,27 +110,27 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
         record: { tokenHash: 'new-hash', name, scopes, createdAt: 123, lastUsedAt: null },
       };
     },
-    async listAccessTokens(_caller: unknown) {
+    async listAccessTokens(_caller: UserCaller) {
       calls.push('tokens:list');
       return [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }];
     },
-    async revokeAccessToken(_caller: unknown, ref: string) {
+    async revokeAccessToken(_caller: UserCaller, ref: string) {
       calls.push(`tokens:revoke:${ref}`);
       return { ok: true as const, revoked: ref === 'ci' };
     },
-    async hasWorkspace(_caller: unknown, name: string) {
+    async hasWorkspace(_caller: UserCaller, name: string) {
       return name === 'jarvis';
     },
     async ensureWorkspaceCapability() {},
-    async issueCliAgentConnectTicket(_caller: unknown, input: { cliTokenHash: string }) {
+    async issueCliAgentConnectTicket(_caller: UserCaller, input: { cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.cliTokenHash}`);
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
-    async listDevices(_caller: unknown) {
+    async listDevices(_caller: UserCaller) {
       calls.push('devices:list');
       return [];
     },
-    async registerDevice(_caller: unknown) {
+    async registerDevice(_caller: UserCaller) {
       calls.push('devices:register');
       return { deviceId: 'dev_1', token: 'raw-device-token' };
     },
@@ -113,26 +168,28 @@ function setupEnv(opts: { sessionMintedAt?: number } = {}) {
       return { trigger_id: 'trg_webhook' };
     },
   };
-  const env = {
+  const env = testEnv({
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
   return { env, calls };
 }
 
 function req(token: string, path: string, init: RequestInit = {}) {
   return new Request(`https://proteus.example.com${path}`, {
     ...init,
-    headers: { authorization: `Bearer ${token}`, ...(init.headers ?? {}) },
+    headers: { authorization: `Bearer ${token}`, ...init.headers },
   });
 }
 
-const jsonInit = (body: unknown, method = 'POST'): RequestInit => ({
+const jsonInit = (body: JsonValue, method = 'POST'): RequestInit => ({
   method,
   headers: { 'content-type': 'application/json' },
   body: JSON.stringify(body),
 });
 
-const rpcInit = (method: string, args: unknown[] = []): RequestInit => jsonInit({ method, args });
+const rpcInit = (method: string, args: JsonValue[] = []): RequestInit => jsonInit({ method, args });
 const RPC = '/api/cli/workspaces/jarvis/rpc';
 
 describe('access token scope enforcement', () => {
@@ -154,7 +211,7 @@ describe('access token scope enforcement', () => {
     const { env, calls } = setupEnv();
     const res = await handleCliRequest(req(EXEC_TOKEN, RPC, rpcInit('getAgentStatus')), env);
     expect(res?.status).toBe(403);
-    expect((await res?.json() as { error: string }).error).toContain('workspace.read');
+    expect((await errorBody(res)).error).toContain('workspace.read');
     expect(calls).not.toContain('status');
   });
 
@@ -162,15 +219,16 @@ describe('access token scope enforcement', () => {
     const { env, calls } = setupEnv();
     const status = await handleCliRequest(req(READ_TOKEN, RPC, rpcInit('getAgentStatus')), env);
     expect(status?.status).toBe(200);
-    expect(((await status?.json()) as { result: { name: string } }).result).toMatchObject({ name: 'jarvis' });
+    const statusBody = v.parse(RpcStatusResponseSchema, await handled(status).json());
+    expect(statusBody.result).toMatchObject({ name: 'jarvis' });
 
     const exec = await handleCliRequest(req(READ_TOKEN, RPC, rpcInit('executeInExecutor', ['workspace', 'pwd'])), env);
     expect(exec?.status).toBe(403);
-    expect((await exec?.json() as { error: string }).error).toContain('workspace.exec');
+    expect((await errorBody(exec)).error).toContain('workspace.exec');
 
     const ticket = await handleCliRequest(req(READ_TOKEN, '/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(403);
-    expect((await ticket?.json() as { error: string }).error).toContain('workspace.exec');
+    expect((await errorBody(ticket)).error).toContain('workspace.exec');
     expect(calls.some((c) => c.startsWith('connect-ticket:'))).toBe(false);
   });
 
@@ -193,7 +251,7 @@ describe('access token scope enforcement', () => {
     for (const [path, init] of forbidden) {
       const res = await handleCliRequest(req(BOTH_TOKEN, path, init), env);
       expect(`${path}:${res?.status}`).toBe(`${path}:403`);
-      expect((await res?.json() as { error: string }).error).toContain('interactive CLI session token');
+      expect((await errorBody(res)).error).toContain('interactive CLI session token');
     }
     expect(calls.filter((c) => !c.startsWith('connect-ticket'))).toEqual([]);
   });
@@ -209,13 +267,14 @@ describe('access token scope enforcement', () => {
     const { env } = setupEnv();
     const me = await handleCliRequest(req(EXEC_TOKEN, '/api/cli/me'), env);
     expect(me?.status).toBe(200);
-    expect(await me?.json()).toMatchObject({
+    expect(v.parse(MeResponseSchema, await handled(me).json())).toMatchObject({
       user: { id: USER_ID },
       token: { kind: 'access', scopes: ['workspace.exec'] },
     });
 
     const sessionMe = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/me'), env);
-    expect(await sessionMe?.json()).toMatchObject({ token: { kind: 'session', scopes: 'all' } });
+    expect(v.parse(MeResponseSchema, await handled(sessionMe).json()))
+      .toMatchObject({ token: { kind: 'session', scopes: 'all' } });
   });
 
   test('unknown access tokens are rejected with 401', async () => {
@@ -233,8 +292,8 @@ describe('access token management routes (session tokens only)', () => {
       fresh.env,
     );
     expect(minted?.status).toBe(201);
-    expect(minted?.headers.get('cache-control')).toBe('no-store');
-    expect(await minted?.json()).toMatchObject({
+    expect(handled(minted).headers.get('cache-control')).toBe('no-store');
+    expect(v.parse(MintedTokenSchema, await handled(minted).json())).toMatchObject({
       token: expect.stringMatching(/^pta_/),
       name: 'ci',
       scopes: ['workspace.exec', 'workspace.read'],
@@ -247,7 +306,7 @@ describe('access token management routes (session tokens only)', () => {
       stale.env,
     );
     expect(refused?.status).toBe(401);
-    expect((await refused?.json() as { error: string }).error).toContain('step-up auth required');
+    expect((await errorBody(refused)).error).toContain('step-up auth required');
     expect(stale.calls.some((c) => c.startsWith('tokens:mint'))).toBe(false);
   });
 
@@ -260,14 +319,14 @@ describe('access token management routes (session tokens only)', () => {
       env,
     );
     expect(dup?.status).toBe(400);
-    expect((await dup?.json() as { error: string }).error).toContain('already exists');
+    expect((await errorBody(dup)).error).toContain('already exists');
   });
 
   test('lists active tokens and revokes by ref with honest 404s', async () => {
     const { env, calls } = setupEnv();
     const list = await handleCliRequest(req(SESSION_TOKEN, '/api/cli/tokens'), env);
     expect(list?.status).toBe(200);
-    expect(await list?.json<{ tokens: unknown[] }>()).toEqual({
+    expect(v.parse(TokenListSchema, await handled(list).json())).toEqual({
       tokens: [{ tokenHash: 'exec-hash', name: 'ci', scopes: ['workspace.exec'], createdAt: 1, lastUsedAt: 2 }],
     });
 

@@ -18,7 +18,7 @@ import { Database } from 'bun:sqlite';
 import {
   HeadController, HeadJournal,
   type HeadInput, type HeadReport, type HeadRuntime, type HeadGrounding,
-  type SpawnedHead, type SerializedMessage, type SplitRequest, type MergeOutput,
+  type SpawnedHead, type SerializedMessage, type MergeOutput,
   type Executor, type LLM,
   initHeadsTables,
   initAlternateTakesTable, recordHeadsTakeSet, claimAlternateTakesForTurn,
@@ -40,12 +40,13 @@ function newJournal() {
 /** Executor whose verdict is decided by whether the code mentions "boom". */
 function verdictExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute(code: string) {
       return code.includes('boom')
         ? { result: undefined, error: 'boom' }
         : { result: undefined };
     },
-  } as unknown as Executor;
+  };
 }
 
 function report(id: string, o: Partial<HeadReport> = {}): HeadReport {
@@ -70,7 +71,7 @@ function buildRuntime(opts: {
   mergePrompts?: string[];        // out-param: every merge prompt seen
 }): HeadRuntime {
   let mergeCall = 0;
-  return {
+  const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       return {
         id: input.id,
@@ -85,8 +86,9 @@ function buildRuntime(opts: {
       mergeCall++;
       return mergeOut(narrative);
     },
-    ...(opts.grounding ? { grounding: opts.grounding } : {}),
   };
+  if (opts.grounding) runtime.grounding = opts.grounding;
+  return runtime;
 }
 
 const ctx: SerializedMessage[] = [{ id: 'm1', role: 'user', content: 'go', createdAt: 1 }];
@@ -109,6 +111,7 @@ describe('grounded head outcome scores', () => {
       grounding: grounding(),
     });
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'good', rationale: 'a' }, { task: 'bad', rationale: 'b' }] },
     });
@@ -128,7 +131,7 @@ describe('grounded head outcome scores', () => {
     const { journal } = newJournal();
     // Judge that throws if ever asked — proves the aborted head spends no call.
     const throwingJudge: LLM = {
-      async *stream() { throw new Error('should not be called for the aborted head'); yield ''; },
+      stream() { throw new Error('should not be called for the aborted head'); },
       async complete() { return JSON.stringify({ score: 0.9 }); },
     };
     const runtime = buildRuntime({
@@ -139,6 +142,7 @@ describe('grounded head outcome scores', () => {
       grounding: grounding({ judge: throwingJudge, explorer: throwingJudge }),
     });
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'done', rationale: 'a' }, { task: 'gone', rationale: 'b' }] },
     });
@@ -152,6 +156,7 @@ describe('grounded head outcome scores', () => {
     const { journal } = newJournal();
     const runtime = buildRuntime({ reports: { a: report('h-a'), b: report('h-b') } });
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
     });
@@ -185,6 +190,7 @@ describe('k-sample median merge', () => {
       mergePrompts,
     });
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
     });
@@ -203,6 +209,7 @@ describe('k-sample median merge', () => {
       mergePrompts,
     });
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
     });
@@ -227,6 +234,7 @@ describe('evidence is not clipped into the merge', () => {
       mergePrompts,
     });
     await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: ctx,
       request: { rationale: 'task', heads: [{ task: 'a', rationale: 'x' }, { task: 'b', rationale: 'y' }] },
     });

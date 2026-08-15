@@ -142,7 +142,7 @@
   <text class="b" x="469" y="658" text-anchor="start">peers — the owner’s other workspaces</text>
   <text class="xs" x="469" y="672" text-anchor="start">same ask/send; reply answers an incoming agent</text>
   <text class="xs" x="469" y="686" text-anchor="start">message by its event id</text>
-  <text class="xs" x="38" y="735">A busy agent is never blocked on — the message is spliced into the turn it is already running, so follow-ups go out as soon as you have them.</text>
+  <text class="xs" x="38" y="735">A busy agent is never blocked on — the message queues immediately for its own mode-homogeneous turn, so follow-ups go out as soon as you have them.</text>
   <rect x="24" y="747" width="852" height="34" rx="7" fill="var(--surface)" stroke="var(--rule)" stroke-dasharray="4 3"/>
   <text class="xs" x="38" y="768"><tspan font-weight="700" fill="var(--fg)">MCTS is a settle policy inside the fork rung</tspan> — reachable and fully functional, never a third kind of helper. Adding a strategy adds a settle value, not a tool.</text>
 </svg>

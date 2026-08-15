@@ -5,6 +5,7 @@ import {
   shouldCheckForUpdate,
   updateNotice,
 } from '../src/version-check.ts';
+import type { JsonValue } from '@proteus/core';
 
 const served = (version: string) => ({ version });
 
@@ -57,9 +58,9 @@ describe('startup-check suppression', () => {
 });
 
 describe('fetchServedVersion is fail-soft', () => {
-  const ok = (body: unknown) => (async () => new Response(JSON.stringify(body), {
+  const ok = (body: JsonValue) => async () => new Response(JSON.stringify(body), {
     headers: { 'content-type': 'application/json' },
-  })) as unknown as typeof fetch;
+  });
 
   test('parses a well-formed payload', async () => {
     const v = await fetchServedVersion('https://x.test', ok({ version: '0.1.0+abc', sha: 'abc' }));
@@ -67,21 +68,21 @@ describe('fetchServedVersion is fail-soft', () => {
   });
 
   test('returns null on 404 (server without the endpoint)', async () => {
-    const f = (async () => new Response('nope', { status: 404 })) as unknown as typeof fetch;
+    const f = async () => new Response('nope', { status: 404 });
     expect(await fetchServedVersion('https://x.test', f)).toBeNull();
   });
 
   test('returns null on malformed payloads and network errors', async () => {
     expect(await fetchServedVersion('https://x.test', ok({ nope: true }))).toBeNull();
     expect(await fetchServedVersion('https://x.test', ok({ version: '  ' }))).toBeNull();
-    const boom = (async () => { throw new Error('offline'); }) as unknown as typeof fetch;
+    const boom = async () => { throw new Error('offline'); };
     expect(await fetchServedVersion('https://x.test', boom)).toBeNull();
   });
 
   test('returns null rather than hanging when the origin stalls', async () => {
-    const stall = ((_u: unknown, init?: RequestInit) => new Promise<Response>((_res, rej) => {
+    const stall = (_input: string | URL | Request, init?: RequestInit) => new Promise<Response>((_res, rej) => {
       init?.signal?.addEventListener('abort', () => rej(new Error('aborted')));
-    })) as unknown as typeof fetch;
+    });
     expect(await fetchServedVersion('https://x.test', stall, 10)).toBeNull();
   });
 });

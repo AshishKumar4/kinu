@@ -12,6 +12,8 @@ import {
   type VectorizeIndex,
   type Embedder,
   type VectorMemoryChunk,
+  type JsonObject,
+  type VectorRecord,
 } from '../src/index.js';
 
 // ── Reciprocal Rank Fusion ───────────────────────────────────────────
@@ -59,8 +61,8 @@ describe('reciprocalRankFusion', () => {
 
 // ── CloudflareVectorStore w/ in-memory mocks ─────────────────────────
 
-function makeMockIndex(): { index: VectorizeIndex; records: Map<string, { values: number[]; metadata?: Record<string, unknown> }> } {
-  const records = new Map<string, { values: number[]; metadata?: Record<string, unknown> }>();
+function makeMockIndex() {
+  const records = new Map<string, { values: number[]; metadata?: JsonObject }>();
   const index: VectorizeIndex = {
     async insert(vecs) {
       for (const v of vecs) records.set(v.id, { values: [...v.values], metadata: v.metadata });
@@ -231,15 +233,15 @@ describe('CloudflareVectorStore', () => {
 // Models real Vectorize: a vector id is unique per *index* (not per namespace),
 // so the same upsert id in two namespaces would collide — the store must make
 // storage ids workspace-unique. A query filters to its namespace.
-function makeNamespacedIndex(): { index: VectorizeIndex; records: Map<string, { values: number[]; namespace?: string; metadata?: Record<string, unknown> }> } {
-  const records = new Map<string, { values: number[]; namespace?: string; metadata?: Record<string, unknown> }>();
-  const put = (vecs: VectorMemoryChunkRecord[]) => {
+function makeNamespacedIndex() {
+  const records = new Map<string, { values: number[]; namespace?: string; metadata?: JsonObject }>();
+  const put = (vecs: readonly VectorRecord[]) => {
     for (const v of vecs) records.set(v.id, { values: [...v.values], namespace: v.namespace, metadata: v.metadata });
     return { ids: vecs.map((v) => v.id) };
   };
   const index: VectorizeIndex = {
-    async insert(vecs) { return put(vecs as VectorMemoryChunkRecord[]); },
-    async upsert(vecs) { return put(vecs as VectorMemoryChunkRecord[]); },
+    async insert(vecs) { return put(vecs); },
+    async upsert(vecs) { return put(vecs); },
     async query(vector, options) {
       const topK = options?.topK ?? 10;
       const ns = options?.namespace;
@@ -258,7 +260,6 @@ function makeNamespacedIndex(): { index: VectorizeIndex; records: Map<string, { 
   };
   return { index, records };
 }
-type VectorMemoryChunkRecord = { id: string; values: number[]; namespace?: string; metadata?: Record<string, unknown> };
 
 describe('CloudflareVectorStore — workspace isolation', () => {
   test('two namespaces sharing a chunk id do not cross-contaminate', async () => {
@@ -323,7 +324,7 @@ describe('createNoopVectorStore', () => {
 
 describe('createWorkersAIEmbedder', () => {
   test('forwards single embed to ai.run with model + text', async () => {
-    const calls: Array<{ model: string; input: unknown }> = [];
+    const calls: Array<{ model: string; input: { text: string | string[] } }> = [];
     const ai = {
       async run(model: string, input: { text: string | string[] }) {
         calls.push({ model, input });
@@ -334,7 +335,7 @@ describe('createWorkersAIEmbedder', () => {
     const vec = await embedder.embed('hello');
     expect(vec).toEqual([0.1, 0.2, 0.3, 0.4]);
     expect(calls[0].model).toBe('@cf/baai/bge-small-en-v1.5');
-    expect((calls[0].input as { text: string }).text).toBe('hello');
+    expect(calls[0].input).toEqual({ text: 'hello' });
     expect(embedder.dimensions).toBe(4);
   });
 
@@ -345,7 +346,9 @@ describe('createWorkersAIEmbedder', () => {
       },
     };
     const embedder = createWorkersAIEmbedder({ aiBinding: ai, dimensions: 2 });
-    const out = await embedder.embedBatch!(['a', 'b', 'c']);
+    const embedBatch = embedder.embedBatch;
+    if (!embedBatch) throw new Error('expected batch embed support');
+    const out = await embedBatch(['a', 'b', 'c']);
     expect(out).toEqual([[0.1, 0.2], [0.3, 0.4], [0.5, 0.6]]);
   });
 

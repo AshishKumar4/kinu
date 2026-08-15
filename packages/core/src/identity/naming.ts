@@ -1,5 +1,8 @@
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import * as v from 'valibot';
 import { isPlaceholderMission } from './soul.js';
+
+const WorkspaceTitleSchema = v.object({ title: v.string() });
 
 /** URL-safe slug for stable workspace ids. */
 export function slugifyName(text: string): string {
@@ -252,8 +255,9 @@ export function parseWorkspaceTitle(raw: string): string | null {
   } catch {
     return null;
   }
-  if (!isRecord(parsed)) return null;
-  return cleanTitle(typeof parsed.title === 'string' ? parsed.title : '') || null;
+  const title = v.safeParse(WorkspaceTitleSchema, parsed);
+  if (!title.success) return null;
+  return cleanTitle(title.output.title) || null;
 }
 
 function extractPersonaName(mission: string): string | null {
@@ -261,7 +265,7 @@ function extractPersonaName(mission: string): string | null {
   return match?.[1] ?? null;
 }
 
-function memorableFallbackIdentity(id: string): { name: string; displayName: string } {
+function memorableFallbackIdentity(id: string) {
   const hex = id.replace(/-/g, '').toLowerCase();
   const adjective = FALLBACK_ADJECTIVES[Number.parseInt(hex.slice(0, 2), 16) % FALLBACK_ADJECTIVES.length];
   const noun = FALLBACK_NOUNS[Number.parseInt(hex.slice(2, 4), 16) % FALLBACK_NOUNS.length];
@@ -283,8 +287,4 @@ function cleanTitle(value: string): string {
     .replace(/\s+/g, ' ')
     .slice(0, 60)
     .trim();
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }

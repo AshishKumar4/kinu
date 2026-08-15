@@ -13,6 +13,7 @@ import { CraftCycle } from '../src/orchestrator/craft-cycle.js';
 import { TurnAccumulator } from '../src/orchestrator/turn-accumulator.js';
 import type { CraftLedger } from '../src/craft/in-episode.js';
 import { CRAFT_INVOCATION_QUALITY, craftInvocationError } from '../src/craft/in-episode.js';
+import type { JsonValue } from '../src/utils/json.js';
 
 interface Observation { names: string[]; quality: number }
 
@@ -275,7 +276,7 @@ describe('CraftCycle — what the turn reports as crafted-tool use', () => {
    *  turn snapshot and the durable usage row will both see. */
   function turnUsage(
     ledger: CraftLedger,
-    calls: ReadonlyArray<{ toolName: string; code?: unknown; result?: string }>,
+    calls: ReadonlyArray<{ toolName: string; code?: JsonValue; result?: string }>,
     enabled = true,
   ): string[] {
     const acc = new TurnAccumulator();

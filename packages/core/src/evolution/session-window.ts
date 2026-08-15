@@ -25,8 +25,10 @@
 // in the window for the next host that can afford the work — rather than
 // consuming them for a pass that was killed halfway.
 
+import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { CompletedTurn } from './types.js';
+import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 
@@ -80,12 +82,30 @@ export interface SessionWindowStore {
 }
 
 interface WindowRow { id: string; turn: string; created_at: number }
+const CompletedTurnSchema: v.GenericSchema<CompletedTurn> = v.object({
+  userMessage: v.string(),
+  assistantResponse: v.string(),
+  toolCalls: v.array(v.object({
+    name: v.string(),
+    args: JsonObjectSchema,
+    result: v.optional(JsonValueSchema),
+  })),
+  craftedToolsUsed: v.optional(v.array(v.string())),
+  steps: v.number(),
+  durationMs: v.number(),
+  feedback: v.nullable(v.picklist(['positive', 'negative'])),
+  hadError: v.boolean(),
+  turnId: v.optional(v.string()),
+  sessionId: v.optional(v.string()),
+  origin: v.optional(v.picklist(['user', 'programmatic'])),
+  usage: v.optional(v.object({ input: v.number(), output: v.number(), cached: v.number() })),
+});
 
 export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
   // A row whose two lifetimes are both over carries no information — dropping
   // it here keeps the table bounded by the open window plus one pending review.
   const dropSettled = (): void => {
-    sql`DELETE FROM session_window WHERE in_window = 0 AND awaiting_review = 0`;
+    void sql`DELETE FROM session_window WHERE in_window = 0 AND awaiting_review = 0`;
   };
   const windowRows = (): WindowRow[] => sql<WindowRow>`
     SELECT id, turn, created_at FROM session_window
@@ -100,17 +120,18 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
       try {
         encoded = JSON.stringify(turn);
       } catch (err) {
-        console.warn('[proteus] session window: turn could not be serialized:', (err as Error).message);
+        const message = err instanceof Error ? err.message : String(err);
+        console.warn('[proteus] session window: turn could not be serialized:', message);
         return;
       }
       const awaitingReview = opts.awaitsFollowup ? 1 : 0;
       // At most one turn waits at a time — the newest user message grades the
       // most recent turn, exactly as the in-memory field did.
       if (awaitingReview === 1) {
-        sql`UPDATE session_window SET awaiting_review = 0 WHERE awaiting_review = 1`;
+        void sql`UPDATE session_window SET awaiting_review = 0 WHERE awaiting_review = 1`;
         dropSettled();
       }
-      sql`INSERT INTO session_window (id, turn, in_window, awaiting_review, created_at)
+      void sql`INSERT INTO session_window (id, turn, in_window, awaiting_review, created_at)
           VALUES (${`win-${nanoid()}`}, ${encoded}, 1, ${awaitingReview}, ${opts.now ?? nowMs()})`;
     },
 
@@ -129,7 +150,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
           // the pass ran belongs to the NEXT window, and an undecodable row
           // must still retire or it would wedge the window forever.
           for (const row of rows) {
-            sql`UPDATE session_window SET in_window = 0 WHERE id = ${row.id}`;
+            void sql`UPDATE session_window SET in_window = 0 WHERE id = ${row.id}`;
           }
           dropSettled();
         },
@@ -141,7 +162,7 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
         SELECT id, turn, created_at FROM session_window
         WHERE awaiting_review = 1 ORDER BY created_at DESC, rowid DESC LIMIT 1`[0];
       if (!row) return null;
-      sql`UPDATE session_window SET awaiting_review = 0 WHERE id = ${row.id}`;
+      void sql`UPDATE session_window SET awaiting_review = 0 WHERE id = ${row.id}`;
       dropSettled();
       return decode(row);
     },
@@ -152,8 +173,8 @@ export function createSessionWindowStore(sql: SqlExecutor): SessionWindowStore {
  *  window is a buffer, and one unreadable turn must not stall the cadence. */
 function decode(row: WindowRow): CompletedTurn | null {
   try {
-    const parsed = JSON.parse(row.turn) as CompletedTurn;
-    return typeof parsed?.userMessage === 'string' ? parsed : null;
+    const parsed = v.safeParse(CompletedTurnSchema, JSON.parse(row.turn));
+    return parsed.success ? parsed.output : null;
   } catch {
     return null;
   }

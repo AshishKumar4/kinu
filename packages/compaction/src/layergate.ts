@@ -100,7 +100,7 @@ export const COMPACTION_LAYERS: readonly Layer<CompactionLadderSubjects>[] = Obj
           const messages = toolHeavyConversation();
           const turns = s.proteusCodec.encode(messages);
           return {
-            shape: turns.map((t) => ({ role: t.role, items: t.items.map((i) => i.kind) })),
+            topology: turns.map((t) => ({ role: t.role, items: t.items.map((i) => i.kind) })),
             keysContentDerived: JSON.stringify(turns.map((t) => t.key))
               === JSON.stringify(s.proteusCodec.encode(toolHeavyConversation()).map((t) => t.key)),
             roundTrip: JSON.stringify(s.proteusCodec.decode(turns, [])) === JSON.stringify(messages),

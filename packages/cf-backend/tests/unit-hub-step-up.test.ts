@@ -8,31 +8,45 @@ import { mockAgentsSdk } from './helpers/agents-sdk.js';
 mockAgentsSdk();
 const { handleHubRequest } = await import('../src/events/routes.js');
 
+interface WebhookOptions {
+  readonly label: string;
+  readonly auth_mode: 'hmac' | 'bearer' | 'mtls';
+  readonly secret?: string;
+  readonly accepted_content_type?: string;
+  readonly rate_limit_per_min?: number;
+}
+
 function hubEnv() {
   const calls: string[] = [];
   const agent = {
     // getAgentByName (partyserver getServerByName) calls setName first.
     async setName() {},
-    async createDurableWebhook(opts: unknown) {
+    async createDurableWebhook(opts: WebhookOptions) {
       calls.push(`webhook:${JSON.stringify(opts)}`);
       return { trigger_id: 'trg_1', url: '/api/workspaces/jarvis/webhook/trg_1', auth_mode: 'hmac', secret: null };
     },
   };
-  const env = {
+  const bindings = {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
       get() { return agent; },
-    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, bindings);
+  // SAFETY: the hub route only reaches the locally constructed orchestrator
+  // namespace and credential secret in this suite.
+  const env = partialEnv as Env;
   return { env, calls };
 }
 
 function createTriggerRequest(authTime: number | null) {
+  const headers = new Headers({ 'content-type': 'application/json' });
+  if (authTime !== null) headers.set('x-proteus-auth-time', String(authTime));
   return new Request('https://proteus.example.com/api/workspaces/jarvis/triggers', {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(authTime !== null ? { 'x-proteus-auth-time': String(authTime) } : {}),
-    },
+    headers,
     body: JSON.stringify({ label: 'github', auth_mode: 'hmac' }),
   });
 }

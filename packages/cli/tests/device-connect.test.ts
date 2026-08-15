@@ -9,6 +9,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import type { Server, Subprocess } from 'bun';
 import { afterEach, describe, expect, test } from 'bun:test';
+import { parseJsonObject, type JsonObject } from '@proteus/core';
+import type { CloudDevice } from '../src/cloud-api.js';
+import { CloudAgentClient } from '../src/cloud-agent-client.js';
+import * as v from 'valibot';
 
 const repoRoot = resolve(__dirname, '../../..');
 const tempDirs: string[] = [];
@@ -27,7 +31,7 @@ interface StubCloud {
 }
 
 /** Minimal cloud origin: device register/list plus /pc/daemon.js. */
-function startStubCloud(opts: { devices?: () => unknown[]; daemonScript?: string; onRegister?: () => void } = {}): StubCloud {
+function startStubCloud(opts: { devices?: () => CloudDevice[]; daemonScript?: string; onRegister?: () => void } = {}): StubCloud {
   const hits = { register: 0, list: 0, daemonScript: 0 };
   const server = Bun.serve({
     port: 0,
@@ -60,28 +64,33 @@ function startStubCloud(opts: { devices?: () => unknown[]; daemonScript?: string
   return { origin: `http://localhost:${server.port}`, hits };
 }
 
-function makeHome(config: Record<string, unknown>): string {
+function makeHome(config: JsonObject): string {
   const home = mkdtempSync(join(tmpdir(), 'proteus-device-'));
   tempDirs.push(home);
   writeFileSync(join(home, 'config.json'), `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
   return home;
 }
 
-function runScript(home: string, script: string) {
-  const proc = Bun.spawnSync({
+async function runScript(home: string, script: string) {
+  const proc = Bun.spawn({
     cmd: [process.execPath, '-e', script],
     cwd: repoRoot,
     env: { ...process.env, PROTEUS_HOME: home },
     stdout: 'pipe',
     stderr: 'pipe',
   });
-  if (proc.exitCode !== 0) {
-    throw new Error(`script failed (${proc.exitCode}): ${proc.stderr.toString()}`);
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  if (exitCode !== 0) {
+    throw new Error(`script failed (${exitCode}): ${stderr}`);
   }
-  return proc.stdout.toString();
+  return stdout;
 }
 
-function connectedDevice(connected: boolean): unknown {
+function connectedDevice(connected: boolean): CloudDevice {
   return {
     id: 'dev_1',
     label: 'laptop',
@@ -107,7 +116,7 @@ describe('device-connect prompt policy', () => {
     const stub = startStubCloud({ devices: () => [] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    const out = runScript(home, `
+    const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
       console.log(JSON.stringify([await shouldOfferDeviceConnect(), await shouldOfferDeviceConnect()]));
     `);
@@ -120,7 +129,7 @@ describe('device-connect prompt policy', () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    const out = runScript(home, `
+    const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
       console.log(JSON.stringify([await shouldOfferDeviceConnect(), await shouldOfferDeviceConnect()]));
     `);
@@ -133,7 +142,7 @@ describe('device-connect prompt policy', () => {
     const stub = startStubCloud({ devices: () => [] });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    const out = runScript(home, `
+    const out = await runScript(home, `
       import { dismissDeviceConnectPrompt, shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
       dismissDeviceConnectPrompt();
       console.log(JSON.stringify(await shouldOfferDeviceConnect()));
@@ -141,7 +150,7 @@ describe('device-connect prompt policy', () => {
 
     expect(JSON.parse(out.trim())).toBe(false);
     expect(stub.hits.list).toBe(0);
-    const config = JSON.parse(readFileSync(join(home, 'config.json'), 'utf-8')) as Record<string, unknown>;
+    const config = parseJsonObject(readFileSync(join(home, 'config.json'), 'utf-8'));
     expect(config.deviceConnectPromptDismissed).toBe(true);
   });
 
@@ -149,7 +158,7 @@ describe('device-connect prompt policy', () => {
     const stub = startStubCloud({ devices: () => [] });
     const home = makeHome({ origin: stub.origin });
 
-    const out = runScript(home, `
+    const out = await runScript(home, `
       import { shouldOfferDeviceConnect } from './packages/cli/src/device-connect.ts';
       console.log(JSON.stringify(await shouldOfferDeviceConnect()));
     `);
@@ -171,17 +180,17 @@ describe('device-connect daemon lifecycle', () => {
     const stub = startStubCloud({ devices: () => [connectedDevice(true)], daemonScript });
     const home = makeHome({ origin: stub.origin, accessToken: 'ptc_test' });
 
-    const out = runScript(home, `
+    const out = await runScript(home, `
       import { connectDevice, daemonStatus } from './packages/cli/src/device-connect.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
       console.log(JSON.stringify({ result, status: daemonStatus() }));
       process.exit(0);
     `);
 
-    const { result, status } = JSON.parse(out.trim()) as {
-      result: Record<string, unknown>;
-      status: { sessionActive: boolean; persistentPid: number | null };
-    };
+    const { result, status } = v.parse(v.object({
+      result: v.object({ kind: v.string(), deviceId: v.string() }),
+      status: v.object({ sessionActive: v.boolean(), persistentPid: v.nullable(v.number()) }),
+    }), JSON.parse(out.trim()));
     expect(result).toEqual({ kind: 'connected', deviceId: 'dev_1' });
     expect(status.sessionActive).toBe(true);
     expect(status.persistentPid).toBeNull(); // session mode never writes a pidfile
@@ -190,7 +199,7 @@ describe('device-connect daemon lifecycle', () => {
     // The daemon files came from the stub, not a reimplementation.
     expect(stub.hits.register).toBe(1);
     expect(stub.hits.daemonScript).toBe(1);
-    const deviceConfig = JSON.parse(readFileSync(join(home, 'device.json'), 'utf-8')) as Record<string, unknown>;
+    const deviceConfig = parseJsonObject(readFileSync(join(home, 'device.json'), 'utf-8'));
     expect(deviceConfig).toEqual({ user: 'user_1', token: 'device-token', origin: stub.origin });
 
     // The CLI process exited — its exit hook must have killed the session daemon.
@@ -208,13 +217,16 @@ describe('device-connect daemon lifecycle', () => {
     sleepers.push(sleeper);
     writeFileSync(join(home, 'pc-agent.pid'), `${sleeper.pid}\n`, { mode: 0o600 });
 
-    const out = runScript(home, `
+    const out = await runScript(home, `
       import { connectDevice, startDaemon } from './packages/cli/src/device-connect.ts';
       const result = await connectDevice({ origin: '${stub.origin}', token: 'ptc_test' }, { session: true });
       console.log(JSON.stringify({ result, started: startDaemon({ session: true }) }));
     `);
 
-    const { result, started } = JSON.parse(out.trim()) as { result: unknown; started: { started: boolean } };
+    const { result, started } = v.parse(v.object({
+      result: v.object({ kind: v.string(), connected: v.boolean() }),
+      started: v.object({ started: v.boolean() }),
+    }), JSON.parse(out.trim()));
     expect(result).toEqual({ kind: 'already-running', connected: false });
     expect(started).toEqual({ started: false });
     // No takeover: nothing registered, downloaded, or killed.
@@ -226,7 +238,7 @@ describe('device-connect daemon lifecycle', () => {
 });
 
 describe('classic cloud chat connect prompt', () => {
-  function cloudAgentConfig(origin: string): Record<string, unknown> {
+  function cloudAgentConfig(origin: string): JsonObject {
     return {
       origin,
       accessToken: 'ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz',
@@ -320,12 +332,12 @@ describe('classic cloud chat connect prompt', () => {
     expect(await waitForPidExit(daemonPid)).toBe(true);
   }, 20_000);
 
-  test('non-interactive stdin prints the proteus connect instruction instead', () => {
+  test('non-interactive stdin prints the proteus connect instruction instead', async () => {
     const stub = startStubCloud({ devices: () => [] });
     const home = makeHome(cloudAgentConfig(stub.origin));
     const cliBin = resolve(repoRoot, 'packages/cli/bin/cli.ts');
 
-    const proc = Bun.spawnSync({
+    const proc = Bun.spawn({
       cmd: [process.execPath, cliBin, 'chat', 'jarvis', '--no-session'],
       cwd: repoRoot,
       stdin: Buffer.from('/exit\n'),
@@ -334,8 +346,12 @@ describe('classic cloud chat connect prompt', () => {
       env: { ...process.env, PROTEUS_HOME: home },
     });
 
-    expect(proc.exitCode).toBe(0);
-    expect(proc.stdout.toString()).toContain('No PC is connected for device access. Connect one with: proteus connect');
+    const [stdout, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      proc.exited,
+    ]);
+    expect(exitCode).toBe(0);
+    expect(stdout).toContain('No PC is connected for device access. Connect one with: proteus connect');
     expect(stub.hits.register).toBe(0);
   });
 });
@@ -343,13 +359,20 @@ describe('classic cloud chat connect prompt', () => {
 describe('/connect slash command', () => {
   test('is offered to consent-capable clients and returns the device-connect outcome', async () => {
     const { commandsForClient, executeSlashCommand } = await import('../src/slash-commands.js');
-    const cloudish = { consents: {}, localControls: null } as unknown as Parameters<typeof executeSlashCommand>[0];
-    const localish = { consents: null, localControls: {} } as unknown as Parameters<typeof executeSlashCommand>[0];
+    const clientOptions = {
+      origin: 'https://proteus.invalid', token: 'test', agentName: 'test', cloudName: 'test',
+      session: { noSession: true },
+    };
+    const cloudish = new CloudAgentClient(clientOptions);
+    const localish = new CloudAgentClient(clientOptions);
+    Object.defineProperty(localish, 'consents', { value: null });
 
     expect(commandsForClient(cloudish).map((c) => c.name)).toContain('/connect');
     expect(commandsForClient(localish).map((c) => c.name)).not.toContain('/connect');
     expect(await executeSlashCommand(cloudish, '/connect')).toEqual({ kind: 'device-connect' });
     expect(await executeSlashCommand(localish, '/connect')).toEqual({ kind: 'unknown', command: '/connect' });
+    await cloudish.close();
+    await localish.close();
   });
 });
 

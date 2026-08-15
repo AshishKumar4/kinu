@@ -11,9 +11,10 @@
  *              unknown (`run`, `execute_tools`), so it races the surface's
  *              detach threshold and only work that proved slow crosses.
  *   'spawn'  — the call launches a process whose completion arrives as a wake
- *              event (`agents` fork), so on a surface whose session outlives
- *              the turn it detaches the moment the spawn is confirmed started;
- *              the threshold wait could only ever be dead air.
+ *              event (`agents` fork). Where a wake can arrive it detaches the
+ *              moment the spawn is confirmed started (the threshold wait could
+ *              only ever be dead air); where none can, it runs inline to
+ *              completion, because a detached result there has no reader.
  */
 
 import type { ToolExecutionOptions, ToolSet } from 'ai';
@@ -21,22 +22,29 @@ import { combineAbortSignals } from '@proteus/agent-utils';
 import { SPAWN_STARTED_OPTION, withBackgroundThreshold, withSpawnDetach } from '../jobs/threshold.js';
 import { JobNotResumable } from '../jobs/runner.js';
 import type { BackgroundJobRunner } from '../jobs/runner.js';
-import { resumableForkInput } from '../tools/agents-tool.js';
+import type { WorkMode } from '../prompting/surface.js';
+import { parseAgentsToolInput, resumableForkInput } from '../tools/agents-tool.js';
 import { nanoid } from '../utils/nanoid.js';
+import { decodeJsonValue, type JsonValue } from '../utils/json.js';
 
 /** How a backgroundable tool's work detaches: racing the threshold for a
  *  result the turn waits on, or on spawn-confirm for a launched process. */
 export interface BackgroundableTool {
-  readonly shape: 'result' | 'spawn';
+  readonly completion: 'result' | 'spawn';
   /** Per-call gate over the tool input. */
-  readonly detachable: (input: unknown) => boolean;
+  readonly detachable: (input: JsonValue) => boolean;
+}
+
+function isForkInput(input: JsonValue): boolean {
+  try { return parseAgentsToolInput(input).action === 'fork'; }
+  catch { return false; }
 }
 
 /** Tools whose work can be long enough to auto-detach to the background. */
 export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, BackgroundableTool> = new Map([
-  ['agents', { shape: 'spawn', detachable: (input: unknown) => (input as { action?: unknown } | null)?.action === 'fork' }],
-  ['execute_tools', { shape: 'result', detachable: () => true }],
-  ['run', { shape: 'result', detachable: () => true }],
+  ['agents', { completion: 'spawn', detachable: isForkInput }],
+  ['execute_tools', { completion: 'result', detachable: () => true }],
+  ['run', { completion: 'result', detachable: () => true }],
 ]);
 
 /**
@@ -55,46 +63,54 @@ export const BACKGROUNDABLE_TOOLS: ReadonlyMap<string, BackgroundableTool> = new
  */
 export function wrapToolsForBackground(raw: ToolSet, deps: {
   jobRunner: Pick<BackgroundJobRunner, 'thresholdDeps' | 'policy'>;
+  /** Captured when the outer tool call begins, before it can detach. */
+  mode: () => WorkMode;
   trackController?: (controller: AbortController) => (() => void);
 }): ToolSet {
   const wrapped: ToolSet = { ...raw };
-  for (const [key, { shape, detachable }] of BACKGROUNDABLE_TOOLS) {
+  for (const [key, { completion, detachable }] of BACKGROUNDABLE_TOOLS) {
     const orig = wrapped[key];
     const exec = orig?.execute;
-    if (!orig || typeof exec !== 'function') continue;
+    if (!orig || !exec) continue;
     wrapped[key] = {
       ...orig,
       execute: (input, options) => {
-        if (!detachable(input)) return exec(input, options);
+        const parsedInput = decodeJsonValue({ value: input });
+        if (!detachable(parsedInput)) return exec(input, options);
         const controller = new AbortController();
-        const turnSignal = (options as { abortSignal?: AbortSignal } | undefined)?.abortSignal;
+        const mode = deps.mode();
+        const turnSignal = options.abortSignal;
         const abortSignal = turnSignal ? combineAbortSignals([turnSignal, controller.signal]) : controller.signal;
-        const thresholdDeps = deps.jobRunner.thresholdDeps(key, input, controller);
         const untrack = deps.trackController?.(controller);
-        // Spawn-shaped work detaches when the tool confirms the spawn started
-        // (never on the timer) — but only where the surface's policy says a
-        // session outlives the turn to receive the wake. The policy is read
-        // per call, exactly like the threshold: on cf one runner serves both
-        // surfaces and only the turn in flight knows which it is.
-        const run = shape === 'spawn' && deps.jobRunner.policy.detachSpawnOnStart
-          ? withSpawnDetach(
+        // The policy is read per call, exactly like the threshold: on cf one
+        // runner serves both surfaces and only the turn in flight knows which
+        // it is.
+        let run: Promise<unknown>;
+        if (completion === 'spawn') {
+          if (!deps.jobRunner.policy.wakesAfterTurn) {
+            run = Promise.resolve(exec(input, { ...options, abortSignal }));
+          } else {
+            run = withSpawnDetach(
               key,
               (spawnStarted) => {
-                // The AI SDK's ToolExecutionOptions is a closed interface; the
-                // announce callback rides alongside it as an explicit
-                // intersection rather than an unsafe cast — `readSpawnStarted`
-                // reads it back the same way on the tool side.
                 const execOptions: ToolExecutionOptions & { [SPAWN_STARTED_OPTION]: () => void } = {
                   ...options, abortSignal, [SPAWN_STARTED_OPTION]: spawnStarted,
                 };
                 return exec(input, execOptions);
               },
-              thresholdDeps,
-            )
-          : withBackgroundThreshold(key, () => exec(input, { ...options, abortSignal }), thresholdDeps);
+              deps.jobRunner.thresholdDeps(key, input, mode, controller),
+            );
+          }
+        } else {
+          run = withBackgroundThreshold(
+            key,
+            () => exec(input, { ...options, abortSignal }),
+            deps.jobRunner.thresholdDeps(key, input, mode, controller),
+          );
+        }
         return untrack ? run.finally(untrack) : run;
       },
-    } as ToolSet[string];
+    };
   }
   return wrapped;
 }
@@ -113,16 +129,18 @@ export function wrapToolsForBackground(raw: ToolSet, deps: {
  * surface inside it.
  */
 export async function resumeForkBackgroundJob(
-  rawTools: () => ToolSet,
+  rawTools: (mode: WorkMode) => ToolSet,
   kind: string,
-  input: unknown,
+  input: JsonValue,
+  mode: WorkMode,
   signal: AbortSignal,
-): Promise<unknown> {
+): Promise<JsonValue | undefined> {
   const forkInput = resumableForkInput(kind, input);
   if (!forkInput) throw new JobNotResumable(kind);
-  const exec = rawTools().agents?.execute;
-  if (typeof exec !== 'function') throw new JobNotResumable(kind);
-  return (exec as (i: unknown, o: unknown) => unknown)(forkInput, {
+  const exec = rawTools(mode).agents?.execute;
+  if (!exec) throw new JobNotResumable(kind);
+  const result = await exec(forkInput, {
     abortSignal: signal, toolCallId: `resume-${nanoid()}`, messages: [],
   });
+  return result === undefined ? undefined : decodeJsonValue({ value: result });
 }

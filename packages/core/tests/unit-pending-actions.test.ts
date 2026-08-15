@@ -18,7 +18,7 @@ import type { DeferredApproval } from '../src/safety/deferred-approval.js';
 
 function job(over: Partial<BackgroundJob>): BackgroundJob {
   return {
-    id: 'bgjob-1', kind: 'run', label: 'bun test', status: 'completed',
+    id: 'bgjob-1', kind: 'run', label: 'bun test', workMode: 'build', status: 'completed',
     result: null, error: null, createdAt: 1000, settledAt: 1100, epoch: 0, resumeAttempts: 0,
     ...over,
   };
@@ -186,6 +186,7 @@ describe('the needs-you queue stays host-owned', () => {
   test('listPendingActions is not a source an agent-authored view may name', () => {
     // Same doctrine as listPendingConsents: a view that can draw the queue an
     // owner reads before approving something can draw a plausible fake of it.
-    expect(VIEW_DATA_SOURCES as readonly string[]).not.toContain('listPendingActions');
+    const viewDataSources = new Set<string>(VIEW_DATA_SOURCES);
+    expect(viewDataSources.has('listPendingActions')).toBe(false);
   });
 });

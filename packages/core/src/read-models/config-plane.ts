@@ -12,11 +12,16 @@
  * one thing a caller supplies (`onChanged`).
  */
 
+import * as v from 'valibot';
 import { DEFAULT_CONFIG } from '../config.js';
 import type { AgentConfigStore, ShellApprovalMode } from '../config/store.js';
-import { isReasoningEffort, type ReasoningEffort } from '../strategy/effort.js';
+import { REASONING_EFFORTS } from '../strategy/effort.js';
 
 const SHELL_APPROVAL_MODES: readonly ShellApprovalMode[] = ['strict', 'allow_all', 'deny_all'];
+const ReasoningEffortSchema = v.picklist(REASONING_EFFORTS);
+const ShellApprovalModeSchema = v.picklist(SHELL_APPROVAL_MODES);
+const ArrayBoundarySchema = v.array(v.unknown());
+const SkillNamesSchema = v.array(v.string());
 
 export interface SetModelDeps {
   readonly config: AgentConfigStore;
@@ -44,12 +49,12 @@ export interface EvolutionConfigView {
 }
 
 /** The stored model spec, or null when unset (the registry picks a default). */
-export function getStoredModelSpec(config: AgentConfigStore): { spec: string | null } {
+export function getStoredModelSpec(config: AgentConfigStore) {
   return { spec: config.getModel() };
 }
 
 /** Validate, store and invalidate. Effective on the next turn. */
-export function setModel(deps: SetModelDeps, spec: string): { ok: true; spec: string } {
+export function setModel(deps: SetModelDeps, spec: string) {
   try {
     const normalized = deps.normalize(spec);
     deps.config.setModel(normalized);
@@ -60,17 +65,18 @@ export function setModel(deps: SetModelDeps, spec: string): { ok: true; spec: st
   }
 }
 
-export function getReasoningEffort(config: AgentConfigStore): { effort: ReasoningEffort | null } {
+export function getReasoningEffort(config: AgentConfigStore) {
   return { effort: config.getReasoningEffort() };
 }
 
-export function setReasoningEffort(config: AgentConfigStore, effort: unknown): { ok: true; effort: ReasoningEffort } {
-  if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
-  config.setReasoningEffort(effort);
-  return { ok: true, effort };
+export function setReasoningEffort<Effort>(config: AgentConfigStore, effort: Effort) {
+  const parsed = v.safeParse(ReasoningEffortSchema, effort);
+  if (!parsed.success) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+  config.setReasoningEffort(parsed.output);
+  return { ok: true, effort: parsed.output };
 }
 
-export function getShellApprovalMode(config: AgentConfigStore): { mode: ShellApprovalMode } {
+export function getShellApprovalMode(config: AgentConfigStore) {
   return { mode: config.getShellApprovalMode() };
 }
 
@@ -86,27 +92,27 @@ export function getShellApprovalMode(config: AgentConfigStore): { mode: ShellApp
  */
 export function setShellApprovalMode(
   deps: { config: AgentConfigStore; onChanged: () => void },
-  mode: unknown,
-): { ok: true; mode: ShellApprovalMode } {
-  if (!SHELL_APPROVAL_MODES.includes(mode as ShellApprovalMode)) throw new Error(`invalid mode: ${String(mode)}`);
-  const approval = mode as ShellApprovalMode;
-  deps.config.setShellApprovalMode(approval);
+  mode: string,
+) {
+  const parsed = v.safeParse(ShellApprovalModeSchema, mode);
+  if (!parsed.success) throw new Error(`invalid mode: ${mode}`);
+  deps.config.setShellApprovalMode(parsed.output);
   deps.onChanged();
-  return { ok: true, mode: approval };
+  return { ok: true, mode: parsed.output };
 }
 
 /** Skills pinned always-active for this agent. Empty means none. */
-export function getAlwaysActiveSkills(config: AgentConfigStore): { names: string[] } {
+export function getAlwaysActiveSkills(config: AgentConfigStore) {
   return { names: config.getAlwaysActiveSkills() };
 }
 
 /** Pin a set of skills. An empty list clears the pin. */
-export function setAlwaysActiveSkills(config: AgentConfigStore, names: unknown): { ok: true; names: string[] } {
-  if (!Array.isArray(names)) throw new Error('names must be a string array');
-  for (const n of names) {
-    if (typeof n !== 'string') throw new Error('names must contain only strings');
-  }
-  config.setAlwaysActiveSkills(names as string[]);
+export function setAlwaysActiveSkills<Names>(config: AgentConfigStore, names: Names) {
+  const array = v.safeParse(ArrayBoundarySchema, names);
+  if (!array.success) throw new Error('names must be a string array');
+  const parsed = v.safeParse(SkillNamesSchema, array.output);
+  if (!parsed.success) throw new Error('names must contain only strings');
+  config.setAlwaysActiveSkills(parsed.output);
   return { ok: true, names: config.getAlwaysActiveSkills() };
 }
 

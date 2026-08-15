@@ -30,6 +30,8 @@
 
 import puppeteer from 'puppeteer';
 import { mkdirSync, appendFileSync, writeFileSync, existsSync } from 'node:fs';
+import * as v from 'valibot';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
 
 const BASE = process.env.PROTEUS_BASE_URL ?? 'https://proteus.ashishkumarsingh.com';
 const AGENT = 'express-e2e-' + Date.now().toString(36);
@@ -42,6 +44,21 @@ writeFileSync(TRANSCRIPT, `=== Express E2E ===\nagent=${AGENT}\nbase=${BASE}\nst
 const log = (m: string) => { console.log(m); appendFileSync(TRANSCRIPT, m + '\n'); };
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
+
+const rpcResponseSchema = v.object({
+  type: v.string(),
+  id: v.string(),
+  success: v.boolean(),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(v.string()),
+});
+
+const exposedPortsSchema = v.object({
+  ports: v.optional(v.array(v.object({
+    port: v.number(),
+    url: v.optional(v.string()),
+  }))),
+});
 
 /**
  * Open a WebSocket to the agent's @callable RPC channel. The agents SDK
@@ -60,16 +77,23 @@ async function openAgentWs(base: string, agent: string): Promise<WebSocket> {
   return ws;
 }
 
-async function rpcCall(ws: WebSocket, method: string, args: unknown[] = [], timeoutMs = 120_000): Promise<unknown> {
+async function rpcCall<Output>(
+  ws: WebSocket,
+  method: string,
+  outputSchema: v.GenericSchema<Output>,
+  args: JsonValue[] = [],
+  timeoutMs = 120_000,
+): Promise<Output> {
   return new Promise((resolve, reject) => {
     const id = uid();
     const timer = setTimeout(() => reject(new Error(`rpc ${method} timeout`)), timeoutMs);
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
+        const msg = v.parse(rpcResponseSchema, parseJsonValue(String(ev.data)));
         if (msg.type === 'rpc' && msg.id === id) {
           clearTimeout(timer); ws.removeEventListener('message', handler);
-          if (msg.success) resolve(msg.result); else reject(new Error(String(msg.error)));
+          if (msg.success) resolve(v.parse(outputSchema, msg.result));
+          else reject(new Error(msg.error ?? 'RPC failed'));
         }
       } catch { /* ignore non-JSON */ }
     };
@@ -122,31 +146,31 @@ const app = express();
 app.get('/', (req, res) => { res.send('Hello World from Proteus Sandbox'); });
 app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));
 `.trim();
-    const writeRes = await rpcCall(ws, 'executeInExecutor',
+    const writeRes = await rpcCall(ws, 'executeInExecutor', JsonValueSchema,
       ['sandbox', `mkdir -p /workspace && cat > /workspace/server.js <<'EOF'\n${serverJs}\nEOF`], 120_000);
     log(`  write result: ${JSON.stringify(writeRes).slice(0, 200)}`);
 
     // 4. npm init + install
     log(`\n--- Step 2/4: npm init + install express`);
-    const npmRes = await rpcCall(ws, 'executeInExecutor',
+    const npmRes = await rpcCall(ws, 'executeInExecutor', JsonValueSchema,
       ['sandbox', 'cd /workspace && npm init -y > /dev/null && npm install express 2>&1 | tail -5'], 180_000);
     log(`  npm result: ${JSON.stringify(npmRes).slice(0, 300)}`);
 
     // 5. Start node in background
     log(`\n--- Step 3/4: start node server.js in background`);
-    const startRes = await rpcCall(ws, 'executeInExecutor',
+    const startRes = await rpcCall(ws, 'executeInExecutor', JsonValueSchema,
       ['sandbox', 'cd /workspace && nohup node server.js > /workspace/out.log 2>&1 & disown; sleep 3; cat /workspace/out.log'], 60_000);
     log(`  start result: ${JSON.stringify(startRes).slice(0, 300)}`);
 
     // 6. Smoke test from inside the container
     log(`\n--- Step 4/4: curl localhost:8080 from inside container`);
-    const smokeRes = await rpcCall(ws, 'executeInExecutor',
+    const smokeRes = await rpcCall(ws, 'executeInExecutor', JsonValueSchema,
       ['sandbox', 'curl -sf http://localhost:8080/ || echo CURL_FAIL'], 30_000);
     log(`  smoke: ${JSON.stringify(smokeRes).slice(0, 200)}`);
 
     // 7. Expose port 8080 (CF Sandbox reserves 3000 for control plane)
     log(`\n--- Exposing port 8080`);
-    const urlInfo = await rpcCall(ws, 'exposeSandboxPort', [8080, 'hello'], 30_000)
+    const urlInfo = await rpcCall(ws, 'exposeSandboxPort', JsonValueSchema, [8080, 'hello'], 30_000)
       .catch((e) => ({ error: String(e) }));
     log(`  exposePort: ${JSON.stringify(urlInfo).slice(0, 300)}`);
 
@@ -156,7 +180,7 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));
     let foundUrl: string | null = null;
     while (Date.now() - start < MAX_WAIT_MS) {
       await new Promise((r) => setTimeout(r, 3000));
-      const r = await rpcCall(ws, 'getExposedPorts', ['sandbox'], 15_000) as { ports?: Array<{ port: number; url?: string }> };
+      const r = await rpcCall(ws, 'getExposedPorts', exposedPortsSchema, ['sandbox'], 15_000);
       const p = (r.ports ?? []).find((p) => p.port === 8080);
       if (p?.url) { foundUrl = p.url; log(`  @${Math.round((Date.now()-start)/1000)}s — ${p.url}`); break; }
       if (((Date.now()-start)/1000) % 15 < 3) log(`  @${Math.round((Date.now()-start)/1000)}s — ports=${JSON.stringify(r.ports ?? [])}`);
@@ -175,7 +199,7 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));
     await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
       const t = btns.find((b) => (b.textContent ?? '').trim() === 'Executors');
-      if (t) (t as HTMLButtonElement).click();
+      if (t) t.click();
     });
     await new Promise((r) => setTimeout(r, 6000)); // wait for port poll
     await page.screenshot({ path: `${OUT_DIR}/04-executors-iframe.png`, fullPage: true });
@@ -187,7 +211,7 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));
     log(`  iframe rendered: ${iframeUrl ?? 'no'}`);
 
     log(`\n--- Verdict`);
-    log(`  Port 3000 exposed: true (${foundUrl})`);
+    log(`  Port 8080 exposed: true (${foundUrl})`);
     log(`  Preview returns Hello World: ${helloOk}`);
     log(`  UI iframe renders the exposed URL: ${iframeUrl !== null}`);
     log(`  end=${new Date().toISOString()}`);
@@ -197,7 +221,7 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));
     process.exit(helloOk ? 0 : 4);
   } catch (err) {
     log(`FATAL: ${err instanceof Error ? err.message : String(err)}`);
-    log((err as Error).stack ?? '');
+    log(err instanceof Error ? err.stack ?? '' : '');
     await browser.close();
     process.exit(99);
   }

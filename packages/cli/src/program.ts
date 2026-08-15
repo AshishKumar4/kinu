@@ -42,6 +42,7 @@ import { exportCommand, importCommand } from './commands/export-import.js';
 import { tokensCommand } from './commands/tokens.js';
 import { workspaceDeleteCommand } from './commands/workspace.js';
 import { printFailure, VERSION } from './display.js';
+import type { ProviderFailure } from './provider-guidance.js';
 
 /** Help groups, in the order the branded help renders them (first registration
  *  of a group fixes its position). */
@@ -483,7 +484,7 @@ export function buildProgram(): Command {
 /** Wrap async actions with consistent error handling. */
 function wrapAction(fn: (...args: any[]) => Promise<void>) {
   return (...args: any[]) => {
-    fn(...args).catch((err: unknown) => {
+    fn(...args).catch((err: ProviderFailure) => {
       printFailure(err);
       process.exit(1);
     });

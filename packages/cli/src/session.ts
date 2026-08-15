@@ -9,6 +9,8 @@ import {
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { basename, join, resolve } from 'node:path';
+import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 import { AGENT_HOME } from './config.js';
 import type { AgentTranscriptMessage } from './agent-client.js';
 
@@ -37,12 +39,11 @@ export interface CliSessionHeader {
   conversationId?: string;
 }
 
-export interface CliSessionEntry {
+export interface CliSessionEntry extends JsonObject {
   type: string;
   id: string;
   parentId: string | null;
   timestamp: string;
-  [key: string]: unknown;
 }
 
 export interface CliSession {
@@ -52,7 +53,7 @@ export interface CliSession {
   conversationId: string;
   path?: string;
   parentId: string | null;
-  append(type: string, data?: Record<string, unknown>): CliSessionEntry | null;
+  append(type: string, data?: JsonObject): CliSessionEntry | null;
 }
 
 export interface CliSessionInfo {
@@ -74,6 +75,40 @@ export interface CliSessionTranscript {
 }
 
 const DEFAULT_SESSION_ID = 'default';
+
+const CliSessionHeaderSchema = v.object({
+  type: v.literal('session'),
+  version: v.literal(1),
+  id: v.string(),
+  agent: v.string(),
+  cwd: v.string(),
+  startedAt: v.string(),
+  name: v.optional(v.string()),
+  parentSession: v.optional(v.string()),
+  conversationId: v.optional(v.string()),
+});
+
+const CliSessionEntrySchema = v.objectWithRest({
+  type: v.string(),
+  id: v.string(),
+  parentId: v.nullable(v.string()),
+  timestamp: v.string(),
+}, JsonValueSchema);
+
+interface SessionPointer {
+  id: string;
+  path: string;
+  lastEntryId: string | null;
+  conversationId: string;
+}
+
+interface ParsedSession {
+  header: CliSessionHeader | null;
+  entries: CliSessionEntry[];
+  lastEntryId: string | null;
+  entryCount: number;
+  firstUserText?: string;
+}
 
 export function defaultConversationIdForCliOptions(opts: Pick<CliSessionOptions, 'continue' | 'resume' | 'session' | 'fork' | 'noSession'> = {}): string | undefined {
   if (opts.noSession || opts.continue || opts.resume || opts.session || opts.fork) return undefined;
@@ -114,9 +149,9 @@ export function createCliSession(agent: string, opts: CliSessionOptions = {}): C
     cwd: process.cwd(),
     startedAt: new Date().toISOString(),
     conversationId,
-    ...(opts.name ? { name: opts.name } : {}),
-    ...(parent?.id ? { parentSession: parent.id } : {}),
   };
+  if (opts.name) header.name = opts.name;
+  if (parent?.id) header.parentSession = parent.id;
   writeFileSync(path, `${JSON.stringify(header)}\n`, { mode: 0o600 });
 
   if (parent) {
@@ -146,7 +181,7 @@ export function listCliSessions(agent: string, opts: Pick<CliSessionOptions, 'se
 export function resolveRequestedSession(
   agent: string,
   opts: CliSessionOptions = {},
-): { id: string; path: string; lastEntryId: string | null; conversationId: string } | null {
+): SessionPointer | null {
   const explicit = opts.session;
   if (explicit) {
     const byPath = explicit.includes('/') || explicit.endsWith('.jsonl')
@@ -227,7 +262,7 @@ function fileSession(agent: string, path: string, id: string, parentId: string |
   };
 }
 
-function sessionPointer(path: string): { id: string; path: string; lastEntryId: string | null; conversationId: string } {
+function sessionPointer(path: string): SessionPointer {
   const parsed = readSessionRaw(path);
   if (!parsed.header) throw new Error(`Invalid session file: ${path}`);
   return {
@@ -244,13 +279,7 @@ function readSessionInfo(path: string): CliSessionInfo | null {
   return sessionInfoFromParsed(path, parsed.header, parsed.entryCount, parsed.firstUserText);
 }
 
-function readSessionRaw(path: string): {
-  header: CliSessionHeader | null;
-  entries: CliSessionEntry[];
-  lastEntryId: string | null;
-  entryCount: number;
-  firstUserText?: string;
-} {
+function readSessionRaw(path: string): ParsedSession {
   let header: CliSessionHeader | null = null;
   const entries: CliSessionEntry[] = [];
   let lastEntryId: string | null = null;
@@ -259,18 +288,22 @@ function readSessionRaw(path: string): {
   const content = readFileSync(path, 'utf-8');
   for (const line of content.split('\n')) {
     if (!line.trim()) continue;
-    let entry: unknown;
-    try { entry = JSON.parse(line); } catch { continue; }
-    if (isSessionHeader(entry)) {
-      header = entry;
+    let decoded: JsonValue;
+    try { decoded = parseJsonValue(line); } catch { continue; }
+    const parsedHeader = v.safeParse(CliSessionHeaderSchema, decoded);
+    if (parsedHeader.success) {
+      header = parsedHeader.output;
       continue;
     }
-    if (!isSessionEntry(entry)) continue;
+    const parsedEntry = v.safeParse(CliSessionEntrySchema, decoded);
+    if (!parsedEntry.success) continue;
+    const entry = parsedEntry.output;
     entries.push(entry);
     entryCount += 1;
     lastEntryId = entry.id;
-    if (!firstUserText && entry.type === 'user' && typeof entry.text === 'string') {
-      firstUserText = entry.text.slice(0, 160);
+    const text = v.safeParse(v.string(), entry.text);
+    if (!firstUserText && entry.type === 'user' && text.success) {
+      firstUserText = text.output.slice(0, 160);
     }
   }
   return { header, entries, lastEntryId, entryCount, firstUserText };
@@ -302,47 +335,51 @@ function entryToMessage(entry: CliSessionEntry): AgentTranscriptMessage | null {
     case 'assistant':
       return textEntry(entry, 'assistant');
     case 'tool_call':
-      return {
-        id: entry.id,
-        role: 'tool_call',
-        content: '',
-        toolName: typeof entry.toolName === 'string' ? entry.toolName : 'tool',
-        args: safeJson(entry.args),
-      };
+      {
+        const toolName = v.safeParse(v.string(), entry.toolName);
+        return {
+          id: entry.id,
+          role: 'tool_call',
+          content: '',
+          toolName: toolName.success ? toolName.output : 'tool',
+          args: safeJson(entry.args),
+        };
+      }
     case 'tool_result':
-      return {
-        id: entry.id,
-        role: 'tool_result',
-        content: typeof entry.result === 'string' ? entry.result : safeJson(entry.result),
-      };
+      {
+        const result = v.safeParse(v.string(), entry.result);
+        return {
+          id: entry.id,
+          role: 'tool_result',
+          content: result.success ? result.output : safeJson(entry.result),
+        };
+      }
     case 'error':
-      return {
-        id: entry.id,
-        role: 'system',
-        content: `Error: ${typeof entry.message === 'string' ? entry.message : safeJson(entry.message)}`,
-      };
+      {
+        const message = v.safeParse(v.string(), entry.message);
+        return {
+          id: entry.id,
+          role: 'system',
+          content: `Error: ${message.success ? message.output : safeJson(entry.message)}`,
+        };
+      }
     default:
       return null;
   }
 }
 
 function textEntry(entry: CliSessionEntry, role: 'user' | 'assistant'): AgentTranscriptMessage | null {
-  const text = entry.text;
-  if (typeof text !== 'string' || !text.trim()) return null;
-  return {
-    id: entry.id, role, content: text.trim(),
-    ...(entry.steered === true ? { steered: true } : {}),
-    ...(entry.branched === true ? { branched: true } : {}),
-  };
+  const parsedText = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), entry.text);
+  if (!parsedText.success) return null;
+  const message: AgentTranscriptMessage = { id: entry.id, role, content: parsedText.output };
+  if (entry.steered === true) message.steered = true;
+  if (entry.branched === true) message.branched = true;
+  return message;
 }
 
-function safeJson(value: unknown): string {
-  if (typeof value === 'string') return value;
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
+function safeJson(value: JsonValue): string {
+  const parsedString = v.safeParse(v.string(), value);
+  return parsedString.success ? parsedString.output : JSON.stringify(value);
 }
 
 function createSessionId(): string {
@@ -356,29 +393,6 @@ function createEntryId(): string {
 
 function cleanPathSegment(input: string): string {
   return (basename(input).replace(/[^A-Za-z0-9._-]/g, '_') || 'agent').slice(0, 120);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
-function isSessionHeader(value: unknown): value is CliSessionHeader {
-  return isRecord(value)
-    && value.type === 'session'
-    && value.version === 1
-    && typeof value.id === 'string'
-    && typeof value.agent === 'string'
-    && typeof value.cwd === 'string'
-    && typeof value.startedAt === 'string'
-    && (value.conversationId === undefined || typeof value.conversationId === 'string');
-}
-
-function isSessionEntry(value: unknown): value is CliSessionEntry {
-  return isRecord(value)
-    && typeof value.type === 'string'
-    && typeof value.id === 'string'
-    && (typeof value.parentId === 'string' || value.parentId === null)
-    && typeof value.timestamp === 'string';
 }
 
 function sessionInfoFromParsed(

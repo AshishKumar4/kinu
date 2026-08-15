@@ -205,8 +205,8 @@ function walkMatching(root: string, pattern: string): string[] {
 /** The environment a check runs in. PROTEUS_* is stripped so a stray variable
  *  from the operator's shell cannot reach into a scored run, and HOME points at
  *  the attempt so nothing lands in the real one. */
-export function sandboxEnv(proteusHome: string): Record<string, string> {
-  const env: Record<string, string> = {};
+export function sandboxEnv(proteusHome: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
   for (const [k, val] of Object.entries(process.env)) {
     if (val === undefined) continue;
     if (k.startsWith('PROTEUS_') || k === 'HOME') continue;
@@ -220,10 +220,11 @@ export function sandboxEnv(proteusHome: string): Record<string, string> {
 
 function runCheck(check: BenchCheck, dir: string, proteusHome: string): Promise<CheckOutcome> {
   const [cmd, ...args] = check.command;
+  if (!cmd) throw new Error(`bench check ${check.id} has no command`);
   const started = Date.now();
   return new Promise((resolveOutcome) => {
     execFile(
-      cmd!, args,
+      cmd, args,
       {
         cwd: check.cwd ? join(dir, check.cwd) : dir,
         env: sandboxEnv(proteusHome),
@@ -232,8 +233,14 @@ function runCheck(check: BenchCheck, dir: string, proteusHome: string): Promise<
       },
       (err, stdout, stderr) => {
         const combined = `${stdout}${stderr}`;
-        const killed = Boolean(err && (err as NodeJS.ErrnoException).code === undefined && (err as { killed?: boolean }).killed);
-        const exitCode = killed ? null : ((err as { code?: number } | null)?.code ?? 0);
+        const killed = err?.killed ?? false;
+        const exitCode = killed
+          ? null
+          : err === null
+            ? 0
+            : Number.isSafeInteger(err.code)
+              ? Number(err.code)
+              : 1;
         resolveOutcome({
           id: check.id,
           passed: exitCode === 0,
@@ -268,7 +275,13 @@ export async function scoreSandbox(
 
 /** Wall-clock half of the budget. Token accounting is the solver's job — only
  *  it knows what it spent — and is reported alongside. */
-export function budgetSignal(budget: AttemptBudget): { signal: AbortSignal; done: () => void; timedOut: () => boolean } {
+export interface BudgetSignal {
+  signal: AbortSignal;
+  done: () => void;
+  timedOut: () => boolean;
+}
+
+export function budgetSignal(budget: AttemptBudget): BudgetSignal {
   const controller = new AbortController();
   let timedOut = false;
   const timer = setTimeout(() => {

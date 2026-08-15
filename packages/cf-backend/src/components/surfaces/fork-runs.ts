@@ -17,8 +17,12 @@
  *     detached job, a drain or an autonomous turn, none of which stream
  *     through this tab's chat socket.
  */
+import { useCallback } from "react";
 import type { ForkRunSummary, HeadRunView } from "@proteus/core";
-import type { ForkNode } from "@/lib/protocol";
+import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
+
+export const FORK_RUN_LIMIT = 30;
 
 /** Matches the run timeline's mid-turn cadence: fast enough to read as live,
  *  slow enough that a long fork is not a poll storm. */
@@ -34,6 +38,25 @@ export function hasLiveForkRun(runs: readonly ForkRunSummary[] | null): boolean 
   return !!runs?.some((run) => run.status === "running");
 }
 
+/** All workspace activity that can create or continue a fork. Detached jobs
+ * do not stream through the chat connection, so they must count independently. */
+export function hasActiveForkWork(
+  isStreaming: boolean,
+  backgroundJobs: readonly BackgroundJob[],
+): boolean {
+  return isStreaming || backgroundJobs.some((job) => job.status === "running");
+}
+
+/** An explicit permalink never falls through to a different run. */
+export function selectForkRun(
+  runs: readonly ForkRunSummary[] | null,
+  requestedId: string | null,
+): ForkRunSummary | null {
+  if (runs === null) return null;
+  if (requestedId !== null) return runs.find((run) => run.id === requestedId) ?? null;
+  return runs[0] ?? null;
+}
+
 /**
  * How long before the fork list re-reads.
  *
@@ -47,6 +70,51 @@ export function forkRunsRevalidateMs(
   hasActiveWork: boolean,
 ): number {
   return hasActiveWork || hasLiveForkRun(runs) ? FORK_REVALIDATE_MS : FORK_IDLE_REVALIDATE_MS;
+}
+
+/** The single live fork-list resource used by both Exploration renderings. */
+export function useLiveForkRuns(
+  rpc: Rpc,
+  isStreaming: boolean,
+  backgroundJobs: readonly BackgroundJob[],
+) {
+  const hasActiveWork = hasActiveForkWork(isStreaming, backgroundJobs);
+  const load = useCallback(
+    () => rpc<ForkRunSummary[]>("listForkRuns", [FORK_RUN_LIMIT]),
+    [rpc],
+  );
+  const revalidate = useCallback(
+    (runs: ForkRunSummary[] | null) => forkRunsRevalidateMs(runs, hasActiveWork),
+    [hasActiveWork],
+  );
+  const { resource, reload } = useAsyncResource(load, revalidate);
+  return { resource, reload, runs: lastValue(resource), hasActiveWork };
+}
+
+/** One permalink target, independent of the bounded recent-fork list. */
+export function useExactForkRun(
+  rpc: Rpc,
+  requestedId: string | null,
+  hasActiveWork: boolean,
+) {
+  const load = useCallback(
+    () => requestedId === null
+      ? Promise.resolve<ForkRunSummary | null>(null)
+      : rpc<ForkRunSummary | null>("getForkRun", [requestedId]),
+    [requestedId, rpc],
+  );
+  const revalidate = useCallback(
+    (run: ForkRunSummary | null) => requestedId === null
+      ? null
+      : forkRunsRevalidateMs(run === null ? null : [run], hasActiveWork),
+    [hasActiveWork, requestedId],
+  );
+  const { resource, reload } = useAsyncResource<ForkRunSummary | null>(
+    load,
+    revalidate,
+    requestedId ?? undefined,
+  );
+  return { resource, reload, run: lastValue(resource) };
 }
 
 /**

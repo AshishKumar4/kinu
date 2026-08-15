@@ -12,7 +12,7 @@ import type {
 } from '../heads/types.js';
 import { DEFAULT_HEAD_BUDGET, DEFAULT_MERGE_STRATEGY } from '../heads/types.js';
 import { formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE } from '../heads/file-changes.js';
-import type { ExplorationStrategy, StrategyContext, StrategyResult } from './types.js';
+import { strategyOption, type ExplorationStrategy, type StrategyContext, type StrategyResult } from './types.js';
 
 interface HeadsStrategyOptions {
   controller: HeadController;
@@ -44,7 +44,9 @@ export function createHeadsStrategy(): ExplorationStrategy {
       'Heads may use heterogeneous models. Findings are merged via structured LLM synthesis.',
     async explore(ctx: StrategyContext): Promise<StrategyResult> {
       const t0 = Date.now();
-      const o = (ctx.options?.heads ?? {}) as Partial<HeadsStrategyOptions>;
+      // SAFETY: agents-tool constructs this host-owned strategy option by
+      // merging its HeadController and callbacks with the schema-parsed head specs.
+      const o = (strategyOption(ctx.options, 'heads') ?? {}) as Partial<HeadsStrategyOptions>;
       if (!o.controller) {
         throw new Error('Heads strategy requires options.heads.controller (HeadController).');
       }
@@ -56,13 +58,15 @@ export function createHeadsStrategy(): ExplorationStrategy {
       // A wall clock exists only if someone asked for one; there is no default
       // to fall through to.
       const wallClockMs = o.maxWallClockMs ?? ctx.budget?.wallClockMs;
-      const parentBudget: HeadBudget = {
-        maxDepth: o.maxDepth ?? DEFAULT_HEAD_BUDGET.maxDepth,
-        ...(wallClockMs === undefined ? {} : { maxWallClockMs: wallClockMs }),
-        spawnedAt: Date.now(),
-      };
+      const parentBudget: HeadBudget = wallClockMs === undefined
+        ? { maxDepth: o.maxDepth ?? DEFAULT_HEAD_BUDGET.maxDepth, spawnedAt: Date.now() }
+        : {
+            maxDepth: o.maxDepth ?? DEFAULT_HEAD_BUDGET.maxDepth,
+            maxWallClockMs: wallClockMs,
+            spawnedAt: Date.now(),
+          };
 
-      const merge = await o.controller.run({
+      const runOptions: Parameters<HeadController['run']>[0] = {
         parentHeadId: null,
         inheritedContext: o.inheritedContext ?? [],
         request: {
@@ -71,12 +75,14 @@ export function createHeadsStrategy(): ExplorationStrategy {
           mergeStrategy: strategy,
         },
         parentBudget,
+        mode: ctx.mode,
         model: o.defaultModel,
         onPhase: o.onPhase,
-        // Labels only: HeadInput crosses a process boundary as data, and the
-        // far side rebuilds a port over whatever reaches the ledger there.
-        ...(ctx.mission ? { missionLabels: ctx.mission.labels } : {}),
-      });
+      };
+      // Labels only: HeadInput crosses a process boundary as data, and the far
+      // side rebuilds a port over whatever reaches the ledger there.
+      if (ctx.mission) runOptions.missionLabels = ctx.mission.labels;
+      const merge = await o.controller.run(runOptions);
 
       o.onComplete?.(merge, ctx.task);
 
@@ -98,6 +104,18 @@ export function createHeadsStrategy(): ExplorationStrategy {
         ? Math.max(...merge.headScores.map((s) => s.score))
         : NEUTRAL;
 
+      const cost: StrategyResult['cost'] = {
+        tokens: merge.costSummary.totalTokens,
+        durationMs: Date.now() - t0,
+        iterations: merge.costSummary.headCount,
+      };
+      if (merge.fileChanges.length > 0) {
+        cost.filesChanged = new Set(
+          merge.fileChanges.flatMap((head) => head.changes.map((change) => change.path)),
+        ).size;
+      }
+      if (ctx.mission) cost.selfMetered = true;
+
       return {
         strategy: 'heads',
         best: {
@@ -107,19 +125,9 @@ export function createHeadsStrategy(): ExplorationStrategy {
           source: 'merge',
         },
         all: candidates,
-        cost: {
-          tokens: merge.costSummary.totalTokens,
-          durationMs: Date.now() - t0,
-          iterations: merge.costSummary.headCount,
-          // What the delegation cost the WORKSPACE, not the ledger: distinct
-          // files the split's heads changed between them.
-          ...(merge.fileChanges.length > 0
-            ? { filesChanged: new Set(merge.fileChanges.flatMap((h) => h.changes.map((c) => c.path))).size }
-            : {}),
-          // Each head debited its own steps as it ran (head-inference.ts), so
-          // the caller must not charge the total a second time.
-          ...(ctx.mission ? { selfMetered: true } : {}),
-        },
+        // Each head debited its own steps as it ran, so the caller must not
+        // charge the total a second time. File changes count distinct paths.
+        cost,
         trace: `Heads(n=${merge.headIds.length}) → merge(strategy=${strategy})`,
       };
     },

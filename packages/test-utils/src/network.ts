@@ -44,13 +44,13 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
   const handlerCallCount = new Map<MockFetchHandler, number>();
 
   const matches = (h: MockFetchHandler, req: RecordedRequest): boolean => {
-    if (typeof h.match === 'string') return req.url.includes(h.match);
+    if (isString(h.match)) return req.url.includes(h.match);
     if (h.match instanceof RegExp) return h.match.test(req.url);
     return h.match(req);
   };
 
   const fetch = asFetchFunction(async (input, init) => {
-    const url = typeof input === 'string' ? input
+    const url = isString(input) ? input
               : input instanceof URL ? input.toString()
               : input.url;
     const method = (init?.method ?? 'GET').toUpperCase();
@@ -58,8 +58,9 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     if (init?.headers) {
       new Headers(init.headers).forEach((v, k) => { headers[k] = v; });
     }
-    const body = typeof init?.body === 'string' ? init.body : undefined;
-    const req: RecordedRequest = { url, method, headers, body };
+    const body = isString(init?.body) ? init.body : undefined;
+    const req: RecordedRequest = { url, method, headers };
+    if (body !== undefined) req.body = body;
     requests.push(req);
 
     const handler = handlers.find(h => matches(h, req));
@@ -72,18 +73,17 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     const callIndex = handlerCallCount.get(handler) ?? 0;
     handlerCallCount.set(handler, callIndex + 1);
 
-    const resp = typeof handler.respond === 'function'
+    const resp = isResponder(handler.respond)
       ? handler.respond(req, callIndex)
       : handler.respond;
     const bodyOut = resp.body === undefined ? ''
-      : typeof resp.body === 'string' ? resp.body
+      : isString(resp.body) ? resp.body
       : JSON.stringify(resp.body);
+    const responseHeaders = new Headers(resp.headers);
+    if (!responseHeaders.has('content-type')) responseHeaders.set('content-type', 'application/json');
     return new Response(bodyOut, {
       status: resp.status ?? 200,
-      headers: {
-        'content-type': 'application/json',
-        ...(resp.headers ?? {}),
-      },
+      headers: responseHeaders,
     });
   });
 
@@ -91,7 +91,7 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     fetch,
     requests,
     matching(pattern) {
-      if (typeof pattern === 'string') return requests.filter(r => r.url.includes(pattern));
+      if (isString(pattern)) return requests.filter(r => r.url.includes(pattern));
       return requests.filter(r => pattern.test(r.url));
     },
     reset() {
@@ -99,4 +99,14 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
       handlerCallCount.clear();
     },
   };
+}
+
+type MockResponseFactory = Extract<MockFetchHandler['respond'], (...args: never[]) => object>;
+
+function isResponder(value: MockFetchHandler['respond']): value is MockResponseFactory {
+  return typeof value === 'function';
+}
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
 }

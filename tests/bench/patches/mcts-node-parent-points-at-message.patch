@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/mcts/record-node.ts b/packages/core/src/mcts/record-node.ts
-index 8676e41..45b05f9 100644
 --- a/packages/core/src/mcts/record-node.ts
 +++ b/packages/core/src/mcts/record-node.ts
-@@ -70,7 +70,7 @@ export async function recordNode(
-     INSERT INTO search_nodes
-       (id, parent_id, root_id, task, action, observation, code_used, depth, msg_id)
+@@ -71,7 +71,7 @@
+  INSERT INTO search_nodes
+       (id, parent_id, root_id, task, action, observation, code_used, code_language, depth, msg_id)
      VALUES
 -      (${opts.nodeId}, ${opts.parentNodeId ?? null}, ${opts.rootId},
 +      (${opts.nodeId}, ${opts.parentMsgId ?? null}, ${opts.rootId},
         ${opts.task}, ${opts.action}, ${opts.observation},
-        ${opts.codeUsed ?? null}, ${opts.depth}, ${msgId})
+        ${opts.codeUsed ?? null}, ${opts.codeLanguage ?? null}, ${opts.depth}, ${msgId})
    `;

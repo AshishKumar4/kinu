@@ -5,20 +5,41 @@
 // beginTurn) against a fake BackendHost.
 import { describe, test, expect } from 'bun:test';
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import { SignalDelivery } from '../src/orchestrator/signals.js';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { AgentSignal, SignalCardEvent } from '../src/types/signals.js';
+import { JsonObjectSchema } from '../src/utils/json.js';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 const assistant = (text: string): ModelMessage => ({ role: 'assistant', content: text });
 const texts = (messages: ReadonlyArray<ModelMessage>) => messages.map((m) => m.content);
 
-function setup(opts: { turnInFlight?: boolean; enqueue?: 'queued' | 'skipped' | 'throw' } = {}) {
+const SignalCardEventSchema: v.GenericSchema<SignalCardEvent> = v.variant('state', [
+  v.object({
+    type: v.literal('signal_card'),
+    id: v.string(),
+    state: v.literal('pending'),
+    metadata: JsonObjectSchema,
+    text: v.string(),
+  }),
+  v.object({
+    type: v.literal('signal_card'),
+    id: v.string(),
+    state: v.picklist(['shown', 'undelivered']),
+  }),
+]);
+
+function setup(opts: {
+  turnInFlight?: boolean;
+  enqueue?: 'queued' | 'skipped' | 'throw';
+  activeMode?: 'plan' | 'build';
+} = {}) {
   const queued: ProgrammaticTurn[] = [];
   const activity: Array<{ event: string; detail?: string }> = [];
   const cards: SignalCardEvent[] = [];
   const host: BackendHost = {
-    broadcast: (event: BroadcastEvent) => { cards.push(event as unknown as SignalCardEvent); },
+    broadcast: (event: BroadcastEvent) => { cards.push(v.parse(SignalCardEventSchema, event)); },
     enqueueTurn: async (turn) => {
       queued.push(turn);
       if (opts.enqueue === 'throw') throw new Error('queue unavailable');
@@ -27,18 +48,26 @@ function setup(opts: { turnInFlight?: boolean; enqueue?: 'queued' | 'skipped' | 
     turnInFlight: () => opts.turnInFlight === true,
     setTimer: () => {},
   };
-  const signals = new SignalDelivery(host, (event, detail) => activity.push({ event, detail }));
+  const signals = new SignalDelivery(
+    host,
+    (event, detail) => activity.push({ event, detail }),
+    () => opts.activeMode ?? 'build',
+  );
   return { signals, queued, activity, cards };
 }
 
 /** The card's journey, without its (random) id: [state, …]. */
 const lifecycle = (cards: readonly SignalCardEvent[]) => cards.map((c) => c.state);
 /** The signal id a queued turn carries — the round trip a backend reads back. */
-const carriedSignalId = (turn: ProgrammaticTurn) =>
-  (turn.metadata as { signalId?: string } | undefined)?.signalId;
+const carriedSignalId = (turn: ProgrammaticTurn) => {
+  const parsed = v.safeParse(v.string(), turn.metadata?.signalId);
+  return parsed.success ? parsed.output : undefined;
+};
 
-const wake = (text: string, over: Partial<AgentSignal> = {}): AgentSignal =>
-  ({ kind: 'event_drain', text, ...over });
+const wake = (text: string, over: Partial<AgentSignal> = {}): AgentSignal => {
+  const signal: AgentSignal = { kind: 'event_drain', text };
+  return Object.assign(signal, over);
+};
 
 const nudge = (text: string): AgentSignal => ({ kind: 'turn_steering', text });
 
@@ -86,6 +115,25 @@ describe('SignalDelivery — one delivery time: the next step', () => {
     });
   });
 
+  test('a mode-bound signal only splices into a live turn with the same mode', async () => {
+    const same = setup({ turnInFlight: true, activeMode: 'plan' });
+    expect(await same.signals.deliver(wake('plan result', {
+      metadata: { proteusMode: 'plan' },
+    }))).toBe('mid-turn');
+
+    const planIntoBuild = setup({ turnInFlight: true, activeMode: 'build' });
+    expect(await planIntoBuild.signals.deliver(wake('plan result', {
+      metadata: { proteusMode: 'plan' },
+    }))).toBe('queued');
+    expect(planIntoBuild.queued[0]?.metadata?.proteusMode).toBe('plan');
+
+    const buildIntoPlan = setup({ turnInFlight: true, activeMode: 'plan' });
+    expect(await buildIntoPlan.signals.deliver(wake('build result', {
+      metadata: { proteusMode: 'build' },
+    }))).toBe('queued');
+    expect(buildIntoPlan.queued[0]?.metadata?.proteusMode).toBe('build');
+  });
+
   test("the step's own steering is handed to the step, never delivered", async () => {
     // The delegation nudge is decided INSIDE the step pipeline, so it rides
     // that step even on a backend where nothing is in flight to ask about, and
@@ -125,7 +173,7 @@ describe('SignalDelivery — the user\'s card', () => {
       // What the agent will actually read on this path, not the other one's.
       text: 'mid-turn: mail from bob',
     });
-    expect(typeof opened.id).toBe('string');
+    expect(opened.id.length).toBeGreaterThan(0);
 
     // Steps that carry nothing move nothing.
     signals.prepareStep({ stepNumber: 0, messages: [user('q')] });

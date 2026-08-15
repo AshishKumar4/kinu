@@ -36,6 +36,10 @@ const MODEL_CREDENTIAL_KEYS: readonly string[] = [
   CODEX_CRED_KEY, CLOUDFLARE_OAUTH_CRED_KEY, CLOUDFLARE_AI_GATEWAY_CRED_KEY,
 ];
 
+export interface CredentialHeaders {
+  [name: string]: string;
+}
+
 export function isModelInferenceCredentialKey(key: string): boolean {
   return MODEL_CREDENTIAL_KEYS.includes(key) || MODEL_CREDENTIAL_KEY_RE.test(key);
 }
@@ -43,7 +47,7 @@ export function isModelInferenceCredentialKey(key: string): boolean {
 /** Header bundle for a given credential. The credential key tells us which
  *  flavor of headers to emit (codex.oauth = WAF-bypass set; openai/anthropic
  *  = Bearer; openrouter = Bearer + extras; openai-compat = Bearer + extras). */
-export function credentialToHeaders(key: string, cred: Credential): Record<string, string> {
+export function credentialToHeaders(key: string, cred: Credential): CredentialHeaders {
   if (key === 'codex.oauth') {
     if (cred.kind !== 'oauth') throw new Error('codex.oauth credential must be oauth kind');
     return codexCredentialToHeaders(cred);
@@ -61,7 +65,7 @@ export function credentialToHeaders(key: string, cred: Credential): Record<strin
   }
   // openai-compat: Bearer + extraHeaders, baseURL is handled at provider construction.
   if (cred.kind === 'openai-compat') {
-    return { Authorization: `Bearer ${cred.apiKey}`, ...(cred.extraHeaders ?? {}) };
+    return { Authorization: `Bearer ${cred.apiKey}`, ...cred.extraHeaders };
   }
   // OAuth without a special header bundle — just Bearer the access token.
   if (cred.kind === 'oauth') {

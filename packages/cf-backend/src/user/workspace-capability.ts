@@ -37,6 +37,7 @@
  */
 import { nanoid, type SqlExec } from '@proteus/core';
 import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto.js';
+import * as v from 'valibot';
 
 /** A workspace's reach into the owner's wider world.
  *  - `full`   — solo-owner workspace: the whole user surface.
@@ -45,10 +46,10 @@ import { hmacSha256Hex, sha256Hex, timingSafeEqual } from '../lib/crypto.js';
  *               untouched, reach beyond it is cut. */
 export type WorkspaceTier = 'full' | 'shared';
 
-const TIER_RANK: Record<WorkspaceTier, number> = { shared: 1, full: 2 };
+const TIER_RANK = { shared: 1, full: 2 } satisfies Record<WorkspaceTier, number>;
 
-function isWorkspaceTier(value: unknown): value is WorkspaceTier {
-  return value === 'full' || value === 'shared';
+function isWorkspaceTier<Value>(value: Value): value is Value & WorkspaceTier {
+  return v.is(v.picklist(['full', 'shared']), value);
 }
 
 /**
@@ -228,10 +229,10 @@ export function initWorkspaceCapabilityTables(sql: SqlExec): void {
  *  itself reports is what makes provisioning self-healing: any disagreement,
  *  however it arose, is repaired by re-minting. */
 export function workspaceCapabilityHash(sql: SqlExec, workspaceName: string): string | null {
-  const row = sql.exec(
+  const row = v.safeParse(v.object({ token_hash: v.string() }), sql.exec(
     `SELECT token_hash FROM workspace_capability_tokens WHERE workspace_name = ? LIMIT 1`, workspaceName,
-  ).toArray()[0];
-  return typeof row?.token_hash === 'string' ? row.token_hash : null;
+  ).toArray()[0]);
+  return row.success ? row.output.token_hash : null;
 }
 
 /** Mint (or re-mint) the capability token for `workspaceName` and ensure it has
@@ -287,23 +288,34 @@ export function setWorkspaceTier(sql: SqlExec, workspaceName: string, tier: Work
 /** Resolve a caller to a principal. Fails closed at every step: an
  *  unrecognized shape, an unknown token, or a token whose workspace has no
  *  registry row is denied rather than defaulted. */
-async function resolveCaller(sql: SqlExec, env: OwnerCapabilityEnv, caller: UserCaller): Promise<ResolvedCaller> {
-  const presentedOwner = (caller as { ownerToken?: unknown } | null)?.ownerToken;
-  if (typeof presentedOwner === 'string' && presentedOwner) {
+const UserCallerSchema = v.union([
+  v.object({ ownerToken: v.string() }),
+  v.object({ workspaceToken: v.string() }),
+]);
+
+async function resolveCaller<Caller>(sql: SqlExec, env: OwnerCapabilityEnv, caller: Caller): Promise<ResolvedCaller> {
+  const parsedCaller = v.safeParse(UserCallerSchema, caller);
+  if (!parsedCaller.success) {
+    throw new CapabilityDeniedError(
+      'This call carried no valid caller identity. Privileged user-level calls must present a capability token.',
+    );
+  }
+  if ('ownerToken' in parsedCaller.output) {
+    const presentedOwner = parsedCaller.output.ownerToken;
     if (timingSafeEqual(presentedOwner, await ownerToken(env))) return { kind: 'owner_session' };
     throw new CapabilityDeniedError('Unrecognized owner capability.');
   }
-  const token = (caller as { workspaceToken?: unknown } | null)?.workspaceToken;
-  if (typeof token !== 'string' || token === '') {
+  const token = parsedCaller.output.workspaceToken;
+  if (token === '') {
     throw new CapabilityDeniedError(
       'This call carried no workspace identity. Privileged user-level calls must present a workspace capability token.',
     );
   }
   const tokenHash = await sha256Hex(token);
-  const row = sql.exec(
+  const row = v.safeParse(v.object({ workspace_name: v.string() }), sql.exec(
     `SELECT workspace_name FROM workspace_capability_tokens WHERE token_hash = ? LIMIT 1`, tokenHash,
-  ).toArray()[0];
-  const workspace = typeof row?.workspace_name === 'string' ? row.workspace_name : null;
+  ).toArray()[0]);
+  const workspace = row.success ? row.output.workspace_name : null;
   if (!workspace) {
     throw new CapabilityDeniedError('Unrecognized workspace capability token.');
   }
@@ -319,10 +331,10 @@ async function resolveCaller(sql: SqlExec, env: OwnerCapabilityEnv, caller: User
 /** The gate. Called first thing in every privileged UserDO method; returns the
  *  resolved principal so a method can additionally scope itself (e.g. renaming
  *  only the calling workspace). */
-export async function requireTier(
+export async function requireTier<Caller>(
   sql: SqlExec,
   env: OwnerCapabilityEnv,
-  caller: UserCaller,
+  caller: Caller,
   capability: WorkspaceCapability,
 ): Promise<ResolvedCaller> {
   const resolved = await resolveCaller(sql, env, caller);

@@ -8,36 +8,61 @@ import { describe, expect, test } from 'bun:test';
 import { handleAuthRequest } from '../src/auth/routes.js';
 import { createOAuthState } from '../src/auth/d1-store.js';
 import { CLOUDFLARE_WORKERS_AI_SCOPES } from '../src/lib/cloudflare-oauth.js';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@proteus/core';
+import { asFetchFunction, DEFAULT_WORKERS_AI_MODEL_SPEC, type OAuthCredential } from '@proteus/core';
 import { createAuthDatabase, makeD1 } from './helpers/d1.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 
 const ORIGIN = 'https://proteus.example.com';
+
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface CloudflareLoginTestBindings<UserStub, AgentStub> {
+  AUTH_DB: D1Database;
+  UserDO: TestNamespace<UserStub>;
+  OrchestratorAgent: TestNamespace<AgentStub>;
+  CLOUDFLARE_OAUTH_CLIENT_ID: string;
+  CLOUDFLARE_OAUTH_CLIENT_SECRET: string;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<UserStub, AgentStub>(bindings: CloudflareLoginTestBindings<UserStub, AgentStub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: The callback reads exactly the constructed D1 database, namespaces,
+  // OAuth client values, and credential key; every reachable binding is present above.
+  return env as Env;
+}
 
 function setupEnv() {
   const credentials: Array<{ key: string; credential: OAuthCredential }> = [];
   const config = new Map<string, string>();
   const userDO = {
-    async ensureProfile(_caller: unknown) {},
-    async setCredential(_caller: unknown, key: string, credential: OAuthCredential) {
+    async ensureProfile(_caller: UserCaller) {},
+    async setCredential(_caller: UserCaller, key: string, credential: OAuthCredential) {
       credentials.push({ key, credential });
     },
-    async getConfig(_caller: unknown, key: string) { return config.get(key) ?? null; },
-    async setConfig(_caller: unknown, key: string, value: string) { config.set(key, value); },
-    async listWorkspaces(_caller: unknown) { return []; },
+    async getConfig(_caller: UserCaller, key: string) { return config.get(key) ?? null; },
+    async setConfig(_caller: UserCaller, key: string, value: string) { config.set(key, value); },
+    async listWorkspaces(_caller: UserCaller) { return []; },
   };
-  const env = {
+  const env = testEnv({
     AUTH_DB: makeD1(createAuthDatabase()),
     UserDO: { idFromName: (name: string) => name, get: () => userDO },
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => ({ async onCredentialsChanged() {} }) },
     CLOUDFLARE_OAUTH_CLIENT_ID: 'cf-client-id',
-    CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret', CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    CLOUDFLARE_OAUTH_CLIENT_SECRET: 'cf-client-secret',
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
   return { env, credentials, config };
 }
 
 function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: string }) {
   const tokenRequests: URLSearchParams[] = [];
-  const fetchFake = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  const fetchFake = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new Request(input, init).url;
     if (url === 'https://dash.cloudflare.com/.well-known/openid-configuration') {
       return Response.json({
         issuer: 'https://dash.cloudflare.com',
@@ -67,12 +92,12 @@ function fakeCloudflareNetwork(tokens: { access_token: string; refresh_token?: s
       });
     }
     throw new Error(`Unexpected fetch in test: ${url}`);
-  }) as typeof fetch;
+  });
   return { fetchFake, tokenRequests };
 }
 
 async function loginViaCloudflare(env: Env): Promise<Response> {
-  const { state } = await createOAuthState((env as unknown as { AUTH_DB: D1Database }).AUTH_DB, {
+  const { state } = await createOAuthState(env.AUTH_DB, {
     provider: 'cloudflare',
     codeVerifier: 'test-code-verifier-test-code-verifier-test-1',
     nonce: null,
@@ -114,7 +139,9 @@ describe('Cloudflare IdP login attaches the Workers AI credential', () => {
       expect(credentials[0].credential.kind).toBe('oauth');
       expect(credentials[0].credential.accessToken).toBe('cf-access-1');
       expect(credentials[0].credential.refreshToken).toBe('cf-refresh-1');
-      expect(credentials[0].credential.expiresAt!).toBeGreaterThan(Date.now());
+      const expiresAt = credentials[0].credential.expiresAt;
+      if (expiresAt === undefined) throw new Error('Cloudflare credential did not include an expiry');
+      expect(expiresAt).toBeGreaterThan(Date.now());
       expect(credentials[0].credential.metadata?.accountId).toBe('abc123abc123abc123abc123abc123ab');
       expect(config.get('default_model')).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     } finally {

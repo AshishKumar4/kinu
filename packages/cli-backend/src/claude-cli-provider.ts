@@ -10,17 +10,24 @@
 // This lives in cli-backend (the local backend). The cloud server must never
 // drive subscription calls, so nothing here is reachable from cf-backend.
 import type { LanguageModelV2, LanguageModelV2CallOptions, LanguageModelV2StreamPart } from '@ai-sdk/provider';
-import type { LanguageModel } from 'ai';
-import type { ModelProvider, ModelInfo } from '@proteus/core';
+import { JsonObjectSchema } from '@proteus/core';
+import type { JsonObject, ModelProvider, ModelInfo, ProviderDeps } from '@proteus/core';
 import { spawn as nodeSpawn } from 'node:child_process';
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
+import * as v from 'valibot';
 
 export const CLAUDE_CLI_PROVIDER_ID = 'claude';
 
 /** Spec model id → the `claude --model` alias the binary accepts. Aliases
  *  resolve to the latest model in each family, so they don't drift with point
  *  releases the way pinned `claude-opus-4-7` ids do. */
-const MODEL_ALIASES: Record<string, string> = {
+interface ModelAliases { [modelId: string]: string }
+
+export interface ClaudeModelProvider extends Omit<ModelProvider, 'createModel' | 'listModels'> {
+  listModels(deps?: ProviderDeps): ModelInfo[];
+  createModel(modelId: string, deps?: ProviderDeps): LanguageModelV2;
+}
+
+const MODEL_ALIASES: ModelAliases = {
   'claude-opus-4-x': 'opus',
   'claude-sonnet-4-x': 'sonnet',
   'claude-haiku-4-x': 'haiku',
@@ -40,8 +47,8 @@ const LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription, or
 /** Minimal child handle the provider needs — narrows `node:child_process` to a
  *  spawn seam so tests can inject a fake `claude` without a PATH shim. */
 export interface SpawnedClaude {
-  stdout: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
-  stderr: AsyncIterable<Uint8Array> | NodeJS.ReadableStream;
+  stdout: AsyncIterable<Uint8Array | string>;
+  stderr: AsyncIterable<Uint8Array | string>;
   stdin: { end(): void } | null;
   kill(signal?: NodeJS.Signals): void;
   /** Resolves with Node's authoritative close outcome. */
@@ -51,7 +58,7 @@ export interface SpawnedClaude {
 export type ClaudeSpawn = (args: string[], opts: { signal?: AbortSignal }) => SpawnedClaude;
 
 const defaultSpawn: ClaudeSpawn = (args, opts) => {
-  const child = nodeSpawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal }) as ChildProcessWithoutNullStreams;
+  const child = nodeSpawn('claude', args, { stdio: ['pipe', 'pipe', 'pipe'], signal: opts.signal });
   const exit = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
     child.on('close', (code, signal) => resolve({ code, signal: signal ?? null }));
     // `close` follows `error` and carries the authoritative code/signal pair.
@@ -86,7 +93,7 @@ export function checkClaudeAvailability(spawn: ClaudeSpawn = defaultSpawn): Prom
   return probeClaude(spawn);
 }
 
-export function createClaudeCliProvider(opts: ClaudeCliProviderOptions = {}): ModelProvider {
+export function createClaudeCliProvider(opts: ClaudeCliProviderOptions = {}): ClaudeModelProvider {
   const spawn = opts.spawn ?? defaultSpawn;
   const probe = opts.probe ?? (() => probeClaude(spawn));
   let cached: Promise<ClaudeAvailability> | null = null;
@@ -107,7 +114,7 @@ export function createClaudeCliProvider(opts: ClaudeCliProviderOptions = {}): Mo
       return undefined;
     },
     listModels: () => MODELS,
-    createModel(modelId): LanguageModel {
+    createModel(modelId): LanguageModelV2 {
       return createClaudeCliModel(modelId, spawn);
     },
   };
@@ -125,7 +132,7 @@ async function probeClaude(spawn: ClaudeSpawn): Promise<ClaudeAvailability> {
   const status = await runToString(spawn, ['auth', 'status']);
   let loggedIn = false;
   try {
-    const parsed = JSON.parse(status.stdout) as { loggedIn?: unknown };
+    const parsed = v.parse(v.object({ loggedIn: v.optional(v.boolean()) }), JSON.parse(status.stdout));
     loggedIn = parsed.loggedIn === true;
   } catch {
     loggedIn = false;
@@ -152,8 +159,11 @@ async function runToString(spawn: ClaudeSpawn, args: string[]): Promise<{ code: 
 async function readAll(stream: SpawnedClaude['stdout']): Promise<string> {
   const decoder = new TextDecoder();
   let out = '';
-  for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
-    out += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+  for await (const chunk of stream) {
+    const text = v.safeParse(v.string(), chunk);
+    out += text.success
+      ? text.output
+      : decoder.decode(v.parse(v.instance(Uint8Array), chunk), { stream: true });
   }
   out += decoder.decode();
   return out;
@@ -258,7 +268,7 @@ function runClaudeStream(
         child = spawn(claudeArgs(alias, built), { signal: options.abortSignal });
       } catch (error) {
         controller.enqueue({ type: 'stream-start', warnings: [] });
-        controller.enqueue({ type: 'error', error: spawnError(error) });
+        controller.enqueue({ type: 'error', error: spawnError({ error }) });
         controller.enqueue(finishPart('error', undefined));
         controller.close();
         return;
@@ -339,14 +349,17 @@ interface ClaudeUsage {
 
 // ─── stream-json parsing ────────────────────────────────────────────────────
 
-type ClaudeEvent = Record<string, unknown>;
+type ClaudeEvent = JsonObject;
 
 /** Split the child's stdout into newline-delimited JSON events. */
 async function* parseNdjson(stream: SpawnedClaude['stdout']): AsyncGenerator<ClaudeEvent> {
   const decoder = new TextDecoder();
   let buffer = '';
-  for await (const chunk of stream as AsyncIterable<Uint8Array | string>) {
-    buffer += typeof chunk === 'string' ? chunk : decoder.decode(chunk, { stream: true });
+  for await (const chunk of stream) {
+    const text = v.safeParse(v.string(), chunk);
+    buffer += text.success
+      ? text.output
+      : decoder.decode(v.parse(v.instance(Uint8Array), chunk), { stream: true });
     let nl: number;
     while ((nl = buffer.indexOf('\n')) >= 0) {
       const line = buffer.slice(0, nl).trim();
@@ -361,8 +374,7 @@ async function* parseNdjson(stream: SpawnedClaude['stdout']): AsyncGenerator<Cla
 
 function safeParse(line: string): ClaudeEvent {
   try {
-    const value = JSON.parse(line) as unknown;
-    return value && typeof value === 'object' ? (value as ClaudeEvent) : {};
+    return v.parse(JsonObjectSchema, JSON.parse(line));
   } catch {
     return {};
   }
@@ -372,11 +384,12 @@ function safeParse(line: string): ClaudeEvent {
  *  text_delta). Returns undefined when the event carries no text. */
 function textDelta(event: ClaudeEvent): string | undefined {
   if (event.type !== 'stream_event') return undefined;
-  const inner = event.event as ClaudeEvent | undefined;
+  const inner = jsonObject({ value: event.event });
   if (!inner || inner.type !== 'content_block_delta') return undefined;
-  const delta = inner.delta as ClaudeEvent | undefined;
+  const delta = jsonObject({ value: inner.delta });
   if (!delta || delta.type !== 'text_delta') return undefined;
-  return typeof delta.text === 'string' ? delta.text : '';
+  const text = v.safeParse(v.string(), delta.text);
+  return text.success ? text.output : '';
 }
 
 function isResult(event: ClaudeEvent): event is ClaudeEvent & { type: 'result' } {
@@ -384,12 +397,12 @@ function isResult(event: ClaudeEvent): event is ClaudeEvent & { type: 'result' }
 }
 
 function resultUsage(event: ClaudeEvent): ClaudeUsage {
-  const usage = event.usage as ClaudeEvent | undefined;
+  const usage = jsonObject({ value: event.usage });
   if (!usage) return {};
   return {
-    inputTokens: numberOf(usage.input_tokens),
-    outputTokens: numberOf(usage.output_tokens),
-    cachedInputTokens: numberOf(usage.cache_read_input_tokens),
+    inputTokens: numberOf({ value: usage.input_tokens }),
+    outputTokens: numberOf({ value: usage.output_tokens }),
+    cachedInputTokens: numberOf({ value: usage.cache_read_input_tokens }),
   };
 }
 
@@ -404,21 +417,27 @@ function mapFinishReason(event: ClaudeEvent): FinishReason {
 }
 
 function resultErrorMessage(event: ClaudeEvent): string {
-  const apiError = event.api_error_status;
-  if (typeof apiError === 'string' && apiError) return `Claude CLI error: ${apiError}`;
-  const result = event.result;
-  if (typeof result === 'string' && result) return `Claude CLI error: ${result}`;
+  const apiError = v.safeParse(v.string(), event.api_error_status);
+  if (apiError.success && apiError.output) return `Claude CLI error: ${apiError.output}`;
+  const result = v.safeParse(v.string(), event.result);
+  if (result.success && result.output) return `Claude CLI error: ${result.output}`;
   return 'Claude CLI returned an error.';
 }
 
-function numberOf(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+function numberOf(input: { value: unknown }): number | undefined {
+  const parsed = v.safeParse(v.number(), input.value);
+  return parsed.success && Number.isFinite(parsed.output) ? parsed.output : undefined;
 }
 
-function spawnError(error: unknown): Error {
-  const message = error instanceof Error ? error.message : String(error);
+function spawnError(input: { error: unknown }): Error {
+  const message = input.error instanceof Error ? input.error.message : String(input.error);
   if (/ENOENT/.test(message)) return new Error(INSTALL_HINT);
   return new Error(`Failed to start Claude Code: ${message}`);
+}
+
+function jsonObject(input: { value: unknown }): JsonObject | null {
+  const parsed = v.safeParse(JsonObjectSchema, input.value);
+  return parsed.success ? parsed.output : null;
 }
 
 function exitError(code: number, stderr: string): string {
@@ -442,7 +461,7 @@ async function collectGenerate(
 ): Promise<Awaited<ReturnType<LanguageModelV2['doGenerate']>>> {
   let text = '';
   let finishReason: FinishReason = 'stop';
-  let usage: { inputTokens: number | undefined; outputTokens: number | undefined; totalTokens: number | undefined; cachedInputTokens?: number } = {
+  let usage: GeneratedUsage = {
     inputTokens: undefined, outputTokens: undefined, totalTokens: undefined,
   };
   let error: unknown;
@@ -461,4 +480,11 @@ async function collectGenerate(
     usage,
     warnings: [],
   };
+}
+
+interface GeneratedUsage {
+  inputTokens: number | undefined;
+  outputTokens: number | undefined;
+  totalTokens: number | undefined;
+  cachedInputTokens?: number;
 }

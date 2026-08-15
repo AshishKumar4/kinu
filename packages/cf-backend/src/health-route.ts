@@ -55,7 +55,7 @@ export async function handleHealthRequest(request: Request, env: Env): Promise<R
       'POST/GET/DELETE /mcp/v1/<agentName>': 'MCP streamable-HTTP server',
       [`/agents/${ORCHESTRATOR_AGENT_SLUG}/<name>/...`]: 'chat WebSocket (Think SDK)',
       // Public
-      'https://<port>-<sandbox>-<token>.<preview-host-suffix>/': 'sandbox container preview',
+      'https://<capability-host>.<preview-host-suffix>/': 'Workspace or Sandbox port preview',
       '/pc/connect': 'reverse-WebSocket tunnel',
     },
     timestamp: new Date().toISOString(),

@@ -85,7 +85,10 @@ export type JsonGenerator = <T>(opts: {
 export interface ScaffoldControl {
   readonly rt: AgentRuntime;
   readonly sql: SqlExecutor;
-  readonly config: AgentConfigStore;
+  readonly config: Pick<
+    AgentConfigStore,
+    'getShadowSampleRate' | 'getAutoPromoteScaffold' | 'getGepaEvalBudget'
+  >;
   /** Resolved per call against the task being run, so a control-plane
    *  operation issued mid-session runs the candidate against the tools the
    *  session has right now, and `defaultInference` delegates to the ordinary
@@ -116,9 +119,9 @@ function scaffoldRunOptions(
     task,
     emit: () => undefined,
     llmStream: surface.llmStream,
-    ...(surface.callTool ? { callTool: surface.callTool } : {}),
-    ...(surface.history ? { history: surface.history } : {}),
-    ...(surface.defaultInference ? { defaultInference: surface.defaultInference } : {}),
+    callTool: surface.callTool,
+    history: surface.history,
+    defaultInference: surface.defaultInference,
     ...extra,
   };
 }
@@ -139,7 +142,7 @@ export async function runScaffoldCaptureText(
   let text = '';
   const result = await runScaffold(scaffoldRunOptions(control, task, {
     emit: (ev) => { text += scaffoldEventText(ev) ?? ''; },
-    ...(candidateCode !== undefined ? { scaffoldCodeOverride: candidateCode } : {}),
+    scaffoldCodeOverride: candidateCode,
     timeoutMs: SCAFFOLD_TURN_TIMEOUT_MS,
   }));
   if (!result.ok && result.error) throw new Error(result.error);
@@ -160,8 +163,8 @@ export async function runScaffoldOnce(
   const pending = opts?.useShadowOverride ? getPendingScaffold(control.sql) : null;
   const codeOverride = pending ? await readScaffoldVersion(control.rt, pending.version) : null;
   return runScaffold(scaffoldRunOptions(control, task, {
-    ...(codeOverride != null ? { scaffoldCodeOverride: codeOverride } : {}),
-    ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    scaffoldCodeOverride: codeOverride ?? undefined,
+    timeoutMs: opts?.timeoutMs,
   }));
 }
 
@@ -264,9 +267,9 @@ export async function runQueuedShadowTrials(control: ScaffoldControl): Promise<S
           currentOutput: trial.currentOutput,
           judge: (prompt, schema) => control.judge({ schema, prompt }),
           llmStream: surface.llmStream,
-          ...(surface.callTool ? { callTool: surface.callTool } : {}),
-          ...(surface.history ? { history: surface.history } : {}),
-          ...(surface.defaultInference ? { defaultInference: surface.defaultInference } : {}),
+          callTool: surface.callTool,
+          history: surface.history,
+          defaultInference: surface.defaultInference,
           config: { ...DEFAULT_AUTO_JUDGE_CONFIG, autoApply: control.config.getAutoPromoteScaffold() },
         });
         applied = result.applied ?? null;
@@ -307,7 +310,7 @@ export async function previewScaffoldLive(
   }
   return runScaffold(scaffoldRunOptions(control, task, {
     scaffoldCodeOverride: codeOverride,
-    ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
+    timeoutMs: opts?.timeoutMs,
   }));
 }
 
@@ -329,7 +332,7 @@ export async function proposeScaffold(
   );
   if (result.ok) {
     try {
-      control.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+      void control.sql`INSERT INTO evolution_events (id, type, message, data, created_at)
         VALUES (${nanoid()}, 'scaffold_proposed',
                 ${`Agent proposed scaffold v${result.version}: ${rationale.slice(0, 80)}`},
                 ${null}, ${Date.now()})`;
@@ -508,7 +511,8 @@ export async function runScaffoldGepaOptimization(
     try {
       output = await runScaffoldCaptureText(control, instance.input, candidate);
     } catch (err) {
-      return { score: 0, feedback: `scaffold execution failed: ${(err as Error).message}` };
+      const message = err instanceof Error ? err.message : String(err);
+      return { score: 0, feedback: `scaffold execution failed: ${message}` };
     }
     const exp = instance.expected;
     const criterion = exp && exp.outcome === 'accepted'
@@ -530,7 +534,8 @@ export async function runScaffoldGepaOptimization(
       });
       return { score: obj.score, feedback: obj.feedback };
     } catch (err) {
-      return { score: 0.5, feedback: `judge unavailable: ${(err as Error).message}` };
+      const message = err instanceof Error ? err.message : String(err);
+      return { score: 0.5, feedback: `judge unavailable: ${message}` };
     }
   };
 
@@ -555,10 +560,11 @@ export async function runScaffoldGepaOptimization(
       onIteration: makePersistingHook({ sql: control.sql, runId, evalSet, persisted }),
     });
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     finishGepaRun(control.sql, {
       runId, status: 'aborted', stopReason: 'aborted', winnerId: null, metricCalls: 0, iterations: 0,
     });
-    return { ok: false, error: (err as Error).message, runId };
+    return { ok: false, error: message, runId };
   }
 
   finishGepaRun(control.sql, {
@@ -570,7 +576,7 @@ export async function runScaffoldGepaOptimization(
     iterations: result.gepa.iterationsRun,
   });
 
-  return {
+  const output: GepaOptimizationResult = {
     ok: true,
     runId,
     proposed: result.proposed,
@@ -583,8 +589,9 @@ export async function runScaffoldGepaOptimization(
       heldOutNegatives: split.heldOutNegatives,
       guards: evalSet.length - split.heldOutNegatives,
     },
-    ...(split.degeneracy ? { selectionWarning: describeSplitDegeneracy(split.degeneracy) } : {}),
   };
+  if (split.degeneracy) output.selectionWarning = describeSplitDegeneracy(split.degeneracy);
+  return output;
 }
 
 /** Structured output over a review LanguageModel at the judge stage's

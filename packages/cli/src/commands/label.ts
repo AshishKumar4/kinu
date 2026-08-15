@@ -36,12 +36,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import {
-  DEFAULT_LABEL_BUDGET, corpusStats, describeEnsembleGap, parseLabelingFile,
+  DEFAULT_LABEL_BUDGET, corpusStats, decodeJsonValue, describeEnsembleGap, parseLabelingFile,
   renderCalibrationReport, renderCorpusReport, renderEnsembleReport, renderLabelingFile,
   weakLabel,
   type CalibrationReport, type CorpusEvalReport, type EnsembleReport, type EnsembleRunResult,
-  type LabelIngestResult, type LabelingItem,
+  type LabelIngestResult, type LabelingItem, type OutcomeLabel, type TurnOutcome,
 } from '@proteus/core';
+import type { JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips, type MineResult } from '../cc-transcript.js';
 import { requireAuthConfig } from '../config.js';
@@ -64,6 +66,78 @@ interface LabelOpts {
 }
 
 const USAGE = 'Usage: proteus label <export|ingest|ensemble|report|mine|score> [agent] [file]';
+
+const TurnOutcomeSchema = v.picklist([
+  'accepted', 'corrected', 'frustrated', 'abandoned',
+] satisfies TurnOutcome[]);
+const OutcomeLabelSchema = v.picklist([
+  'accepted', 'corrected', 'frustrated', 'abandoned', 'unclear',
+] satisfies OutcomeLabel[]);
+const MeasuredProportionSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number(), se: v.number() });
+const KappaEstimateSchema = v.object({ value: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
+const ClassifierAccuracySchema = v.object({
+  sensitivity: MeasuredProportionSchema, specificity: MeasuredProportionSchema, prevalence: v.number(),
+});
+const CorrectedRateSchema = v.object({
+  corrected: MeasuredProportionSchema, raw: v.number(), bias: v.number(), population: v.number(),
+});
+const CalibrationGapSchema = v.object({
+  kind: v.picklist(['no_population', 'no_labels', 'unlabeled_strata', 'uninformative_classifier']),
+  strata: v.array(v.string()),
+});
+const EnsembleGapSchema = v.object({
+  kind: v.picklist(['no_population', 'no_gold_labels', 'no_usable_labels', 'too_few_judges', 'not_run']),
+  judges: v.array(v.string()),
+});
+const LabelingItemSchema: v.GenericSchema<LabelingItem> = v.object({
+  outcomeId: v.string(), userMessage: v.string(), assistantResponse: v.string(),
+  followup: v.nullable(v.string()), createdAt: v.number(),
+});
+const LabelIngestResultSchema: v.GenericSchema<LabelIngestResult> = v.object({
+  stored: v.number(), unknown: v.array(v.string()), disagreements: v.number(),
+});
+const EnsembleRunResultSchema: v.GenericSchema<EnsembleRunResult> = v.union([
+  v.object({
+    run: v.object({
+      judged: v.array(v.object({ model: v.string(), stored: v.number(), failed: v.number() })),
+      turns: v.number(), alreadyJudged: v.number(),
+    }),
+    gap: v.null(),
+  }),
+  v.object({ run: v.null(), gap: EnsembleGapSchema }),
+]);
+const CalibrationReportSchema: v.GenericSchema<CalibrationReport> = v.object({
+  universe: v.number(), labeled: v.number(), unclear: v.number(), orphaned: v.number(),
+  labelers: v.array(v.string()), lastLabeledAt: v.nullable(v.number()),
+  strata: v.array(v.object({
+    predicted: TurnOutcomeSchema, population: v.number(), labeled: v.number(),
+    actual: v.array(v.object({ outcome: TurnOutcomeSchema, count: v.number() })),
+  })),
+  accuracy: v.nullable(ClassifierAccuracySchema),
+  kappa: v.nullable(KappaEstimateSchema),
+  overall: v.nullable(CorrectedRateSchema),
+  segments: v.array(v.object({
+    scaffoldVersion: v.nullable(v.number()),
+    observed: v.object({ events: v.number(), population: v.number() }),
+    rate: v.nullable(CorrectedRateSchema),
+  })),
+  gap: v.nullable(CalibrationGapSchema),
+});
+const EnsembleReportSchema: v.GenericSchema<EnsembleReport> = v.object({
+  members: v.array(v.object({ model: v.string(), labeled: v.number(), kappa: v.nullable(KappaEstimateSchema) })),
+  gold: v.number(), covered: v.number(), split: v.number(), compared: v.number(),
+  kappa: v.object({
+    humanEnsemble: v.nullable(KappaEstimateSchema), humanClassifier: v.nullable(KappaEstimateSchema),
+    ensembleClassifier: v.nullable(KappaEstimateSchema),
+  }),
+  confusion: v.array(v.object({ ensemble: OutcomeLabelSchema, human: TurnOutcomeSchema, count: v.number() })),
+  accuracy: v.nullable(ClassifierAccuracySchema),
+  standIn: v.nullable(v.object({
+    qualified: v.boolean(),
+    conditions: v.array(v.object({ name: v.string(), met: v.boolean(), detail: v.string() })),
+  })),
+  gap: v.nullable(EnsembleGapSchema),
+});
 
 export async function labelCommand(
   action: string | undefined,
@@ -94,7 +168,7 @@ export async function labelCommand(
 async function exportLabels(target: AgentTarget, opts: LabelOpts): Promise<void> {
   const size = parsePositiveInt(opts.size, DEFAULT_LABEL_BUDGET, 'size');
   const items = target.mode === 'cloud'
-    ? await cloudRpc<LabelingItem[]>(target, 'sampleOutcomeLabeling', [size])
+    ? await cloudRpc(target, 'sampleOutcomeLabeling', v.array(LabelingItemSchema), [size])
     : sampleLocalLabeling(target.localName, size);
 
   if (items.length === 0) {
@@ -149,7 +223,7 @@ async function ingestLabels(target: AgentTarget, file: string | undefined, opts:
 
   const labeler = opts.labeler ?? process.env.USER ?? 'owner';
   const result = target.mode === 'cloud'
-    ? await cloudRpc<LabelIngestResult>(target, 'recordOutcomeLabeling', [labeler, parsed.labels])
+    ? await cloudRpc(target, 'recordOutcomeLabeling', LabelIngestResultSchema, [labeler, decodeJsonValue({ value: parsed.labels })])
     : recordLocalOutcomeLabels(target.localName, { labeler, labels: parsed.labels });
 
   if (opts.json) {
@@ -185,7 +259,7 @@ async function ensembleLabels(target: AgentTarget, opts: LabelOpts): Promise<voi
   }
 
   const result = target.mode === 'cloud'
-    ? await cloudRpc<EnsembleRunResult>(target, 'runOutcomeEnsemble', specs.length > 0 ? [specs] : [])
+    ? await cloudRpc(target, 'runOutcomeEnsemble', EnsembleRunResultSchema, specs.length > 0 ? [specs] : [])
     : await runLocalOutcomeEnsemble(target.localName, specs.length > 0 ? specs : null);
 
   if (opts.json) {
@@ -230,10 +304,7 @@ function writeReport(path: string, markdown: string): void {
 /** Mine and weak-label, with the options both actions share. Read-only over
  *  the transcripts, and the same deterministic order every run, so `score`
  *  measures the corpus `mine` reported. */
-function mineAndLabel(opts: LabelOpts): {
-  mined: MineResult;
-  labels: ReturnType<typeof weakLabel>[];
-} {
+function mineAndLabel(opts: LabelOpts) {
   const mined = mineTranscripts({
     root: opts.root ? resolve(opts.root) : defaultTranscriptRoot(homedir()),
     projects: (opts.projects ?? '').split(',').map((p) => p.trim()).filter((p) => p !== ''),
@@ -342,19 +413,24 @@ async function reportLabels(target: AgentTarget, opts: LabelOpts): Promise<void>
  *  which renders the same block beneath K_align. */
 export async function fetchReport(target: AgentTarget): Promise<CalibrationReport> {
   return target.mode === 'cloud'
-    ? cloudRpc<CalibrationReport>(target, 'getOutcomeCalibration', [])
+    ? cloudRpc(target, 'getOutcomeCalibration', CalibrationReportSchema)
     : getLocalCalibration(target.localName);
 }
 
 function fetchEnsemble(target: AgentTarget): Promise<EnsembleReport> {
   return target.mode === 'cloud'
-    ? cloudRpc<EnsembleReport>(target, 'getOutcomeEnsemble', [])
+    ? cloudRpc(target, 'getOutcomeEnsemble', EnsembleReportSchema)
     : Promise.resolve(getLocalEnsemble(target.localName));
 }
 
-function cloudRpc<T>(target: AgentTarget, method: string, args: unknown[]): Promise<T> {
+function cloudRpc<T>(
+  target: AgentTarget,
+  method: string,
+  schema: v.GenericSchema<T>,
+  args: JsonValue[] = [],
+): Promise<T> {
   const auth = requireAuthConfig();
-  return callAgentRpc<T>(auth.origin, auth.token, target.cloudName, method, args);
+  return callAgentRpc(auth.origin, auth.token, target.cloudName, method, schema, args);
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number, label: string): number {

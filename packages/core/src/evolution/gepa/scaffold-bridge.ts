@@ -61,7 +61,7 @@ export interface RunScaffoldGepaOpts<I = unknown, E = unknown> {
   dryRun?: boolean;
 }
 
-export interface RunScaffoldGepaResult<I = unknown, E = unknown> {
+export interface RunScaffoldGepaResult {
   /** The raw GEPA output — winner + Pareto front + history. */
   gepa: GepaResult;
   /** The winner's eval-set score with its 95% interval. Read the two
@@ -84,7 +84,7 @@ export interface RunScaffoldGepaResult<I = unknown, E = unknown> {
 
 export async function runScaffoldGepa<I = unknown, E = unknown>(
   opts: RunScaffoldGepaOpts<I, E>,
-): Promise<RunScaffoldGepaResult<I, E>> {
+): Promise<RunScaffoldGepaResult> {
   const seed = opts.seed ?? await opts.rt.identity.scaffold.read();
 
   const gepa = await runGepa({

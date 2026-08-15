@@ -19,7 +19,6 @@ import { generateText } from 'ai';
 import {
   DEFAULT_WORKERS_AI_MODEL_ID,
   explorePrompt,
-  extractCodeBlock,
   formatInheritedContext,
   missionCallUsage,
   parseModelSpec,
@@ -27,9 +26,11 @@ import {
   reflectionPrompt,
   type BranchExploration,
   type BranchReflection,
-  type CraftedTool,
+  type ExploreToolHint,
+  type JsonValue,
   type LLMProviderConfig,
 } from '@proteus/core';
+import * as v from 'valibot';
 import { createLocalModelResolver, type LocalProviderCredentials } from './model-resolver.js';
 import { createFileCodexAuthStore } from './codex-auth-store.js';
 
@@ -39,21 +40,55 @@ if (!dbPath) {
   process.exit(1);
 }
 
+const stringMapSchema = v.record(v.string(), v.string());
+const localProviderCredentialsSchema = v.object({
+  openaiApiKey: v.optional(v.string()),
+  anthropicApiKey: v.optional(v.string()),
+  openrouterApiKey: v.optional(v.string()),
+  codexAccessToken: v.optional(v.string()),
+  openaiCompat: v.optional(v.record(v.string(), v.object({
+    baseURL: v.string(),
+    apiKey: v.optional(v.string()),
+    headers: v.optional(stringMapSchema),
+    extraHeaders: v.optional(stringMapSchema),
+  }))),
+});
+const branchWorkerMessageSchema = v.variant('method', [
+  v.object({
+    method: v.literal('explore'),
+    args: v.object({
+      history: v.array(v.object({ role: v.string(), content: v.string() })),
+      languages: v.pipe(v.array(v.string()), v.minLength(1)),
+      mode: v.picklist(['plan', 'build']),
+      siblings: v.optional(v.array(v.string()), []),
+    }),
+  }),
+  v.object({
+    method: v.literal('reflect'),
+    args: v.object({ task: v.string() }),
+  }),
+]);
+const branchWorkerEnvelopeSchema = v.object({ method: v.string() });
+const BRANCH_METHODS = new Set<string>(['explore', 'reflect']);
+
 const llmConfig: LLMProviderConfig = {
   name: process.env.PROTEUS_LLM_NAME ?? 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL ?? '',
-  headers: readJson<Record<string, string>>(process.env.PROTEUS_LLM_HEADERS) ?? {
+  headers: readJson(stringMapSchema, process.env.PROTEUS_LLM_HEADERS) ?? {
     Authorization: process.env.PROTEUS_AUTH ?? '',
   },
   model: process.env.PROTEUS_MODEL ?? DEFAULT_WORKERS_AI_MODEL_ID,
 };
 
+const credentials: LocalProviderCredentials = readJson(
+  localProviderCredentialsSchema,
+  process.env.PROTEUS_PROVIDER_CREDENTIALS,
+) ?? {};
+if (process.env.CODEX_ACCESS_TOKEN) credentials.codexAccessToken = process.env.CODEX_ACCESS_TOKEN;
+
 const modelResolver = createLocalModelResolver({
   llm: llmConfig,
-  credentials: {
-    ...(readJson<LocalProviderCredentials>(process.env.PROTEUS_PROVIDER_CREDENTIALS) ?? {}),
-    ...(process.env.CODEX_ACCESS_TOKEN ? { codexAccessToken: process.env.CODEX_ACCESS_TOKEN } : {}),
-  },
+  credentials,
   codexAuthStore: process.env.PROTEUS_CONFIG_PATH
     ? createFileCodexAuthStore(process.env.PROTEUS_CONFIG_PATH)
     : undefined,
@@ -65,77 +100,80 @@ db.exec('PRAGMA journal_mode = WAL');
 db.exec(`CREATE TABLE IF NOT EXISTS traces (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   step INTEGER NOT NULL, text TEXT NOT NULL,
-  code_used TEXT, created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+  created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
 )`);
 
 // Load crafted tools from the parent DB if available
-let craftedTools: CraftedTool[] = [];
+let craftedTools: ExploreToolHint[] = [];
 let parentDb: Database | null = null;
 try {
   const parentDbPath = process.env.PROTEUS_PARENT_DB;
   if (parentDbPath) {
     parentDb = new Database(parentDbPath, { readonly: true });
-    craftedTools = parentDb.query('SELECT name, description FROM crafted_tools').all() as CraftedTool[];
+    craftedTools = parentDb.query<ExploreToolHint, []>('SELECT name, description FROM crafted_tools').all();
   }
 } catch {}
 
-process.on('message', async (msg: { method: string; args: unknown }) => {
+process.on('message', async (rawMessage: JsonValue) => {
+  let method = 'unknown';
   try {
-    let result: unknown;
+    method = v.parse(branchWorkerEnvelopeSchema, rawMessage).method;
+    if (!BRANCH_METHODS.has(method)) throw new Error(`Unknown method: ${method}`);
+    const msg = v.parse(branchWorkerMessageSchema, rawMessage);
+    let result: BranchExploration | BranchReflection;
     switch (msg.method) {
       case 'explore': {
-        const { history, siblings = [] } = msg.args as {
-          history: Array<{ role: string; content: string }>;
-          tools: unknown[];
-          siblings?: readonly string[];
-        };
+        const { history, siblings } = msg.args;
+        const [language, ...alternates] = msg.args.languages;
+        if (!language) throw new Error('Branch exploration requires at least one executor language');
+        const languages: [string, ...string[]] = [language, ...alternates];
         const { system, user } = explorePrompt({
+          mode: msg.args.mode,
           context: formatInheritedContext(history),
           craftedTools,
+          languages,
           siblings,
         });
         const { model, providerOptions } = resolveLowEffortModel();
-        const { text, usage } = await generateText({
+        const request: Parameters<typeof generateText>[0] = {
           model,
           system,
-          messages: [{ role: 'user' as const, content: user }],
-          ...(providerOptions ? { providerOptions } : {}),
-        });
+          messages: [{ role: 'user', content: user }],
+        };
+        if (providerOptions) request.providerOptions = providerOptions;
+        const { text, usage } = await generateText(request);
         const trimmed = text.trim();
-        const codeUsed = extractCodeBlock(trimmed);
-        // Persist code_used so reflect + the parent's trace inspection see it.
-        db.run('INSERT INTO traces (step, text, code_used) VALUES (?, ?, ?)', [1, trimmed, codeUsed]);
+        db.run('INSERT INTO traces (step, text) VALUES (?, ?)', [1, trimmed]);
         // The spend travels back with the proposal: this process resolves its
         // own model, so the parent's mission ledger cannot see the call any
         // other way (mcts/engine.ts debits it).
-        result = { text: trimmed, codeUsed, usage: missionCallUsage(usage) } satisfies BranchExploration;
+        result = { text: trimmed, usage: missionCallUsage(usage) };
         break;
       }
       case 'reflect': {
-        const { task } = msg.args as { task: string };
+        const { task } = msg.args;
         // Read the branch's own trace table (mirror cf generateReflection): the
         // reflection is about the attempt this branch actually made, not the
         // bare task string.
-        const traces = db.query('SELECT text FROM traces ORDER BY step').all() as Array<{ text: string }>;
+        const traces = db.query<{ text: string }, []>('SELECT text FROM traces ORDER BY step').all();
         const attempt = traces.map(t => t.text).join('\n');
         const { model, providerOptions } = resolveLowEffortModel();
-        const { text, usage } = await generateText({
+        const request: Parameters<typeof generateText>[0] = {
           model,
-          messages: [{ role: 'user' as const, content: reflectionPrompt(task, attempt) }],
-          ...(providerOptions ? { providerOptions } : {}),
-        });
-        result = { text: text.trim(), usage: missionCallUsage(usage) } satisfies BranchReflection;
+          messages: [{ role: 'user', content: reflectionPrompt(task, attempt) }],
+        };
+        if (providerOptions) request.providerOptions = providerOptions;
+        const { text, usage } = await generateText(request);
+        result = { text: text.trim(), usage: missionCallUsage(usage) };
         break;
       }
-      default:
-        throw new Error(`Unknown method: ${msg.method}`);
     }
-    process.send!({ method: msg.method, result });
+    process.send!({ method, result });
   } catch (err) {
     // Always carry a message: an empty one reads as "no error" to any
     // presence-checking caller and hides the real failure.
     const message = err instanceof Error && err.message ? err.message : String(err) || 'branch worker failed';
-    process.send!({ method: msg.method, error: message });
+    process.send!({ method, error: message });
   }
 });
 
@@ -148,7 +186,7 @@ process.once('exit', () => {
 
 function readStoredModelSpec(): string | null {
   try {
-    const row = parentDb?.query("SELECT value FROM agent_config WHERE key = 'model' LIMIT 1").get() as { value: string } | null | undefined;
+    const row = parentDb?.query<{ value: string }, []>("SELECT value FROM agent_config WHERE key = 'model' LIMIT 1").get();
     return row?.value ?? null;
   } catch {
     return null;
@@ -163,8 +201,8 @@ function resolveLowEffortModel() {
   };
 }
 
-function readJson<T>(raw: string | undefined): T | null {
+function readJson<T>(schema: v.GenericSchema<T>, raw: string | undefined): T | null {
   if (!raw) return null;
-  try { return JSON.parse(raw) as T; }
+  try { return v.parse(schema, JSON.parse(raw)); }
   catch { return null; }
 }

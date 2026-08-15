@@ -68,7 +68,8 @@ every connected provider — not just Workers AI. On Workers AI the usual spread
 
 | Model | Description | Best For |
 |-------|-------------|----------|
-| Kimi K2.6 | Reasoning + tools + vision, 262k context. The default. | Complex problems, CTF challenges, algorithm design |
+| DeepSeek V4 Pro 0813 | Reasoning + tools, 1,048k context. The paid-access default. | Complex problems, CTF challenges, algorithm design |
+| Kimi K2.6 | Reasoning + tools + vision, 262k context | Long-context and vision-heavy work |
 | Nemotron 3 Super 120B / GPT OSS 120B | Reasoning models, 256k / 128k context | Alternate reasoning trajectories |
 | Llama 4 Scout | General-purpose instruction model | Quick tasks, simple questions, iteration |
 
@@ -77,17 +78,14 @@ tends to extract more complex tool patterns than an instruction model. Reasoning
 effort is a separate dial: `/effort low|medium|high` maps onto each provider
 family's native knob, so the same model can be run cheap or deep.
 
-### With Nimbus: Full Development Environment
+### Hosted Development Environment
 
-[Nimbus](https://github.com/AshishKumar4/Nimbus) is a companion project that provides a complete cloud-native development environment on Cloudflare Workers. Integration would give Proteus agents:
-
-- `npm install` — real package resolution and installation
-- `node` — execute JS/TS in isolated V8 isolates with Node.js API shims
-- `git` — full git operations (clone, push, pull, merge)
-- `vite` — serve web apps with HMR
-- `wrangler dev` — run Cloudflare Workers on the actual runtime
-
-With that, an agent could build, test, and deploy real applications instead of only calling tools.
+Hosted workspaces use one authoritative Nimbus session for files and shell
+state. The `workspace` executor provides a real POSIX shell, on-demand language
+runtimes, git and package tooling, long-running processes, and capability-hosted
+HTTP/WebSocket previews. Sandbox containers and connected devices remain
+separate, explicit environments; there is no second Nimbus executor or file
+copy between two workspace stores.
 
 ## 3. CLI Version Applications
 
@@ -211,8 +209,9 @@ graph TB
 
 This limitation used to read "no multi-agent collaboration at all," and that is
 no longer true. A workspace can staff durable `SubordinateAgent` facets through
-the `team` tool — each with its own turn loop, sharing the workspace's files —
-and reach the owner's other workspaces through `peers`. What is *not* yet shown
+the unified `agents` tool — each with its own turn loop, sharing the workspace's
+files — and reach the owner's other workspaces through the same surface. What is
+not yet shown
 is that delegating produces better results than working linearly: there is no
 measurement of whether decomposition beats a single long turn, how often
 subordinates duplicate each other's work, or how much coordination overhead the
@@ -246,45 +245,27 @@ The scaffold mutation pipeline exists and is fully implemented (4-gate validatio
 - The LLM often produces scaffolds that fail structural validation (forbidden patterns like `import`)
 - Successful mutations are rare — most conversations don't generate enough data for meaningful scaffold improvements
 
-### MCTS Exploration is Only Coarsely Visible
+### MCTS Exploration
 
-The engine broadcasts per-iteration progress (`onMctsProgress` →
-`broadcastMctsProgress`), so the UI is no longer a single static snapshot. But
-what it receives is an iteration counter and remaining budget — not incremental
-tree state, so the shape of the search still only resolves once it finishes.
+The engine broadcasts the latest node-bearing search tree on every changed
+iteration. Embedded and full-page explorers share the same live run resource,
+retain stale data with visible retryable errors, and resolve historical runs by
+id rather than only through the recent-run window.
 
 ## 6. Future Roadmap
 
-### Nimbus Integration
+### Preview-site Isolation
 
-Port Nimbus's shell emulator, npm client, and Node.js execution engine into Proteus's agent-utils layer. This would give agents real development capabilities:
-
-```mermaid
-graph LR
-    subgraph "Current Proteus"
-        S1[16 POSIX commands]
-        S2[new Function executor]
-        S3[No package management]
-    end
-
-    subgraph "With Nimbus"
-        N1[60+ Unix commands]
-        N2[V8 isolate executor<br/>with Node.js shims]
-        N3[npm install + resolution]
-        N4[git clone/push/pull]
-        N5[Vite dev server]
-        N6[Wrangler dev]
-    end
-
-    S1 -->|replace| N1
-    S2 -->|replace| N2
-    S3 -->|add| N3
-```
+Capability hosts already isolate preview origins and strip Proteus credentials.
+Complete cookie-site isolation between sibling previews additionally requires a
+preview suffix on a Public Suffix List boundary; that is a DNS/domain deployment
+prerequisite rather than an application fallback.
 
 ### Multi-Agent Coordination
 
-Delegation to specialist agents shipped — `team` for in-workspace subordinates,
-`peers` for cross-workspace handoff. What's left of the original idea:
+Delegation to specialist agents shipped through one `agents` surface:
+in-workspace subordinates and cross-workspace handoff. What's left of the
+original idea:
 - Share crafted tools via a global CraftStore (using R2 for cross-DO storage)
 - Coordinate MCTS exploration across agents for larger search spaces
 - Measure whether staffing actually beats working linearly

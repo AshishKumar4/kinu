@@ -16,6 +16,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
 import type { AgentRuntime, LLM, LLMProviderConfig } from '@proteus/core';
 import {
   initScaffoldTables, createAgentConfigStore, initAgentConfigTable,
@@ -31,11 +32,9 @@ const DUMMY_LLM: LLMProviderConfig = {
 
 /** A streaming LanguageModel stub — the DEFAULT loop's answer. */
 function fakeModel(answer: string): LanguageModel {
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
     doStream: async () => ({
       stream: new ReadableStream({
         start(controller) {
@@ -52,7 +51,7 @@ function fakeModel(answer: string): LanguageModel {
       }),
       response: { headers: {} },
     }),
-  } as unknown as LanguageModel;
+  });
 }
 
 async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean } = {}) {
@@ -61,7 +60,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db as never, {
+  const rt = createCLIRuntime(db, {
     dbPath: `/tmp/proteus-scaffold-test-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
   });
   // What `proteus create` provisions (identity/create.ts): the scaffold
@@ -73,7 +72,7 @@ async function setup(defaultAnswer: string, opts: { provisionScaffold?: boolean 
   initAgentConfigTable(rt.storage.execRaw);
   if (opts.provisionScaffold !== false) {
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-    rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
+    void rt.storage.sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
       VALUES (0, ${Date.now()}, ${'initial bootstrap'})`;
   }
   const events: SessionEvent[] = [];
@@ -94,13 +93,16 @@ async function installScaffold(
 ): Promise<void> {
   await rt.storage.vfs.writeFile(`scaffold/agent.js.v${opts.version}`, opts.code);
   if (opts.status === 'current') await rt.identity.scaffold.write(opts.code);
-  rt.storage.sql`
+  void rt.storage.sql`
     INSERT OR REPLACE INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (${opts.version}, ${Date.now()}, ${`v${opts.version}`}, ${opts.status})`;
 }
 
 const streamed = (events: SessionEvent[]) =>
-  events.filter((e) => e.type === 'text-delta').map((e) => (e as { delta: string }).delta).join('');
+  events
+    .filter((event): event is Extract<SessionEvent, { type: 'text-delta' }> => event.type === 'text-delta')
+    .map((event) => event.delta)
+    .join('');
 
 describe('a promoted scaffold drives a local turn', () => {
   // Fails before the fix: processTurn drove runChat directly, so this streamed
@@ -119,8 +121,9 @@ describe('a promoted scaffold drives a local turn', () => {
     expect(streamed(events)).toBe('the scaffold answered: who answers?');
     expect(streamed(events)).not.toContain('default loop');
     // The reply the user saw is what the durable history keeps.
-    const rows = db.query(`SELECT role, content FROM messages ORDER BY created_at`)
-      .all() as Array<{ role: string; content: string }>;
+    const rows = db.query<{ role: string; content: string }, []>(
+      `SELECT role, content FROM messages ORDER BY created_at`,
+    ).all();
     expect(rows.map((r) => r.content)).toEqual(['who answers?', 'the scaffold answered: who answers?']);
   });
 
@@ -202,7 +205,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
       version: 2, status: 'pending',
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'PENDING-SCAFFOLD' }; }`,
     });
-    (rt as { judgeModel?: LLM }).judgeModel = markerJudge('PENDING-SCAFFOLD');
+    rt.judgeModel = markerJudge('PENDING-SCAFFOLD');
 
     const config = createAgentConfigStore(rt.storage.sql);
     config.setShadowSampleRate(1);      // evaluate every turn — no flaky sampling
@@ -239,7 +242,7 @@ describe('a pending scaffold is resolvable, so the loop cannot deadlock', () => 
       code: `async function* run(rt, task) { yield { type: 'chunk', data: 'PENDING-SCAFFOLD' }; }`,
     });
     // The judge prefers whatever the LIVE turn produced.
-    (rt as { judgeModel?: LLM }).judgeModel = markerJudge('CURRENT-SCAFFOLD');
+    rt.judgeModel = markerJudge('CURRENT-SCAFFOLD');
 
     const config = createAgentConfigStore(rt.storage.sql);
     config.setShadowSampleRate(1);

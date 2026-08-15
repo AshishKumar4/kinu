@@ -323,6 +323,7 @@ async function resolveOrCreateIdentity(
   // only differ from our resolution under a concurrent same-account login.
   userId = account?.user_id ?? userId;
 
+  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
   const userDO = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
   await userDO.ensureProfile(await ownerCaller(env), email, profile.displayName ?? undefined);
 

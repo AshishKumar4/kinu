@@ -23,7 +23,7 @@ interface CraftCandidate {
 export function checkConflictsBeforeAdding(
   rt: AgentRuntime,
   candidate: CraftCandidate,
-): { conflicting: string[] } {
+) {
   // Name conflict: exact match
   const exact = rt.craftStore.get(candidate.name);
   if (exact) return { conflicting: [candidate.name] };
@@ -103,9 +103,9 @@ export async function upsertCraftedTool(
       rt.craftStore.update(conflicting[0]!, {
         code: candidate.code,
         description: candidate.description,
-        ...(candidate.params !== undefined ? { params: candidate.params } : {}),
+        params: candidate.params,
       });
-      rt.storage.sql`
+      void rt.storage.sql`
         UPDATE craft_scores SET score = ${candidate.score}, last_used_at = ${nowMs()}
         WHERE tool_name = ${conflicting[0]!}
       `;
@@ -120,7 +120,7 @@ export async function upsertCraftedTool(
     code: candidate.code,
     scope: 'local',
   });
-  rt.storage.sql`
+  void rt.storage.sql`
     INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
     VALUES (${candidate.name}, ${candidate.score}, 0, ${nowMs()})
   `;

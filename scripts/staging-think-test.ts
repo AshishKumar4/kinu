@@ -8,6 +8,30 @@
 //
 //   bun scripts/staging-think-test.ts "<agent-name>" "<prompt>" [listenSeconds]
 
+import * as v from 'valibot';
+
+const streamEventSchema = v.looseObject({
+  type: v.string(),
+  delta: v.optional(v.string()),
+  toolName: v.optional(v.string()),
+});
+
+const chatPartSchema = v.looseObject({
+  type: v.string(),
+  text: v.optional(v.string()),
+});
+
+const chatMessageSchema = v.looseObject({
+  role: v.string(),
+  parts: v.array(chatPartSchema),
+});
+
+const frameSchema = v.looseObject({
+  type: v.string(),
+  body: v.optional(v.string()),
+  messages: v.optional(v.array(chatMessageSchema)),
+});
+
 const BASE = process.env.PROTEUS_BASE_URL ?? 'https://proteus-staging.ashishkmr472.workers.dev';
 const AGENT = process.argv[2] ?? 'heads-test';
 const PROMPT = process.argv[3] ?? 'Say hello.';
@@ -35,15 +59,18 @@ function handleStreamChunk(chunk: string) {
     if (!s.startsWith('data:')) continue;
     const payload = s.slice(5).trim();
     if (!payload || payload === '[DONE]') continue;
-    let ev: any;
-    try { ev = JSON.parse(payload); } catch { continue; }
-    const ty = ev?.type ?? '';
-    if (ty === 'text-delta' && typeof ev.delta === 'string') { assistantText += ev.delta; lastActivity = Date.now(); }
+    let decoded;
+    try { decoded = JSON.parse(payload); } catch { continue; }
+    const parsed = v.safeParse(streamEventSchema, decoded);
+    if (!parsed.success) continue;
+    const event = parsed.output;
+    const ty = event.type;
+    if (ty === 'text-delta' && event.delta !== undefined) { assistantText += event.delta; lastActivity = Date.now(); }
     else if (ty === 'reasoning-delta') { lastActivity = Date.now(); }
     else if (ty.startsWith('tool-')) {
-      const tag = `${ty}${ev.toolName ? ':' + ev.toolName : ''}`;
+      const tag = `${ty}${event.toolName ? ':' + event.toolName : ''}`;
       if (!toolEvents.includes(tag)) { toolEvents.push(tag); note('  ⚙', tag); }
-    } else if (ty === 'error') { const m = JSON.stringify(ev).slice(0, 300); errors.push(m); note('  ✗ STREAM ERROR', m); }
+    } else if (ty === 'error') { const m = JSON.stringify(event).slice(0, 300); errors.push(m); note('  ✗ STREAM ERROR', m); }
     else if (ty === 'finish' || ty === 'finish-step') { note('  ✓', ty); }
   }
 }
@@ -62,27 +89,30 @@ ws.addEventListener('open', () => {
 });
 
 ws.addEventListener('message', (ev) => {
-  const raw = typeof ev.data === 'string' ? ev.data : '';
-  if (!raw) return;
-  let data: any;
-  try { data = JSON.parse(raw); } catch { return; }
-  const type = data?.type ?? '(no-type)';
+  const messageData = v.safeParse(v.string(), ev.data);
+  if (!messageData.success || messageData.output.length === 0) return;
+  let decoded;
+  try { decoded = JSON.parse(messageData.output); } catch { return; }
+  const parsed = v.safeParse(frameSchema, decoded);
+  if (!parsed.success) return;
+  const data = parsed.output;
+  const type = data.type;
   frameCounts[type] = (frameCounts[type] ?? 0) + 1;
   if (frameCounts[type] === 1) note('·', `first frame: ${type}`);
-  if (type === 'cf_agent_use_chat_response' && typeof data.body === 'string') handleStreamChunk(data.body);
+  if (type === 'cf_agent_use_chat_response' && data.body !== undefined) handleStreamChunk(data.body);
   else if (type === 'cf_agent_chat_messages') {
     for (const m of (data.messages ?? [])) {
-      for (const p of (m.parts ?? [])) {
+      for (const p of m.parts) {
         const blob = JSON.stringify(p);
         if (/error|aborted|budget|Merge synthesis|reading 'input'/i.test(blob)) note('  ■', `[${m.role}/${p.type}] ${blob.slice(0, 400)}`);
-        if (p.type === 'text' && m.role === 'assistant' && typeof p.text === 'string' && p.text.length > assistantText.length) assistantText = p.text;
+        if (p.type === 'text' && m.role === 'assistant' && p.text !== undefined && p.text.length > assistantText.length) assistantText = p.text;
       }
     }
   }
 });
 
 ws.addEventListener('error', (e) => note('WS', `error: ${JSON.stringify(e).slice(0, 200)}`));
-ws.addEventListener('close', (e) => note('WS', `close code=${(e as CloseEvent).code}`));
+ws.addEventListener('close', (e) => note('WS', `close code=${e.code}`));
 
 const hb = setInterval(() => {
   const idle = ((Date.now() - lastActivity) / 1000).toFixed(0);

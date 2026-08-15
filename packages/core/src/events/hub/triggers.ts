@@ -29,15 +29,17 @@
  *   mcp_route         sever  (child has no MCP exposure)
  */
 
+import * as v from 'valibot';
 import {
   type TriggerId, type TriggerKind, type TriggerRow, type TrustLevel,
 } from './types.js';
 import { ulid } from './ulid.js';
-import type { SqlExec } from '../../types/primitives.js';
+import type { SqlExec, SqlValue } from '../../types/primitives.js';
+import { parseJsonObject, type JsonObject } from '../../utils/json.js';
 
 export type ForkPolicy = 'copy' | 'sever' | 'share';
 
-export const DEFAULT_FORK_POLICY: Record<TriggerKind, ForkPolicy> = {
+export const DEFAULT_FORK_POLICY = {
   webhook_durable:   'sever',
   webhook_ephemeral: 'sever',
   timer_oneshot:     'sever',
@@ -47,16 +49,37 @@ export const DEFAULT_FORK_POLICY: Record<TriggerKind, ForkPolicy> = {
   peer_inbox:        'copy',
   mcp_route:         'sever',
   email_route:       'sever',  // a fork has its own address; re-grant deliberately
-};
+} satisfies Record<TriggerKind, ForkPolicy>;
 
 export interface RegisterSpec {
   kind: TriggerKind;
-  spec: Record<string, unknown>;
+  spec: JsonObject;
   creator_trust: TrustLevel;
   fork_policy?: ForkPolicy;
   rate_limit_per_min?: number;
   next_fire_at?: number;
 }
+
+const TriggerRowSchema = v.object({
+  id: v.string(),
+  kind: v.picklist([
+    'webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
+    'process_watch', 'file_watch', 'peer_inbox', 'mcp_route', 'email_route',
+  ]),
+  spec: v.string(),
+  creator_trust: v.picklist(['external', 'authenticated', 'owner', 'self']),
+  fork_policy: v.nullable(v.picklist(['copy', 'sever', 'share'])),
+  state: v.picklist(['active', 'paused', 'revoked']),
+  created_at: v.number(),
+  paused_at: v.nullable(v.number()),
+  revoked_at: v.nullable(v.number()),
+  rate_limit_per_min: v.number(),
+  next_fire_at: v.nullable(v.number()),
+  last_fire_at: v.nullable(v.number()),
+  fire_count: v.number(),
+});
+const OptionalNextFireRowSchema = v.object({ next_fire_at: v.nullable(v.number()) });
+const NextFireRowSchema = v.object({ next_fire_at: v.number() });
 
 export interface AlarmScheduler {
   /** Ask the DO to wake at this time (or earlier). Idempotent — multiple
@@ -93,7 +116,7 @@ export class TriggerRegistry {
       `SELECT id, kind, spec, creator_trust, fork_policy, state, rate_limit_per_min,
               created_at, paused_at, revoked_at, next_fire_at, last_fire_at, fire_count
        FROM triggers WHERE id = ?`, id,
-    ).toArray() as Array<Record<string, unknown>>;
+    ).toArray();
     if (rows.length === 0) return null;
     return rowToTrigger(rows[0]);
   }
@@ -103,11 +126,11 @@ export class TriggerRegistry {
                       rate_limit_per_min, created_at, paused_at, revoked_at,
                       next_fire_at, last_fire_at, fire_count
                FROM triggers WHERE 1=1`;
-    const bindings: unknown[] = [];
+    const bindings: SqlValue[] = [];
     if (filter?.kind) { sql += ` AND kind = ?`; bindings.push(filter.kind); }
     if (filter?.state) { sql += ` AND state = ?`; bindings.push(filter.state); }
     sql += ` ORDER BY created_at DESC`;
-    const rows = this.sql.exec(sql, ...bindings).toArray() as Array<Record<string, unknown>>;
+    const rows = this.sql.exec(sql, ...bindings).toArray();
     return rows.map(rowToTrigger);
   }
 
@@ -135,7 +158,7 @@ export class TriggerRegistry {
     // Re-schedule the trigger if it has a next_fire_at in the future.
     const fire = this.sql.exec(
       `SELECT next_fire_at FROM triggers WHERE id = ?`, id,
-    ).toArray() as Array<{ next_fire_at: number | null }>;
+    ).toArray().map((row) => v.parse(OptionalNextFireRowSchema, row));
     if (fire[0]?.next_fire_at && fire[0].next_fire_at > now) {
       this.alarm.scheduleAt(fire[0].next_fire_at);
     }
@@ -161,7 +184,7 @@ export class TriggerRegistry {
     const fireRows = this.sql.exec(
       `SELECT next_fire_at FROM triggers WHERE state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at > ?`,
       now,
-    ).toArray() as Array<{ next_fire_at: number }>;
+    ).toArray().map((row) => v.parse(NextFireRowSchema, row));
     if (fireRows.length > 0) {
       const soonest = Math.min(...fireRows.map(r => r.next_fire_at));
       this.alarm.scheduleAt(soonest);
@@ -204,7 +227,7 @@ export class TriggerRegistry {
        FROM triggers
        WHERE state = 'active' AND next_fire_at IS NOT NULL AND next_fire_at <= ?`,
       now,
-    ).toArray() as Array<Record<string, unknown>>;
+    ).toArray();
     return rows.map(rowToTrigger);
   }
 
@@ -228,12 +251,12 @@ export class TriggerRegistry {
    *  ids assigned. Caller copies them into the child DO. Severed kinds are
    *  not included; shared kinds reference the original ids (the spec column
    *  contains the share linkage). */
-  forkPlan(): { copy: TriggerRow[]; share: TriggerRow[] } {
+  forkPlan() {
     const all = this.list({ state: 'active' });
     const copy: TriggerRow[] = [];
     const share: TriggerRow[] = [];
     for (const t of all) {
-      const policy = (t.fork_policy ?? DEFAULT_FORK_POLICY[t.kind]) as ForkPolicy;
+      const policy = t.fork_policy ?? DEFAULT_FORK_POLICY[t.kind];
       if (policy === 'copy')  copy.push(t);
       if (policy === 'share') share.push(t);
       // 'sever' → not included
@@ -242,20 +265,21 @@ export class TriggerRegistry {
   }
 }
 
-function rowToTrigger(r: Record<string, unknown>): TriggerRow {
+function rowToTrigger<T>(row: T): TriggerRow {
+  const r = v.parse(TriggerRowSchema, row);
   return {
-    id: r.id as string,
-    kind: r.kind as TriggerKind,
-    spec: JSON.parse((r.spec as string) ?? '{}'),
-    creator_trust: r.creator_trust as TrustLevel,
-    fork_policy: r.fork_policy as 'copy' | 'sever' | 'share' | null,
-    state: r.state as TriggerRow['state'],
-    created_at: r.created_at as number,
-    paused_at: r.paused_at as number | null,
-    revoked_at: r.revoked_at as number | null,
-    rate_limit_per_min: r.rate_limit_per_min as number,
-    next_fire_at: r.next_fire_at as number | null,
-    last_fire_at: r.last_fire_at as number | null,
-    fire_count: r.fire_count as number,
+    id: r.id,
+    kind: r.kind,
+    spec: parseJsonObject(r.spec),
+    creator_trust: r.creator_trust,
+    fork_policy: r.fork_policy,
+    state: r.state,
+    created_at: r.created_at,
+    paused_at: r.paused_at,
+    revoked_at: r.revoked_at,
+    rate_limit_per_min: r.rate_limit_per_min,
+    next_fire_at: r.next_fire_at,
+    last_fire_at: r.last_fire_at,
+    fire_count: r.fire_count,
   };
 }

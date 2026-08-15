@@ -1,0 +1,817 @@
+diff --git a/dist/_shared/session-router.d.ts b/dist/_shared/session-router.d.ts
+index d2636957bf012dc56e6714762a60b10ede329962..123edea6c6858d467eabfe32f758788cccc4533e 100644
+--- a/dist/_shared/session-router.d.ts
++++ b/dist/_shared/session-router.d.ts
+@@ -37,6 +37,8 @@
+ export declare const SESSION_ROUTE_PREFIX = "/s";
+ /** Header the Worker sets on forwarded requests. The DO reads it. */
+ export declare const BASE_PATH_HEADER = "X-Nimbus-Base";
++export declare const HOSTED_WEBSOCKET_KEY_HEADER = "x-nimbus-hosted-websocket";
++export declare const HOSTED_WEBSOCKET_CAPABILITY_HEADER = "x-nimbus-hosted-websocket-capability";
+ /**
+  * Header the Worker sets to inform the DO of its tenant scope. The DO
+  * reads it for audit-logging / RPC-routing; it does NOT use it for
+diff --git a/dist/_shared/session-router.js b/dist/_shared/session-router.js
+index eb72a2d4d5e537191f0fafcb60a10bb0a9fed51c..4ca2379035bb4a0ad8d4cc5bddb668c00ebafe31 100644
+--- a/dist/_shared/session-router.js
++++ b/dist/_shared/session-router.js
+@@ -38,6 +38,8 @@ import { NIMBUS_TOKEN_QUERY } from '../auth/middleware.js';
+ export const SESSION_ROUTE_PREFIX = '/s';
+ /** Header the Worker sets on forwarded requests. The DO reads it. */
+ export const BASE_PATH_HEADER = 'X-Nimbus-Base';
++export const HOSTED_WEBSOCKET_KEY_HEADER = 'x-nimbus-hosted-websocket';
++export const HOSTED_WEBSOCKET_CAPABILITY_HEADER = 'x-nimbus-hosted-websocket-capability';
+ /**
+  * Header the Worker sets to inform the DO of its tenant scope. The DO
+  * reads it for audit-logging / RPC-routing; it does NOT use it for
+diff --git a/dist/loaders/process-fabric.d.ts b/dist/loaders/process-fabric.d.ts
+index 364cd427563cc019b9afe8b2454eadefcac5edea..22f06c3663433cf1100f3017ab6213617f3ba0ce 100644
+--- a/dist/loaders/process-fabric.d.ts
++++ b/dist/loaders/process-fabric.d.ts
+@@ -258,6 +258,8 @@ export interface HostedProcess {
+     readonly lost: Promise<never>;
+     /** Inbound HTTP for the process's registered ports. */
+     handleHttpRequest(request: Request): Promise<Response>;
++    /** Inbound WebSocket upgrade kept on fetch semantics end-to-end. */
++    handleWebSocketRequest(request: Request): Promise<Response>;
+     /**
+      * Idempotent teardown. Settles only once the process is actually gone —
+      * on a remote host that is a round trip, and the writer identity this
+diff --git a/dist/loaders/process-fabric.js b/dist/loaders/process-fabric.js
+index b3904a3672e885d0319c3a785c0d947af06ada38..927534a1ced3aa44e7a99b29a06f57774ab49a6a 100644
+--- a/dist/loaders/process-fabric.js
++++ b/dist/loaders/process-fabric.js
+@@ -352,7 +352,10 @@ export class ProcessFabric {
+         return new ResidentProcessHandle({
+             done,
+             booted: () => hosted.started,
+-            routeTarget: { handleHttpRequest: (request) => hosted.handleHttpRequest(request) },
++            routeTarget: {
++                handleHttpRequest: (request) => hosted.handleHttpRequest(request),
++                handleWebSocketRequest: (request) => hosted.handleWebSocketRequest(request),
++            },
+             kill: () => { held.release(); void release(); },
+             describe: () => hosted.describe(),
+         });
+diff --git a/dist/loaders/process-host.d.ts b/dist/loaders/process-host.d.ts
+index 9dbe4afcfa718883e45dea5e51454103f40ea6dc..2d6c61b2efa815eef5995756a09a886acde72e83 100644
+--- a/dist/loaders/process-host.d.ts
++++ b/dist/loaders/process-host.d.ts
+@@ -52,12 +52,10 @@
+  *              the inbound call and the facet dies with it. Nothing in this
+  *              fabric arms an alarm, on either substrate.
+  *
+- * WebSockets are NOT in that list, because a resident process never receives
+- * one. `RouteableFacetTarget` is `handleHttpRequest(Request): Promise<Response>`
+- * and nothing else; no runner returns a 101 with a `webSocket` member; every
+- * inbound socket Nimbus serves — the shell terminal, `/api/logs/<pid>`, vite
+- * HMR — terminates on the session DO and reaches the process, if at all, as
+- * events on a supervisor poll. That is substrate-independent by construction.
++ * WebSocket upgrades cannot use the parts-based RPC path: a 101 Response owns
++ * a live socket. They therefore stay on fetch semantics for every hop. A local
++ * facet is fetched directly; a peer is fetched as a service binding and then
++ * fetches its hosted facet directly.
+  */
+ import { type ProcessHost, type ResidentDiskReader } from './process-fabric.js';
+ /** The substrates this deployment can be configured for. */
+diff --git a/dist/loaders/process-host.js b/dist/loaders/process-host.js
+index 8d482e0a83de11154e100dc169f7d41837e26bf7..253731fd562bd1ab7f10c8e964f3e9ff6382b58f 100644
+--- a/dist/loaders/process-host.js
++++ b/dist/loaders/process-host.js
+@@ -52,18 +52,17 @@
+  *              the inbound call and the facet dies with it. Nothing in this
+  *              fabric arms an alarm, on either substrate.
+  *
+- * WebSockets are NOT in that list, because a resident process never receives
+- * one. `RouteableFacetTarget` is `handleHttpRequest(Request): Promise<Response>`
+- * and nothing else; no runner returns a 101 with a `webSocket` member; every
+- * inbound socket Nimbus serves — the shell terminal, `/api/logs/<pid>`, vite
+- * HMR — terminates on the session DO and reaches the process, if at all, as
+- * events on a supervisor poll. That is substrate-independent by construction.
++ * WebSocket upgrades cannot use the parts-based RPC path: a 101 Response owns
++ * a live socket. They therefore stay on fetch semantics for every hop. A local
++ * facet is fetched directly; a peer is fetched as a service binding and then
++ * fetches its hosted facet directly.
+  */
+ import { disposeRpcResource } from '@nimbus-sh/core/_shared/rpc-dispose.js';
+ import { isTransientDoReset } from '@nimbus-sh/core/observability/oom-classify.js';
+ import { PEER_RETRY_BACKOFF_MS, PEER_TRANSIENT_RESET_RETRIES } from './fanout-pool.js';
+ import { DYNAMIC_WORKER_CODE_LIMIT_BYTES, openResidentFacet, residentFacetName, runOneShotWorker, } from './workerd-facet-host.js';
+ import { BindingError } from './vendor/errors.js';
++import { HOSTED_WEBSOCKET_CAPABILITY_HEADER, HOSTED_WEBSOCKET_KEY_HEADER } from '../_shared/session-router.js';
+ /**
+  * The var that picks the substrate, and the only place its name appears.
+  * Unset means `facet`; an unrecognized value is refused rather than defaulted,
+@@ -233,6 +232,7 @@ class PeerProcessHost {
+     async open(params) {
+         const placement = await this._place(params.pid);
+         this.tokensInUse.set(params.pid, placement.isolateToken);
++        const webSocketCapability = crypto.randomUUID();
+         // Held open for the process's whole life: it is the lifecycle, and it is
+         // also what keeps the hosting DO resident. It settles when a `lifetime`
+         // runner exits or when a `boot` runner's host is cancelled, and rejects if
+@@ -242,6 +242,7 @@ class PeerProcessHost {
+             pid: params.pid,
+             writerId: params.writerId,
+             workerKey: params.workerKey,
++            webSocketCapability,
+             startArgs: params.startArgs,
+         });
+         hostLeg.catch(() => { });
+@@ -284,6 +285,7 @@ class PeerProcessHost {
+             // process that was up, and the fabric ends the process on it.
+             lost: hostLeg.then(() => new Promise(() => { })),
+             handleHttpRequest: (request) => routeThroughPeer(placement.stub, params.workerKey, request),
++            handleWebSocketRequest: (request) => routeWebSocketThroughPeer(placement.stub, params.workerKey, webSocketCapability, request),
+             release: async () => {
+                 if (released)
+                     return;
+@@ -398,6 +400,12 @@ async function routeThroughPeer(stub, workerKey, request) {
+         headers: responseHeaders,
+     });
+ }
++async function routeWebSocketThroughPeer(stub, workerKey, capability, request) {
++    const headers = new Headers(request.headers);
++    headers.set(HOSTED_WEBSOCKET_KEY_HEADER, workerKey);
++    headers.set(HOSTED_WEBSOCKET_CAPABILITY_HEADER, capability);
++    return stub.fetch(new Request(request.url, { method: request.method, headers }));
++}
+ /**
+  * Headers as pairs, with every `Set-Cookie` kept separate.
+  *
+diff --git a/dist/loaders/workerd-facet-host.js b/dist/loaders/workerd-facet-host.js
+index 4f4e6a7cdfcadf49c5c684e61f30253881e50d7f..956b6cfbc1561afa8b9482610c29408fe1bda880 100644
+--- a/dist/loaders/workerd-facet-host.js
++++ b/dist/loaders/workerd-facet-host.js
+@@ -191,6 +191,7 @@ export function openResidentFacet(ctx, env, disk, supervisor, params) {
+         // with it, so there is no independent death to report.
+         lost: new Promise(() => { }),
+         handleHttpRequest: (request) => facet.handleHttpRequest(request),
++        handleWebSocketRequest: (request) => facet.fetch(request),
+         release,
+         slot,
+     };
+diff --git a/dist/session/init.js b/dist/session/init.js
+index df748079d03e0aba0439b451280949ee727e6614..1a6a2b01db8d02df82ad9f5a6fa509f8132f2a1d 100644
+--- a/dist/session/init.js
++++ b/dist/session/init.js
+@@ -76,6 +76,7 @@ import { sessionAiEnv } from './ai.js';
+ import { routeSessionLoopback } from './loopback.js';
+ import { setPhase } from './init-phases.js';
+ import { VITE_CONFIG_KEY } from './keys.js';
++import { clearPortCapability } from './programmatic.js';
+ function resolveNpmPrefix(prefix, cwd) {
+     return prefix.startsWith('/')
+         ? normalizeVfsPath(prefix)
+@@ -1243,6 +1244,7 @@ export async function initSession(self, ws) {
+             try {
+                 const previewStub = makeLongRunningPortStub(self.viteDevServer);
+                 self.portRegistry.bindFacetStub(previewProcEntry.pid, previewStub);
++                await clearPortCapability(self, previewPort);
+                 self.portRegistry.register(previewPort, previewProcEntry.pid);
+                 self._viteShimPid = previewProcEntry.pid;
+                 self._viteShimPort = previewPort;
+@@ -1457,6 +1459,7 @@ export async function initSession(self, ws) {
+         // facet uses (Express, Bun.serve, http.createServer().listen()).
+         const viteStub = makeLongRunningPortStub(self.viteDevServer);
+         self.portRegistry.bindFacetStub(viteProcEntry.pid, viteStub);
++        await clearPortCapability(self, resolvedPort);
+         self.portRegistry.register(resolvedPort, viteProcEntry.pid);
+         // Track the wiring so `vite stop` and crash-handlers can tear it
+         // down without searching the registry.
+diff --git a/dist/session/nimbus-session.d.ts b/dist/session/nimbus-session.d.ts
+index f74cdbb85c3c0ca86be408ac9c954629d3e5bada..6957c8df2c59be40696ddbb29edd5bc4e73c6e6c 100644
+--- a/dist/session/nimbus-session.d.ts
++++ b/dist/session/nimbus-session.d.ts
+@@ -262,6 +262,7 @@ export declare class NimbusSession extends CloudflareDurableObject {
+     _rpcReadFileBytes(path: string, pid?: number): Promise<Uint8Array | null>;
+     _rpcInnerDoFetch(req: any): Promise<any>;
+     _rpcWriteFile(path: string, content: string | Uint8Array, pid?: number): Promise<number>;
++    _rpcWriteProtectedRootFile(rootPath: string, path: string, content: string | Uint8Array): Promise<void>;
+     _rpcStat(path: string, pid?: number): Promise<any>;
+     _rpcLstat(path: string, pid?: number): Promise<any>;
+     _rpcHasLegacySymlinkUnder(path: string, pid?: number): Promise<boolean>;
+@@ -455,6 +456,7 @@ export declare class NimbusSession extends CloudflareDurableObject {
+         port: number;
+         ok: boolean;
+     }>;
++    _rpcRouteCapabilityPort(port: number, capability: string, request: Request, innerPath: string): Promise<Response>;
+     _rpcDeleteFile(path: string, options?: {
+         recursive?: boolean;
+     }): Promise<void>;
+diff --git a/dist/session/nimbus-session.js b/dist/session/nimbus-session.js
+index 897b3c9911ea81bd33b6a007a0b095f134c0d6ca..e90a04ffb6d04a91739487dd8374ff6b727e807b 100644
+--- a/dist/session/nimbus-session.js
++++ b/dist/session/nimbus-session.js
+@@ -615,6 +615,9 @@ export class NimbusSession extends CloudflareDurableObject {
+     async _rpcReadFileBytes(path, pid) { return _rpc._rpcReadFileBytes(this, path, pid); }
+     async _rpcInnerDoFetch(req) { return _rpc._rpcInnerDoFetch(this, req); }
+     async _rpcWriteFile(path, content, pid) { return _rpc._rpcWriteFile(this, path, content, pid); }
++    async _rpcWriteProtectedRootFile(rootPath, path, content) {
++        return _rpc._rpcWriteProtectedRootFile(this, rootPath, path, content);
++    }
+     async _rpcStat(path, pid) { return _rpc._rpcStat(this, path, pid); }
+     async _rpcLstat(path, pid) { return _rpc._rpcLstat(this, path, pid); }
+     async _rpcHasLegacySymlinkUnder(path, pid) {
+@@ -772,6 +775,9 @@ export class NimbusSession extends CloudflareDurableObject {
+     async _rpcListPorts() { return _programmatic.rpcListPorts(this); }
+     async _rpcExposePort(port) { return _programmatic.rpcExposePort(this, port); }
+     async _rpcUnexposePort(port) { return _programmatic.rpcUnexposePort(this, port); }
++    async _rpcRouteCapabilityPort(port, capability, request, innerPath) {
++        return _routes.routeCapabilityPort(this, port, capability, request, innerPath);
++    }
+     async _rpcDeleteFile(path, options) { return _programmatic.rpcDeleteFile(this, path, options); }
+     async _rpcDestroy(options) { return _programmatic.rpcDestroy(this, options); }
+     // Legacy VFS (direct method calls)
+diff --git a/dist/session/programmatic.d.ts b/dist/session/programmatic.d.ts
+index d7f0ad86f60995f519d414d0daba12e37230ea3f..7969f3c31c0d5afe66478a03f299039ca16be45f 100644
+--- a/dist/session/programmatic.d.ts
++++ b/dist/session/programmatic.d.ts
+@@ -12,10 +12,10 @@ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-proces
+ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+ import type { RuntimeCatalogEnv } from '../runtime/runtime-catalog.js';
+ import type { SqliteVFS } from '@nimbus-sh/core/vfs/sqlite-vfs.js';
+-interface ProgrammaticShell {
++export interface ProgrammaticShell {
+     env?: Record<string, string>;
+-    getEnv?(): Record<string, string>;
+-    getCwd?(): string;
++    getEnv(): Record<string, string>;
++    getCwd(): string;
+     execute(command: string, options?: ProgrammaticShellExecuteOptions): Promise<{
+         exitCode: number;
+     }>;
+@@ -35,6 +35,7 @@ interface ProgrammaticContext {
+     /** Holds a background process's work open for the life of the process. */
+     waitUntil?(promise: Promise<unknown>): void;
+     storage: {
++        get(key: string): Promise<unknown>;
+         delete(key: string): Promise<void>;
+         deleteAll(): Promise<void>;
+         deleteAlarm(): Promise<void>;
+@@ -66,6 +67,7 @@ export interface ProgrammaticHost {
+     viteDevServer: ProgrammaticViteServer | null;
+     cirrusReal: ProgrammaticCirrusServer | null;
+     _cpRegistry: MinShellRegistry | null;
++    _programmaticShellQueues?: Map<string, Promise<void>>;
+     _viteShimPid: number | null;
+     _viteShimPort: number | null;
+     _cirrusHmrWsClients?: {
+@@ -100,11 +102,18 @@ export interface ProgrammaticReadyOptions {
+     preinstall?: string[];
+ }
+ export interface ProgrammaticExecOptions extends ProgrammaticReadyOptions {
++    shellId?: string;
++    /** @internal Initial root used only when shellId has no durable state. */
++    shellRoot?: string;
+     cwd?: string;
+     env?: Record<string, string>;
+     timeoutMs?: number;
+     stdin?: string;
+ }
++export declare function createProgrammaticShell(self: ProgrammaticHost, pid: number, state: {
++    cwd: string;
++    env: Record<string, string>;
++}): ProgrammaticShell;
+ export interface ProgrammaticDestroyOptions {
+     reason?: string;
+ }
+@@ -114,6 +123,10 @@ export interface ProgrammaticDestroyResult {
+     destroyedAt: number;
+     reason: string | null;
+ }
++export declare function readPortCapability(self: ProgrammaticHost, port: number): Promise<string | null>;
++export declare function restorePortCapability(self: ProgrammaticHost, port: number): Promise<string | null>;
++export declare function persistPortCapability(self: ProgrammaticHost, port: number, capability: string): Promise<void>;
++export declare function clearPortCapability(self: ProgrammaticHost, port: number): Promise<void>;
+ export interface ProgrammaticExecResult {
+     command: string;
+     exitCode: number;
+@@ -151,6 +164,7 @@ export interface SerializedPort {
+     port: number;
+     pid: number;
+     registeredAt: number;
++    capability: string;
+ }
+ export declare function ensureProgrammaticReady(self: ProgrammaticHost, options?: ProgrammaticReadyOptions): Promise<{
+     ok: true;
+@@ -227,11 +241,13 @@ export declare function rpcExposePort(self: ProgrammaticHost, port: number): Pro
+     listening: boolean;
+     pid: number | null;
+     registeredAt: number | null;
++    capability: string | null;
+ }>;
+ export declare function rpcUnexposePort(self: ProgrammaticHost, port: number): Promise<{
+     port: number;
+     ok: boolean;
+ }>;
++export declare function rpcRouteCapabilityPort(self: ProgrammaticHost, port: number, capability: string, request: Request, pathname: string): Promise<Response>;
+ export declare function rpcDeleteFile(self: ProgrammaticHost, path: string, options?: {
+     recursive?: boolean;
+ }): Promise<void>;
+diff --git a/dist/session/programmatic.js b/dist/session/programmatic.js
+index e50b0b3688eca32264b9ef069bb08c35936b9d9f..060aaa0b260387cd18a7a343215c5ea0eb5af238 100644
+--- a/dist/session/programmatic.js
++++ b/dist/session/programmatic.js
+@@ -13,6 +13,7 @@ import { SessionProcessSupervisor } from '@nimbus-sh/core/runtime/session-proces
+ import { PortRegistry } from '@nimbus-sh/core/runtime/port-registry.js';
+ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
+ import { endProcessInput, resizeProcess, signalProcess, writeProcessInput, } from '@nimbus-sh/core/runtime/process-input-routing.js';
++import { HeadlessTerminal, Shell } from '@nimbus-sh/core/substrate/lifo/index.js';
+ import { z } from 'zod/v4';
+ import { SESSION_DESTROYED_KEY, VITE_CONFIG_KEY, W9_ISOLATE_GEN_KEY } from './keys.js';
+ const ProcessLogsOptionsSchema = z.object({
+@@ -20,6 +21,35 @@ const ProcessLogsOptionsSchema = z.object({
+     lines: z.number().int().nonnegative().optional(),
+     bytes: z.number().int().nonnegative().optional(),
+ }).strict();
++const ShellIdSchema = z.string().min(1).max(160).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
++const ShellStateSchema = z.object({
++    cwd: z.string().startsWith('/'),
++    env: z.record(z.string(), z.string()),
++}).strict();
++const SHELL_STATE_KEY_PREFIX = 'nimbus_programmatic_shell:';
++const PORT_CAPABILITY_KEY_PREFIX = 'nimbus_preview_capability:';
++const PortCapabilitySchema = z.string().regex(/^[a-f0-9]{24}$/);
++function portCapabilityKey(port) {
++    return `${PORT_CAPABILITY_KEY_PREFIX}${Number(port)}`;
++}
++export async function readPortCapability(self, port) {
++    const stored = PortCapabilitySchema.safeParse(await self.ctx.storage.get(portCapabilityKey(port)));
++    if (!stored.success)
++        return null;
++    return stored.data;
++}
++export async function restorePortCapability(self, port) {
++    const stored = await readPortCapability(self, port);
++    if (!stored)
++        return null;
++    return self.portRegistry.restoreCapability(Number(port), stored) ? stored : null;
++}
++export async function persistPortCapability(self, port, capability) {
++    await self.ctx.storage.put(portCapabilityKey(port), PortCapabilitySchema.parse(capability));
++}
++export async function clearPortCapability(self, port) {
++    await self.ctx.storage.delete(portCapabilityKey(port));
++}
+ function makeHeadlessWebSocket() {
+     const listeners = new Map();
+     const state = { readyState: 1 };
+@@ -77,6 +107,82 @@ function runtimeDeps(self) {
+         getHome: () => getHome(self),
+     };
+ }
++export function createProgrammaticShell(self, pid, state) {
++    const parent = self.shell;
++    if (!parent)
++        throw new Error('Nimbus shell did not initialize');
++    const identity = {
++        pid,
++        get cred() { return self.processes.cred(pid); },
++        setUmask: (mask) => self.processes.setUmask(pid, mask),
++        runAs: parent.getRunAsHost(),
++    };
++    const shell = new Shell(new HeadlessTerminal(), parent.getVfs(), parent.getRegistry(), {
++        ...parent.getEnv(),
++        ...state.env,
++        $: String(pid),
++    }, parent.getProcessRegistry(), identity);
++    shell.setCwd(state.cwd);
++    return shell;
++}
++function shellId(options) {
++    if (options.shellId === undefined)
++        return null;
++    return ShellIdSchema.parse(options.shellId);
++}
++function shellStateKey(id) {
++    return `${SHELL_STATE_KEY_PREFIX}${id}`;
++}
++function initialShellState(self, options) {
++    const root = typeof options.shellRoot === 'string' && options.shellRoot.startsWith('/')
++        ? options.shellRoot
++        : getHome(self);
++    return { cwd: root, env: {} };
++}
++function capturedShellState(shell) {
++    const env = { ...shell.getEnv() };
++    delete env['$'];
++    return { cwd: shell.getCwd(), env };
++}
++async function withShellState(self, options, background, run) {
++    const id = shellId(options);
++    if (id === null)
++        return run(null);
++    const queues = self._programmaticShellQueues ??= new Map();
++    const previous = queues.get(id) ?? Promise.resolve();
++    let release;
++    const gate = new Promise((resolve) => { release = resolve; });
++    const tail = previous.catch(() => undefined).then(() => gate);
++    queues.set(id, tail);
++    await previous.catch(() => undefined);
++    try {
++        const key = shellStateKey(id);
++        const stored = await self.ctx.storage.get(key);
++        const state = stored === undefined
++            ? initialShellState(self, options)
++            : ShellStateSchema.parse(stored);
++        let shell = null;
++        try {
++            return await run({
++                cwd: state.cwd,
++                create: (pid) => {
++                    shell = createProgrammaticShell(self, pid, state);
++                    return shell;
++                },
++            });
++        }
++        finally {
++            await self.ctx.storage.put(key, background || shell === null
++                ? state
++                : capturedShellState(shell));
++        }
++    }
++    finally {
++        release();
++        if (queues.get(id) === tail)
++            queues.delete(id);
++    }
++}
+ export async function ensureProgrammaticReady(self, options = {}) {
+     if (!self.shell) {
+         await self.initSession(makeHeadlessWebSocket());
+@@ -101,13 +207,14 @@ export async function ensureProgrammaticReady(self, options = {}) {
+     }
+     return { ok: true, preinstalled: preinstall };
+ }
+-function startShellJob(self, command, options, job) {
+-    const shell = self.shell;
+-    if (!shell)
++function startShellJob(self, command, options, job, scoped) {
++    const parentShell = self.shell;
++    if (!parentShell)
+         throw new Error('Nimbus shell did not initialize');
+     const line = String(command);
+-    const cwd = options.cwd ?? shell.getCwd?.() ?? '/home/user';
++    const cwd = options.cwd ?? scoped?.cwd ?? parentShell.getCwd?.() ?? '/home/user';
+     const entry = self.processes.spawn(line, [line], cwd, { longRunning: job.background });
++    const shell = scoped?.create(entry.pid) ?? parentShell;
+     const pid = entry.pid;
+     if (job.background)
+         self.processes.openInput(pid);
+@@ -129,8 +236,8 @@ function startShellJob(self, command, options, job) {
+         sink?.(text);
+     };
+     const run = shell.execute(line, {
+-        cwd,
+-        env: { ...(shell.getEnv?.() ?? {}), ...(options.env ?? {}) },
++        cwd: scoped ? options.cwd : cwd,
++        env: scoped ? options.env : { ...(shell.getEnv?.() ?? {}), ...(options.env ?? {}) },
+         onStdout: emit('stdout', job.onStdout),
+         onStderr: emit('stderr', job.onStderr),
+         signal: controller.signal,
+@@ -161,6 +268,9 @@ function startShellJob(self, command, options, job) {
+ }
+ export async function rpcExec(self, command, options = {}) {
+     await ensureProgrammaticReady(self, options);
++    return withShellState(self, options, false, (scoped) => rpcExecReady(self, command, options, scoped));
++}
++async function rpcExecReady(self, command, options, scoped) {
+     const stdout = [];
+     const stderr = [];
+     const started = Date.now();
+@@ -170,7 +280,7 @@ export async function rpcExec(self, command, options = {}) {
+         background: false,
+         onStdout: (d) => stdout.push(d),
+         onStderr: (d) => stderr.push(d),
+-    });
++    }, scoped);
+     let result;
+     try {
+         result = options.timeoutMs && options.timeoutMs > 0
+@@ -249,7 +359,10 @@ function collectJobOutput(self, pid) {
+  */
+ export async function rpcStartProcess(self, command, options = {}) {
+     await ensureProgrammaticReady(self, options);
+-    const job = startShellJob(self, command, options, { background: true });
++    return withShellState(self, options, true, (scoped) => rpcStartProcessReady(self, command, options, scoped));
++}
++async function rpcStartProcessReady(self, command, options, scoped) {
++    const job = startShellJob(self, command, options, { background: true }, scoped);
+     const line = String(command);
+     notifyTerminalEvent(self.terminal ?? null, {
+         type: 'spawn', pid: job.pid, command: line, longRunning: true, attachedTty: false,
+@@ -411,24 +524,39 @@ export async function rpcProcessLogs(self, pid, options = {}) {
+ }
+ export async function rpcListPorts(self) {
+     await ensureProgrammaticReady(self);
+-    return self.portRegistry.getAll().map(serializePort);
++    const entries = self.portRegistry.getAll();
++    await Promise.all(entries.map((entry) => persistPortCapability(self, entry.port, entry.capability)));
++    return entries.map(serializePort);
+ }
+ export async function rpcExposePort(self, port) {
+     await ensureProgrammaticReady(self);
+     const n = Number(port);
+     const entry = self.portRegistry.get(n);
++    if (entry)
++        await persistPortCapability(self, n, entry.capability);
+     return {
+         port: n,
+         listening: !!entry,
+         pid: entry?.pid ?? null,
+         registeredAt: entry?.registeredAt ?? null,
++        capability: entry?.capability ?? null,
+     };
+ }
+ export async function rpcUnexposePort(self, port) {
+     await ensureProgrammaticReady(self);
+     const n = Number(port);
++    await clearPortCapability(self, n);
+     return { port: n, ok: self.portRegistry.unregister(n) };
+ }
++export async function rpcRouteCapabilityPort(self, port, capability, request, pathname) {
++    await ensureProgrammaticReady(self);
++    await restorePortCapability(self, port);
++    if (request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
++        return new Response('WebSocket upgrades must use the session fetch route', { status: 409 });
++    }
++    const routed = await self.portRegistry.routeCapabilityRequest(Number(port), String(capability), request, pathname);
++    return routed ?? new Response('Not found', { status: 404 });
++}
+ export async function rpcDeleteFile(self, path, options = {}) {
+     await ensureProgrammaticReady(self);
+     const p = String(path).replace(/^\/+/, '');
+@@ -714,6 +842,7 @@ function serializePort(p) {
+         port: Number(p.port),
+         pid: Number(p.pid),
+         registeredAt: Number(p.registeredAt),
++        capability: String(p.capability),
+     };
+ }
+ function shellQuote(s) {
+diff --git a/dist/session/routes.d.ts b/dist/session/routes.d.ts
+index ab53035216090ecb517c1db108d5b30d386612e2..0b7ccb3b5153a795c5e1d4aa581ca2b9de61da35 100644
+--- a/dist/session/routes.d.ts
++++ b/dist/session/routes.d.ts
+@@ -25,5 +25,7 @@
+  */
+ type RoutesHost = any;
+ export declare function handleFetch(self: RoutesHost, request: Request): Promise<Response>;
++/** Route a capability-authenticated embedder request to a guest HTTP server. */
++export declare function routeCapabilityPort(self: RoutesHost, port: number, capability: string, request: Request, innerPath: string): Promise<Response>;
+ export {};
+ //# sourceMappingURL=routes.d.ts.map
+\ No newline at end of file
+diff --git a/dist/session/routes.js b/dist/session/routes.js
+index 14a5dadd410ea847ecd74326d4f1ffde33b5dc29..adfbdaddc83b09549cf025d00b84d3df62ed7714 100644
+--- a/dist/session/routes.js
++++ b/dist/session/routes.js
+@@ -45,6 +45,9 @@ import { renderNoDevServerHtml } from './helpers.js';
+ import { handleAgentRequest } from './agent.js';
+ import { captureSessionAiCredential } from './ai.js';
+ import { CRED_KERNEL } from '@nimbus-sh/core/runtime/os-contracts.js';
++import { clearPortCapability, persistPortCapability, readPortCapability, restorePortCapability } from './programmatic.js';
++import { routeHostedWebSocket } from './rpc.js';
++import { HOSTED_WEBSOCKET_CAPABILITY_HEADER, HOSTED_WEBSOCKET_KEY_HEADER } from '../_shared/session-router.js';
+ // The L2 key builders are imported rather than re-derived so the bench
+ // endpoints below can never drift from the key shape the cache actually
+ // uses (they did: the packument purge used a stale `/p/` segment).
+@@ -105,6 +108,7 @@ async function restorePersistedDevServer(self, onlyPort) {
+         const port = (config.port && Number.isFinite(config.port)) ? config.port : DEFAULT_VITE_PORT;
+         if (onlyPort != null && onlyPort !== port)
+             return;
++        const persistedCapability = await readPortCapability(self, port);
+         // A cirrus-real session rebuilds the real-vite facet, not the Cirrus shim —
+         // same key, same starter the `vite` builtin uses, so a woken real-vite
+         // session comes back as real-vite rather than degrading to the shim.
+@@ -125,6 +129,8 @@ async function restorePersistedDevServer(self, onlyPort) {
+                 configDir: config.configDir || config.root,
+             }).finally(() => { self._realViteRestore = null; });
+             await self._realViteRestore;
++            if (persistedCapability && self.portRegistry.restoreCapability(port, persistedCapability))
++                await persistPortCapability(self, port, persistedCapability);
+             return;
+         }
+         self.ensureSqliteFs();
+@@ -155,7 +161,10 @@ async function restorePersistedDevServer(self, onlyPort) {
+         // restored server across hibernation cycles.
+         try {
+             self.portRegistry.bindFacetStub(entry.pid, makeLongRunningPortStub(self.viteDevServer));
++            await clearPortCapability(self, port);
+             self.portRegistry.register(port, entry.pid);
++            if (persistedCapability && self.portRegistry.restoreCapability(port, persistedCapability))
++                await persistPortCapability(self, port, persistedCapability);
+             self._viteShimPid = entry.pid;
+             self._viteShimPort = port;
+         }
+@@ -179,8 +188,13 @@ async function restorePersistedDevServer(self, onlyPort) {
+  * the untrusted-code boundary and cannot carry it, and a plain user server on
+  * any other port is mounted at root and needs no rewriting.
+  */
+-async function routeToSessionPort(self, port, request, innerPath, mountBase) {
++async function routeToSessionPort(self, port, request, innerPath, mountBase, capability) {
+     await restorePersistedDevServer(self, port);
++    if (capability !== undefined)
++        await restorePortCapability(self, port);
++    if (capability !== undefined && !self.portRegistry.hasCapability(port, capability)) {
++        return new Response('Not found', { status: 404 });
++    }
+     if (port === self._viteShimPort) {
+         // The preview HMR WebSocket can't cross the port-registry RPC, so it is
+         // accepted in-DO for both dev servers — the same handling `/preview/` uses.
+@@ -193,11 +207,17 @@ async function routeToSessionPort(self, port, request, innerPath, mountBase) {
+             return self.viteDevServer.handleRequest(request, innerPath, mountBase);
+         }
+     }
+-    const proxied = await self.portRegistry.routeRequest(port, request, innerPath);
++    const proxied = capability === undefined
++        ? await self.portRegistry.routeRequest(port, request, innerPath)
++        : await self.portRegistry.routeCapabilityRequest(port, capability, request, innerPath);
+     if (proxied)
+         return proxied;
+     return new Response(`No process listening on port ${port}`, { status: 502 });
+ }
++/** Route a capability-authenticated embedder request to a guest HTTP server. */
++export function routeCapabilityPort(self, port, capability, request, innerPath) {
++    return routeToSessionPort(self, port, request, normalizeForwardedHttpPath(innerPath), '', capability);
++}
+ /**
+  * The public URL prefix a port-routed request is mounted at. `<port>--<sid>`
+  * hosts arrive with an empty base header (mounted at the origin root); the
+@@ -294,6 +314,21 @@ async function parseJsonBody(request, schema) {
+ }
+ export async function handleFetch(self, request) {
+     const url = new URL(request.url);
++    const hostedWebSocket = request.headers.get(HOSTED_WEBSOCKET_KEY_HEADER);
++    if (hostedWebSocket) {
++        if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket')
++            return new Response('Expected WebSocket', { status: 426 });
++        const capability = request.headers.get(HOSTED_WEBSOCKET_CAPABILITY_HEADER);
++        if (!capability)
++            return new Response('Not found', { status: 404 });
++        const headers = new Headers(request.headers);
++        headers.delete(HOSTED_WEBSOCKET_KEY_HEADER);
++        headers.delete(HOSTED_WEBSOCKET_CAPABILITY_HEADER);
++        return routeHostedWebSocket(self, hostedWebSocket, capability, new Request(request.url, {
++            method: request.method,
++            headers,
++        }));
++    }
+     // Capture session basePath from the routing header (if forwarded by the
+     // Worker's session-router). Threaded through to ViteDevServer so the
+     // served app's module URLs, HMR paths, <base href>, and router basename
+@@ -1016,6 +1051,7 @@ export async function handleFetch(self, request) {
+             try {
+                 const apiViteStub = makeLongRunningPortStub(self.viteDevServer);
+                 self.portRegistry.bindFacetStub(apiViteEntry.pid, apiViteStub);
++                await clearPortCapability(self, apiVitePort);
+                 self.portRegistry.register(apiVitePort, apiViteEntry.pid);
+                 self._viteShimPid = apiViteEntry.pid;
+                 self._viteShimPort = apiVitePort;
+@@ -1220,7 +1256,8 @@ export async function handleFetch(self, request) {
+     if (portMatch) {
+         const port = parseInt(portMatch[1]);
+         const path = normalizeForwardedHttpPath(portMatch[2] || '/');
+-        return routeToSessionPort(self, port, request, path, portRouteMountBase(request, port));
++        const capability = request.headers.get('x-nimbus-preview-capability');
++        return routeToSessionPort(self, port, request, path, portRouteMountBase(request, port), capability ?? undefined);
+     }
+     // ── /api/_diag/cache — per-tier cache observability ───────────────
+     //
+diff --git a/dist/session/rpc.d.ts b/dist/session/rpc.d.ts
+index de2cbd8ac2d6be7a5f813459a2395a05f3ff1c80..9276e836204f00246c9ce20ec8265fcdceafed71 100644
+--- a/dist/session/rpc.d.ts
++++ b/dist/session/rpc.d.ts
+@@ -59,6 +59,7 @@ export declare function _rpcInnerDoFetch(self: RpcHost, req: {
+     body: ArrayBuffer | null;
+ }>;
+ export declare function _rpcWriteFile(self: RpcHost, path: string, content: string | Uint8Array, pid?: number): Promise<number>;
++export declare function _rpcWriteProtectedRootFile(self: RpcHost, rootPath: string, path: string, content: string | Uint8Array): Promise<void>;
+ export declare function _rpcStat(self: RpcHost, path: string, pid?: number): Promise<any>;
+ export declare function _rpcLstat(self: RpcHost, path: string, pid?: number): Promise<any>;
+ export declare function _rpcHasLegacySymlinkUnder(self: RpcHost, path: string, pid?: number): Promise<boolean>;
+@@ -408,6 +409,8 @@ export declare function _rpcFanoutExecute(self: RpcHost, fnSource: string, args:
+ export interface HostedProcessRecord {
+     facet: Promise<ResidentFacet>;
+     started: Promise<unknown>;
++    /** Unforgeable capability for fetch-semantic WebSocket routing. */
++    webSocketCapability: string;
+     /** Settles when the coordinator cancels or the process is torn down. */
+     cancelled: Promise<void>;
+     cancel(): void;
+@@ -478,6 +481,8 @@ export declare function _rpcAwaitHostedBoot(self: RpcHost, workerKey: string): P
+  * what leaves here must not be an object the loaded worker owns.
+  */
+ export declare function _rpcRouteHostedHttp(self: RpcHost, workerKey: string, wire: HostedHttpRequest): Promise<HostedHttpResponse>;
++/** Fetch-semantic WebSocket hop for a process hosted by this peer. */
++export declare function routeHostedWebSocket(self: RpcHost, workerKey: string, capability: string, request: Request): Promise<Response>;
+ /**
+  * RPC: deterministic kill of a hosted process — the same teardown a
+  * coordinator applies to a facet of its own, and it does not answer until it
+diff --git a/dist/session/rpc.js b/dist/session/rpc.js
+index a2ae244c1e5471f5f0a04585369ccf1d74368a1d..536a6a42bdef8461cc91ff82a5806abda3e8190d 100644
+--- a/dist/session/rpc.js
++++ b/dist/session/rpc.js
+@@ -39,8 +39,10 @@ import { acquireSupervisorReadAllocation, } from '@nimbus-sh/core/observability/
+ import { rpcPayloadEnd, rpcPayloadStart, } from '@nimbus-sh/core/observability/diag-counters.js';
+ import { CRED_KERNEL, CRED_SESSION_USER, } from '@nimbus-sh/core/runtime/os-contracts.js';
+ import { getSymlinkRegistry } from '@nimbus-sh/core/vfs/symlink-registry.js';
++import { normalizeVfsPath, parentVfsPath } from '@nimbus-sh/core/vfs/path.js';
+ import { FS_LIST_PAGE_LIMIT, FS_READ_BATCH_PATH_LIMIT, FS_READ_BATCH_REQUEST_BYTES, MAX_RPC_SAFE_PAYLOAD_BYTES, } from '@nimbus-sh/core/constants.js';
+ import { routeSessionLoopback } from './loopback.js';
++import { clearPortCapability } from './programmatic.js';
+ import { z } from 'zod/v4';
+ const WriteBatchInodeSchema = z.object({
+     path: z.string(),
+@@ -238,6 +240,30 @@ export async function _rpcWriteFile(self, path, content, pid) {
+     // a plain Uint8Array on the cell — the shape that arrives here.
+     return runtimeFs(self, pid).writeFile(path, content);
+ }
++/**
++ * Write one host-governed file at the session root and make the surrounding
++ * Unix permissions enforce that only the host may replace, rename, or remove
++ * it. The root remains writable to the session user through standard sticky
++ * directory semantics, so ordinary project files keep their normal behavior.
++ * This method is intentionally absent from the remote HTTP RPC dispatcher.
++ */
++export async function _rpcWriteProtectedRootFile(self, rootPath, path, content) {
++    self.ensureSqliteFs();
++    const root = normalizeVfsPath(rootPath);
++    const protectedPath = normalizeVfsPath(path);
++    if (!root || parentVfsPath(protectedPath) !== root) {
++        throw new Error('protected file must be a direct child of the declared session root');
++    }
++    const fs = self.sqliteFs.as(CRED_KERNEL);
++    if (!fs.exists(root) || !fs.isDirectory(root)) {
++        throw new Error('protected file session root does not exist');
++    }
++    fs.chown(root, CRED_KERNEL.uid, CRED_KERNEL.gid);
++    fs.chmod(root, 0o1777);
++    fs.writeFile(protectedPath, content);
++    fs.chown(protectedPath, CRED_KERNEL.uid, CRED_KERNEL.gid);
++    fs.chmod(protectedPath, 0o444);
++}
+ export async function _rpcStat(self, path, pid) {
+     return runtimeFs(self, pid).stat(path);
+ }
+@@ -975,6 +1001,7 @@ export async function _rpcPrefetch(self, cwd, entryCode) {
+ export async function _rpcRegisterPort(self, pid, port) {
+     // Port registration stores the facet association
+     // The actual facet stub is stored by FacetManager separately
++    await clearPortCapability(self, port);
+     self.portRegistry.register(port, pid);
+ }
+ export async function _rpcUnregisterPort(self, port) {
+@@ -1231,6 +1258,8 @@ const HostProcessOptsSchema = z.object({
+     writerId: z.string().uuid(),
+     /** Keyed dynamic-worker identity on THIS peer's loader. */
+     workerKey: z.string().min(1),
++    /** Unforgeable capability for fetch-semantic WebSocket routing. */
++    webSocketCapability: z.string().uuid(),
+     /** Opaque arguments forwarded to the runner's startProcess. */
+     startArgs: z.unknown().optional(),
+ });
+@@ -1387,6 +1416,7 @@ export async function _rpcHostProcess(self, boot, opts) {
+     registerHostedRecord(self, workerKey, {
+         facet: facetPromise,
+         started: startedPromise,
++        webSocketCapability: hostOpts.webSocketCapability,
+         cancelled,
+         cancel,
+     });
+@@ -1485,6 +1515,14 @@ export async function _rpcRouteHostedHttp(self, workerKey, wire) {
+         body,
+     };
+ }
++/** Fetch-semantic WebSocket hop for a process hosted by this peer. */
++export async function routeHostedWebSocket(self, workerKey, capability, request) {
++    const record = await awaitHostedRecord(self, workerKey);
++    if (record.webSocketCapability !== capability)
++        return new Response('Not found', { status: 404 });
++    const facet = await record.facet;
++    return facet.handleWebSocketRequest(request);
++}
+ /**
+  * RPC: deterministic kill of a hosted process — the same teardown a
+  * coordinator applies to a facet of its own, and it does not answer until it
+diff --git a/dist/session/start-real-vite.js b/dist/session/start-real-vite.js
+index ab05785d4d233f52a1135a4699167cacc85a1e7c..511fa9489a93ea6524db130dd280244b6925a4f2 100644
+--- a/dist/session/start-real-vite.js
++++ b/dist/session/start-real-vite.js
+@@ -22,6 +22,7 @@ import { CirrusReal } from '../facets/cirrus-real.js';
+ import { makeLongRunningPortStub } from '@nimbus-sh/core/runtime/long-running-handle.js';
+ import { acquireHeavyAlloc } from '@nimbus-sh/core/observability/heavy-alloc-coord.js';
+ import { VITE_CONFIG_KEY } from './keys.js';
++import { clearPortCapability } from './programmatic.js';
+ /**
+  * Boot a cirrus-real dev server on `self`, register its port, and persist the
+  * config restore needs. `self` is the session host (RoutesHost/InitHost = any).
+@@ -110,6 +111,7 @@ export async function startRealVite(self, opts) {
+         // only difference is which handler.handleRequest the stub forwards into.
+         const cirrusStub = makeLongRunningPortStub(cirrusReal);
+         self.portRegistry.bindFacetStub(entry.pid, cirrusStub);
++        await clearPortCapability(self, opts.port);
+         self.portRegistry.register(opts.port, entry.pid);
+         self._viteShimPid = entry.pid;
+         self._viteShimPort = opts.port;

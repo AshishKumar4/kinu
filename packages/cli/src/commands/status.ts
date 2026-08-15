@@ -2,11 +2,13 @@ import { existsSync, statSync } from 'node:fs';
 import { agentDbPath, requireAuthConfig } from '../config.js';
 import {
   callAgentRpc,
+  CloudAgentStatusSchema,
+  CloudBackgroundJobSchema,
+  CloudToolDescriptionsSchema,
+  CloudTriggerListSchema,
   type CloudAgentStatus,
-  type CloudBackgroundJob,
-  type CloudToolDescriptions,
-  type CloudTriggerList,
 } from '../cloud-api.js';
+import * as v from 'valibot';
 import { ACCENT, DIM, OK, printAgentStatus, printError } from '../display.js';
 import { resolveAgentTarget } from '../agent-target.js';
 import { getLocalAgentInfo } from '../local-inspection.js';
@@ -16,10 +18,10 @@ export async function statusCommand(name: string): Promise<void> {
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const [status, tools, triggers, jobs] = await Promise.all([
-      callAgentRpc<CloudAgentStatus>(auth.origin, auth.token, target.cloudName, 'getAgentStatus'),
-      callAgentRpc<CloudToolDescriptions>(auth.origin, auth.token, target.cloudName, 'getToolDescriptions'),
-      callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers'),
-      callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [10]),
+      callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAgentStatus', CloudAgentStatusSchema),
+      callAgentRpc(auth.origin, auth.token, target.cloudName, 'getToolDescriptions', CloudToolDescriptionsSchema),
+      callAgentRpc(auth.origin, auth.token, target.cloudName, 'listTriggers', CloudTriggerListSchema),
+      callAgentRpc(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', v.array(CloudBackgroundJobSchema), [10]),
     ]);
     printCloudStatus(target.name, status, {
       builtInTools: tools.builtIn.length,

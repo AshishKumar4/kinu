@@ -1,4 +1,13 @@
-import type { OAuthCredential } from '@proteus/core';
+import { JsonObjectSchema, type JsonObject, type OAuthCredential } from '@proteus/core';
+import * as v from 'valibot';
+
+const CloudflareAccountSchema = v.object({ id: v.string(), name: v.optional(v.string()) });
+const CloudflareGatewaySchema = v.object({
+  id: v.string(), authentication: v.optional(v.boolean()), created_at: v.optional(v.string()),
+});
+const CloudflareErrorEnvelopeSchema = v.object({
+  errors: v.optional(v.array(v.object({ message: v.optional(v.string()) }))),
+});
 
 export const CLOUDFLARE_OAUTH_CRED_KEY = 'cloudflare.oauth';
 /** DERIVED credential key — never stored. UserDO serves it from the same
@@ -52,7 +61,7 @@ export class CloudflareOAuthTokenError extends Error {
 export async function requestCloudflareOAuthToken(
   env: CloudflareOAuthEnv,
   fields: Record<string, string>,
-): Promise<Record<string, unknown>> {
+): Promise<JsonObject> {
   const clientId = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_ID);
   const clientSecret = cleanEnv(env.CLOUDFLARE_OAUTH_CLIENT_SECRET);
   if (!clientId) throw new Error('Cloudflare OAuth client id is not configured.');
@@ -94,14 +103,13 @@ export async function fetchCloudflareAccounts(accessToken: string): Promise<Clou
     throw new Error(`Cloudflare account lookup failed: ${reason}`);
   }
 
-  const result = Array.isArray(payload.result) ? payload.result : [];
+  const result = v.safeParse(v.array(CloudflareAccountSchema), payload.result);
+  if (!result.success) return [];
   return result
-    .map((item) => {
-      if (!item || typeof item !== 'object') return null;
-      const row = item as Record<string, unknown>;
-      const id = typeof row.id === 'string' ? row.id : '';
+    .output.map((row) => {
+      const id = row.id;
       if (!isCloudflareAccountId(id)) return null;
-      const name = typeof row.name === 'string' && row.name.trim() ? row.name.trim() : id;
+      const name = row.name?.trim() || id;
       return { id, name };
     })
     .filter((item): item is CloudflareAccount => item !== null);
@@ -121,15 +129,20 @@ export async function cloudflareTokenToCredential(
   // AI" notice instead of being locked out of the product entirely.
   const account = (await fetchCloudflareAccounts(accessToken))[0] ?? null;
 
+  const metadata: JsonObject = {
+    tokenType: stringValue(token.token_type) ?? 'bearer',
+  };
+  if (account) {
+    metadata.accountId = account.id;
+    metadata.accountName = account.name;
+  }
+  const scopes = scopeList(token.scope);
+  if (scopes) metadata.scopes = scopes;
   const credential: OAuthCredential = {
     kind: 'oauth',
     accessToken,
     expiresAt: expiresAtFromToken(token),
-    metadata: {
-      ...(account ? { accountId: account.id, accountName: account.name } : {}),
-      scopes: scopeList(token.scope),
-      tokenType: stringValue(token.token_type) ?? 'bearer',
-    },
+    metadata,
   };
   if (refreshToken) credential.refreshToken = refreshToken;
   return credential;
@@ -140,24 +153,26 @@ export async function refreshCloudflareCredential(
   current: OAuthCredential,
 ): Promise<OAuthCredential> {
   if (!current.refreshToken) throw new Error('Cloudflare OAuth credential has no refresh token. Reconnect Cloudflare.');
-  const token = await requestCloudflareOAuthToken(env, {
+  const token: CloudflareTokenPayload = await requestCloudflareOAuthToken(env, {
     grant_type: 'refresh_token',
     refresh_token: current.refreshToken,
-  }) as CloudflareTokenPayload;
+  });
 
   const accessToken = stringValue(token.access_token) ?? current.accessToken;
   const refreshToken = stringValue(token.refresh_token) ?? current.refreshToken;
-  return {
+  const metadata: JsonObject = { ...current.metadata };
+  const scopes = scopeList(token.scope);
+  if (scopes) metadata.scopes = scopes;
+  metadata.tokenType = stringValue(token.token_type) ?? current.metadata?.tokenType ?? 'bearer';
+  const credential: OAuthCredential = {
     ...current,
     accessToken,
     refreshToken,
-    expiresAt: expiresAtFromToken(token) ?? current.expiresAt,
-    metadata: {
-      ...(current.metadata ?? {}),
-      scopes: scopeList(token.scope) ?? current.metadata?.scopes,
-      tokenType: stringValue(token.token_type) ?? current.metadata?.tokenType ?? 'bearer',
-    },
+    metadata,
   };
+  const expiresAt = expiresAtFromToken(token) ?? current.expiresAt;
+  if (expiresAt !== undefined) credential.expiresAt = expiresAt;
+  return credential;
 }
 
 export function cloudflareWorkersAIBaseURL(accountId: string): string | null {
@@ -206,17 +221,16 @@ export async function fetchCloudflareAIGateways(
       : '';
     throw new Error(`Cloudflare AI Gateway listing failed: ${reason}.${hint}`);
   }
-  const result = Array.isArray(payload.result) ? payload.result : [];
-  return result
+  const result = v.safeParse(v.array(CloudflareGatewaySchema), payload.result);
+  if (!result.success) return [];
+  return result.output
     .map((item): CloudflareAIGatewaySummary | null => {
-      if (!item || typeof item !== 'object') return null;
-      const row = item as Record<string, unknown>;
-      const id = typeof row.id === 'string' ? row.id : '';
+      const id = item.id;
       if (!isCloudflareAIGatewayId(id)) return null;
       return {
         id,
-        authenticated: row.authentication === true,
-        createdAt: typeof row.created_at === 'string' ? row.created_at : null,
+        authenticated: item.authentication === true,
+        createdAt: item.created_at ?? null,
       };
     })
     .filter((item): item is CloudflareAIGatewaySummary => item !== null);
@@ -228,76 +242,72 @@ export function cloudflareAIGatewayId(env: Pick<CloudflareOAuthEnv, 'CLOUDFLARE_
 
 export function accountIdFromCloudflareCredential(credential: OAuthCredential): string | null {
   const accountId = credential.metadata?.accountId;
-  return typeof accountId === 'string' && isCloudflareAccountId(accountId) ? accountId : null;
+  return v.is(v.string(), accountId) && isCloudflareAccountId(accountId) ? accountId : null;
 }
 
 export function isCloudflareCredentialUsable(credential: OAuthCredential, skewMs = 60_000): boolean {
   if (!accountIdFromCloudflareCredential(credential)) return false;
-  if (typeof credential.expiresAt !== 'number') return true;
+  if (credential.expiresAt === undefined) return true;
   if (credential.expiresAt > Date.now() + skewMs) return true;
-  return typeof credential.refreshToken === 'string' && credential.refreshToken.length > 0;
+  return credential.refreshToken !== undefined && credential.refreshToken.length > 0;
 }
 
 export function isCloudflareCredentialExpiring(credential: OAuthCredential, skewMs = 60_000): boolean {
-  return typeof credential.expiresAt === 'number' && credential.expiresAt <= Date.now() + skewMs;
+  return credential.expiresAt !== undefined && credential.expiresAt <= Date.now() + skewMs;
 }
 
-function cleanEnv(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : '';
+function cleanEnv<Value>(value: Value): string {
+  return v.is(v.string(), value) ? value.trim() : '';
 }
 
 function expiresAtFromToken(token: CloudflareTokenPayload): number | undefined {
   const raw = token.expires_in;
-  const seconds = typeof raw === 'number'
+  const seconds = v.is(v.number(), raw)
     ? raw
-    : typeof raw === 'string' && raw.trim()
+    : v.is(v.string(), raw) && raw.trim()
       ? Number(raw)
       : NaN;
   if (!Number.isFinite(seconds) || seconds <= 0) return undefined;
   return Date.now() + Math.max(0, seconds - 30) * 1000;
 }
 
-function scopeList(value: unknown): string[] | undefined {
-  if (typeof value === 'string') {
+function scopeList<Value>(value: Value): string[] | undefined {
+  if (v.is(v.string(), value)) {
     const scopes = value.trim().split(/\s+/).filter(Boolean);
     return scopes.length ? scopes : undefined;
   }
   if (Array.isArray(value)) {
-    const scopes = value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+    const scopes = value.filter((item): item is string => v.is(v.string(), item) && item.trim().length > 0);
     return scopes.length ? scopes : undefined;
   }
   return undefined;
 }
 
-function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+function stringValue<Value>(value: Value): string | null {
+  return v.is(v.string(), value) && value.trim() ? value.trim() : null;
 }
 
-function stringField(obj: Record<string, unknown>, key: string): string | null {
+function stringField(obj: JsonObject, key: string): string | null {
   return stringValue(obj[key]);
 }
 
-function firstCloudflareError(obj: Record<string, unknown>): string | null {
-  const errors = Array.isArray(obj.errors) ? obj.errors : [];
-  for (const error of errors) {
-    if (!error || typeof error !== 'object') continue;
-    const message = stringField(error as Record<string, unknown>, 'message');
+function firstCloudflareError(obj: JsonObject): string | null {
+  const parsed = v.safeParse(CloudflareErrorEnvelopeSchema, obj);
+  for (const error of parsed.success ? parsed.output.errors ?? [] : []) {
+    const message = error.message?.trim() || null;
     if (message) return message;
   }
   return null;
 }
 
-async function readJsonObject(response: Response, label: string): Promise<Record<string, unknown>> {
-  let parsed: unknown;
+async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
+  let parsed: JsonObject;
   try {
-    parsed = await response.json();
+    parsed = v.parse(JsonObjectSchema, await response.json());
   } catch {
     throw new Error(`${label} did not return JSON.`);
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${label} returned an invalid JSON body.`);
-  }
-  return parsed as Record<string, unknown>;
+  return parsed;
 }
 
 function isCloudflareAccountId(value: string): boolean {

@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/chat.ts b/packages/core/src/chat.ts
-index bd6a002..afdb14c 100644
 --- a/packages/core/src/chat.ts
 +++ b/packages/core/src/chat.ts
-@@ -179,7 +179,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
+@@ -251,7 +251,7 @@
        // into the one flat number the ChatEvent carries (the accumulator reads
        // both sources too, so a CLI consumer passing only cachedInputTokens is
        // faithful and never double-counts).
--      const anthropicCacheRead = step.providerMetadata?.anthropic?.cacheReadInputTokens;
-+      const anthropicCacheRead = step.providerMetadata?.anthropic?.cacheCreationInputTokens;
+-      const parsedCacheRead = v.safeParse(v.number(), step.providerMetadata?.anthropic?.cacheReadInputTokens);
++      const parsedCacheRead = v.safeParse(v.number(), step.providerMetadata?.anthropic?.cacheCreationInputTokens);
+       const anthropicCacheRead = parsedCacheRead.success ? parsedCacheRead.output : 0;
        const cachedInputTokens = (step.usage?.cachedInputTokens ?? 0)
-         + (typeof anthropicCacheRead === 'number' ? anthropicCacheRead : 0);
-       pendingStepEvents.push({
+         + anthropicCacheRead;

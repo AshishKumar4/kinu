@@ -35,7 +35,7 @@ interface TimingResult {
   error?: string;
 }
 
-async function measureChatLatency(message: string, label: string): Promise<TimingResult> {
+async function measureChatLatency(message: string): Promise<TimingResult> {
   const t0 = performance.now();
   const result: TimingResult = {
     connectMs: -1,
@@ -176,13 +176,13 @@ async function main() {
 
   // Test 1: Simple "say hi" — minimal inference
   console.log("▶ Test 1: Simple message — 'Say hi'");
-  const r1 = await measureChatLatency("Say hi", "simple");
+  const r1 = await measureChatLatency("Say hi");
   results.push({ label: "Simple (say hi)", result: r1 });
   console.log("");
 
   // Test 2: Slightly more complex — should trigger tool consideration
   console.log("▶ Test 2: Task message — 'List the files in the workspace'");
-  const r2 = await measureChatLatency("List the files in the workspace", "task");
+  const r2 = await measureChatLatency("List the files in the workspace");
   results.push({ label: "Task (list files)", result: r2 });
   console.log("");
 

@@ -20,7 +20,7 @@ import { spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import puppeteer, { type Browser } from 'puppeteer';
+import puppeteer, { type Browser, type LaunchOptions } from 'puppeteer';
 
 const REPO = join(import.meta.dir, '..');
 const CF = join(REPO, 'packages', 'cf-backend');
@@ -64,6 +64,10 @@ function chromePath(): string | undefined {
   return undefined;
 }
 
+function isPngPath<Value>(value: Value): value is Value & `${string}.png` {
+  return typeof value === 'string' && value.endsWith('.png');
+}
+
 async function waitForServer(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -92,12 +96,12 @@ async function shoot(
     // change under review, and a before/after diff of the gallery is unreadable
     // noise. Pinning the clock makes a frame a pure function of the code.
     const FIXED = 1_770_000_000_000;
-    globalThis.Date = new Proxy(Date, {
+    const pinnedDate = new Proxy(Date, {
       construct: (target, args, newTarget) =>
         Reflect.construct(target, args.length === 0 ? [FIXED] : args, newTarget),
-      get: (target, prop, receiver) =>
-        prop === 'now' ? () => FIXED : Reflect.get(target, prop, receiver),
     });
+    Object.defineProperty(pinnedDate, 'now', { value: () => FIXED });
+    globalThis.Date = pinnedDate;
   }, mode);
   const failures: string[] = [];
   page.on('pageerror', (err) => failures.push(String(err)));
@@ -107,7 +111,8 @@ async function shoot(
   // React renders after the RPC stubs resolve; the mock is async.
   await new Promise((r) => setTimeout(r, 600));
   const path = join(outDir, `${frame}-${size.name}-${mode}.png`);
-  await page.screenshot({ path: path as `${string}.png`, fullPage: true });
+  if (!isPngPath(path)) throw new Error(`screenshot path must end in .png: ${path}`);
+  await page.screenshot({ path, fullPage: true });
   await page.close();
   if (failures.length > 0) console.warn(`  ! ${frame}/${mode} console errors:\n    ${failures.join('\n    ')}`);
   return path;
@@ -122,8 +127,7 @@ try {
   mkdirSync(outDir, { recursive: true });
   await waitForServer(`http://127.0.0.1:${PORT}/gallery.html`);
   const executablePath = chromePath();
-  const browser = await puppeteer.launch({
-    ...(executablePath ? { executablePath } : {}),
+  const launchOptions: LaunchOptions = {
     // Headless Chrome reports no pointing device, so `(hover: hover)` and
     // `(pointer: fine)` are both false and every `hover:` utility Tailwind
     // emits behind them is dead in a capture. Declaring the mouse restores
@@ -133,7 +137,9 @@ try {
       '--disable-dev-shm-usage',
       '--blink-settings=primaryPointerType=4,availablePointerTypes=4,primaryHoverType=2,availableHoverTypes=2',
     ],
-  });
+  };
+  if (executablePath) launchOptions.executablePath = executablePath;
+  const browser = await puppeteer.launch(launchOptions);
   try {
     for (const frame of frames) {
       for (const size of WIDTHS) {

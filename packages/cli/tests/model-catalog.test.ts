@@ -11,7 +11,7 @@ import {
 
 const FEED: AgentModelEntry[] = [
   { spec: 'workers-ai/@cf/meta/llama-4', label: 'Llama 4', provider: 'workers-ai' },
-  { spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai', contextWindow: 131072 },
+  { spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai', contextWindow: 1048576 },
   { spec: 'anthropic/claude-opus-4-7', label: 'Claude Opus 4.7', provider: 'anthropic', contextWindow: 1_000_000 },
   { spec: 'groq/llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'groq' },
   { spec: 'anthropic/claude-haiku-4-5', label: 'Claude Haiku 4.5', provider: 'anthropic' },
@@ -41,9 +41,9 @@ describe('dedupeModelEntries', () => {
 
 describe('normalizeModelEntries + contextWindowForSpec', () => {
   test('keeps contextWindow through normalization and looks it up by spec', () => {
-    const rows = normalizeModelEntries([
+    const rows = normalizeModelEntries({ rows: [
       { spec: 'groq/llama-3.3-70b-versatile', label: 'Llama 3.3 70B', provider: 'groq', contextWindow: 131072 },
-    ]);
+    ] });
     expect(contextWindowForSpec(rows, 'groq/llama-3.3-70b-versatile')).toBe(131072);
     expect(contextWindowForSpec(rows, 'missing/spec')).toBeUndefined();
   });
@@ -51,17 +51,17 @@ describe('normalizeModelEntries + contextWindowForSpec', () => {
   test('maps local resolver rows (provider + id) to picker entries with metadata', () => {
     // The exact shape LocalAgentClient.listModels feeds /model: the signed-in
     // resolver lists ModelInfo rows under their provider id.
-    const rows = normalizeModelEntries([
+    const rows = normalizeModelEntries({ rows: [
       {
-        provider: 'workers-ai', id: '@cf/moonshotai/kimi-k2.6', label: 'Kimi K2.6',
-        capabilities: ['tools', 'streaming'], contextWindow: 262144,
+        provider: 'workers-ai', id: '@cf/deepseek-ai/deepseek-v4-pro-0813', label: 'DeepSeek V4 Pro 0813',
+        capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1048576,
       },
       { provider: 'my-gateway', id: 'openai/gpt-4.1', label: 'GPT-4.1', contextWindow: 1047576 },
-    ]);
+    ] });
     expect(rows).toEqual([
       {
-        spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'Kimi K2.6', provider: 'workers-ai',
-        capabilities: ['tools', 'streaming'], contextWindow: 262144,
+        spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai',
+        capabilities: ['tools', 'streaming', 'reasoning'], contextWindow: 1048576,
       },
       {
         spec: 'my-gateway/openai/gpt-4.1', label: 'GPT-4.1', provider: 'my-gateway',

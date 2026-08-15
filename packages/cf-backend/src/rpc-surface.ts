@@ -132,7 +132,7 @@ export const AGENTS_FACET_RPC_SURFACE: readonly string[] = [
  * property shadows. This is the rule workerd implements, and it is the single
  * definition both `sealRpcSurface` and its tests work from.
  */
-export function rpcReachableNames(target: object): string[] {
+export function rpcReachableNames<Target extends object>(target: Target): string[] {
   const own = new Set(Object.getOwnPropertyNames(target));
   const reachable = new Set<string>();
   for (let proto: object | null = Object.getPrototypeOf(target);
@@ -157,7 +157,7 @@ export function rpcReachableNames(target: object): string[] {
  * stub. Names in `surface` that the class does not have are ignored: a surface
  * is a ceiling, and the runtime already denies what does not exist.
  */
-export function sealRpcSurface(instance: object, surface: readonly string[]): void {
+export function sealRpcSurface<Instance extends object>(instance: Instance, surface: readonly string[]): void {
   const allowed = new Set(surface);
   for (const name of rpcReachableNames(instance)) {
     if (allowed.has(name)) continue;
@@ -167,7 +167,7 @@ export function sealRpcSurface(instance: object, surface: readonly string[]): vo
 }
 
 /** The descriptor the prototype chain resolves `name` to. */
-function inheritedDescriptor(instance: object, name: string): PropertyDescriptor | undefined {
+function inheritedDescriptor<Instance extends object>(instance: Instance, name: string): PropertyDescriptor | undefined {
   for (let proto: object | null = Object.getPrototypeOf(instance);
        proto !== null && proto !== Object.prototype;
        proto = Object.getPrototypeOf(proto)) {
@@ -240,7 +240,9 @@ const USER_DO_METHODS = [
   'recordReleaseDeployment',
   'registerDevice',
   'registerWorkspace',
+  'releaseWorkspaceReservation',
   'removeWorkspace',
+  'reserveWorkspace',
   'requestReleaseApproval',
   'revokeAccessToken',
   'revokeCliTokenHash',
@@ -326,16 +328,20 @@ const ORCHESTRATOR_METHODS = [
   'createDurableWebhook',
   'getEmailIngress',
   'getRunEvents',
+  'getRunEventsWire',
   'getShadowStatus',
   'getSubordinateBootstrapIdentity',
   'getToolList',
   'getWorkspaceCapabilityHash',
   'listPeersFromMcp',
+  'listRecentEventsWire',
+  'listTriggersWire',
   'listRuns',
   'rawCopyFromFork',
   'receivePeerMessage',
   'receiveSubordinateEvent',
   'runScaffoldOnce',
+  'runScaffoldOnceWire',
   'runTaskFromMcp',
   'saveNoteFromMcp',
   'sendPeerFromMcp',

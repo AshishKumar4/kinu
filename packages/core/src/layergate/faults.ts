@@ -21,7 +21,7 @@ import { DynamicContextLedger, type DynamicContext } from '../prompting/volatile
 import { StepInjections, type RecordedInjection } from '../prompting/step-injections.js';
 import { LAYERS, type Layer } from './layers.js';
 import { observePipeline, scoreAgainstBaseline } from './gate.js';
-import type { PipelineSubjects, SubjectName } from './subjects.js';
+import type { PipelineSubjects } from './subjects.js';
 
 export interface Fault<S = PipelineSubjects> {
   readonly id: string;
@@ -317,10 +317,10 @@ export const FAULTS: readonly Fault[] = Object.freeze([
   },
 ]);
 
-export async function runFaultMatrix<S = PipelineSubjects>(
+async function runFaults<S>(
   subjects: S,
-  faults: readonly Fault<S>[] = FAULTS as unknown as readonly Fault<S>[],
-  layers: readonly Layer<S>[] = LAYERS as unknown as readonly Layer<S>[],
+  faults: readonly Fault<S>[],
+  layers: readonly Layer<S>[],
 ): Promise<FaultImpact[]> {
   const clean = await observePipeline(subjects, layers);
   const reference = Object.fromEntries(clean);
@@ -349,14 +349,28 @@ export async function runFaultMatrix<S = PipelineSubjects>(
   return impacts;
 }
 
+export function runFaultMatrix(subjects: PipelineSubjects): Promise<FaultImpact[]>;
+export function runFaultMatrix<S>(
+  subjects: S,
+  faults: readonly Fault<S>[],
+  layers: readonly Layer<S>[],
+): Promise<FaultImpact[]>;
+export function runFaultMatrix<S>(
+  ...input: [subjects: PipelineSubjects] | [subjects: S, faults: readonly Fault<S>[], layers: readonly Layer<S>[]]
+): Promise<FaultImpact[]> {
+  if (input.length === 1) return runFaults(input[0], FAULTS, LAYERS);
+  return runFaults(input[0], input[1], input[2]);
+}
+
 export function renderFaultMatrix(impacts: readonly FaultImpact[]): string {
   const width = Math.max(...impacts.map((i) => i.fault.length));
   return [
     `Fault matrix (own ≥ ${LOCALIZATION_OWN_MIN_PP}pp, every other layer < ${LOCALIZATION_OTHER_MAX_PP}pp)`,
     ...impacts.map((impact) => {
       const leaks = Object.entries(impact.dropPp)
-        .filter(([layer, drop]) => layer !== impact.layer && drop !== null && drop > 0)
-        .map(([layer, drop]) => `${layer} ${(drop as number).toFixed(1)}pp`);
+        .filter((entry): entry is [string, number] =>
+          entry[0] !== impact.layer && entry[1] !== null && entry[1] > 0)
+        .map(([layer, drop]) => `${layer} ${drop.toFixed(1)}pp`);
       return `  ${impact.fault.padEnd(width)}  own ${impact.ownDropPp.toFixed(1).padStart(5)}pp  ` +
         `other ${impact.maxOtherDropPp.toFixed(1).padStart(5)}pp  ` +
         `${impact.localized ? 'LOCALIZED' : 'LEAKED'}${leaks.length ? ` [${leaks.join(', ')}]` : ''}`;

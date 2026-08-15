@@ -77,32 +77,26 @@ export function renderAgentsMdSection(
 }
 
 /**
- * AGENTS.md discovery for cloud workspaces: the agent VFS root provides
- * defaults; a subordinate's `/workspace` parent mount adds the enclosing
- * workspace instructions; the sandbox workspace — read only when a container
- * is already active, never provisioned for this — is nearest and wins on
- * conflict. Files are read through the workspace filesystem as structured bytes, so
- * an executor error string can never masquerade as file content. Best-effort:
- * a failed read yields an absent file, never an error.
+ * AGENTS.md discovery for cloud workspaces: the canonical workspace provides
+ * defaults, and an already-active sandbox contributes its own project rules as
+ * the nearest file. Each file is read from the environment that owns its bytes;
+ * discovery never provisions a sandbox. A failed read yields an absent file.
  */
 export async function collectWorkspaceAgentsMd(
   vfs: VFS,
   sandbox?: ExecutorProvider,
 ): Promise<AgentsMdFile[]> {
   const out: AgentsMdFile[] = [];
-  const read = async (path: string, label: string): Promise<void> => {
+  const read = async (files: VFS, path: string, label: string): Promise<void> => {
     try {
-      const raw = await vfs.readFile(path, { encoding: 'utf8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      const raw = await files.readFile(path, { encoding: 'utf8' });
+      const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
       if (text.trim()) out.push({ path: label, content: text });
-    } catch { /* absent, or an unavailable mount */ }
+    } catch { /* absent or unavailable */ }
   };
-  await read('AGENTS.md', 'AGENTS.md (agent workspace)');
-  await read('/workspace/AGENTS.md', '/workspace/AGENTS.md (parent workspace)');
-  // Gate on the live container: the mount is always addressable, but reading it
-  // must not spin a container up just for discovery.
-  if (sandbox?.getStatus?.().active) {
-    await read('/sandbox/workspace/AGENTS.md', '/workspace/AGENTS.md (sandbox)');
+  await read(vfs, 'AGENTS.md', 'AGENTS.md (workspace)');
+  if (sandbox?.getStatus?.().active && sandbox.files) {
+    await read(sandbox.files, '/workspace/AGENTS.md', '/workspace/AGENTS.md (sandbox)');
   }
   return out;
 }

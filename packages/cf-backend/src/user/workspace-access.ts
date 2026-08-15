@@ -7,6 +7,7 @@ import type { UserDO } from './user-do.js';
 import { createCloudWorkspaceForUser } from './workspace-create.js';
 import { err, json, safeJson } from '../lib/http.js';
 import { ownerCaller } from './workspace-capability.js';
+import * as v from 'valibot';
 
 /** POST /workspaces body → created WorkspaceEntry (201) | mapped error response. */
 export async function handleCreateWorkspaceRequest(
@@ -16,7 +17,11 @@ export async function handleCreateWorkspaceRequest(
   userDO: DurableObjectStub<UserDO>,
   ctx?: ExecutionContext,
 ): Promise<Response> {
-  const body = await safeJson<{ name?: string; displayName?: string; purpose?: string }>(request);
+  const body = await safeJson(request, v.object({
+    name: v.optional(v.string()),
+    displayName: v.optional(v.string()),
+    purpose: v.optional(v.string()),
+  }));
   if (!body) return err(400, 'Body must be JSON');
   if (!body.name?.trim() && !body.purpose?.trim()) return err(400, 'purpose required');
   try {
@@ -47,7 +52,7 @@ export function notifyWorkspacesCredentialsChanged(
     await Promise.allSettled(workspaces
       .filter((a) => a.archivedAt === null)
       .map((a) => env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(a.name)).onCredentialsChanged()));
-  })().catch((e: unknown) => {
+  })().catch((e) => {
     console.warn('[workspace-access] credential-change fanout failed:', e instanceof Error ? e.message : e);
   });
   ctx?.waitUntil(task);

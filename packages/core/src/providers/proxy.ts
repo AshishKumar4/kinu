@@ -68,7 +68,11 @@ export const PROXY_DENIED_CRED_KEYS: readonly string[] = [
 /** Base URLs owned by a statically registered provider. These win over the
  *  models.dev catalog for the same reason the registry's static tier wins:
  *  the adapter, not the catalog, decides where a bespoke provider talks. */
-const STATIC_PROVIDER_BASE_URLS: Readonly<Record<string, string>> = {
+interface StaticProviderBaseUrls {
+  readonly [credentialKey: string]: string;
+}
+
+const STATIC_PROVIDER_BASE_URLS: StaticProviderBaseUrls = {
   [OPENAI_CRED_KEY]: OPENAI_BASE_URL,
   [ANTHROPIC_CRED_KEY]: ANTHROPIC_BASE_URL,
   [OPENROUTER_CRED_KEY]: OPENROUTER_BASE_URL,
@@ -153,7 +157,9 @@ export function proxyTargetAllowed(target: string, base: string): boolean {
  *  one is codex, whose credential the proxy refuses outright — so a refresh
  *  marker would be a wire feature nothing could ever set. */
 export function proxyAuthResolution(credKey: string, baseURL?: string | null): AuthResolution {
-  return { headers: { [PROXY_CRED_HEADER]: credKey }, ...(baseURL ? { baseURL } : {}) };
+  const resolution: AuthResolution = { headers: { [PROXY_CRED_HEADER]: credKey } };
+  if (baseURL) resolution.baseURL = baseURL;
+  return resolution;
 }
 
 export interface ProviderProxyFetchOptions {
@@ -194,10 +200,8 @@ export function createProviderProxyFetch(opts: ProviderProxyFetchOptions): typeo
  *  preferring `init` exactly as the platform does. The body is not read here:
  *  the provider layer always calls its fetch as `(url, init)` (see
  *  `createAuthedFetch`), so spreading `init` forwards the body untouched. */
-function describeRequest(input: RequestInfo | URL, init?: RequestInit): {
-  url: string; method: string; headers: Headers;
-} {
-  const fromRequest = typeof input === 'object' && 'url' in input ? input : null;
+function describeRequest(input: RequestInfo | URL, init?: RequestInit) {
+  const fromRequest = input instanceof Request ? input : null;
   return {
     url: fromRequest ? fromRequest.url : String(input),
     method: init?.method ?? fromRequest?.method ?? 'GET',

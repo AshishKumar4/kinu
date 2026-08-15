@@ -40,7 +40,7 @@ import { isPreviewUrl } from "@/lib/preview-origin";
 import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
 import { EmptyState } from "./shared";
 
-const STATUS_META: Record<ReleaseStatus, { label: string; tone: string }> = {
+const STATUS_META = {
   draft: { label: "Draft", tone: "p-card p-text-2" },
   planning: { label: "Planning", tone: "p-badge-info" },
   patching: { label: "Patching", tone: "p-badge-danger" },
@@ -52,15 +52,15 @@ const STATUS_META: Record<ReleaseStatus, { label: string; tone: string }> = {
   rejected: { label: "Rejected", tone: "p-badge-danger" },
   rolled_back: { label: "Rolled back", tone: "p-badge-warning" },
   failed: { label: "Failed", tone: "p-badge-danger" },
-};
+} satisfies Record<ReleaseStatus, { label: string; tone: string }>;
 
-const CHECK_TONE: Record<ReleaseCheck["status"], string> = {
+const CHECK_TONE = {
   pending: "p-card p-text-3",
   running: "p-badge-warning",
   passed: "p-badge-success",
   failed: "p-badge-danger",
   skipped: "p-card p-text-3",
-};
+} satisfies Record<ReleaseCheck["status"], string>;
 
 function timeShort(ts: number): string {
   if (!ts) return "";
@@ -84,7 +84,7 @@ function SectionTitle({ icon, title, count }: { icon: React.ReactNode; title: st
     <div className="flex items-center gap-2 mb-2.5">
       <span className="p-text-2">{icon}</span>
       <span className="text-sm font-medium p-text">{title}</span>
-      {typeof count === "number" && <Badge variant="secondary">{count}</Badge>}
+      {count !== undefined && <Badge variant="secondary">{count}</Badge>}
     </div>
   );
 }

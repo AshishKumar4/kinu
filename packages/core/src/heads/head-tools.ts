@@ -3,11 +3,10 @@
  * fork of the parent workspace may do. Both backends build heads from this one
  * function: the cf ExplorationAgent Facet and the CLI in-process head runtime.
  *
- * A head IS a fork: it runs on the parent's real execution surface (the parent's
- * exec planes and workspace files) and reaches them through exactly the tools the
- * parent agent uses — `run`, `execute_tools`, `web`. Before this, a head got a
- * freshly-created empty scratch behind tools NAMED `sandbox_*`, so a head asked
- * to study a repo in the workspace truthfully reported finding nothing.
+ * A head IS a fork: it reaches the parent's real execution surface through the
+ * same `run`, `execute_tools`, and `web` vocabulary. Hosted heads share the
+ * canonical workspace directly; local heads expose it as `parent.*` beside a
+ * private scratch workspace. The prompt receives that backend layout explicitly.
  *
  * Containment is two independent mechanisms, both structural:
  *
@@ -38,14 +37,11 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { Decision, HeadId, HeadInput, MergeStrategy } from './types.js';
 import type { WebSearchProvider } from '../web/index.js';
 
-/** The builtin tools a head keeps. `file` is the file plane, `execute_tools`
- *  the crafted/`llm`/`web` namespaces, `run` the real executor, `web` live
- *  research. `file` is kept deliberately, not by drift: a head does real
- *  implementation work on the parent's real files, and withholding the
- *  exact-match editor from it would leave the sed/heredoc corruption path open
- *  on exactly the branch whose output gets scored. `memory` and `skills` are
- *  withheld: they would address this head's OWN stores, which nothing outside a
- *  single head run ever reads. */
+/** The builtin tools a head keeps. `file` is the runtime's native file plane,
+ *  `execute_tools` its executor namespaces, `run` its shell router, and `web`
+ *  live research. Hosted `file` reaches the canonical workspace; local `file`
+ *  reaches private scratch while `parent.*` reaches canonical files. `memory`
+ *  and `skills` are withheld because they would address head-private stores. */
 export const HEAD_BUILTIN_TOOLS = ['execute_tools', 'run', 'file', 'web'] as const;
 
 export interface HeadSplitRequest {
@@ -67,8 +63,8 @@ export interface HeadToolDeps {
   input: HeadInput;
   /** The findings accumulator every tool in the surface writes into. */
   capture: HeadCapture;
-  /** The head's forked runtime — parent exec planes + workspace files, private
-   *  durable scratch. Backs `run` and the `execute_tools` file plane. */
+  /** The head's forked runtime. Its exact file topology is supplied separately
+   *  to the inference prompt; this value backs `run`, `file`, and execute_tools. */
   rt: AgentRuntime;
   /** Pre-built `execute_tools`; the backend owns it because codemode
    *  construction differs per platform (cf: LOADER Worker; CLI: Node eval). */
@@ -100,17 +96,19 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
     // record_evidence / record_decision — the merge-back mechanism. Already
     // self-recording, so deliberately outside the wrapper.
     ...buildHeadAccumulatorTools(capture),
+  };
 
-    // Recursion depth is fixed for a head's whole run — nothing decrements
-    // `input.budget.maxDepth` in place — so a head with none left cannot split
-    // at any moment of it, and is not offered the tool rather than being handed
-    // one whose only possible outcome is a refusal. Same structural containment
-    // as the rest of this surface (absent, not guarded), and the prompt follows
-    // for free: buildHeadSystemPrompt reads Object.keys of this very set, so a
-    // head without the tool is told not to propose recursion instead of being
-    // told it may split zero levels. The wall clock stays a RUNTIME check inside
-    // execute — it can pass mid-run, which build time cannot know.
-    ...(input.budget.maxDepth <= 0 ? {} : { split_subheads: tool({
+  // Recursion depth is fixed for a head's whole run — nothing decrements
+  // `input.budget.maxDepth` in place — so a head with none left cannot split
+  // at any moment of it, and is not offered the tool rather than being handed
+  // one whose only possible outcome is a refusal. Same structural containment
+  // as the rest of this surface (absent, not guarded), and the prompt follows
+  // for free: buildHeadSystemPrompt reads Object.keys of this very set, so a
+  // head without the tool is told not to propose recursion instead of being
+  // told it may split zero levels. The wall clock stays a RUNTIME check inside
+  // execute — it can pass mid-run, which build time cannot know.
+  if (input.budget.maxDepth > 0) {
+    all.split_subheads = tool({
       description:
         `Spawn 2-4 child heads recursively to explore narrower sub-questions. ` +
         `Children's findings merge into a single narrative. ` +
@@ -169,8 +167,8 @@ export function buildHeadToolSet(deps: HeadToolDeps): ToolSet {
           return `split_subheads failed: ${err instanceof Error ? err.message : String(err)}`;
         }
       },
-    }) }),
-  };
+    });
+  }
 
   if (input.allowedTools === undefined) return all;
   const allowed = new Set(input.allowedTools);

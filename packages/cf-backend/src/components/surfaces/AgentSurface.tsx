@@ -28,6 +28,7 @@ import type { ToolInfo, MemoryEntry, Rpc } from "@/lib/protocol";
 import { MarkdownContent, EmptyState, EMPTY_HINTS, Section } from "./shared";
 import { ScaffoldLineage } from "./ScaffoldLineage";
 import { GepaView, QualityView } from "./evolution-panels";
+import * as v from "valibot";
 
 interface Fact { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }
 
@@ -198,7 +199,7 @@ export function AgentSurface({ agentStatus: as, tools, memory, memoryContent, on
             {facts.map((f) => (
               <div key={f.key} className="flex items-start gap-2 px-3 py-1.5 border-b p-border last:border-0">
                 <span className="font-mono p-accent shrink-0">{f.key}</span>
-                <span className="p-text-2 truncate flex-1 text-right">{typeof f.value === "string" ? f.value : JSON.stringify(f.value)}</span>
+                <span className="p-text-2 truncate flex-1 text-right">{v.is(v.string(), f.value) ? f.value : JSON.stringify(f.value)}</span>
                 {f.confidence < 1 && <span className="text-[10px] p-text-3 shrink-0">{(f.confidence * 100).toFixed(0)}%</span>}
               </div>
             ))}

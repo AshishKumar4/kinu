@@ -17,27 +17,11 @@ import {
   runAutoShadowEval,
   initScaffoldTables,
   initShadowTables,
+  type ScaffoldDefaultInferenceChunk,
   type StructuredJudgeFn,
 } from '../src/index.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Executor } from '../src/types/primitives.js';
-import { createTestRuntime } from './helpers.js';
-
-/** DynamicWorkerExecutor semantics: providers visible as globals. */
-function evalExecutor(): Executor {
-  return {
-    async execute(code, providers) {
-      const arr = providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>;
-      try {
-        const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
-        const result = await fn(...arr.map((p) => p.fns));
-        return { result };
-      } catch (err) {
-        return { result: undefined, error: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  };
-}
+import { createEvalExecutor, createTestRuntime } from './helpers.js';
 
 /** A pending scaffold that delegates to the default loop — the bootstrap
  *  pattern, and the shape most proposals build on. */
@@ -53,10 +37,10 @@ async function setup(): Promise<AgentRuntime> {
   const { rt } = createTestRuntime();
   initScaffoldTables(rt.storage.execRaw);
   initShadowTables(rt.storage.execRaw);
-  (rt as { executor: Executor }).executor = evalExecutor();
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  rt.executor = createEvalExecutor();
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
     VALUES (1, ${Date.now()}, 'delegating pending', 'pending')`;
   await rt.storage.vfs.writeFile('scaffold/agent.js.v1', DELEGATING_PENDING);
   await rt.identity.scaffold.write('async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }');
@@ -84,9 +68,9 @@ const contextJudge: StructuredJudgeFn = async (prompt) => {
 
 /** What the orchestrator's defaultInference bridge streams: AI-SDK UI
  *  message chunks. With the live opts replayed it can answer from context. */
-function uiStream(answer: string): () => AsyncIterable<unknown> {
+function uiStream(answer: string): () => AsyncIterable<ScaffoldDefaultInferenceChunk> {
   return async function* () {
-    yield { type: 'text-delta', delta: answer };
+    yield { value: { type: 'text-delta', delta: answer } };
   };
 }
 

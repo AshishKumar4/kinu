@@ -47,6 +47,7 @@
 import type { DynamicApproval } from '../prompting/volatile-context.js';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { SignalDeliverer } from '../types/signals.js';
+import * as v from 'valibot';
 import {
   formatApproval,
   type DeferredApprovalChannel, type ShellApprovalRequest,
@@ -114,19 +115,16 @@ interface Row {
 }
 
 function toAction(r: Row): DeferredApproval {
+  const status = v.safeParse(v.picklist(['queued', 'approved', 'denied', 'used']), r.status);
   return {
     id: r.id,
     command: r.command,
     reason: r.reason,
-    status: STATUSES.has(r.status) ? r.status as DeferredApprovalStatus : 'queued',
+    status: status.success ? status.output : 'queued',
     requestedAt: r.requested_at,
     decidedAt: r.decided_at,
   };
 }
-
-const STATUSES: ReadonlySet<string> = new Set<DeferredApprovalStatus>(
-  ['queued', 'approved', 'denied', 'used'],
-);
 
 export function initDeferredApprovalsTable(execRaw: RawSqlExec): void {
   execRaw(`CREATE TABLE IF NOT EXISTS deferred_approvals (
@@ -161,7 +159,7 @@ export class DeferredApprovalStore {
   }
 
   create(action: Omit<DeferredApproval, 'status' | 'decidedAt'>): DeferredApproval {
-    this.sql`INSERT INTO deferred_approvals (id, command, reason, status, requested_at, decided_at)
+    void this.sql`INSERT INTO deferred_approvals (id, command, reason, status, requested_at, decided_at)
       VALUES (${action.id}, ${action.command}, ${action.reason}, 'queued', ${action.requestedAt}, NULL)`;
     return { ...action, status: 'queued', decidedAt: null };
   }
@@ -177,7 +175,7 @@ export class DeferredApprovalStore {
    */
   decide(id: string, answer: DeferredApprovalAnswer, now: number): DeferredApproval | null {
     if (this.get(id)?.status !== 'queued') return null;
-    this.sql`UPDATE deferred_approvals SET status=${answer}, decided_at=${now}
+    void this.sql`UPDATE deferred_approvals SET status=${answer}, decided_at=${now}
       WHERE id=${id} AND status='queued'`;
     return this.get(id);
   }
@@ -186,7 +184,7 @@ export class DeferredApprovalStore {
    *  it — so one approval can never authorise two runs. */
   spend(id: string): boolean {
     if (this.get(id)?.status !== 'approved') return false;
-    this.sql`UPDATE deferred_approvals SET status='used' WHERE id=${id} AND status='approved'`;
+    void this.sql`UPDATE deferred_approvals SET status='used' WHERE id=${id} AND status='approved'`;
     return this.get(id)?.status === 'used';
   }
 

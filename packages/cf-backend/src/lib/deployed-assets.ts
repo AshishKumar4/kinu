@@ -7,6 +7,7 @@
 // every fresh install died on a checksum mismatch and nothing reported it.
 // So: one place owns "did this deployment actually publish that file?", and
 // the SPA shell is never an acceptable answer for a file we asked for by name.
+import * as v from 'valibot';
 
 /** CLI source archive + its checksum + the served build stamp. Written into
  *  `dist/client/downloads/` by scripts/build-cli-source-archive.sh. */
@@ -20,6 +21,11 @@ export interface BuildStamp {
   sha: string;
   builtAt: string;
 }
+const BuildStampSchema = v.object({
+  version: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  sha: v.pipe(v.string(), v.trim(), v.minLength(1)),
+  builtAt: v.pipe(v.string(), v.trim(), v.minLength(1)),
+});
 
 /**
  * Fetch a published asset, or null when this deployment does not contain it.
@@ -45,16 +51,9 @@ export async function fetchDeployedAsset(
 export async function readBuildStamp(env: Env, base: string | URL): Promise<BuildStamp | null> {
   const res = await fetchDeployedAsset(env, base, CLI_VERSION_PATH);
   if (!res) return null;
-  let body: unknown;
   try {
-    body = await res.json();
+    return v.parse(BuildStampSchema, await res.json());
   } catch {
     return null;
   }
-  if (typeof body !== 'object' || body === null) return null;
-  const { version, sha, builtAt } = body as Record<string, unknown>;
-  if (typeof version !== 'string' || !version.trim()) return null;
-  if (typeof sha !== 'string' || !sha.trim()) return null;
-  if (typeof builtAt !== 'string' || !builtAt.trim()) return null;
-  return { version: version.trim(), sha: sha.trim(), builtAt: builtAt.trim() };
 }

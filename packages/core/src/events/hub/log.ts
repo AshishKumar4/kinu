@@ -29,16 +29,23 @@
  *     level — duplicate idempotency keys return the existing event id.
  */
 
+import * as v from 'valibot';
 import {
   type AgentLogRow, type EventId, type EventVariant, type IngressDescriptor,
   type Priority, type ProteusEvent, type ReplyChannelRef, type RevisitCondition,
-  type TraceId, type TurnId, type TrustLevel,
+  type TraceId, type TurnId,
 } from './types.js';
-import { dedupeKeyFor } from './dedupe.js';
+import { dedupeKeyForDescriptor } from './dedupe.js';
 import { deriveFields } from './trust.js';
 import { applyVisibilityForStorage } from './visibility.js';
 import { ulid } from './ulid.js';
-import type { SqlExec } from '../../types/primitives.js';
+import type { SqlExec, SqlValue } from '../../types/primitives.js';
+import {
+  JsonObjectSchema,
+  JsonValueSchema,
+  parseJsonObject,
+  parseJsonValue,
+} from '../../utils/json.js';
 
 const EVENT_SCHEMA_VERSION = 1;
 
@@ -68,9 +75,161 @@ export interface QueryFilter {
   limit?: number;
 }
 
-const PRIORITY_ORDER: Record<Priority, number> = {
+const PRIORITY_ORDER = {
   background: 0, normal: 1, urgent: 2,
-};
+} satisfies Record<Priority, number>;
+
+const IngressSchema = v.picklist([
+  'chat_ws', 'webhook_hmac', 'webhook_bearer', 'webhook_mtls', 'timer_alarm',
+  'sandbox_cb', 'process_watch', 'file_watch', 'peer_async', 'mcp_streamable',
+  'email_inbound', 'subordinate', 'self_emit', 'reply_request',
+]);
+const VariantSchema = v.picklist([
+  'chat', 'webhook', 'process_done', 'timer', 'peer_agent', 'subordinate_task',
+  'subordinate_report', 'file_changed', 'email', 'internal', 'reply_request',
+  'mcp_chat', 'mcp_third_party',
+]);
+const TrustSchema = v.picklist(['external', 'authenticated', 'owner', 'self']);
+const PrioritySchema = v.picklist(['urgent', 'normal', 'background']);
+const PayloadPolicySchema = v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']);
+const AgentLogKindSchema = v.picklist([
+  'event', 'phase', 'step', 'tool_call', 'tool_result', 'reactor_decision', 'reply_attempt',
+]);
+const WorkModeSchema = v.picklist(['plan', 'build']);
+const NullableString = v.nullable(v.string());
+const NullableNumber = v.nullable(v.number());
+const IdRowSchema = v.object({ id: v.string() });
+const PayloadRowSchema = v.object({ payload: v.string() });
+const TraceRowSchema = v.object({ trace_id: v.string() });
+const CountRowSchema = v.object({ n: v.number() });
+const PhaseRowSchema = v.object({ payload: v.string(), received_at: v.number() });
+
+const EventRowSchema = v.object({
+  id: v.string(),
+  parent_id: NullableString,
+  trace_id: v.string(),
+  ingress: IngressSchema,
+  variant: VariantSchema,
+  trust: TrustSchema,
+  priority: PrioritySchema,
+  payload_visibility: PayloadPolicySchema,
+  payload: v.string(),
+  received_at: v.number(),
+  schema_version: v.number(),
+  dedupe_key: NullableString,
+  step_idx: NullableNumber,
+});
+
+const AgentLogRowSchema = v.object({
+  id: v.string(),
+  kind: AgentLogKindSchema,
+  turn_id: NullableString,
+  step_idx: NullableNumber,
+  parent_id: NullableString,
+  trace_id: v.string(),
+  ingress: v.nullable(IngressSchema),
+  variant: v.nullable(VariantSchema),
+  trust: v.nullable(TrustSchema),
+  priority: v.nullable(PrioritySchema),
+  payload_visibility: v.nullable(PayloadPolicySchema),
+  payload: v.string(),
+  received_at: v.number(),
+  schema_version: v.number(),
+  dedupe_key: NullableString,
+});
+
+const ChatPayloadSchema = v.object({ text: v.string() });
+const WebhookPayloadSchema = v.object({
+  webhook_id: v.string(),
+  http_method: v.string(),
+  http_headers: v.record(v.string(), v.string()),
+  body: v.unknown(),
+  delivery_id: v.string(),
+  body_path: v.optional(v.string()),
+});
+const ProcessDonePayloadSchema = v.object({
+  process_id: v.string(),
+  command: v.string(),
+  exit_code: v.number(),
+  stdout_excerpt: v.string(),
+  stderr_excerpt: v.string(),
+  duration_ms: v.number(),
+  full_stdout_handle: v.optional(v.string()),
+  full_stderr_handle: v.optional(v.string()),
+});
+const TimerPayloadSchema = v.object({
+  trigger_id: v.string(),
+  scheduled_fire_at: v.number(),
+  label: v.optional(v.string()),
+  user_payload: v.optional(v.unknown()),
+  mission_label: v.optional(v.string()),
+});
+const PeerAgentPayloadSchema = v.object({
+  from_agent_name: v.string(),
+  from_user_id: v.string(),
+  topic: v.string(),
+  body: JsonValueSchema,
+  sender_event_id: v.string(),
+  reply_expected: v.optional(v.boolean()),
+  body_path: v.optional(v.string()),
+  proteus_mode: WorkModeSchema,
+});
+const SubordinateTaskPayloadSchema = v.object({
+  from_workspace: v.string(),
+  kind: v.picklist(['task', 'message']),
+  body: v.string(),
+  deliverable: v.optional(v.string()),
+  deadline_hint: v.optional(v.string()),
+  inherited_context: v.optional(v.string()),
+  proteus_mode: WorkModeSchema,
+});
+const SubordinateReportPayloadSchema = v.object({
+  from_subordinate: v.string(),
+  status: v.picklist(['progress', 'completed', 'blocked']),
+  content: v.string(),
+  task: v.optional(v.string()),
+  content_path: v.optional(v.string()),
+  proteus_mode: WorkModeSchema,
+});
+const FileChangedPayloadSchema = v.object({
+  path: v.string(),
+  change: v.picklist(['created', 'modified', 'deleted']),
+  size: v.optional(v.number()),
+});
+const EmailPayloadSchema = v.object({
+  from: v.string(),
+  to: v.string(),
+  subject: v.string(),
+  body_text: v.string(),
+  message_id: NullableString,
+  in_reply_to: NullableString,
+  references: NullableString,
+  attachments: v.array(v.object({
+    filename: v.string(),
+    content_type: v.string(),
+    size: v.number(),
+  })),
+  body_path: v.optional(v.string()),
+});
+const InternalPayloadSchema = v.object({ kind: v.string(), data: v.unknown() });
+const ReplyRequestPayloadSchema = v.object({
+  question: v.string(),
+  schema: v.optional(v.unknown()),
+  awaiting_event_id: v.string(),
+});
+const McpChatPayloadSchema = v.object({
+  client_id: v.string(), method: v.string(), arguments: v.unknown(), request_id: v.string(),
+});
+const McpThirdPartyPayloadSchema = v.object({
+  client_id: v.string(), client_label: v.string(), method: v.string(),
+  arguments: v.unknown(), request_id: v.string(),
+});
+const RevisitConditionSchema = v.variant('kind', [
+  v.object({ kind: v.literal('at'), ts: v.number() }),
+  v.object({ kind: v.literal('after_phase'), phase: v.picklist(['idle', 'merging']) }),
+  v.object({ kind: v.literal('after_event'), variant: VariantSchema, source: v.optional(v.string()) }),
+  v.object({ kind: v.literal('after_seconds'), n: v.number() }),
+]);
 
 export class EventLog {
   constructor(private readonly sql: SqlExec) {}
@@ -92,38 +251,21 @@ export class EventLog {
     reply_channel?: ReplyChannelRef;
     hmac_secret_for_visibility?: string;
   }): PublishResult {
-    const { descriptor: d, now, caused_by, reply_channel, hmac_secret_for_visibility } = opts;
+    const { descriptor: d, now, caused_by, hmac_secret_for_visibility } = opts;
 
     // 1. Derive trust/priority/visibility (pure functions).
     const derived = deriveFields(d);
 
-    // 2. Build the event for visibility transform + dedupe key.
-    //    Use a placeholder id here — replaced before insert.
+    // 2. Build the durable identity + dedupe key.
     const placeholderId = ulid();
     const trace_id = caused_by ? this.lookupTraceId(caused_by) ?? placeholderId : placeholderId;
-
-    const eventForKey: ProteusEvent = {
-      id: placeholderId,
-      trace_id,
-      caused_by: caused_by ?? null,
-      ingress: d.ingress,
-      variant: d.variant,
-      trust: derived.trust,
-      priority: derived.priority,
-      payload_visibility: derived.payload_visibility,
-      received_at: now,
-      schema_version: EVENT_SCHEMA_VERSION,
-      reply_channel: reply_channel ?? null,
-      dedupe_key: null,           // computed below
-      payload: d.payload as never,
-    } as ProteusEvent;
-
-    const dedupe_key = dedupeKeyFor(eventForKey);
+    const dedupe_key = dedupeKeyForDescriptor(d, now);
 
     // 3. Visibility transform: what actually goes into the payload column.
     const transform = applyVisibilityForStorage(
       d.payload, derived.payload_visibility, hmac_secret_for_visibility,
     );
+    const storedPayload = preserveDelegatedMode(d, derived.payload_visibility, transform.stored);
 
     // 4. Atomic dedupe + insert. The UNIQUE index on dedupe_key makes this
     //    "exactly once" — if a duplicate is racing, INSERT OR IGNORE wins
@@ -131,7 +273,7 @@ export class EventLog {
     if (dedupe_key !== null) {
       const existing = this.sql.exec(
         `SELECT id FROM agent_log WHERE dedupe_key = ?`, dedupe_key,
-      ).toArray() as Array<{ id: string }>;
+      ).toArray().map((row) => v.parse(IdRowSchema, row));
       if (existing.length > 0) {
         return { id: existing[0].id, admitted: false };
       }
@@ -151,7 +293,7 @@ export class EventLog {
       derived.trust,
       derived.priority,
       derived.payload_visibility,
-      JSON.stringify(transform.stored),
+      JSON.stringify(storedPayload),
       now,
       EVENT_SCHEMA_VERSION,
       dedupe_key,
@@ -180,7 +322,7 @@ export class EventLog {
         AND turn_id IS NULL
         AND (step_idx IS NULL OR step_idx >= 0)
     `;
-    const bindings: unknown[] = [];
+    const bindings: SqlValue[] = [];
 
     if (filter.variant) {
       sql += ' AND variant = ?';
@@ -211,7 +353,8 @@ export class EventLog {
     `;
     bindings.push(limit);
 
-    const rows = this.sql.exec(sql, ...bindings).toArray() as Array<Record<string, unknown>>;
+    const rows = this.sql.exec(sql, ...bindings).toArray()
+      .map((row) => v.parse(EventRowSchema, row));
     let events = rows.map(rowToEvent);
 
     // Resolve deferred events: those whose revisit condition is now satisfied.
@@ -239,13 +382,13 @@ export class EventLog {
               dedupe_key, step_idx
        FROM agent_log
        WHERE kind = 'event' AND turn_id IS NULL AND step_idx = -1`,
-    ).toArray() as Array<Record<string, unknown>>;
+    ).toArray().map((row) => v.parse(EventRowSchema, row));
 
-    const candidates = rows.map(rowToEvent);
-    return candidates.filter((ev) => {
-      const cond = (ev.payload as { __defer_revisit?: RevisitCondition }).__defer_revisit;
-      if (!cond) return false;
-      return revisitConditionMet(cond, ctx);
+    return rows.flatMap((row) => {
+      const payload = v.safeParse(JsonObjectSchema, parseJsonValue(row.payload));
+      if (!payload.success) return [];
+      const cond = v.safeParse(RevisitConditionSchema, payload.output.__defer_revisit);
+      return cond.success && revisitConditionMet(cond.output, ctx) ? [rowToEvent(row)] : [];
     });
   }
 
@@ -296,7 +439,7 @@ export class EventLog {
        )
        RETURNING id`,
       cutoff,
-    ).toArray() as Array<{ id: EventId }>;
+    ).toArray().map((row) => v.parse(IdRowSchema, row));
     return rows.map((row) => row.id);
   }
 
@@ -308,10 +451,10 @@ export class EventLog {
   defer(eventId: EventId, revisitAt: RevisitCondition): void {
     const row = this.sql.exec(
       `SELECT payload FROM agent_log WHERE id = ? AND kind = 'event'`, eventId,
-    ).toArray() as Array<{ payload: string }>;
+    ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
     if (row.length === 0) return;
-    const payload = JSON.parse(row[0].payload);
-    payload.__defer_revisit = revisitAt;
+    const payload = parseJsonObject(row[0].payload);
+    payload.__defer_revisit = v.parse(JsonValueSchema, revisitAt);
     this.sql.exec(
       `UPDATE agent_log SET payload = ?, step_idx = -1, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
       JSON.stringify(payload), eventId,
@@ -325,9 +468,9 @@ export class EventLog {
   dismiss(eventId: EventId, reason: string, by: 'reactor' | 'tool' | 'system'): void {
     const row = this.sql.exec(
       `SELECT payload FROM agent_log WHERE id = ? AND kind = 'event'`, eventId,
-    ).toArray() as Array<{ payload: string }>;
+    ).toArray().map((entry) => v.parse(PayloadRowSchema, entry));
     if (row.length === 0) return;
-    const payload = JSON.parse(row[0].payload);
+    const payload = parseJsonObject(row[0].payload);
     payload.__dismissed = { reason, by, at: Date.now() };
     this.sql.exec(
       `UPDATE agent_log SET payload = ?, step_idx = -2, turn_id = NULL, consumed_at = NULL WHERE id = ?`,
@@ -347,14 +490,15 @@ export class EventLog {
       FROM agent_log
       WHERE kind = 'event'
     `;
-    const bindings: unknown[] = [];
+    const bindings: SqlValue[] = [];
     if (filter.trace_id) { sql += ' AND trace_id = ?'; bindings.push(filter.trace_id); }
     if (filter.turn_id)  { sql += ' AND turn_id = ?';  bindings.push(filter.turn_id); }
     if (filter.variant)  { sql += ' AND variant = ?';  bindings.push(filter.variant); }
     if (filter.since)    { sql += ' AND received_at >= ?'; bindings.push(filter.since); }
     sql += ' ORDER BY received_at DESC';
     sql += ' LIMIT ?'; bindings.push(filter.limit ?? 100);
-    const rows = this.sql.exec(sql, ...bindings).toArray() as Array<Record<string, unknown>>;
+    const rows = this.sql.exec(sql, ...bindings).toArray()
+      .map((row) => v.parse(EventRowSchema, row));
     return rows.map(rowToEvent);
   }
 
@@ -366,7 +510,7 @@ export class EventLog {
               dedupe_key, step_idx
        FROM agent_log
        WHERE kind = 'event' AND id = ?`, eventId,
-    ).toArray() as Array<Record<string, unknown>>;
+    ).toArray().map((row) => v.parse(EventRowSchema, row));
     return rows.length > 0 ? rowToEvent(rows[0]) : null;
   }
 
@@ -376,7 +520,7 @@ export class EventLog {
   private lookupTraceId(eventId: EventId): TraceId | null {
     const rows = this.sql.exec(
       `SELECT trace_id FROM agent_log WHERE id = ? AND kind = 'event'`, eventId,
-    ).toArray() as Array<{ trace_id: string }>;
+    ).toArray().map((row) => v.parse(TraceRowSchema, row));
     return rows.length > 0 ? rows[0].trace_id : null;
   }
 
@@ -385,7 +529,7 @@ export class EventLog {
     const rows = this.sql.exec(
       `SELECT COUNT(*) AS n FROM agent_log WHERE trace_id = ? AND kind = 'event'`,
       traceId,
-    ).toArray() as Array<{ n: number }>;
+    ).toArray().map((row) => v.parse(CountRowSchema, row));
     return rows[0]?.n ?? 0;
   }
 
@@ -396,13 +540,13 @@ export class EventLog {
    *  e.g. the email dispatcher's reply_attempt audit rows). Direct callers
    *  must NOT use this to insert `kind='event'` rows — only `publish()` is
    *  allowed. */
-  appendNonEventRow(opts: {
+  appendNonEventRow<Payload>(opts: {
     kind: 'phase' | 'step' | 'tool_call' | 'tool_result' | 'reactor_decision' | 'reply_attempt';
     turn_id: TurnId | null;
     step_idx: number | null;
     parent_id: string | null;
     trace_id: TraceId;
-    payload: unknown;
+    payload: Payload;
     now: number;
   }): string {
     const id = ulid();
@@ -426,10 +570,11 @@ export class EventLog {
        WHERE kind = 'phase' AND turn_id = ?
        ORDER BY received_at DESC, id DESC LIMIT 1`,
       turn_id,
-    ).toArray() as Array<{ payload: string; received_at: number }>;
+    ).toArray().map((row) => v.parse(PhaseRowSchema, row));
     if (rows.length === 0) return null;
-    const p = JSON.parse(rows[0].payload) as { phase?: string };
-    return { phase: p.phase ?? 'unknown', at: rows[0].received_at };
+    const payload = parseJsonObject(rows[0].payload);
+    const phase = v.safeParse(v.string(), payload.phase);
+    return { phase: phase.success ? phase.output : 'unknown', at: rows[0].received_at };
   }
 
   /** All step / tool rows of a turn, ordered. Used by reactor snapshot
@@ -442,45 +587,85 @@ export class EventLog {
        WHERE turn_id = ? AND kind IN ('step', 'tool_call', 'tool_result', 'reactor_decision')
        ORDER BY step_idx, id`,
       turn_id,
-    ).toArray() as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
-      id: r.id as string,
-      kind: r.kind as AgentLogRow['kind'],
-      turn_id: r.turn_id as string | null,
-      step_idx: r.step_idx as number | null,
-      parent_id: r.parent_id as string | null,
-      trace_id: r.trace_id as string,
-      ingress: r.ingress as never,
-      variant: r.variant as never,
-      trust: r.trust as never,
-      priority: r.priority as never,
-      payload_visibility: r.payload_visibility as never,
-      payload: r.payload != null ? JSON.parse(r.payload as string) : null,
-      received_at: r.received_at as number,
-      schema_version: r.schema_version as number,
-      dedupe_key: r.dedupe_key as string | null,
+    ).toArray().map((row) => v.parse(AgentLogRowSchema, row));
+    return rows.map((row): AgentLogRow => ({
+      ...row,
+      payload: parseJsonValue(row.payload),
     }));
   }
 }
 
 // ── helpers ──────────────────────────────────────────────────────
 
-function rowToEvent(r: Record<string, unknown>): ProteusEvent {
-  return {
-    id: r.id as string,
-    trace_id: r.trace_id as string,
-    caused_by: (r.parent_id as string | null) ?? null,
-    ingress: r.ingress as never,
-    variant: r.variant as never,
-    trust: r.trust as TrustLevel,
-    priority: r.priority as Priority,
-    payload_visibility: r.payload_visibility as never,
-    received_at: r.received_at as number,
-    schema_version: r.schema_version as number,
-    reply_channel: null,            // hydrated separately by ReplyChannelStore
-    dedupe_key: (r.dedupe_key as string | null) ?? null,
-    payload: r.payload != null ? JSON.parse(r.payload as string) : null,
-  } as ProteusEvent;
+function preserveDelegatedMode(
+  descriptor: IngressDescriptor,
+  policy: v.InferOutput<typeof PayloadPolicySchema>,
+  stored: v.InferOutput<typeof JsonValueSchema>,
+): v.InferOutput<typeof JsonValueSchema> {
+  if (policy === 'full' || policy === 'redact') return stored;
+  if (
+    descriptor.variant !== 'peer_agent'
+    && descriptor.variant !== 'subordinate_task'
+    && descriptor.variant !== 'subordinate_report'
+  ) return stored;
+  const envelope = v.safeParse(JsonObjectSchema, stored);
+  if (!envelope.success) return stored;
+  return { ...envelope.output, proteus_mode: descriptor.payload.proteus_mode };
+}
+
+function rowToEvent(row: v.InferOutput<typeof EventRowSchema>): ProteusEvent {
+  const payload = parseJsonValue(row.payload);
+  const base = {
+    id: row.id,
+    trace_id: row.trace_id,
+    caused_by: row.parent_id,
+    ingress: row.ingress,
+    trust: row.trust,
+    priority: row.priority,
+    received_at: row.received_at,
+    schema_version: row.schema_version,
+    reply_channel: null,
+    dedupe_key: row.dedupe_key,
+  };
+
+  if (row.payload_visibility !== 'full' && row.payload_visibility !== 'redact') {
+    return {
+      ...base,
+      variant: row.variant,
+      payload_visibility: row.payload_visibility,
+      payload,
+    };
+  }
+
+  const readable = { ...base, payload_visibility: row.payload_visibility };
+  switch (row.variant) {
+    case 'chat':
+      return { ...readable, variant: row.variant, payload: v.parse(ChatPayloadSchema, payload) };
+    case 'webhook':
+      return { ...readable, variant: row.variant, payload: v.parse(WebhookPayloadSchema, payload) };
+    case 'process_done':
+      return { ...readable, variant: row.variant, payload: v.parse(ProcessDonePayloadSchema, payload) };
+    case 'timer':
+      return { ...readable, variant: row.variant, payload: v.parse(TimerPayloadSchema, payload) };
+    case 'peer_agent':
+      return { ...readable, variant: row.variant, payload: v.parse(PeerAgentPayloadSchema, payload) };
+    case 'subordinate_task':
+      return { ...readable, variant: row.variant, payload: v.parse(SubordinateTaskPayloadSchema, payload) };
+    case 'subordinate_report':
+      return { ...readable, variant: row.variant, payload: v.parse(SubordinateReportPayloadSchema, payload) };
+    case 'file_changed':
+      return { ...readable, variant: row.variant, payload: v.parse(FileChangedPayloadSchema, payload) };
+    case 'email':
+      return { ...readable, variant: row.variant, payload: v.parse(EmailPayloadSchema, payload) };
+    case 'internal':
+      return { ...readable, variant: row.variant, payload: v.parse(InternalPayloadSchema, payload) };
+    case 'reply_request':
+      return { ...readable, variant: row.variant, payload: v.parse(ReplyRequestPayloadSchema, payload) };
+    case 'mcp_chat':
+      return { ...readable, variant: row.variant, payload: v.parse(McpChatPayloadSchema, payload) };
+    case 'mcp_third_party':
+      return { ...readable, variant: row.variant, payload: v.parse(McpThirdPartyPayloadSchema, payload) };
+  }
 }
 
 function revisitConditionMet(cond: RevisitCondition, ctx: { now: number; phase: 'idle' | 'merging' }): boolean {

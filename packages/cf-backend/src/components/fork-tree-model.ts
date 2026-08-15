@@ -83,8 +83,36 @@ export function ancestorIds(root: ForkNode, id: string): string[] {
 	return walk(root, []) ?? [];
 }
 
+/** Resolve an id against the latest immutable tree snapshot. Selection state
+ * stores ids, never node objects, so live polling cannot leave details stale. */
+export function findForkNode(root: ForkNode, id: string): ForkNode | null {
+	if (root.id === id) return root;
+	for (const child of root.children) {
+		const found = findForkNode(child, id);
+		if (found) return found;
+	}
+	return null;
+}
+
+/** The branch the settled search actually chose. A running tree has none, so
+ * callers must not turn a provisional score into a winner label. */
+export function terminalForkNode(root: ForkNode): ForkNode | null {
+	let chosen: ForkNode | null = null;
+	const walk = (node: ForkNode): void => {
+		if (
+			node.status === "terminal"
+			&& (chosen === null || (node.value ?? Number.NEGATIVE_INFINITY) > (chosen.value ?? Number.NEGATIVE_INFINITY))
+		) {
+			chosen = node;
+		}
+		for (const child of node.children) walk(child);
+	};
+	walk(root);
+	return chosen;
+}
+
 /** Node count and deepest depth — the two numbers both tree surfaces report. */
-export function treeStats(root: ForkNode): { nodes: number; depth: number } {
+export function treeStats(root: ForkNode) {
 	let nodes = 0;
 	let depth = 0;
 	const walk = (node: ForkNode): void => {

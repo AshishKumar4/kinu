@@ -13,7 +13,7 @@
  *   • host.*     — emit events back to the chat client (text deltas, tool calls)
  *   • workspace.* — existing inline executor (file/memory)
  *
- * Plus any sandboxes registered on the parent (sandbox.*, nimbus.*, laptop.*).
+ * Plus any external environments registered on the parent (sandbox.*, laptop.*).
  *
  * Scaffold contract (v1):
  *
@@ -32,8 +32,23 @@
  * (See scaffold/shadow.ts for the rollout state machine.)
  */
 
+import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { Executor } from '../types/primitives.js';
+import {
+  assertJsonValue,
+  isJsonObject,
+  JsonObjectSchema,
+  JsonValueSchema,
+  decodeJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from '../utils/json.js';
+
+type SandboxFunction = (...args: JsonValue[]) => Promise<JsonValue | undefined>;
+interface SandboxFunctions {
+  [name: string]: SandboxFunction;
+}
 
 /**
  * The d.ts the scaffold sandbox sees for the `host` bridge — the ONLY way a
@@ -50,7 +65,7 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
    *  Pass tool NAMES (from the agent's tool surface) in \`tools\`; the host wires the executables. */
   function llmStream(opts: {
     system: string;
-    messages: Array<{ role: string; content: string }>;
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     tools?: string[];
     maxSteps?: number;
   }): Promise<string>;
@@ -77,14 +92,14 @@ export const SCAFFOLD_HOST_TYPES = `declare namespace host {
 /** What scaffold execution emits back to the caller. */
 export type ScaffoldEvent =
   | { type: 'text_delta'; text: string }
-  | { type: 'tool_call'; name: string; args: Record<string, unknown>; toolCallId: string }
-  | { type: 'tool_result'; toolCallId: string; result: unknown }
+  | { type: 'tool_call'; name: string; args: JsonObject; toolCallId: string }
+  | { type: 'tool_result'; toolCallId: string; result?: JsonValue }
   | { type: 'step_finish'; stepIndex: number; reason?: string }
-  | { type: 'done'; result?: unknown }
+  | { type: 'done'; result?: JsonValue }
   | { type: 'error'; message: string }
   /** A ready-made AI-SDK UI message stream chunk, emitted by
    *  `host.defaultInference()`. Passed through verbatim by the adapter. */
-  | { type: 'ui_chunk'; chunk: unknown };
+  | { type: 'ui_chunk'; chunk: JsonValue };
 
 /** Callback the host provides — every scaffold emit is forwarded through here. */
 export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
@@ -99,9 +114,9 @@ export type ScaffoldEmitFn = (event: ScaffoldEvent) => void | Promise<void>;
  */
 export function scaffoldEventText(event: ScaffoldEvent): string | null {
   if (event.type === 'text_delta') return event.text;
-  if (event.type === 'ui_chunk') {
-    const c = event.chunk as { type?: string; delta?: string } | undefined;
-    if (c?.type === 'text-delta' && typeof c.delta === 'string') return c.delta;
+  if (event.type === 'ui_chunk' && isJsonObject(event.chunk)) {
+    const delta = v.safeParse(v.string(), event.chunk.delta);
+    if (event.chunk.type === 'text-delta' && delta.success) return delta.output;
   }
   return null;
 }
@@ -120,7 +135,7 @@ export interface ScaffoldRunResult {
   /** Set if the scaffold threw or codemode rejected. */
   error?: string;
   /** Whatever the scaffold returned as its final result (if it did). */
-  finalResult?: unknown;
+  finalResult?: JsonValue;
 }
 
 /**
@@ -135,6 +150,36 @@ export interface ScaffoldRunResult {
  * constant; nothing sets its own.
  */
 export const SCAFFOLD_TURN_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** One host inference chunk before validation at the codemode JSON boundary. */
+export interface ScaffoldDefaultInferenceChunk {
+  value: JsonValue;
+}
+
+export interface ScaffoldHistoryQuery {
+  offset?: number;
+  limit?: number;
+  maxChars?: number;
+}
+
+export interface ScaffoldHistoryEntry {
+  index: number;
+  role: string;
+  chars: number;
+  text: string;
+  truncated: boolean;
+}
+
+export interface ScaffoldHistoryPage {
+  total: number;
+  offset: number;
+  entries: ScaffoldHistoryEntry[];
+  clipped: boolean;
+}
+
+export type ScaffoldHistoryReader = (
+  query?: ScaffoldHistoryQuery,
+) => Promise<ScaffoldHistoryPage>;
 
 /** Options for a scaffold run. */
 export interface ScaffoldRunOptions {
@@ -152,7 +197,7 @@ export interface ScaffoldRunOptions {
    */
   llmStream: (opts: {
     system: string;
-    messages: Array<{ role: string; content: string }>;
+    messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
     tools?: string[];
     maxSteps?: number;
   }) => AsyncIterable<string>;
@@ -161,7 +206,7 @@ export interface ScaffoldRunOptions {
    * function executes the tool from the parent's ToolSet and returns the
    * result. The host emits both 'tool_call' and 'tool_result' events.
    */
-  callTool?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  callTool?: (name: string, args: JsonObject) => Promise<JsonValue | undefined>;
   /**
    * Default-inference bridge — when the scaffold calls host.defaultInference(),
    * this runs the standard host inference (the AI SDK streamText the agent
@@ -170,7 +215,7 @@ export interface ScaffoldRunOptions {
    * instead of reimplementing the tool-call loop. Absent means this host
    * capability is unavailable and host.defaultInference returns an error.
    */
-  defaultInference?: () => AsyncIterable<unknown>;
+  defaultInference?: () => AsyncIterable<ScaffoldDefaultInferenceChunk>;
   /**
    * Read-only history bridge — when the scaffold calls host.history(query),
    * this returns a budgeted page of the conversation it is the inference loop
@@ -178,11 +223,54 @@ export interface ScaffoldRunOptions {
    * error, exactly like the other optional bridges. Built by
    * orchestrator/scaffold-host.ts, which owns the budget.
    */
-  history?: (query: { offset?: number; limit?: number; maxChars?: number }) => Promise<unknown>;
+  history?: ScaffoldHistoryReader;
   /** Hard timeout in milliseconds. Default {@link SCAFFOLD_TURN_TIMEOUT_MS}. */
   timeoutMs?: number;
   /** Optional: override the scaffold code (for shadow-mode A/B). Default: rt.identity.scaffold.read(). */
   scaffoldCodeOverride?: string;
+}
+
+const ScaffoldEventSchema: v.GenericSchema<ScaffoldEvent> = v.variant('type', [
+  v.object({ type: v.literal('text_delta'), text: v.string() }),
+  v.object({
+    type: v.literal('tool_call'),
+    name: v.string(),
+    args: JsonObjectSchema,
+    toolCallId: v.string(),
+  }),
+  v.object({
+    type: v.literal('tool_result'),
+    toolCallId: v.string(),
+    result: v.optional(JsonValueSchema),
+  }),
+  v.object({
+    type: v.literal('step_finish'),
+    stepIndex: v.number(),
+    reason: v.optional(v.string()),
+  }),
+  v.object({ type: v.literal('done'), result: v.optional(JsonValueSchema) }),
+  v.object({ type: v.literal('error'), message: v.string() }),
+  v.object({ type: v.literal('ui_chunk'), chunk: JsonValueSchema }),
+]);
+
+const LlmStreamOptionsSchema = v.object({
+  system: v.string(),
+  messages: v.array(v.object({
+    role: v.picklist(['system', 'user', 'assistant']),
+    content: v.string(),
+  })),
+  tools: v.optional(v.array(v.string())),
+  maxSteps: v.optional(v.number()),
+});
+
+const HistoryQuerySchema = v.object({
+  offset: v.optional(v.number()),
+  limit: v.optional(v.number()),
+  maxChars: v.optional(v.number()),
+});
+
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
 }
 
 /** Build the codemode provider that bridges scaffold ↔ host. */
@@ -195,8 +283,8 @@ function buildHostProvider(opts: {
   readMemory: (path: string) => Promise<string>;
   appendMemory: (path: string, content: string) => Promise<void>;
   capturedEvents: ScaffoldEvent[];
-  state: { doneEmitted: boolean; finalResult: unknown };
-}): { name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>>; types: string } {
+  state: { doneEmitted: boolean; finalResult: JsonValue | undefined };
+}) {
   const { emit, llmStream, callTool, defaultInference, history, readMemory, appendMemory, capturedEvents, state } = opts;
 
   async function pushEvent(ev: ScaffoldEvent): Promise<void> {
@@ -208,44 +296,46 @@ function buildHostProvider(opts: {
     await emit(ev);
   }
 
-  const fns: Record<string, (...args: unknown[]) => Promise<unknown>> = {
-    emit: async (event: unknown) => {
-      if (event == null || typeof event !== 'object') return 'host.emit: invalid event';
-      const ev = event as ScaffoldEvent;
-      if (!('type' in ev) || typeof ev.type !== 'string') return 'host.emit: missing type';
-      await pushEvent(ev);
+  const fns = {
+    emit: async (...args: unknown[]) => {
+      const event = v.safeParse(ScaffoldEventSchema, args[0]);
+      if (!event.success) return 'host.emit: invalid event';
+      await pushEvent(event.output);
       return 'emitted';
     },
-    callTool: async (name: unknown, args: unknown) => {
-      if (typeof name !== 'string') return { error: 'host.callTool: name must be a string' };
+    callTool: async (...rawArgs: unknown[]) => {
+      const name = v.safeParse(v.string(), rawArgs[0]);
+      if (!name.success) return { error: 'host.callTool: name must be a string' };
       if (!callTool) return { error: 'host.callTool: unavailable in this runtime (parent provides ToolSet only when scaffold mode is enabled)' };
       const callId = `tc-${Math.random().toString(36).slice(2, 10)}`;
-      const parsedArgs = (args && typeof args === 'object' && !Array.isArray(args)) ? args as Record<string, unknown> : {};
-      await pushEvent({ type: 'tool_call', name, args: parsedArgs, toolCallId: callId });
+      const parsedArgs = v.safeParse(JsonObjectSchema, rawArgs[1]);
+      const toolArgs = parsedArgs.success ? parsedArgs.output : {};
+      await pushEvent({ type: 'tool_call', name: name.output, args: toolArgs, toolCallId: callId });
       try {
-        const result = await callTool(name, parsedArgs);
+        const result = await callTool(name.output, toolArgs);
         await pushEvent({ type: 'tool_result', toolCallId: callId, result });
         return result;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage({ error: err });
         await pushEvent({ type: 'tool_result', toolCallId: callId, result: { error: msg } });
         return { error: msg };
       }
     },
-    llmStream: async (rawOpts: unknown) => {
+    llmStream: async (...args: unknown[]) => {
       // Returns the full concatenated text. The scaffold may also iterate by
       // calling llmStream({...}) again for additional turns — that's its
       // responsibility. We push 'text_delta' events as chunks arrive.
-      const o = rawOpts as Parameters<ScaffoldRunOptions['llmStream']>[0];
+      const parsed = v.safeParse(LlmStreamOptionsSchema, args[0]);
+      if (!parsed.success) return { error: 'host.llmStream: invalid options' };
       let acc = '';
       try {
-        for await (const chunk of llmStream(o)) {
+        for await (const chunk of llmStream(parsed.output)) {
           acc += chunk;
           await pushEvent({ type: 'text_delta', text: chunk });
         }
         return acc;
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage({ error: err });
         await pushEvent({ type: 'error', message: `llmStream failed: ${msg}` });
         return { error: msg };
       }
@@ -260,33 +350,44 @@ function buildHostProvider(opts: {
       }
       try {
         for await (const chunk of defaultInference()) {
-          await pushEvent({ type: 'ui_chunk', chunk });
+          assertJsonValue(chunk);
+          await pushEvent({ type: 'ui_chunk', chunk: chunk.value });
         }
         return 'done';
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
+        const msg = errorMessage({ error: err });
         await pushEvent({ type: 'error', message: `defaultInference failed: ${msg}` });
         return { error: msg };
       }
     },
-    history: async (query: unknown) => {
+    history: async (...args: unknown[]) => {
       if (!history) return { error: 'host.history: unavailable in this runtime' };
-      const q = (query && typeof query === 'object' && !Array.isArray(query)) ? query as Record<string, unknown> : {};
+      const parsed = v.safeParse(HistoryQuerySchema, args[0] ?? {});
+      const query = parsed.success ? parsed.output : {};
       try {
-        return await history(q);
+        const page = { value: await history(query) };
+        assertJsonValue(page);
+        return page.value;
       } catch (err) {
-        return { error: err instanceof Error ? err.message : String(err) };
+        return { error: errorMessage({ error: err }) };
       }
     },
-    readMemory: async (path: unknown) => {
-      try { return await readMemory(String(path)); }
-      catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
+    readMemory: async (...args: unknown[]) => {
+      const path = v.safeParse(v.string(), args[0]);
+      if (!path.success) return { error: 'host.readMemory: path must be a string' };
+      try { return await readMemory(path.output); }
+      catch (err) { return { error: errorMessage({ error: err }) }; }
     },
-    appendMemory: async (path: unknown, content: unknown) => {
-      try { await appendMemory(String(path), String(content)); return 'appended'; }
-      catch (err) { return { error: err instanceof Error ? err.message : String(err) }; }
+    appendMemory: async (...args: unknown[]) => {
+      const path = v.safeParse(v.string(), args[0]);
+      const content = v.safeParse(v.string(), args[1]);
+      if (!path.success || !content.success) {
+        return { error: 'host.appendMemory: path and content must be strings' };
+      }
+      try { await appendMemory(path.output, content.output); return 'appended'; }
+      catch (err) { return { error: errorMessage({ error: err }) }; }
     },
-  };
+  } satisfies Record<string, (...args: unknown[]) => Promise<JsonValue | undefined>>;
 
   return { name: 'host', fns, types: SCAFFOLD_HOST_TYPES };
 }
@@ -307,14 +408,17 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const { rt, task, emit, llmStream, callTool, timeoutMs = SCAFFOLD_TURN_TIMEOUT_MS, scaffoldCodeOverride } = opts;
   const startedAt = Date.now();
   const capturedEvents: ScaffoldEvent[] = [];
-  const state = { doneEmitted: false, finalResult: undefined as unknown };
+  const state = {
+    doneEmitted: false,
+    finalResult: undefined,
+  } satisfies { doneEmitted: boolean; finalResult: JsonValue | undefined };
 
   // 1. Load scaffold code (with optional shadow-mode override).
   let code: string;
   try {
     code = scaffoldCodeOverride ?? (await rt.identity.scaffold.read());
   } catch (err) {
-    const msg = `scaffold read failed: ${err instanceof Error ? err.message : String(err)}`;
+    const msg = `scaffold read failed: ${errorMessage({ error: err })}`;
     await emit({ type: 'error', message: msg });
     return {
       ok: false, doneEmitted: false, emitCount: 0, events: [], durationMs: Date.now() - startedAt, error: msg,
@@ -356,7 +460,7 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   // the DO, but it pins a CLI process open for the whole budget after every
   // scaffold turn — `proteus exec` hung for five minutes past its answer.
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeoutPromise = new Promise<{ result: unknown; error: string }>((resolve) => {
+  const timeoutPromise = new Promise<{ result: JsonValue | undefined; error: string }>((resolve) => {
     timer = setTimeout(
       () => resolve({ result: undefined, error: `scaffold timeout after ${timeoutMs}ms` }),
       timeoutMs,
@@ -366,8 +470,8 @@ export async function runScaffold(opts: ScaffoldRunOptions): Promise<ScaffoldRun
   const result = await Promise.race([execPromise, timeoutPromise]).finally(() => clearTimeout(timer));
   const durationMs = Date.now() - startedAt;
 
-  if ((result as { error?: string }).error) {
-    const msg = (result as { error: string }).error;
+  if (result.error) {
+    const msg = result.error;
     await emit({ type: 'error', message: msg });
     return {
       ok: false,
@@ -460,16 +564,19 @@ return __result;
  */
 async function assembleProviders(
   rt: AgentRuntime,
-  hostProvider: { name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>>; types?: string },
-): Promise<Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>>; types?: string }>> {
-  const out: Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>>; types?: string }> = [
+  hostProvider: { name: string; fns: SandboxFunctions; types?: string },
+): Promise<Array<{ name: string; fns: SandboxFunctions; types?: string }>> {
+  const out: Array<{ name: string; fns: SandboxFunctions; types?: string }> = [
     hostProvider,
   ];
   const routerProviders = rt.executionRouter?.getProviders() ?? [];
   for (const p of routerProviders) {
-    const fns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+    const fns: SandboxFunctions = {};
     for (const [name, descriptor] of Object.entries(p.tools)) {
-      fns[name] = descriptor.execute as (...args: unknown[]) => Promise<unknown>;
+      fns[name] = async (...args: JsonValue[]) => {
+        const result = await descriptor.execute(...args);
+        return result === undefined ? undefined : decodeJsonValue({ value: result });
+      };
     }
     out.push({ name: p.name, fns, types: p.types });
   }

@@ -27,6 +27,8 @@
 
 import puppeteer, { type Browser, type Page } from 'puppeteer';
 import { mkdirSync, appendFileSync, writeFileSync, existsSync, readdirSync } from 'node:fs';
+import * as v from 'valibot';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
 
 const BASE = process.env.PROTEUS_BASE_URL ?? 'https://proteus.ashishkumarsingh.com';
 const RUN_ID = Date.now().toString(36);
@@ -41,6 +43,25 @@ const section = (n: number, title: string) => log(`\n=== T${n}: ${title} ===`);
 const pass = (n: number, msg: string) => log(`✅ T${n}: ${msg}`);
 const fail = (n: number, msg: string) => log(`❌ T${n}: ${msg}`);
 const note = (n: number, msg: string) => log(`ℹ️  T${n}: ${msg}`);
+
+const rpcFrameSchema = v.object({
+  type: v.string(),
+  id: v.string(),
+  success: v.boolean(),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(v.string()),
+});
+
+const execResultSchema = v.object({
+  stdout: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+
+const exposedPortSchema = v.object({ url: v.optional(v.string()) });
+
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
@@ -64,16 +85,23 @@ async function openAgentWs(base: string, agent: string): Promise<WebSocket> {
   return ws;
 }
 
-async function rpcCall(ws: WebSocket, method: string, args: unknown[] = [], timeoutMs = 60_000): Promise<unknown> {
+async function rpcCall<Output>(
+  ws: WebSocket,
+  method: string,
+  outputSchema: v.GenericSchema<Output>,
+  args: JsonValue[] = [],
+  timeoutMs = 60_000,
+): Promise<Output> {
   return new Promise((resolve, reject) => {
     const id = uid();
     const timer = setTimeout(() => reject(new Error(`rpc ${method} timeout`)), timeoutMs);
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(typeof ev.data === 'string' ? ev.data : '');
+        const msg = v.parse(rpcFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === 'rpc' && msg.id === id) {
           clearTimeout(timer); ws.removeEventListener('message', handler);
-          if (msg.success) resolve(msg.result); else reject(new Error(String(msg.error)));
+          if (msg.success) resolve(v.parse(outputSchema, msg.result));
+          else reject(new Error(msg.error ?? 'RPC failed'));
         }
       } catch { /* ignore */ }
     };
@@ -94,8 +122,8 @@ async function detectPhase1Deployed(page: Page): Promise<boolean> {
   // Open the home page and grab the bundle URL.
   await page.goto(BASE, { waitUntil: 'networkidle2', timeout: 60_000 });
   const bundleUrl = await page.evaluate(() => {
-    const s = Array.from(document.querySelectorAll('script[src]'))
-      .map((el) => (el as HTMLScriptElement).src)
+    const s = Array.from(document.querySelectorAll<HTMLScriptElement>('script[src]'))
+      .map((el) => el.src)
       .find((u) => /index-.*\.js$/.test(u));
     return s ?? null;
   });
@@ -124,7 +152,7 @@ async function testWsDrop(ctx: TestCtx, agent: string): Promise<boolean> {
   await page.screenshot({ path: `${OUT_DIR}/t1-01-loaded.png`, fullPage: true });
   // Send a long-running prompt
   await page.evaluate(() => {
-    const ta = document.querySelector('textarea') as HTMLTextAreaElement | null;
+    const ta = document.querySelector<HTMLTextAreaElement>('textarea');
     if (ta) {
       ta.focus();
       ta.value = 'List 30 random programming languages, one per line, no other text';
@@ -159,7 +187,8 @@ async function testWsDrop(ctx: TestCtx, agent: string): Promise<boolean> {
   });
   log(`  after-restore: connected=${recovered.connected} chat-panel=${recovered.hasChatPanel}`);
   const ok = stillMounted.hasChatPanel && recovered.hasChatPanel;
-  ok ? pass(1, 'chat panel survived WS drop') : fail(1, 'chat panel was unmounted on disconnect');
+  if (ok) pass(1, 'chat panel survived WS drop');
+  else fail(1, 'chat panel was unmounted on disconnect');
   return ok;
 }
 
@@ -170,19 +199,21 @@ async function testIdleKeepalive(agent: string): Promise<boolean> {
   log('  WS opened');
   // Capture incoming messages (heartbeat acks etc) just to keep connection live
   const start = Date.now();
-  const closed = new Promise<{ at: number; code?: number; reason?: string }>(resolve => {
-    ws.onclose = (e) => resolve({ at: Date.now() - start, code: e.code, reason: e.reason });
+  const closed = new Promise<{ kind: 'closed'; at: number; code: number; reason: string }>(resolve => {
+    ws.onclose = (e) => resolve({ kind: 'closed', at: Date.now() - start, code: e.code, reason: e.reason });
   });
   // Timeout after 115s (we expect to NOT close)
-  const timeout = new Promise<{ at: number }>(r => setTimeout(() => r({ at: -1 }), 115_000));
+  const timeout = new Promise<{ kind: 'timeout' }>(resolve => {
+    setTimeout(() => resolve({ kind: 'timeout' }), 115_000);
+  });
   log('  waiting 110s without sending any messages...');
   const winner = await Promise.race([closed, timeout]);
-  if (winner.at === -1) {
+  if (winner.kind === 'timeout') {
     pass(2, '110s elapsed and WS still open (idle reaper survived)');
     ws.close();
     return true;
   } else {
-    fail(2, `WS closed at ${winner.at}ms (code=${(winner as { code?: number }).code})`);
+    fail(2, `WS closed at ${winner.at}ms (code=${winner.code})`);
     return false;
   }
 }
@@ -196,21 +227,21 @@ async function testColdStart(agent: string): Promise<boolean> {
   const ws = await openAgentWs(BASE, freshAgent);
   const start = Date.now();
   // First exec on a brand-new container — cold start path.
-  let result: unknown;
+  let result: v.InferOutput<typeof execResultSchema>;
   try {
-    result = await rpcCall(ws, 'executeInExecutor', ['sandbox', 'echo cold-start-ok'], 120_000);
+    result = await rpcCall(ws, 'executeInExecutor', execResultSchema, ['sandbox', 'echo cold-start-ok'], 120_000);
   } catch (err) {
-    fail(3, `first exec rejected: ${(err as Error).message}`);
+    fail(3, `first exec rejected: ${errorMessage(err)}`);
     ws.close();
     return false;
   }
   const elapsed = Date.now() - start;
   log(`  first exec result @${elapsed}ms: ${JSON.stringify(result).slice(0, 200)}`);
-  const r = result as { stdout?: string; error?: string };
   // Pass if exec returned a non-error result (retry wrapper transparently
   // recovered any transient failures during cold start).
-  const ok = !r.error && (r.stdout ?? '').includes('cold-start-ok');
-  ok ? pass(3, `cold-start exec succeeded in ${elapsed}ms`) : fail(3, `cold-start exec failed: ${r.error ?? r.stdout}`);
+  const ok = !result.error && (result.stdout ?? '').includes('cold-start-ok');
+  if (ok) pass(3, `cold-start exec succeeded in ${elapsed}ms`);
+  else fail(3, `cold-start exec failed: ${result.error ?? result.stdout}`);
   ws.close();
   return ok;
 }
@@ -233,14 +264,14 @@ const express = require('express');
 const app = express();
 app.get('/', (req, res) => { res.send('Hello World from Proteus Sandbox'); });
 app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));`.trim();
-  await rpcCall(ws, 'executeInExecutor',
+  await rpcCall(ws, 'executeInExecutor', v.optional(JsonValueSchema),
     ['sandbox', `mkdir -p /workspace && cat > /workspace/server.js <<'EOF'\n${serverJs}\nEOF`], 120_000);
-  await rpcCall(ws, 'executeInExecutor',
+  await rpcCall(ws, 'executeInExecutor', v.optional(JsonValueSchema),
     ['sandbox', 'cd /workspace && npm init -y > /dev/null && npm install express 2>&1 | tail -1'], 180_000);
-  await rpcCall(ws, 'executeInExecutor',
+  await rpcCall(ws, 'executeInExecutor', v.optional(JsonValueSchema),
     ['sandbox', 'cd /workspace && nohup node server.js > /workspace/out.log 2>&1 & disown; sleep 2'], 30_000);
   log('  exposing port 8080');
-  const exposeResult = await rpcCall(ws, 'exposeSandboxPort', [8080, 'hello'], 30_000) as { url?: string };
+  const exposeResult = await rpcCall(ws, 'exposeSandboxPort', exposedPortSchema, [8080, 'hello'], 30_000);
   log(`  expose URL: ${exposeResult.url}`);
   // `<port>-<sandbox>-<token>.<suffix>` — the preview hostname the SDK mints.
   const previewHost = /^https:\/\/\d{4,5}-[a-z0-9][a-z0-9-]*-[a-z0-9_]+\./i;
@@ -260,8 +291,8 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));`.trim();
     const text = document.body.innerText;
     const tabBadge = /Executors\s+\d+/.test(text) || !!document.querySelector('button [class*="emerald"]');
     // Look for an iframe with the preview URL
-    const iframes = Array.from(document.querySelectorAll('iframe')).map(f => (f as HTMLIFrameElement).src);
-    const iframeMatch = iframes.some(s => typeof s === 'string' && s.startsWith(url));
+    const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src);
+    const iframeMatch = iframes.some(s => s.startsWith(url));
     return { tabBadge, iframes, iframeMatch, expected: url };
   }, exposeResult.url);
   log(`  UI check: tab-badge=${uiCheck.tabBadge} iframe-match=${uiCheck.iframeMatch} iframes=${JSON.stringify(uiCheck.iframes)}`);
@@ -270,19 +301,19 @@ app.listen(8080, '0.0.0.0', () => console.log('listening on 8080'));`.trim();
     await page.evaluate(() => {
       const btns = Array.from(document.querySelectorAll('button'));
       const t = btns.find((b) => (b.textContent ?? '').trim().startsWith('Executors'));
-      if (t) (t as HTMLButtonElement).click();
+      if (t) t.click();
     });
     await new Promise(r => setTimeout(r, 6000));
     await page.screenshot({ path: `${OUT_DIR}/t4-02-executors-tab.png`, fullPage: true });
   }
   const finalCheck = await page.evaluate((url) => {
-    const iframes = Array.from(document.querySelectorAll('iframe')).map(f => (f as HTMLIFrameElement).src);
-    return { iframes, found: iframes.some(s => typeof s === 'string' && s.startsWith(url)) };
+    const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src);
+    return { iframes, found: iframes.some(s => s.startsWith(url)) };
   }, exposeResult.url);
   log(`  final iframe check: found=${finalCheck.found} iframes=${JSON.stringify(finalCheck.iframes)}`);
   const ok = helloOk && finalCheck.found;
-  ok ? pass(4, 'preview iframe visible in UI + body returns Hello World')
-     : fail(4, `helloOk=${helloOk} iframeFound=${finalCheck.found}`);
+  if (ok) pass(4, 'preview iframe visible in UI + body returns Hello World');
+  else fail(4, `helloOk=${helloOk} iframeFound=${finalCheck.found}`);
   ws.close();
   return ok;
 }
@@ -307,16 +338,16 @@ async function main() {
 
   try {
     results.t1 = await testWsDrop(ctx, baseAgent);
-  } catch (e) { fail(1, (e as Error).message); results.t1 = false; }
+  } catch (e) { fail(1, errorMessage(e)); results.t1 = false; }
   try {
     results.t2 = await testIdleKeepalive(baseAgent);
-  } catch (e) { fail(2, (e as Error).message); results.t2 = false; }
+  } catch (e) { fail(2, errorMessage(e)); results.t2 = false; }
   try {
     results.t3 = await testColdStart(baseAgent);
-  } catch (e) { fail(3, (e as Error).message); results.t3 = false; }
+  } catch (e) { fail(3, errorMessage(e)); results.t3 = false; }
   try {
     results.t4 = await testBuildAndShow(ctx, baseAgent);
-  } catch (e) { fail(4, (e as Error).message); results.t4 = false; }
+  } catch (e) { fail(4, errorMessage(e)); results.t4 = false; }
 
   log(`\n=== Summary ===`);
   for (const [k, v] of Object.entries(results)) {
@@ -330,4 +361,8 @@ async function main() {
   process.exit(allPass ? 0 : 1);
 }
 
-main().catch(e => { log(`FATAL: ${(e as Error).message}\n${(e as Error).stack}`); process.exit(99); });
+main().catch(error => {
+  const stack = error instanceof Error ? error.stack ?? error.message : String(error);
+  log(`FATAL: ${errorMessage(error)}\n${stack}`);
+  process.exit(99);
+});

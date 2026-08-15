@@ -1,8 +1,26 @@
 // agent.* codemode provider — the agent's self-direction namespace.
 import { describe, test, expect } from "bun:test";
 import { Database } from "bun:sqlite";
+import * as v from "valibot";
 import { MissionGovernor } from "../src/mission-budget.js";
 import { createAgentSelfProvider, type AgentSelfHost } from "../src/tools/agent-self.js";
+import type { BackgroundJob } from "../src/jobs/store.js";
+import { makeExecRaw, makeSql } from "./helpers.js";
+
+const RunningJobReadSchema = v.object({
+  id: v.string(),
+  kind: v.string(),
+  status: v.literal("running"),
+  note: v.string(),
+});
+
+const ScheduledBudgetSchema = v.object({
+  budget: v.object({
+    label: v.string(),
+    limits: v.object({ usd: v.number() }),
+    spent: v.object({ tokens: v.number() }),
+  }),
+});
 
 /** A real governor over in-memory SQLite — the ledger is the subject here, so
  *  stubbing it would test nothing. */
@@ -10,14 +28,8 @@ function realGovernor(): MissionGovernor {
   const db = new Database(":memory:");
   return new MissionGovernor({
     storage: {
-      sql: ((strings: TemplateStringsArray, ...values: unknown[]) => {
-        const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? "?" : ""), "");
-        const stmt = db.prepare(query);
-        if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...values as never[]);
-        stmt.run(...values as never[]);
-        return [];
-      }) as never,
-      execRaw: (ddl: string) => { db.exec(ddl); },
+      sql: makeSql(db),
+      execRaw: makeExecRaw(db),
     },
   });
 }
@@ -26,15 +38,34 @@ function fakeHost(over: Partial<AgentSelfHost> = {}): AgentSelfHost & { calls: s
   const calls: string[] = [];
   return {
     calls,
-    proposeCurriculumTasks: async (count) => { calls.push(`propose:${count}`); return [{ id: "t1" }]; },
+    proposeCurriculumTasks: async (count) => {
+      calls.push(`propose:${count}`);
+      return [{
+        id: "t1", task: "task", rationale: "rationale", predictedSuccess: 0.5,
+        targetsSkills: [], proposedAt: 1, status: "pending",
+      }];
+    },
     listCurriculumTasks: async (status) => { calls.push(`list:${status}`); return []; },
     setCurriculumTaskStatus: async (id, status) => { calls.push(`set:${id}:${status}`); return { ok: true }; },
     proposeScaffold: async (rationale, code, baseVersion) => { calls.push(`scaffold:${rationale.length}:${code.length}:${baseVersion ?? 'live'}`); return { ok: true, version: 2 }; },
-    listScaffoldVersions: async (limit) => { calls.push(`archive:${limit ?? 'all'}`); return [{ version: 0, status: "current" }]; },
+    listScaffoldVersions: async (limit) => {
+      calls.push(`archive:${limit ?? 'all'}`);
+      return [{
+        version: 0, written_at: 1, rationale: "initial", status: "current",
+        parent_version: null, trials: 0, wins: 0, losses: 0, ties: 0, win_rate: null,
+      }];
+    },
     createTimerTrigger: (opts) => { calls.push(`timer:${opts.cron ?? opts.atMs}:${opts.missionLabel ?? "uncapped"}`); return { id: "trg1", kind: opts.cron ? "timer_cron" : "timer_oneshot", nextFireAt: 123 }; },
     budget: realGovernor(),
     cancelTrigger: async (id) => { calls.push(`cancel:${id}`); return { ok: true, changed: true }; },
-    getReplayEvals: async (limit) => { calls.push(`replay:${limit ?? 'all'}`); return [{ id: "rpl-1", loss: 0.25 }]; },
+    getReplayEvals: async (limit) => {
+      calls.push(`replay:${limit ?? 'all'}`);
+      return [{
+        id: "rpl-1", ranAt: 1, sampleSize: 1, acceptedCount: 1, negativeCount: 0,
+        meanScore: 0.75, loss: 0.25, interval: { mean: 0.75, lo: 0.5, hi: 1, n: 1 },
+        scaffoldVersion: 0, results: [],
+      }];
+    },
     armCompactNow: () => { calls.push("compactNow"); },
     jobResult: async (id) => { calls.push(`jobResult:${id}`); return null; },
     listBackgroundJobs: async (limit) => { calls.push(`jobs:${limit ?? 'all'}`); return []; },
@@ -49,8 +80,10 @@ describe("createAgentSelfProvider — shape", () => {
     expect(p.positionalArgs).toBe(true);
     expect(p.types).toContain("agent.schedule".replace("agent.", "")); // declares schedule
     for (const name of ["proposeCurriculum", "listCurriculum", "acceptCurriculumTask", "proposeScaffold", "scaffoldVersions", "schedule", "cancelSchedule", "compactNow"]) {
-      expect(typeof p.tools[name]?.execute).toBe("function");
-      expect(p.tools[name]?.description.length).toBeGreaterThan(0);
+      const descriptor = p.tools[name];
+      if (!descriptor) throw new Error(`missing agent.${name}`);
+      expect(descriptor.execute).toBeFunction();
+      expect(descriptor.description.length).toBeGreaterThan(0);
     }
   });
 });
@@ -103,7 +136,7 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
     const r = await p.tools.scaffoldVersions.execute(10);
-    expect(r).toEqual([{ version: 0, status: "current" }]);
+    expect(r).toMatchObject([{ version: 0, status: "current" }]);
     expect(host.calls).toEqual(["archive:10"]);
   });
 
@@ -111,14 +144,17 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
     const r = await p.tools.replayEvals.execute(5);
-    expect(r).toEqual([{ id: "rpl-1", loss: 0.25 }]);
+    expect(r).toMatchObject([{ id: "rpl-1", loss: 0.25 }]);
     expect(host.calls).toEqual(["replay:5"]);
     expect(p.types).toContain("replayEvals");
   });
 
   test("jobResult on a SETTLED job passes the row through unchanged — the result is there to read", async () => {
-    const settled = { id: "bgjob-1", kind: "run", status: "completed" as const, result: '"the output"', error: null };
-    const host = fakeHost({ jobResult: (async (id: string) => { host.calls.push(`jobResult:${id}`); return settled; }) as never });
+    const settled: BackgroundJob = {
+      id: "bgjob-1", kind: "run", label: null, workMode: "build", status: "completed",
+      result: '"the output"', error: null, createdAt: 1, settledAt: 2, epoch: 0, resumeAttempts: 0,
+    };
+    const host = fakeHost({ jobResult: async (id) => { host.calls.push(`jobResult:${id}`); return settled; } });
     const p = createAgentSelfProvider(host);
     expect(await p.tools.jobResult.execute("bgjob-1")).toEqual(settled);
   });
@@ -128,20 +164,22 @@ describe("createAgentSelfProvider — delegation + validation", () => {
     // invites another read a moment later (that is what a poll loop IS). The
     // shaped read states the wake contract instead, so there is nothing to gain
     // by reading again.
-    const running = { id: "bgjob-2", kind: "agents", status: "running" as const, result: null, error: null };
-    const host = fakeHost({ jobResult: (async () => running) as never });
+    const running: BackgroundJob = {
+      id: "bgjob-2", kind: "agents", label: null, workMode: "build", status: "running",
+      result: null, error: null, createdAt: 1, settledAt: null, epoch: 0, resumeAttempts: 0,
+    };
+    const host = fakeHost({ jobResult: async () => running });
     const p = createAgentSelfProvider(host);
-    const r = await p.tools.jobResult.execute("bgjob-2") as Record<string, unknown>;
+    const r = v.parse(RunningJobReadSchema, await p.tools.jobResult.execute("bgjob-2"));
     expect(r.status).toBe("running");
     expect(r.id).toBe("bgjob-2");
     expect(r.kind).toBe("agents");
     // No result/error fields to misread as "it returned nothing" — and no
     // invitation to call again.
-    expect(r.result).toBeUndefined();
-    expect(r.error).toBeUndefined();
-    expect(typeof r.note).toBe("string");
-    expect(r.note as string).toContain("woken");
-    expect(r.note as string).toMatch(/not.*finish sooner|will not make it finish/i);
+    expect("result" in r).toBe(false);
+    expect("error" in r).toBe(false);
+    expect(r.note).toContain("woken");
+    expect(r.note).toMatch(/not.*finish sooner|will not make it finish/i);
   });
 
   test("jobResult on a null (unknown) job passes null through", async () => {
@@ -183,9 +221,9 @@ describe("createAgentSelfProvider — delegation + validation", () => {
   test("a schedule that names a spending limit declares the ledger and hands the trigger its label", async () => {
     const host = fakeHost();
     const p = createAgentSelfProvider(host);
-    const out = await p.tools.schedule.execute({
+    const out = v.parse(ScheduledBudgetSchema, await p.tools.schedule.execute({
       cron: "0 12 * * *", budget_usd: 5, budget_label: "nightly-sweep",
-    }) as { budget: { label: string; limits: { usd: number } } };
+    }));
 
     expect(out.budget).toMatchObject({ label: "nightly-sweep", limits: { usd: 5 }, spent: { tokens: 0 } });
     expect(host.calls).toEqual(["timer:0 12 * * *:nightly-sweep"]);

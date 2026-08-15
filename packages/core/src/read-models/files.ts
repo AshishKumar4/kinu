@@ -41,7 +41,11 @@ export interface EnvironmentInfo {
 /** The name the workspace UI imports this row set by. */
 export type MountInfo = EnvironmentInfo;
 
-const CONSISTENCY: Record<string, EnvironmentInfo['policy']['consistency']> = {
+interface RuntimeConsistency {
+  [runtime: string]: EnvironmentInfo['policy']['consistency'];
+}
+
+const CONSISTENCY: RuntimeConsistency = {
   workspace: 'durable', parent: 'durable', sandbox: 'ephemeral', nimbus: 'ephemeral', laptop: 'live-shared',
 };
 
@@ -135,7 +139,7 @@ export async function readExecutorFile(
     const stat = await vfs.stat(target);
     if (stat?.isDir) return { error: 'path is a directory' };
     const raw = await vfs.readFile(target, { encoding: 'utf8' });
-    const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
     if (text.includes(String.fromCharCode(0))) return { error: 'binary file — not previewable' };
     if (text.length > MAX_VIEWABLE_BYTES) return { content: text.slice(0, MAX_VIEWABLE_BYTES), truncated: true };
     return { content: text };

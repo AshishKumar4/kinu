@@ -23,9 +23,9 @@ describe('Convergence', () => {
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, observation)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status, observation)
         VALUES ('r', 'winner', 'test task', 0.85, 5, 'open', 'good result')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
         VALUES ('r', 'loser', 'test task', 0.3, 3, 'open')`;
 
     const result = await converge(rt, session, 'r');
@@ -40,9 +40,9 @@ describe('Convergence', () => {
     const session = createMockSession();
 
     // All nodes have value < MIN_ACCEPTABLE_SCORE (0.3)
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
         VALUES ('r', 'low1', 'test', 0.15, 3, 'open')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
         VALUES ('r', 'low2', 'test', 0.1, 2, 'open')`;
 
     const result = await converge(rt, session, 'r');
@@ -60,9 +60,9 @@ describe('Convergence', () => {
     initSearchTables(rt.storage.execRaw);
     const session = createMockSession();
 
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
         VALUES ('r', 'best', 'test', 0.9, 10, 'open')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
         VALUES ('r', 'other', 'test', 0.5, 5, 'open')`;
 
     await converge(rt, session, 'r');
@@ -79,11 +79,11 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
         VALUES ('r', 'best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
         VALUES ('r', 'rival', 'test', 0.85, 6, 1, 'open', 'near-tied plan')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
         VALUES ('r', 'weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
 
     await converge(rt, session, 'r');
@@ -92,7 +92,8 @@ describe('Convergence', () => {
     const rival = rt.storage.sql<{ status: string }>`SELECT status FROM search_nodes WHERE id = 'rival'`[0]!;
     expect(rival.status).toBe('pruned');
     // …but lives on as a comparable take next to the winner.
-    const set = latestAlternateTakeSet(rt.storage.sql)!;
+    const set = latestAlternateTakeSet(rt.storage.sql);
+    if (!set) throw new Error('expected alternate-takes set');
     expect(set.winnerNodeId).toBe('best');
     expect(set.candidates.map((c) => c.nodeId)).toEqual(['best', 'rival']);
   });
@@ -109,19 +110,20 @@ describe('Convergence', () => {
 
     // Marker executor: code containing FAIL_MARKER fails, everything else passes.
     rt.executor = {
+      languages: ['javascript'],
       async execute(code: string) {
         return String(code).includes('FAIL_MARKER')
           ? { result: undefined, error: 'discriminating test failed' }
           : { result: true };
       },
-    } as typeof rt.executor;
+    };
 
     // argmax winner: marginally higher value but its code FAILS the test.
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used)
-        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const x = FAIL_MARKER;')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const x = FAIL_MARKER;', 'javascript')`;
     // near-tied rival (within takesEpsilon=0.1): lower value but its code PASSES.
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used)
-        VALUES ('r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const ok = 1;')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const ok = 1;', 'javascript')`;
 
     const result = await converge(rt, session, 'r');
 
@@ -141,18 +143,19 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
     rt.executor = {
+      languages: ['javascript'],
       async execute(code: string) {
         return String(code).includes('FAIL_MARKER')
           ? { result: undefined, error: 'failed' }
           : { result: true };
       },
-    } as typeof rt.executor;
+    };
 
     // Both pass; argmax has higher value → it stays the winner.
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used)
-        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used)
-        VALUES ('r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'argmax', 'test', 0.85, 6, 1, 'open', 'plan A', 'const a = 1;', 'javascript')`;
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation, code_used, code_language)
+        VALUES ('r', 'passer', 'test', 0.80, 5, 1, 'open', 'plan B', 'const b = 2;', 'javascript')`;
 
     const result = await converge(rt, session, 'r');
     expect(result.winnerId).toBe('argmax');
@@ -164,9 +167,9 @@ describe('Convergence', () => {
     initAlternateTakesTable(rt.storage.execRaw);
     const session = createMockSession();
 
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
         VALUES ('r', 'best', 'test', 0.9, 10, 1, 'open', 'winning plan')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, depth, status, observation)
         VALUES ('r', 'weak', 'test', 0.4, 2, 1, 'open', 'weak plan')`;
 
     await converge(rt, session, 'r');
@@ -179,7 +182,7 @@ describe('Convergence', () => {
     initScaffoldTables(rt.storage.execRaw);   // creates task_history
     const session = createMockSession();
 
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, value, visits, status)
         VALUES ('r', 'w', 'ship the feature', 0.8, 4, 'open')`;
     await converge(rt, session, 'r');
 

@@ -1,27 +1,32 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { afterEach, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { testOwner } from './helpers/user-do.js';
 import { generateText } from 'ai';
 import { createMockFetch } from '@proteus/test-utils';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { OwnedModelServices } from '../src/owned-model-services.ts';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import type { LanguageModel } from 'ai';
+import type { CredentialHeaders } from '../src/user/credential-headers.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 
 /** `LanguageModel` is `string | LanguageModelV3`; a resolver hands back the
  *  object half, and these tests read its provider/model ids. */
-function resolved(model: LanguageModel): Exclude<LanguageModel, string> {
-  if (typeof model === 'string') throw new Error(`expected a resolved model, got the spec "${model}"`);
-  return model;
+const ResolvedModelSchema = v.object({ provider: v.string(), modelId: v.string() });
+
+function resolved(model: LanguageModel): v.InferOutput<typeof ResolvedModelSchema> {
+  return v.parse(ResolvedModelSchema, model);
 }
 
 interface FakeUserDO {
-  getAuthHeaders(caller: unknown, key: string): Promise<Record<string, string> | null>;
-  getCredentialBaseURL(caller: unknown, key: string): Promise<string | null>;
-  listCredentials(caller: unknown): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
+  getAuthHeaders(caller: UserCaller, key: string): Promise<CredentialHeaders | null>;
+  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
+  listCredentials(caller: UserCaller): Promise<Array<{ key: string; kind: 'bearer'; createdAt: number; updatedAt: number }>>;
 }
 
-function fakeUserDO(credentials: Record<string, Record<string, string>> = {}): FakeUserDO {
+function fakeUserDO(credentials: Readonly<Record<string, CredentialHeaders>> = {}): FakeUserDO {
   return {
     async getAuthHeaders(_caller, key) { return credentials[key] ?? null; },
     async getCredentialBaseURL() { return null; },
@@ -32,11 +37,18 @@ function fakeUserDO(credentials: Record<string, Record<string, string>> = {}): F
 }
 
 function fakeEnv(stub: FakeUserDO = fakeUserDO()): Env {
-  return {
+  const bindings = {
     UserDO: {
       idFromName: (name: string) => name,
       get: () => stub,
-    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: OwnedModelServices only reads the constructed UserDO namespace
+  // and credential secret in these tests; every reachable stub method exists.
+  return env as Env;
 }
 
 const realFetch = globalThis.fetch;
@@ -92,7 +104,7 @@ describe('OwnedModelServices', () => {
     ]);
     const model = resolved(services.resolveModel());
     expect(model.provider).toBe('ai-gateway.chat');
-    expect(model.modelId).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+    expect(model.modelId).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('resolves explicit specs and supplies the stable per-agent affinity key', () => {

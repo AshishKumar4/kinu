@@ -10,24 +10,44 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes.js';
 
 const ORIGIN = 'https://proteus.example.com';
 const tempDirs: string[] = [];
+
+interface InstallSandbox {
+  home: string;
+  stubBin: string;
+}
+
+const PtyResultSchema = v.object({
+  output: v.string(),
+  exitcode: v.nullable(v.number()),
+  post: v.object({
+    icanon: v.boolean(),
+    echo: v.boolean(),
+    isig: v.boolean(),
+  }),
+});
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 async function installScript(): Promise<string> {
-  const res = await handleCliRequest(new Request(`${ORIGIN}/install.sh`), {} as Env);
-  expect(res?.status).toBe(200);
-  return res!.text();
+  const partialEnv: Partial<Env> = {};
+  // SAFETY: handleCliRequest returns from its /install.sh branch before reading env, and this request fixes that pathname.
+  const env = partialEnv as Env;
+  const response = await handleCliRequest(new Request(`${ORIGIN}/install.sh`), env);
+  if (!response) throw new Error('/install.sh was not handled');
+  expect(response.status).toBe(200);
+  return response.text();
 }
 
 /** A sandbox HOME plus stub curl/bun/ln so the script runs without network
  *  or system side effects. The stub curl "downloads" a stub proteus shim. */
-function makeSandbox(): { home: string; stubBin: string } {
+function makeSandbox(): InstallSandbox {
   const home = mkdtempSync(join(tmpdir(), 'proteus-install-test-'));
   tempDirs.push(home);
   const stubBin = join(home, 'stub-bin');
@@ -86,8 +106,14 @@ function runHeadlessInstall(script: string, home: string, stubBin: string): Prom
     child.stderr.setEncoding('utf8').on('data', (chunk: string) => { output += chunk; });
     child.stdin.end(script);
 
+    const childPid = child.pid;
+    if (childPid === undefined) {
+      resolve({ exitCode: null, output, timedOut: true });
+      return;
+    }
+
     const timer = setTimeout(() => {
-      try { process.kill(-child.pid!, 'SIGKILL'); } catch { /* already gone */ }
+      try { process.kill(-childPid, 'SIGKILL'); } catch { /* already gone */ }
       resolve({ exitCode: null, output, timedOut: true });
     }, 20_000);
 
@@ -161,9 +187,9 @@ describe('install.sh terminal handling', () => {
       },
     });
     expect(run.status).toBe(0);
-    const result = JSON.parse(run.stdout.trim().split('\n').at(-1)!) as {
-      output: string; exitcode: number | null; post: { icanon: boolean; echo: boolean; isig: boolean };
-    };
+    const lastLine = run.stdout.trim().split('\n').at(-1);
+    if (!lastLine) throw new Error('PTY harness emitted no result');
+    const result = v.parse(PtyResultSchema, JSON.parse(lastLine));
     expect(result.output).toContain('STUB-SETUP-DIED');
     expect(result.exitcode).not.toBe(0); // setup failure still surfaces
     expect(result.post).toEqual({ icanon: true, echo: true, isig: true });

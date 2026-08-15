@@ -12,9 +12,11 @@
 // the life of the workspace, which is what makes them referable at all.
 
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
+import * as v from 'valibot';
 
 export const TASK_STATUSES = ['open', 'active', 'done', 'dropped'] as const;
 export type TaskStatus = (typeof TASK_STATUSES)[number];
+const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
 const OPEN_STATUSES: ReadonlySet<string> = new Set(['open', 'active']);
 
@@ -39,11 +41,12 @@ interface Row {
 }
 
 function toTask(r: Row): AgentTask {
+  const status = v.safeParse(TaskStatusSchema, r.status);
   return {
     id: r.id,
     parentId: r.parent_id,
     title: r.title,
-    status: (TASK_STATUSES as readonly string[]).includes(r.status) ? r.status as TaskStatus : 'open',
+    status: status.success ? status.output : 'open',
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
@@ -119,7 +122,7 @@ export class TaskListStore {
         continue;
       }
       const id = `t${seq}`;
-      this.sql`INSERT INTO agent_tasks (id, seq, parent_id, title, status, created_at, updated_at)
+      void this.sql`INSERT INTO agent_tasks (id, seq, parent_id, title, status, created_at, updated_at)
         VALUES (${id}, ${seq}, ${parentId}, ${title}, 'open', ${now}, ${now})`;
       added.push({ id, parentId, title, status: 'open', createdAt: now, updatedAt: now });
       seq++;
@@ -130,7 +133,7 @@ export class TaskListStore {
   /** Set an item's status. Null when there is no such id. */
   setStatus(id: string, status: TaskStatus, now: number): AgentTask | null {
     if (!this.get(id)) return null;
-    this.sql`UPDATE agent_tasks SET status=${status}, updated_at=${now} WHERE id=${id}`;
+    void this.sql`UPDATE agent_tasks SET status=${status}, updated_at=${now} WHERE id=${id}`;
     return this.get(id);
   }
 

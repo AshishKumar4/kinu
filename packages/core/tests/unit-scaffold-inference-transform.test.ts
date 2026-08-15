@@ -13,26 +13,11 @@
  *     is cancelled when the scaffold settles.
  */
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { scaffoldInferenceTransform, type InferenceStreamResult } from '../src/index.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Executor } from '../src/types/primitives.js';
-import { createTestRuntime } from './helpers.js';
-
-/** DynamicWorkerExecutor semantics: providers visible as globals. */
-function evalExecutor(): Executor {
-  return {
-    async execute(code, providers) {
-      const arr = providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>;
-      try {
-        const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
-        const result = await fn(...arr.map((p) => p.fns));
-        return { result };
-      } catch (err) {
-        return { result: undefined, error: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  };
-}
+import { JsonObjectSchema, type JsonObject } from '../src/utils/json.js';
+import { createEvalExecutor, createTestRuntime } from './helpers.js';
 
 const DELEGATING_SCAFFOLD = `async function run(rt, task) {
   await host.defaultInference();
@@ -44,7 +29,7 @@ const CUSTOM_SCAFFOLD = `async function run(rt, task) {
 
 function runtime(): AgentRuntime {
   const { rt } = createTestRuntime();
-  (rt as { executor: Executor }).executor = evalExecutor();
+  rt.executor = createEvalExecutor();
   return rt;
 }
 
@@ -58,11 +43,15 @@ function runOpts(rt: AgentRuntime, scaffoldCode: string) {
   };
 }
 
-async function collect(stream: AsyncIterable<unknown>): Promise<Array<{ type: string }>> {
-  const out: Array<{ type: string }> = [];
-  for await (const c of stream) out.push(c as { type: string });
+async function collect(stream: ReturnType<InferenceStreamResult['toUIMessageStream']>): Promise<JsonObject[]> {
+  const out: JsonObject[] = [];
+  for await (const chunk of stream) {
+    out.push(v.parse(JsonObjectSchema, chunk));
+  }
   return out;
 }
+
+const chunkType = (chunk: JsonObject): string => v.parse(v.string(), chunk.type);
 
 describe('scaffoldInferenceTransform', () => {
   test('version <= 0 → the default result passes through untouched (same object)', () => {
@@ -74,7 +63,7 @@ describe('scaffoldInferenceTransform', () => {
   });
 
   test('delegating scaffold is byte-faithful: the prepared chunks pass through verbatim', async () => {
-    const innerContent = [
+    const innerContent: JsonObject[] = [
       { type: 'text-start', id: 'x' },
       { type: 'text-delta', id: 'x', delta: 'hello ' },
       { type: 'text-delta', id: 'x', delta: 'world' },
@@ -99,14 +88,14 @@ describe('scaffoldInferenceTransform', () => {
     const chunks = await collect(out.toUIMessageStream());
 
     // Outer envelope owned by the scaffold stream; inner start/finish stripped.
-    expect(chunks[0]?.type).toBe('start');
-    expect(chunks[chunks.length - 1]?.type).toBe('finish');
-    // The prepared content chunks arrive verbatim — the SAME objects, not
-    // re-encoded copies. That is the byte-faithfulness of a delegating
-    // scaffold on this seam: host.defaultInference() IS the default stream.
-    const content = chunks.filter((c) => c.type.startsWith('text-'));
+    expect(chunks[0] ? chunkType(chunks[0]) : undefined).toBe('start');
+    const lastChunk = chunks.at(-1);
+    expect(lastChunk ? chunkType(lastChunk) : undefined).toBe('finish');
+    // The prepared content chunks retain the exact validated wire content and
+    // ordering. Object identity is not a transport contract across the parser.
+    const content = chunks.filter((chunk) => chunkType(chunk).startsWith('text-'));
     expect(content).toHaveLength(innerContent.length);
-    content.forEach((c, i) => expect(c).toBe(innerContent[i] as { type: string }));
+    expect(content).toEqual(innerContent);
     // Exactly one consumption of the prepared stream (no re-run of inference).
     expect(streams).toBe(1);
   });
@@ -131,8 +120,8 @@ describe('scaffoldInferenceTransform', () => {
     const chunks = await collect(out.toUIMessageStream());
 
     const text = chunks
-      .filter((c): c is { type: string; delta: string } => c.type === 'text-delta')
-      .map((c) => c.delta).join('');
+      .filter((chunk) => chunkType(chunk) === 'text-delta')
+      .map((chunk) => v.parse(v.string(), chunk.delta)).join('');
     expect(text).toBe('custom answer');
     // The scaffold never delegated → the eagerly-fired default stream was
     // cancelled instead of running unconsumed to completion.

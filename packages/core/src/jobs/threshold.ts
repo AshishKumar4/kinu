@@ -9,6 +9,7 @@
 // immediately — "this is continuing in the background; you'll be woken with the
 // result." When too many jobs are already in flight the detach is refused
 // instead: the work is cancelled and the model is told why.
+import * as v from 'valibot';
 
 /** Who owns the session, which is what makes a detach cheap or expensive.
  *  Not a toggle — every session has exactly one of these, fixed at construction. */
@@ -19,13 +20,18 @@ export interface BackgroundPolicy {
   readonly detachAfterMs: number;
   /** How long teardown waits on work that has not settled before leaving it. */
   readonly settleGraceMs: number;
-  /** Whether SPAWN-shaped work (a fork — a process whose completion arrives as
-   *  an event, not a result this turn is waiting on) detaches the moment the
-   *  spawn is confirmed started, instead of riding `detachAfterMs`. True only
-   *  where a session outlives the turn to receive the wake; on a one-shot
-   *  surface the turn is the only consumer the result will ever have, so a
-   *  fork there is result-shaped like everything else. */
-  readonly detachSpawnOnStart: boolean;
+  /**
+   * Whether this session outlives the turn, and can therefore receive a wake.
+   *
+   * It decides what SPAWN-shaped work (a fork) does, and both answers follow
+   * from it. Where a wake can arrive, a fork detaches the moment its spawn is
+   * confirmed started — its duration is long by construction, so waiting on a
+   * threshold could only ever be dead air. Where no wake can arrive, the turn
+   * is the ONLY consumer the result will ever have, so the fork runs inline to
+   * completion: detaching it there produces an answer with nobody left to read
+   * it.
+   */
+  readonly wakesAfterTurn: boolean;
 }
 
 /**
@@ -50,11 +56,20 @@ export interface BackgroundPolicy {
  * unlikely to finish at all, teardown gives it a short grace and then leaves it
  * running rather than joining it: that unbounded join was 6.4 of 16.2 agent-hours
  * of pure idle tail in the same run.
+ *
+ * A fork here is the case that grace was never meant to cover. It terminates,
+ * its result IS the point, and no wake can arrive to deliver one — so letting
+ * it cross the threshold guaranteed the worst outcome available: the model got
+ * a handle instead of an answer, the search kept running unread, and teardown
+ * abandoned it 120s later. A `settle=mcts` fork under `proteus exec` did
+ * exactly that — 4 of 40 iterations, `bg_jobs_abandoned`, and a model left to
+ * narrate a convergence over rival approaches it never saw. `wakesAfterTurn`
+ * is what stops it: no wake, no detach, the turn waits for its own answer.
  */
-export const BACKGROUND_POLICY: Readonly<Record<SessionSurface, BackgroundPolicy>> = {
-  interactive: { detachAfterMs: 30_000, settleGraceMs: 300_000, detachSpawnOnStart: true },
-  'one-shot': { detachAfterMs: 300_000, settleGraceMs: 120_000, detachSpawnOnStart: false },
-};
+export const BACKGROUND_POLICY = {
+  interactive: { detachAfterMs: 30_000, settleGraceMs: 300_000, wakesAfterTurn: true },
+  'one-shot': { detachAfterMs: 300_000, settleGraceMs: 120_000, wakesAfterTurn: false },
+} as const satisfies Record<SessionSurface, BackgroundPolicy>;
 
 /** Returned to the model when a tool call is moved to the background. */
 export interface BackgroundHandle {
@@ -72,8 +87,15 @@ export interface BackgroundRefusal {
   readonly message: string;
 }
 
-export function isBackgroundHandle(v: unknown): v is BackgroundHandle {
-  return typeof v === 'object' && v !== null && (v as { background?: unknown }).background === true;
+const BackgroundHandleSchema: v.GenericSchema<BackgroundHandle> = v.object({
+  background: v.literal(true),
+  jobId: v.string(),
+  kind: v.string(),
+  message: v.string(),
+});
+
+export function isBackgroundHandle<T>(value: T): value is T & BackgroundHandle {
+  return v.safeParse(BackgroundHandleSchema, value).success;
 }
 
 /**
@@ -89,10 +111,7 @@ export function isBackgroundOutcomeText(result: string): boolean {
   const text = result.trimStart();
   if (!text.startsWith('{')) return false;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null
-      && typeof (parsed as { background?: unknown }).background === 'boolean'
-      && typeof (parsed as { kind?: unknown }).kind === 'string';
+    return v.safeParse(v.object({ background: v.boolean(), kind: v.string() }), JSON.parse(text)).success;
   } catch {
     return false;
   }
@@ -127,7 +146,7 @@ export async function withBackgroundThreshold<T>(
     timer = setTimeout(() => resolve(TIMED_OUT), thresholdMs);
   });
   // Wrap with both handlers so the abandoned branch never throws unhandled.
-  const settled = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
+  const settled = promise.then((value) => ({ value }), (error) => ({ error }));
   const winner = await Promise.race([settled, timeout]);
   if (timer) clearTimeout(timer);
 
@@ -176,7 +195,7 @@ export async function withSpawnDetach<T>(
   const started = new Promise<typeof SPAWNED>((resolve) => { announce = () => resolve(SPAWNED); });
   const promise = exec(announce);
   // Wrap with both handlers so the abandoned branch never throws unhandled.
-  const settled = promise.then((value) => ({ value }), (error: unknown) => ({ error }));
+  const settled = promise.then((value) => ({ value }), (error) => ({ error }));
   const winner = await Promise.race([settled, started]);
 
   if (winner !== SPAWNED) {
@@ -208,10 +227,14 @@ export async function withSpawnDetach<T>(
  *  same tool simply runs to completion. */
 export const SPAWN_STARTED_OPTION = 'proteusSpawnStarted';
 
+const SpawnStartedOptionsSchema = v.object({
+  [SPAWN_STARTED_OPTION]: v.optional(v.function()),
+});
+
 /** The spawn announcement out of a tool-call options bag, if the background
  *  wrapper armed one. */
-export function readSpawnStarted(toolOptions: unknown): (() => void) | undefined {
-  if (typeof toolOptions !== 'object' || toolOptions === null) return undefined;
-  const fn = (toolOptions as Record<string, unknown>)[SPAWN_STARTED_OPTION];
-  return typeof fn === 'function' ? (fn as () => void) : undefined;
+export function readSpawnStarted<T>(toolOptions: T): (() => void) | undefined {
+  const parsed = v.safeParse(SpawnStartedOptionsSchema, toolOptions);
+  const fn = parsed.success ? parsed.output[SPAWN_STARTED_OPTION] : undefined;
+  return fn;
 }

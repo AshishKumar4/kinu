@@ -80,12 +80,19 @@
  * the rest of the turn's accounting.
  */
 
+import * as v from 'valibot';
 import type { TurnSteeringRecord, TurnSteeringTrigger } from '../events/types.js';
 import type { ToolCallContext, ToolResultContext } from '../extension.js';
 import type { AgentSignal } from '../types/signals.js';
 import type { BuiltinToolName } from '../tools/registry.js';
 import type { RecoveryFinding } from '../evolution/recovery.js';
 import { fnv1a64 } from '../prompting/volatile-context.js';
+import {
+  isJsonObject,
+  parseJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from '../utils/json.js';
 
 /** Identical calls answered identically before the turn is told it is looping.
  *  Three is the first count that is a loop rather than a retry: one repeat is a
@@ -132,6 +139,8 @@ export const STEPS_WITHOUT_PROGRESS_BEFORE_STEER = 12;
 /** How much of a repeated call's arguments the steer quotes back. Enough to
  *  name a command; never a whole `execute_tools` program. */
 const ARGS_ECHO_MAX_CHARS = 200;
+
+const ErrorResultSchema = v.object({ error: v.string() });
 
 /** The tool the delegation steers name — the whole delegation ladder is one tool. */
 const DELEGATION_TOOL: BuiltinToolName = 'agents';
@@ -189,9 +198,7 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
   if (/^Error\b/.test(text)) return true;
   if (!text.startsWith('{')) return false;
   try {
-    const parsed: unknown = JSON.parse(text);
-    return typeof parsed === 'object' && parsed !== null
-      && typeof (parsed as { error?: unknown }).error === 'string';
+    return v.safeParse(ErrorResultSchema, parseJsonValue(text)).success;
   } catch {
     // The seam hands over a BOUNDED prefix of the result (chat.ts and the cf
     // afterToolCall both cut at 1000 chars), so a long failure payload arrives
@@ -204,25 +211,28 @@ export function isFailingToolResult(ctx: ToolResultContext): boolean {
 
 /** One tool called one way. Hashed rather than stored: an `execute_tools`
  *  program is tens of kilobytes and a turn runs hundreds of steps. */
-function callSignature(toolName: string, args: Record<string, unknown>): string {
+function callSignature(toolName: string, args: JsonObject): string {
   return `${toolName} ${fnv1a64(stableArgs(args))}`;
 }
 
 /** Key-order-independent serialization, so `{a,b}` and `{b,a}` are one call. */
-function stableArgs(args: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(args, (_key, value: unknown) =>
-      value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? Object.fromEntries(
-            Object.entries(value as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-        : value) ?? '';
-  } catch {
-    // Circular or unserializable input: no stable identity, so no repeat.
-    return '';
+function sortJsonValue(value: JsonValue): JsonValue {
+  if (Array.isArray(value)) return value.map(sortJsonValue);
+  if (!isJsonObject(value)) return value;
+
+  const sorted: JsonObject = {};
+  const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+  for (const [key, child] of entries) {
+    sorted[key] = sortJsonValue(child);
   }
+  return sorted;
 }
 
-function echoArgs(args: Record<string, unknown>): string {
+function stableArgs(args: JsonObject): string {
+  return JSON.stringify(sortJsonValue(args));
+}
+
+function echoArgs(args: JsonObject): string {
   const rendered = stableArgs(args);
   return rendered.length <= ARGS_ECHO_MAX_CHARS
     ? rendered

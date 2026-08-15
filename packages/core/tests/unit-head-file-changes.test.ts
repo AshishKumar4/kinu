@@ -27,7 +27,7 @@ function memVfs(seed: Record<string, string> = {}): VFS & { reads: number; files
       return v;
     },
     async writeFile(path: string, data: string | Uint8Array) {
-      files.set(path, typeof data === 'string' ? data : new TextDecoder().decode(data));
+      files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
     },
     async readdir() { return [...files.keys()]; },
     async stat(path: string) {

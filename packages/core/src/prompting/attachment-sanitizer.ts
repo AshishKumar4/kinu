@@ -113,12 +113,14 @@ export async function sanitizeAttachmentsForModel(
 ): Promise<ModelMessage[]> {
   const out: ModelMessage[] = [];
   for (const message of messages) {
-    if (message.role === 'user' && typeof message.content === 'string') {
-      const replacement = await sanitizeUserText(message.content, policy);
-      out.push(replacement === null ? message : { ...message, content: replacement });
-    } else if (message.role === 'user' && typeof message.content !== 'string') {
-      out.push(await sanitizeUserMessage(message, message.content, policy));
-    } else if (message.role === 'assistant' && typeof message.content !== 'string') {
+    if (message.role === 'user') {
+      if (Array.isArray(message.content)) {
+        out.push(await sanitizeUserMessage(message, message.content, policy));
+      } else {
+        const replacement = await sanitizeUserText(message.content, policy);
+        out.push(replacement === null ? message : { ...message, content: replacement });
+      }
+    } else if (message.role === 'assistant' && Array.isArray(message.content)) {
       out.push(await sanitizeAssistantMessage(message, message.content, policy));
     } else {
       out.push(message);
@@ -220,7 +222,6 @@ function estimatePayloadBytes(data: FilePart['data'] | ImagePart['image']): numb
   if (data instanceof URL) return null;
   if (data instanceof Uint8Array) return data.byteLength;
   if (data instanceof ArrayBuffer) return data.byteLength;
-  if (typeof data !== 'string') return null;
   if (/^https?:\/\//.test(data)) return null;
   const comma = data.startsWith('data:') ? data.indexOf(',') : -1;
   return Math.floor(((comma === -1 ? data.length : data.length - comma - 1) * 3) / 4);
@@ -332,14 +333,9 @@ function decodePayload(data: FilePart['data'] | ImagePart['image']): DecodedPayl
   if (data instanceof URL) return { kind: 'remote' };
   if (data instanceof Uint8Array) return { kind: 'bytes', bytes: data };
   if (data instanceof ArrayBuffer) return { kind: 'bytes', bytes: new Uint8Array(data) };
-  if (typeof data === 'string') {
-    if (data.startsWith('data:')) return { kind: 'bytes', bytes: decodeDataUrl(data) };
-    if (/^https?:\/\//.test(data)) return { kind: 'remote' };
-    return { kind: 'bytes', bytes: decodeBase64OrText(data) };
-  }
-  // Buffer (Node) is a Uint8Array subclass — unreachable, but keep the
-  // narrowing honest for future DataContent widening.
-  return { kind: 'bytes', bytes: new TextEncoder().encode(String(data)) };
+  if (data.startsWith('data:')) return { kind: 'bytes', bytes: decodeDataUrl(data) };
+  if (/^https?:\/\//.test(data)) return { kind: 'remote' };
+  return { kind: 'bytes', bytes: decodeBase64OrText(data) };
 }
 
 function decodeDataUrl(dataUrl: string): Uint8Array {
@@ -364,9 +360,13 @@ function decodeBase64OrText(value: string): Uint8Array {
   }
 }
 
+interface AttachmentExtensions {
+  [mediaType: string]: string;
+}
+
 /** Deterministic file extension for the content-addressed path. */
 function extensionFor(mediaType: string): string {
-  const known: Record<string, string> = {
+  const known: AttachmentExtensions = {
     'application/pdf': 'pdf',
     'image/jpeg': 'jpg',
     'image/svg+xml': 'svg',

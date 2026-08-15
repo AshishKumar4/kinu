@@ -8,7 +8,7 @@ import { createCLIRuntime } from '../src/runtime.js';
 
 function freshVfs() {
   const db = new Database(':memory:');
-  const rt = createCLIRuntime(db as never, {
+  const rt = createCLIRuntime(db, {
     dbPath: `/tmp/proteus-vfs-${Math.floor(performance.now())}.db`,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });

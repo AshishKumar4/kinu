@@ -5,15 +5,32 @@
 // row, and a call still running never does — a headline that ticks between
 // "4 calls" and "5 calls" while the agent works is worse than no headline.
 import { describe, test, expect } from 'bun:test';
-import type { UIMessage } from 'ai';
+import type { ReasoningUIPart, TextUIPart, ToolUIPart, UIMessage } from 'ai';
+import type { JsonValue } from '@proteus/core';
 import { groupMessageParts } from '../src/components/tool-call-grouping.ts';
 import { describeCommand, describeToolCall, summarizeToolRun } from '../src/components/tool-call-summary.ts';
 
 type Part = UIMessage['parts'][number];
 
-const tool = (id: string, name: string, state: string, input: unknown = {}): Part =>
-  ({ type: `tool-${name}`, toolCallId: id, state, input }) as unknown as Part;
-const text = (t: string): Part => ({ type: 'text', text: t }) as unknown as Part;
+type TestToolState = 'input-available' | 'output-available' | 'output-error';
+
+function tool(
+  id: string,
+  name: string,
+  state: TestToolState,
+  input: JsonValue = {},
+): ToolUIPart {
+  const type: `tool-${string}` = `tool-${name}`;
+  if (state === 'output-available') {
+    return { type, toolCallId: id, state, input, output: null };
+  }
+  if (state === 'output-error') {
+    return { type, toolCallId: id, state, input, errorText: 'test failure' };
+  }
+  return { type, toolCallId: id, state, input };
+}
+
+const text = (content: string): TextUIPart => ({ type: 'text', text: content });
 
 const kinds = (parts: readonly Part[]) =>
   groupMessageParts(parts).map((b) => (b.kind === 'tool-run' ? `run(${b.parts.length})` : b.part.type));
@@ -61,7 +78,8 @@ describe('grouping a turn into blocks', () => {
   });
 
   test('non-tool parts are passed through untouched, in order', () => {
-    expect(kinds([{ type: 'reasoning', text: 'hm' } as unknown as Part, text('a')]))
+    const reasoning: ReasoningUIPart = { type: 'reasoning', text: 'hm' };
+    expect(kinds([reasoning, text('a')]))
       .toEqual(['reasoning', 'text']);
   });
 

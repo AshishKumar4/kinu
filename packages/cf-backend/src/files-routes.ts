@@ -38,7 +38,7 @@ export async function handleFilesRequest(
 
   const bytes = new Uint8Array(await request.arrayBuffer());
   const agent = await getAgentByName<Env, OrchestratorAgent>(
-    (env as Env & { OrchestratorAgent: DurableObjectNamespace }).OrchestratorAgent,
+    env.OrchestratorAgent,
     agentName,
   );
   const result = await agent.writeExecutorFile(executorId, path, bytes);

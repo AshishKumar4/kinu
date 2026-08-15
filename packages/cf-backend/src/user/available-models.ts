@@ -34,6 +34,7 @@ export interface ModelMenuResponse {
 }
 
 export async function listAvailableModels(env: Env, userId: string, caller: UserCaller): Promise<ModelMenuResponse> {
+  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
   const { registry, deps } = createAgentProviderRegistry({
     env,
@@ -106,6 +107,7 @@ export function buildProviderCatalog(
 }
 
 export async function listProviderCatalog(env: Env, userId: string, caller: UserCaller): Promise<ProviderCatalogEntry[]> {
+  // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
   const stub = env.UserDO.get(env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
   const { registry } = createAgentProviderRegistry({ env, userDO: { stub, caller }, fetch });
   const [providers, creds] = await Promise.all([

@@ -22,7 +22,7 @@
  * scripted event sequence and assert the chunk stream.
  */
 
-import type { UIMessageChunk } from 'ai';
+import { uiMessageChunkSchema, type UIMessageChunk } from 'ai';
 import type { ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
 import { pumpScaffoldEvents } from './event-pump.js';
 
@@ -50,7 +50,8 @@ export async function* scaffoldEventsToUIStream(
     }
   }
 
-  yield { type: 'start', ...(opts.messageId ? { messageId: opts.messageId } : {}) };
+  if (opts.messageId) yield { type: 'start', messageId: opts.messageId };
+  else yield { type: 'start' };
 
   let result: ScaffoldRunResult;
   for (;;) {
@@ -59,8 +60,9 @@ export async function* scaffoldEventsToUIStream(
     const ev = next.value;
     switch (ev.type) {
       case 'ui_chunk': {
-        const chunk = ev.chunk as UIMessageChunk | undefined;
-        if (chunk && typeof chunk === 'object' && 'type' in chunk) {
+        const validation = await uiMessageChunkSchema().validate?.(ev.chunk);
+        if (validation?.success) {
+          const chunk = validation.value;
           // Strip the inner envelope — we own start/finish.
           if (chunk.type !== 'start' && chunk.type !== 'finish') yield chunk;
         }

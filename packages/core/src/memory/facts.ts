@@ -8,10 +8,12 @@
 // the system prompt every turn.
 
 import type { SqlExecutor } from '../types/primitives.js';
+import * as v from 'valibot';
+import { parseJsonValue, type JsonValue } from '../utils/json.js';
 
 export interface Fact {
   key: string;
-  value: unknown;
+  value: JsonValue;
   confidence: number;
   source: string;
   lastObservedAt: number;
@@ -34,7 +36,7 @@ export function initFactsTable(execRaw: (ddl: string) => void): void {
 }
 
 export interface FactsStore {
-  upsert(key: string, value: unknown, opts?: { confidence?: number; source?: string }): FactUpsertResult;
+  upsert(key: string, value: JsonValue, opts?: { confidence?: number; source?: string }): FactUpsertResult;
   recall(key: string): Fact | null;
   forget(key: string): void;
   recentTopK(k: number): Fact[];
@@ -59,8 +61,8 @@ function rowToFact(r: FactRow): Fact {
   };
 }
 
-function safeParse(json: string): unknown {
-  try { return JSON.parse(json); } catch { return json; }
+function safeParse(json: string): JsonValue {
+  try { return parseJsonValue(json); } catch { return json; }
 }
 
 export function createFactsStore(sql: SqlExecutor): FactsStore {
@@ -69,20 +71,17 @@ export function createFactsStore(sql: SqlExecutor): FactsStore {
       const conf = opts.confidence ?? 1;
       const src = opts.source ?? null;
       const valueJson = JSON.stringify(value);
-      if (valueJson === undefined) {
-        throw new TypeError('fact value must be JSON-serializable');
-      }
       const existing = sql<{ value_json: string; last_observed_at: number }>`
         SELECT value_json, last_observed_at FROM agent_facts WHERE key = ${key} LIMIT 1`[0];
       if (existing?.value_json === valueJson) {
-        sql`UPDATE agent_facts SET
+        void sql`UPDATE agent_facts SET
               confidence = ${conf},
               source = COALESCE(${src}, source)
             WHERE key = ${key}`;
         return 'unchanged';
       }
       const now = Math.max(Date.now(), (existing?.last_observed_at ?? -1) + 1);
-      sql`
+      void sql`
         INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
         VALUES (${key}, ${valueJson}, ${conf}, ${src}, ${now})
         ON CONFLICT(key) DO UPDATE SET
@@ -98,7 +97,7 @@ export function createFactsStore(sql: SqlExecutor): FactsStore {
       return rows[0] ? rowToFact(rows[0]) : null;
     },
     forget(key) {
-      sql`DELETE FROM agent_facts WHERE key = ${key}`;
+      void sql`DELETE FROM agent_facts WHERE key = ${key}`;
     },
     recentTopK(k) {
       const rows = sql<FactRow>`SELECT key, value_json, confidence, source, last_observed_at
@@ -122,7 +121,8 @@ export function renderFactsBlock(facts: Fact[], opts: { maxChars?: number } = {}
   let shown = 0;
   let used = 0;
   for (const f of facts) {
-    const val = typeof f.value === 'string' ? f.value : JSON.stringify(f.value);
+    const text = v.safeParse(v.string(), f.value);
+    const val = text.success ? text.output : JSON.stringify(f.value);
     const line = `${f.key}: ${val}`;
     if (used + line.length + 1 > max) break;
     lines.push(line);

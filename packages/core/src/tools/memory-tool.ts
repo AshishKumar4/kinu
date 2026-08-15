@@ -8,12 +8,20 @@
  * calls — one dispatcher, two callers, mirroring tools/agents-tool.ts.
  */
 import type { Memory, SqlExecutor } from '../types/primitives.js';
+import * as v from 'valibot';
 import type { FactsStore } from '../memory/facts.js';
 import type { VectorStore } from '../memory/vector-store.js';
 import { appendMemoryNote } from '../memory/note.js';
 import { hybridSearch, memorySnippetRehydrator, type LexicalHit } from '../memory/hybrid-search.js';
 import { SessionSearchStore } from '../memory/session-search.js';
+import { decodeJsonValue, type JsonValue } from '../utils/json.js';
 import type { MemoryToolAction, MEMORY_FACT_ACTIONS } from './registry.js';
+
+const FactKeySchema = v.pipe(v.string(), v.nonEmpty());
+
+function errorMessage({ error }: { error: unknown }): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export interface MemoryToolDeps {
   memory: Memory;
@@ -46,7 +54,7 @@ export interface MemoryToolInput {
 /** Build a memory dispatcher over one runtime's stores. Constructed once —
  *  SessionSearchStore holds no state of its own, so this is cheap — and
  *  reused by every call the returned function serves. */
-export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryToolInput) => Promise<unknown> {
+export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryToolInput) => Promise<JsonValue> {
   const { memory, vectorStore: vs, facts } = deps;
 
   const searchMemory = async (query: string): Promise<string> => {
@@ -81,23 +89,25 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   // messages table (one store, both backends). Mode inferred Hermes-style:
   // around_message_id → scroll, query → search, neither → browse.
   const sessionSearch = new SessionSearchStore(deps.sql);
-  const runSessionsAction = (args: MemoryToolInput): unknown => {
+  const runSessionsAction = (args: MemoryToolInput): JsonValue => {
     try {
       if (args.around_message_id) {
         const view = sessionSearch.scroll(args.around_message_id, args.window ?? 5, args.max_chars);
         if (!view) return { error: `no message with id ${args.around_message_id}` };
-        return { mode: 'scroll', ...view };
+        return decodeJsonValue({ value: { mode: 'scroll', ...view } });
       }
       if (args.query?.trim()) {
         const hits = sessionSearch.search(args.query, args.limit ?? 5);
-        return {
+        return decodeJsonValue({ value: {
           mode: 'search', query: args.query, hits,
           hint: hits.length > 0
             ? 'Pass a hit\'s messageId as around_message_id to read the surrounding window.'
             : 'No matches. Multi-word queries require all terms; try fewer or different keywords.',
-        };
+        } });
       }
-      return { mode: 'browse', sessions: sessionSearch.browse(args.limit ?? 10) };
+      return decodeJsonValue({
+        value: { mode: 'browse', sessions: sessionSearch.browse(args.limit ?? 10) },
+      });
     } catch (err) {
       return { error: `session search unavailable: ${err instanceof Error ? err.message : String(err)}` };
     }
@@ -106,33 +116,33 @@ export function createMemoryDispatcher(deps: MemoryToolDeps): (input: MemoryTool
   const runFactAction = (
     action: (typeof MEMORY_FACT_ACTIONS)[number],
     args: MemoryToolInput,
-  ): unknown => {
+  ): JsonValue => {
     if (!facts) return { error: 'the keyed-fact actions are not available on this runtime' };
-    if (typeof args.key !== 'string' || args.key.length === 0) {
+    const key = v.safeParse(FactKeySchema, args.key);
+    if (!key.success) {
       return { error: 'key must be a non-empty string' };
     }
     if (action === 'remember') {
-      // Pre-flight serialize so circular refs / non-serializable values
-      // surface as a clean tool error instead of crashing the turn.
-      try { JSON.stringify(args.value); }
-      catch (err) { return { error: `value not JSON-serializable: ${(err as Error).message}` }; }
-      facts.upsert(args.key, args.value, { confidence: args.confidence });
-      return { ok: true, key: args.key };
+      let value: JsonValue;
+      try { value = decodeJsonValue({ value: args.value }); }
+      catch (error) { return { error: `value not JSON-serializable: ${errorMessage({ error })}` }; }
+      facts.upsert(key.output, value, { confidence: args.confidence });
+      return { ok: true, key: key.output };
     }
     if (action === 'recall') {
-      const f = facts.recall(args.key);
-      if (!f) return { found: false, key: args.key };
-      return {
+      const f = facts.recall(key.output);
+      if (!f) return { found: false, key: key.output };
+      return decodeJsonValue({ value: {
         found: true, key: f.key, value: f.value, confidence: f.confidence,
         source: f.source, lastObservedAt: f.lastObservedAt,
-      };
+      } });
     }
-    const existed = facts.recall(args.key) !== null;
-    facts.forget(args.key);
-    return { ok: true, key: args.key, existed };
+    const existed = facts.recall(key.output) !== null;
+    facts.forget(key.output);
+    return { ok: true, key: key.output, existed };
   };
 
-  return async (args: MemoryToolInput): Promise<unknown> => {
+  return async (args: MemoryToolInput): Promise<JsonValue> => {
     switch (args.action) {
       case 'save':
         if (!args.content) return 'memory.save requires `content`.';

@@ -14,6 +14,20 @@ import {
   type ModelMenu, type ModelMenuEntry, type ProviderFailure,
 } from "../lib/user-api";
 import { badgeCapabilities, groupModelMenu, modelMatchesQuery } from "./model-picker-options";
+import * as v from 'valibot';
+
+const ModelMenuEntrySchema = v.object({
+  spec: v.string(),
+  label: v.string(),
+  provider: v.string(),
+  capabilities: v.optional(v.array(v.string())),
+  contextWindow: v.optional(v.number()),
+});
+
+function modelMenuEntry<Input>(input: Input): ModelMenuEntry | null {
+  const parsed = v.safeParse(ModelMenuEntrySchema, input);
+  return parsed.success ? parsed.output : null;
+}
 
 /** The clear button Kumo forces onto a non-clearable picker. Named so the
  *  stylesheet can remove it; must match the selector in index.css. */
@@ -50,14 +64,17 @@ export function ModelPicker({
     <Combobox
       items={items}
       value={selected}
-      onValueChange={(next: unknown) => {
-        const entry = next as ModelMenuEntry | null;
+      onValueChange={<Next,>(next: Next) => {
+        const entry = modelMenuEntry(next);
         if (entry) onChange(entry.spec);
         else if (clearable) onChange("");
       }}
-      itemToStringLabel={(m: unknown) => (m as ModelMenuEntry).label}
-      itemToStringValue={(m: unknown) => (m as ModelMenuEntry).spec}
-      filter={(m: unknown, query: string) => modelMatchesQuery(m as ModelMenuEntry, query)}
+      itemToStringLabel={<Item,>(item: Item) => modelMenuEntry(item)?.label ?? ''}
+      itemToStringValue={<Item,>(item: Item) => modelMenuEntry(item)?.spec ?? ''}
+      filter={<Item,>(item: Item, query: string) => {
+        const model = modelMenuEntry(item);
+        return model ? modelMatchesQuery(model, query) : false;
+      }}
       size={size}
     >
       <Combobox.TriggerInput

@@ -9,7 +9,7 @@ function setup() {
   initAllTables(makeExecRaw(db));
   const sql = makeSql(db);
   const write = (event: string, detail: string | null, createdAt: number): void => {
-    sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
+    void sql`INSERT INTO activity_log (event, detail, elapsed_ms, created_at)
         VALUES (${event}, ${detail}, ${0}, ${createdAt})`;
   };
   return { sql, write };

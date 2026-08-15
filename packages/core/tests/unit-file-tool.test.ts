@@ -8,12 +8,14 @@
 
 import { describe, expect, test } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
+import * as v from 'valibot';
 import { applyFileEdits, readFileSlice } from '../src/tools/file-edit.js';
 import { TurnFileLedger } from '../src/tools/file-ledger.js';
-import { createFileTool } from '../src/tools/file-tool.js';
+import { createFileTool, type FileToolInput } from '../src/tools/file-tool.js';
 import { TurnContextBudget } from '../src/context-budget.js';
 import { makeVfsError } from '../src/vfs/errno.js';
 import type { Memory, VFS } from '../src/types/primitives.js';
+import type { JsonValue } from '../src/utils/json.js';
 
 // ── the engine ──────────────────────────────────────────────────────────────
 
@@ -173,7 +175,9 @@ describe('readFileSlice', () => {
 
   test('continuing from the named offset reaches the end', () => {
     const first = readFileSlice(file, { path: '/f', maxChars: 20 });
-    const next = Number(/offset=(\d+)/.exec(first.output)![1]);
+    const offsetMatch = /offset=(\d+)/.exec(first.output);
+    if (!offsetMatch) throw new Error('truncated read did not include its continuation offset');
+    const next = Number(offsetMatch[1]);
     const second = readFileSlice(file, { path: '/f', offset: next, maxChars: 10_000 });
     expect(second.omitted).toBe(0);
     expect(second.output.split('\n')[0]).toBe(`line ${next}`);
@@ -324,10 +328,18 @@ function memoryVfs(seed: Record<string, string> = {}): VFS & { files: Map<string
   };
 }
 
+type FileToolTestInput = FileToolInput | { action: string; path: string };
+
 function toolFor(vfs: VFS, ledger = new TurnFileLedger()) {
   const entry = createFileTool({ vfs, ledger, budget: new TurnContextBudget() });
-  const execute = toolExecute(entry);
-  return { call: (args: unknown) => execute(args), ledger };
+  return { call: toolExecute<FileToolTestInput, JsonValue>(entry), ledger };
+}
+
+const ErrorResultSchema = v.object({ error: v.string() });
+const StringResultSchema = v.string();
+
+function errorResult(value: JsonValue): { error: string } {
+  return v.parse(ErrorResultSchema, value);
 }
 
 describe('file tool', () => {
@@ -346,10 +358,10 @@ describe('file tool', () => {
   test('an edit without a read is refused, and the refusal names the call to make', async () => {
     const vfs = memoryVfs({ 'a.ts': 'const x = 1;\n' });
     const { call, ledger } = toolFor(vfs);
-    const result = await call({
+    const result = errorResult(await call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 2;' }],
-    }) as { error: string };
+    }));
     expect(result.error).toContain('action=read path=a.ts');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\n');
     expect(ledger.snapshot().failures).toEqual({ unread: 1 });
@@ -360,10 +372,10 @@ describe('file tool', () => {
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
     vfs.files.set('a.ts', 'const x = 1;\nconst y = 2;\n');
-    const result = await call({
+    const result = errorResult(await call({
       action: 'edit', path: 'a.ts',
       edits: [{ old_text: 'const x = 1;', new_text: 'const x = 3;' }],
-    }) as { error: string };
+    }));
     expect(result.error).toContain('changed since you read it');
     expect(vfs.files.get('a.ts')).toBe('const x = 1;\nconst y = 2;\n');
     expect(ledger.snapshot().failures).toEqual({ stale: 1 });
@@ -373,9 +385,9 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'x\nx\n' });
     const { call, ledger } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
-    const result = await call({
+    const result = errorResult(await call({
       action: 'edit', path: 'a.ts', edits: [{ old_text: 'x', new_text: 'y' }],
-    }) as { error: string };
+    }));
     expect(result.error).toContain('appears 2 times');
     expect(vfs.files.get('a.ts')).toBe('x\nx\n');
     expect(ledger.snapshot()).toMatchObject({ attempts: 1, applied: 0, failures: { ambiguous: 1 }, abandonedPaths: 1 });
@@ -395,7 +407,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'big.ts': body });
     const { call } = toolFor(vfs);
     await call({ action: 'read', path: 'big.ts', limit: 3 });
-    const refused = await call({ action: 'write', path: 'big.ts', content: 'wiped\n' }) as { error: string };
+    const refused = errorResult(await call({ action: 'write', path: 'big.ts', content: 'wiped\n' }));
     expect(refused.error).toContain('read only lines 1-3 of 200');
     expect(refused.error).toContain('offset=4');
     expect(vfs.files.get('big.ts')).toBe(body);
@@ -417,9 +429,10 @@ describe('file tool', () => {
   test('a BOM is never shown, so the first line the read returns can be matched', async () => {
     const vfs = memoryVfs({ 'a.cs': '\uFEFFusing System;\nclass A {}\n' });
     const { call } = toolFor(vfs);
-    const shown = await call({ action: 'read', path: 'a.cs' }) as string;
+    const shown = v.parse(StringResultSchema, await call({ action: 'read', path: 'a.cs' }));
     expect(shown.startsWith('\uFEFF')).toBe(false);
-    const firstLine = shown.split('\n')[0]!;
+    const firstLine = shown.split('\n')[0];
+    if (firstLine === undefined) throw new Error('file read returned no first line');
     expect(await call({ action: 'edit', path: 'a.cs', edits: [{ old_text: firstLine, new_text: 'using X;' }] }))
       .toMatchObject({ ok: true });
     expect(vfs.files.get('a.cs')).toBe('\uFEFFusing X;\nclass A {}\n');
@@ -429,7 +442,7 @@ describe('file tool', () => {
     const vfs = memoryVfs({ 'a.ts': 'alpha\n' });
     const { call } = toolFor(vfs);
     await call({ action: 'read', path: 'a.ts' });
-    const result = await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }) as { error: string };
+    const result = errorResult(await call({ action: 'edit', path: 'a.ts', edits: [{ old_text: 'alpha' }] }));
     expect(result.error).toContain('needs both old_text and new_text');
     expect(vfs.files.get('a.ts')).toBe('alpha\n');
     // An explicit empty string still deletes.
@@ -449,7 +462,13 @@ describe('file tool', () => {
 
   test('a memory write re-indexes however the path is spelled', async () => {
     const indexed: string[] = [];
-    const memory = { index: async (p: string) => { indexed.push(p); } } as unknown as Memory;
+    const memory: Memory = {
+      async write() {},
+      async append() {},
+      async index(path: string) { indexed.push(path); },
+      async search() { return []; },
+      async read() { return null; },
+    };
     for (const path of ['memory/a.md', '/memory/a.md', 'memory/a.md']) {
       const entry = createFileTool({ vfs: memoryVfs(), ledger: new TurnFileLedger(), budget: new TurnContextBudget(), memory });
       await toolExecute(entry)({ action: 'write', path, content: 'x' });
@@ -475,7 +494,7 @@ describe('file tool', () => {
   test('write over an existing file is refused until it has been read', async () => {
     const vfs = memoryVfs({ 'a.txt': 'original' });
     const { call } = toolFor(vfs);
-    const refused = await call({ action: 'write', path: 'a.txt', content: 'replacement' }) as { error: string };
+    const refused = errorResult(await call({ action: 'write', path: 'a.txt', content: 'replacement' }));
     expect(refused.error).toContain('has not been read here yet');
     expect(vfs.files.get('a.txt')).toBe('original');
     await call({ action: 'read', path: 'a.txt' });
@@ -494,7 +513,7 @@ describe('file tool', () => {
 
   test('a missing file reports the VFS error with the addressing correction', async () => {
     const { call } = toolFor(memoryVfs());
-    const result = await call({ action: 'read', path: '/app/main.py' }) as { error: string };
+    const result = errorResult(await call({ action: 'read', path: '/app/main.py' }));
     expect(result.error).toContain('ENOENT');
     expect(result.error).toContain('NOT the machine or container');
     expect(result.error).toContain('roots are: local');

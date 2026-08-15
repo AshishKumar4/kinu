@@ -4,14 +4,13 @@
  *  identity is deterministic without message ids. */
 
 import { describe, expect, test } from 'bun:test';
-import type { ModelMessage } from 'ai';
+import { modelMessageSchema, type ModelMessage } from 'ai';
 import {
   buildPlan,
   proteusCodec,
   proteusConventions,
   proteusSpec,
   transformTurns,
-  type ToolPairHandle,
   type Item,
   type Turn,
 } from '../src/index.js';
@@ -114,10 +113,9 @@ describe('encode structure', () => {
     expect(turns[1].role).toBe('assistant');
     const kinds = turns[1].items.map((item) => item.kind);
     expect(kinds).toEqual(['text', 'tool']);
-    const tool = turns[1].items[1] as Extract<Item, { kind: 'tool' }>;
+    const tool = requireToolItem(turns[1].items[1]);
     expect(tool.callId).toBe('c1');
-    const pair = tool.handle as ToolPairHandle;
-    expect(pair.result?.toolCallId).toBe('c1');
+    expect(proteusCodec.transcriptLine(tool)).toContain('out');
   });
 
   test('headless tool message forms its own assistant-role turn', () => {
@@ -162,11 +160,11 @@ describe('decode after pruning', () => {
     const decoded = proteusCodec.decode(turns, messages);
     expect(decoded).toHaveLength(4);
     const rebuilt = decoded[1];
-    if (rebuilt.role !== 'assistant' || typeof rebuilt.content === 'string') throw new Error('unexpected shape');
+    if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => part.type)).toEqual(['text', 'tool-call', 'tool-call']);
     // Surviving parts are the same objects; untouched messages are verbatim.
     const original = messages[1];
-    if (original.role !== 'assistant' || typeof original.content === 'string') throw new Error('unexpected shape');
+    if (original.role !== 'assistant' || isString(original.content)) throw new Error('unexpected structure');
     expect(rebuilt.content[0]).toBe(original.content[1]);
     expect(decoded[0]).toBe(messages[0]);
     expect(decoded[2]).toBe(messages[2]);
@@ -178,7 +176,7 @@ describe('decode after pruning', () => {
     turns[1].items = turns[1].items.filter((item) => !(item.kind === 'tool' && item.callId === 'c1'));
     const decoded = proteusCodec.decode(turns, messages);
     const rebuiltAssistant = decoded[1];
-    if (rebuiltAssistant.role !== 'assistant' || typeof rebuiltAssistant.content === 'string') throw new Error('unexpected shape');
+    if (rebuiltAssistant.role !== 'assistant' || isString(rebuiltAssistant.content)) throw new Error('unexpected structure');
     expect(rebuiltAssistant.content.some((p) => p.type === 'tool-call' && p.toolCallId === 'c1')).toBe(false);
     expect(rebuiltAssistant.content.some((p) => p.type === 'tool-call' && p.toolCallId === 'c2')).toBe(true);
     const rebuiltTool = decoded[2];
@@ -203,7 +201,7 @@ describe('decode after pruning', () => {
     ];
     const decoded = proteusCodec.decode(turns, messages);
     const rebuilt = decoded[1];
-    if (rebuilt.role !== 'assistant' || typeof rebuilt.content === 'string') throw new Error('unexpected shape');
+    if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     const last = rebuilt.content[rebuilt.content.length - 1];
     expect(last.type === 'text' && last.text).toBe('[tool calls/results cleared]');
   });
@@ -228,7 +226,7 @@ describe('decode after pruning', () => {
     const decoded = proteusCodec.decode(turns, ordered);
     expect(decoded).toHaveLength(1);
     const rebuilt = decoded[0];
-    if (rebuilt.role !== 'assistant' || typeof rebuilt.content === 'string') throw new Error('unexpected shape');
+    if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => part.type === 'text' ? part.text : part.type)).toEqual([
       'before',
       '[tool:run] pwd — ok',
@@ -258,7 +256,7 @@ describe('decode after pruning', () => {
 
     const decoded = proteusCodec.decode(turns, ordered);
     const rebuilt = decoded[0];
-    if (rebuilt.role !== 'assistant' || typeof rebuilt.content === 'string') throw new Error('unexpected shape');
+    if (rebuilt.role !== 'assistant' || isString(rebuilt.content)) throw new Error('unexpected structure');
     expect(rebuilt.content.map((part) => {
       if (part.type === 'text') return part.text;
       if (part.type === 'tool-call' || part.type === 'tool-result') return `${part.type}:${part.toolCallId}`;
@@ -312,7 +310,7 @@ describe('decode after pruning', () => {
     const transformed = transformTurns(turns, plan.rawTailStartIndex, plan, proteusSpec);
     const decoded = proteusCodec.decode(transformed, messages);
     const rebuilt = decoded.at(-1);
-    if (!rebuilt || rebuilt.role !== 'user' || typeof rebuilt.content === 'string') {
+    if (!rebuilt || rebuilt.role !== 'user' || isString(rebuilt.content)) {
       throw new Error('expected a multipart raw-tail user message');
     }
     expect(rebuilt.content).toHaveLength(1);
@@ -340,7 +338,7 @@ describe('estimation and transcripts', () => {
       assistant([toolCall('c1', 'run', { command: 'x'.repeat(400) })]),
       toolMessage([toolResult('c1', 'run', 'y'.repeat(4_000))]),
     ]);
-    const tool = turns[0].items[0] as Extract<Item, { kind: 'tool' }>;
+    const tool = requireToolItem(turns[0].items[0]);
     expect(proteusCodec.estimateItem(tool)).toBeGreaterThan(1_000);
   });
 
@@ -374,7 +372,8 @@ describe('estimation and transcripts', () => {
     expect(doc).toContain('total 12\\ndrwxr-xr-x');
     expect(doc).toContain('[binary 5 bytes]');
     // Every fenced block parses back to the native message group.
-    const blocks = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)].map((m) => JSON.parse(m[1]) as ModelMessage[]);
+    const blocks = [...doc.matchAll(/```json\n([\s\S]*?)\n```/g)]
+      .map((match) => parseMessageGroup(match[1]));
     expect(blocks).toHaveLength(3);
     expect(blocks[0][0]).toEqual({ role: 'user', content: 'exact user wording' });
     expect(blocks[2]).toHaveLength(2);
@@ -432,3 +431,23 @@ describe('conventions', () => {
     ]);
   });
 });
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
+}
+
+function isMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {
+  return Array.isArray(value)
+    && value.every((message) => modelMessageSchema.safeParse(message).success);
+}
+
+function parseMessageGroup(json: string): ModelMessage[] {
+  const parsed: unknown = JSON.parse(json);
+  if (!isMessageGroup(parsed)) throw new Error('expected a model-message transcript group');
+  return parsed;
+}
+
+function requireToolItem(item: Item | undefined): Extract<Item, { kind: 'tool' }> {
+  if (!item || item.kind !== 'tool') throw new Error('expected a tool item');
+  return item;
+}

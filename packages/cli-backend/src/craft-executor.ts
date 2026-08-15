@@ -18,11 +18,13 @@
  * user code. That is the same path the CF LOADER executor produces.
  */
 
-import type { CraftedToolExecute, CraftedToolExecuteFn } from '@proteus/core';
+import { decodeJsonValue } from '@proteus/core';
+import type { CraftedToolExecute, CraftedToolExecuteFn, JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 
 export function createNodeCraftedExecute(): CraftedToolExecute {
   return (tool) => {
-    let compiled: ((arg: unknown) => Promise<unknown>) | null = null;
+    let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
     let compiledFor = '';
 
     const ensure = () => {
@@ -32,15 +34,12 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
       //   async function(x) { return x * 2 }
       // upsertCraftedTool runs this exact compilation before storing, so a tool
       // that reaches here has already produced a callable once.
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
       const factory = new Function('return (' + tool.code + ')');
-      const fn = factory();
-      if (typeof fn !== 'function') {
-        throw new Error(
-          `Crafted tool "${tool.name}" did not evaluate to a function (got ${typeof fn}).`,
-        );
-      }
-      compiled = fn as (arg: unknown) => Promise<unknown>;
+      const fn = v.parse(v.function_(), factory());
+      compiled = async (arg) => {
+        const result = await fn(arg);
+        return result === undefined ? undefined : decodeJsonValue({ value: result });
+      };
       compiledFor = tool.code;
       return compiled;
     };

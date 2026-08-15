@@ -7,42 +7,49 @@
 // selection and reuses core's filterByEffectiveScore, so a score-retired tool
 // disappears from the sandbox preamble too.
 import { describe, test, expect, mock } from "bun:test";
-import { Database } from "bun:sqlite";
-import type { CraftStore, SqlExecutor, SqlValue } from "@proteus/core";
+import type { CraftedTool, CraftStore } from "@proteus/core";
 import { craftFailureMarker, initCraftScoreTables } from "@proteus/core";
+import { createTestSql } from "@proteus/test-utils";
 
 // @cloudflare/codemode (the DWE import) needs the workerd-only module.
 mock.module("cloudflare:workers", () => ({ RpcTarget: class {}, WorkerEntrypoint: class {}, DurableObject: class {} }));
 const { selectInjectableCraftedTools, buildToolsPreamble } = await import("../src/crafted-tool-registry.js");
 const { craftedDispatcherEntry } = await import("../src/execute-tools.js");
 
-function makeSql(db: Database): SqlExecutor {
-  return (<T,>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
-    const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? "?" : ""), "");
-    const stmt = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(values as never[])) as T[];
-    stmt.run(...(values as never[]));
-    return [];
-  }) as SqlExecutor;
+function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
+  const rows: CraftedTool[] = tools.map((t) => ({
+      name: t.name, code: t.code, description: t.description ?? "",
+      params: null, scope: "local", createdAt: 0, updatedAt: 0,
+  }));
+  const unsupported = (): never => { throw new Error("unused CraftStore operation"); };
+  return {
+    create: unsupported,
+    update: unsupported,
+    get: () => undefined,
+    delete: unsupported,
+    list: () => rows,
+    search: () => [],
+    getAll: () => rows,
+  };
 }
 
-function makeCraftStore(tools: Array<{ name: string; code: string; description?: string }>): CraftStore {
-  return {
-    list: () => tools.map((t) => ({
-      name: t.name, code: t.code, description: t.description ?? "",
-      params: null, scope: "local", created_at: 0, updated_at: 0,
-    })),
-  } as unknown as CraftStore;
+async function rejectionOf(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof Error) return error;
+    return new Error(String(error));
+  }
+  throw new Error("Expected promise to reject");
 }
 
 describe("selectInjectableCraftedTools — one policy with core", () => {
   test("drops comment-only code and score-retired tools; keeps healthy + unscored", () => {
-    const db = new Database(":memory:");
+    const { db, sql } = createTestSql();
     initCraftScoreTables((ddl: string) => db.exec(ddl));
-    const sql = makeSql(db);
     const now = Date.now();
-    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('healthy', 0.9, 4, ${now})`;
-    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('retired', 0.01, 9, ${now})`;
+    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('healthy', 0.9, 4, ${now})`;
+    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('retired', 0.01, 9, ${now})`;
 
     const store = makeCraftStore([
       { name: "healthy", code: "async (args) => 1" },
@@ -91,9 +98,10 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
       { name: "boom", code: 'async () => { throw new Error("inner"); }' },
     ]);
     const run = new Function(`return (async () => {\n  ${preamble}\n  return tools.boom();\n})()`);
-    const err = await (run() as Promise<unknown>).catch((e: unknown) => e as Error);
-    expect((err as Error).message).toBe(`${craftFailureMarker("boom")} inner`);
-    expect((err as Error).cause).toBeInstanceOf(Error);
+    const execution: Promise<unknown> = run();
+    const err = await rejectionOf(execution);
+    expect(err.message).toBe(`${craftFailureMarker("boom")} inner`);
+    expect(err.cause).toBeInstanceOf(Error);
   });
 
   test("codemode.<name> raises and names the form that works", async () => {
@@ -103,15 +111,16 @@ describe("selectInjectableCraftedTools — one policy with core", () => {
     // the runtime — including the in-episode fitness observer.
     const entry = craftedDispatcherEntry("doubleIt", "doubles");
     expect(entry.description).toBe("doubles");
-    const err = await entry.execute().then(() => null, (e: unknown) => e as Error);
+    const err = await rejectionOf(entry.execute());
     expect(err).toBeInstanceOf(Error);
-    expect(err!.message).toContain("tools.doubleIt(args)");
-    expect(err!.message).toContain("not codemode.doubleIt(args)");
+    expect(err.message).toContain("tools.doubleIt(args)");
+    expect(err.message).toContain("not codemode.doubleIt(args)");
   });
 
   test("a broken craft store yields an empty selection, not a throw", () => {
-    const db = new Database(":memory:");
-    const store = { list: () => { throw new Error("not initialized"); } } as unknown as CraftStore;
-    expect(selectInjectableCraftedTools(store, makeSql(db))).toEqual([]);
+    const { sql } = createTestSql();
+    const store = makeCraftStore([]);
+    store.list = () => { throw new Error("not initialized"); };
+    expect(selectInjectableCraftedTools(store, sql)).toEqual([]);
   });
 });

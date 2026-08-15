@@ -12,8 +12,17 @@
 // time via the AuthResolver.
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import type { LanguageModel } from 'ai';
+import * as v from 'valibot';
 import type { AuthResolution, ModelInfo, ModelProvider } from './types.js';
-import { createAuthedFetch, isRecord, positiveInteger } from './util.js';
+import { createAuthedFetch, positiveInteger } from './util.js';
+
+const ModelListSchema = v.object({
+  data: v.array(v.object({
+    id: v.optional(v.unknown()),
+    name: v.optional(v.unknown()),
+    context_window: v.optional(v.unknown()),
+  })),
+});
 
 export const OPENAI_COMPAT_KEY_PREFIX = 'openai-compat.';
 
@@ -73,16 +82,17 @@ export async function discoverOpenAICompatibleModels(
       headers: { ...auth.headers, accept: 'application/json' },
     });
     if (!response.ok) return [];
-    const body: unknown = await response.json();
-    if (!isRecord(body) || !Array.isArray(body.data)) return [];
-    return body.data.flatMap((value): ModelInfo[] => {
-      if (!isRecord(value) || typeof value.id !== 'string' || !value.id.trim()) return [];
-      const id = value.id.trim();
+    const body = v.safeParse(ModelListSchema, await response.json());
+    if (!body.success) return [];
+    return body.output.data.flatMap((value): ModelInfo[] => {
+      const id = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.id);
+      if (!id.success) return [];
       const contextWindow = positiveInteger(value.context_window);
+      const name = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value.name);
       return [{
-        id,
-        label: typeof value.name === 'string' && value.name.trim() ? value.name.trim() : id,
-        ...(contextWindow ? { contextWindow } : {}),
+        id: id.output,
+        label: name.success ? name.output : id.output,
+        contextWindow: contextWindow || undefined,
       }];
     });
   } catch {

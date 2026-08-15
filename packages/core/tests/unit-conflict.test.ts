@@ -60,6 +60,7 @@ describe('CraftStore conflict detection', () => {
  */
 function evaluatingExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute(code: string): Promise<ExecuteResult> {
       try {
         const compile = new Function(`return (${code})`);

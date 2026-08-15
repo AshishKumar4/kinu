@@ -13,6 +13,8 @@
 import {
   isEngineOwnedTransitionTarget,
   type ReleaseApproval,
+  type ReleaseBoard,
+  type ReleaseChange,
   type ReleaseCheck,
   type ReleaseEngine,
   type ReleaseStatus,
@@ -22,7 +24,7 @@ import {
 import type { ReleaseToolAction } from './registry.js';
 
 export interface ReleaseToolDeps {
-  board(): Promise<unknown>;
+  board(): Promise<ReleaseBoard>;
   bindSource(input: {
     kind: 'local' | 'github';
     label: string;
@@ -32,9 +34,9 @@ export interface ReleaseToolDeps {
     localRoot?: string | null;
     deployTarget?: string | null;
   }): Promise<ReleaseSource>;
-  create(input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<unknown>;
-  update(changeId: string, patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null }): Promise<unknown>;
-  transition(changeId: string, status: ReleaseStatus): Promise<unknown>;
+  create(input: { bindingId: string; userPrompt: string; plan?: string | null }): Promise<ReleaseChange>;
+  update(changeId: string, patch: { plan?: string | null; summary?: string | null; patch?: string | null; previewUrl?: string | null }): Promise<ReleaseChange>;
+  transition(changeId: string, status: ReleaseStatus): Promise<ReleaseChange>;
   recordCheck(changeId: string, input: {
     name: string;
     status: ReleaseCheck['status'];
@@ -91,12 +93,26 @@ export interface ReleaseActionInput {
   startCommand?: string;
 }
 
+export type ReleaseActionResult =
+  | ReleaseBoard
+  | ReleaseSource
+  | ReleaseChange
+  | ReleaseCheck
+  | ReleaseApproval
+  | ReleaseDeployment
+  | Awaited<ReturnType<ReleaseEngine['apply']>>
+  | Awaited<ReturnType<ReleaseEngine['runChecks']>>
+  | Awaited<ReturnType<ReleaseEngine['preview']>>
+  | Awaited<ReturnType<ReleaseEngine['deploy']>>
+  | Awaited<ReturnType<ReleaseEngine['rollback']>>
+  | { error: string };
+
 /** Dispatch one release action. Never throws — every failure comes back as
  *  `{ error }` so a codemode caller sees a value, not an exception. */
 export async function runReleaseAction(
   releases: ReleaseToolDeps,
   args: ReleaseActionInput,
-): Promise<unknown> {
+): Promise<ReleaseActionResult> {
   try {
     switch (args.action) {
       case 'board':
@@ -184,12 +200,15 @@ export async function runReleaseAction(
             );
           case 'preview':
             if (args.port == null) return { error: 'preview requires port (the port your server listens on)' };
-            return await engine.preview(args.changeId, { port: args.port, ...(args.startCommand ? { startCommand: args.startCommand } : {}) });
+            return await engine.preview(args.changeId, {
+              port: args.port,
+              startCommand: args.startCommand || undefined,
+            });
           case 'deploy':
             if (!args.deployment?.environment) return { error: 'deploy requires deployment.environment (local | staging | production)' };
             return await engine.deploy(args.changeId, {
               environment: args.deployment.environment,
-              ...(args.deployment.command ? { command: args.deployment.command } : {}),
+              command: args.deployment.command || undefined,
             });
           case 'rollback':
             return await engine.rollback(args.changeId, args.deployment?.command ? { command: args.deployment.command } : undefined);

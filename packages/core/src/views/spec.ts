@@ -22,6 +22,7 @@
 
 import * as v from 'valibot';
 import { RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, normalizeViewTitle } from './sources.js';
+import { isJsonObject, type JsonValue } from '../utils/json.js';
 
 /** Bumped only when an old spec would render wrongly under new rules. */
 export const VIEW_SPEC_VERSION = 1;
@@ -161,7 +162,7 @@ export type ViewSpecResult =
  * reason `applyPromotionDecision` re-runs the misevolution check against
  * on-disk scaffold code instead of trusting what it accepted earlier.
  */
-export function parseViewSpec(input: unknown): ViewSpecResult {
+export function parseViewSpec<Input>(input: Input): ViewSpecResult {
   const result = v.safeParse(ViewSpecSchema, input);
   if (!result.success) {
     const issues = result.issues
@@ -179,14 +180,14 @@ export function parseViewSpec(input: unknown): ViewSpecResult {
  *  throwing: a source whose shape moved should leave a blank cell, not break
  *  the surface. Guards the prototype chain a second time — cheap, and the spec
  *  on disk is agent-writable. */
-export function resolveViewPath(root: unknown, path: string | undefined): unknown {
+export function resolveViewPath(root: JsonValue, path: string | undefined): JsonValue | undefined {
   if (!path) return root;
-  let current: unknown = root;
+  let current = root;
   for (const segment of path.split('.')) {
     if (FORBIDDEN_PATH_SEGMENTS.has(segment)) return undefined;
-    if (current === null || typeof current !== 'object') return undefined;
+    if (!isJsonObject(current)) return undefined;
     if (!Object.hasOwn(current, segment)) return undefined;
-    current = (current as Record<string, unknown>)[segment];
+    current = current[segment];
   }
   return current;
 }

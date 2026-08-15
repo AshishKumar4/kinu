@@ -19,13 +19,48 @@
  */
 
 import { appendFileSync, writeFileSync } from 'node:fs';
+import * as v from 'valibot';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
 
 const BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost:5173';
 const AGENT_NAME = 'phase-c-' + Date.now();
 const TIMEOUT_MS = 120_000;
 const TRANSCRIPT = '/tmp/phase-c-transcript.txt';
 
-let allFrames: unknown[] = [];
+let allFrames: JsonValue[] = [];
+
+const messageSchema = v.object({
+  role: v.string(),
+  parts: v.optional(v.array(v.object({
+    type: v.string(),
+    text: v.optional(v.string()),
+  }))),
+});
+
+const chatFrameSchema = v.object({
+  type: v.string(),
+  id: v.optional(v.string()),
+  body: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+  messages: v.optional(v.array(messageSchema)),
+});
+
+const rpcFrameSchema = v.object({
+  type: v.string(),
+  id: v.string(),
+  success: v.boolean(),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(v.string()),
+});
+
+const toolListSchema = v.object({
+  crafted: v.array(v.object({ name: v.string(), description: v.string() })),
+});
+
+const descriptionSchema = v.object({ description: v.string() });
+
+type ChatMessage = v.InferOutput<typeof messageSchema>;
 
 function log(msg: string) {
   console.log(msg);
@@ -34,7 +69,6 @@ function log(msg: string) {
 
 function uid() { return Math.random().toString(36).slice(2, 10); }
 
-function httpUrl(path: string) { return `${BASE_URL}/agents/orchestrator-agent/${AGENT_NAME}${path}`; }
 function wsUrl() {
   const u = new URL(BASE_URL);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -48,22 +82,27 @@ async function connect(): Promise<WebSocket> {
     ws.onopen = () => { clearTimeout(t); resolve(ws); };
     ws.onerror = e => { clearTimeout(t); reject(new Error('WS error: ' + JSON.stringify(e))); };
     ws.onmessage = e => {
-      try { allFrames.push(JSON.parse(String(e.data))); } catch { allFrames.push(String(e.data)); }
+      try { allFrames.push(parseJsonValue(String(e.data))); } catch { allFrames.push(String(e.data)); }
     };
   });
 }
 
-async function rpc(ws: WebSocket, method: string, args: unknown[] = []): Promise<unknown> {
+async function rpc<Output>(
+  ws: WebSocket,
+  method: string,
+  outputSchema: v.GenericSchema<Output>,
+  args: JsonValue[] = [],
+): Promise<Output> {
   return new Promise((resolve, reject) => {
     const id = uid();
     const t = setTimeout(() => reject(new Error(`RPC ${method} timeout`)), 15_000);
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(rpcFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === 'rpc' && msg.id === id) {
           clearTimeout(t);
           ws.removeEventListener('message', handler);
-          if (msg.success) resolve(msg.result);
+          if (msg.success) resolve(v.parse(outputSchema, msg.result));
           else reject(new Error(String(msg.error ?? 'rpc failed')));
         }
       } catch {}
@@ -73,12 +112,12 @@ async function rpc(ws: WebSocket, method: string, args: unknown[] = []): Promise
   });
 }
 
-async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bodies: string[]; final: unknown[] }> {
+async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bodies: string[]; final: ChatMessage[] }> {
   return new Promise((resolve, reject) => {
     const reqId = uid();
     const timer = setTimeout(() => reject(new Error('chat timeout')), timeoutMs);
     const bodies: string[] = [];
-    let final: unknown[] = [];
+    let final: ChatMessage[] = [];
     let done = false;
 
     const finish = () => {
@@ -89,7 +128,7 @@ async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promis
 
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(chatFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
           if (msg.body) bodies.push(msg.body);
           if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2000); }
@@ -137,7 +176,7 @@ async function main() {
 
   // Confirm it made it to the store
   log('\n--- Confirm tool stored ---');
-  const toolList1 = await rpc(ws, 'getToolList', []) as { crafted: Array<{ name: string; description: string }> };
+  const toolList1 = await rpc(ws, 'getToolList', toolListSchema);
   log(`  crafted after turn 1: ${JSON.stringify(toolList1.crafted)}`);
   const hasDouble1 = toolList1.crafted.some(t => t.name === 'double' || t.name.toLowerCase() === 'double');
   if (!hasDouble1) {
@@ -150,7 +189,7 @@ async function main() {
   // includes codemode.double — i.e. the crafted tool was wired into the
   // codemode namespace via createExecuteTool.
   log('\n--- Phase D: inspect execute_tools.description for codemode.double ---');
-  const desc = await rpc(ws, 'getExecuteToolsDescription', []) as { description: string };
+  const desc = await rpc(ws, 'getExecuteToolsDescription', descriptionSchema);
   log(`  description length: ${desc.description.length}`);
   // Preview — show the codemode block
   const codemodeIdx = desc.description.indexOf('codemode:');
@@ -181,7 +220,7 @@ async function main() {
   const r2 = await chat(ws, prompt2);
   const body2 = r2.bodies.join('');
   log(`body2 (${body2.length} chars, first 2000):\n${body2.slice(0, 2000)}`);
-  const lastAssistant = (r2.final as Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>)
+  const lastAssistant = r2.final
     .filter(m => m.role === 'assistant').pop();
   const assistantText = lastAssistant?.parts?.filter(p => p.type === 'text').map(p => p.text ?? '').join('') ?? '';
   log(`\nassistant text: ${JSON.stringify(assistantText.slice(0, 600))}`);
@@ -250,8 +289,8 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(e => {
-  log(`FATAL: ${e instanceof Error ? e.message : String(e)}`);
-  log((e as Error).stack ?? '');
+main().catch(error => {
+  log(`FATAL: ${error instanceof Error ? error.message : String(error)}`);
+  log(error instanceof Error ? error.stack ?? '' : '');
   process.exit(99);
 });

@@ -4,9 +4,9 @@
  * A branch runs on whichever substrate the backend has — a Cloudflare facet, a
  * local subprocess, or an inline closure when facets are unavailable — and the
  * substrate is genuinely different in each case. The QUESTION is not: the
- * prompt, the diversity directive and the ```js extraction are what makes two
- * branches comparable, and the evaluator that grounds a branch by EXECUTING
- * its code only has code to run because the prompt asked for a fenced block.
+ * prompt and diversity directive make branches comparable. The executor's
+ * declared languages keep the prompt aligned with the evaluator that will run
+ * the fenced implementation.
  *
  * Written per substrate, it drifted — and drifted invisibly, because each copy
  * was only ever compared against itself. The inline fallback carried a comment
@@ -19,6 +19,7 @@
 
 import { diversityDirective } from './diversity.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import type { WorkMode } from '../prompting/surface.js';
 
 /** A crafted tool as a branch is told about it — name and description only. A
  *  branch reasons, it does not call tools. */
@@ -28,12 +29,15 @@ export interface ExploreToolHint {
 }
 
 export interface ExplorePromptInput {
+  readonly mode: WorkMode;
   /** The parent conversation, already bounded (formatInheritedContext). */
   readonly context: string;
   /** Patterns this agent has already crafted, offered as prior art. */
   readonly craftedTools: readonly ExploreToolHint[];
   /** The angles this branch's parallel siblings were handed (siblingAngles). */
   readonly siblings: readonly string[];
+  /** Languages the executor that will score this proposal can run. */
+  readonly languages: readonly [string, ...string[]];
 }
 
 export interface ExplorePrompt {
@@ -42,13 +46,25 @@ export interface ExplorePrompt {
 }
 
 /** The one question every branch is asked. */
-export function explorePrompt({ context, craftedTools, siblings }: ExplorePromptInput): ExplorePrompt {
+export function explorePrompt({ mode, context, craftedTools, siblings, languages }: ExplorePromptInput): ExplorePrompt {
   const toolHints = craftedTools.length > 0
     ? `\nKnown patterns:\n${craftedTools.map((t) => `- ${t.name}: ${t.description}`).join('\n')}`
     : '';
+  if (mode === 'plan') {
+    return {
+      system: 'You are an expert agent exploring one read-only planning approach.' + toolHints
+        + '\n\nInspect and reason about the task, but do not author runnable implementation code or change any system state.',
+      user: `Prior context:\n${context}\n\n`
+        + 'Propose ONE specific planning approach. Ground it in relevant components, risks, and verification. Do not implement it.'
+        + diversityDirective(siblings),
+    };
+  }
+  const alternatives = languages.slice(1);
   return {
     system: 'You are an expert agent exploring one approach to solve a task.' + toolHints
-      + '\n\nIf your approach involves code, include it in a ```js code block.',
+      + `\n\nIf your approach involves code, include it in a \`\`\`${languages[0]} code block`
+      + (alternatives.length > 0 ? ` (or ${alternatives.join('/')}, which also run here)` : '')
+      + '. Code in any other language cannot be run here and remains unverified.',
     user: `Prior context:\n${context}\n\n`
       + `Propose ONE specific concrete approach. Include a code implementation if applicable.`
       + diversityDirective(siblings),
@@ -69,11 +85,4 @@ export function reflectionPrompt(task: string, attempt: string): string {
   return `Task: ${evidenceWindow(task, EVIDENCE_BUDGETS.reflection)}\n`
     + (bounded ? `Attempt: ${bounded}\n` : '')
     + `\nWhat specifically went wrong? One sentence.`;
-}
-
-/** The fenced implementation a branch was asked for, or null when it answered
- *  in prose. What the grounded evaluator executes, so the fence languages
- *  accepted here are the ones a branch may answer in. */
-export function extractCodeBlock(text: string): string | null {
-  return text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)```/)?.[1]?.trim() ?? null;
 }

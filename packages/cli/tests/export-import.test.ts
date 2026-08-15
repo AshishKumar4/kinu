@@ -14,6 +14,13 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { archiveSqlFromDatabase, readWorkspaceArchivePage, type ArchiveCursor } from '@proteus/core';
+import { JsonArraySchema, JsonObjectSchema } from '@proteus/core';
+import * as v from 'valibot';
+
+const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
+  v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
+  v.object({ phase: v.literal('files'), after: v.string(), rows: v.number(), files: v.number() }),
+]);
 
 const repoRoot = resolve(__dirname, '../../..');
 const cliBin = join(repoRoot, 'packages/cli/bin/cli.ts');
@@ -93,7 +100,8 @@ describe('proteus export / import', () => {
     expect(db.query(`SELECT name FROM workspace_identity`).get()).toEqual({ name: 'scout' });
     expect(db.query(`SELECT content FROM messages WHERE id = 'unicode'`).get())
       .toEqual({ content: '→ café 🌍 '.repeat(9000) });
-    const blob = db.query(`SELECT data FROM vfs_files WHERE path = 'logo.bin'`).get() as { data: Uint8Array };
+    const blob = db.query<{ data: Uint8Array }, []>(`SELECT data FROM vfs_files WHERE path = 'logo.bin'`).get();
+    if (!blob) throw new Error('restored logo missing');
     expect(Array.from(new Uint8Array(blob.data)).slice(0, 4)).toEqual([0, 1, 2, 3]);
     db.close();
   });
@@ -114,11 +122,13 @@ describe('proteus export / import', () => {
         if (request.headers.get('authorization') !== 'Bearer ptc_stored_session') {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
-        const body = await request.json() as { method: string; args: unknown[] };
-        calls.push({ method: body.method, cursor: (body.args[0] ?? null) as ArchiveCursor | null });
+        const body = v.parse(JsonObjectSchema, await request.json());
+        const method = v.parse(v.string(), body.method);
+        const args = v.parse(JsonArraySchema, body.args);
+        calls.push({ method, cursor: v.parse(v.nullable(ArchiveCursorSchema), args[0] ?? null) });
         // Exactly what the orchestrator RPC does, with a page size small
         // enough that the CLI has to walk more than one page.
-        const page = readWorkspaceArchivePage(source, {
+        const page = await readWorkspaceArchivePage(source, {
           workspace: 'skywriter', source: 'cloud',
           cursor: calls[calls.length - 1]!.cursor, maxBytes: 2048,
         });

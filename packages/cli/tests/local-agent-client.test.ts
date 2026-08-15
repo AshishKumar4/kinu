@@ -8,8 +8,10 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import type { LanguageModelV2Prompt } from '@ai-sdk/provider';
 import type { LLMProviderConfig } from '@proteus/core';
-import { createCLIRuntime, type LocalModelResolver, type resolveChatModel } from '@proteus/cli-backend';
+import { createCLIRuntime, type LocalModelResolver } from '@proteus/cli-backend';
+import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model.js';
 import { LocalAgentClient } from '../src/local-agent-client.js';
 import type { AgentClientEvent } from '../src/agent-client.js';
 
@@ -23,15 +25,15 @@ afterEach(() => {
   for (const dir of tempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function fakeModel(answer: string): LanguageModel {
+function fakeModel(answer: string, onPrompt?: (prompt: LanguageModelV2Prompt) => void): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
   const [a, b] = [answer.slice(0, answer.length >> 1), answer.slice(answer.length >> 1)];
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async () => ({
+    doStream: async (options) => {
+      onPrompt?.(options.prompt);
+      return {
       stream: new ReadableStream({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
@@ -44,18 +46,17 @@ function fakeModel(answer: string): LanguageModel {
         },
       }),
       response: { headers: {} },
-    }),
-  } as unknown as LanguageModel;
+      };
+    },
+  });
 }
 
 /** Emits one delta then stalls until the turn abort signal fires. */
 function stallingModel(): LanguageModel {
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async ({ abortSignal }: { abortSignal?: AbortSignal }) => ({
+    doStream: async ({ abortSignal }) => ({
       stream: new ReadableStream({
         start(controller) {
           controller.enqueue({ type: 'stream-start', warnings: [] });
@@ -68,7 +69,7 @@ function stallingModel(): LanguageModel {
       }),
       response: { headers: {} },
     }),
-  } as unknown as LanguageModel;
+  });
 }
 
 function fakeResolver(model: LanguageModel): LocalModelResolver {
@@ -94,7 +95,7 @@ function setup(model: LanguageModel) {
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db as never, { dbPath, llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { dbPath, llm: DUMMY_LLM });
   const info = {
     id: 'agent-1', name: 'jarvis', purpose: 'test agent', soul: '', scaffoldVersion: 1,
     craftedToolCount: 0, searchNodeCount: 0, taskCount: 0, memorySize: 0, createdAt: Date.now(),
@@ -106,7 +107,7 @@ function setup(model: LanguageModel) {
     dbPath,
     info,
     refreshInfo: async () => info,
-    model: model as ReturnType<typeof resolveChatModel>,
+    model,
     modelResolver: fakeResolver(model),
     mcpServers: {},
     noAutoEvolve: true,
@@ -184,11 +185,9 @@ describe('LocalAgentClient', () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-    const model = {
-      specificationVersion: 'v2',
+    const model = new TestLanguageModelV2({
       provider: 'fake',
       modelId: 'fake-model',
-      supportedUrls: {},
       doStream: async () => ({
         stream: new ReadableStream({
           async start(controller) {
@@ -203,7 +202,7 @@ describe('LocalAgentClient', () => {
         }),
         response: { headers: {} },
       }),
-    } as unknown as LanguageModel;
+    });
 
     const { client } = setup(model);
     const events: AgentClientEvent[] = [];
@@ -235,15 +234,7 @@ describe('LocalAgentClient', () => {
   test('fork walks the conversation back before the picked message and re-points the client', async () => {
     // Capture what the model sees so the forked context is provable.
     const seenPrompts: string[] = [];
-    const base = fakeModel('answer') as unknown as { doStream: (options: unknown) => unknown };
-    const inner = base.doStream.bind(base);
-    const model = {
-      ...(base as object),
-      doStream: async (options: { prompt?: unknown }) => {
-        seenPrompts.push(JSON.stringify(options.prompt ?? ''));
-        return inner(options);
-      },
-    } as unknown as LanguageModel;
+    const model = fakeModel('answer', (prompt) => { seenPrompts.push(JSON.stringify(prompt)); });
 
     const { client } = setup(model);
     await client.connect();
@@ -290,9 +281,9 @@ describe('/changelog — the Evolution Changelog over a real local client', () =
 
     // Seed real ledgers: one crafted tool + two learned facts in one aggregate.
     rt.craftStore.create({ params: null, name: 'csv_summarizer', description: 'summarize CSVs', code: 'async () => 1', scope: 'local' });
-    rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+    void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                    VALUES ('favorite_shell', '"fish"', 1.0, NULL, ${Date.now() - 1000})`;
-    rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
+    void rt.storage.sql`INSERT INTO agent_facts (key, value_json, confidence, source, last_observed_at)
                    VALUES ('editor', '"helix"', 1.0, NULL, ${Date.now() - 500})`;
 
     const listed = await executeSlashCommand(client, '/changelog');
@@ -349,9 +340,9 @@ describe('/takes — Alternate Takes over a real local client', () => {
     // run a turn so the session claims it.
     initSearchTables(rt.storage.execRaw);
     initAlternateTakesTable(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
         VALUES ('r', 'win', 'choose a plan', 'A', 'plan A wins', 0.9, 3, 1, 'open')`;
-    rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
+    void rt.storage.sql`INSERT INTO search_nodes (root_id, id, task, action, observation, value, visits, depth, status)
         VALUES ('r', 'alt', 'choose a plan', 'B', 'plan B instead', 0.84, 2, 1, 'open')`;
     // Production captures happen mid-turn. This fixture seeds before send(), so
     // place it inside the upcoming turn's claim window instead of depending on

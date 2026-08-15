@@ -16,8 +16,7 @@ import {
 import { initAllTables } from '../src/identity/schema.js';
 import { createWorkspace } from '../src/identity/create.js';
 import { openWorkspace } from '../src/identity/open.js';
-import type { AgentDatabase } from '../src/identity/inline-primitives.js';
-import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
+import { makeSql, makeExecRaw, createWorkspaceBundle, makeAgentDatabase } from './helpers.js';
 
 const TEST_LLM = { name: 'test', baseURL: 'http://localhost:0', headers: {}, model: 'test-model' };
 
@@ -25,7 +24,7 @@ function freshWorkspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initAllTables(makeExecRaw(db));
-  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'W'}, ${'atlas'}, ${100})`;
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'W'}, ${'atlas'}, ${100})`;
   return { db, sql, vfs: createWorkspaceBundle(db).vfs };
 }
 
@@ -51,12 +50,19 @@ describe('the soul is a file', () => {
     expect(await readSoul(vfs)).toBeNull();
   });
 
-  test('the agent can evolve it with its own file tools, and readSoul sees that', async () => {
+  test('a host-owned writer can protect the file without duplicating mission updates', async () => {
     const { sql, vfs } = freshWorkspace();
-    await seedSoul(vfs, sql, { name: 'atlas', mission: 'first mission' });
-    await vfs.writeFile(SOUL_PATH, '# Atlas\n\n## Mission\n\nsecond mission');
+    const writes: Array<{ path: string; content: string }> = [];
+    const content = '# Atlas\n\n## Mission\n\nsecond mission';
 
-    expect(await readSoul(vfs)).toContain('second mission');
+    await writeSoul(vfs, sql, content, async (path, markdown) => {
+      writes.push({ path, content: markdown });
+      await vfs.writeFile(path, markdown);
+    });
+
+    expect(writes).toEqual([{ path: SOUL_PATH, content }]);
+    expect(await readSoul(vfs)).toBe(content);
+    expect(readMission(sql)).toBe('second mission');
   });
 });
 
@@ -89,11 +95,12 @@ describe('the mission a read-only listing reads', () => {
 describe('workspace birth and open', () => {
   test('createWorkspace seeds a readable soul and a matching mission', async () => {
     const db = new Database(':memory:');
-    await createWorkspace(db as unknown as AgentDatabase, {
+    const agentDb = makeAgentDatabase(db);
+    await createWorkspace(agentDb, {
       name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 
-    const { info } = await openWorkspace(db as unknown as AgentDatabase, { llm: TEST_LLM });
+    const { info } = await openWorkspace(agentDb, { llm: TEST_LLM });
     expect(info.name).toBe('atlas');
     expect(info.purpose).toBe('Help with testing.');
     expect(info.soul).toContain('Help with testing.');
@@ -102,7 +109,7 @@ describe('workspace birth and open', () => {
 
   test('the seeds are real files the agent can read back', async () => {
     const db = new Database(':memory:');
-    const rt = await createWorkspace(db as unknown as AgentDatabase, {
+    const rt = await createWorkspace(makeAgentDatabase(db), {
       name: 'atlas', purpose: 'Help with testing.', llm: TEST_LLM,
     });
 

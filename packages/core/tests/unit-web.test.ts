@@ -12,7 +12,9 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { tool, jsonSchema } from 'ai';
+import * as v from 'valibot';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
@@ -23,54 +25,66 @@ import {
   UnsafeUrlError,
   WebFetchError,
   TOOL_OUTPUT_DIR,
+  decodeJsonValue,
+  projectJsonValue,
   type CraftedToolExecute,
+  type CodemodeProvider,
+  type CreateExecuteToolFactory,
+  type JsonValue,
   type WebSearchProvider,
 } from '../src/index.js';
 
-const nodeCraftedExecute: CraftedToolExecute = (t) => {
-  let compiled: ((arg: unknown) => Promise<unknown>) | null = null;
-  return async (arg) => {
-    if (!compiled) {
-      const fn = new Function('return (' + t.code + ')')();
-      compiled = fn as (arg: unknown) => Promise<unknown>;
-    }
-    return compiled(arg);
-  };
+const unusedCraftedExecute: CraftedToolExecute = () => async () => {
+  throw new Error('This web-tool suite does not install crafted tools');
 };
 
 /** execute_tools factory that wires every injected provider namespace into the
  *  sandbox by name (mirrors the cli-backend factory) so codemode `web.*` works. */
-const nodeExecFactory = (opts: {
-  craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-  providers: unknown[];
-}) => {
-  const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-  for (const [n, e] of Object.entries(opts.craftedTools())) codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
-  const nsBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
-  for (const p of opts.providers as Array<{ name: string; tools: Record<string, { execute: (...a: unknown[]) => Promise<unknown> }> }>) {
-    if (!p?.name || !p.tools) continue;
-    const nsp: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
-    for (const [k, t] of Object.entries(p.tools)) nsp[k] = (...a) => t.execute(...a);
-    nsBindings[p.name] = nsp;
-  }
-  const extras = Object.keys(nsBindings);
-  return tool({
-    description: 'test exec_tools',
-    inputSchema: jsonSchema<{ code: string }>({
-      type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
-    }),
-    execute: async (a: { code: string }) => {
-      try {
-        const fn = new Function('workspace', 'codemode', ...extras,
-          'return (async () => { ' + a.code + ' })()');
-        const result = await fn({}, codemode, ...extras.map((n) => nsBindings[n]));
-        return { result };
-      } catch (e) {
-        return { result: undefined, error: (e as Error).message };
+function createNodeExecFactory(codemodeProviders: CodemodeProvider[] = []): CreateExecuteToolFactory {
+  return (opts) => {
+    const codemode = opts.craftedTools();
+    const nsBindings: Record<string, Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>> = {};
+    for (const provider of opts.providers) {
+      const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
+      for (const [toolName, entry] of Object.entries(provider.tools)) {
+        namespace[toolName] = async (...args) => await entry.execute(...args);
       }
-    },
-  });
-};
+      nsBindings[provider.name] = namespace;
+    }
+    for (const provider of codemodeProviders) {
+      const namespace: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>> = {};
+      for (const [toolName, entry] of Object.entries(provider.tools)) {
+        namespace[toolName] = async (...args) => {
+          const result = await entry.execute(...args);
+          return result === undefined ? undefined : projectJsonValue({ value: result });
+        };
+      }
+      nsBindings[provider.name] = namespace;
+    }
+    const extras = Object.keys(nsBindings);
+    return tool({
+      description: 'test exec_tools',
+      inputSchema: jsonSchema<{ code: string }>({
+        type: 'object', properties: { code: { type: 'string' } }, required: ['code'],
+      }),
+      execute: async (a: { code: string }) => {
+        try {
+          const fn = new Function('workspace', 'codemode', ...extras,
+            'return (async () => { ' + a.code + ' })()');
+          const rawResult = await fn({}, codemode, ...extras.map((name) => nsBindings[name]));
+          const result = v.safeParse(v.undefined(), rawResult).success
+            ? undefined
+            : decodeJsonValue({ value: rawResult });
+          return { result };
+        } catch (error) {
+          return { result: undefined, error: error instanceof Error ? error.message : String(error) };
+        }
+      },
+    });
+  };
+}
+
+const nodeExecFactory = createNodeExecFactory();
 
 interface StubResponse {
   ok?: boolean;
@@ -79,23 +93,24 @@ interface StubResponse {
   headers?: Record<string, string>;
 }
 
+interface StubFetch {
+  fetch: typeof fetch;
+  calls: Array<{ url: string; init?: RequestInit }>;
+}
+
 /** Build a fetch stub from a URL→response map, recording the calls. */
-function stubFetch(handler: (url: string, init?: RequestInit) => StubResponse) {
+function stubFetch(handler: (url: string, init?: RequestInit) => StubResponse): StubFetch {
   const calls: Array<{ url: string; init?: RequestInit }> = [];
-  const fn = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
+  const fn = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new Request(input).url;
     calls.push({ url, init });
     const r = handler(url, init);
     const status = r.status ?? (r.ok === false ? 500 : 200);
-    return {
-      ok: r.ok ?? status < 400,
+    return new Response(r.body, {
       status,
       headers: new Headers(r.headers ?? { 'content-type': 'text/html' }),
-      text: async () => r.body,
-      json: async () => JSON.parse(r.body),
-      arrayBuffer: async () => new TextEncoder().encode(r.body).buffer,
-    } as unknown as Response;
-  }) as unknown as typeof fetch;
+    });
+  }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
   return { fetch: fn, calls };
 }
 
@@ -124,19 +139,19 @@ describe('web provider — search', () => {
   });
 
   test('workerd this-binding regression: search and fetch invoke the injected fetch unbound', async () => {
-    const thisSensitiveFetch = async function (
-      this: unknown,
+    const thisSensitiveFetch = Object.assign(async function (
+      this: void,
       input: RequestInfo | URL,
     ): Promise<Response> {
       if (this !== undefined) {
         throw new TypeError('Illegal invocation: function called with incorrect `this` reference');
       }
-      const url = typeof input === 'string' ? input : input.toString();
+      const url = new Request(input).url;
       const isSearch = url.includes('html.duckduckgo.com');
       return new Response(isSearch ? DDG_HTML : '# Plain page\n\nFetched safely.', {
         headers: { 'content-type': isSearch ? 'text/html' : 'text/markdown' },
       });
-    } as typeof fetch;
+    }, { preconnect: fetch.preconnect }) satisfies typeof fetch;
     const provider = createDefaultWebSearchProvider({ fetch: thisSensitiveFetch });
 
     const searchResult = await provider.search('the topic');
@@ -167,7 +182,7 @@ describe('web provider — search', () => {
     expect(res.answer).toBe('A synthesized answer.');
     expect(res.results[0]).toMatchObject({ position: 1, url: 'https://docs.example.com/x', date: '2026-01-02' });
     expect(calls[0].url).toContain('tavily.com');
-    expect((calls[0].init?.headers as Record<string, string>).authorization).toContain('tvly-test');
+    expect(new Headers(calls[0]!.init?.headers).get('authorization')).toContain('tvly-test');
   });
 
   test('DuckDuckGo rate-limit maps to a retriable error', async () => {
@@ -204,7 +219,7 @@ describe('web provider — fetch', () => {
     expect(res.markdown).toBe('# Already Markdown\n\nclean');
     expect(res.title).toBe('Already Markdown'); // first heading when no HTML <title>
     // Markdown-for-Agents Accept header is sent.
-    expect((calls[0].init?.headers as Record<string, string>).accept).toContain('text/markdown');
+    expect(new Headers(calls[0]!.init?.headers).get('accept')).toContain('text/markdown');
   });
 
   test('markdown frontmatter title is extracted', async () => {
@@ -270,10 +285,9 @@ function buildWithWeb(rt: ReturnType<typeof createTestRuntime>['rt'], webSearch?
   const provider = webSearch ?? createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: DDG_HTML })).fetch });
   return buildBuiltinTools({
     rt,
-    craftedToolExecute: nodeCraftedExecute,
-    createExecuteTool: ((opts: Parameters<typeof nodeExecFactory>[0]) =>
-      nodeExecFactory({ ...opts, providers: [createWebCodemodeProvider(provider)] })) as never,
-    codemodeLoader: { __test: true } as unknown,
+    craftedToolExecute: unusedCraftedExecute,
+    createExecuteTool: createNodeExecFactory([createWebCodemodeProvider(provider)]),
+    codemodeLoader: { __test: true },
     webSearch: provider,
   });
 }
@@ -282,8 +296,8 @@ describe('web builtin', () => {
   test('gated on the webSearch dep', () => {
     const { rt } = createTestRuntime();
     const without = buildBuiltinTools({
-      rt, craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory as never, codemodeLoader: {} as unknown,
+      rt, craftedToolExecute: unusedCraftedExecute,
+      createExecuteTool: nodeExecFactory, codemodeLoader: {},
     });
     expect(Object.keys(without)).not.toContain('web');
 
@@ -293,8 +307,8 @@ describe('web builtin', () => {
 
   test('action=search returns ranked, model-ready text', async () => {
     const { rt } = createTestRuntime();
-    const t = buildWithWeb(rt) as unknown as { web: { execute: (a: WebArgs) => Promise<string> } };
-    const out = await t.web.execute({ action: 'search', query: 'the topic' });
+    const execute = toolExecute<WebArgs, string>(buildWithWeb(rt).web);
+    const out = await execute({ action: 'search', query: 'the topic' });
     expect(out).toContain('1. First & Best');
     expect(out).toContain('https://example.com/a');
     expect(out).toContain('via duckduckgo');
@@ -302,17 +316,17 @@ describe('web builtin', () => {
 
   test('a call missing the argument its action needs says which', async () => {
     const { rt } = createTestRuntime();
-    const t = buildWithWeb(rt) as unknown as { web: { execute: (a: WebArgs) => Promise<unknown> } };
-    expect(await t.web.execute({ action: 'search' })).toEqual({ error: 'web.search requires `query`' });
-    expect(await t.web.execute({ action: 'fetch' })).toEqual({ error: 'web.fetch requires `url`' });
+    const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt).web);
+    expect(await execute({ action: 'search' })).toEqual({ error: 'web.search requires `query`' });
+    expect(await execute({ action: 'fetch' })).toEqual({ error: 'web.fetch requires `url`' });
   });
 
   test('action=fetch clamps a big page to a head with a VFS restore path', async () => {
     const { rt } = createTestRuntime();
     const big = '<html><body>' + 'word '.repeat(20000) + '</body></html>';
     const provider = createDefaultWebSearchProvider({ fetch: stubFetch(() => ({ body: big, headers: { 'content-type': 'text/html' } })).fetch });
-    const t = buildWithWeb(rt, provider) as unknown as { web: { execute: (a: WebArgs) => Promise<string> } };
-    const out = await t.web.execute({ action: 'fetch', url: 'https://example.com/big' });
+    const execute = toolExecute<WebArgs, string>(buildWithWeb(rt, provider).web);
+    const out = await execute({ action: 'fetch', url: 'https://example.com/big' });
 
     expect(out).toContain('Source: https://example.com/big');
     expect(out).toContain('[output truncated');
@@ -320,7 +334,7 @@ describe('web builtin', () => {
     // The full output is restorable from the VFS.
     const m = /full output saved to (\S+)/.exec(out);
     expect(m).toBeTruthy();
-    const saved = await rt.storage.vfs.readFile(m![1], { encoding: 'utf8' });
+    const saved = await rt.storage.vfs.readFile(m?.[1] ?? '', { encoding: 'utf8' });
     expect(String(saved).length).toBeGreaterThan(out.length);
   });
 
@@ -330,10 +344,10 @@ describe('web builtin', () => {
       search: async () => { throw new WebFetchError('rate limited', true); },
       fetch: async () => { throw new WebFetchError('x'); },
     };
-    const t = buildWithWeb(rt, failing) as unknown as { web: { execute: (a: WebArgs) => Promise<unknown> } };
-    expect(await t.web.execute({ action: 'search', query: 'x' }))
+    const execute = toolExecute<WebArgs, JsonValue>(buildWithWeb(rt, failing).web);
+    expect(await execute({ action: 'search', query: 'x' }))
       .toMatchObject({ error: 'rate limited', retriable: true });
-    expect(await t.web.execute({ action: 'fetch', url: 'https://example.com' }))
+    expect(await execute({ action: 'fetch', url: 'https://example.com' }))
       .toMatchObject({ error: 'x' });
   });
 
@@ -344,14 +358,16 @@ describe('web builtin', () => {
         url.includes('duckduckgo') ? { body: DDG_HTML } : { body: '<html><body><p>page body</p></body></html>' },
       ).fetch,
     });
-    const t = buildWithWeb(rt, provider) as unknown as { execute_tools: { execute: (a: { code: string }) => Promise<{ result: unknown }> } };
+    const execute = toolExecute<{ code: string }, { result: JsonValue | undefined }>(
+      buildWithWeb(rt, provider).execute_tools,
+    );
 
-    const searched = await t.execute_tools.execute({
+    const searched = await execute({
       code: 'const r = await web.search("topic", { limit: 2 }); return r.results.length;',
     });
     expect(searched.result).toBe(2);
 
-    const fetched = await t.execute_tools.execute({
+    const fetched = await execute({
       code: 'const r = await web.fetch("https://example.com/p"); return r.markdown;',
     });
     expect(String(fetched.result)).toContain('page body');

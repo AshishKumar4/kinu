@@ -3,7 +3,7 @@ import {
   setDefaultModel,
   setDefaultReasoningEffort,
 } from '../config.js';
-import { isReasoningEffort, type ReasoningEffort } from '@proteus/core';
+import { isReasoningEffort, type ModelMenu, type ReasoningEffort } from '@proteus/core';
 import { resolveAgentTarget } from '../agent-target.js';
 import {
   cancelLocalJob,
@@ -19,12 +19,16 @@ import {
 } from '../local-inspection.js';
 import {
   callAgentRpc,
+  CloudBackgroundJobSchema,
+  CloudToolDescriptionsSchema,
+  CloudTriggerListSchema,
   createCloudWebhookTrigger,
   listCloudAvailableModels,
-  type CloudBackgroundJob,
-  type CloudToolDescriptions,
-  type CloudTriggerList,
+  type CloudModelMenu,
+  type CloudWebhookTrigger,
+  type CloudWebhookTriggerInput,
 } from '../cloud-api.js';
+import * as v from 'valibot';
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { createConfiguredLocalModelResolver } from '../local-model-resolver.js';
 import {
@@ -44,6 +48,16 @@ interface ControlOpts {
   json?: boolean;
 }
 
+const ModelSetResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
+const StoredModelSchema = v.object({ spec: v.nullable(v.string()) });
+const EffortSetResultSchema = v.object({ ok: v.literal(true), effort: v.picklist(['low', 'medium', 'high']) });
+const StoredEffortSchema = v.object({ effort: v.nullable(v.picklist(['low', 'medium', 'high'])) });
+const CancelTriggerSchema = v.object({ ok: v.literal(true), changed: v.boolean() });
+const TimerTriggerSchema = v.object({
+  id: v.string(), kind: v.picklist(['timer_cron', 'timer_oneshot']), nextFireAt: v.nullable(v.number()),
+});
+const CancelJobSchema = v.object({ ok: v.boolean() });
+
 export async function modelCommand(name: string, spec: string | undefined, opts: ControlOpts): Promise<void> {
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
@@ -53,8 +67,8 @@ export async function modelCommand(name: string, spec: string | undefined, opts:
       validateModelSelection(models, catalogSpec(models, spec), spec, name);
     }
     const result = spec
-      ? await callAgentRpc<{ ok: true; spec: string }>(auth.origin, auth.token, target.cloudName, 'setModel', [spec])
-      : await callAgentRpc<{ spec: string | null }>(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec');
+      ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setModel', ModelSetResultSchema, [spec])
+      : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getStoredModelSpec', StoredModelSchema);
     console.log(spec ? `${OK('set')} ${result.spec}` : `${DIM('model')} ${result.spec ?? '(default)'}`);
     if (spec && result.spec) setDefaultModel(result.spec);
     return;
@@ -86,8 +100,8 @@ export async function effortCommand(name: string, level: string | undefined): Pr
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     result = level
-      ? await callAgentRpc<{ ok: true; effort: ReasoningEffort }>(auth.origin, auth.token, target.cloudName, 'setReasoningEffort', [level])
-      : await callAgentRpc<{ effort: ReasoningEffort | null }>(auth.origin, auth.token, target.cloudName, 'getReasoningEffort');
+      ? await callAgentRpc(auth.origin, auth.token, target.cloudName, 'setReasoningEffort', EffortSetResultSchema, [level])
+      : await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReasoningEffort', StoredEffortSchema);
   } else {
     result = level
       ? setLocalReasoningEffort(target.localName, level)
@@ -102,9 +116,9 @@ export async function effortCommand(name: string, level: string | undefined): Pr
 /** The catalog for spec validation. A menu that could not be read at all is
  *  null (validation is skipped); a menu missing a failed provider's models is
  *  still a usable catalog. */
-async function loadModelCatalog(load: () => Promise<unknown>): Promise<AgentModelEntry[] | null> {
+async function loadModelCatalog(load: () => Promise<ModelMenu | CloudModelMenu>): Promise<AgentModelEntry[] | null> {
   try {
-    return normalizeModelMenu(await load()).models;
+    return normalizeModelMenu({ payload: await load() }).models;
   } catch {
     return null;
   }
@@ -158,11 +172,11 @@ function catalogSpec(models: readonly AgentModelEntry[] | null, spec: string): s
   return suffixMatches.length === 1 ? suffixMatches[0]!.spec : normalized;
 }
 
-export async function toolsCommand(name: string, opts: ControlOpts): Promise<void> {
+export async function toolsCommand(name: string, _opts: ControlOpts): Promise<void> {
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const tools = await callAgentRpc<CloudToolDescriptions>(auth.origin, auth.token, target.cloudName, 'getToolDescriptions');
+    const tools = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getToolDescriptions', CloudToolDescriptionsSchema);
     printTools([
       ...tools.builtIn.map((tool) => ({ ...tool, group: 'built-in' })),
       ...tools.crafted.map((tool) => ({ ...tool, group: 'crafted' })),
@@ -190,34 +204,35 @@ export async function triggersCommand(
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     if (normalized === 'list') {
-      const { triggers } = await callAgentRpc<CloudTriggerList>(auth.origin, auth.token, target.cloudName, 'listTriggers');
+      const { triggers } = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'listTriggers', CloudTriggerListSchema);
       present(triggers, opts, printTriggers);
       return;
     }
     if (normalized === 'cancel') {
       if (!value) throw new Error('trigger id required');
-      const cancelled = await callAgentRpc<{ ok: true; changed: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelTrigger', [value]);
+      const cancelled = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelTrigger', CancelTriggerSchema, [value]);
       present({ id: value, ...cancelled }, opts, () =>
         console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
       return;
     }
     if (normalized === 'webhook') {
       if (!value) throw new Error('webhook label required');
-      const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, {
+      const webhookInput: CloudWebhookTriggerInput = {
         label: value,
         auth_mode: normalizeWebhookAuthMode(opts.authMode),
-        ...(opts.secret ? { secret: opts.secret } : {}),
-        ...(opts.contentType ? { accepted_content_type: opts.contentType } : {}),
-        ...(opts.rateLimit ? { rate_limit_per_min: parsePositiveInt(opts.rateLimit, 'rate limit') } : {}),
-      });
+      };
+      if (opts.secret) webhookInput.secret = opts.secret;
+      if (opts.contentType) webhookInput.accepted_content_type = opts.contentType;
+      if (opts.rateLimit) webhookInput.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
+      const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, webhookInput);
       present(created, opts, printCreatedWebhook);
       return;
     }
     const input = timerInput(normalized, value);
     // trust:'owner' — an interactive session token IS the owner (the old
     // per-route matcher stamped the same value server-side).
-    const created = await callAgentRpc<{ id: string; kind: 'timer_cron' | 'timer_oneshot'; nextFireAt: number | null }>(
-      auth.origin, auth.token, target.cloudName, 'createTimerTrigger', [{ ...input, trust: 'owner' }],
+    const created = await callAgentRpc(
+      auth.origin, auth.token, target.cloudName, 'createTimerTrigger', TimerTriggerSchema, [{ ...input, trust: 'owner' }],
     );
     present(created, opts, () =>
       console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.nextFireAt)}`));
@@ -227,7 +242,7 @@ export async function triggersCommand(
   if (normalized === 'webhook') throw new Error('Webhook triggers require a cloud workspace.');
 
   if (normalized === 'list') {
-    present(listLocalTriggers(target.localName).triggers as Parameters<typeof printTriggers>[0], opts, printTriggers);
+    present(listLocalTriggers(target.localName).triggers, opts, printTriggers);
     return;
   }
   if (normalized === 'cancel') {
@@ -237,9 +252,10 @@ export async function triggersCommand(
       console.log(`${OK('cancelled')} ${cancelled.changed ? value : `${value} (already inactive)`}`));
     return;
   }
-  const created = createLocalTimerTrigger(target.localName, timerInput(normalized, value)) as { id?: string; kind?: string; nextFireAt?: number; next_fire_at?: number };
+  const created = createLocalTimerTrigger(target.localName, timerInput(normalized, value));
+  if (!created) throw new Error('Trigger was registered but could not be read back.');
   present(created, opts, () =>
-    console.log(`${OK('scheduled')} ${created.id ?? '(trigger)'} ${DIM(created.kind ?? '')} ${formatTime(created.nextFireAt ?? created.next_fire_at ?? null)}`));
+    console.log(`${OK('scheduled')} ${created.id} ${DIM(created.kind)} ${formatTime(created.next_fire_at)}`));
 }
 
 export async function jobsCommand(name: string, action: string | undefined, id: string | undefined, opts: ControlOpts): Promise<void> {
@@ -249,12 +265,12 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
     const auth = requireAuthConfig();
     if (normalized === 'cancel') {
       if (!id) throw new Error('job id required');
-      const cancelled = await callAgentRpc<{ ok: boolean }>(auth.origin, auth.token, target.cloudName, 'cancelBackgroundJob', [id]);
+      const cancelled = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelBackgroundJob', CancelJobSchema, [id]);
       present({ id, ...cancelled }, opts, () =>
         console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
       return;
     }
-    const jobs = await callAgentRpc<CloudBackgroundJob[]>(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', [20]);
+    const jobs = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'listBackgroundJobs', v.array(CloudBackgroundJobSchema), [20]);
     present(jobs, opts, printJobs);
     return;
   }
@@ -266,7 +282,7 @@ export async function jobsCommand(name: string, action: string | undefined, id: 
       console.log(`${OK('cancelled')} ${cancelled.ok ? id : `${id} (not running)`}`));
     return;
   }
-  present(listLocalJobs(target.localName) as Parameters<typeof printJobs>[0], opts, printJobs);
+  present(listLocalJobs(target.localName), opts, printJobs);
 }
 
 /** Raw JSON under `--json`, the human rendering otherwise — the inspector
@@ -276,7 +292,13 @@ function present<T>(data: T, opts: ControlOpts, human: (data: T) => void): void 
   else human(data);
 }
 
-function timerInput(action: string, value: string | undefined): { cron?: string; atMs?: number; label?: string } {
+interface TimerInput {
+  cron?: string;
+  atMs?: number;
+  label?: string;
+}
+
+function timerInput(action: string, value: string | undefined): TimerInput {
   if (action === 'every') {
     if (!value) throw new Error('cron expression required');
     return { cron: value };
@@ -338,17 +360,10 @@ function printJobs(jobs: Array<{ id: string; kind?: string; status: string; erro
   }
 }
 
-function printCreatedWebhook(created: unknown): void {
-  if (typeof created !== 'object' || created === null) {
-    console.log(`${OK('created')} ${String(created)}`);
-    return;
-  }
-  const record = created as Record<string, unknown>;
-  console.log(`${OK('created')} ${String(record.id ?? 'webhook')}`);
-  const url = record.url ?? record.endpoint ?? record.webhookUrl;
-  if (url) console.log(`${DIM('url')} ${ACCENT(String(url))}`);
-  const secret = record.secret;
-  if (secret) console.log(`${DIM('secret')} ${String(secret)}`);
+function printCreatedWebhook(created: CloudWebhookTrigger): void {
+  console.log(`${OK('created')} ${created.trigger_id}`);
+  console.log(`${DIM('url')} ${ACCENT(created.url)}`);
+  if (created.secret) console.log(`${DIM('secret')} ${created.secret}`);
 }
 
 function formatTime(value: number | null | undefined): string {

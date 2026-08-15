@@ -15,7 +15,7 @@ import {
   runGepa, computeParetoFront, sampleParentByWeight, bestAggregate,
   parentSelectionWeights, rolloutMinibatch, renderReflectionPrompt,
   stripMarkdownFences,
-  type EvalInstance, type GepaCandidate, type MetricOutcome,
+  type EvalInstance, type GepaBudget, type GepaCandidate, type MetricOutcome,
 } from './index.js';
 
 // ── deterministic RNG ────────────────────────────────────────────
@@ -536,7 +536,12 @@ describe('runGepa — metric-call accounting', () => {
 // ── the rejection state machine ──────────────────────────────────
 
 /** Collect every rejection reason the loop reports. */
-function rejectionLog(): { reasons: string[]; onIteration: (s: { accepted: boolean; rejectionReason?: string }) => void } {
+interface RejectionLog {
+  reasons: string[];
+  onIteration: (state: { accepted: boolean; rejectionReason?: string }) => void;
+}
+
+function rejectionLog(): RejectionLog {
   const reasons: string[] = [];
   return {
     reasons,
@@ -695,7 +700,11 @@ describe('runGepa — constraint checks', () => {
 
 // ── specialists vs the generalist, and the Merge operator ────────
 
-const SPECIALIST_SCORES: Record<string, Record<string, number>> = {
+interface SpecialistScores {
+  [candidate: string]: Record<string, number>;
+}
+
+const SPECIALIST_SCORES: SpecialistScores = {
   seed:         { i1: 0.1, i2: 0.1 },
   SPEC_A:       { i1: 1.0, i2: 0.0 },
   SPEC_B:       { i1: 0.0, i2: 1.0 },
@@ -759,7 +768,7 @@ describe('runGepa — winner selection over the whole pool', () => {
 });
 
 describe('runGepa — the Merge operator', () => {
-  function mergeRun(budgetPatch: Record<string, unknown>) {
+  function mergeRun(budgetPatch: Partial<GepaBudget>) {
     const prompts: string[] = [];
     const script = ['SPEC_A', 'SPEC_B', 'FINAL', 'FINAL_2', 'FINAL_3'];
     let call = 0;

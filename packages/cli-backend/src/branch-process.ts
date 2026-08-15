@@ -9,7 +9,7 @@
 import type {
   BranchHandle, BranchExploration, BranchReflection, SpawnBranch, AbortBranch,
 } from '@proteus/core';
-import type { CraftedTool, LLMProviderConfig } from '@proteus/core';
+import type { CraftedTool, LLMProviderConfig, WorkMode } from '@proteus/core';
 import { fork, type ChildProcess } from 'node:child_process';
 import { mkdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -24,7 +24,26 @@ export interface BranchSpawnerConfig {
   codexConfigPath?: string;
 }
 
-export function createBranchSpawner(basePath: string, config: BranchSpawnerConfig): { spawn: SpawnBranch; abort: AbortBranch } {
+export interface BranchSpawner {
+  spawn: SpawnBranch;
+  abort: AbortBranch;
+}
+
+interface ExploreBranchArgs {
+  history: Array<{ role: string; content: string }>;
+  tools: CraftedTool[];
+  languages: readonly [string, ...string[]];
+  mode: WorkMode;
+  siblings: readonly string[];
+}
+
+interface ReflectBranchArgs {
+  task: string;
+}
+
+type BranchRpcArgs = ExploreBranchArgs | ReflectBranchArgs;
+
+export function createBranchSpawner(basePath: string, config: BranchSpawnerConfig): BranchSpawner {
   mkdirSync(`${basePath}/branches`, { recursive: true });
 
   const spawn: SpawnBranch = async (branchId: string): Promise<BranchHandle> => {
@@ -33,20 +52,22 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
     // Locate the worker script relative to this file
     const workerPath = join(dirname(fileURLToPath(import.meta.url)), 'branch-worker.ts');
 
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      PROTEUS_LLM_NAME: config.llm.name,
+      PROTEUS_BASE_URL: config.llm.baseURL,
+      PROTEUS_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
+      PROTEUS_MODEL: config.llm.model,
+      PROTEUS_LLM_HEADERS: JSON.stringify(config.llm.headers),
+      PROTEUS_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
+      PROTEUS_PARENT_DB: `${basePath}.db`,
+    };
+    if (config.codexConfigPath) env.PROTEUS_CONFIG_PATH = config.codexConfigPath;
+
     const child = fork(workerPath, [dbPath], {
       stdio: 'pipe',
       // Pass LLM credentials through env vars so the child can initialize its LLM
-      env: {
-        ...process.env,
-        PROTEUS_LLM_NAME: config.llm.name,
-        PROTEUS_BASE_URL: config.llm.baseURL,
-        PROTEUS_AUTH: config.llm.headers.Authorization ?? config.llm.headers.authorization ?? '',
-        PROTEUS_MODEL: config.llm.model,
-        PROTEUS_LLM_HEADERS: JSON.stringify(config.llm.headers),
-        PROTEUS_PROVIDER_CREDENTIALS: JSON.stringify(branchSafeCredentials(config.providerCredentials)),
-        ...(config.codexConfigPath ? { PROTEUS_CONFIG_PATH: config.codexConfigPath } : {}),
-        PROTEUS_PARENT_DB: `${basePath}.db`, // Parent DB path for loading crafted tools
-      },
+      env,
       // No execArgv needed — when running under bun, fork() inherits bun's runtime
     });
     activeBranches.set(branchId, child);
@@ -54,7 +75,7 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
       activeBranches.delete(branchId);
     });
 
-    const rpc = <T>(method: string, args: unknown): Promise<T> =>
+    const rpc = <T>(method: string, args: BranchRpcArgs): Promise<T> =>
       new Promise((resolve, reject) => {
         const timeoutMs = 120_000; // 2 minutes per exploration
         const timeout = setTimeout(() => {
@@ -100,8 +121,8 @@ export function createBranchSpawner(basePath: string, config: BranchSpawnerConfi
     });
 
     return {
-      explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], siblings: readonly string[] = []) =>
-        rpc<BranchExploration>('explore', { history, tools, siblings }),
+      explore: (history: Array<{ role: string; content: string }>, tools: CraftedTool[], languages: readonly [string, ...string[]], mode: WorkMode, siblings: readonly string[] = []) =>
+        rpc<BranchExploration>('explore', { history, tools, languages, mode, siblings }),
       generateReflection: (task: string) => rpc<BranchReflection>('reflect', { task }),
     };
   };

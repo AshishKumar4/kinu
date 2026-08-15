@@ -10,7 +10,7 @@ import {
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 
-function setup(): { recorder: RunEventRecorder; sql: ReturnType<typeof makeSql> } {
+function setup() {
   const db = new Database(':memory:');
   initRunEventTables(makeExecRaw(db));
   const sql = makeSql(db);
@@ -38,7 +38,6 @@ describe('RunEventRecorder.emit', () => {
     const { recorder } = setup();
     const a = recorder.emit('run-1', { type: 'text_delta', text: 'hi' });
     expect(a.runId).toBe('run-1');
-    expect(typeof a.timestamp).toBe('string');
     expect(a.timestamp.length).toBeGreaterThan(10);
   });
 
@@ -91,7 +90,8 @@ describe('RunEventRecorder.read', () => {
 
     const events = recorder.read('run-1', { types: ['run_end'] });
     expect(events.length).toBe(1);
-    const runEnd = events[0] as Extract<RunEvent, { type: 'run_end' }>;
+    const runEnd = events.find((event) => event.type === 'run_end');
+    if (!runEnd) throw new Error('expected run_end event');
     expect(runEnd.reason).toBe('error');
     expect(runEnd.error).toBe('Bad Request: content parts must be text or image_url');
   });

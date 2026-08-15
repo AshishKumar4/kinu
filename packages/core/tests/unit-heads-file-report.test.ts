@@ -9,14 +9,16 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
 import { createHeadsStrategy } from '../src/strategy/heads.js';
+import { HeadController } from '../src/heads/controller.js';
 import { HeadJournal } from '../src/heads/journal.js';
 import { initHeadsTables } from '../src/heads/schema.js';
 import { HEAD_FILE_CHANGE_PROVENANCE } from '../src/heads/file-changes.js';
 import type { HeadFileChangeSet, HeadReport, MergeResult } from '../src/heads/index.js';
 import type { StrategyContext } from '../src/strategy/types.js';
 import { Database } from 'bun:sqlite';
-import { makeSql, makeExecRaw } from './helpers.js';
+import { createTestRuntime, makeSql, makeExecRaw } from './helpers.js';
 
 function mergeWith(fileChanges: readonly HeadFileChangeSet[]): MergeResult {
   return {
@@ -31,13 +33,20 @@ function mergeWith(fileChanges: readonly HeadFileChangeSet[]): MergeResult {
 }
 
 function ctxFor(merge: MergeResult): StrategyContext {
+  const { rt } = createTestRuntime();
+  const controller = new HeadController({
+    spawnHead: async () => { throw new Error('strategy test replaces controller.run'); },
+    mergeLLM: async () => { throw new Error('strategy test replaces controller.run'); },
+  }, new HeadJournal(rt.storage.sql));
+  controller.run = async () => merge;
   return {
     task: 't',
-    rt: {} as StrategyContext['rt'],
-    model: {} as StrategyContext['model'],
+    mode: 'build',
+    rt,
+    model: new MockLanguageModelV3(),
     options: {
       heads: {
-        controller: { run: async () => merge },
+        controller,
         heads: [{ task: 'a', rationale: 'r' }],
       },
     },
@@ -113,6 +122,7 @@ describe('the head journal makes a split\'s file changes queryable', () => {
     const journal = new HeadJournal(makeSql(db));
     const base = {
       rootId: 'run-1', parentId: null, depth: 0, rationale: 'r',
+      mode: 'build' as const,
       inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 },
       mergeStrategy: 'synthesize' as const,
     };
@@ -147,6 +157,7 @@ describe('the head journal makes a split\'s file changes queryable', () => {
     const journal = new HeadJournal(makeSql(db));
     journal.insertSpawn({
       id: 'h', rootId: 'run-2', parentId: null, depth: 0, task: 't', rationale: 'r',
+      mode: 'build',
       inheritedContext: [], budget: { maxDepth: 3, spawnedAt: 1 }, mergeStrategy: 'synthesize',
     });
     journal.recordReport({

@@ -29,9 +29,10 @@ import {
   DynamicContextLedger, agentDynamicContext, renderDynamicContextBlock,
 } from '../src/prompting/volatile-context.js';
 import type { BackendHost } from '../src/types/backend-host.js';
-import type { EventLog } from '../src/events/hub/log.js';
+import { EventLog } from '../src/events/hub/log.js';
+import { initEventsHubTables } from '../src/events/hub/schema.js';
 import type { RunEventInput } from '../src/events/types.js';
-import { createTestRuntime, makeExecRaw, makeSql } from './helpers.js';
+import { createTestRuntime, makeExecRaw, makeSql, makeSqlExec } from './helpers.js';
 
 function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   return {
@@ -44,7 +45,7 @@ function finding(overrides: Partial<RecoveryFinding> = {}): RecoveryFinding {
   };
 }
 
-function ledgerDb(): { sql: ReturnType<typeof makeSql>; db: Database } {
+function ledgerDb() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db), sql);
@@ -151,6 +152,12 @@ const host: BackendHost = {
   setTimer: () => {},
 };
 
+function eventLog(): EventLog {
+  const sql = makeSqlExec(new Database(':memory:'));
+  initEventsHubTables(sql);
+  return new EventLog(sql);
+}
+
 /** Distinct failing calls, then one CHANGED call that runs clean — the shape
  *  the finding exists for. Driven through the same turn extension both
  *  backends register. */
@@ -171,7 +178,7 @@ describe('the loop, through the production seams', () => {
     const engine = new EvolutionEngine(rt);
     const events: EvolutionEvent[] = [];
     engine.onEvent((e) => events.push(e));
-    const orch = new AgentOrchestrator({ host, engine, eventLog: {} as EventLog });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
     grindThenRecover(orch);
@@ -202,15 +209,16 @@ describe('the loop, through the production seams', () => {
     expect(block).toContain('bun test');
 
     // The turn's run record names the streak for the measurement query.
-    expect(orch.recoverySnapshot()).toEqual({
-      recoveries: [{ tool: 'run', failures: 3, failedSignature: expect.stringMatching(/^run/) as unknown as string }],
-    });
+    const snapshot = orch.recoverySnapshot();
+    expect(snapshot?.recoveries).toHaveLength(1);
+    expect(snapshot?.recoveries[0]).toMatchObject({ tool: 'run', failures: 3 });
+    expect(snapshot?.recoveries[0]?.failedSignature).toMatch(/^run/);
   });
 
   test('a finding recorded between two steps reaches the NEXT step\'s request — the episode improves while running', () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    const orch = new AgentOrchestrator({ host, engine, eventLog: {} as EventLog });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
     // The per-step pipeline exactly as both backends wire it: the ledger lives
     // for the activation, the snapshot re-reads the lessons ledger per step.
     const ledger = new DynamicContextLedger();
@@ -244,7 +252,7 @@ describe('the loop, through the production seams', () => {
   test('the same finding twice in one episode is one row and one run-event entry per turn', () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    const orch = new AgentOrchestrator({ host, engine, eventLog: {} as EventLog });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
     grindThenRecover(orch);
@@ -257,7 +265,7 @@ describe('the loop, through the production seams', () => {
   test('with auto-evolution off, nothing is recorded at all — the bench arm measures the loop\'s absence', () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt, { enabled: false });
-    const orch = new AgentOrchestrator({ host, engine, eventLog: {} as EventLog });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
     grindThenRecover(orch);
@@ -268,7 +276,7 @@ describe('the loop, through the production seams', () => {
   test('the turn boundary clears the run record but never the ledger', () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    const orch = new AgentOrchestrator({ host, engine, eventLog: {} as EventLog });
+    const orch = new AgentOrchestrator({ host, engine, eventLog: eventLog() });
 
     orch.beginTurn(Date.now());
     grindThenRecover(orch);

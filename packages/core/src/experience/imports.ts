@@ -153,7 +153,7 @@ export function stageImport(
   }
 
   const id = `imp-${nanoid()}`;
-  rt.storage.sql`INSERT INTO imported_experience
+  void rt.storage.sql`INSERT INTO imported_experience
       (id, library_id, kind, key, title, payload_json, evidence, source_workspace,
        status, turn_ids, imported_at, corroborated_at)
     VALUES (${id}, ${entry.id}, ${entry.kind}, ${entry.key}, ${entry.title},
@@ -179,7 +179,7 @@ export function bindPendingImports(sql: SqlExecutor, turnId: string): void {
   const pending = listImportedExperience(sql, { status: 'provisional', limit: 200 })
     .filter((row) => row.turnIds.length === 0);
   for (const row of pending) {
-    sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])} WHERE id = ${row.id}`;
+    void sql`UPDATE imported_experience SET turn_ids = ${JSON.stringify([turnId])} WHERE id = ${row.id}`;
   }
 }
 
@@ -209,11 +209,11 @@ export async function settleImportsForTurn(
 
   for (const row of riding) {
     if (verdict === 'accepted' && await promoteImport(rt, row)) {
-      rt.storage.sql`UPDATE imported_experience
+      void rt.storage.sql`UPDATE imported_experience
           SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${row.id}`;
       settlement.corroborated.push({ ...row, status: 'corroborated', corroboratedAt: now });
     } else {
-      rt.storage.sql`DELETE FROM imported_experience WHERE id = ${row.id}`;
+      void rt.storage.sql`DELETE FROM imported_experience WHERE id = ${row.id}`;
       settlement.discarded.push(row);
     }
   }

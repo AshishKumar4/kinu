@@ -75,7 +75,11 @@ export interface PendingActionInputs {
   }>;
 }
 
-const APPROVAL_LABEL: Record<string, string> = {
+interface ApprovalLabels {
+  [approvalType: string]: string;
+}
+
+const APPROVAL_LABEL: ApprovalLabels = {
   apply: 'apply the patch',
   deploy_staging: 'deploy to staging',
   deploy_production: 'deploy to production',

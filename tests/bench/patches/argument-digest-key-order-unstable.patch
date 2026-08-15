@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/safety/argument-digest.ts b/packages/core/src/safety/argument-digest.ts
-index 9160ca3..5ec2b53 100644
 --- a/packages/core/src/safety/argument-digest.ts
 +++ b/packages/core/src/safety/argument-digest.ts
-@@ -20,7 +20,7 @@ export function stableStringify(value: unknown): string {
-   if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'null';
+@@ -21,7 +21,7 @@
+   if (value === null) return 'null';
    if (Array.isArray(value)) return '[' + value.map(stableStringify).join(',') + ']';
-   const obj = value as Record<string, unknown>;
--  const keys = Object.keys(obj).sort();
-+  const keys = Object.keys(obj);
-   return '{' + keys.map((k) => JSON.stringify(k) + ':' + stableStringify(obj[k])).join(',') + '}';
+   if (!isJsonObject(value)) return JSON.stringify(value);
+-  const keys = Object.keys(value).sort();
++  const keys = Object.keys(value);
+   return '{' + keys.map((key) => JSON.stringify(key) + ':' + stableStringify(value[key]!)).join(',') + '}';
  }
- 
+

@@ -152,14 +152,14 @@ Branches only **explore**; scoring is engine-level, so both backends score
 through the same `evaluation.ts` and the reward is execution-grounded either
 way. `ExplorationAgent`'s MCTS-mode `@callable()` methods are:
 
-- `explore(history, craftedTools, siblingAngles)` — propose one approach
+- `explore(history, craftedTools, languages, mode, siblingAngles)` — propose one approach under the parent's trusted work mode
 - `generateReflection(task)` — explain what went wrong (for pruned branches)
 
 plus `setOwner` / `setSharedParent` for bootstrap. Siblings are pushed apart by
 `mcts/diversity.ts`, which hands each branch index a different framing angle, so
 three branches don't converge on the same idea.
 
-The same class also serves **head mode** for `think(strategy:'heads')` —
+The same class also serves **head mode** for `agents({action:'fork'})` —
 `initHead` / `runAsHead` / `abortHead` drive a multi-step agentic loop over a
 restricted tool surface. See [ARCHITECTURE.md](./ARCHITECTURE.md) for why that
 class deliberately stays outside the `ActorAgent` hierarchy.
@@ -193,7 +193,8 @@ open nodes failed rather than shipping a bad answer.
 | `visits` | INTEGER | Number of backpropagation passes |
 | `value` | REAL | Running mean score (0-1) |
 | `status` | TEXT | `open`, `terminal`, `pruned`, `failed` |
-| `code_used` | TEXT | Code extracted from exploration branches |
+| `code_used` | TEXT | Runnable source selected from an exploration proposal |
+| `code_language` | TEXT | Executor language for `code_used`; null when no runnable code was offered |
 | `msg_id` | TEXT | Session message ID for tree navigation |
 | `branch_agent_key` | TEXT | Maps to the Facet agent key |
 | `created_at` | INTEGER | Epoch milliseconds |

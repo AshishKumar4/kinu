@@ -4,10 +4,11 @@
 // seam. Mocks live only at the email seam (raw MIME in, RPC target out).
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore, buildDrainBatch,
   acceptInboundEmail, inboundEmailDropNotice, normalizeEmailAddress,
-  type EmailIngressDeps, type IncomingEmail, type SqlExec,
+  type EmailIngressDeps, type IncomingEmail, type ProteusEvent, type SqlExec,
 } from '@proteus/core';
 import {
   agentEmailAddress, agentNameFromRecipient,
@@ -15,18 +16,23 @@ import {
 } from '../src/email/inbound.js';
 import { routeInboundEmail, type EmailDeliveryTarget } from '../src/email/route.js';
 import { createMemoryVfs } from '@proteus/test-utils';
+import { sqlExec } from './helpers/user-do.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  return sqlExec(new Database(':memory:'));
 }
 
 const DOMAIN = 'agents.example.com';
+type EmailEvent = Extract<ProteusEvent, { variant: 'email' }>;
+
+function requireEmailEvent(log: EventLog, eventId: string): EmailEvent {
+  const event = log.get(eventId);
+  if (!event || (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact')
+    || event.variant !== 'email') {
+    throw new Error(`expected readable email event ${eventId}`);
+  }
+  return event;
+}
 
 function makeDeps(overrides: Partial<EmailIngressDeps> = {}) {
   const sql = makeSql();
@@ -123,7 +129,7 @@ describe('parseInboundMime', () => {
       '--B--',
       '',
     ].join('\r\n');
-    const parsed = await parseInboundMime(new TextEncoder().encode(raw).buffer as ArrayBuffer);
+    const parsed = await parseInboundMime(await new Blob([raw]).arrayBuffer());
     expect(parsed.subject).toBe('Check the deploy');
     expect(parsed.body_text).toBe('Is staging green?');
     expect(parsed.message_id).toBe('<abc@mail.example.com>');
@@ -143,7 +149,7 @@ describe('parseInboundMime', () => {
       '',
       '<div><p>Run the <b>tests</b></p><style>p{color:red}</style></div>',
     ].join('\r\n');
-    const parsed = await parseInboundMime(new TextEncoder().encode(raw).buffer as ArrayBuffer);
+    const parsed = await parseInboundMime(await new Blob([raw]).arrayBuffer());
     expect(parsed.body_text).toBe('Run the tests');
   });
 });
@@ -155,7 +161,7 @@ describe('acceptInboundEmail — the trust gate', () => {
     expect(result).toMatchObject({ admitted: true, duplicate: false, sender_class: 'owner' });
     if (!result.admitted) throw new Error('unreachable');
 
-    const event = log.get(result.event_id)!;
+    const event = requireEmailEvent(log, result.event_id);
     expect(event.variant).toBe('email');
     expect(event.trust).toBe('authenticated');       // capped — never owner
     expect(event.priority).toBe('normal');
@@ -163,7 +169,9 @@ describe('acceptInboundEmail — the trust gate', () => {
     // The thread reply channel is bound to the event and carries threading.
     const channel = replies.findOpenByEvent(result.event_id)!;
     expect(channel.kind).toBe('email_thread');
-    expect(JSON.parse(channel.holder_addr)).toMatchObject({
+    expect(v.parse(v.object({
+      to: v.string(), from: v.string(), subject: v.string(), message_id: v.nullable(v.string()),
+    }), JSON.parse(channel.holder_addr))).toMatchObject({
       to: 'owner@example.com',
       from: `scout-a1b2c3@${DOMAIN}`,
       subject: 'Check the deploy',
@@ -228,12 +236,14 @@ describe('acceptInboundEmail — the trust gate', () => {
     const result = await acceptInboundEmail(deps, incoming({ body_text: body }));
     if (!result.admitted) throw new Error('unreachable');
 
-    const payload = log.get(result.event_id)!.payload as { body_path?: string };
+    const payload = requireEmailEvent(log, result.event_id).payload;
     expect(payload.body_path).toBeTruthy();
-    expect(files.get(payload.body_path!)).toBe(body);
+    if (!payload.body_path) throw new Error('expected spilled email body path');
+    expect(files.get(payload.body_path)).toBe(body);
 
-    const batch = buildDrainBatch(log.pending())!;
-    expect(batch.text).toContain(payload.body_path!);
+    const batch = buildDrainBatch(log.pending());
+    if (!batch) throw new Error('expected pending email drain batch');
+    expect(batch.text).toContain(payload.body_path);
     expect(batch.text).toContain('chars omitted');
     expect(batch.text).toContain('URGENT-HEAD');
     expect(batch.text).toContain('ACTION-TAIL');
@@ -243,8 +253,10 @@ describe('acceptInboundEmail — the trust gate', () => {
     const { deps, log } = makeDeps();
     const result = await acceptInboundEmail(deps, incoming());
     if (!result.admitted) throw new Error('unreachable');
-    expect((log.get(result.event_id)!.payload as { body_path?: string }).body_path).toBeUndefined();
-    expect(buildDrainBatch(log.pending())!.text).toContain('Is staging green?');
+    expect(requireEmailEvent(log, result.event_id).payload.body_path).toBeUndefined();
+    const batch = buildDrainBatch(log.pending());
+    if (!batch) throw new Error('expected pending email drain batch');
+    expect(batch.text).toContain('Is staging green?');
   });
 });
 
@@ -256,7 +268,8 @@ describe('the inbox gate says when it is deaf', () => {
   const RESET_AT = 1_700_000_060_000;
 
   test('while the window is exhausted, the turn is told — with the limit and the reset', () => {
-    const notice = inboundEmailDropNotice(30, RESET_AT, RESET_AT - 20_000)!;
+    const notice = inboundEmailDropNotice(30, RESET_AT, RESET_AT - 20_000);
+    if (!notice) throw new Error('expected active rate-limit notice');
     expect(notice.source).toBe('inbound email');
     expect(notice.reason).toContain('more than 30 messages');
     expect(notice.reason).toContain(new Date(RESET_AT).toISOString());
@@ -280,16 +293,21 @@ describe('routeInboundEmail — the Worker seam', () => {
       '',
       'Is staging green?',
     ].join('\r\n');
+    const body = new Response(raw).body;
+    if (!body) throw new Error('expected response body stream');
     return {
       from: opts.from ?? 'owner@example.com',
       to: opts.to ?? `scout-a1b2c3@${DOMAIN}`,
       headers: new Headers({ 'message-id': '<abc@mail.example.com>', ...opts.headers }),
-      raw: new Response(raw).body as ReadableStream<Uint8Array>,
+      raw: body,
     };
   }
 
   test('delivers the parsed email to the agent named by the recipient', async () => {
-    const deliveries: Array<{ agent: string; opts: unknown }> = [];
+    const deliveries: Array<{
+      agent: string;
+      opts: Parameters<EmailDeliveryTarget['acceptEmailDelivery']>[0];
+    }> = [];
     const target: EmailDeliveryTarget = {
       acceptEmailDelivery: async (opts) => {
         deliveries.push({ agent: 'scout-a1b2c3', opts });

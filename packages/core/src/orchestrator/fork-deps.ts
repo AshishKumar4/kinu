@@ -84,19 +84,23 @@ export function buildStrategyForkDeps(wiring: ForkDepsWiring): AgentsForkDeps {
     registry,
     rt: wiring.rt,
     model: wiring.model,
-    defaultOptions: () => ({
-      mcts: {
+    defaultOptions: () => {
+      const mcts = {
         session: wiring.mcts.session(),
         search: wiring.mcts.search,
         ...wiring.mcts.overrides(),
-        ...(wiring.mcts.onProgress ? { onProgress: wiring.mcts.onProgress() } : {}),
-      },
-      heads: {
-        controller: wiring.heads.controller(),
-        inheritedContext: wiring.heads.inheritedContext(),
-        onPhase: wiring.heads.onPhase(),
-        onComplete: wiring.heads.onComplete,
-      },
-    }),
+      };
+      const onProgress = wiring.mcts.onProgress?.();
+      if (onProgress) Object.assign(mcts, { onProgress });
+      return {
+        mcts,
+        heads: {
+          controller: wiring.heads.controller(),
+          inheritedContext: wiring.heads.inheritedContext(),
+          onPhase: wiring.heads.onPhase(),
+          onComplete: wiring.heads.onComplete,
+        },
+      };
+    },
   };
 }

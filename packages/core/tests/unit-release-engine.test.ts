@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import {
   ReleaseEngine,
   runReleaseAction,
@@ -25,6 +25,7 @@ import {
   type ReleaseToolDeps,
   type SandboxHandle,
 } from '../src/index.js';
+import { makeSqlExec } from './helpers.js';
 
 // ── Fake sandbox exec seam ─────────────────────────────────────────────────
 
@@ -38,9 +39,18 @@ class FakeSandbox implements ReleaseExec {
   exposeResult: { url: string } | { error: string } = { url: 'https://8080-sb-tok.previews.example/' };
   private rules: Rule[] = [];
 
-  on(match: RegExp, handle: ExecResult | ((command: string) => ExecResult)): this {
-    this.rules.push({ match, handle: typeof handle === 'function' ? handle : () => handle });
+  on(match: RegExp, result: ExecResult): this {
+    this.rules.push({ match, handle: () => result });
     return this;
+  }
+
+  onDynamic(match: RegExp, handle: Rule['handle']): this {
+    this.rules.push({ match, handle });
+    return this;
+  }
+
+  removeRulesMatching(fragment: string): void {
+    this.rules = this.rules.filter((rule) => !rule.match.source.includes(fragment));
   }
 
   async exec(command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> {
@@ -70,16 +80,7 @@ class FakeSandbox implements ReleaseExec {
 
 function makeStore(): ReleaseStore {
   const db = new Database(':memory:');
-  const exec = {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...(bindings as SQLQueryBindings[])) as Array<Record<string, unknown>> };
-      }
-      stmt.run(...(bindings as SQLQueryBindings[]));
-      return { toArray: () => [] };
-    },
-  };
+  const exec = makeSqlExec(db);
   initReleaseTables(exec);
   let seq = 0;
   return createReleaseStore(releaseSqlFromExec(exec), {
@@ -530,17 +531,17 @@ describe('engine.rollback', () => {
     let head = APPLY_SHA;
     let hasGit = false;
     s.sandbox
-      .on(/test -e .*\.git/, () => ({ stdout: hasGit ? 'yes' : 'no' }))
-      .on(/init -b main/, () => {
+      .onDynamic(/test -e .*\.git/, () => ({ stdout: hasGit ? 'yes' : 'no' }))
+      .onDynamic(/init -b main/, () => {
         hasGit = true;
         return {};
       })
-      .on(/reset --hard '([0-9a-f]+)'/, (cmd) => {
+      .onDynamic(/reset --hard '([0-9a-f]+)'/, (cmd) => {
         head = /reset --hard '([0-9a-f]+)'/.exec(cmd)![1];
         return {};
       })
       .on(/rev-parse HEAD~1/, { stdout: BASE_SHA })
-      .on(/rev-parse HEAD/, () => ({ stdout: head }))
+      .onDynamic(/rev-parse HEAD/, () => ({ stdout: head }))
       .on(/wrangler deploy/, { stdout: 'Current Version ID: 0b1d2f3a-4c5e-6789-abcd-ef0123456789' });
     // Walk to deployed through the real ledger + engine.
     expect((await s.engine.apply(s.changeId)).ok).toBe(true);
@@ -600,9 +601,7 @@ describe('engine.rollback', () => {
     // Sabotage: reset "succeeds" but HEAD never moves.
     s.sandbox.on(/nothing/, {}); // keep rule list non-empty semantics explicit
     const sBadHead = s.head; // HEAD stays at APPLY_SHA unless reset rule fires
-    s.sandbox['rules' as never] = (s.sandbox as unknown as { rules: Rule[] }).rules.filter(
-      (r) => !r.match.source.includes('reset --hard'),
-    ) as never;
+    s.sandbox.removeRulesMatching('reset --hard');
 
     const result = await s.engine.rollback(s.changeId);
     expect(result.ok).toBe(false);
@@ -793,9 +792,12 @@ describe('createSandboxReleaseExec', () => {
 // but the gate behavior this describes did not move.
 
 describe('release dispatcher with an engine wired', () => {
-  type ToolExecute = (args: Record<string, unknown>) => Promise<unknown>;
+  interface BuiltReleaseTool {
+    s: Setup;
+    execute: (args: ReleaseActionInput) => ReturnType<typeof runReleaseAction>;
+  }
 
-  function buildTool(opts?: { engine?: false }): { s: Setup; execute: ToolExecute } {
+  function buildTool(opts?: { engine?: false }): BuiltReleaseTool {
     const s = setup();
     const deps: ReleaseToolDeps = {
       board: async () => s.store.board('jarvis', 20),
@@ -806,9 +808,9 @@ describe('release dispatcher with an engine wired', () => {
       recordCheck: async (changeId, input) => s.store.recordCheck(changeId, input),
       requestApproval: async (changeId, approvalType) => s.store.requestApproval(changeId, approvalType),
       recordDeployment: async (changeId, input) => s.store.recordDeployment(changeId, input),
-      ...(opts?.engine === false ? {} : { engine: s.engine }),
+      engine: opts?.engine === false ? undefined : s.engine,
     };
-    return { s, execute: (args) => runReleaseAction(deps, args as unknown as ReleaseActionInput) };
+    return { s, execute: (args) => runReleaseAction(deps, args) };
   }
 
   test('refuses manual transitions into engine-owned states; ordinary transitions pass through', async () => {

@@ -7,7 +7,7 @@ import { Database } from 'bun:sqlite';
 import { makeSql, makeExecRaw } from '../../../tests/helpers.js';
 import {
   initGepaTables, startGepaRun, persistGepaCandidate,
-  persistGepaParetoSnapshot, updateGepaRunCounters, finishGepaRun,
+  persistGepaParetoSnapshot, finishGepaRun,
   listGepaRuns, loadGepaCandidates, makePersistingHook,
   runGepa,
   type GepaCandidate, type EvalInstance, type MetricOutcome,

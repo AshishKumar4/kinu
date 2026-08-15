@@ -30,62 +30,17 @@
 import { Database } from 'bun:sqlite';
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
-import type { LanguageModel } from 'ai';
 import {
-  HeadController, HeadJournal, MissionGovernor, createWorkspace,
+  HeadController, HeadJournal, MissionGovernor,
   initSearchTables, initScaffoldTables, initCraftScoreTables,
   type LLMProviderConfig, type MergeResult, type WebSearchProvider,
 } from '../packages/core/src/index.js';
+import { createWorkspace } from '../packages/core/src/identity/index.js';
 import { createCLIHeadRuntime } from '../packages/cli-backend/src/head-runtime.js';
 import { createCLIRuntime, makeSql } from '../packages/cli-backend/src/runtime.js';
 import { resolveChatModel } from '../packages/cli-backend/src/local-session.js';
-
-interface PanelWorkerInput {
-  dbPath: string;
-  workspaceName: string;
-  purpose: string;
-  /** The one task every member of the panel is given. */
-  ask: string;
-  /** One entry per fork. Identical entries are the `self` arm; one per vendor
-   *  family is the `mixed` arm. Length is the panel size. */
-  panel: LLMProviderConfig[];
-  /** The parent/analyst config — the model that writes the merge. Held constant
-   *  across arms on purpose: this experiment varies the PANEL, not the analyst,
-   *  and letting both move would make a difference unattributable. */
-  analyst: LLMProviderConfig;
-  maxTokens: number;
-}
-
-interface PanelWorkerOutput {
-  tokens: number;
-  steps: number;
-  hadError: boolean;
-  budgetBreach: 'tokens' | null;
-  peakPromptTokens: number;
-  /** Secondary metric: the grounded [0,1] outcome the heads path already
-   *  computes per fork (execution-banded when the fork left runnable code).
-   *  The PRIMARY metric is the sandbox's own checks, scored by the harness. */
-  headScores: number[];
-  grounded: boolean;
-  blindSpots: string[];
-  error?: string;
-}
-
-/** Meters what a panel actually spends. Every member and the analyst are wrapped
- *  by the same counter, so the cost reported for an arm is the whole panel's. */
-function meteredModel(base: LanguageModel, onUsage: (tokens: number) => void): LanguageModel {
-  const inner = base as unknown as { doGenerate: (o: unknown) => Promise<{ usage?: unknown }> };
-  const bound = inner.doGenerate.bind(inner);
-  return {
-    ...(base as object),
-    doGenerate: async (options: unknown) => {
-      const result = await bound(options);
-      const u = result.usage as { inputTokens?: number; outputTokens?: number } | undefined;
-      onUsage((u?.inputTokens ?? 0) + (u?.outputTokens ?? 0));
-      return result;
-    },
-  } as unknown as LanguageModel;
-}
+import { createBenchInferenceProxy } from './bench-inference-proxy.js';
+import { parsePanelWorkerInput, type WorkerOutput } from './bench-worker-protocol.js';
 
 /** The spec a fork carries is its INDEX into the panel list, not a registry
  *  name: the bench talks to explicit provider configs rather than a credential
@@ -93,49 +48,53 @@ function meteredModel(base: LanguageModel, onUsage: (tokens: number) => void): L
 const forkSpec = (i: number): string => `panel-${i}`;
 
 async function main(): Promise<void> {
-  const input = JSON.parse(await Bun.stdin.text()) as PanelWorkerInput;
+  const input = parsePanelWorkerInput(await Bun.stdin.text());
+  const proxy = createBenchInferenceProxy({
+    upstreamBaseURL: input.analyst.baseURL,
+    additionalUpstreamBaseURLs: input.panel.map((config) => config.baseURL),
+    maxTokens: input.maxTokens,
+  });
+  const throughProxy = (config: LLMProviderConfig): LLMProviderConfig => ({
+    ...config,
+    baseURL: proxy.baseURLFor(config.baseURL),
+  });
+  const analyst = throughProxy(input.analyst);
+  const panel = input.panel.map(throughProxy);
 
   const fresh = !existsSync(input.dbPath);
   if (fresh) mkdirSync(dirname(input.dbPath), { recursive: true });
   const db = new Database(input.dbPath);
+  // SAFETY: The CLI backend owns this bun:sqlite adapter boundary; the same Database instance is its production input.
+  const backendDb = db as never;
   db.exec('PRAGMA journal_mode = WAL');
   if (fresh) {
-    await createWorkspace(db as never, {
-      name: input.workspaceName, purpose: input.purpose, llm: input.analyst,
+    await createWorkspace(backendDb, {
+      name: input.workspaceName, purpose: input.purpose, llm: analyst,
     });
     initSearchTables((ddl: string) => db.exec(ddl));
     initScaffoldTables((ddl: string) => db.exec(ddl));
     initCraftScoreTables((ddl: string) => db.exec(ddl));
   }
 
-  let tokens = 0;
-  let breach: 'tokens' | null = null;
-  const meter = (spent: number): void => {
-    tokens += spent;
-    if (tokens > input.maxTokens && !breach) breach = 'tokens';
-  };
-  const modelFor = (cfg: LLMProviderConfig): LanguageModel =>
-    meteredModel(resolveChatModel(cfg), meter);
-
-  const rt = createCLIRuntime(db as never, { dbPath: input.dbPath, llm: input.analyst });
+  const rt = createCLIRuntime(backendDb, { dbPath: input.dbPath, llm: analyst });
   const governor = new MissionGovernor({ storage: rt.storage });
-  const byIndex = new Map(input.panel.map((cfg, i) => [forkSpec(i), cfg]));
+  const byIndex = new Map(panel.map((config, index) => [forkSpec(index), config]));
 
   // A panel member does no live research — every arm must see the same world,
   // and a flaky search result is variance charged to whichever arm drew it.
   const noWeb: WebSearchProvider = {
-    search: async () => ({ query: '', results: [], source: 'disabled' as never }),
+    search: async () => ({ query: '', results: [], source: 'duckduckgo' }),
     fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   };
 
   const headRuntime = createCLIHeadRuntime({
-    model: modelFor(input.analyst),
+    model: resolveChatModel(analyst),
     parentRuntime: rt,
     cwd: process.cwd(),
     resolveModel: (spec: string) => {
       const cfg = byIndex.get(spec);
       if (!cfg) throw new Error(`panel worker: no provider for fork spec "${spec}"`);
-      return modelFor(cfg);
+      return resolveChatModel(cfg);
     },
     webSearch: noWeb,
     codemodeExtras: () => [],
@@ -150,6 +109,7 @@ async function main(): Promise<void> {
   try {
     merge = await new HeadController(headRuntime, new HeadJournal(makeSql(db))).run({
       parentHeadId: null,
+      mode: 'build',
       inheritedContext: [],
       request: {
         rationale: input.ask,
@@ -164,26 +124,39 @@ async function main(): Promise<void> {
     });
   } catch (err) {
     error = err instanceof Error ? err.message : String(err);
+  } finally {
+    await proxy.settle();
+    db.close();
+    proxy.stop(true);
   }
 
-  const out: PanelWorkerOutput = {
-    tokens,
+  const usage = proxy.usage();
+  if (usage.unmeteredResponses > 0) {
+    const usageError = `${usage.unmeteredResponses} successful inference response(s) omitted token usage`;
+    error = error ? `${error}; ${usageError}` : usageError;
+  }
+
+  const out: WorkerOutput = {
+    tokens: usage.tokens,
     steps: merge?.costSummary.headCount ?? 0,
     hadError: error !== undefined,
-    budgetBreach: breach,
-    peakPromptTokens: 0,
+    budgetBreach: usage.tokens > input.maxTokens ? 'tokens' : null,
+    peakPromptTokens: usage.peakPromptTokens,
+    modelCalls: usage.calls,
+    /** Secondary metric: the grounded outcome the heads path computes per fork.
+     *  The primary metric is still the sandbox's own checks in the harness. */
     headScores: merge ? merge.headScores.map((s) => s.score) : [],
     grounded: merge?.grounded ?? false,
     blindSpots: merge ? [...merge.blindSpots] : [],
-    ...(error ? { error } : {}),
   };
-  db.close();
+  if (error) out.error = error;
   process.stdout.write(`${JSON.stringify(out)}\n`);
 }
 
 main().catch((err) => {
-  const out: PanelWorkerOutput = {
+  const out: WorkerOutput = {
     tokens: 0, steps: 0, hadError: true, budgetBreach: null, peakPromptTokens: 0,
+    modelCalls: 0,
     headScores: [], grounded: false, blindSpots: [],
     error: err instanceof Error ? (err.stack ?? err.message) : String(err),
   };

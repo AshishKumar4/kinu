@@ -143,7 +143,7 @@ export function createParentExecutor(deps: {
     available: true,
     active: true,
     status: 'active',
-    ...(deps.workspaceName ? { reason: `forked from ${deps.workspaceName}` } : {}),
+    reason: deps.workspaceName ? `forked from ${deps.workspaceName}` : undefined,
   };
 
   return {
@@ -159,11 +159,14 @@ export function createParentExecutor(deps: {
     tools: {
       readFile: {
         description: "Read a file from the parent workspace you were forked from, in the parent's own paths.",
-        execute: async (path: unknown) => vfs.readFile(String(path), { encoding: 'utf8' }),
+        execute: async <Path>(path: Path) => {
+          const content = await vfs.readFile(String(path), { encoding: 'utf8' });
+          return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
+        },
       },
       writeFile: {
         description: 'Write a file in the parent workspace. Your changes are attributed to you in the merge.',
-        execute: async (path: unknown, content: unknown) => {
+        execute: async <Path, Content>(path: Path, content: Content) => {
           const text = String(content);
           await vfs.writeFile(String(path), text);
           return `Written ${text.length} bytes to ${path}`;
@@ -171,21 +174,21 @@ export function createParentExecutor(deps: {
       },
       readdir: {
         description: 'List a directory of the parent workspace.',
-        execute: async (path: unknown) => vfs.readdir(String(path ?? '.')),
+        execute: async <Path>(path: Path) => vfs.readdir(String(path ?? '.')),
       },
       exists: {
         description: 'Check whether a path exists in the parent workspace.',
-        execute: async (path: unknown) => vfs.exists(String(path)),
+        execute: async <Path>(path: Path) => vfs.exists(String(path)),
       },
       exec: {
         description:
           "Run one command in the parent workspace's real shell — the full coreutils set, pipes, "
           + 'redirects and loops. The fast way to search it (grep -rn, find).',
-        execute: async (command: unknown, context?: unknown) => {
+        execute: async <Command, Context>(command: Command, context?: Context) => {
           // The signal is read for parity with every other executor; a Durable
           // Object RPC exposes no kill for an in-flight call, so an aborted
           // caller stops waiting while the parent's command finishes.
-          readExecSignal(context);
+          readExecSignal({ context });
           return formatExecResult(value(await deps.handle.exec(String(command))));
         },
       },

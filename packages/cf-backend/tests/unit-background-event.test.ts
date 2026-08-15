@@ -5,7 +5,7 @@ import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { buildDrainBatch } from '@proteus/core';
-import type { ProteusEvent } from '@proteus/core';
+import type { JsonValue, ProteusEvent } from '@proteus/core';
 import {
   applySignalCard, classifyProgrammaticTurn, eventVariantLabel, messageSignalId,
   parseDrainedEvents, parseSignalCardEvent, type SignalCard,
@@ -38,26 +38,46 @@ describe('programmatic turn provenance', () => {
 
 /* The drain text the UI parses is composed by core's buildDrainBatch — these
    cases feed real events through it so the parser cannot drift from it. */
-function event(over: Partial<ProteusEvent>): ProteusEvent {
-  return {
-    id: over.id ?? 'ev-1',
-    ts: 0,
+const EVENT_BASE = {
+  trace_id: 'trace-1',
+  caused_by: null,
+  trust: 'external',
+  priority: 'background',
+  payload_visibility: 'full',
+  received_at: 0,
+  schema_version: 1,
+  reply_channel: null,
+  dedupe_key: null,
+} as const;
+
+function event<Event extends ProteusEvent>(value: Event): Event {
+  return value;
+}
+
+function webhookEvent(id = 'ev-1') {
+  return event({
+    ...EVENT_BASE,
+    id,
     ingress: 'webhook_hmac',
     variant: 'webhook',
-    payload: { http_method: 'POST', body: { ok: true } },
-    payload_visibility: 'full',
-    trust: 'untrusted',
-    consumed_by_turn: null,
-    ...over,
-  } as unknown as ProteusEvent;
+    payload: {
+      webhook_id: 'hook-1',
+      http_method: 'POST',
+      http_headers: {},
+      body: { ok: true },
+      delivery_id: `delivery-${id}`,
+    },
+  });
 }
 
 describe('drained event parsing', () => {
   test('a subordinate report is recovered as variant / source / brief', () => {
     const batch = buildDrainBatch([event({
+      ...EVENT_BASE,
+      id: 'ev-1',
       ingress: 'subordinate',
       variant: 'subordinate_report',
-      payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps' },
+      payload: { from_subordinate: 'surface-auditor', status: 'progress', task: 'Audit the CLI', content: 'Found 3 gaps', proteus_mode: 'build' },
     })])!;
     expect(parseDrainedEvents(batch.text)).toEqual([{
       variant: 'subordinate_report',
@@ -69,8 +89,9 @@ describe('drained event parsing', () => {
 
   test('the instruction line is dropped, and every event in a batch is kept', () => {
     const batch = buildDrainBatch([
-      event({ id: 'a' }),
+      webhookEvent('a'),
       event({
+        ...EVENT_BASE,
         id: 'b', ingress: 'email_inbound', variant: 'email',
         payload: {
           from: 'ops@example.com', to: 'agent@example.com', subject: 'Deploy failed',
@@ -88,10 +109,11 @@ describe('drained event parsing', () => {
 
   test('a peer ask is flagged as awaiting a reply, and the hint stays out of the brief', () => {
     const batch = buildDrainBatch([event({
+      ...EVENT_BASE,
       id: 'p1', ingress: 'peer_async', variant: 'peer_agent',
       payload: {
         from_agent_name: 'atlas', from_user_id: 'u1', topic: 'schema', body: 'which shape?',
-        sender_event_id: 'out-1', reply_expected: true,
+        sender_event_id: 'out-1', reply_expected: true, proteus_mode: 'build',
       },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
@@ -103,6 +125,7 @@ describe('drained event parsing', () => {
 
   test('a colon inside the source label does not swallow the brief', () => {
     const batch = buildDrainBatch([event({
+      ...EVENT_BASE,
       id: 't1', ingress: 'timer_alarm', variant: 'timer',
       payload: { label: 'background-job-wake:job-7', trigger_id: 'x', scheduled_fire_at: 0 },
     })])!;
@@ -116,10 +139,12 @@ describe('drained event parsing', () => {
 
   test('a multi-line brief keeps its continuation lines', () => {
     const batch = buildDrainBatch([event({
+      ...EVENT_BASE,
       id: 's1', ingress: 'subordinate', variant: 'subordinate_task' as const,
       payload: {
         from_workspace: 'atlas', kind: 'task' as const, body: 'check the CLI',
         inherited_context: 'Context line one.\nContext line two.',
+        proteus_mode: 'build',
       },
     })])!;
     const [parsed] = parseDrainedEvents(batch.text);
@@ -142,11 +167,11 @@ describe('event variant labels', () => {
 });
 
 describe('the card lifecycle', () => {
-  const opened = (id: string, over: Record<string, unknown> = {}) => ({
+  const opened = (id: string, over: { readonly text?: string } = {}) => ({
     type: 'signal_card', id, state: 'pending',
     metadata: { proteusEvent: 'event_drain' }, text: '1 event arrived', ...over,
   });
-  const apply = (events: unknown[]): readonly SignalCard[] =>
+  const apply = (events: JsonValue[]): readonly SignalCard[] =>
     events.reduce<readonly SignalCard[]>((cards, event) => {
       const parsed = parseSignalCardEvent(event);
       return parsed ? applySignalCard(cards, parsed) : cards;

@@ -114,6 +114,14 @@ function readsChannel(text: string, channel: string): boolean {
   ).test(text);
 }
 
+/** The AI chat hook owns this framework protocol frame internally. Its
+ * registration against the same Agent connection is the consumer evidence;
+ * application code does not receive the frame through its own switch. */
+function readsFrameworkChannel(text: string, channel: string): boolean {
+  return channel === 'cf_agent_chat_messages'
+    && /\buseAgentChat\s*\(\s*\{\s*agent\s*,/.test(text);
+}
+
 describe('broadcast channels reach a consumer', () => {
   test('the scan finds the broadcast surface at all', () => {
     // Guards the guard: if `broadcast(` is renamed or the object shape changes,
@@ -140,7 +148,10 @@ describe('broadcast channels reach a consumer', () => {
       const consumers = CONSUMER_ROOTS
         .flatMap((root) => sourceFiles(root, ['.ts', '.tsx']))
         .filter((file) => !producers.includes(file))
-        .filter((file) => readsChannel(readFileSync(file, 'utf8'), channel))
+        .filter((file) => {
+          const text = readFileSync(file, 'utf8');
+          return readsChannel(text, channel) || readsFrameworkChannel(text, channel);
+        })
         .map((file) => relative(REPO, file));
 
       // The failure names the channel and where it is broadcast from, because

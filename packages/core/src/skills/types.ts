@@ -32,6 +32,8 @@
  * round-trip-corrupt skills authored by newer tools.
  */
 
+import type { JsonObject } from '../utils/json.js';
+
 /** Discriminated outcome of parsing a SKILL.md file. */
 export type SkillParseResult =
   | { ok: true; skill: ParsedSkill }
@@ -67,7 +69,7 @@ export interface ParsedSkill {
   /** Skill body (the natural-language instructions). */
   body: string;
   /** Forward-compat: any unknown front-matter keys preserved verbatim. */
-  ext: Record<string, unknown>;
+  ext: JsonObject;
   /** Where this skill came from. Used by the loader for precedence. */
   source: SkillSource;
 }

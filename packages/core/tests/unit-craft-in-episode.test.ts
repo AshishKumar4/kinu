@@ -104,13 +104,13 @@ describe('craftFailureBlame — attribution by stamp only', () => {
   });
 });
 
-function ledgerFixture(): { ledger: ReturnType<typeof createCraftLedger>; db: Database } {
+function ledgerFixture() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initCraftScoreTables(makeExecRaw(db));
   db.exec(`CREATE TABLE IF NOT EXISTS crafted_tools (name TEXT PRIMARY KEY)`);
   const ledger = createCraftLedger({
-    craftStore: { list: () => db.query('SELECT name FROM crafted_tools').all() as Array<{ name: string }> },
+    craftStore: { list: () => db.query<{ name: string }, []>('SELECT name FROM crafted_tools').all() },
     sql,
   });
   return { ledger, db };
@@ -130,7 +130,7 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     db.run(`INSERT INTO crafted_tools (name) VALUES ('kept'), ('retired')`);
     seedCraftScore(sql, 'kept');
     seedCraftScore(sql, 'retired');
-    sql`UPDATE craft_scores SET score = 0.01 WHERE tool_name = 'retired'`;
+    void sql`UPDATE craft_scores SET score = 0.01 WHERE tool_name = 'retired'`;
     expect(ledger.names()).toEqual(['kept']);
   });
 
@@ -147,14 +147,18 @@ describe('the craft ledger — where an in-episode observation lands', () => {
   test('observations accumulate through the existing EMA, not a parallel score', () => {
     const { ledger, db } = ledgerFixture();
     seedCraftScore(makeSql(db), 'summarize');
-    const before = db.query(`SELECT score, uses FROM craft_scores WHERE tool_name='summarize'`)
-      .get() as { score: number; uses: number };
+    const before = db.query<{ score: number; uses: number }, []>(
+      `SELECT score, uses FROM craft_scores WHERE tool_name='summarize'`,
+    ).get();
+    if (!before) throw new Error('expected seeded craft score');
     expect(before.score).toBe(CRAFT_NEUTRAL_PRIOR);
     expect(before.uses).toBe(0);
 
     ledger.observe(['summarize'], CRAFT_INVOCATION_QUALITY.returned);
-    const after = db.query(`SELECT score, uses FROM craft_scores WHERE tool_name='summarize'`)
-      .get() as { score: number; uses: number };
+    const after = db.query<{ score: number; uses: number }, []>(
+      `SELECT score, uses FROM craft_scores WHERE tool_name='summarize'`,
+    ).get();
+    if (!after) throw new Error('expected observed craft score');
     expect(after.score).toBeGreaterThan(before.score);
     expect(after.uses).toBe(1);
   });
@@ -193,11 +197,16 @@ describe('the craft ledger — where an in-episode observation lands', () => {
     const sql = makeSql(db);
     seedCraftScore(sql, 'earned');
     ledger.observe(['earned'], CRAFT_INVOCATION_QUALITY.returned);
-    const earned = (db.query(`SELECT score FROM craft_scores WHERE tool_name='earned'`)
-      .get() as { score: number }).score;
+    const earnedRow = db.query<{ score: number }, []>(
+      `SELECT score FROM craft_scores WHERE tool_name='earned'`,
+    ).get();
+    if (!earnedRow) throw new Error('expected earned craft score');
+    const earned = earnedRow.score;
     seedCraftScore(sql, 'earned');
-    expect((db.query(`SELECT score FROM craft_scores WHERE tool_name='earned'`)
-      .get() as { score: number }).score).toBe(earned);
+    const reseeded = db.query<{ score: number }, []>(
+      `SELECT score FROM craft_scores WHERE tool_name='earned'`,
+    ).get();
+    expect(reseeded?.score).toBe(earned);
   });
 
   test('a runtime without the score table loses the observation, never the turn', () => {

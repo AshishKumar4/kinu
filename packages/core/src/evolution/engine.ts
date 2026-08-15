@@ -32,6 +32,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
@@ -45,7 +46,7 @@ import type {
 } from './types.js';
 import { DEFAULT_EVOLUTION_CONFIG } from './types.js';
 import { isoDate } from '../utils/date.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
@@ -92,6 +93,12 @@ import {
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive.js';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
+
+const GeneralizedToolSchema = v.object({
+  name: v.optional(v.string()),
+  description: v.optional(v.string()),
+  code: v.optional(v.string()),
+});
 import { runMCTS } from '../mcts/engine.js';
 import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store.js';
 
@@ -259,7 +266,7 @@ export class EvolutionEngine {
   private emit(event: EvolutionEvent): void {
     // Persist to SQL so UI can query it
     try {
-      this.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
+      void this.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
         VALUES (${event.type}, ${event.message}, ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
     } catch {
       // Table may not exist yet in test environments — that's fine
@@ -809,8 +816,7 @@ export class EvolutionEngine {
       // Only attempt mutation if the LLM produced something that looks like a scaffold
       if (!proposed.includes('async function* run')) return;
 
-      // Extract just the code from potential markdown fences
-      const code = proposed.replace(/```(?:js|javascript)?\n?/g, '').replace(/```\n?$/g, '').trim();
+      const code = stripMarkdownFences(proposed);
 
       const branchNote = base && baseCode
         ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
@@ -875,10 +881,10 @@ export class EvolutionEngine {
       const result = await runMCTS(this.rt, writer, task, {
         budget: this.config.lifetimeMCTSBudget,
         branches: overrides.branches ?? this.config.lifetimeMCTSBranches,
-        ...(overrides.maxDepth !== undefined ? { maxDepth: overrides.maxDepth } : {}),
-        ...(overrides.explorationWeight !== undefined ? { explorationWeight: overrides.explorationWeight } : {}),
-        ...(overrides.judgeSamples !== undefined ? { judgeSamples: overrides.judgeSamples } : {}),
-        ...(overrides.maxEvalLLMCalls !== undefined ? { maxEvalLLMCalls: overrides.maxEvalLLMCalls } : {}),
+        maxDepth: overrides.maxDepth,
+        explorationWeight: overrides.explorationWeight,
+        judgeSamples: overrides.judgeSamples,
+        maxEvalLLMCalls: overrides.maxEvalLLMCalls,
         onProgress: this.config.onMctsProgress,
       });
 
@@ -888,9 +894,10 @@ export class EvolutionEngine {
         data: result,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.emit({
         type: 'mcts_complete',
-        message: `Evolution failed: ${(err as Error).message}`,
+        message: `Evolution failed: ${message}`,
       });
     }
   }
@@ -929,7 +936,8 @@ export class EvolutionEngine {
       }
       return summary;
     } catch (err) {
-      this.emit({ type: 'replay_eval', message: `Replay eval failed: ${(err as Error).message}` });
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
       return null;
     }
   }
@@ -1003,7 +1011,7 @@ export class EvolutionEngine {
     );
 
     try {
-      const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string; params?: unknown };
+      const parsed = v.parse(GeneralizedToolSchema, extractJsonObject(generalized));
       // Shape only — whether the code is usable is decided by upsertCraftedTool,
       // which compiles it the way the runtime will before storing anything.
       if (!parsed.name || !parsed.code) return;

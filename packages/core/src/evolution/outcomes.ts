@@ -15,14 +15,16 @@
  * this module owns. No second classifier exists anywhere else.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
-import type { CompletedTurn } from './types.js';
+import type { CompletedTurn, ToolCallRecord } from './types.js';
 import type { EvalInstance } from './gepa/types.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
+import { parseJsonValue } from '../utils/json.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 /** Every outcome kind, in the ledger's canonical order. The one list — the
@@ -36,12 +38,13 @@ export type TurnOutcome = (typeof TURN_OUTCOMES)[number];
  *  means everywhere it is drawn as a set (GEPA's optimization targets, the
  *  pathology clustering). `abandoned` is an absence of signal, not a verdict. */
 export const NEGATIVE_TURN_OUTCOMES = ['corrected', 'frustrated'] as const;
+const NEGATIVE_TURN_OUTCOME_SET: ReadonlySet<TurnOutcome> = new Set(NEGATIVE_TURN_OUTCOMES);
 
 /** The event every rate downstream is really about: a turn the user had to
  *  correct, or was unhappy with. K_align's numerator, the craft-retirement
  *  signal, and the GEPA split's optimization target are all this predicate. */
 export function isNegativeOutcome(outcome: TurnOutcome | null): boolean {
-  return outcome !== null && (NEGATIVE_TURN_OUTCOMES as readonly string[]).includes(outcome);
+  return outcome !== null && NEGATIVE_TURN_OUTCOME_SET.has(outcome);
 }
 
 /** What a HUMAN may say about a turn when hand-labeling it (calibration.ts):
@@ -144,7 +147,7 @@ export function isTrivialTurn(turn: Pick<CompletedTurn, 'userMessage' | 'toolCal
  *
  *  `fact` was folded into `memory`; stored turns from before that carry the old
  *  name and must still score the same, so it is recognised too. */
-export function isPureLookupCall(call: { name: string; args: Record<string, unknown> }): boolean {
+export function isPureLookupCall(call: Pick<ToolCallRecord, 'name' | 'args'>): boolean {
   if (call.name === 'memory') return call.args.action === 'search' || call.args.action === 'recall';
   return call.name === 'fact' && call.args.action === 'recall';
 }
@@ -198,6 +201,12 @@ export interface OutcomeClassification {
   evidence: string;
 }
 
+const OutcomeClassificationSchema = v.object({
+  outcome: v.picklist(['accepted', 'corrected', 'frustrated']),
+  confidence: v.optional(v.number()),
+  evidence: v.optional(v.string()),
+});
+
 export function buildOutcomeClassifierPrompt(input: {
   userMessage: string;
   assistantResponse: string;
@@ -233,17 +242,15 @@ export async function classifyTurnOutcome(
     return null;
   }
   try {
-    const parsed = extractJsonObject(raw) as { outcome?: unknown; confidence?: unknown; evidence?: unknown };
-    if (parsed.outcome !== 'accepted' && parsed.outcome !== 'corrected' && parsed.outcome !== 'frustrated') {
-      return null;
-    }
-    const confidence = typeof parsed.confidence === 'number' && Number.isFinite(parsed.confidence)
-      ? Math.min(1, Math.max(0, parsed.confidence))
+    const parsed = v.safeParse(OutcomeClassificationSchema, extractJsonObject(raw));
+    if (!parsed.success) return null;
+    const confidence = parsed.output.confidence !== undefined && Number.isFinite(parsed.output.confidence)
+      ? Math.min(1, Math.max(0, parsed.output.confidence))
       : 0.5;
     return {
-      outcome: parsed.outcome,
+      outcome: parsed.output.outcome,
       confidence,
-      evidence: typeof parsed.evidence === 'string' ? parsed.evidence : '',
+      evidence: parsed.output.evidence ?? '',
     };
   } catch {
     return null;
@@ -363,7 +370,7 @@ export function recordOutcomeLabels(sql: SqlExecutor, input: {
 }): number {
   const now = input.now ?? nowMs();
   for (const entry of input.labels) {
-    sql`INSERT INTO outcome_labels (id, outcome_id, label, labeler, created_at)
+    void sql`INSERT INTO outcome_labels (id, outcome_id, label, labeler, created_at)
         VALUES (${`lbl-${nanoid()}`}, ${entry.outcomeId}, ${entry.label}, ${input.labeler}, ${now})`;
   }
   return input.labels.length;
@@ -422,7 +429,7 @@ export function recordEnsembleLabels(sql: SqlExecutor, input: {
 }): number {
   const now = input.now ?? nowMs();
   for (const entry of input.labels) {
-    sql`INSERT INTO outcome_ensemble_labels (id, outcome_id, model, label, created_at)
+    void sql`INSERT INTO outcome_ensemble_labels (id, outcome_id, model, label, created_at)
         VALUES (${`ens-${nanoid()}`}, ${entry.outcomeId}, ${input.model}, ${entry.label}, ${now})`;
   }
   return input.labels.length;
@@ -484,9 +491,9 @@ export interface RecordTurnOutcomeInput {
 export function recordTurnOutcome(sql: SqlExecutor, input: RecordTurnOutcomeInput): string {
   const id = `outc-${nanoid()}`;
   if (input.turnId) {
-    sql`DELETE FROM turn_outcomes WHERE turn_id = ${input.turnId}`;
+    void sql`DELETE FROM turn_outcomes WHERE turn_id = ${input.turnId}`;
   }
-  sql`INSERT INTO turn_outcomes
+  void sql`INSERT INTO turn_outcomes
         (id, turn_id, session_id, outcome, confidence, source,
          user_message, assistant_response, followup, scaffold_version, created_at)
       VALUES
@@ -679,16 +686,21 @@ interface StoredRunEvent {
   name?: string;
 }
 
+const StoredRunEventSchema = v.object({
+  type: v.string(),
+  name: v.optional(v.string()),
+});
+
+const ChatRunStartSchema = v.object({
+  type: v.literal('run_start'),
+  caused_by: v.literal('chat'),
+  userMessage: v.string(),
+});
+
 function parseRunEvent(payload: string): StoredRunEvent | null {
   try {
-    const value: unknown = JSON.parse(payload);
-    if (typeof value !== 'object' || value === null || !('type' in value) || typeof value.type !== 'string') {
-      return null;
-    }
-    return {
-      type: value.type,
-      ...('name' in value && typeof value.name === 'string' ? { name: value.name } : {}),
-    };
+    const parsed = v.safeParse(StoredRunEventSchema, parseJsonValue(payload));
+    return parsed.success ? parsed.output : null;
   } catch {
     return null;
   }
@@ -713,11 +725,8 @@ function turnProcessEvidence(sql: SqlExecutor, turnId: string | null): string | 
     const expectedUserMessage = window.userMessage.slice(0, 500);
     const runId = starts.find(({ payload }) => {
       try {
-        const value: unknown = JSON.parse(payload);
-        return typeof value === 'object' && value !== null &&
-          'type' in value && value.type === 'run_start' &&
-          'caused_by' in value && value.caused_by === 'chat' &&
-          'userMessage' in value && value.userMessage === expectedUserMessage;
+        const parsed = v.safeParse(ChatRunStartSchema, parseJsonValue(payload));
+        return parsed.success && parsed.output.userMessage === expectedUserMessage;
       } catch {
         return false;
       }
@@ -856,7 +865,7 @@ export function recordLesson(sql: SqlExecutor, input: {
 }): string {
   const id = `lsn-${nanoid()}`;
   const now = input.now ?? nowMs();
-  sql`INSERT INTO lessons (id, turn_ids, text, source, status, created_at, corroborated_at)
+  void sql`INSERT INTO lessons (id, turn_ids, text, source, status, created_at, corroborated_at)
       VALUES (${id}, ${JSON.stringify(input.turnIds)}, ${input.text}, ${input.source},
               ${input.status}, ${now}, ${input.status === 'corroborated' ? now : null})`;
   return id;
@@ -870,8 +879,8 @@ interface RawLessonRow {
 function toLessonRow(r: RawLessonRow): LessonRow {
   let turnIds: string[] = [];
   try {
-    const parsed = JSON.parse(r.turn_ids) as unknown;
-    if (Array.isArray(parsed)) turnIds = parsed.filter((v): v is string => typeof v === 'string');
+    const parsed = v.safeParse(v.array(v.string()), parseJsonValue(r.turn_ids));
+    if (parsed.success) turnIds = parsed.output;
   } catch { /* malformed row — treat as untied */ }
   return {
     id: r.id, turnIds, text: r.text, source: r.source, status: r.status,
@@ -913,7 +922,7 @@ export function corroborateLessonsForTurn(sql: SqlExecutor, turnId: string, now 
   const provisional = listLessons(sql, { status: 'provisional', limit: 200 });
   const matched = provisional.filter((l) => l.turnIds.includes(turnId));
   for (const lesson of matched) {
-    sql`UPDATE lessons SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${lesson.id}`;
+    void sql`UPDATE lessons SET status = 'corroborated', corroborated_at = ${now} WHERE id = ${lesson.id}`;
   }
   return matched.map((l) => ({ ...l, status: 'corroborated' as const, corroboratedAt: now }));
 }

@@ -4,7 +4,7 @@
        between the two with <picture>. Everything below the palette block must
        stay byte-identical in both, so edit them together. -->
   <title id="t">Proteus: one core, two backends</title>
-  <desc id="d">Clients and autonomous ingress feed a platform-clean core package that owns the turn pipeline, tools, delegation, evolution, context, the VFS mount plane, the execution router and the event log. Below it a seam of two interfaces — AgentRuntime for resource primitives and BackendHost for loop capabilities — is implemented twice: by the Cloudflare backend, where a workspace is a Durable Object, and by the local CLI backend running on your own machine.</desc>
+  <desc id="d">Clients and autonomous ingress feed a platform-clean core package that owns the turn pipeline, tools, delegation, evolution, context, the canonical workspace file plane, the execution router and the event log. Below it a seam of two interfaces — AgentRuntime for resource primitives and BackendHost for loop capabilities — is implemented twice: by the Cloudflare backend, where a workspace is a Durable Object, and by the local CLI backend running on your own machine.</desc>
   <style>
     :root {
       --fg: #1f2328;
@@ -89,7 +89,7 @@
   <text class="s" x="50" y="232" text-anchor="start">turn-context → prepare-step → stream → signals → completeTurn</text>
   <rect x="38" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="50" y="275" text-anchor="start">Tools</text>
-  <text class="xs" x="50" y="290" text-anchor="start">9 builtins, dep-gated</text>
+  <text class="xs" x="50" y="290" text-anchor="start">8 builtins, dep-gated</text>
   <text class="xs" x="50" y="305" text-anchor="start">crafted · MCP · extensions</text>
   <rect x="247" y="254" width="197" height="58" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="259" y="275" text-anchor="start">Delegation</text>
@@ -104,11 +104,11 @@
   <text class="xs" x="677" y="290" text-anchor="start">system prompt · dynamic</text>
   <text class="xs" x="677" y="305" text-anchor="start">block · compaction ladder</text>
   <rect x="38" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
-  <text class="b" x="50" y="345" text-anchor="start">CompositeVFS</text>
-  <text class="xs" x="50" y="360" text-anchor="start">/local · /sandbox · /nimbus · /pc</text>
+  <text class="b" x="50" y="345" text-anchor="start">Workspace files</text>
+  <text class="xs" x="50" y="360" text-anchor="start">/home/user · one durable file plane</text>
   <rect x="316" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="328" y="345" text-anchor="start">ExecutionRouter</text>
-  <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · nimbus · laptop</text>
+  <text class="xs" x="328" y="360" text-anchor="start">workspace · sandbox · laptop · parent</text>
   <rect x="594" y="324" width="266" height="46" rx="7" fill="var(--slateFill)" stroke="var(--rule)"/>
   <text class="b" x="606" y="345" text-anchor="start">EventLog + SignalDelivery</text>
   <text class="xs" x="606" y="360" text-anchor="start">the reactor and the wake seam</text>

@@ -4,8 +4,8 @@
 import { describe, test, expect } from 'bun:test';
 import type { ForkNode } from '../src/lib/protocol.js';
 import {
-  ancestorIds, cleanNodeLabel, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
-  NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, treeStats, truncate,
+  ancestorIds, cleanNodeLabel, findForkNode, linkWidth, losingBranchIds, maxVisits, NODE_R_MAX,
+  NODE_R_MIN, nodeRadius, principalVariation, subtreeCount, terminalForkNode, treeStats, truncate,
 } from '../src/components/fork-tree-model.js';
 
 let seq = 0;
@@ -73,6 +73,44 @@ describe('treeStats', () => {
       ],
     });
     expect(treeStats(root)).toEqual({ nodes: 6, depth: 3 });
+  });
+});
+
+describe('live selection', () => {
+  test('an id resolves to the node from the newest immutable tree snapshot', () => {
+    const first = node({
+      id: 'root',
+      children: [node({ id: 'branch', status: 'running', visits: 1, value: null })],
+    });
+    const next = node({
+      id: 'root',
+      children: [node({ id: 'branch', status: 'terminal', visits: 8, value: 0.91 })],
+    });
+
+    expect(findForkNode(first, 'branch')).toMatchObject({ status: 'running', visits: 1 });
+    expect(findForkNode(next, 'branch')).toMatchObject({ status: 'terminal', visits: 8, value: 0.91 });
+    expect(findForkNode(next, 'missing')).toBeNull();
+  });
+});
+
+describe('settled winner', () => {
+  test('a running search has no winner even when live branches already have scores', () => {
+    const root = node({
+      id: 'root',
+      children: [node({ id: 'provisional', status: 'running', value: 0.99 })],
+    });
+    expect(terminalForkNode(root)).toBeNull();
+  });
+
+  test('the winner is the terminal branch, not a higher-scoring unchosen alternative', () => {
+    const root = node({
+      id: 'root',
+      children: [
+        node({ id: 'unchosen', status: 'open', value: 0.99 }),
+        node({ id: 'chosen', status: 'terminal', value: 0.81 }),
+      ],
+    });
+    expect(terminalForkNode(root)?.id).toBe('chosen');
   });
 });
 

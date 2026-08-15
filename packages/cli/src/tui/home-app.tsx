@@ -554,9 +554,11 @@ function nextFocus(current: HomeFocus, hasAgents: boolean): HomeFocus {
 }
 
 async function loadHomeModelCatalog(mode: AgentMode, opts: HomeTuiOptions): Promise<AgentModelMenu> {
-  return normalizeModelMenu(mode === 'cloud'
-    ? await loadCloudHomeModels(opts.origin)
-    : await createConfiguredLocalModelResolver(opts).resolver.listModels());
+  return normalizeModelMenu({
+    payload: mode === 'cloud'
+      ? await loadCloudHomeModels(opts.origin)
+      : await createConfiguredLocalModelResolver(opts).resolver.listModels(),
+  });
 }
 
 async function loadCloudHomeModels(originOverride: string | undefined) {

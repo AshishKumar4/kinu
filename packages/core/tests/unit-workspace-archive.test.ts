@@ -18,6 +18,7 @@ import {
   restoreWorkspaceArchive,
   writeWorkspaceArchive,
   type ArchiveCursor,
+  type SqlValue,
 } from '../src/index.js';
 import { makeSql, makeExecRaw } from './helpers.js';
 import { createWorkspaceBundle } from './helpers.js';
@@ -38,9 +39,9 @@ function fresh() {
 async function seeded() {
   const ws = fresh();
   initAllTables(ws.execRaw);
-  ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'w1'}, ${'scout'}, ${100})`;
+  void ws.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'w1'}, ${'scout'}, ${100})`;
   for (let i = 0; i < 5; i++) {
-    ws.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+    void ws.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
            VALUES (${`m${i}`}, ${'default'}, ${null}, ${'user'}, ${`hello sqlite ${i}`}, ${100 + i})`;
   }
   // Binary content through the canonical VFS writer — the chunked BLOB path.
@@ -58,10 +59,10 @@ async function seeded() {
 describe('workspace archive', () => {
   test('round-trips a workspace into an empty database, byte-exactly', async () => {
     const source = await seeded();
-    const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local', now: 42 });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local', now: 42 });
 
     const target = fresh();
-    const result = restoreWorkspaceArchive(target.archive, lines);
+    const result = await restoreWorkspaceArchive(target.archive, lines);
 
     expect(result.workspace).toBe('scout');
     expect(result.source).toBe('local');
@@ -84,10 +85,10 @@ describe('workspace archive', () => {
 
   test('the restored FTS index is searchable — it is rebuilt, not copied', async () => {
     const source = await seeded();
-    const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local' });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'local' });
 
     const target = fresh();
-    restoreWorkspaceArchive(target.archive, lines);
+    await restoreWorkspaceArchive(target.archive, lines);
 
     const hits = new SessionSearchStore(target.sql).search('sqlite');
     expect(hits.length).toBe(5);
@@ -99,15 +100,15 @@ describe('workspace archive', () => {
   test('the workspace capability secret is never in an archive', async () => {
     const source = await seeded();
     source.db.exec(`CREATE TABLE workspace_capability (id INTEGER PRIMARY KEY CHECK (id = 1), token TEXT NOT NULL)`);
-    source.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${'pwc_supersecret'})`;
+    void source.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${'pwc_supersecret'})`;
 
-    const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
 
     expect(lines.some((l) => l.includes('pwc_supersecret'))).toBe(false);
     expect(lines.some((l) => l.includes('workspace_capability'))).toBe(false);
 
     const target = fresh();
-    restoreWorkspaceArchive(target.archive, lines);
+    await restoreWorkspaceArchive(target.archive, lines);
     const table = target.sql<{ name: string }>`
       SELECT name FROM sqlite_master WHERE name = ${'workspace_capability'}`;
     expect(table).toEqual([]);
@@ -115,13 +116,13 @@ describe('workspace archive', () => {
 
   test('a paged export reassembles into the same archive as an unpaged one', async () => {
     const source = await seeded();
-    const whole = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', now: 7 });
+    const whole = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud', now: 7 });
 
     const paged: string[] = [];
     let cursor: ArchiveCursor | null = null;
     let pages = 0;
     do {
-      const page = readWorkspaceArchivePage(source.archive, {
+      const page = await readWorkspaceArchivePage(source.archive, {
         workspace: 'scout', source: 'cloud', now: 7, cursor, maxBytes: 1,
       });
       paged.push(...page.lines);
@@ -134,19 +135,69 @@ describe('workspace archive', () => {
     expect(paged).toEqual(whole);
 
     const target = fresh();
-    restoreWorkspaceArchive(target.archive, paged);
+    await restoreWorkspaceArchive(target.archive, paged);
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM messages`[0]!.n).toBe(5);
+  });
+
+  test('external workspace files page in the same stream and restore byte-exactly', async () => {
+    const source = fresh();
+    source.execRaw('CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)');
+    void source.sql`INSERT INTO notes (text) VALUES (${'database state'})`;
+    const bodies = new Map([
+      ['SOUL.md', new TextEncoder().encode('# soul\n')],
+      ['memory/project.md', new TextEncoder().encode('remember\n')],
+      ['project/data.bin', new Uint8Array([0, 255, 7, 8])],
+    ]);
+    const files = {
+      async listEntries() {
+        return [
+          { path: 'SOUL.md', type: 'file' as const },
+          { path: 'memory', type: 'directory' as const },
+          { path: 'memory/project.md', type: 'file' as const },
+          { path: 'project', type: 'directory' as const },
+          { path: 'project/data.bin', type: 'file' as const },
+        ];
+      },
+      async readFile(path: string) { return bodies.get(path)!.slice(); },
+    };
+
+    const whole = await writeWorkspaceArchive(source.archive, {
+      workspace: 'external', source: 'cloud', now: 11, files,
+    });
+    const paged: string[] = [];
+    let cursor: ArchiveCursor | null = null;
+    do {
+      const page = await readWorkspaceArchivePage(source.archive, {
+        workspace: 'external', source: 'cloud', now: 11, files, cursor, maxBytes: 1,
+      });
+      paged.push(...page.lines);
+      cursor = page.next;
+    } while (cursor);
+    expect(paged).toEqual(whole);
+    expect(paged.filter((line) => line.includes('"t":"header"'))).toHaveLength(1);
+
+    const target = fresh();
+    const restoredBodies = new Map<string, Uint8Array>();
+    const restored = await restoreWorkspaceArchive(target.archive, paged, {
+      files: () => ({
+        async mkdir() {},
+        async writeFile(path, data) { restoredBodies.set(path, data.slice()); },
+      }),
+    });
+    expect(restored.files).toBe(3);
+    expect(restoredBodies).toEqual(bodies);
+    expect(target.sql<{ text: string }>`SELECT text FROM notes`).toEqual([{ text: 'database state' }]);
   });
 
   test('a page stops at the first row that fills it, however big the rows are', async () => {
     const ws = fresh();
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
-    const big = new Uint8Array(64 * 1024);
+    const blob = new ArrayBuffer(64 * 1024);
     // ids start at 0 on purpose: with an INTEGER PRIMARY KEY the rowid IS the
     // id, so the first row's key is 0 and a numeric "start here" sentinel
     // would skip it.
     for (let i = 0; i < 5; i++) {
-      ws.sql`INSERT INTO blobs (id, data) VALUES (${i}, ${big.buffer})`;
+      void ws.sql`INSERT INTO blobs (id, data) VALUES (${i}, ${blob})`;
     }
 
     // One blob is far larger than the page budget, so every page must carry
@@ -154,7 +205,7 @@ describe('workspace archive', () => {
     let cursor: ArchiveCursor | null = null;
     const rowsPerPage: number[] = [];
     do {
-      const page = readWorkspaceArchivePage(ws.archive, {
+      const page = await readWorkspaceArchivePage(ws.archive, {
         workspace: 'blobby', source: 'cloud', cursor, maxBytes: 4096,
       });
       rowsPerPage.push(page.lines.filter((l) => l.includes('"t":"row"')).length);
@@ -167,15 +218,15 @@ describe('workspace archive', () => {
     const ws = fresh();
     ws.execRaw(`CREATE TABLE notes (id INTEGER PRIMARY KEY, text TEXT)`);
     ws.execRaw(`CREATE TABLE blobs (id INTEGER PRIMARY KEY, data BLOB)`);
-    for (let i = 0; i < 400; i++) ws.sql`INSERT INTO notes (text) VALUES (${`note ${i}`})`;
-    const big = new Uint8Array(200 * 1024);
-    for (let i = 0; i < 4; i++) ws.sql`INSERT INTO blobs (data) VALUES (${big.buffer})`;
+    for (let i = 0; i < 400; i++) void ws.sql`INSERT INTO notes (text) VALUES (${`note ${i}`})`;
+    const blob = new ArrayBuffer(200 * 1024);
+    for (let i = 0; i < 4; i++) void ws.sql`INSERT INTO blobs (data) VALUES (${blob})`;
 
     // Record what each row query asks for. `notes` earns a large batch; the
     // blob table must not inherit it — one such fetch is hundreds of megabytes.
     const asked: Array<{ table: string; limit: number }> = [];
     const spy = {
-      exec(query: string, ...bindings: unknown[]) {
+      exec(query: string, ...bindings: SqlValue[]) {
         const match = /FROM "([^"]+)"/.exec(query);
         if (match && /LIMIT \?/.test(query)) {
           asked.push({ table: match[1]!, limit: Number(bindings[bindings.length - 1]) });
@@ -186,7 +237,7 @@ describe('workspace archive', () => {
 
     let cursor: ArchiveCursor | null = null;
     do {
-      const page = readWorkspaceArchivePage(spy, { workspace: 'mixed', source: 'cloud', cursor });
+      const page = await readWorkspaceArchivePage(spy, { workspace: 'mixed', source: 'cloud', cursor });
       cursor = page.next;
     } while (cursor);
 
@@ -196,37 +247,37 @@ describe('workspace archive', () => {
 
   test('a truncated archive is refused, not half-restored', async () => {
     const source = await seeded();
-    const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
 
     const target = fresh();
-    expect(() => restoreWorkspaceArchive(target.archive, lines.slice(0, lines.length - 1)))
-      .toThrow(/incomplete/);
+    await expect(restoreWorkspaceArchive(target.archive, lines.slice(0, lines.length - 1)))
+      .rejects.toThrow(/incomplete/);
   });
 
   test('a damaged archive that lost rows is refused', async () => {
     const source = await seeded();
-    const lines = writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'scout', source: 'cloud' });
     const withoutARow = lines.filter((l, i) => !(l.includes('"t":"row"') && i > 20));
 
     const target = fresh();
-    expect(() => restoreWorkspaceArchive(target.archive, withoutARow)).toThrow(/damaged/);
+    await expect(restoreWorkspaceArchive(target.archive, withoutARow)).rejects.toThrow(/damaged/);
   });
 
   test('a file that is not an archive is refused by its first line', async () => {
     const target = fresh();
-    expect(() => restoreWorkspaceArchive(target.archive, ['SQLite format 3']))
-      .toThrow(/not a Proteus workspace archive/);
-    expect(() => restoreWorkspaceArchive(target.archive, ['{"t":"row","table":"messages","values":{}}']))
-      .toThrow(/not a Proteus workspace archive/);
+    await expect(restoreWorkspaceArchive(target.archive, ['SQLite format 3']))
+      .rejects.toThrow(/not a Proteus workspace archive/);
+    await expect(restoreWorkspaceArchive(target.archive, ['{"t":"row","table":"messages","values":{}}']))
+      .rejects.toThrow(/not a Proteus workspace archive/);
   });
 
   test('an empty workspace archives and restores to an empty workspace', async () => {
     const source = fresh();
     initAllTables(source.execRaw);
-    const lines = writeWorkspaceArchive(source.archive, { workspace: 'blank', source: 'local' });
+    const lines = await writeWorkspaceArchive(source.archive, { workspace: 'blank', source: 'local' });
 
     const target = fresh();
-    const result = restoreWorkspaceArchive(target.archive, lines);
+    const result = await restoreWorkspaceArchive(target.archive, lines);
     expect(result.tables).toBeGreaterThan(0);
     expect(target.sql<{ n: number }>`SELECT COUNT(*) AS n FROM messages`[0]!.n).toBe(0);
   });

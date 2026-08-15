@@ -5,6 +5,7 @@ import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { handleUserRequest } from '../src/user/routes.js';
 import type { AuthIdentity } from '../src/auth/session.js';
+import type { JsonValue } from '@proteus/core';
 
 const IDENTITY: AuthIdentity = {
   userId: '0123456789abcdef0123456789abcdef',
@@ -32,17 +33,30 @@ function setup() {
     },
   };
   const pending: Promise<unknown>[] = [];
-  const ctx = { waitUntil: (p: Promise<unknown>) => { pending.push(p); } } as unknown as ExecutionContext;
-  const env = {
+  const partialCtx: Partial<ExecutionContext> = {};
+  Object.assign(partialCtx, {
+    waitUntil(promise: Promise<unknown>) { pending.push(promise); },
+  });
+  // SAFETY: The constructed context provides the waitUntil method used here,
+  // and that method is constructed immediately above with the tested queue.
+  const ctx = partialCtx as ExecutionContext;
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, {
     UserDO: { idFromName: (n: string) => n, get: () => stub },
     OrchestratorAgent: {
       idFromName: (n: string) => n,
-      get: (id: unknown) => ({ async onCredentialsChanged() { notified.push(String(id)); return { ok: true }; } }),
-    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      get: (id: string) => ({ async onCredentialsChanged() { notified.push(id); return { ok: true }; } }),
+    },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
+  // SAFETY: The constructed environment provides the two locally owned
+  // constructed namespaces and encryption key above; no other Env binding is
+  // reachable in the fanout behavior exercised here.
+  const env = partialEnv as Env;
   return { env, ctx, notified, pending };
 }
 
-async function call(env: Env, ctx: ExecutionContext, path: string, method: string, body?: unknown) {
+async function call(env: Env, ctx: ExecutionContext, path: string, method: string, body?: JsonValue) {
   return handleUserRequest(new Request(`https://proteus.example.com/api/user${path}`, {
     method,
     headers: { 'content-type': 'application/json' },

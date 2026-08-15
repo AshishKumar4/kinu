@@ -15,6 +15,7 @@ import { describe, test, expect, afterAll } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { rmSync } from 'node:fs';
 import type { LanguageModel } from 'ai';
+import type { LanguageModelV2 } from '@ai-sdk/provider';
 import {
   BACKGROUND_POLICY,
   compareSurface, normalizeObservedTables, observedActionEnum,
@@ -24,6 +25,7 @@ import {
 import { LocalAgentSession, openWorkspaceCLI, type LocalModelResolver } from '@proteus/cli-backend';
 import { createCliAgent } from '../src/agent-create';
 import { resolveLLMConfig, agentDbPath, agentDir } from '../src/config';
+import { TestLanguageModelV2 } from '../../cli-backend/tests/test-language-model.js';
 
 // Dummy provider config so resolveLLMConfig succeeds offline — the capturing
 // model below intercepts before any network call could happen.
@@ -37,17 +39,15 @@ afterAll(() => {
   rmSync(agentDir(AGENT_NAME), { recursive: true, force: true });
 });
 
-interface CapturedTool { name: string; inputSchema?: unknown }
+type CapturedTool = NonNullable<Parameters<LanguageModelV2['doStream']>[0]['tools']>[number];
 
 /** A v2 model that records the exact tool definitions the SDK hands it, then
  *  streams a one-word answer. */
 function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
   const usage = { inputTokens: 3, outputTokens: 2, totalTokens: 5 };
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'conformance',
     modelId: 'conformance-model',
-    supportedUrls: {},
     doGenerate: async () => ({
       content: [{ type: 'text', text: 'observed' }], finishReason: 'stop', usage, warnings: [],
     }),
@@ -65,7 +65,7 @@ function capturingModel(sink: (tools: CapturedTool[]) => void): LanguageModel {
         }),
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 function staticResolver(model: LanguageModel): LocalModelResolver {
@@ -73,9 +73,12 @@ function staticResolver(model: LanguageModel): LocalModelResolver {
     normalizeSpecSync: (spec: string | null | undefined) => spec?.trim() || 'conformance/conformance-model',
     resolveModel: () => model,
     listProviders: async () => [],
-    listModels: async () => [],
+    listModels: async () => ({ models: [], failures: [] }),
     modelInfo: async () => null,
-  } as unknown as LocalModelResolver;
+    judgeCandidates: async () => [],
+    fastModelCandidates: () => [],
+    getAuth: async () => null,
+  };
 }
 
 async function observeCli(): Promise<{ observed: ObservedSurface; captured: CapturedTool[] }> {
@@ -83,13 +86,13 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
 
   const dbPath = agentDbPath(AGENT_NAME);
   const db = new Database(dbPath);
-  const { rt } = await openWorkspaceCLI(db as never, dbPath, { llm: resolveLLMConfig({}) });
+  const { rt } = await openWorkspaceCLI(db, dbPath, { llm: resolveLLMConfig({}) });
 
   let captured: CapturedTool[] = [];
   const model = capturingModel((tools) => { captured = tools; });
   const session = new LocalAgentSession({
     rt,
-    db: db as never,
+    db,
     model,
     modelResolver: staticResolver(model),
     noAutoEvolve: true,
@@ -103,8 +106,8 @@ async function observeCli(): Promise<{ observed: ObservedSurface; captured: Capt
   await session.end();
 
   const byName = new Map(captured.map((t) => [t.name, t]));
-  const tables = (db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
-    .all() as Array<{ name: string }>).map((r) => r.name);
+  const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+    .all().map((row) => row.name);
 
   return {
     captured,

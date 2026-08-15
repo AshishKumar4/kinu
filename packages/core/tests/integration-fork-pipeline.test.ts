@@ -20,7 +20,7 @@ import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
   initAllTables, readForkLineage, readSoul, writeSoul,
-  snapshotWorkspaceForFork, writeForkSnapshot,
+  snapshotWorkspaceForFork, writeForkSnapshot, SOUL_PATH,
 } from '../src/index.js';
 import { makeSql, makeExecRaw, createWorkspaceBundle } from './helpers.js';
 
@@ -33,19 +33,19 @@ function fresh() {
 }
 
 async function seedSource(src: ReturnType<typeof fresh>) {
-  src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
+  void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC-1'}, ${'source-agent'}, ${100})`;
   await writeSoul(src.vfs, src.sql, 'help with testing');
-  src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m1'}, ${null}, ${'user'}, ${'hello'}, ${1000})`;
-  src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m2'}, ${'m1'}, ${'assistant'}, ${'hi there'}, ${1100})`;
-  src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m3'}, ${'m2'}, ${'user'}, ${'post-fork-point'}, ${1500})`;
-  src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'user'}, ${JSON.stringify({ content: 'hello' })}, ${1000})`;
-  src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'assistant'}, ${JSON.stringify({ content: 'hi there' })}, ${1100})`;
-  src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
+  void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m1'}, ${null}, ${'user'}, ${'hello'}, ${1000})`;
+  void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m2'}, ${'m1'}, ${'assistant'}, ${'hi there'}, ${1100})`;
+  void src.sql`INSERT INTO messages (id, parent_id, role, content, created_at) VALUES (${'m3'}, ${'m2'}, ${'user'}, ${'post-fork-point'}, ${1500})`;
+  void src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'user'}, ${JSON.stringify({ content: 'hello' })}, ${1000})`;
+  void src.sql`INSERT INTO conversation_history (session_id, role, message, created_at) VALUES (${'default'}, ${'assistant'}, ${JSON.stringify({ content: 'hi there' })}, ${1100})`;
+  void src.sql`INSERT INTO crafted_tools (name, description, code, scope, created_at, updated_at) VALUES (${'helper'}, ${'utility'}, ${'async (x) => x + 1'}, ${'local'}, ${500}, ${500})`;
   await src.vfs.mkdir('memory', { recursive: true });
   await src.vfs.writeFile('memory/MEMORY.md', 'key insight');
   // Pre-create agent_config and add non-display-name rows
   src.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-  src.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
+  void src.sql`INSERT OR REPLACE INTO agent_config (key, value) VALUES (${'model'}, ${'@cf/moonshotai/kimi-k2.6'})`;
 }
 
 describe('fork pipeline (end-to-end)', () => {
@@ -54,7 +54,7 @@ describe('fork pipeline (end-to-end)', () => {
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
     // Simulate the fork DO's onStart bootstrap
-    tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BOOT-ID'}, ${'fork-bootstrap'}, ${999})`;
+    void tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'BOOT-ID'}, ${'fork-bootstrap'}, ${999})`;
     await writeSoul(tgt.vfs, tgt.sql, 'default');
 
     await seedSource(src);
@@ -113,9 +113,9 @@ describe('fork pipeline (end-to-end)', () => {
     const src = fresh();
     const tgt = fresh();
     tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
+    void src.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'S'}, ${'s'}, ${100})`;
     await writeSoul(src.vfs, src.sql, 'p');
-    src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
+    void src.sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hi'}, ${1000})`;
 
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm1'));
 
@@ -127,36 +127,72 @@ describe('fork pipeline (end-to-end)', () => {
     expect(tools[0]!.c).toBe(0);
   });
 
-  test('idempotent re-copy over a partial failure — second run succeeds', async () => {
-    // Simulates rawCopyFromFork being called twice: the first call failed
-    // partway, leaving garbage in the fork DB, and the second must still
-    // produce the correct final state. writeForkSnapshot purges the bootstrap
-    // identity and any prior fork_lineage, so it is effectively idempotent.
+  test('hosted fork identity preserves the owner established before file copy', async () => {
     const src = fresh();
     const tgt = fresh();
-    tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    // Pretend a partial first run left the fork with bootstrap identity +
-    // partial messages + a stale lineage row.
-    tgt.sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'STALE'}, ${'partial'}, ${50})`;
-    await writeSoul(tgt.vfs, tgt.sql, 'partial-soul');
-    tgt.sql`INSERT INTO fork_lineage (id, source_workspace_id, source_workspace_name, source_message_id, source_message_created_at, forked_at)
-            VALUES (${1}, ${'OLD'}, ${'old'}, ${'x'}, ${0}, ${0})`;
-
     await seedSource(src);
     const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
 
     await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, {
-      workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
+      workspaceId: 'OWNED-FORK', workspaceName: 'owned-fork', ownerUserId: 'user-123', now: 9000,
     });
 
-    // Identity replaced clean
+    expect(tgt.sql<{ owner_user_id: string }>`SELECT owner_user_id FROM workspace_identity`).toEqual([
+      { owner_user_id: 'user-123' },
+    ]);
+  });
+
+  test('hosted forks route SOUL.md through the owner-only writer on every delivery', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedSource(src);
+    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
+    const soul = snapshot.files.find((file) => file.path === SOUL_PATH);
+    if (!soul) throw new Error('fork snapshot did not include SOUL.md');
+    const protectedWrites: string[] = [];
+    const options = {
+      workspaceId: 'PROTECTED-FORK',
+      workspaceName: 'protected-fork',
+      ownerUserId: 'user-123',
+      now: 9000,
+      writeSoulFile: async (content: string) => {
+        protectedWrites.push(content);
+        await tgt.vfs.writeFile(SOUL_PATH, content);
+      },
+    } as const;
+
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
+
+    expect(protectedWrites).toEqual([soul.content, soul.content]);
+  });
+
+  test('repeating a completed delivery converges on exactly one copied history', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    tgt.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
+    await seedSource(src);
+    const snapshot = structuredClone(await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2'));
+
+    const options = {
+      workspaceId: 'FINAL', workspaceName: 'recovered-fork', now: 99999,
+    } as const;
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, options);
+
     const ident = tgt.sql<{ id: string; name: string }>`SELECT id, name FROM workspace_identity`;
     expect(ident.length).toBe(1);
     expect(ident[0]!.id).toBe('FINAL');
-    // Lineage replaced, not duplicated
     const lin = tgt.sql<{ c: number }>`SELECT COUNT(*) as c FROM fork_lineage`;
     expect(lin[0]!.c).toBe(1);
     const l = readForkLineage(tgt.sql);
     expect(l!.forkedAt).toBe(99999);
+
+    const messages = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM messages`;
+    const history = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM conversation_history`;
+    const assistant = tgt.sql<{ c: number }>`SELECT COUNT(*) AS c FROM assistant_messages`;
+    expect(messages[0]!.c).toBe(snapshot.messages.length);
+    expect(history[0]!.c).toBe(snapshot.conversationHistory.length + 1);
+    expect(assistant[0]!.c).toBe(snapshot.assistantMessages.length + 1);
   });
 });

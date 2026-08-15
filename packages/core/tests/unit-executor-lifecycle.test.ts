@@ -83,7 +83,7 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
         return "hello";
       },
       async write(path: string, content: string | Uint8Array) {
-        calls.push(`write:${path}:${typeof content === "string" ? content : content.byteLength}`);
+        calls.push(`write:${path}:${content instanceof Uint8Array ? content.byteLength : content}`);
       },
       async list(path: string) {
         calls.push(`list:${path}`);
@@ -101,8 +101,9 @@ function nimbusBox(): NimbusSandboxHandle & { calls: string[]; execOptions: unkn
       },
     },
     runtimes: {
-      async ensure(specs: string | string[]) {
+      async ensure(specs: string | string[]): Promise<undefined> {
         calls.push(`ensure:${Array.isArray(specs) ? specs.join(",") : specs}`);
+        return undefined;
       },
       async list() {
         calls.push("runtimes");
@@ -222,6 +223,14 @@ describe("executor lifecycle state", () => {
 
     expect(result).toBe("ok");
     expect(handle.execOptions).toEqual([{ timeout: 60_000 }]);
+  });
+
+  test("sandbox port discovery preserves a real SDK failure", async () => {
+    const handle = sandboxHandle();
+    handle.getExposedPorts = async () => { throw new Error("preview registry unavailable"); };
+    const executor = createSandboxExecutor(handle, "proteus.example.test");
+
+    await expect(executor.listExposedPorts!()).rejects.toThrow("preview registry unavailable");
   });
 
   test("Nimbus adapter uses the SDK sandbox handle shape", async () => {

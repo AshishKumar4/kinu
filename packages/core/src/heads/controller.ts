@@ -28,8 +28,6 @@ import {
   type HeadScore,
   type MergeStrategy,
   type SerializedMessage,
-  type Evidence,
-  type Decision,
   DEFAULT_HEAD_BUDGET,
   DEFAULT_MERGE_STRATEGY,
   deriveChildBudget,
@@ -39,6 +37,7 @@ import { headProducedFindings } from './head-summary.js';
 import { MergeOutputSchema, type MergeOutput } from './merge-schema.js';
 import { evaluateWithMultiModelJudging, median } from '../mcts/evaluation.js';
 import type { LLM, Executor } from '../types/primitives.js';
+import type { WorkMode } from '../prompting/surface.js';
 
 /** What the merge LLM should return. Validated by MergeOutputSchema. */
 export type MergeLLMFn = (
@@ -131,6 +130,7 @@ export class HeadController {
     request: SplitRequest;
     parentBudget?: HeadBudget;
     model?: string;
+    mode: WorkMode;
     /** Mission-budget labels every head in this split charges. Carried down to
      *  each HeadInput so a head running out of process can find the ledger. */
     missionLabels?: readonly string[];
@@ -166,6 +166,7 @@ export class HeadController {
         parentId: opts.parentHeadId,
         depth: (parentBudget.maxDepth - childBudget.maxDepth),
         task: h.task,
+        mode: opts.mode,
         rationale: h.rationale,
         inheritedContext: opts.inheritedContext,
         budget: childBudget,
@@ -174,8 +175,8 @@ export class HeadController {
         model: h.model ?? opts.model,
         allowedTools: h.allowedTools,
         mergeStrategy: strategy,
-        ...(opts.missionLabels?.length ? { missionLabels: opts.missionLabels } : {}),
       };
+      if (opts.missionLabels?.length) Object.assign(input, { missionLabels: opts.missionLabels });
       this.journal.insertSpawn(input);
       return this.runtime.spawnHead(input);
     });
@@ -231,7 +232,7 @@ export class HeadController {
     // Ground each head's report into a real [0,1] outcome (execution-banded
     // when the head left runnable code, else median judge) — the SAME evaluator
     // the MCTS engine uses. Empty when the runtime has no grounding seam.
-    const headScores = await this.scoreHeads(reports, opts.request.rationale);
+    const headScores = await this.scoreHeads(reports, opts.request.rationale, opts.mode);
 
     // Synthesize via LLM (k-sample median when grounded; n=1 otherwise).
     const mergeResult = await this.merge(
@@ -240,6 +241,7 @@ export class HeadController {
       strategy,
       opts.inheritedContext,
       parentBudget,
+      opts.mode,
       handles.map((h) => h.id),
       headScores,
     );
@@ -267,8 +269,9 @@ export class HeadController {
   private async scoreHeads(
     reports: readonly HeadReport[],
     rationale: string,
+    mode: WorkMode,
   ): Promise<readonly HeadScore[]> {
-    const g = this.runtime.grounding;
+    const g = mode === 'plan' ? undefined : this.runtime.grounding;
     const siblings = reports.map(headTrajectory);
     return Promise.all(
       reports.map(async (r, i): Promise<HeadScore> => {
@@ -310,10 +313,11 @@ export class HeadController {
     strategy: MergeStrategy,
     inheritedContext: readonly SerializedMessage[],
     parentBudget: HeadBudget,
+    mode: WorkMode,
     headIds: readonly HeadId[] = reports.map((r) => r.id),
     headScores: readonly HeadScore[] = [],
   ): Promise<MergeResult> {
-    const grounded = this.runtime.grounding != null;
+    const grounded = mode !== 'plan' && this.runtime.grounding != null;
     const costSummary = summarizeCost(reports, parentBudget);
     const fileChanges = collectFileChanges(reports);
 
@@ -356,16 +360,16 @@ export class HeadController {
       costSummary,
     });
 
-    const merged = await this.synthesize(prompt, rationale);
+    const merged = await this.synthesize(prompt, rationale, grounded);
     if (!merged.ok) return fallback(merged.error);
 
     return {
       mergedNarrative: merged.output.narrative,
-      selectedDecisions: merged.output.selected_decisions as readonly Decision[],
+      selectedDecisions: merged.output.selected_decisions,
       unresolvedQuestions: merged.output.unresolved_questions,
       recommendations: merged.output.recommendations,
       blindSpots: merged.output.blind_spots,
-      evidenceAggregate: reports.flatMap((r) => r.evidence) as readonly Evidence[],
+      evidenceAggregate: reports.flatMap((r) => r.evidence),
       headIds,
       headScores,
       fileChanges,
@@ -382,8 +386,9 @@ export class HeadController {
   private async synthesize(
     prompt: string,
     rationale: string,
+    grounded: boolean,
   ): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> {
-    const g = this.runtime.grounding;
+    const g = grounded ? this.runtime.grounding : undefined;
     const k = Math.max(1, g?.mergeSamples ?? 1);
 
     const sampleOne = async (): Promise<{ ok: true; output: MergeOutput } | { ok: false; error: string }> => {
@@ -556,11 +561,11 @@ function buildMergePrompt(
   inheritedContext: readonly SerializedMessage[],
   headScores: readonly HeadScore[] = [],
 ): string {
-  const strategyGuidance: Record<MergeStrategy, string> = {
+  const strategyGuidance = {
     synthesize: 'Synthesize the heads\' findings into a single coherent narrative. Reconcile disagreements explicitly; prefer the head with stronger evidence.',
     best_of: 'Pick the strongest single head\'s narrative. Briefly cite weaker heads only for what they add.',
     consensus: 'Emphasize areas of agreement across heads. Surface disagreements as explicit unresolved questions.',
-  };
+  } satisfies Record<MergeStrategy, string>;
 
   // Last ~6 turns of context as framing; cap to avoid blowing the merge prompt.
   const recentContext = inheritedContext.slice(-6)

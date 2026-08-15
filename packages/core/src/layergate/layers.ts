@@ -27,11 +27,14 @@ import { BUILTIN_TOOLS, BUILTIN_TOOL_SPECS } from '../tools/registry.js';
 import { DEFAULT_SHADOW_CONFIG } from '../scaffold/shadow.js';
 import { createNoopVectorStore, type VectorSearchHit, type VectorStore } from '../memory/vector-store.js';
 import type { BackendHost } from '../types/backend-host.js';
-import type { ProteusEvent } from '../events/hub/types.js';
+import type { ProteusEvent, ReadableProteusEvent } from '../events/hub/types.js';
 import type { LexicalHit } from '../memory/hybrid-search.js';
 import type { ScaffoldArchiveEntry } from '../scaffold/archive.js';
 import type { ParsedSkill } from '../skills/types.js';
-import type { PipelineSubjects, SubjectName } from './subjects.js';
+import type { PipelineSubjects } from './subjects.js';
+import * as v from 'valibot';
+import type { RunEventInput } from '../events/types.js';
+import type { AgentSignal } from '../types/signals.js';
 
 /** A single deterministic observation of the pipeline. Generic over the
  *  subjects record so a dependent package (e.g. @proteus/compaction) can
@@ -42,8 +45,10 @@ export interface Probe<S = PipelineSubjects> {
   /** What behaviour this pins, in one line. Surfaces in drift reports. */
   readonly asserts: string;
   /** Must be a pure function of `subjects`: JSON-serializable, no clock, no RNG. */
-  readonly observe: (subjects: S) => unknown;
+  readonly observe: (subjects: S) => LayerObservation | Promise<LayerObservation>;
 }
+
+export type LayerObservation = object | string | number | boolean | null | undefined;
 
 export interface Layer<S = PipelineSubjects> {
   readonly id: string;
@@ -136,8 +141,8 @@ function fakeSignalHost(queued: string[], turnInFlight: boolean): BackendHost {
 
 /** Distributes over the event union so a fixture cannot pair a variant with
  *  another variant's payload — the correlation `Partial<ProteusEvent>` loses. */
-type EventShape = ProteusEvent extends infer E
-  ? E extends ProteusEvent
+type EventFixture = ReadableProteusEvent extends infer E
+  ? E extends ReadableProteusEvent
     ? { id: string; ingress: ProteusEvent['ingress']; variant: E['variant']; payload: E['payload'] }
     : never
   : never;
@@ -151,7 +156,7 @@ function webhookEvent(id: string): ProteusEvent {
   return event({ id, ingress: 'webhook_hmac', variant: 'webhook', payload: { ...WEBHOOK_PAYLOAD } });
 }
 
-function event(shape: EventShape): ProteusEvent {
+function event(fixture: EventFixture): ProteusEvent {
   return {
     trace_id: 'trace',
     caused_by: null,
@@ -162,7 +167,7 @@ function event(shape: EventShape): ProteusEvent {
     schema_version: 1,
     reply_channel: null,
     dedupe_key: null,
-    ...shape,
+    ...fixture,
   };
 }
 
@@ -666,9 +671,12 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'context-budget/clamp-serialized',
         asserts: 'structured results pass through under budget and serialize+clamp over it',
         observe: async (s) => ({
-          nullish: await s.clampSerializedToolResult(null, { maxChars: 10 }),
-          small: await s.clampSerializedToolResult({ ok: true }, { maxChars: 100 }),
-          big: await s.clampSerializedToolResult({ rows: Array.from({ length: 40 }, (_, i) => `row-${i}`) }, { maxChars: 120 }),
+          nullish: await s.clampSerializedToolResult({ output: null }, { maxChars: 10 }),
+          small: await s.clampSerializedToolResult({ output: { ok: true } }, { maxChars: 100 }),
+          big: await s.clampSerializedToolResult(
+            { output: { rows: Array.from({ length: 40 }, (_, i) => `row-${i}`) } },
+            { maxChars: 120 },
+          ),
         }),
       },
     ],
@@ -676,7 +684,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
 
   {
     id: 'compaction',
-    owns: 'the compaction handoff contract: summary prompt shape, checkpoint framing, iterative update',
+    owns: 'the compaction handoff contract: summary prompt fixture, checkpoint framing, iterative update',
     subjects: ['buildCompactionSummaryPrompt', 'wrapCompactionSummary', 'stripCheckpointPreamble'],
     probes: [
       {
@@ -779,7 +787,7 @@ export const LAYERS: readonly Layer[] = Object.freeze([
             id: 'pe1',
             variant: 'peer_agent',
             ingress: 'peer_async',
-            payload: { from_agent_name: 'scout', from_user_id: 'u1', topic: 'status', body: 'status?', sender_event_id: 'se1', reply_expected: true },
+            payload: { from_agent_name: 'scout', from_user_id: 'u1', topic: 'status', body: 'status?', sender_event_id: 'se1', reply_expected: true, proteus_mode: 'build' },
           }),
         ])?.text,
       },
@@ -894,13 +902,15 @@ export const LAYERS: readonly Layer[] = Object.freeze([
               broadcast: (event) => {
                 const id = String(event.id);
                 if (!ids.includes(id)) ids.push(id);
+                const text = v.safeParse(v.string(), event.text);
                 cards.push({
                   card: ids.indexOf(id), state: String(event.state),
-                  ...(typeof event.text === 'string' ? { text: event.text } : {}),
+                  text: text.success ? text.output : undefined,
                 });
               },
               enqueueTurn: async (turn) => {
-                carried = (turn.metadata as { signalId?: string } | undefined)?.signalId;
+                const metadata = v.safeParse(v.object({ signalId: v.optional(v.string()) }), turn.metadata);
+                carried = metadata.success ? metadata.output.signalId : undefined;
                 return { status: 'queued' };
               },
               turnInFlight: () => turnInFlight,
@@ -1387,8 +1397,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'backend-turn-driver/run-bracket',
         asserts: 'run_start+turn_start then turn_end+run_end, with bounded userMessage, usage totals, and the error text',
         observe: (s) => {
-          const emitted: Array<{ runId: string; input: unknown }> = [];
-          const recorder = { emit: (runId: string, input: unknown) => { emitted.push({ runId, input }); } };
+          const emitted: Array<{ runId: string; input: RunEventInput }> = [];
+          const recorder = { emit: (runId: string, input: RunEventInput) => { emitted.push({ runId, input }); } };
           s.openTurnRun(recorder, 'run-1', {
             agentId: 'ws', causedBy: 'chat', userMessage: 'X'.repeat(600), turnIndex: 3,
           });
@@ -1403,8 +1413,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'the file_edit row rides the bracket only when the turn attempted an edit, carrying failures and recovery',
         observe: (s) => {
           const rows = (files: TurnFileLedger) => {
-            const emitted: unknown[] = [];
-            s.closeTurnRun({ emit: (_r: string, input: unknown) => { emitted.push(input); } }, 'run-1', {
+            const emitted: RunEventInput[] = [];
+            s.closeTurnRun({ emit: (_r: string, input: RunEventInput) => { emitted.push(input); } }, 'run-1', {
               turnIndex: 0, usage: { input: 0, output: 0, cached: 0 }, reason: 'completed', files,
             });
             return emitted;
@@ -1468,9 +1478,9 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         asserts: 'a context overflow arms force-compaction and enqueues exactly one retry; a failed retry and a rate limit never do',
         observe: async (s) => {
           const armed: string[] = [];
-          const enqueued: unknown[] = [];
+          const enqueued: AgentSignal[] = [];
           const state = { savePromptTokens: () => {}, armForceCompaction: (key: string) => { armed.push(key); } };
-          const signals = { deliver: (signal: unknown) => { enqueued.push(signal); return Promise.resolve('queued' as const); } };
+          const signals = { deliver: (signal: AgentSignal) => { enqueued.push(signal); return Promise.resolve('queued' as const); } };
           const decisions = [
             s.applyOverflowRecovery({
               error: 'prompt is too long: 210000 tokens > 200000 maximum',
@@ -1525,10 +1535,8 @@ export const LAYERS: readonly Layer[] = Object.freeze([
         id: 'subordinate-runtime/inherited-context-digest',
         asserts: 'the digest caps the parent history, DISCLOSES the omission it made, narrows roles, and keeps ids index-stable',
         observe: (s) => {
-          const history: ModelMessage[] = [
-            ...Array.from({ length: 60 }, (_, i): ModelMessage =>
-              ({ role: i % 2 === 0 ? 'user' : 'assistant', content: `m${i}` })),
-          ];
+          const history: ModelMessage[] = Array.from({ length: 60 }, (_, i): ModelMessage =>
+              ({ role: i % 2 === 0 ? 'user' : 'assistant', content: `m${i}` }));
           return s.inheritedContextFromHistory(history, 50);
         },
       },

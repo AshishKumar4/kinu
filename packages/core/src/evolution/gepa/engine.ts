@@ -38,6 +38,10 @@ type ProposalOutcome =
   | { ok: true; source: string; operator: 'mutate' | 'merge'; metricCallsCharged: number; parentSource?: string }
   | { ok: false; reason: string };
 
+function errorMessage<Failure>(failure: Failure): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}
+
 export async function runGepa<I = unknown, E = unknown>(
   config: GepaConfig<I, E>,
 ): Promise<GepaResult> {
@@ -95,7 +99,7 @@ export async function runGepa<I = unknown, E = unknown>(
         parentSource: parent.source,
       };
     } catch (err) {
-      return { ok: false, reason: `mutate_failed: ${(err as Error).message}` };
+      return { ok: false, reason: `mutate_failed: ${errorMessage(err)}` };
     }
   }
 
@@ -115,7 +119,7 @@ export async function runGepa<I = unknown, E = unknown>(
         metricCallsCharged: 0,
       };
     } catch (err) {
-      return { ok: false, reason: `merge_failed: ${(err as Error).message}` };
+      return { ok: false, reason: `merge_failed: ${errorMessage(err)}` };
     }
   }
 
@@ -178,7 +182,7 @@ export async function runGepa<I = unknown, E = unknown>(
       try {
         testPassed = await config.constraints.testRunner(proposal.source);
       } catch (err) {
-        if (await recordRejection(iter, `test_runner_threw: ${(err as Error).message}`)) { stopReason = 'no_improvement_possible'; break; }
+        if (await recordRejection(iter, `test_runner_threw: ${errorMessage(err)}`)) { stopReason = 'no_improvement_possible'; break; }
         continue;
       }
       if (!testPassed) {
@@ -297,6 +301,6 @@ async function emitIteration(
 ): Promise<void> {
   if (!hook) return;
   try { await hook(state); } catch (err) {
-    console.warn('[gepa] onIteration hook failed:', (err as Error).message);
+    console.warn('[gepa] onIteration hook failed:', errorMessage(err));
   }
 }

@@ -4,8 +4,15 @@
  *  archived-range index behind the navigation manifest. */
 
 import { describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { initWorkspaceSchema, type SqlExecutor, type SqlValue, type VFS } from '@proteus/core';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import {
+  initWorkspaceSchema,
+  type SqlExec,
+  type SqlExecRow,
+  type SqlExecutor,
+  type SqlValue,
+  type VFS,
+} from '@proteus/core';
 import {
   compactionTranscriptPath,
   createCompactionStateStore,
@@ -17,30 +24,41 @@ import {
 /** The compaction tables come from core's one workspace-schema list; a store
  *  test needs exactly those two tables, so it runs the same entry point. */
 function initCompactionStateTable(db: Database): void {
+  const exec: SqlExec = {
+    exec(query, ...bindings) {
+      const bound = bindings.map(sqliteBinding);
+      const stmt = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
+      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
+        return { toArray: () => stmt.all(...bound) };
+      }
+      stmt.run(...bound);
+      return { toArray: () => [] };
+    },
+  };
   initWorkspaceSchema({
     execRaw: (ddl) => db.exec(ddl),
     sql: sqliteSql(db),
-    exec: {
-      exec(query: string, ...bindings: unknown[]) {
-        const stmt = db.prepare(query);
-        if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-          return { toArray: () => stmt.all(...bindings as never[]) as Array<Record<string, unknown>> };
-        }
-        stmt.run(...bindings as never[]);
-        return { toArray: () => [] };
-      },
-    },
+    exec,
   });
 }
 
 function sqliteSql(db: Database): SqlExecutor {
-  return (<T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+  const sql: SqlExecutor = function <T = unknown>(
+    strings: TemplateStringsArray,
+    ...values: SqlValue[]
+  ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
-    const stmt = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...(values as never[])) as T[];
-    stmt.run(...(values as never[]));
+    const bound = values.map(sqliteBinding);
+    const stmt = db.prepare<T, SQLQueryBindings[]>(query);
+    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
+    stmt.run(...bound);
     return [];
-  }) as SqlExecutor;
+  };
+  return sql;
+}
+
+function sqliteBinding(value: SqlValue): SQLQueryBindings {
+  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
 }
 
 function stateRig() {
@@ -67,7 +85,12 @@ function snapshot(sessionId: string): PlanSnapshot {
 }
 
 /** Map-backed VFS that surfaces EEXIST on repeat mkdir, like real backends can. */
-function memoryVfs(): { vfs: VFS; files: Map<string, string> } {
+interface MemoryVfs {
+  vfs: VFS;
+  files: Map<string, string>;
+}
+
+function memoryVfs(): MemoryVfs {
   const files = new Map<string, string>();
   const dirs = new Set<string>();
   const vfs: VFS = {
@@ -77,7 +100,7 @@ function memoryVfs(): { vfs: VFS; files: Map<string, string> } {
       return content;
     },
     writeFile: async (path, data) => {
-      files.set(path, String(data));
+      files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
     },
     readdir: async () => [],
     stat: async () => null,

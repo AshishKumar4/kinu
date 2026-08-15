@@ -9,22 +9,49 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
+import type { JsonValue } from '@proteus/core';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 const CI_TOKEN = `pta_${USER_ID}_${'c'.repeat(44)}`;
+const CredentialListSchema = v.array(v.object({ key: v.string(), kind: v.string() }));
+
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface CredentialRouteTestBindings<Stub> {
+  UserDO: TestNamespace<Stub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<Stub>(bindings: CredentialRouteTestBindings<Stub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: CLI credential handlers read exactly the constructed UserDO
+  // namespace and credential key; every reachable binding is present.
+  return env as Env;
+}
+
+function handled(response: Response | null): Response {
+  if (!response) throw new Error('credential route did not handle the request');
+  return response;
+}
 
 function setupEnv() {
-  const stored = new Map<string, { kind: string; value: unknown }>();
+  const stored = new Map<string, { kind: string; value: { kind?: string } }>();
   const userDO = {
-    async verifyCliToken(_caller: unknown, token: string) {
+    async verifyCliToken(_caller: UserCaller, token: string) {
       return {
         ok: token === SESSION_TOKEN,
         tokenHash: 'session-hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async verifyAccessToken(_caller: unknown, token: string) {
+    async verifyAccessToken(_caller: UserCaller, token: string) {
       if (token !== CI_TOKEN) return { ok: false, error: 'invalid token' };
       return {
         ok: true,
@@ -33,32 +60,33 @@ function setupEnv() {
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async listCredentials(_caller: unknown) {
+    async listCredentials(_caller: UserCaller) {
       return [...stored.entries()].map(([key, v]) => ({ key, kind: v.kind, createdAt: 1, updatedAt: 2 }));
     },
-    async setCredential(_caller: unknown, key: string, credential: { kind?: string }) {
+    async setCredential(_caller: UserCaller, key: string, credential: { kind?: string }) {
       if (key === 'cloudflare.ai-gateway') throw new Error('cloudflare.ai-gateway is derived from your Cloudflare login and cannot be stored directly.');
       stored.set(key, { kind: credential.kind ?? 'bearer', value: credential });
     },
-    async deleteCredential(_caller: unknown, key: string) { stored.delete(key); },
+    async deleteCredential(_caller: UserCaller, key: string) { stored.delete(key); },
   };
-  const env = {
+  const env = testEnv({
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
     CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
-  } as unknown as Env;
+  });
   return { env, stored };
 }
 
-function credentialRequest(opts: { token?: string; key?: string; method?: string; body?: unknown }) {
+function credentialRequest(opts: { token?: string; key?: string; method?: string; body?: JsonValue }) {
   const path = opts.key ? `/api/cli/credentials/${encodeURIComponent(opts.key)}` : '/api/cli/credentials';
-  return new Request(`https://proteus.example.com${path}`, {
+  const init: RequestInit = {
     method: opts.method ?? 'GET',
     headers: {
       authorization: `Bearer ${opts.token ?? SESSION_TOKEN}`,
       'content-type': 'application/json',
     },
-    ...(opts.body === undefined ? {} : { body: JSON.stringify(opts.body) }),
-  });
+  };
+  if (opts.body !== undefined) init.body = JSON.stringify(opts.body);
+  return new Request(`https://proteus.example.com${path}`, init);
 }
 
 describe('CLI provider credentials', () => {
@@ -79,7 +107,7 @@ describe('CLI provider credentials', () => {
     }), env);
 
     expect(res?.status).toBe(403);
-    expect(await res!.text()).toContain('interactive CLI session token');
+    expect(await handled(res).text()).toContain('interactive CLI session token');
     expect(stored.size).toBe(0);
   });
 
@@ -90,7 +118,7 @@ describe('CLI provider credentials', () => {
     }), env);
 
     const res = await handleCliRequest(credentialRequest({}), env);
-    const body = await res!.json() as Array<{ key: string; kind: string }>;
+    const body = v.parse(CredentialListSchema, await handled(res).json());
     expect(body).toMatchObject([{ key: 'anthropic.bearer', kind: 'bearer' }]);
     expect(JSON.stringify(body)).not.toContain('sk-ant-real');
   });
@@ -113,6 +141,6 @@ describe('CLI provider credentials', () => {
     }), env);
 
     expect(res?.status).toBe(400);
-    expect(await res!.text()).toContain('derived from your Cloudflare login');
+    expect(await handled(res).text()).toContain('derived from your Cloudflare login');
   });
 });

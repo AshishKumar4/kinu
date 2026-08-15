@@ -24,6 +24,8 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { jsonSchema, tool } from 'ai';
+import * as v from 'valibot';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
@@ -33,6 +35,11 @@ import {
 
 type ExecuteToolOptions = Parameters<CreateExecuteToolFactory>[0];
 
+interface CapturedExecuteTool {
+  factory: CreateExecuteToolFactory;
+  options: () => ExecuteToolOptions;
+}
+
 /**
  * Capture what the CF adapter would have passed to createExecuteTool.
  *
@@ -40,15 +47,16 @@ type ExecuteToolOptions = Parameters<CreateExecuteToolFactory>[0];
  * callback, so a `let x: T | null = null` reads back as `null` and every use
  * needs a cast to undo the narrowing.
  */
-function captureExecuteTool(): {
-  factory: CreateExecuteToolFactory;
-  options: () => ExecuteToolOptions;
-} {
+function captureExecuteTool(): CapturedExecuteTool {
   const seen: ExecuteToolOptions[] = [];
   return {
     factory: (opts) => {
       seen.push(opts);
-      return { description: 'mock', execute: async () => null };
+      return tool({
+        description: 'mock',
+        inputSchema: jsonSchema({ type: 'object' }),
+        execute: async () => null,
+      });
     },
     options: () => {
       const first = seen[0];
@@ -101,7 +109,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     const doubleEntry = resolved.double;
     expect(doubleEntry).toBeDefined();
     expect(doubleEntry!.description).toBe('Doubles its numeric argument');
-    expect(typeof doubleEntry!.execute).toBe('function');
+    expect(doubleEntry!.execute).toBeFunction();
 
     // Phase C factory was called exactly once for this tool, per resolution.
     expect(factoryCallCount).toBe(1);
@@ -117,7 +125,10 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     buildBuiltinTools({
       rt,
       codemodeLoader: { get: () => ({ getEntrypoint: () => ({}) }) },
-      craftedToolExecute: (tool) => async (arg) => (new Function('return ' + tool.code)() as (a: unknown) => unknown)(arg),
+      craftedToolExecute: (source) => async (arg) => {
+        if (source.name !== 'quadruple') throw new Error(`unexpected tool ${source.name}`);
+        return v.parse(v.number(), arg) * 4;
+      },
       createExecuteTool: capture.factory,
     });
     const resolve = capture.options().craftedTools;
@@ -151,10 +162,8 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
     let execCalls = 0;
     const factory: CraftedToolExecute = (tool) => async (arg) => {
       execCalls++;
-      // Replay the stored code via Node eval; Phase G's live test uses the
-      // real child-Worker path — this test just pins the dispatch wiring.
-      const fn = new Function('return ' + tool.code)();
-      return fn(arg);
+      if (tool.name !== 'triple') throw new Error(`unexpected tool ${tool.name}`);
+      return v.parse(v.number(), arg) * 3;
     };
 
     const capture = captureExecuteTool();
@@ -183,7 +192,7 @@ describe('Phase D — crafted tools reach createExecuteTool under codemode.*', (
       code: 'async () => null',
       scope: 'local',
     });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('forgotten', 0.01, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('forgotten', 0.01, ${Date.now()})`;
 
     let factoryCalls = 0;
     const factory: CraftedToolExecute = () => {

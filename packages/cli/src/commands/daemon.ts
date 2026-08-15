@@ -250,19 +250,19 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
 function sessionEvolutionDue(db: Database): boolean {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_window'`).get();
   if (!table) return false;
-  const row = db.query(`SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1`).get() as { n: number } | null;
+  const row = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1').get();
   return (row?.n ?? 0) >= DEFAULT_SESSION_REFLECTION_INTERVAL;
 }
 
 function nextTriggerAt(db: Database): number | null {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`).get();
   if (!table) return null;
-  const row = db.query(`
+  const row = db.query<{ next_fire_at: number | null }, []>(`
     SELECT MIN(next_fire_at) AS next_fire_at
     FROM triggers
     WHERE state = 'active' AND next_fire_at IS NOT NULL
-  `).get() as { next_fire_at: number | null } | null;
-  return typeof row?.next_fire_at === 'number' ? row.next_fire_at : null;
+  `).get();
+  return row?.next_fire_at ?? null;
 }
 
 function logSessionEvent(agentName: string, event: SessionEvent): void {

@@ -8,17 +8,18 @@
  * (no retry policy, no fallback). This is a documented behavioral underspecification.
  */
 
-import type { SqlExecutor, LLM } from '../types/primitives.js';
+import type { SqlExecutor } from '../types/primitives.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { SearchNode } from '../types/mcts.js';
 import type { ConvergenceResult } from '../types/evaluation.js';
 import type { SessionWriter } from './record-node.js';
-import { maybeStoreCraftedTool } from '../craft/discovery.js';
+import { isCraftable, maybeStoreCraftedTool } from '../craft/discovery.js';
 import { captureAlternateTakes } from './takes.js';
 import { selectWinnerByTest } from './test-selection.js';
 import { DEFAULT_CONFIG } from '../config.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { isoDate } from '../utils/date.js';
+import type { WorkMode } from '../prompting/surface.js';
 
 export async function converge(
   rt: AgentRuntime,
@@ -26,6 +27,7 @@ export async function converge(
   rootId: string,
   minAcceptable: number = DEFAULT_CONFIG.mcts.minAcceptableScore,
   takesEpsilon: number = DEFAULT_CONFIG.mcts.takesEpsilon,
+  mode: WorkMode = 'build',
 ): Promise<ConvergenceResult> {
   const population = rt.storage.sql<SearchNode>`
     SELECT * FROM search_nodes
@@ -41,24 +43,28 @@ export async function converge(
   // not separate them, so argmax(value) is noise. Break the near-tie with a
   // discriminating execution test over the candidates' code (same executor the
   // EVALUATE phase used); the test-passer becomes the winner, else value order.
-  const selectedId = await selectWinnerByTest(population, argmaxWinner, takesEpsilon, {
-    executor: rt.executor,
-    judge: rt.judgeModel ?? rt.llm,
-  });
+  const selectedId = mode === 'plan'
+    ? argmaxWinner.id
+    : await selectWinnerByTest(population, argmaxWinner, takesEpsilon, {
+        executor: rt.executor,
+        judge: rt.judgeModel ?? rt.llm,
+      });
   const winner = selectedId === argmaxWinner.id
     ? argmaxWinner
     : population.find((n) => n.id === selectedId) ?? argmaxWinner;
 
   // BUG-4: Below-threshold → converge reports failure, not hallucinated success
   if (winner.value < minAcceptable) {
-    await rt.memory.append(
-      'memory/MEMORY.md',
-      `\n### Failed task (${isoDate()}, best score ${winner.value.toFixed(2)})\n` +
-      `Task: ${winner.task.slice(0, 200)}\nAll approaches scored below ${minAcceptable}.\n`,
-    );
-    await rt.memory.index('memory/MEMORY.md');
+    if (mode === 'build') {
+      await rt.memory.append(
+        'memory/MEMORY.md',
+        `\n### Failed task (${isoDate()}, best score ${winner.value.toFixed(2)})\n` +
+        `Task: ${winner.task.slice(0, 200)}\nAll approaches scored below ${minAcceptable}.\n`,
+      );
+      await rt.memory.index('memory/MEMORY.md');
+      await recordTaskOutcome(rt, winner.task, 'error', winner.value);
+    }
     abandonSearchTree(rt.storage.sql, rootId);
-    await recordTaskOutcome(rt, winner.task, 'error', winner.value);
     return {
       winnerId: winner.id,
       winnerValue: winner.value,
@@ -71,50 +77,47 @@ export async function converge(
     ? session.getHistory(winner.msg_id)
     : [];
 
-  const summary = await rt.llm.complete(
-    `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.value.toFixed(2)}\n\n` +
-    `Summarize in ≤3 bullet points what approach worked:`,
-  );
-  await rt.memory.append(
-    'memory/MEMORY.md',
-    `\n## Successful approach (${isoDate()}, score ${winner.value.toFixed(2)})\n${summary}\n`,
-  );
-  await rt.memory.index('memory/MEMORY.md');
+  if (mode === 'build') {
+    const summary = await rt.llm.complete(
+      `Task: ${winner.task}\nResult: ${evidenceWindow(winner.observation, EVIDENCE_BUDGETS.convergenceObservation)}\nScore: ${winner.value.toFixed(2)}\n\n` +
+      `Summarize in ≤3 bullet points what approach worked:`,
+    );
+    await rt.memory.append(
+      'memory/MEMORY.md',
+      `\n## Successful approach (${isoDate()}, score ${winner.value.toFixed(2)})\n${summary}\n`,
+    );
+    await rt.memory.index('memory/MEMORY.md');
 
-  // Extract winning code into CraftStore if available.
-  // code_used is populated by ExplorationAgent when the branch produces code blocks.
-  const winnerCode = rt.storage.sql<{ code_used: string | null }>`
-    SELECT code_used FROM search_nodes WHERE id = ${winner.id}
-  `[0]?.code_used;
-  if (winnerCode && winner.value > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
-    try {
-      await maybeStoreCraftedTool(rt, winnerCode, winner.value);
-    } catch {
-      // Craft extraction failure is non-fatal
+    const winnerCode = rt.storage.sql<{ code_used: string | null; code_language: string | null }>`
+      SELECT code_used, code_language FROM search_nodes WHERE id = ${winner.id}
+    `[0];
+    if (winnerCode?.code_used && isCraftable(winnerCode.code_language)
+        && winner.value > DEFAULT_CONFIG.mcts.craftExtractionThreshold) {
+      try {
+        await maybeStoreCraftedTool(rt, winnerCode.code_used, winner.value);
+      } catch {
+        // Craft extraction failure is non-fatal
+      }
     }
-  }
 
-  // Alternate Takes: capture the winner's near-tied rivals BEFORE the close
-  // below prunes them — afterwards they are indistinguishable from mid-search
-  // prunes. The host claims the set for the turn at turn end; the user's pick
-  // becomes the explicit preference signal in turn_outcomes.
-  try {
-    captureAlternateTakes(rt.storage.sql, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
-  } catch {
-    // alternate_takes may not exist in minimal test runtimes — non-fatal.
+    try {
+      captureAlternateTakes(rt.storage.sql, { rootId, task: winner.task, winnerId: winner.id, epsilon: takesEpsilon });
+    } catch {
+      // alternate_takes may not exist in minimal test runtimes — non-fatal.
+    }
   }
 
   // Close the tree: the winner becomes terminal and every other open node in
   // this search is pruned, so a settled tree can never be re-entered.
-  rt.storage.sql`
+  void rt.storage.sql`
     UPDATE search_nodes
     SET status = 'pruned'
     WHERE root_id = ${rootId} AND status = 'open' AND id != ${winner.id}
   `;
-  rt.storage.sql`
+  void rt.storage.sql`
     UPDATE search_nodes SET status = 'terminal' WHERE id = ${winner.id}
   `;
-  await recordTaskOutcome(rt, winner.task, 'success', winner.value);
+  if (mode === 'build') await recordTaskOutcome(rt, winner.task, 'success', winner.value);
 
   return {
     winnerId: winner.id,
@@ -131,7 +134,7 @@ export async function converge(
  * this is what makes the durable 'failed' record honest.
  */
 export function abandonSearchTree(sql: SqlExecutor, rootId: string): void {
-  sql`UPDATE search_nodes SET status = 'failed'
+  void sql`UPDATE search_nodes SET status = 'failed'
       WHERE root_id = ${rootId} AND status = 'open'`;
 }
 
@@ -146,8 +149,8 @@ async function recordTaskOutcome(
   let scaffoldVersion = 0;
   try { scaffoldVersion = await rt.identity.scaffold.version(); } catch { /* scaffold-less backend */ }
   try {
-    rt.storage.sql`
-      INSERT INTO task_history (task, scaffold_version, outcome, score)
+    void rt.storage.sql`
+  INSERT INTO task_history (task, scaffold_version, outcome, score)
       VALUES (${task.slice(0, 500)}, ${scaffoldVersion}, ${outcome}, ${score})
     `;
   } catch {

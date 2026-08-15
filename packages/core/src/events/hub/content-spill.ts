@@ -48,7 +48,8 @@ export async function spillEventContent(vfs: VFS, content: string): Promise<stri
     }
     return path;
   } catch (err) {
-    console.warn('[proteus] event content spill failed:', (err as Error).message);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[proteus] event content spill failed:', message);
     return null;
   }
 }

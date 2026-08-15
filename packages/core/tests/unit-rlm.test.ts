@@ -2,6 +2,9 @@ import { describe, test, expect } from 'bun:test';
 import { createRLMProvider, type RLMModelResolver } from '../src/rlm.ts';
 import type { LanguageModel } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
+
+const ErrorResultSchema = v.object({ error: v.string() });
 
 // We don't go through the AI SDK here — we exercise the codemode-tool
 // surface that the LLM's sandbox code calls. The execute() fn is the
@@ -14,9 +17,7 @@ function stubResolver(opts: {
   normalizeSpecSync?: (spec: string | null) => string;
 } = {}): RLMModelResolver {
   return {
-    resolveModel: opts.resolveModel ?? (() => ({
-      specificationVersion: 'v2', provider: 'stub',
-    } as unknown as LanguageModel)),
+    resolveModel: opts.resolveModel ?? (() => new MockLanguageModelV3()),
     normalizeSpecSync: opts.normalizeSpecSync ?? ((spec) => spec ?? 'workers-ai/x'),
   };
 }
@@ -30,16 +31,19 @@ describe('llm provider (Recursive Language Models)', () => {
 
   test('query rejects empty/non-string input', async () => {
     const p = createRLMProvider(stubResolver(), () => 'workers-ai/x');
-    const r1 = await p.tools.query.execute('', {}) as { error: string };
+    const r1 = v.parse(ErrorResultSchema, await p.tools.query.execute('', {}));
     expect(r1.error).toMatch(/non-empty string/);
 
-    const r2 = await p.tools.query.execute(null as never, {}) as { error: string };
+    const r2 = v.parse(ErrorResultSchema, await p.tools.query.execute(null, {}));
     expect(r2.error).toMatch(/non-empty string/);
   });
 
   test('query rejects an invalid reasoning effort at the tool boundary', async () => {
     const p = createRLMProvider(stubResolver(), () => 'workers-ai/x');
-    const result = await p.tools.query.execute('hi', { reasoning_effort: 'extreme' }) as { error: string };
+    const result = v.parse(
+      ErrorResultSchema,
+      await p.tools.query.execute('hi', { reasoning_effort: 'extreme' }),
+    );
     expect(result.error).toContain('must be low, medium, or high');
   });
 
@@ -47,8 +51,11 @@ describe('llm provider (Recursive Language Models)', () => {
     let resolvedSpec: string | undefined;
     const p = createRLMProvider(
       stubResolver({
-        resolveModel: () => ({ specificationVersion: 'v2' } as unknown as LanguageModel),
-        normalizeSpecSync: (s) => { resolvedSpec = s as string; return s ?? 'd'; },
+        resolveModel: () => new MockLanguageModelV3(),
+        normalizeSpecSync: (spec) => {
+          if (spec !== null) resolvedSpec = spec;
+          return spec ?? 'd';
+        },
       }),
       () => 'should-not-be-used',
     );
@@ -69,13 +76,8 @@ describe('llm provider (Recursive Language Models)', () => {
   });
 
   test('query defaults to low provider effort with no output cap and honors an explicit cap', async () => {
-    const calls: Array<{
-      maxOutputTokens?: number;
-      providerOptions?: Record<string, Record<string, unknown>>;
-    }> = [];
     const model = new MockLanguageModelV3({
-      doGenerate: async (options) => {
-        calls.push(options);
+      doGenerate: async () => {
         return {
           content: [{ type: 'text', text: 'ok' }],
           finishReason: { unified: 'stop' as const, raw: undefined },
@@ -95,10 +97,10 @@ describe('llm provider (Recursive Language Models)', () => {
     await p.tools.query.execute('uncapped');
     await p.tools.query.execute('capped', { maxOutputTokens: 77, reasoning_effort: 'high' });
 
-    expect(calls[0]?.maxOutputTokens).toBeUndefined();
-    expect(calls[0]?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
-    expect(calls[1]?.maxOutputTokens).toBe(77);
-    expect(calls[1]?.providerOptions).toEqual({ openai: { reasoningEffort: 'high' } });
+    expect(model.doGenerateCalls[0]?.maxOutputTokens).toBeUndefined();
+    expect(model.doGenerateCalls[0]?.providerOptions).toEqual({ openai: { reasoningEffort: 'low' } });
+    expect(model.doGenerateCalls[1]?.maxOutputTokens).toBe(77);
+    expect(model.doGenerateCalls[1]?.providerOptions).toEqual({ openai: { reasoningEffort: 'high' } });
   });
 
   test('query surfaces model-resolution errors as {error}, not throws', async () => {
@@ -108,7 +110,7 @@ describe('llm provider (Recursive Language Models)', () => {
       }),
       () => 'workers-ai/x',
     );
-    const r = await p.tools.query.execute('hi', {}) as { error: string };
+    const r = v.parse(ErrorResultSchema, await p.tools.query.execute('hi', {}));
     expect(r.error).toMatch(/unresolvable/);
     expect(r.error).toMatch(/boom/);
   });

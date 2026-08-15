@@ -7,7 +7,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LLMProviderConfig } from '@proteus/core';
-import { createInlineWorkspace } from '@proteus/core';
+import { createInlineWorkspace } from '@proteus/core/identity';
 import { openWorkspaceCLI } from '../src/open.js';
 
 const DUMMY_LLM: LLMProviderConfig = {
@@ -37,7 +37,7 @@ async function legacyWorkspace(): Promise<{ db: Database; dbPath: string }> {
     );
   `);
   db.run('INSERT INTO agent_identity (id, name, created_at) VALUES (?, ?, ?)', ['legacy-1', 'jarvis', 1781042330894]);
-  const workspace = createInlineWorkspace(db as never);
+  const workspace = createInlineWorkspace(db);
   await workspace.vfs.writeFile('SOUL.md', '# jarvis\n\n## Mission\n\nRun the household and the lab.');
   return { db, dbPath };
 }

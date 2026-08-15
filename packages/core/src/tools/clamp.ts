@@ -13,9 +13,11 @@
  */
 
 import type { ToolSet } from 'ai';
+import * as v from 'valibot';
 import type { VFS } from '../types/primitives.js';
 import { nanoid } from '../utils/nanoid.js';
 import { SPILL_DIRS, type BulkProducer, type TurnContextBudget } from '../context-budget.js';
+import { assertJsonValue, parseJsonValue, type JsonValue } from '../utils/json.js';
 
 /** Workspace VFS directory full outputs are offloaded to. */
 export const TOOL_OUTPUT_DIR = SPILL_DIRS.toolOutput;
@@ -102,20 +104,17 @@ export async function clampToolResult(
  *  Within budget the original value passes through untouched; oversize values
  *  are offloaded as JSON and replaced by the clamped serialization. */
 export async function clampSerializedToolResult(
-  output: unknown,
+  input: { output: unknown },
   opts: ClampToolResultOptions = {},
-): Promise<unknown> {
+): Promise<JsonValue | undefined> {
+  const output = normalizeToolOutput(input);
   if (output == null) return output;
-  if (typeof output === 'string') return clampToolResult(output, opts);
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(output);
-  } catch {
-    serialized = String(output);
-  }
+  const text = v.safeParse(v.string(), output);
+  if (text.success) return clampToolResult(text.output, opts);
+  const serialized = JSON.stringify(output);
   const configured = opts.maxChars ?? DEFAULT_TOOL_RESULT_MAX_CHARS;
-  if (serialized == null || serialized.length <= (opts.budget?.capFor(configured) ?? configured)) {
-    opts.budget?.admit(serialized?.length ?? 0);
+  if (serialized.length <= (opts.budget?.capFor(configured) ?? configured)) {
+    opts.budget?.admit(serialized.length);
     return output;
   }
   return clampToolResult(serialized, opts);
@@ -127,12 +126,15 @@ export function withClampedToolResult(
   toolEntry: ToolSet[string],
   opts: ClampToolResultOptions,
 ): ToolSet[string] {
-  const execute = (toolEntry as { execute?: (...args: never[]) => unknown }).execute;
-  if (typeof execute !== 'function') return toolEntry;
+  const execute = toolEntry?.execute;
+  if (!execute) return toolEntry;
   return {
     ...toolEntry,
-    execute: async (...args: never[]) => clampSerializedToolResult(await execute(...args), opts),
-  } as ToolSet[string];
+    execute: async (input, options) => clampSerializedToolResult(
+      { output: await execute(input, options) },
+      opts,
+    ),
+  };
 }
 
 /** Wrap every entry of an externally supplied ToolSet (MCP servers) so its
@@ -142,7 +144,26 @@ export function withClampedToolResults(
   tools: ToolSet,
   opts: ClampToolResultOptions,
 ): ToolSet {
+  // SAFETY: The ToolSet contract guarantees every source value and every
+  // wrapper result is a ToolSet entry; Object.fromEntries preserves those values.
   return Object.fromEntries(
     Object.entries(tools).map(([name, entry]) => [name, withClampedToolResult(entry, opts)]),
   ) as ToolSet;
+}
+
+function normalizeToolOutput(input: { output: unknown }): JsonValue | undefined {
+  if (input.output === undefined) return undefined;
+  const value = { value: input.output };
+  try {
+    assertJsonValue(value);
+    return value.value;
+  } catch {
+    try {
+      const serialized = JSON.stringify(input.output);
+      if (serialized !== undefined) return parseJsonValue(serialized);
+    } catch {
+      // Fall through to the only representation available for non-JSON values.
+    }
+    return String(input.output);
+  }
 }

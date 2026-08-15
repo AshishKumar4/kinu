@@ -1,6 +1,6 @@
 // LLM fixtures — scripted responses without hitting an actual model.
-import type { LLM } from '@proteus/core';
-import type { LanguageModel } from 'ai';
+import type { JsonValue, LLM } from '@proteus/core';
+import type { LanguageModel, ToolExecutionOptions } from 'ai';
 
 /** A scripted LLM that returns the next answer in `responses` on each call.
  *  Tracks all prompts seen so tests can assert what was asked. */
@@ -47,8 +47,8 @@ export function createEchoLLM(): LLM {
 
 /** An LLM that returns canned JSON, with retries on schema mismatch. Pair
  *  with structured-output tests (auto-judge, curriculum, sleep-time, eval). */
-export function createJSONLLM(payload: unknown): LLM {
-  const json = typeof payload === 'string' ? payload : JSON.stringify(payload);
+export function createJSONLLM(payload: JsonValue): LLM {
+  const json = isString(payload) ? payload : JSON.stringify(payload);
   return {
     async *stream() { yield json; },
     async complete() { return json; },
@@ -80,12 +80,27 @@ export type ModelStreamPart =
  * runtime that the thing really is callable rather than failing later inside
  * the call.
  */
-export function toolExecute<Args = unknown, Result = unknown>(
-  entry: unknown,
-): (args: Args, options?: unknown) => Promise<Result> {
-  const execute = (entry as { execute?: unknown } | undefined)?.execute;
-  if (typeof execute !== 'function') {
+interface ExecutableTool<Args, Result> {
+  execute?: (args: Args, options: ToolExecutionOptions) => PromiseLike<Result> | Result;
+}
+
+const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions = {
+  toolCallId: 'test-tool-call',
+  messages: [],
+};
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
+}
+
+export function toolExecute<Args, Result>(
+  entry: ExecutableTool<Args, Result>,
+): (args: Args, options?: ToolExecutionOptions) => Promise<Result> {
+  const execute = entry.execute;
+  if (!execute) {
     throw new Error('toolExecute: the tool has no execute (was it built with a different name?)');
   }
-  return execute as (args: Args, options?: unknown) => Promise<Result>;
+  return async (args, options = DEFAULT_TOOL_OPTIONS) => {
+    return await execute(args, options);
+  };
 }

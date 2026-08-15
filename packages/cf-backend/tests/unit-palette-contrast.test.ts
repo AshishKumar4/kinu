@@ -56,7 +56,7 @@ function parse(css: string): Rgb {
 /** The two `:root` / `[data-mode="light"]` blocks, as name → value. Values
  *  that indirect through another token are resolved one level, which is all
  *  the palette uses. */
-function palette(mode: 'dark' | 'light'): Record<string, string> {
+function palette(mode: 'dark' | 'light') {
   const text = readFileSync(INDEX_CSS, 'utf8');
   // `:root` holds the dark set; the light block overrides a subset of it, so
   // light is dark-with-overrides exactly as the cascade computes it.
@@ -73,7 +73,8 @@ function palette(mode: 'dark' | 'light'): Record<string, string> {
       [...text.slice(open, i).matchAll(/(--c-[a-z0-9-]+)\s*:\s*([^;]+);/g)].map((m) => [m[1]!, m[2]!.trim()]),
     );
   };
-  const merged = { ...block('\n:root {'), ...(mode === 'light' ? block('[data-mode="light"] {') : {}) };
+  const merged = block('\n:root {');
+  if (mode === 'light') Object.assign(merged, block('[data-mode="light"] {'));
   for (const [k, v] of Object.entries(merged)) {
     const ref = v.match(/^var\((--c-[a-z0-9-]+)\)$/);
     if (ref) merged[k] = merged[ref[1]!]!;

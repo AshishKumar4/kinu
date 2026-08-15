@@ -35,6 +35,25 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
+import * as v from "valibot";
+
+const ProviderCatalogEntrySchema = v.object({
+  id: v.string(),
+  credKey: v.string(),
+  name: v.string(),
+  doc: v.optional(v.string()),
+  envVar: v.optional(v.string()),
+  connected: v.boolean(),
+});
+
+function providerCatalogEntry<Input>(input: Input): ProviderCatalogEntry | null {
+  const parsed = v.safeParse(ProviderCatalogEntrySchema, input);
+  return parsed.success ? parsed.output : null;
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
+}
 
 interface Account {
   profile: UserProfile | null;
@@ -194,7 +213,7 @@ export default function UserSettingsPage() {
               onChange={async (spec) => {
                 setDefaultModel(spec);
                 try { await setConfig('default_model', spec); }
-                catch (err) { setDefaultModel(null); alert((err as Error).message); }
+                catch (err) { setDefaultModel(null); alert(errorMessage(err)); }
               }}
               clearable
               placeholder="(use system default)"
@@ -256,7 +275,7 @@ function DevicesCard() {
     setIssuing(true);
     setErr(null);
     try { const r = await registerDevice(); setInstall(r.installCommand); refreshDevices(); }
-    catch (e) { setErr(`Could not register device: ${(e as Error).message}`); }
+    catch (e) { setErr(`Could not register device: ${errorMessage(e)}`); }
     finally { setIssuing(false); }
   }, [refreshDevices]);
 
@@ -264,7 +283,7 @@ function DevicesCard() {
     if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
     setErr(null);
     try { await revokeDevice(id); }
-    catch (e) { setErr(`Could not revoke device: ${(e as Error).message}`); }
+    catch (e) { setErr(`Could not revoke device: ${errorMessage(e)}`); }
     refreshDevices();
   }, [refreshDevices]);
 
@@ -368,7 +387,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
     setSaving(true);
     setError(null);
     try { await selectCloudflareGateway(id || null); onChanged(); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) { setError(errorMessage(e)); }
     finally { setSaving(false); }
   };
 
@@ -458,17 +477,17 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
         } catch (e) {
           // Thrown = the poll request itself failed (network blip) — show it
           // but keep polling; the flow may still complete.
-          setError((e as Error).message);
+          setError(errorMessage(e));
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorMessage(e));
     }
   }, [onChanged]);
 
   const disconnect = useCallback(async () => {
     if (!confirm('Disconnect ChatGPT? All your agents will lose access to Codex models.')) return;
-    try { await disconnectCodex(); onChanged(); } catch (e) { setError((e as Error).message); }
+    try { await disconnectCodex(); onChanged(); } catch (e) { setError(errorMessage(e)); }
   }, [onChanged]);
 
   if (status?.connected) {
@@ -535,7 +554,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
 
   const remove = useCallback(async (key: string, name: string) => {
     if (!confirm(`Remove the saved API key for "${name}"?`)) return;
-    try { await deleteCredential(key); onChanged(); } catch (e) { alert((e as Error).message); }
+    try { await deleteCredential(key); onChanged(); } catch (e) { alert(errorMessage(e)); }
   }, [onChanged]);
 
   // Connect-a-provider form — any models.dev catalog provider, searchable.
@@ -554,7 +573,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       setApiKey('');
       onChanged();
     } catch (e) {
-      alert((e as Error).message);
+      alert(errorMessage(e));
     } finally {
       setSavingKey(null);
     }
@@ -577,7 +596,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       setCompatName(''); setCompatBaseURL(''); setCompatApiKey('');
       onChanged();
     } catch (e) {
-      alert((e as Error).message);
+      alert(errorMessage(e));
     } finally {
       setSavingKey(null);
     }
@@ -616,9 +635,9 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
         <Combobox
           items={catalog}
           value={selected}
-          onValueChange={(next: unknown) => setSelected(next as ProviderCatalogEntry | null)}
-          itemToStringLabel={(p: unknown) => (p as ProviderCatalogEntry).name}
-          itemToStringValue={(p: unknown) => (p as ProviderCatalogEntry).id}
+          onValueChange={<Next,>(next: Next) => setSelected(providerCatalogEntry(next))}
+          itemToStringLabel={<Item,>(item: Item) => providerCatalogEntry(item)?.name ?? ''}
+          itemToStringValue={<Item,>(item: Item) => providerCatalogEntry(item)?.id ?? ''}
         >
           <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
           <Combobox.Content>

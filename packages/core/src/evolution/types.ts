@@ -5,12 +5,13 @@
 import type { ModelMessage } from 'ai';
 
 import type { MCTSProgressEvent } from '../types/mcts.js';
+import type { JsonObject, JsonValue } from '../utils/json.js';
 
 /** A tool call as reported by the AI SDK's structured result */
 export interface ToolCallRecord {
   name: string;
-  args: Record<string, unknown>;
-  result: unknown;
+  args: JsonObject;
+  result?: JsonValue;
 }
 
 /** Provider-reported token usage for one turn, summed over its steps.

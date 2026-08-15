@@ -13,6 +13,7 @@
  * binding over them.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import * as v from "valibot";
 
 export type AsyncResource<T> =
   | { status: "loading" }
@@ -22,14 +23,16 @@ export type AsyncResource<T> =
 /** Starting a (re)load — a value already on screen stays there while it
  *  revalidates, so a background refresh never blanks a working view. */
 export function beginLoad<T>(previous: AsyncResource<T>): AsyncResource<T> {
-  return previous.status === "ready" ? previous : { status: "loading" };
+  if (previous.status === "ready") return previous;
+  if (previous.status === "error" && previous.last !== null) return previous;
+  return { status: "loading" };
 }
 
 export function loadSucceeded<T>(value: T): AsyncResource<T> {
   return { status: "ready", value };
 }
 
-export function loadFailed<T>(previous: AsyncResource<T>, error: unknown): AsyncResource<T> {
+export function loadFailed<T, ErrorValue>(previous: AsyncResource<T>, error: ErrorValue): AsyncResource<T> {
   return { status: "error", message: describeError(error), last: lastValue(previous) };
 }
 
@@ -40,9 +43,9 @@ export function lastValue<T>(resource: AsyncResource<T>): T | null {
   return null;
 }
 
-export function describeError(error: unknown): string {
+export function describeError<ErrorValue>(error: ErrorValue): string {
   if (error instanceof Error && error.message) return error.message;
-  if (typeof error === "string" && error.trim()) return error;
+  if (v.is(v.string(), error) && error.trim()) return error;
   return "request failed";
 }
 
@@ -54,28 +57,51 @@ export function describeError(error: unknown): string {
  */
 export type Revalidate<T> = (value: T | null) => number | null;
 
+export interface AsyncResourceControl<T> {
+  resource: AsyncResource<T>;
+  reload: () => void;
+}
+
 /**
  * Fetch `load` on mount and whenever its identity changes, exposing the
  * tri-state plus the retry every failed fetch needs. `load` and `revalidate`
  * must be stable (useCallback) — they are the effect keys.
  */
-export function useAsyncResource<T>(load: () => Promise<T>, revalidate?: Revalidate<T>): {
-  resource: AsyncResource<T>;
-  reload: () => void;
-} {
-  const [resource, setResource] = useState<AsyncResource<T>>({ status: "loading" });
+export function useAsyncResource<T>(
+  load: () => Promise<T>,
+  revalidate?: Revalidate<T>,
+  identity?: string,
+): AsyncResourceControl<T> {
+  const [state, setState] = useState<{
+    identity: string | undefined;
+    resource: AsyncResource<T>;
+  }>({ identity, resource: { status: "loading" } });
+  const resource: AsyncResource<T> = state.identity === identity
+    ? state.resource
+    : { status: "loading" };
   // Only the newest run may write: a slow failing load must not overwrite the
   // result of the retry that superseded it.
   const runId = useRef(0);
 
   const run = useCallback(() => {
     const id = ++runId.current;
-    setResource(beginLoad);
+    setState((previous) => ({
+      identity,
+      resource: beginLoad(previous.identity === identity ? previous.resource : { status: "loading" }),
+    }));
     load().then(
-      (value) => { if (id === runId.current) setResource(loadSucceeded(value)); },
-      (error) => { if (id === runId.current) setResource((previous) => loadFailed(previous, error)); },
+      (value) => {
+        if (id === runId.current) setState({ identity, resource: loadSucceeded(value) });
+      },
+      (error) => {
+        if (id !== runId.current) return;
+        setState((previous) => ({
+          identity,
+          resource: loadFailed(previous.identity === identity ? previous.resource : { status: "loading" }, error),
+        }));
+      },
     );
-  }, [load]);
+  }, [identity, load]);
 
   useEffect(() => { run(); }, [run]);
 

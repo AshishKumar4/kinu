@@ -13,6 +13,7 @@ import {
   DELEGATION_RUNGS,
   modelSupportsTools,
   promptModeForTurnEvent,
+  promptModeForTurnMetadata,
   splitPromptSections,
   type ParsedSkill,
 } from '../src/index.ts';
@@ -319,7 +320,7 @@ describe('buildSystemPromptSync', () => {
       // and since deleted.
       expect(prompt).not.toContain(spec.whenToUse);
       expect(prompt).not.toContain(spec.whenNotToUse);
-      if (spec.doctrine) expect(prompt).not.toContain(spec.doctrine);
+      if ('doctrine' in spec && spec.doctrine) expect(prompt).not.toContain(spec.doctrine);
     }
     // The `Use when:` / `Avoid when:` schema prefixes never leak into prose.
     expect(prompt).not.toContain('Use when:');
@@ -335,10 +336,11 @@ describe('buildSystemPromptSync', () => {
     // from. Live K3 guidance argues against DUPLICATION, for everyone, which
     // is what the schema-only doctrine rule already does.
     const { rt } = createTestRuntime();
+    const registeredExecutors: string[] = [];
     const opts = {
       availableTools: ['run', 'memory'] as const,
       externalTools: [{ name: 'tool_docs_search', source: 'mcp' as const, description: 'Search docs.' }],
-      registeredExecutors: [] as string[],
+      registeredExecutors,
     };
     const section = (id: string) => {
       const prompt = buildSystemPromptSync(rt, { ...opts, model: { id } });
@@ -477,7 +479,10 @@ describe('buildSystemPromptSync', () => {
   test('renders executor section when registeredExecutors supplied', () => {
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
-      registeredExecutors: ['workspace', 'sandbox'],
+      executors: [
+        { name: 'workspace', kind: 'workspace', capabilities: [], available: true, configured: true, active: true, status: 'active' },
+        { name: 'sandbox', kind: 'sandbox', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
+      ],
     });
     expect(prompt).toContain('workspace.*');
     expect(prompt).toContain('sandbox.*');
@@ -486,6 +491,20 @@ describe('buildSystemPromptSync', () => {
     // With ≥2 executors, warn they're disjoint filesystems (the documented
     // "wrote in the sandbox, read an empty workspace" confusion).
     expect(prompt).toMatch(/separate filesystems/i);
+  });
+
+  test('teaches the preview workflow for the executor that actually exposes inbound ports', () => {
+    const { rt } = createTestRuntime();
+    const prompt = buildSystemPromptSync(rt, {
+      backend: 'cf',
+      executors: [
+        { name: 'workspace', kind: 'workspace', capabilities: ['net_inbound'], available: true, configured: true, active: true, status: 'active' },
+      ],
+    });
+
+    expect(prompt).toMatch(/Showing a running app/);
+    expect(prompt).toContain('workspace.exposePort(port)');
+    expect(prompt).not.toContain('sandbox.exposePort(port)');
   });
 
   test('every runtime is its own filesystem, on every backend', () => {
@@ -511,18 +530,16 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'laptop', kind: 'laptop', available: false, configured: false, active: false, status: 'not_configured' },
-        { name: 'nimbus', kind: 'nimbus', available: true, configured: true, active: false, status: 'idle' },
         { name: 'sandbox', kind: 'sandbox', available: false, configured: false, active: false, status: 'not_configured' },
       ],
     });
 
-    expect(prompt).toContain('nimbus.*');
+    expect(prompt).not.toContain('nimbus.*');
     expect(prompt).toContain('workspace.*');
     // The hosted workspace runtime is a real POSIX shell over the agent's own
-    // filesystem, but it has no native binaries — the model must read both
-    // halves, or it either under-uses the shell or tries to build in it.
+    // filesystem, with resident runtimes and processes in the same environment.
     expect(prompt).toContain('real POSIX shell');
-    expect(prompt).toContain('No NATIVE binaries');
+    expect(prompt).toContain('resident background processes');
     expect(prompt).not.toContain('laptop');
     expect(prompt).not.toContain('sandbox.*');
     expect(prompt).not.toMatch(/Showing a running app/);
@@ -591,7 +608,6 @@ describe('buildSystemPromptSync', () => {
       executors: [
         { name: 'workspace', kind: 'workspace', available: true, configured: true, active: true, status: 'active' },
         { name: 'sandbox', kind: 'sandbox', available: true, configured: true, active: true, status: 'active' },
-        { name: 'nimbus', kind: 'nimbus', available: true, configured: true, active: false, status: 'idle' },
         { name: 'laptop', kind: 'laptop', available: true, configured: true, active: true, status: 'active' },
       ],
     });
@@ -602,8 +618,9 @@ describe('buildSystemPromptSync', () => {
     expect(prompt).toContain('the same bytes the `file` tool and `workspace.*` file ops read');
     // Every other environment is a namespace, never a directory of this one.
     expect(prompt).toContain('`sandbox.*`');
-    expect(prompt).toContain('`nimbus.*`');
+    expect(prompt).not.toContain('`nimbus.*`');
     expect(prompt).toContain('`laptop.*`');
+    expect(prompt).not.toContain('Nimbus for quick cloud execution');
     expect(prompt).toContain('THEIR native paths');
     expect(prompt).not.toContain('mount table');
   });
@@ -761,6 +778,15 @@ describe('buildSystemPromptSync', () => {
     expect(buildSystemPromptSync(rt, { mode: 'background_resume' })).toContain('Background-resume mode');
     expect(buildSystemPromptSync(rt, { mode: 'cron' })).toContain('Scheduled wake mode');
     expect(buildSystemPromptSync(rt, { mode: 'release' })).toContain('Never deploy Proteus release changes');
+    const plan = buildSystemPromptSync(rt, { mode: 'plan', planSubmissionAvailable: true });
+    expect(plan).toContain('submit_plan');
+    expect(plan).toContain('Do not change files, system state, releases, or deployments');
+    expect(plan).toContain('Do not expose ports or produce preview or output links');
+    expect(plan).toContain('Do not begin implementation until the plan is approved');
+
+    const delegatedPlan = buildSystemPromptSync(rt, { mode: 'plan', planSubmissionAvailable: false });
+    expect(delegatedPlan).toContain('report concrete findings to the parent Plan turn');
+    expect(delegatedPlan).not.toContain('End by calling `submit_plan`');
   });
 
   test('turn-mode classification is one shared rule for both backends', () => {
@@ -773,6 +799,11 @@ describe('buildSystemPromptSync', () => {
     expect(promptModeForTurnEvent('event_drain')).toBe('chat');
     expect(promptModeForTurnEvent(null)).toBe('chat');
     expect(promptModeForTurnEvent(undefined)).toBe('chat');
+    expect(promptModeForTurnMetadata({ proteusMode: 'plan' })).toBe('plan');
+    expect(promptModeForTurnMetadata({ proteusMode: 'build' })).toBe('build');
+    expect(promptModeForTurnMetadata({ proteusMode: 'invalid', proteusEvent: 'background_job' }))
+      .toBe('background_resume');
+    expect(promptModeForTurnMetadata(null)).toBe('chat');
 
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
@@ -805,7 +836,7 @@ describe('buildSystemPromptSync', () => {
     // CF surface stays within its pinned ceiling, so prompt growth is a
     // reviewed decision, not drift. Ceilings are ~10% over 2026-06 measured
     // sizes — raise one ONLY alongside an intentional content change.
-    const BUDGETS: Record<string, number> = {
+    const BUDGETS = {
       'Runtime context': 160,
       // 2026-08: the ladder pointer is gone. It restated the Delegation
       // section's own opening forty lines above it, and both of its triggers
@@ -890,7 +921,7 @@ describe('buildSystemPromptSync', () => {
       // CompletionGate says mechanically and Opus 5 guidance says to delete.
       'Verification': 620,
       'Output format': 180,
-    };
+    } satisfies Record<string, number>;
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
       backend: 'cf',

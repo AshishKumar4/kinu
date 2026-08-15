@@ -15,6 +15,7 @@ import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
 import type { MonitorDO } from "./src/monitor/monitor-do.js";
 import type { NimbusSession } from "@nimbus-sh/sdk/worker";
+import type { VectorizeIndex as ProteusVectorizeIndex } from "@proteus/core";
 
 // This file has top-level imports (for the DO class generics below), which
 // makes it a module — so `interface Env` here would be module-scoped, not
@@ -24,6 +25,10 @@ declare global {
   interface Env {
     /** Workers AI direct binding. OPTIONAL — fallback is the AI Gateway. */
     AI?: Ai;
+    /** Optional semantic-memory index. Without it, memory remains FTS-only. */
+    MEMORY_VECTORS?: ProteusVectorizeIndex;
+    /** Optional Nimbus runtime-catalog binding/config marker. */
+    NIMBUS_RUNTIME_CACHE?: string;
     LOADER: WorkerLoader;
     OrchestratorAgent: DurableObjectNamespace<OrchestratorAgent>;
     ExplorationAgent: DurableObjectNamespace<ExplorationAgent>;
@@ -43,8 +48,8 @@ declare global {
     BACKUP_BUCKET?: R2Bucket;
     AI_GATEWAY_URL: string;
     AI_GATEWAY_AUTH: string;
-    /** Zone sandbox previews are served under, one hostname per exposed port
-     *  (`<port>-<sandbox>-<token>.<suffix>`). Empty disables previews. */
+    /** Zone isolated previews are served under, one capability hostname per
+     *  exposed Workspace or Sandbox port. Empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;
     /** Static asset binding — required for SPA fallback when the Worker
      *  runs first on every route (see `run_worker_first` in wrangler). */

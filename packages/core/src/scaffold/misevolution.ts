@@ -46,6 +46,10 @@ interface MisevolutionCriterion {
   readonly reason: string;
 }
 
+function criterion(input: MisevolutionCriterion): Readonly<MisevolutionCriterion> {
+  return Object.freeze(input);
+}
+
 /** The fixed checklist, derived from what evolved code can actually express
  *  through the sandbox (host.* bridge + workspace/sandbox providers):
  *
@@ -65,32 +69,32 @@ interface MisevolutionCriterion {
  *     be weakened by evolved code.
  */
 const MISEVOLUTION_CRITERIA: readonly MisevolutionCriterion[] = Object.freeze([
-  {
+  criterion({
     id: 'network-egress',
     pattern: /\bfetch\s*\(|\bXMLHttpRequest\b|\bnew\s+WebSocket\b|\bsendBeacon\s*\(|\bEventSource\b/,
     reason: 'direct network egress — evolved code must reach the outside world only through the audited tool surface (host.callTool / sandbox tools)',
-  },
-  {
+  }),
+  criterion({
     id: 'version-machinery-tamper',
     pattern: /\bscaffold_versions\b|\bscaffold_evaluations\b|\bscaffold_trial_queue\b|['"`]scaffold\/agent\.js|agent\.js\.v\d/,
     reason: 'touches the scaffold version files or shadow-eval tables — promotion happens only through the gated pipeline',
-  },
-  {
+  }),
+  criterion({
     id: 'rollout-config-tamper',
     pattern: /\bauto_promote_scaffold\b|\bshadow_sample_rate\b|\bscaffold_explore_share\b|\bauto_gepa_every_n_turns\b|\bchangelog_seen_at\b/,
     reason: 'references the shadow-rollout knobs or the changelog seen-marker — evolved code must not change its own promotion gates or hide its changes from the operator',
-  },
-  {
+  }),
+  criterion({
     id: 'self-modification-reentry',
     pattern: /\bproposeScaffold\b|\bmodifyScaffold\b|\bapplyPromotionDecision\b|\bapplyScaffoldDecision\b|\brollbackScaffold\b|\bcheckMisevolution\b/,
     reason: 'an evolved artifact must not itself propose, promote, roll back, or re-gate scaffold versions',
-  },
-  {
+  }),
+  criterion({
     id: 'consent-weakening',
     pattern: /\bshell_approval_mode\b|\bsetShellApprovalMode\b|\ballow_all\b|\bdevice_consent\b/,
     reason: 'weakens a consent/approval path (shell approval mode, device consent)',
-  },
-].map(Object.freeze)) as readonly MisevolutionCriterion[];
+  }),
+]);
 
 /** Criteria 2–5: everything that protects the SAFETY MACHINERY itself —
  *  promotion, the rollout knobs, the gate's own entry points, and consent.
@@ -165,7 +169,7 @@ export function recordMisevolutionVeto(
   args: { surface: MisevolutionSurface; violation: MisevolutionViolation; detail: string },
 ): void {
   try {
-    sql`INSERT INTO evolution_events (type, message, data, created_at)
+    void sql`INSERT INTO evolution_events (type, message, data, created_at)
         VALUES ('misevolution_veto',
                 ${`Misevolution veto [${args.surface}/${args.violation.criterionId}]: ${args.violation.reason}`},
                 ${JSON.stringify({ surface: args.surface, criterionId: args.violation.criterionId, detail: args.detail.slice(0, 500) })},

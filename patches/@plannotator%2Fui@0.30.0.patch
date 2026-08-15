@@ -1,0 +1,3141 @@
+diff --git a/components/AnnotationPanel.tsx b/components/AnnotationPanel.tsx
+index 1969f7b1833d2ea81693560c21eaf49e568f2aea..f4f1674dc851e16c784d2378cc6ed65b2d338e55 100644
+--- a/components/AnnotationPanel.tsx
++++ b/components/AnnotationPanel.tsx
+@@ -1,769 +1,172 @@
+-import React, { useState, useRef, useEffect } from 'react';
+-import { AnnotationType, type Annotation, type Block, type CodeAnnotation, type EditorAnnotation } from '../types';
+-import { isCurrentUser } from '../utils/identity';
+-import { ImageThumbnail } from './ImageThumbnail';
+-import { EditorAnnotationCard } from './EditorAnnotationCard';
++import React, { useEffect, useRef, useState } from 'react';
++import type { Annotation } from '../types';
++import { AnnotationType } from '../types';
+ import { useIsMobile } from '../hooks/useIsMobile';
+-import { OverlayScrollArea } from './OverlayScrollArea';
+-import { Button } from './ui/button';
+-import { cn } from '../lib/utils';
+-
+-// Card type-word colors. Deletion uses `destructive` (reliably red on every
+-// theme, matching the in-document .deletion highlight). Comment uses the
+-// `annotation-comment` token, which defaults to each theme's --accent (so it
+-// stays consistent with the .comment highlight) but is overridden to a legible
+-// blue in neutral themes whose accent is a low-contrast gray (e.g. "simple").
+-// Global has no in-document highlight, so it uses a fixed legible purple.
+-const TYPE_COLOR: Record<AnnotationType, string> = {
+-  [AnnotationType.DELETION]: 'text-destructive',
+-  [AnnotationType.COMMENT]: 'text-annotation-comment',
+-  [AnnotationType.GLOBAL_COMMENT]: 'text-purple-500',
+-};
+-
+-const TYPE_LABEL: Record<AnnotationType, string> = {
+-  [AnnotationType.DELETION]: 'Deletion',
+-  [AnnotationType.COMMENT]: 'Comment',
+-  [AnnotationType.GLOBAL_COMMENT]: 'Global',
+-};
+-
+-const PencilIcon = () => (
+-  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-    <path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+-  </svg>
+-);
+-
+-const TrashCardIcon = () => (
+-  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-    <path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+-  </svg>
+-);
+-
+-interface DirectEditsPanelItem {
+-  id: string;
+-  title?: string;
+-  label?: string;
+-  added: number;
+-  removed: number;
+-  diffText: string;
+-  description?: string;
+-  onDiscard?: () => void;
+-}
+ 
+ interface PanelProps {
+   isOpen: boolean;
+   annotations: Annotation[];
+-  blocks: Block[];
+   onSelect: (id: string) => void;
+   onDelete: (id: string) => void;
+   onEdit?: (id: string, updates: Partial<Annotation>) => void;
+   selectedId: string | null;
+-  codeAnnotations?: CodeAnnotation[];
+-  onSelectCodeAnnotation?: (id: string) => void;
+-  onDeleteCodeAnnotation?: (id: string) => void;
+-  onEditCodeAnnotation?: (id: string, updates: Partial<CodeAnnotation>) => void;
+-  sharingEnabled?: boolean;
+   width?: number | string;
+-  editorAnnotations?: EditorAnnotation[];
+-  onDeleteEditorAnnotation?: (id: string) => void;
+   onClose?: () => void;
+-  /** Copy the full feedback payload. May resolve a success boolean; resolving
+-    *  `false` suppresses the "Copied" flash. A void resolution (existing hosts)
+-    *  is treated as success, preserving the original behavior. */
+-  onQuickCopy?: () => Promise<void | boolean>;
+-  onShare?: () => void;
+-  otherFileAnnotations?: { count: number; files: number };
+-  onOtherFileAnnotationsClick?: () => void;
+-  /** Committed direct edits to one or more documents. Rendered as pinned cards
+-    *  above the annotation timeline with expandable unified diffs. */
+-  directEdits?: DirectEditsPanelItem[] | null;
+-  /** Host slot rendered at the foot of each plan-annotation card (e.g. reply/
+-    *  resolve UI). The panel stays presentation-only; clicks inside the slot
+-    *  do not select the card. Default: nothing rendered. */
+-  renderCardFooter?: (annotation: Annotation) => React.ReactNode;
+-  /** Hide every built-in mutation affordance (delete/edit, direct-edit
+-    *  discard). The host footer slot still renders: its contents are
+-    *  host-owned and may be read affordances (replies, links), so the host
+-    *  gates what belongs in it. Selection and scrolling still work.
+-    *  Default false — today's behavior. */
+   readOnly?: boolean;
+ }
+ 
+-export const AnnotationPanel: React.FC<PanelProps> = ({
+-  isOpen,
+-  annotations,
+-  onSelect,
+-  onDelete,
+-  onEdit,
+-  selectedId,
+-  codeAnnotations = [],
+-  onSelectCodeAnnotation,
+-  onDeleteCodeAnnotation,
+-  onEditCodeAnnotation,
+-  sharingEnabled = true,
+-  width,
+-  editorAnnotations,
+-  onDeleteEditorAnnotation,
+-  onClose,
+-  onQuickCopy,
+-  onShare,
+-  otherFileAnnotations,
+-  onOtherFileAnnotationsClick,
+-  directEdits = null,
+-  renderCardFooter,
+-  readOnly = false,
+-}) => {
+-  const isMobile = useIsMobile();
+-  const [copiedText, setCopiedText] = useState(false);
+-  const listRef = useRef<HTMLDivElement>(null);
+-  const sortedAnnotations = [...annotations].sort((a, b) => a.createdA - b.createdA);
+-  const sortedCodeAnnotations = [...codeAnnotations].sort((a, b) => a.createdAt - b.createdAt);
+-  const timelineEntries = [
+-    ...sortedAnnotations.map(annotation => ({ kind: 'plan' as const, ts: annotation.createdA, annotation })),
+-    ...sortedCodeAnnotations.map(annotation => ({ kind: 'code' as const, ts: annotation.createdAt, annotation })),
+-  ].sort((a, b) => a.ts - b.ts);
+-  const totalCount = annotations.length + codeAnnotations.length + (editorAnnotations?.length ?? 0);
+-
+-  // Scroll selected annotation card into view
+-  useEffect(() => {
+-    if (!selectedId || !listRef.current) return;
+-    const card = listRef.current.querySelector(`[data-annotation-id="${selectedId}"]`);
+-    if (card) {
+-      card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+-    }
+-  }, [selectedId]);
+-
+-  if (!isOpen) return null;
+-
+-  const panel = (
+-    <aside
+-      data-annotation-panel="true"
+-      data-plan-sidebar="right"
+-      className={`border-l border-border/50 bg-card flex flex-col flex-shrink-0 ${
+-        isMobile ? 'fixed top-12 bottom-0 right-0 z-[60] w-full max-w-sm shadow-2xl bg-card' : ''
+-      }`}
+-      style={isMobile ? undefined : { width: width ?? 288 }}
+-    >
+-      {/* Header */}
+-      <div className="border-b border-border/50">
+-        <div className="flex h-10 items-center justify-between px-3">
+-          <div className="flex items-center gap-2">
+-            <h2 className="text-xs font-medium text-foreground">
+-              Annotations
+-            </h2>
+-            {totalCount > 0 && (
+-              <span className="flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-primary/10 px-1 font-mono text-[10px] font-medium tabular-nums text-primary">
+-                {totalCount}
+-              </span>
+-            )}
+-          </div>
+-          {isMobile && onClose && (
+-            <button
+-              onClick={onClose}
+-              className="relative rounded-md p-1.5 text-muted-foreground transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground md:hidden"
+-              title="Close panel"
+-              aria-label="Close panel"
+-            >
+-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+-              </svg>
+-            </button>
+-          )}
+-        </div>
+-        {otherFileAnnotations && otherFileAnnotations.count > 0 && (
+-          <button
+-            onClick={onOtherFileAnnotationsClick}
+-            className="px-3 pb-2 text-[10px] text-primary/70 hover:text-primary transition-colors cursor-pointer"
+-            title="Show annotated files in sidebar"
+-          >
+-            +{otherFileAnnotations.count} in {otherFileAnnotations.files} other file{otherFileAnnotations.files === 1 ? '' : 's'}
+-          </button>
+-        )}
+-      </div>
+-
+-      {/* List */}
+-      <OverlayScrollArea className="flex-1 min-h-0">
+-        <div ref={listRef} className="p-2 flex flex-col gap-1.5">
+-        {directEdits?.map((item) => (
+-          <DirectEditsCard key={item.id} {...item} onDiscard={readOnly ? undefined : item.onDiscard} />
+-        ))}
+-        {totalCount === 0 ? (
+-          (!directEdits || directEdits.length === 0) && (
+-            <div className="flex flex-col items-center justify-center px-4 py-16 text-center">
+-              <p className="text-xs text-muted-foreground/60">
+-                No annotations yet
+-              </p>
+-              <p className="mt-1 text-[11px] text-muted-foreground/40">
+-                Select text to annotate
+-              </p>
+-            </div>
+-          )
+-        ) : (
+-          <>
+-            {timelineEntries.map(entry => (
+-              entry.kind === 'plan' ? (
+-                <AnnotationCard
+-                  key={entry.annotation.id}
+-                  annotation={entry.annotation}
+-                  isSelected={selectedId === entry.annotation.id}
+-                  isMe={isCurrentUser(entry.annotation.author)}
+-                  onSelect={() => onSelect(entry.annotation.id)}
+-                  onDelete={() => onDelete(entry.annotation.id)}
+-                  onEdit={onEdit ? (updates: Partial<Annotation>) => onEdit(entry.annotation.id, updates) : undefined}
+-                  readOnly={readOnly}
+-                  footer={renderCardFooter?.(entry.annotation)}
+-                />
+-              ) : (
+-                <CodeAnnotationCard
+-                  key={entry.annotation.id}
+-                  annotation={entry.annotation}
+-                  isSelected={selectedId === entry.annotation.id}
+-                  isMe={isCurrentUser(entry.annotation.author)}
+-                  onSelect={() => onSelectCodeAnnotation?.(entry.annotation.id)}
+-                  onDelete={() => onDeleteCodeAnnotation?.(entry.annotation.id)}
+-                  onEdit={onEditCodeAnnotation ? (updates: Partial<CodeAnnotation>) => onEditCodeAnnotation(entry.annotation.id, updates) : undefined}
+-                  readOnly={readOnly}
+-                />
+-              )
+-            ))}
+-            {editorAnnotations && editorAnnotations.length > 0 && (
+-              <>
+-                {timelineEntries.length > 0 && (
+-                  <div className="flex items-center gap-2 pt-2 pb-1">
+-                    <div className="flex-1 border-t border-border/30" />
+-                    <span className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground/60">Editor</span>
+-                    <div className="flex-1 border-t border-border/30" />
+-                  </div>
+-                )}
+-                {editorAnnotations.map(ann => (
+-                  <EditorAnnotationCard
+-                    key={ann.id}
+-                    annotation={ann}
+-                    onDelete={readOnly ? undefined : () => onDeleteEditorAnnotation?.(ann.id)}
+-                  />
+-                ))}
+-              </>
+-            )}
+-
+-          </>
+-        )}
+-        </div>
+-      </OverlayScrollArea>
+-
+-      {/* Quick Actions Footer */}
+-      {totalCount > 0 && (
+-        <div className="border-t border-border/50 px-3 py-2 flex gap-1.5">
+-          {onQuickCopy && (
+-            <button
+-              onClick={async () => {
+-                const result = await onQuickCopy();
+-                if (result === false) return;
+-                setCopiedText(true);
+-                setTimeout(() => setCopiedText(false), 2000);
+-              }}
+-              className={`flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-medium transition-colors ${
+-                copiedText ? 'text-green-500' : 'text-muted-foreground hover:bg-surface-1 hover:text-foreground'
+-              }`}
+-            >
+-              {copiedText ? (
+-                <>
+-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-                    <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+-                  </svg>
+-                  Copied
+-                </>
+-              ) : (
+-                <>
+-                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-                    <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+-                  </svg>
+-                  Copy
+-                </>
+-              )}
+-            </button>
+-          )}
+-          {sharingEnabled && onShare && (
+-            <button
+-              onClick={onShare}
+-              className="flex-1 flex items-center justify-center gap-1.5 rounded-lg py-2 text-xs font-medium transition-colors text-muted-foreground hover:bg-surface-1 hover:text-foreground"
+-            >
+-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1" />
+-              </svg>
+-              Share
+-            </button>
+-          )}
+-        </div>
+-      )}
+-    </aside>
+-  );
+-
+-  if (isMobile) {
+-    return (
+-      <>
+-        <div
+-          className="fixed inset-0 z-[59] bg-background/60 backdrop-blur-sm"
+-          onClick={onClose}
+-        />
+-        {panel}
+-      </>
+-    );
+-  }
+-
+-  return panel;
++const annotationLabel = (type: AnnotationType): string => {
++  if (type === AnnotationType.DELETION) return 'Remove';
++  if (type === AnnotationType.GLOBAL_COMMENT) return 'Global';
++  return 'Comment';
+ };
+ 
+-function formatTimestamp(ts: number): string {
+-  const now = Date.now();
+-  const diff = now - ts;
+-  const seconds = Math.floor(diff / 1000);
+-  const minutes = Math.floor(seconds / 60);
+-  const hours = Math.floor(minutes / 60);
+-  const days = Math.floor(hours / 24);
+-
+-  if (seconds < 60) return 'now';
+-  if (minutes < 60) return `${minutes}m`;
+-  if (hours < 24) return `${hours}h`;
+-  if (days < 7) return `${days}d`;
+-
+-  return new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+-}
+-
+-/** Pinned card for committed direct edits: +N/−M summary, expandable unified
+- *  diff, and a two-step discard. Not part of the annotation timeline — edits
+- *  are document state, not a selection-anchored note. */
+-const DirectEditsCard: React.FC<{
+-  title?: string;
+-  label?: string;
+-  added: number;
+-  removed: number;
+-  diffText: string;
+-  description?: string;
+-  onDiscard?: () => void;
+-}> = ({ title = 'Edits', label, added, removed, diffText, description, onDiscard }) => {
+-  const [expanded, setExpanded] = useState(false);
+-  const [confirmDiscard, setConfirmDiscard] = useState(false);
+-
+-  // Auto-cancel the discard confirmation after a beat.
+-  useEffect(() => {
+-    if (!confirmDiscard) return;
+-    const t = setTimeout(() => setConfirmDiscard(false), 3000);
+-    return () => clearTimeout(t);
+-  }, [confirmDiscard]);
+-
+-  // Show from the first hunk header; the ---/+++ preamble is noise here.
+-  const diffLines = React.useMemo(() => {
+-    const lines = diffText.split('\n');
+-    const fileSeparators = lines.filter((l) => l.startsWith('===')).length;
+-    if (fileSeparators > 1) return lines;
+-    const firstHunk = lines.findIndex((l) => l.startsWith('@@'));
+-    return firstHunk === -1 ? lines : lines.slice(firstHunk);
+-  }, [diffText]);
+-
+-  return (
+-    <div className="w-full rounded-lg px-3 py-2.5 bg-surface-1/40 ring-1 ring-border/40">
+-      <div className="flex items-center gap-1.5">
+-        <span className="text-[11px] font-medium text-primary">{title}</span>
+-        {label && (
+-          <span className="min-w-0 truncate text-[10px] text-muted-foreground" title={label}>
+-            {label}
+-          </span>
+-        )}
+-        <span className="font-mono text-[10px] tabular-nums">
+-          <span className="text-success">+{added}</span>
+-          <span className="text-muted-foreground/40">/</span>
+-          <span className="text-destructive">-{removed}</span>
+-        </span>
+-        <div className="ml-auto flex items-center gap-1">
+-          <button
+-            type="button"
+-            onClick={() => setExpanded((v) => !v)}
+-            className="cursor-pointer rounded px-1.5 py-0.5 text-[10px] text-muted-foreground transition-colors hover:bg-surface-1 hover:text-foreground"
+-            aria-expanded={expanded}
+-          >
+-            {expanded ? 'Hide diff' : 'Diff'}
+-          </button>
+-          {onDiscard && (
+-            <button
+-              type="button"
+-              onClick={() => {
+-                if (confirmDiscard) {
+-                  setConfirmDiscard(false);
+-                  onDiscard();
+-                } else {
+-                  setConfirmDiscard(true);
+-                }
+-              }}
+-              className={cn(
+-                'cursor-pointer rounded px-1.5 py-0.5 text-[10px] transition-colors',
+-                confirmDiscard
+-                  ? 'bg-destructive/15 text-destructive hover:bg-destructive/25'
+-                  : 'text-muted-foreground hover:bg-surface-1 hover:text-destructive',
+-              )}
+-            >
+-              {confirmDiscard ? 'Confirm?' : 'Discard'}
+-            </button>
+-          )}
+-        </div>
+-      </div>
+-      <p className="mt-1 text-[10px] leading-snug text-muted-foreground/60">
+-        {description ?? 'Your text changes — sent with the feedback as a diff.'}
+-      </p>
+-      {expanded && (
+-        <pre className="mt-2 max-h-56 overflow-auto rounded-md bg-muted/40 p-2 font-mono text-[10px] leading-relaxed">
+-          {diffLines.map((line, i) => (
+-            <div
+-              key={i}
+-              className={
+-                line.startsWith('+') ? 'text-success'
+-                : line.startsWith('-') ? 'text-destructive'
+-                : line.startsWith('@@') ? 'text-primary/70'
+-                : 'text-muted-foreground'
+-              }
+-            >
+-              {line.length === 0 ? ' ' : line}
+-            </div>
+-          ))}
+-        </pre>
+-      )}
+-    </div>
+-  );
++const annotationColor = (type: AnnotationType): string => {
++  if (type === AnnotationType.DELETION) return 'text-destructive';
++  if (type === AnnotationType.GLOBAL_COMMENT) return 'text-purple-500';
++  return 'text-annotation-comment';
+ };
+ 
+-const AnnotationCard: React.FC<{
++interface CardProps {
+   annotation: Annotation;
+-  isSelected: boolean;
+-  isMe: boolean;
++  selected: boolean;
++  readOnly: boolean;
+   onSelect: () => void;
+   onDelete: () => void;
+   onEdit?: (updates: Partial<Annotation>) => void;
+-  readOnly?: boolean;
+-  footer?: React.ReactNode;
+-}> = ({ annotation, isSelected, isMe, onSelect, onDelete, onEdit, readOnly = false, footer }) => {
+-  const [isEditing, setIsEditing] = useState(false);
+-  const [editText, setEditText] = useState(annotation.text || '');
+-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+-
+-  useEffect(() => {
+-    if (isEditing && textareaRef.current) {
+-      textareaRef.current.focus();
+-      textareaRef.current.select();
+-    }
+-  }, [isEditing]);
+-
+-  // Update editText when annotation.text changes
+-  useEffect(() => {
+-    if (!isEditing) {
+-      setEditText(annotation.text || '');
+-    }
+-  }, [annotation.text, isEditing]);
+-
+-  const handleStartEdit = (e: React.MouseEvent) => {
+-    e.stopPropagation();
+-    setEditText(annotation.text || '');
+-    setIsEditing(true);
+-  };
++}
+ 
+-  const handleSaveEdit = () => {
+-    if (onEdit) {
+-      onEdit({ text: editText });
+-    }
+-    setIsEditing(false);
+-  };
++const AnnotationCard = ({
++  annotation,
++  selected,
++  readOnly,
++  onSelect,
++  onDelete,
++  onEdit,
++}: CardProps) => {
++  const [editing, setEditing] = useState(false);
++  const [text, setText] = useState(annotation.text ?? '');
+ 
+-  const handleCancelEdit = () => {
+-    setEditText(annotation.text || '');
+-    setIsEditing(false);
+-  };
++  useEffect(() => setText(annotation.text ?? ''), [annotation.text]);
+ 
+-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+-    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+-      e.preventDefault();
+-      handleSaveEdit();
+-    } else if (e.key === 'Escape') {
+-      e.preventDefault();
+-      handleCancelEdit();
+-    }
++  const save = () => {
++    const next = text.trim();
++    if (!next || !onEdit) return;
++    onEdit({ text: next });
++    setEditing(false);
+   };
+ 
+-  const typeColor = TYPE_COLOR[annotation.type] ?? 'text-muted-foreground';
+-  const typeLabel = TYPE_LABEL[annotation.type] ?? 'Note';
+-  const isGlobal = annotation.type === AnnotationType.GLOBAL_COMMENT;
+-
+-  // Shared edit textarea — matches the prototype composer primitive
+-  const editComposer = (
+-    <div onClick={(e: React.MouseEvent) => e.stopPropagation()}>
+-      <textarea
+-        ref={textareaRef}
+-        value={editText}
+-        onChange={(e: React.ChangeEvent<HTMLTextAreaElement>) => setEditText(e.target.value)}
+-        onKeyDown={handleKeyDown}
+-        placeholder="Add your comment..."
+-        aria-label="Annotation comment"
+-        className="w-full resize-none rounded-lg border border-border/50 bg-card px-2.5 py-2 text-base leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted-foreground/50 focus:border-primary/40 focus:ring-1 focus:ring-primary/20"
+-        style={{ fieldSizing: 'content', minHeight: 44 } as React.CSSProperties}
+-      />
+-      <div className="mt-1.5 flex justify-end gap-1.5">
+-        <Button variant="ghost" size="xxs" onClick={handleCancelEdit}>Cancel</Button>
+-        <Button size="xxs" disabled={!editText.trim()} onClick={handleSaveEdit}>Save</Button>
+-      </div>
+-    </div>
+-  );
+-
+   return (
+-    <div
++    <article
+       data-annotation-id={annotation.id}
+-      role="button"
+-      tabIndex={0}
++      className={`rounded-lg border p-3 transition-colors ${selected ? 'border-primary bg-primary/5' : 'border-border/50 bg-background/40 hover:border-border'}`}
+       onClick={onSelect}
+-      onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
+-        if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+-          e.preventDefault();
+-          onSelect();
+-        }
+-      }}
+-      className={cn(
+-        'group w-full cursor-pointer rounded-lg px-3 py-2.5 text-left transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+-        isSelected ? 'bg-surface-1 ring-1 ring-border/50' : 'hover:bg-surface-1/50',
+-      )}
+     >
+-      {/* Header: type word + author · time + actions */}
+-      <div className="mb-1.5 flex items-center gap-1.5">
+-        <span className={cn('text-[11px] font-medium', typeColor)}>{typeLabel}</span>
+-        {annotation.diffContext && (
+-          <span className="text-[9px] px-1.5 py-0.5 rounded font-medium bg-muted text-muted-foreground">
+-            diff
+-          </span>
+-        )}
+-        <span className="text-[10px] text-muted-foreground/50 truncate">
+-          {annotation.author ? `${annotation.author}${isMe ? ' (me)' : ''} · ` : ''}{formatTimestamp(annotation.createdA)}
++      <div className="flex items-center gap-2">
++        <span className={`text-[10px] font-semibold uppercase tracking-wide ${annotationColor(annotation.type)}`}>
++          {annotationLabel(annotation.type)}
++        </span>
++        <span className="ml-auto text-[10px] text-muted-foreground">
++          {new Date(annotation.createdA).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+         </span>
+-        {!readOnly && (
+-          <div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+-            {onEdit && annotation.type !== AnnotationType.DELETION && !isEditing && (
+-              <button
+-                type="button"
+-                onClick={handleStartEdit}
+-                className="relative rounded-md p-1.5 text-muted-foreground transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground"
+-                title="Edit annotation"
+-              >
+-                <PencilIcon />
+-              </button>
+-            )}
+-            <button
+-              type="button"
+-              onClick={(e: React.MouseEvent<HTMLButtonElement>) => { e.stopPropagation(); onDelete(); }}
+-              className="relative rounded-md p-1.5 text-muted-foreground transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-destructive"
+-              title="Delete annotation"
+-            >
+-              <TrashCardIcon />
+-            </button>
+-          </div>
+-        )}
+       </div>
+-
+-      {/* Global Comment - show text directly */}
+-      {isGlobal ? (
+-        isEditing ? (
+-          editComposer
+-        ) : (
+-          <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+-            {annotation.text}
+-          </p>
+-        )
+-      ) : (
+-        <>
+-          {/* Quote — the annotated text */}
+-          <p className="mb-1.5 line-clamp-2 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground/80">
+-            "{annotation.originalText}"
+-          </p>
+-
+-          {/* Comment/Replacement Text */}
+-          {annotation.type !== AnnotationType.DELETION && (
+-            isEditing ? (
+-              editComposer
+-            ) : (
+-              annotation.text && (
+-                <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+-                  {annotation.text}
+-                </p>
+-              )
+-            )
+-          )}
+-        </>
++      {annotation.originalText && (
++        <blockquote className="mt-2 line-clamp-3 border-l-2 border-border pl-2 text-[11px] text-muted-foreground">
++          {annotation.originalText}
++        </blockquote>
+       )}
+-
+-      {/* Attached Images */}
+-      {annotation.images && annotation.images.length > 0 && (
+-        <div className="mt-2 flex flex-wrap gap-1.5">
+-          {annotation.images.map((img, idx) => (
+-            <div key={idx} className="text-center">
+-              <ImageThumbnail
+-                path={img.path}
+-                size="sm"
+-                showRemove={false}
+-              />
+-              <div className="text-[9px] text-muted-foreground truncate max-w-[3rem]" title={img.name}>{img.name}</div>
+-            </div>
+-          ))}
++      {editing ? (
++        <div className="mt-2" onClick={(event) => event.stopPropagation()}>
++          <textarea
++            value={text}
++            onChange={(event) => setText(event.target.value)}
++            className="min-h-20 w-full resize-y rounded-md border border-input bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring"
++            autoFocus
++          />
++          <div className="mt-2 flex justify-end gap-2">
++            <button type="button" className="rounded px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted" onClick={() => { setText(annotation.text ?? ''); setEditing(false); }}>Cancel</button>
++            <button type="button" className="rounded bg-primary px-2 py-1 text-[11px] font-medium text-primary-foreground disabled:opacity-40" disabled={!text.trim()} onClick={save}>Save</button>
++          </div>
+         </div>
+-      )}
+-
+-      {/* Host footer slot (reply/resolve UI etc.) — interactions inside it
+-          must not toggle card selection. */}
+-      {footer != null && footer !== false && (
+-        <div
+-          data-annotation-card-footer="true"
+-          className="mt-2"
+-          onClick={(e: React.MouseEvent) => e.stopPropagation()}
+-          onKeyDown={(e: React.KeyboardEvent) => e.stopPropagation()}
+-        >
+-          {footer}
++      ) : annotation.text ? (
++        <p className="mt-2 whitespace-pre-wrap text-xs text-foreground/90">{annotation.text}</p>
++      ) : null}
++      {!readOnly && !editing && (
++        <div className="mt-2 flex justify-end gap-1" onClick={(event) => event.stopPropagation()}>
++          {annotation.type !== AnnotationType.DELETION && onEdit && (
++            <button type="button" className="rounded px-2 py-1 text-[10px] text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => setEditing(true)}>Edit</button>
++          )}
++          <button type="button" className="rounded px-2 py-1 text-[10px] text-destructive hover:bg-destructive/10" onClick={onDelete}>Delete</button>
+         </div>
+       )}
+-    </div>
++    </article>
+   );
+ };
+ 
+-const CodeAnnotationCard: React.FC<{
+-  annotation: CodeAnnotation;
+-  isSelected: boolean;
+-  isMe: boolean;
+-  onSelect: () => void;
+-  onDelete: () => void;
+-  onEdit?: (updates: Partial<CodeAnnotation>) => void;
+-  readOnly?: boolean;
+-}> = ({ annotation, isSelected, isMe, onSelect, onDelete, onEdit, readOnly = false }) => {
+-  const [isEditing, setIsEditing] = useState(false);
+-  const [editText, setEditText] = useState(annotation.text || '');
+-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+-
+-  useEffect(() => {
+-    if (isEditing) {
+-      textareaRef.current?.focus();
+-      textareaRef.current?.select();
+-    }
+-  }, [isEditing]);
++export const AnnotationPanel = ({
++  isOpen,
++  annotations,
++  onSelect,
++  onDelete,
++  onEdit,
++  selectedId,
++  width,
++  onClose,
++  readOnly = false,
++}: PanelProps) => {
++  const isMobile = useIsMobile();
++  const listRef = useRef<HTMLDivElement>(null);
++  const sorted = [...annotations].sort((left, right) => left.createdA - right.createdA);
+ 
+   useEffect(() => {
+-    if (!isEditing) setEditText(annotation.text || '');
+-  }, [annotation.text, isEditing]);
+-
+-  const handleSaveEdit = () => {
+-    onEdit?.({ text: editText });
+-    setIsEditing(false);
+-  };
+-
+-  const lineRange = annotation.lineStart === annotation.lineEnd
+-    ? `line ${annotation.lineStart}`
+-    : `lines ${annotation.lineStart}-${annotation.lineEnd}`;
+-  const fileName = annotation.filePath.split('/').pop() || annotation.filePath;
+-
+-  const handleCancelEdit = () => {
+-    setIsEditing(false);
+-    setEditText(annotation.text || '');
+-  };
++    if (!selectedId) return;
++    listRef.current?.querySelector(`[data-annotation-id="${CSS.escape(selectedId)}"]`)?.scrollIntoView({
++      behavior: 'smooth',
++      block: 'center',
++    });
++  }, [selectedId]);
+ 
+-  return (
+-    <div
+-      data-annotation-id={annotation.id}
+-      role="button"
+-      tabIndex={0}
+-      onClick={onSelect}
+-      onKeyDown={(e: React.KeyboardEvent<HTMLDivElement>) => {
+-        if ((e.key === 'Enter' || e.key === ' ') && e.target === e.currentTarget) {
+-          e.preventDefault();
+-          onSelect();
+-        }
+-      }}
+-      className={cn(
+-        'group w-full cursor-pointer rounded-lg px-3 py-2.5 text-left transition-colors duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/50',
+-        isSelected ? 'bg-surface-1 ring-1 ring-border/50' : 'hover:bg-surface-1/50',
+-      )}
++  if (!isOpen) return null;
++  const panel = (
++    <aside
++      data-annotation-panel="true"
++      className={`flex shrink-0 flex-col border-l border-border/50 bg-card ${isMobile ? 'fixed inset-y-0 right-0 z-[60] w-full max-w-sm shadow-2xl' : ''}`}
++      style={isMobile ? undefined : { width: width ?? 288 }}
+     >
+-      {/* Header: type word + author · time + actions */}
+-      <div className="mb-1.5 flex items-center gap-1.5">
+-        <span className="text-[11px] font-medium text-primary">Code</span>
+-        <span className="text-[10px] text-muted-foreground/50 truncate">
+-          {annotation.author ? `${annotation.author}${isMe ? ' (me)' : ''} · ` : ''}{formatTimestamp(annotation.createdAt)}
+-        </span>
+-        {!readOnly && (
+-          <div className="ml-auto flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100 [@media(hover:none)]:opacity-100">
+-            {onEdit && !isEditing && (
+-              <button
+-                type="button"
+-                onClick={(e) => { e.stopPropagation(); setIsEditing(true); }}
+-                className="relative rounded-md p-1.5 text-muted-foreground transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-foreground"
+-                title="Edit annotation"
+-              >
+-                <PencilIcon />
+-              </button>
+-            )}
+-            <button
+-              type="button"
+-              onClick={(e) => { e.stopPropagation(); onDelete(); }}
+-              className="relative rounded-md p-1.5 text-muted-foreground transition-colors before:absolute before:-inset-1.5 before:content-[''] hover:text-destructive"
+-              title="Delete annotation"
+-            >
+-              <TrashCardIcon />
+-            </button>
+-          </div>
++      <div className="flex h-11 items-center justify-between border-b border-border/50 px-3">
++        <div className="flex items-center gap-2">
++          <h2 className="text-xs font-medium text-foreground">Annotations</h2>
++          <span className="rounded-full bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary">{annotations.length}</span>
++        </div>
++        {isMobile && onClose && (
++          <button type="button" className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground" onClick={onClose} aria-label="Close annotations">×</button>
+         )}
+       </div>
+-
+-      {/* File / line meta */}
+-      <div className="rounded px-2 py-1 bg-surface-1 font-mono text-[11px] text-muted-foreground truncate" title={annotation.filePath}>
+-        {fileName} · {lineRange}
+-      </div>
+-
+-      {annotation.originalCode && (
+-        <p className="mt-1.5 line-clamp-2 whitespace-pre-wrap font-mono text-[11px] leading-relaxed text-muted-foreground/80">
+-          {annotation.originalCode}
+-        </p>
+-      )}
+-
+-      {isEditing ? (
+-        <div className="mt-1.5" onClick={(e) => e.stopPropagation()}>
+-          <textarea
+-            ref={textareaRef}
+-            value={editText}
+-            onChange={(e) => setEditText(e.target.value)}
+-            onKeyDown={(e) => {
+-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && !e.nativeEvent.isComposing) {
+-                e.preventDefault();
+-                handleSaveEdit();
+-              } else if (e.key === 'Escape') {
+-                e.preventDefault();
+-                handleCancelEdit();
+-              }
+-            }}
+-            placeholder="Add your comment..."
+-            aria-label="Annotation comment"
+-            className="w-full resize-none rounded-lg border border-border/50 bg-card px-2.5 py-2 text-base leading-relaxed text-foreground outline-none transition-colors placeholder:text-muted-foreground/50 focus:border-primary/40 focus:ring-1 focus:ring-primary/20"
+-            style={{ fieldSizing: 'content', minHeight: 44 } as React.CSSProperties}
+-          />
+-          <div className="mt-1.5 flex justify-end gap-1.5">
+-            <Button variant="ghost" size="xxs" onClick={handleCancelEdit}>Cancel</Button>
+-            <Button size="xxs" disabled={!editText.trim()} onClick={handleSaveEdit}>Save</Button>
++      <div ref={listRef} className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto p-2">
++        {sorted.length === 0 ? (
++          <div className="grid flex-1 place-items-center px-4 text-center">
++            <div><p className="text-xs text-muted-foreground">No annotations yet</p><p className="mt-1 text-[11px] text-muted-foreground/70">Select text to annotate</p></div>
+           </div>
+-        </div>
+-      ) : (
+-        annotation.text && (
+-          <p className="mt-1.5 whitespace-pre-wrap text-[13px] leading-relaxed text-foreground/90">
+-            {annotation.text}
+-          </p>
+-        )
+-      )}
++        ) : sorted.map((annotation) => (
++          <AnnotationCard
++            key={annotation.id}
++            annotation={annotation}
++            selected={selectedId === annotation.id}
++            readOnly={readOnly}
++            onSelect={() => onSelect(annotation.id)}
++            onDelete={() => onDelete(annotation.id)}
++            onEdit={onEdit ? (updates) => onEdit(annotation.id, updates) : undefined}
++          />
++        ))}
++      </div>
++    </aside>
++  );
+ 
+-      {annotation.images && annotation.images.length > 0 && (
+-        <div className="mt-2 flex flex-wrap gap-1.5">
+-          {annotation.images.map((img) => (
+-            <div key={img.path} className="text-center">
+-              <ImageThumbnail path={img.path} size="sm" showRemove={false} />
+-              <div className="text-[9px] text-muted-foreground truncate max-w-[3rem]" title={img.name}>{img.name}</div>
+-            </div>
+-          ))}
+-        </div>
+-      )}
+-    </div>
++  if (!isMobile) return panel;
++  return (
++    <>
++      <div className="fixed inset-0 z-[59] bg-background/60 backdrop-blur-sm" onClick={onClose} />
++      {panel}
++    </>
+   );
+ };
+diff --git a/components/Viewer.tsx b/components/Viewer.tsx
+index 2072dc366d992240a0d1a12d00a25d61522a3662..ce3270009dc36862cdcd2270b72a121655cff41d 100644
+--- a/components/Viewer.tsx
++++ b/components/Viewer.tsx
+@@ -1,141 +1,36 @@
+-import React, { useRef, useState, useEffect, useMemo, forwardRef, useImperativeHandle, useCallback } from 'react';
++import React, {
++  forwardRef,
++  useCallback,
++  useEffect,
++  useImperativeHandle,
++  useMemo,
++  useRef,
++  useState,
++} from 'react';
+ import { createPortal } from 'react-dom';
+-import { AnnotationType, type Block, type Annotation, type EditorMode, type InputMethod, type ImageAttachment, type ActionsLabelMode } from '../types';
+-import { applyHighlight, codeBlockClassName, onCodeHighlightSwap } from '../utils/codeHighlight';
+-import { paintCodeBlockMark } from '../utils/codeBlockMark';
+-import { useFenceTheme } from '../hooks/useFenceTheme';
++import DOMPurify from 'dompurify';
++import katex from 'katex';
++import { Marked, type RendererObject } from 'marked';
++import { AnnotationType, type Annotation, type Block, type EditorMode } from '../types';
+ import { computeListIndices, groupBlocks, type Frontmatter } from '../utils/parser';
+ import { buildHeadingSlugMap } from '../utils/slugify';
+ import { copyTextToClipboard } from '../utils/clipboard';
+-import { BlockRenderer } from './BlockRenderer';
+-import { CodeBlock } from './blocks/CodeBlock';
+-import { TableBlock } from './blocks/TableBlock';
+-import { TableToolbar } from './blocks/TableToolbar';
+-import { TablePopout } from './blocks/TablePopout';
+-import { CodePathValidationContext } from './CodePathValidationContext';
+-import { useValidatedCodePaths } from '../hooks/useValidatedCodePaths';
+-import { AnnotationToolbar } from './AnnotationToolbar';
+-import { FloatingQuickLabelPicker } from './FloatingQuickLabelPicker';
+-
+-// Debug error boundary to catch silent toolbar crashes
+-class ToolbarErrorBoundary extends React.Component<
+-  { children: React.ReactNode },
+-  { error: Error | null }
+-> {
+-  state = { error: null as Error | null };
+-  static getDerivedStateFromError(error: Error) { return { error }; }
+-  componentDidCatch(error: Error) { console.error('AnnotationToolbar crashed:', error); }
+-  render() {
+-    if (this.state.error) {
+-      return <div style={{ position: 'fixed', top: 10, left: 10, zIndex: 9999, background: 'red', color: 'white', padding: '8px 12px', borderRadius: 6, fontSize: 12 }}>
+-        Toolbar error: {this.state.error.message}
+-      </div>;
+-    }
+-    return this.props.children;
+-  }
+-}
+-
+-import { CommentPopover, type CommentAskAIHandler } from './CommentPopover';
+-import { TaterSpriteSitting } from './TaterSpriteSitting';
+-import { AttachmentsButton } from './AttachmentsButton';
+-import { MessagesIcon } from './icons/MessagesIcon';
+-import { GraphvizBlock } from './GraphvizBlock';
+-import { MermaidBlock } from './MermaidBlock';
+-import { isGraphvizLanguage, isMermaidLanguage } from './diagramLanguages';
+-import { getIdentity } from '../utils/identity';
+-import { type QuickLabel } from '../utils/quickLabels';
+-import { DocBadges, type LinkedDocBadgeInfo } from './DocBadges';
+-import { PinpointOverlay } from './PinpointOverlay';
+-import { usePinpoint } from '../hooks/usePinpoint';
+ import { useAnnotationHighlighter } from '../hooks/useAnnotationHighlighter';
+-import { useVimSelection } from '../hooks/useVimSelection';
+-import { useScrollViewport } from '../hooks/useScrollViewport';
+-import { decodeAnchorHash } from '../utils/anchors';
+-import { VimModeOverlay } from './VimModeOverlay';
+ 
+ interface ViewerProps {
+   blocks: Block[];
+   markdown: string;
+   frontmatter?: Frontmatter | null;
+   annotations: Annotation[];
+-  onAddAnnotation: (ann: Annotation) => void;
++  onAddAnnotation: (annotation: Annotation) => void;
+   onSelectAnnotation: (id: string | null) => void;
+   selectedAnnotationId: string | null;
+   mode: EditorMode;
+-  inputMethod?: InputMethod;
+-  taterMode: boolean;
+-  globalAttachments?: ImageAttachment[];
+-  onAddGlobalAttachment?: (image: ImageAttachment) => void;
+-  onRemoveGlobalAttachment?: (path: string) => void;
+-  repoInfo?: { display: string; branch?: string; host?: string } | null;
+   stickyActions?: boolean;
+-  /** Render the plan as a floating card on a grid background (shadow/border/padding). Default false. */
+   gridEnabled?: boolean;
+-  onOpenLinkedDoc?: (path: string) => void;
+-  onOpenCodeFile?: (path: string) => void;
+-  imageBaseDir?: string;
+-  /** Directory the active document lives in — used by the code-path validator
+-   *  so out-of-tree relative references (e.g. `../foo.ts` in a linked doc)
+-   *  resolve against the doc's own directory rather than only cwd. */
+-  codePathBaseDir?: string;
+-  /** Opt out of `/api/doc/exists` code-path validation (host without that
+-   *  endpoint). Default undefined for Plannotator => validation stays on. */
+-  disableCodePathValidation?: boolean;
+-  linkedDocInfo?: LinkedDocBadgeInfo | null;
+-  // Plan diff props
+-  planDiffStats?: { additions: number; deletions: number; modifications: number } | null;
+-  isPlanDiffActive?: boolean;
+-  onPlanDiffToggle?: () => void;
+-  hasPreviousVersion?: boolean;
+-  /** Baseline suffix + tooltip for the plan-diff badge (see DocBadges) —
+-   *  annotate/folder sessions pass "since last review"; plan review omits. */
+-  planDiffBaselineLabel?: string;
+-  planDiffBaselineTooltip?: string;
+-  /** Show amber "Demo" badge (portal mode, no shared content loaded) */
+-  showDemoBadge?: boolean;
+-  /** Max width in px for the plan card; null removes the cap entirely. */
+   maxWidth?: number | null;
+-  /** Label for the copy button (default: "Copy plan") */
+   copyLabel?: string;
+-  /**
+-   * Compactness of the action button labels. See ActionsLabelMode in
+-   * types.ts. Defaults to 'full' to preserve the original look for
+-   * callers that don't measure plan-area width.
+-   */
+-  actionsLabelMode?: ActionsLabelMode;
+-  archiveInfo?: { status: 'approved' | 'denied' | 'unknown'; timestamp: string; title: string } | null;
+-  /** Source attribution for HTML/URL annotations (e.g. URL or filename) */
+-  sourceInfo?: string;
+-  /** Absolute path of the annotated source file for the Open-in-app control. */
+-  openInAppPath?: string | null;
+-  /**
+-   * Message picker affordance — annotate-last mode only. Shown as a button in
+-   * the sticky-top action bar so the user can switch to a different recent
+-   * assistant message. Clicking opens the full picker in the left sidebar's
+-   * Messages tab.
+-   */
+-  messagePickerInfo?: { current: number; total: number; onOpen: () => void };
+-  // Checkbox toggle props
+-  onToggleCheckbox?: (blockId: string, checked: boolean) => void;
+-  checkboxOverrides?: Map<string, boolean>;
+-  onAskAI?: CommentAskAIHandler;
+-  /** Whether comment popovers offer image attachments. Hosts without an
+-   *  uploadTransport pass false so the attach affordance never dead-ends.
+-   *  Default true — today's behavior. */
+-  allowImages?: boolean;
+-  /** View-only mode: suppresses every annotation-creation entry point
+-   *  (selection toolbar, comment popovers, quick labels, pinpoint, global
+-   *  comment, attachments, checkbox toggles). Existing annotations still
+-   *  render and remain selectable. Default false — today's behavior. */
+   readOnly?: boolean;
+-  /** Opt-in Vim-style keyboard selection. Default false for compatibility. */
+-  vimModeEnabled?: boolean;
+-  /** Replace the compact Vim badge with the live video-style key HUD. */
+-  vimHudEnabled?: boolean;
+-  /** Show the bottom-right key panel without affecting the HUD reticle. */
+-  vimHudKeyPanelEnabled?: boolean;
+-  /** Persist a user request to hide the bottom-right key panel. */
+-  onVimHudKeyPanelChange?: (enabled: boolean) => void;
+ }
+ 
+ export interface ViewerHandle {
+@@ -144,37 +39,24 @@ export interface ViewerHandle {
+   applySharedAnnotations: (annotations: Annotation[]) => void;
+ }
+ 
+-interface CodeBlockToolbarTarget {
+-  readonly block: Block;
+-  readonly element: HTMLElement;
+-  readonly activation: 'pointer' | 'keyboard';
+-}
++const annotationId = (): string => {
++  if (typeof globalThis.crypto?.randomUUID === 'function') {
++    return globalThis.crypto.randomUUID();
++  }
++  return `annotation-${Date.now()}-${Math.random().toString(36).slice(2)}`;
++};
+ 
+-/**
+- * Renders YAML frontmatter as a styled metadata card.
+- */
+-const FrontmatterCard: React.FC<{ frontmatter: Frontmatter }> = ({ frontmatter }) => {
++const FrontmatterCard = ({ frontmatter }: { frontmatter: Frontmatter }) => {
+   const entries = Object.entries(frontmatter);
+   if (entries.length === 0) return null;
+-
+   return (
+-    <div className="mt-4 mb-6 p-4 bg-muted/30 border border-border/50 rounded-lg">
++    <div className="mt-4 mb-6 rounded-lg border border-border/50 bg-muted/30 p-4">
+       <div className="grid gap-2 text-sm">
+         {entries.map(([key, value]) => (
+           <div key={key} className="flex gap-2">
+-            <span className="font-medium text-muted-foreground min-w-[80px]">{key}:</span>
++            <span className="min-w-[80px] font-medium text-muted-foreground">{key}:</span>
+             <span className="text-foreground">
+-              {Array.isArray(value) ? (
+-                <span className="flex flex-wrap gap-1">
+-                  {value.map((v, i) => (
+-                    <span key={i} className="px-1.5 py-0.5 bg-primary/10 text-primary rounded text-xs">
+-                      {v}
+-                    </span>
+-                  ))}
+-                </span>
+-              ) : (
+-                value
+-              )}
++              {Array.isArray(value) ? value.join(', ') : value}
+             </span>
+           </div>
+         ))}
+@@ -183,12 +65,376 @@ const FrontmatterCard: React.FC<{ frontmatter: Frontmatter }> = ({ frontmatter }
+   );
+ };
+ 
+-/**
+- * Render and annotate a parsed Markdown document.
+- *
+- * Pointer and opt-in keyboard annotations share the same highlight callbacks;
+- * the imperative handle mutates only highlights owned by this viewer.
+- */
++const INLINE_TAGS = ['a', 'br', 'code', 'del', 'em', 's', 'span', 'strong', 'sub', 'sup'];
++const INLINE_ATTRIBUTES = ['href', 'rel', 'target', 'title'];
++const escapeAttribute = (value: string): string => value
++  .replace(/&/g, '&amp;')
++  .replace(/"/g, '&quot;')
++  .replace(/</g, '&lt;')
++  .replace(/>/g, '&gt;');
++
++const planInlineRenderer: RendererObject = {
++  link(token): string {
++    const label = this.parser.parseInline(token.tokens);
++    const href = token.href.trim();
++    if (!href.startsWith('#') && !/^https?:\/\//i.test(href) && !/^mailto:/i.test(href)) {
++      return label;
++    }
++    const title = token.title ? ` title="${escapeAttribute(token.title)}"` : '';
++    const external = href.startsWith('#') ? '' : ' target="_blank" rel="noopener noreferrer"';
++    return `<a href="${escapeAttribute(href)}"${title}${external}>${label}</a>`;
++  },
++};
++const planInlineMarked = new Marked({ renderer: planInlineRenderer });
++
++const PlanInlineMarkdown = React.memo(({ text }: { text: string }) => {
++  const html = useMemo(() => {
++    const rendered = planInlineMarked.parseInline(text, {
++      async: false,
++      gfm: true,
++    });
++    return DOMPurify.sanitize(rendered, {
++      ALLOWED_TAGS: INLINE_TAGS,
++      ALLOWED_ATTR: INLINE_ATTRIBUTES,
++    });
++  }, [text]);
++  return <span dangerouslySetInnerHTML={{ __html: html }} />;
++});
++
++const tableCells = (line: string): string[] => {
++  const value = line.trim().replace(/^\|/, '').replace(/\|$/, '');
++  return value.split(/(?<!\\)\|/).map((cell) => cell.trim().replace(/\\\|/g, '|'));
++};
++
++const planDirectiveKind = (value: string | undefined): string => {
++  const kind = value?.trim().toLowerCase();
++  if (kind === 'info' || kind === 'tip' || kind === 'success'
++    || kind === 'warning' || kind === 'danger' || kind === 'caution') {
++    return kind;
++  }
++  return 'note';
++};
++
++const PlanBlock = React.memo(({
++  block,
++  headingId,
++  listIndex,
++}: {
++  block: Block;
++  headingId?: string;
++  listIndex?: number | null;
++}) => {
++  if (block.type === 'heading') {
++    const level = Math.min(6, Math.max(1, block.level ?? 1));
++    const className = level === 1
++      ? 'mb-4 mt-6 text-2xl font-bold tracking-tight first:mt-0'
++      : level === 2
++        ? 'mb-3 mt-8 text-xl font-semibold text-foreground/90'
++        : 'mb-2 mt-6 text-base font-semibold text-foreground/80';
++    const content = <PlanInlineMarkdown text={block.content} />;
++    if (level === 1) return <h1 id={headingId} data-block-id={block.id} className={className}>{content}</h1>;
++    if (level === 2) return <h2 id={headingId} data-block-id={block.id} className={className}>{content}</h2>;
++    if (level === 3) return <h3 id={headingId} data-block-id={block.id} className={className}>{content}</h3>;
++    if (level === 4) return <h4 id={headingId} data-block-id={block.id} className={className}>{content}</h4>;
++    if (level === 5) return <h5 id={headingId} data-block-id={block.id} className={className}>{content}</h5>;
++    return <h6 id={headingId} data-block-id={block.id} className={className}>{content}</h6>;
++  }
++  if (block.type === 'blockquote') {
++    const alert = block.alertKind;
++    return (
++      <blockquote data-block-id={block.id} className={`my-4 border-l-2 pl-4 text-muted-foreground ${alert ? `alert-${alert}` : 'border-primary/50 italic'}`}>
++        {alert && <div className="alert-title mb-1 text-xs font-semibold uppercase tracking-wide">{alert}</div>}
++        <PlanInlineMarkdown text={block.content} />
++      </blockquote>
++    );
++  }
++  if (block.type === 'list-item') {
++    const marker = block.checked !== undefined
++      ? (block.checked ? '☑' : '☐')
++      : listIndex === null || listIndex === undefined ? '•' : `${listIndex}.`;
++    return (
++      <div data-block-id={block.id} className="my-1.5 flex items-start gap-3 text-sm leading-relaxed" style={{ marginLeft: `${(block.level ?? 0) * 1.25}rem` }}>
++        <span className="select-none text-muted-foreground">{marker}</span>
++        <span className={block.checked ? 'text-muted-foreground line-through' : 'text-foreground/90'}><PlanInlineMarkdown text={block.content} /></span>
++      </div>
++    );
++  }
++  if (block.type === 'math') {
++    const html = katex.renderToString(block.content, {
++      displayMode: true,
++      throwOnError: false,
++      trust: false,
++    });
++    return (
++      <div
++        data-block-id={block.id}
++        data-math-tex={block.content}
++        data-math-display="true"
++        className="math-annotatable my-5 overflow-x-auto rounded-lg border border-border/30 bg-muted/30 p-4 text-center"
++        dangerouslySetInnerHTML={{ __html: html }}
++      />
++    );
++  }
++  if (block.type === 'code') {
++    return (
++      <pre data-block-id={block.id} className="my-5 overflow-x-auto rounded-lg border border-border/30 bg-muted/50 p-4 text-[13px]">
++        <code className={`pn-code font-mono${block.language ? ` language-${block.language}` : ''}`}>{block.content}</code>
++      </pre>
++    );
++  }
++  if (block.type === 'directive') {
++    const kind = planDirectiveKind(block.directiveKind);
++    return (
++      <aside data-block-id={block.id} className={`directive directive-${kind} my-4 rounded-lg border p-4`}>
++        <div className="directive-title mb-1 text-xs font-semibold uppercase tracking-wide">{kind}</div>
++        <p className="text-sm leading-relaxed text-foreground/90"><PlanInlineMarkdown text={block.content} /></p>
++      </aside>
++    );
++  }
++  if (block.type === 'table') {
++    const rows = block.content.split('\n').filter((line) => line.trim());
++    const header = rows[0] ? tableCells(rows[0]) : [];
++    const body = rows.slice(2).map(tableCells);
++    return (
++      <div data-block-id={block.id} className="my-4 overflow-x-auto">
++        <table className="w-full border-collapse text-sm">
++          <thead><tr>{header.map((cell, index) => <th key={index} className="border border-border bg-muted/40 px-3 py-2 text-left font-medium"><PlanInlineMarkdown text={cell} /></th>)}</tr></thead>
++          <tbody>{body.map((row, rowIndex) => <tr key={rowIndex}>{row.map((cell, cellIndex) => <td key={cellIndex} className="border border-border px-3 py-2"><PlanInlineMarkdown text={cell} /></td>)}</tr>)}</tbody>
++        </table>
++      </div>
++    );
++  }
++  if (block.type === 'hr') return <hr data-block-id={block.id} className="my-8 border-border/30" />;
++  return (
++    <p data-block-id={block.id} className="mb-4 text-[15px] leading-relaxed text-foreground/90">
++      <PlanInlineMarkdown text={block.content} />
++    </p>
++  );
++});
++
++const PlanListGroup = React.memo(({ blocks }: { blocks: Block[] }) => {
++  const indices = computeListIndices(blocks);
++  return (
++    <div className="-mx-2 px-2 py-1">
++      {blocks.map((block, index) => (
++        <PlanBlock key={block.id} block={block} listIndex={indices[index]} />
++      ))}
++    </div>
++  );
++});
++
++interface AnnotationToolbarProps {
++  element: HTMLElement;
++  selectionText: string;
++  onDelete: () => void;
++  onComment: () => void;
++  onClose: () => void;
++}
++
++const PlanAnnotationToolbar = ({
++  element,
++  selectionText,
++  onDelete,
++  onComment,
++  onClose,
++}: AnnotationToolbarProps) => {
++  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
++  const [copied, setCopied] = useState(false);
++
++  useEffect(() => {
++    const update = () => {
++      const rect = element.getBoundingClientRect();
++      if (rect.bottom < 0 || rect.top > window.innerHeight) {
++        onClose();
++        return;
++      }
++      setPosition({ top: rect.top - 44, left: rect.left + rect.width / 2 });
++    };
++    update();
++    window.addEventListener('scroll', update, true);
++    window.addEventListener('resize', update);
++    return () => {
++      window.removeEventListener('scroll', update, true);
++      window.removeEventListener('resize', update);
++    };
++  }, [element, onClose]);
++
++  useEffect(() => {
++    const handleKeyDown = (event: KeyboardEvent) => {
++      if (event.key === 'Escape') onClose();
++    };
++    window.addEventListener('keydown', handleKeyDown);
++    return () => window.removeEventListener('keydown', handleKeyDown);
++  }, [onClose]);
++
++  if (!position) return null;
++  return createPortal(
++    <div
++      className="annotation-toolbar fixed z-[100] flex -translate-x-1/2 items-center gap-0.5 rounded-lg border border-border bg-popover p-1 shadow-2xl"
++      style={position}
++      onMouseDown={(event) => event.stopPropagation()}
++      role="toolbar"
++      aria-label="Annotate selection"
++    >
++      <button
++        type="button"
++        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
++        onClick={() => {
++          void copyTextToClipboard(selectionText).then(setCopied);
++        }}
++      >
++        {copied ? 'Copied' : 'Copy'}
++      </button>
++      <button
++        type="button"
++        className="rounded-md px-2 py-1 text-xs text-destructive hover:bg-destructive/10"
++        onClick={onDelete}
++      >
++        Remove
++      </button>
++      <button
++        type="button"
++        className="rounded-md px-2 py-1 text-xs text-annotation-comment hover:bg-muted"
++        onClick={onComment}
++      >
++        Comment
++      </button>
++      <button
++        type="button"
++        className="rounded-md px-2 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
++        onClick={onClose}
++        aria-label="Cancel annotation"
++      >
++        Cancel
++      </button>
++    </div>,
++    document.body,
++  );
++};
++
++interface CommentPopoverProps {
++  anchorEl: HTMLElement;
++  contextText: string;
++  initialText?: string;
++  isGlobal: boolean;
++  onSubmit: (text: string) => void;
++  onClose: () => void;
++}
++
++const PlanCommentPopover = ({
++  anchorEl,
++  contextText,
++  initialText = '',
++  isGlobal,
++  onSubmit,
++  onClose,
++}: CommentPopoverProps) => {
++  const [text, setText] = useState(initialText);
++  const [position, setPosition] = useState<{ top: number; left: number; width: number } | null>(null);
++  const rootRef = useRef<HTMLDivElement>(null);
++  const textareaRef = useRef<HTMLTextAreaElement>(null);
++
++  useEffect(() => {
++    const update = () => {
++      const rect = anchorEl.getBoundingClientRect();
++      const width = Math.min(384, window.innerWidth - 32);
++      const left = Math.max(16, Math.min(
++        rect.left + rect.width / 2 - width / 2,
++        window.innerWidth - width - 16,
++      ));
++      const below = rect.bottom + 8;
++      const top = below + 240 <= window.innerHeight ? below : Math.max(16, rect.top - 248);
++      setPosition({ top, left, width });
++    };
++    update();
++    window.addEventListener('scroll', update, true);
++    window.addEventListener('resize', update);
++    return () => {
++      window.removeEventListener('scroll', update, true);
++      window.removeEventListener('resize', update);
++    };
++  }, [anchorEl]);
++
++  useEffect(() => {
++    textareaRef.current?.focus();
++    const handlePointerDown = (event: PointerEvent) => {
++      const target = event.target;
++      if (!(target instanceof Node)) return;
++      if (text.trim() || rootRef.current?.contains(target)) return;
++      onClose();
++    };
++    document.addEventListener('pointerdown', handlePointerDown, true);
++    return () => document.removeEventListener('pointerdown', handlePointerDown, true);
++  }, [onClose, text]);
++
++  if (!position) return null;
++  const submit = () => {
++    const comment = text.trim();
++    if (comment) onSubmit(comment);
++  };
++  return createPortal(
++    <div
++      ref={rootRef}
++      data-comment-popover="true"
++      className="fixed z-[100] overflow-hidden rounded-xl border border-border bg-popover shadow-2xl"
++      style={position}
++      role="dialog"
++      aria-label={isGlobal ? 'Global plan comment' : 'Plan comment'}
++      onPointerDown={(event) => event.stopPropagation()}
++    >
++      <div className="flex items-center justify-between gap-3 border-b border-border/50 px-3 py-2">
++        <span className="truncate text-xs text-muted-foreground">
++          {isGlobal ? 'Global comment' : contextText || 'Comment'}
++        </span>
++        <button
++          type="button"
++          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
++          onClick={onClose}
++          aria-label="Close comment"
++        >
++          ×
++        </button>
++      </div>
++      <div className="p-3">
++        <textarea
++          ref={textareaRef}
++          value={text}
++          onChange={(event) => setText(event.target.value)}
++          onKeyDown={(event) => {
++            if (event.key === 'Escape') onClose();
++            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
++              event.preventDefault();
++              submit();
++            }
++          }}
++          className="min-h-24 w-full resize-y rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-ring"
++          placeholder={isGlobal ? 'Add a global comment…' : 'Add a comment…'}
++        />
++      </div>
++      <div className="flex items-center justify-end gap-2 border-t border-border/50 px-3 py-2">
++        <span className="mr-auto text-[10px] text-muted-foreground">Ctrl/⌘ + Enter</span>
++        <button
++          type="button"
++          className="rounded-md px-3 py-1.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
++          onClick={onClose}
++        >
++          Cancel
++        </button>
++        <button
++          type="button"
++          className="rounded-md bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground disabled:opacity-40"
++          onClick={submit}
++          disabled={!text.trim()}
++        >
++          Save
++        </button>
++      </div>
++    </div>,
++    document.body,
++  );
++};
++
++/** Proteus's intentionally narrow Plannotator document surface. */
+ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
+   blocks,
+   markdown,
+@@ -198,137 +444,26 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
+   onSelectAnnotation,
+   selectedAnnotationId,
+   mode,
+-  inputMethod = 'drag',
+-  taterMode,
+-  globalAttachments = [],
+-  onAddGlobalAttachment,
+-  onRemoveGlobalAttachment,
+-  repoInfo,
+   stickyActions = true,
+   gridEnabled = false,
+-  planDiffStats,
+-  isPlanDiffActive,
+-  onPlanDiffToggle,
+-  hasPreviousVersion,
+-  planDiffBaselineLabel,
+-  planDiffBaselineTooltip,
+-  showDemoBadge,
+   maxWidth,
+-  onOpenLinkedDoc,
+-  onOpenCodeFile,
+-  linkedDocInfo,
+-  imageBaseDir,
+-  codePathBaseDir,
+-  disableCodePathValidation,
+-  copyLabel,
+-  actionsLabelMode = 'full',
+-  archiveInfo,
+-  sourceInfo,
+-  openInAppPath,
+-  messagePickerInfo,
+-  onToggleCheckbox,
+-  checkboxOverrides,
+-  onAskAI,
+-  allowImages = true,
++  copyLabel = 'Copy plan',
+   readOnly = false,
+-  vimModeEnabled = false,
+-  vimHudEnabled = false,
+-  vimHudKeyPanelEnabled = true,
+-  onVimHudKeyPanelChange,
+ }, ref) => {
+-  const [copied, setCopied] = useState(false);
+-  const [lightbox, setLightbox] = useState<{ src: string; alt: string } | null>(null);
+-  const [locationHash, setLocationHash] = useState(() => window.location.hash);
+-  const globalCommentButtonRef = useRef<HTMLButtonElement>(null);
+-  // Read through a ref: only the imperative removeHighlight path below needs
+-  // it, and CodeBlock re-highlights itself on palette change.
+-  const fenceTheme = useFenceTheme();
+-  const fenceThemeRef = useRef(fenceTheme);
+-  fenceThemeRef.current = fenceTheme;
+-
+-  const handleCopyPlan = async () => {
+-    if (await copyTextToClipboard(markdown)) {
+-      setCopied(true);
+-      setTimeout(() => setCopied(false), 2000);
+-    } else {
+-      console.error('Failed to copy');
+-    }
+-  };
+   const containerRef = useRef<HTMLDivElement>(null);
+-  // The element that actually scrolls; shared by the Vim scroll math, the
+-  // sticky-header observer, and the reticle geometry.
+-  const scrollViewport = useScrollViewport();
+-  // The badge cluster (repo chips / diff badge) is absolutely positioned in the
+-  // card's top padding. One row fits; a second row (diff badge) or mobile
+-  // wrapping outgrows the padding and lands on the document's first heading.
+-  // Measure the cluster and insert exactly the clearance it needs (0 when it fits).
+-  const docBadgesRef = useRef<HTMLDivElement | null>(null);
+-  const [badgeClearance, setBadgeClearance] = useState(0);
+-  useEffect(() => {
+-    const el = docBadgesRef.current;
+-    const article = containerRef.current;
+-    if (!el || !article) { setBadgeClearance(0); return; }
+-    const measure = () => {
+-      const pad = parseFloat(getComputedStyle(article).paddingTop) || 0;
+-      const overflow = el.offsetTop + el.offsetHeight - pad;
+-      setBadgeClearance(overflow > 1 ? overflow + 4 : 0);
+-    };
+-    measure();
+-    const ro = new ResizeObserver(measure);
+-    ro.observe(el);
+-    window.addEventListener('resize', measure);
+-    return () => { ro.disconnect(); window.removeEventListener('resize', measure); };
+-  }, [repoInfo, hasPreviousVersion, showDemoBadge, linkedDocInfo, archiveInfo, sourceInfo, planDiffStats, openInAppPath]);
+-
+-  // Per-doc heading slug map with dedup — computed once per blocks array so
+-  // anchor ids stay stable across re-renders and duplicate heading texts get
+-  // `-1`/`-2`/... suffixes rather than colliding on the same id.
++  const globalCommentButtonRef = useRef<HTMLButtonElement>(null);
++  const [copied, setCopied] = useState(false);
++  const [globalCommentOpen, setGlobalCommentOpen] = useState(false);
+   const headingSlugMap = useMemo(() => buildHeadingSlugMap(blocks), [blocks]);
+-  const isTouchDevice = useMemo(() => window.matchMedia('(pointer: coarse)').matches, []);
+-  const [codeBlockToolbar, setCodeBlockToolbar] =
+-    useState<CodeBlockToolbarTarget | null>(null);
+-  const [isCodeBlockToolbarExiting, setIsCodeBlockToolbarExiting] = useState(false);
+-  const [hoveredTable, setHoveredTable] = useState<{ block: Block; element: HTMLElement } | null>(null);
+-  const [isTableToolbarExiting, setIsTableToolbarExiting] = useState(false);
+-  const tableHoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+-  const [popoutTable, setPopoutTable] = useState<Block | null>(null);
+-  // Viewer-specific comment popover state (global comments + code blocks)
+-  const [viewerCommentPopover, setViewerCommentPopover] = useState<{
+-    anchorEl: HTMLElement;
+-    contextText: string;
+-    selectedText?: string;
+-    initialText?: string;
+-    isGlobal: boolean;
+-    codeBlock?: { block: Block; element: HTMLElement };
+-  } | null>(null);
+-  // Viewer-specific quick label state (code blocks)
+-  const [codeBlockQuickLabelPicker, setCodeBlockQuickLabelPicker] = useState<{
+-    anchorEl: HTMLElement;
+-    codeBlock: { block: Block; element: HTMLElement };
+-  } | null>(null);
+-  const hoverTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+-  const readOnlyRef = useRef(readOnly);
+-  readOnlyRef.current = readOnly;
+-  const stickySentinelRef = useRef<HTMLDivElement>(null);
+-  const lastAutoScrolledHashRef = useRef<string | null>(null);
+-  const [isStuck, setIsStuck] = useState(false);
+-
+-  // Shared annotation infrastructure via hook
+   const {
+     toolbarState,
+-    commentPopover: hookCommentPopover,
+-    quickLabelPicker: hookQuickLabelPicker,
++    commentPopover,
+     handleAnnotate,
+-    handleQuickLabel,
+     handleToolbarClose,
+     handleRequestComment,
+-    handleCommentSubmit: hookCommentSubmit,
+-    handleCommentClose: hookCommentClose,
+-    handleFloatingQuickLabel: hookFloatingQuickLabel,
+-    handleQuickLabelPickerDismiss: hookQuickLabelPickerDismiss,
+-    highlightRange,
+-    highlightMathElement,
+-    removeHighlight: hookRemoveHighlight,
++    handleCommentSubmit,
++    handleCommentClose,
++    removeHighlight,
+     clearAllHighlights,
+     applyAnnotations,
+   } = useAnnotationHighlighter({
+@@ -338,920 +473,121 @@ export const Viewer = forwardRef<ViewerHandle, ViewerProps>(({
+     onSelectAnnotation,
+     selectedAnnotationId,
+     mode,
+-    enabled: !readOnly,
++    enabled: true,
++    interactive: !readOnly,
+   });
+ 
+-  // Refs for code block annotation path
+-  const onAddAnnotationRef = useRef(onAddAnnotation);
+-  useEffect(() => { onAddAnnotationRef.current = onAddAnnotation; }, [onAddAnnotation]);
+-  const modeRef = useRef<EditorMode>(mode);
+-  useEffect(() => { modeRef.current = mode; }, [mode]);
+-
+-  const applyCodeBlockAnnotation = useCallback((
+-    blockId: string,
+-    codeEl: Element,
+-    type: AnnotationType,
+-    text?: string,
+-    images?: ImageAttachment[],
+-    isQuickLabel?: boolean,
+-    quickLabelTip?: string,
+-  ) => {
+-    if (readOnlyRef.current) return;
+-
+-    const id = `codeblock-${Date.now()}`;
+-    const codeText = codeEl.textContent || '';
+-
+-    paintCodeBlockMark(codeEl, id, type);
+-
+-    const newAnnotation: Annotation = {
+-      id,
+-      blockId,
+-      startOffset: 0,
+-      endOffset: codeText.length,
+-      type,
+-      text,
+-      originalText: codeText,
+-      createdA: Date.now(),
+-      author: getIdentity(),
+-      images,
+-      ...(isQuickLabel ? { isQuickLabel: true } : {}),
+-      ...(quickLabelTip ? { quickLabelTip } : {}),
+-    };
+-
+-    onAddAnnotationRef.current(newAnnotation);
+-    window.getSelection()?.removeAllRanges();
+-  }, []);
+-
+-  // Live annotation list for the imperative DOM paths below, which run outside
+-  // React's render (highlight swaps, the imperative handle).
+-  const annotationsRef = useRef(annotations);
+-  annotationsRef.current = annotations;
+-
+-  // `removeHighlight` runs BEFORE the host drops the annotation from state and
+-  // re-highlights the block on the way out, so for one tick `annotationsRef`
+-  // still lists an annotation whose mark is deliberately gone. Remember those
+-  // ids so the swap listener below never paints a removed annotation back in,
+-  // whichever tick that block's re-highlight lands in.
+-  const removedAnnotationIdsRef = useRef<Set<string>>(new Set());
+-  // Retire a tombstone as soon as the host's list agrees the annotation is
+-  // gone: the window it guards is only the tick between removeHighlight and
+-  // the state update, and keeping it would block a later restore that brings
+-  // the same annotation (same id) back from a draft.
+-  for (const id of removedAnnotationIdsRef.current) {
+-    if (!annotations.some((a) => a.id === id)) removedAnnotationIdsRef.current.delete(id);
+-  }
+-
+-  // A highlight swap replaces a `<code>` element's children — that is how the
+-  // palette/mode change repaints tokens, and how the first async grammar
+-  // attach lands after load. It also destroys any annotation mark inside the
+-  // fence. Re-paint it here, SYNCHRONOUSLY after the write, so the block ends
+-  // up with both the new theme's tokens and its mark.
+-  //
+-  // Being driven by the swap is also what makes the restore race safe without
+-  // timing: a share/draft restore that painted before the swap is
+-  // re-established in the same task the swap ran in, and one that runs after
+-  // it finds the mark already present and leaves it alone.
+-  useEffect(() => onCodeHighlightSwap((codeEl) => {
+-    const container = containerRef.current;
+-    if (!container || !container.contains(codeEl)) return;
+-    // The swap always clears the element, so a surviving mark means this write
+-    // was not the one that owns this block's contents.
+-    if (codeEl.querySelector('[data-bind-id]')) return;
+-
+-    const codeText = codeEl.textContent ?? '';
+-    if (!codeText) return;
+-    const blockId = codeEl.closest('[data-block-id]')?.getAttribute('data-block-id') ?? '';
+-
+-    // Fenced code is annotated all-or-nothing, so this block's annotations are
+-    // exactly the ones whose originalText is its full text. Share-restored
+-    // annotations arrive with an empty blockId (it is filled in during restore),
+-    // so an unset blockId still counts. The last one wins, matching what
+-    // annotating the same block twice does.
+-    const owner = annotationsRef.current.filter((a) =>
+-      a.type !== AnnotationType.GLOBAL_COMMENT
+-      && !a.diffContext
+-      && a.originalText === codeText
+-      && (a.blockId === blockId || !a.blockId)
+-      && !removedAnnotationIdsRef.current.has(a.id)
+-      && !container.querySelector(`[data-bind-id="${a.id}"], [data-highlight-id="${a.id}"]`)
+-    ).at(-1);
+-
+-    if (owner) paintCodeBlockMark(codeEl, owner.id, owner.type);
+-  }), []);
+-
+-  // Pinpoint mode: hover + click to select elements
+-  const handlePinpointCodeBlockClick = useCallback((blockId: string, element: HTMLElement) => {
+-    if (readOnlyRef.current) return;
+-
+-    const block = blocks.find((candidate) => candidate.id === blockId);
+-    const codeEl = element.querySelector('code');
+-    if (!block || !codeEl) return;
+-    // In pinpoint mode, apply code block annotation based on current editor mode
+-    if (modeRef.current === 'redline') {
+-      applyCodeBlockAnnotation(blockId, codeEl, AnnotationType.DELETION);
+-    } else if (modeRef.current === 'quickLabel') {
+-      setCodeBlockQuickLabelPicker({
+-        anchorEl: element,
+-        codeBlock: { block, element },
+-      });
+-    } else {
+-      // Show comment popover anchored to the code block
+-      setViewerCommentPopover({
+-        anchorEl: element,
+-        contextText: (codeEl.textContent || '').slice(0, 80),
+-        selectedText: codeEl.textContent || '',
+-        isGlobal: false,
+-        codeBlock: { block, element },
+-      });
+-    }
+-  }, [applyCodeBlockAnnotation, blocks]);
+-
+-  const handleKeyboardCodeBlockAction = useCallback((
+-    blockId: string,
+-    element: HTMLElement,
+-    modeOverride?: EditorMode,
+-  ) => {
+-    if (readOnlyRef.current) return;
+-
+-    const block = blocks.find((candidate) => candidate.id === blockId);
+-    const codeEl = element.querySelector('code');
+-    if (!block || !codeEl) return;
+-
+-    const effectiveMode = modeOverride ?? modeRef.current;
+-    if (effectiveMode === 'redline') {
+-      applyCodeBlockAnnotation(blockId, codeEl, AnnotationType.DELETION);
+-      return;
+-    }
+-    if (effectiveMode === 'quickLabel') {
+-      setCodeBlockQuickLabelPicker({
+-        anchorEl: element,
+-        codeBlock: { block, element },
+-      });
+-      return;
+-    }
+-    if (effectiveMode === 'selection') {
+-      if (hoverTimeoutRef.current) {
+-        clearTimeout(hoverTimeoutRef.current);
+-        hoverTimeoutRef.current = null;
+-      }
+-      setCodeBlockToolbar({ block, element, activation: 'keyboard' });
+-      return;
+-    }
+-    setViewerCommentPopover({
+-      anchorEl: element,
+-      contextText: (codeEl.textContent || '').slice(0, 80),
+-      selectedText: codeEl.textContent || '',
+-      isGlobal: false,
+-      codeBlock: { block, element },
+-    });
+-  }, [applyCodeBlockAnnotation, blocks]);
+-
+-  const vimModeActive = vimModeEnabled && !readOnly;
+-  const keyboardCodeBlockToolbarOpen = codeBlockToolbar?.activation === 'keyboard';
+-  const vimBlocked = !!toolbarState
+-    || !!hookCommentPopover
+-    || !!viewerCommentPopover
+-    || !!hookQuickLabelPicker
+-    || !!codeBlockQuickLabelPicker
+-    || keyboardCodeBlockToolbarOpen
+-    || !!isPlanDiffActive
+-    || !!popoutTable
+-    || !!lightbox;
+-  const clearPinpointHoverRef = useRef<() => void>(() => {});
+-  const handleVimCommand = useCallback(() => {
+-    clearPinpointHoverRef.current();
+-  }, []);
+-  const vim = useVimSelection({
+-    containerRef,
+-    scrollViewport,
+-    enabled: vimModeActive,
+-    hudEnabled: vimHudEnabled,
+-    blocked: vimBlocked,
+-    activeMode: mode,
+-    contentVersion: blocks,
+-    onHighlightRange: highlightRange,
+-    onCodeBlockAction: handleKeyboardCodeBlockAction,
+-    onMathAction: highlightMathElement,
+-    onHandledCommand: handleVimCommand,
+-  });
+-
+-  const { hoverTarget, clearHover: clearPinpointHover } = usePinpoint({
+-    containerRef,
+-    inputMethod,
+-    enabled: !readOnly && !toolbarState && !hookCommentPopover && !viewerCommentPopover && !hookQuickLabelPicker && !codeBlockQuickLabelPicker && !(isPlanDiffActive ?? false) && !vim.helpOpen,
+-    onSelectRange: highlightRange,
+-    onCodeBlockClick: handlePinpointCodeBlockClick,
+-  });
+-  clearPinpointHoverRef.current = clearPinpointHover;
+-  const vimOwnsHudTarget = vimHudEnabled
+-    && vim.state.phase !== 'inactive'
+-    && (vim.focused || vim.state.phase === 'action');
+-  const vimOwnsDocumentNavigation = vimModeActive
+-    && vim.focused
+-    && vim.state.phase !== 'inactive'
+-    && vim.state.phase !== 'action';
+-  const legacyVimTarget = !vimHudEnabled
+-    && (vim.focused || vim.state.phase === 'action')
+-    ? vim.activeTarget
+-    : null;
+-  const pinpointOverlayTarget = vimOwnsHudTarget
+-    ? null
+-    : (inputMethod === 'pinpoint' ? hoverTarget : null) ?? legacyVimTarget;
+-
+-  useEffect(() => {
+-    if (!readOnly) return;
+-    if (hoverTimeoutRef.current) {
+-      clearTimeout(hoverTimeoutRef.current);
+-      hoverTimeoutRef.current = null;
+-    }
+-    setCodeBlockToolbar(null);
+-    setIsCodeBlockToolbarExiting(false);
+-    setViewerCommentPopover(null);
+-    setCodeBlockQuickLabelPicker(null);
+-  }, [readOnly]);
++  useImperativeHandle(ref, () => ({
++    removeHighlight,
++    clearAllHighlights,
++    applySharedAnnotations: applyAnnotations,
++  }), [applyAnnotations, clearAllHighlights, removeHighlight]);
+ 
+   useEffect(() => {
+-    if (!vimOwnsDocumentNavigation) return;
+-    if (hoverTimeoutRef.current) {
+-      clearTimeout(hoverTimeoutRef.current);
+-      hoverTimeoutRef.current = null;
+-    }
+-    setCodeBlockToolbar((current) => (
+-      current?.activation === 'pointer' ? null : current
++    const eligible = annotations.filter((annotation) => (
++      annotation.type !== AnnotationType.GLOBAL_COMMENT && !!annotation.originalText
+     ));
+-    setIsCodeBlockToolbarExiting(false);
+-  }, [vimOwnsDocumentNavigation]);
+-
+-  // Suppress native context menu on touch devices (prevents cut/copy/paste overlay on mobile)
+-  useEffect(() => {
+-    const container = containerRef.current;
+-    if (!container || !isTouchDevice) return;
+-
+-    const handleContextMenu = (e: Event) => {
+-      e.preventDefault();
+-    };
+-
+-    container.addEventListener('contextmenu', handleContextMenu);
+-    return () => container.removeEventListener('contextmenu', handleContextMenu);
+-  }, []);
+-
+-  // Detect when sticky action bar is "stuck" to show card background.
+-  // The IntersectionObserver root must be the actual scroll element — the
+-  // OverlayScrollArea viewport — not the <main> host, which doesn't scroll.
+-  useEffect(() => {
+-    if (!stickyActions || !stickySentinelRef.current || !scrollViewport) return;
+-    const observer = new IntersectionObserver(
+-      ([entry]) => setIsStuck(!entry.isIntersecting),
+-      { root: scrollViewport, threshold: 0 }
+-    );
+-    observer.observe(stickySentinelRef.current);
+-    return () => observer.disconnect();
+-  }, [stickyActions, scrollViewport]);
+-
+-  useEffect(() => {
+-    const handleHashChange = () => {
+-      lastAutoScrolledHashRef.current = null;
+-      setLocationHash(window.location.hash);
+-    };
+-
+-    window.addEventListener('hashchange', handleHashChange);
+-    return () => window.removeEventListener('hashchange', handleHashChange);
+-  }, []);
+-
+-  const scrollToAnchor = useCallback((hash: string) => {
+-    const anchor = decodeAnchorHash(hash);
+-    if (!anchor) return false;
+-
+-    const container = containerRef.current;
+-    if (!container || !scrollViewport) return false;
+-
+-    const target = document.getElementById(anchor);
+-    if (!target || !container.contains(target)) return false;
+-
+-    const stickyActionsEl = container.querySelector<HTMLElement>('[data-sticky-actions]');
+-    const stickyTop = stickyActionsEl
+-      ? Number.parseFloat(window.getComputedStyle(stickyActionsEl).top || '0') || 0
+-      : 0;
+-    const headerOffset = stickyActionsEl
+-      ? stickyActionsEl.getBoundingClientRect().height + stickyTop
+-      : 0;
+-    const containerRect = scrollViewport.getBoundingClientRect();
+-    const targetRect = target.getBoundingClientRect();
+-    const relativeTop = targetRect.top - containerRect.top;
+-    const offsetPosition = scrollViewport.scrollTop + relativeTop - headerOffset;
+-
+-    scrollViewport.scrollTo({
+-      top: Math.max(0, offsetPosition),
+-      behavior: 'smooth',
+-    });
+-    return true;
+-  }, [scrollViewport]);
+-
+-  useEffect(() => {
+-    if (!scrollViewport || !locationHash || lastAutoScrolledHashRef.current === locationHash) return;
+     const timer = window.setTimeout(() => {
+-      if (scrollToAnchor(locationHash)) {
+-        lastAutoScrolledHashRef.current = locationHash;
+-      }
++      clearAllHighlights();
++      applyAnnotations(eligible);
+     }, 0);
+     return () => window.clearTimeout(timer);
+-  }, [blocks, locationHash, scrollToAnchor, scrollViewport]);
+-
+-  // Use the native copy event so clipboard writes are synchronous (Safari
+-  // rejects the async navigator.clipboard API outside the user-gesture window).
+-  // web-highlighter clears the DOM selection on mouseup, so the browser has
+-  // nothing to copy by the time Cmd+C fires — we inject the captured text here.
+-  useEffect(() => {
+-    const handleCopy = (e: ClipboardEvent) => {
+-      const tag = (e.target as HTMLElement)?.tagName;
+-      if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+-
+-      if (toolbarState?.selectionText) {
+-        e.preventDefault();
+-        e.clipboardData?.setData('text/plain', toolbarState.selectionText);
+-      }
+-    };
+-
+-    document.addEventListener('copy', handleCopy);
+-    return () => document.removeEventListener('copy', handleCopy);
+-  }, [toolbarState]);
+-
+-  // Imperative handle — delegates to hook, extends removeHighlight for code blocks
+-  useImperativeHandle(ref, () => ({
+-    removeHighlight: (id: string) => {
+-      // The re-highlight below notifies the swap listener, which would happily
+-      // paint this annotation's mark straight back in — the host has not
+-      // dropped it from state yet. Tombstone the id first.
+-      removedAnnotationIdsRef.current.add(id);
+-      // Code block annotations need syntax re-highlighting after removal.
+-      // Must run BEFORE hookRemoveHighlight, which removes the <mark> elements.
+-      const manualHighlights = containerRef.current?.querySelectorAll(`[data-bind-id="${id}"]`);
+-      manualHighlights?.forEach(el => {
+-        const parent = el.parentNode;
+-        if (parent && parent.nodeName === 'CODE') {
+-          const codeEl = parent as HTMLElement;
+-          const plainText = el.textContent || '';
+-          el.remove();
+-          codeEl.textContent = plainText;
+-          const block = blocks.find(b => b.id === codeEl.closest('[data-block-id]')?.getAttribute('data-block-id'));
+-          codeEl.className = codeBlockClassName(block?.language);
+-          // Language-less fences stay plain (#1212) — applyHighlight never guesses.
+-          applyHighlight(codeEl, plainText, block?.language, fenceThemeRef.current);
+-        }
+-      });
+-
+-      hookRemoveHighlight(id);
+-    },
+-    clearAllHighlights,
+-    applySharedAnnotations: applyAnnotations,
+-  }), [hookRemoveHighlight, clearAllHighlights, applyAnnotations, blocks]);
+-
+-  // --- Viewer-specific: code block annotation ---
+-
+-  const handleCodeBlockAnnotate = (type: AnnotationType) => {
+-    if (readOnlyRef.current || !codeBlockToolbar) return;
+-    const codeEl = codeBlockToolbar.element.querySelector('code');
+-    if (!codeEl) return;
+-    applyCodeBlockAnnotation(codeBlockToolbar.block.id, codeEl, type);
+-    setCodeBlockToolbar(null);
+-  };
+-
+-  const handleCodeBlockQuickLabel = (label: QuickLabel) => {
+-    if (readOnlyRef.current || !codeBlockToolbar) return;
+-    const codeEl = codeBlockToolbar.element.querySelector('code');
+-    if (!codeEl) return;
+-    applyCodeBlockAnnotation(
+-      codeBlockToolbar.block.id, codeEl, AnnotationType.COMMENT,
+-      `${label.emoji} ${label.text}`, undefined, true, label.tip
+-    );
+-    setCodeBlockToolbar(null);
+-  };
+-
+-  const handleCodeBlockToolbarClose = () => {
+-    setCodeBlockToolbar(null);
+-  };
+-
+-  // Viewer-specific comment popover handlers (code blocks + global comments)
+-
+-  const handleCodeBlockRequestComment = (initialChar?: string) => {
+-    if (readOnlyRef.current || !codeBlockToolbar) return;
+-    const codeText = codeBlockToolbar.element.querySelector('code')?.textContent || '';
+-    setViewerCommentPopover({
+-      anchorEl: codeBlockToolbar.element,
+-      contextText: codeText.slice(0, 80),
+-      selectedText: codeText,
+-      initialText: initialChar,
+-      isGlobal: false,
+-      codeBlock: codeBlockToolbar,
++  }, [annotations, applyAnnotations, blocks, clearAllHighlights, readOnly]);
++
++  const copyPlan = useCallback(async () => {
++    if (!await copyTextToClipboard(markdown)) return;
++    setCopied(true);
++    setTimeout(() => setCopied(false), 1500);
++  }, [markdown]);
++
++  const addGlobalComment = useCallback((text: string) => {
++    onAddAnnotation({
++      id: annotationId(),
++      blockId: '',
++      startOffset: 0,
++      endOffset: 0,
++      type: AnnotationType.GLOBAL_COMMENT,
++      text,
++      originalText: '',
++      createdA: Date.now(),
++      author: 'Owner',
+     });
+-    setCodeBlockToolbar(null);
+-  };
+-
+-  const handleViewerCommentSubmit = (text: string, images?: ImageAttachment[]) => {
+-    if (readOnlyRef.current || !viewerCommentPopover) return;
+-
+-    if (viewerCommentPopover.isGlobal) {
+-      const newAnnotation: Annotation = {
+-        id: `global-${Date.now()}`,
+-        blockId: '',
+-        startOffset: 0,
+-        endOffset: 0,
+-        type: AnnotationType.GLOBAL_COMMENT,
+-        text: text.trim(),
+-        originalText: '',
+-        createdA: Date.now(),
+-        author: getIdentity(),
+-        images,
+-      };
+-      onAddAnnotation(newAnnotation);
+-    } else if (viewerCommentPopover.codeBlock) {
+-      const codeEl = viewerCommentPopover.codeBlock.element.querySelector('code');
+-      if (codeEl) {
+-        applyCodeBlockAnnotation(viewerCommentPopover.codeBlock.block.id, codeEl, AnnotationType.COMMENT, text, images);
+-      }
+-    }
+-
+-    setViewerCommentPopover(null);
+-  };
+-
+-  const handleViewerCommentClose = useCallback(() => {
+-    setViewerCommentPopover(null);
+-  }, []);
+-
+-  const codePathValidation = useValidatedCodePaths(markdown, codePathBaseDir, disableCodePathValidation);
++    setGlobalCommentOpen(false);
++  }, [onAddAnnotation]);
+ 
+   return (
+-    <CodePathValidationContext.Provider value={codePathValidation}>
+     <div className="relative z-50 w-full" style={maxWidth === null ? undefined : { maxWidth: maxWidth ?? 832 }}>
+-      {taterMode && <TaterSpriteSitting />}
+       <article
+         ref={containerRef}
+         data-print-region="article"
+-        data-vim-mode={vimModeActive ? 'enabled' : undefined}
+-        data-vim-phase={vimModeActive ? vim.state.phase : undefined}
+-        data-vim-focused={vimModeActive ? String(vim.focused) : undefined}
+-        data-vim-blocked={vimModeActive ? String(vimBlocked) : undefined}
+-        data-vim-target-key={vimModeActive ? vim.activeTarget?.key : undefined}
+-        tabIndex={vimModeActive ? 0 : undefined}
+-        onFocus={vim.onFocus}
+-        onBlur={vim.onBlur}
+-        onMouseDown={vim.onMouseDown}
+-        className={`w-full bg-card rounded-xl py-5 md:py-8 lg:py-10 xl:py-12 relative ${gridEnabled ? 'px-5 md:px-8 lg:px-10 xl:px-12 shadow-xl border border-border/50' : ''} ${inputMethod === 'pinpoint' ? 'cursor-pointer' : ''}`}
+-        style={{
+-          WebkitTouchCallout: 'none',
+-          ...(vimModeActive ? { outline: 'none' } : {}),
+-        } as React.CSSProperties}
++        className={`relative w-full rounded-xl bg-card py-5 md:py-8 lg:py-10 xl:py-12 ${
++          gridEnabled ? 'border border-border/50 px-5 shadow-xl md:px-8 lg:px-10 xl:px-12' : ''
++        }`}
+       >
+-        {/* Repo info + plan diff badge + demo badge + linked doc badge + archive badge - top left */}
+-        {(repoInfo || hasPreviousVersion || showDemoBadge || linkedDocInfo || archiveInfo || sourceInfo || openInAppPath) && (
+-          <div ref={docBadgesRef} data-print-hide className={`absolute top-3 md:top-4 ${gridEnabled ? 'left-3 md:left-5' : 'left-0'}`}>
+-            <DocBadges
+-              layout="column"
+-              repoInfo={repoInfo}
+-              planDiffStats={planDiffStats}
+-              isPlanDiffActive={isPlanDiffActive}
+-              hasPreviousVersion={hasPreviousVersion}
+-              onPlanDiffToggle={onPlanDiffToggle}
+-              planDiffBaselineLabel={planDiffBaselineLabel}
+-              planDiffBaselineTooltip={planDiffBaselineTooltip}
+-              showDemoBadge={showDemoBadge}
+-              archiveInfo={archiveInfo}
+-              linkedDocInfo={linkedDocInfo}
+-              sourceInfo={sourceInfo}
+-              openInAppPath={openInAppPath}
+-            />
+-          </div>
+-        )}
+-
+-        {/* Clearance so document content starts below the (absolute) badge cluster
+-            when it outgrows the card's top padding — see the measuring effect above. */}
+-        {badgeClearance > 0 && <div data-print-hide style={{ height: badgeClearance }} aria-hidden="true" />}
+-
+-        {/* Sentinel for sticky detection */}
+-        {stickyActions && <div ref={stickySentinelRef} className="h-0 w-0 float-right" aria-hidden="true" />}
+-
+-        {/* Header buttons - top right */}
+-        <div data-print-hide data-sticky-actions className={`${stickyActions ? 'sticky top-3' : ''} z-30 float-right flex items-start gap-1 md:gap-2 rounded-lg p-1 md:p-2 transition-colors duration-150 ${isStuck ? 'bg-card/95 backdrop-blur-sm shadow-sm' : ''} ${gridEnabled ? '-mr-3 md:-mr-5 lg:-mr-7 xl:-mr-9' : '-mr-1 md:-mr-2'} mt-6 md:-mt-5 lg:-mt-7 xl:-mt-9`}>
+-          {messagePickerInfo && (
++        <div
++          data-print-hide
++          className={`${stickyActions ? 'sticky top-3' : ''} z-30 float-right mt-6 flex items-start gap-1 rounded-lg bg-card/95 p-1 shadow-sm backdrop-blur-sm md:-mt-5 md:gap-2 md:p-2 lg:-mt-7 xl:-mt-9`}
++        >
++          {!readOnly && (
+             <button
+-              onClick={messagePickerInfo.onOpen}
+-              className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-md transition-colors"
+-              title="Pick a different message to annotate"
++              ref={globalCommentButtonRef}
++              type="button"
++              className="rounded-md bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
++              onClick={() => setGlobalCommentOpen(true)}
+             >
+-              <MessagesIcon />
+-              {actionsLabelMode === 'full' && (
+-                <span>Message {messagePickerInfo.current} of {messagePickerInfo.total}</span>
+-              )}
+-              {actionsLabelMode === 'short' && (
+-                <span>{messagePickerInfo.current}/{messagePickerInfo.total}</span>
+-              )}
++              Global comment
+             </button>
+           )}
+-
+-          {/* Attachments button */}
+-          {!readOnly && onAddGlobalAttachment && onRemoveGlobalAttachment && (
+-            <AttachmentsButton
+-              images={globalAttachments}
+-              onAdd={onAddGlobalAttachment}
+-              onRemove={onRemoveGlobalAttachment}
+-              variant="toolbar"
+-              hideLabel={actionsLabelMode === 'icon'}
+-            />
+-          )}
+-
+-          {/* <span className="md:hidden">Comment</span><span className="hidden md:inline">Global comment</span> button */}
+-          {!readOnly && (
+-          <button
+-            ref={globalCommentButtonRef}
+-            onClick={() => {
+-              setViewerCommentPopover({
+-                anchorEl: globalCommentButtonRef.current!,
+-                contextText: '',
+-                isGlobal: true,
+-              });
+-            }}
+-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-md transition-colors"
+-            title="Add global comment"
+-          >
+-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-              <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9.004 9.004 0 008.716-6.747M12 21a9.004 9.004 0 01-8.716-6.747M12 21c2.485 0 4.5-4.03 4.5-9S14.485 3 12 3m0 18c-2.485 0-4.5-4.03-4.5-9S9.515 3 12 3m0 0a8.997 8.997 0 017.843 4.582M12 3a8.997 8.997 0 00-7.843 4.582m15.686 0A11.953 11.953 0 0112 10.5c-2.998 0-5.74-1.1-7.843-2.918m15.686 0A8.959 8.959 0 0121 12c0 .778-.099 1.533-.284 2.253m0 0A17.919 17.919 0 0112 16.5c-3.162 0-6.133-.815-8.716-2.247m0 0A9.015 9.015 0 013 12c0-1.605.42-3.113 1.157-4.418" />
+-            </svg>
+-            {actionsLabelMode === 'full' && <span>Global comment</span>}
+-            {actionsLabelMode === 'short' && <span>Comment</span>}
+-          </button>
+-          )}
+-
+-          {/* Copy plan/file button */}
+           <button
+-            onClick={handleCopyPlan}
+-            className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:text-foreground bg-muted/50 hover:bg-muted rounded-md transition-colors"
+-            title={copied ? 'Copied!' : copyLabel || (linkedDocInfo ? 'Copy file' : 'Copy plan')}
++            type="button"
++            className="rounded-md bg-muted/50 px-2.5 py-1.5 text-xs font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
++            onClick={() => void copyPlan()}
+           >
+-            {copied ? (
+-              <>
+-                <svg className="w-3.5 h-3.5 text-success" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+-                </svg>
+-                Copied!
+-              </>
+-            ) : (
+-              <>
+-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+-                  <path strokeLinecap="round" strokeLinejoin="round" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+-                </svg>
+-                {actionsLabelMode === 'full' && <span>{copyLabel || (linkedDocInfo ? 'Copy file' : 'Copy plan')}</span>}
+-                {actionsLabelMode === 'short' && <span>Copy</span>}
+-              </>
+-            )}
++            {copied ? 'Copied' : copyLabel}
+           </button>
+         </div>
+-        {frontmatter && <><div className="clear-right md:hidden" /><FrontmatterCard frontmatter={frontmatter} /></>}
+-        {!frontmatter && blocks.length > 0 && blocks[0].type !== 'heading' && <div className="mt-4" />}
+-        {groupBlocks(blocks).map(group =>
+-          group.type === 'list-group' ? (
+-            (() => {
+-              const indices = computeListIndices(group.blocks);
+-              return (
+-                <div key={group.key} data-pinpoint-group="list" className="py-1 -mx-2 px-2">
+-                  {group.blocks.map((block, i) => (
+-                    <BlockRenderer
+-                      imageBaseDir={imageBaseDir}
+-                      onImageClick={(src, alt) => setLightbox({ src, alt })}
+-                      key={block.id}
+-                      block={block}
+-                      orderedIndex={indices[i]}
+-                      onOpenLinkedDoc={onOpenLinkedDoc}
+-                      onOpenCodeFile={onOpenCodeFile}
+-                      onToggleCheckbox={readOnly ? undefined : onToggleCheckbox}
+-                      checkboxOverrides={checkboxOverrides}
+-                      githubRepo={repoInfo?.display}
+-                      headingAnchorId={headingSlugMap.get(block.id)}
+-                      onNavigateAnchor={scrollToAnchor}
+-                    />
+-                  ))}
+-                </div>
+-              );
+-            })()
+-          ) : group.block.type === 'code' && isMermaidLanguage(group.block.language) ? (
+-            <MermaidBlock key={group.block.id} block={group.block} />
+-          ) : group.block.type === 'code' && isGraphvizLanguage(group.block.language) ? (
+-            <GraphvizBlock key={group.block.id} block={group.block} />
+-          ) : group.block.type === 'table' ? (
+-            <TableBlock
+-              key={group.block.id}
+-              block={group.block}
+-              imageBaseDir={imageBaseDir}
+-              onImageClick={(src, alt) => setLightbox({ src, alt })}
+-              onOpenLinkedDoc={onOpenLinkedDoc}
+-              onOpenCodeFile={onOpenCodeFile}
+-              githubRepo={repoInfo?.display}
+-              onNavigateAnchor={scrollToAnchor}
+-              onHover={(element) => {
+-                if (tableHoverTimeoutRef.current) {
+-                  clearTimeout(tableHoverTimeoutRef.current);
+-                  tableHoverTimeoutRef.current = null;
+-                }
+-                setIsTableToolbarExiting(false);
+-                if (!toolbarState) {
+-                  setHoveredTable({ block: group.block, element });
+-                }
+-              }}
+-              onLeave={() => {
+-                tableHoverTimeoutRef.current = setTimeout(() => {
+-                  setIsTableToolbarExiting(true);
+-                  setTimeout(() => {
+-                    setHoveredTable(null);
+-                    setIsTableToolbarExiting(false);
+-                  }, 150);
+-                }, 100);
+-              }}
+-            />
+-          ) : group.block.type === 'code' ? (
+-            <CodeBlock
+-              key={group.block.id}
+-              block={group.block}
+-              onHover={readOnly || inputMethod === 'pinpoint' ? undefined : (element) => {
+-                // Clear any pending leave timeout
+-                if (hoverTimeoutRef.current) {
+-                  clearTimeout(hoverTimeoutRef.current);
+-                  hoverTimeoutRef.current = null;
+-                }
+-                // Cancel exit animation if re-entering
+-                setIsCodeBlockToolbarExiting(false);
+-                // Only show hover toolbar if no selection toolbar is active
+-                if (
+-                  !toolbarState
+-                  && !vimOwnsDocumentNavigation
+-                  && !keyboardCodeBlockToolbarOpen
+-                ) {
+-                  setCodeBlockToolbar({
+-                    block: group.block,
+-                    element,
+-                    activation: 'pointer',
+-                  });
+-                }
+-              }}
+-              onLeave={readOnly || inputMethod === 'pinpoint' ? undefined : () => {
+-                if (keyboardCodeBlockToolbarOpen) return;
+-                // Delay then start exit animation
+-                hoverTimeoutRef.current = setTimeout(() => {
+-                  setIsCodeBlockToolbarExiting(true);
+-                  // After exit animation, unmount
+-                  setTimeout(() => {
+-                    setCodeBlockToolbar(null);
+-                    setIsCodeBlockToolbarExiting(false);
+-                  }, 150);
+-                }, 100);
+-              }}
+-              isHovered={
+-                !readOnly
+-                && inputMethod !== 'pinpoint'
+-                && !vimOwnsDocumentNavigation
+-                && codeBlockToolbar?.block.id === group.block.id
+-              }
+-            />
+-          ) : (
+-            <BlockRenderer imageBaseDir={imageBaseDir} onImageClick={(src, alt) => setLightbox({ src, alt })} key={group.block.id} block={group.block} onOpenLinkedDoc={onOpenLinkedDoc} onOpenCodeFile={onOpenCodeFile} onNavigateAnchor={scrollToAnchor} onToggleCheckbox={readOnly ? undefined : onToggleCheckbox} checkboxOverrides={checkboxOverrides} githubRepo={repoInfo?.display} headingAnchorId={headingSlugMap.get(group.block.id)} />
+-          )
+-        )}
+ 
+-        {/* Text selection toolbar */}
+-        {!readOnly && toolbarState && (
+-          <ToolbarErrorBoundary>
+-            <AnnotationToolbar
+-              element={toolbarState.element}
+-              positionMode="center-above"
+-              onAnnotate={handleAnnotate}
+-              onClose={handleToolbarClose}
+-              onRequestComment={handleRequestComment}
+-              onQuickLabel={handleQuickLabel}
+-              copyText={toolbarState.selectionText}
+-              hideCopyButton={!isTouchDevice}
+-              closeOnScrollOut
+-            />
+-          </ToolbarErrorBoundary>
+-        )}
+-
+-        {/* Table hover toolbar */}
+-        {hoveredTable && !toolbarState && (
+-          <TableToolbar
+-            element={hoveredTable.element}
+-            markdown={hoveredTable.block.content}
+-            isExiting={isTableToolbarExiting}
+-            onExpand={() => {
+-              setPopoutTable(hoveredTable.block);
+-              setHoveredTable(null);
+-              setIsTableToolbarExiting(false);
+-              if (tableHoverTimeoutRef.current) {
+-                clearTimeout(tableHoverTimeoutRef.current);
+-                tableHoverTimeoutRef.current = null;
+-              }
+-            }}
+-            onMouseEnter={() => {
+-              if (tableHoverTimeoutRef.current) {
+-                clearTimeout(tableHoverTimeoutRef.current);
+-                tableHoverTimeoutRef.current = null;
+-              }
+-              setIsTableToolbarExiting(false);
+-            }}
+-            onMouseLeave={() => {
+-              tableHoverTimeoutRef.current = setTimeout(() => {
+-                setIsTableToolbarExiting(true);
+-                setTimeout(() => {
+-                  setHoveredTable(null);
+-                  setIsTableToolbarExiting(false);
+-                }, 150);
+-              }, 100);
+-            }}
+-          />
+-        )}
+-
+-        {/* Code block hover toolbar */}
+-        {!readOnly
+-          && codeBlockToolbar
+-          && !toolbarState
+-          && !(vimOwnsDocumentNavigation && codeBlockToolbar.activation === 'pointer')
+-          && (
+-            <ToolbarErrorBoundary>
+-              <AnnotationToolbar
+-                element={codeBlockToolbar.element}
+-                positionMode="top-right"
+-                onAnnotate={handleCodeBlockAnnotate}
+-                onClose={handleCodeBlockToolbarClose}
+-                onRequestComment={handleCodeBlockRequestComment}
+-                onQuickLabel={handleCodeBlockQuickLabel}
+-                isExiting={isCodeBlockToolbarExiting}
+-                onMouseEnter={() => {
+-                  if (hoverTimeoutRef.current) {
+-                    clearTimeout(hoverTimeoutRef.current);
+-                    hoverTimeoutRef.current = null;
+-                  }
+-                  setIsCodeBlockToolbarExiting(false);
+-                }}
+-                onMouseLeave={() => {
+-                  if (codeBlockToolbar.activation === 'keyboard') return;
+-                  hoverTimeoutRef.current = setTimeout(() => {
+-                    setIsCodeBlockToolbarExiting(true);
+-                    setTimeout(() => {
+-                      setCodeBlockToolbar(null);
+-                      setIsCodeBlockToolbarExiting(false);
+-                    }, 150);
+-                  }, 100);
+-                }}
+-              />
+-            </ToolbarErrorBoundary>
+-          )}
+-
+-        {/* Table popout dialog — portaled into containerRef so annotations */}
+-        {/* can walk into its text nodes the same way they do the inline table. */}
+-        {popoutTable && (
+-          <TablePopout
+-            block={popoutTable}
+-            open={!!popoutTable}
+-            onClose={() => setPopoutTable(null)}
+-            container={containerRef.current}
+-            imageBaseDir={imageBaseDir}
+-            onImageClick={(src, alt) => setLightbox({ src, alt })}
+-            onOpenLinkedDoc={onOpenLinkedDoc}
+-            onOpenCodeFile={onOpenCodeFile}
+-            githubRepo={repoInfo?.display}
+-            onNavigateAnchor={scrollToAnchor}
+-          />
+-        )}
+-
+-        {/* Pinpoint hover overlay */}
+-        {(inputMethod === 'pinpoint' || vim.activeTarget) && (
+-          <PinpointOverlay
+-            target={pinpointOverlayTarget}
+-            containerRef={containerRef}
+-          />
+-        )}
+-        {vimModeActive && (
+-          <VimModeOverlay
+-            containerRef={containerRef}
+-            inputMethod={inputMethod}
+-            state={vim.state}
+-            focused={vim.focused}
+-            hudEnabled={vimHudEnabled}
+-            keyPanelEnabled={vimHudKeyPanelEnabled}
+-            hudCommand={vim.hudCommand}
+-            activeTarget={vim.activeTarget}
+-            helpOpen={vim.helpOpen}
+-            onHelpOpenChange={vim.onHelpOpenChange}
+-            onKeyPanelHide={
+-              onVimHudKeyPanelChange
+-                ? () => onVimHudKeyPanelChange(false)
+-                : undefined
+-            }
+-            onHudFocusLeave={vim.onHudFocusLeave}
++        {frontmatter && <><div className="clear-right md:hidden" /><FrontmatterCard frontmatter={frontmatter} /></>}
++        {!frontmatter && blocks.length > 0 && blocks[0]?.type !== 'heading' && <div className="mt-4" />}
++        {groupBlocks(blocks).map((group) => group.type === 'list-group' ? (
++          <PlanListGroup key={group.key} blocks={group.blocks} />
++        ) : (
++          <PlanBlock
++            key={group.block.id}
++            block={group.block}
++            headingId={headingSlugMap.get(group.block.id)}
+           />
+-        )}
++        ))}
+ 
+-        {/* Comment popover — hook handles text selection, Viewer handles global + code block */}
+-        {!readOnly && hookCommentPopover && (
+-            <CommentPopover
+-              anchorEl={hookCommentPopover.anchorEl}
+-              contextText={hookCommentPopover.contextText}
+-              isGlobal={false}
+-              initialText={hookCommentPopover.initialText}
+-              onSubmit={hookCommentSubmit}
+-              onClose={hookCommentClose}
+-              allowImages={allowImages}
+-              skillReferences
+-              onAskAI={onAskAI}
+-              askAIContext={{
+-                kind: 'selection',
+-                label: 'Selected text',
+-                text: hookCommentPopover.selectedText ?? hookCommentPopover.contextText,
+-                sourcePath: linkedDocInfo?.filepath ?? sourceInfo,
+-              }}
+-            />
+-          )}
+-        {!readOnly && viewerCommentPopover && (
+-          <CommentPopover
+-            anchorEl={viewerCommentPopover.anchorEl}
+-            contextText={viewerCommentPopover.contextText}
+-            isGlobal={viewerCommentPopover.isGlobal}
+-            initialText={viewerCommentPopover.initialText}
+-            onSubmit={handleViewerCommentSubmit}
+-            onClose={handleViewerCommentClose}
+-            allowImages={allowImages}
+-            skillReferences
+-            onAskAI={onAskAI}
+-            askAIContext={{
+-              kind: viewerCommentPopover.isGlobal ? 'general' : 'selection',
+-              label: viewerCommentPopover.isGlobal ? 'Document' : 'Code block',
+-              text: viewerCommentPopover.selectedText,
+-              sourcePath: linkedDocInfo?.filepath ?? sourceInfo,
+-            }}
++        {!readOnly && toolbarState && (
++          <PlanAnnotationToolbar
++            element={toolbarState.element}
++            selectionText={toolbarState.selectionText}
++            onDelete={() => handleAnnotate(AnnotationType.DELETION)}
++            onComment={() => handleRequestComment()}
++            onClose={handleToolbarClose}
+           />
+         )}
+-
+-        {/* Quick Label floating picker — hook handles text selection, Viewer handles code blocks */}
+-        {!readOnly && hookQuickLabelPicker && (
+-          <FloatingQuickLabelPicker
+-            anchorEl={hookQuickLabelPicker.anchorEl}
+-            cursorHint={hookQuickLabelPicker.cursorHint}
+-            onSelect={hookFloatingQuickLabel}
+-            onDismiss={hookQuickLabelPickerDismiss}
++        {!readOnly && commentPopover && (
++          <PlanCommentPopover
++            anchorEl={commentPopover.anchorEl}
++            contextText={commentPopover.contextText}
++            initialText={commentPopover.initialText}
++            isGlobal={false}
++            onSubmit={(text) => handleCommentSubmit(text)}
++            onClose={handleCommentClose}
+           />
+         )}
+-        {!readOnly && codeBlockQuickLabelPicker && (
+-          <FloatingQuickLabelPicker
+-            anchorEl={codeBlockQuickLabelPicker.anchorEl}
+-            onSelect={(label: QuickLabel) => {
+-              const codeEl = codeBlockQuickLabelPicker.codeBlock.element.querySelector('code');
+-              if (codeEl) {
+-                applyCodeBlockAnnotation(
+-                  codeBlockQuickLabelPicker.codeBlock.block.id, codeEl, AnnotationType.COMMENT,
+-                  `${label.emoji} ${label.text}`, undefined, true, label.tip
+-                );
+-              }
+-              setCodeBlockQuickLabelPicker(null);
+-              window.getSelection()?.removeAllRanges();
+-            }}
+-            onDismiss={() => {
+-              setCodeBlockQuickLabelPicker(null);
+-              window.getSelection()?.removeAllRanges();
+-            }}
++        {!readOnly && globalCommentOpen && globalCommentButtonRef.current && (
++          <PlanCommentPopover
++            anchorEl={globalCommentButtonRef.current}
++            contextText=""
++            isGlobal
++            onSubmit={addGlobalComment}
++            onClose={() => setGlobalCommentOpen(false)}
+           />
+         )}
+       </article>
+-
+-      {/* Image lightbox */}
+-      {lightbox && createPortal(
+-        <ImageLightbox src={lightbox.src} alt={lightbox.alt} onClose={() => setLightbox(null)} />,
+-        document.body
+-      )}
+     </div>
+-    </CodePathValidationContext.Provider>
+   );
+ });
+-
+-/** Simple lightbox overlay for enlarged image viewing. */
+-const ImageLightbox: React.FC<{ src: string; alt: string; onClose: () => void }> = ({ src, alt, onClose }) => {
+-  useEffect(() => {
+-    const handleKeyDown = (e: KeyboardEvent) => {
+-      if (e.key === 'Escape') onClose();
+-    };
+-    window.addEventListener('keydown', handleKeyDown);
+-    return () => window.removeEventListener('keydown', handleKeyDown);
+-  }, [onClose]);
+-
+-  return (
+-    <div
+-      className="fixed inset-0 z-[200] flex flex-col items-center justify-center bg-black/80 backdrop-blur-sm cursor-zoom-out"
+-      onClick={onClose}
+-    >
+-      <img
+-        src={src}
+-        alt={alt}
+-        className="max-w-[90vw] max-h-[85vh] object-contain rounded-lg shadow-2xl"
+-        onClick={(e) => e.stopPropagation()}
+-      />
+-      {alt && (
+-        <div className="mt-3 text-sm text-white/70 max-w-[90vw] text-center truncate">{alt}</div>
+-      )}
+-    </div>
+-  );
+-};
+diff --git a/hooks/useAnnotationHighlighter.ts b/hooks/useAnnotationHighlighter.ts
+index b432ca54d621b920d202e7123aad14402696039f..b08a9668e92e0ab315a02e7868678f11071333c1 100644
+--- a/hooks/useAnnotationHighlighter.ts
++++ b/hooks/useAnnotationHighlighter.ts
+@@ -10,7 +10,6 @@ import Highlighter from '@plannotator/web-highlighter';
+ import type { Annotation, EditorMode, ImageAttachment } from '../types';
+ import { AnnotationType } from '../types';
+ import type { QuickLabel } from '../utils/quickLabels';
+-import { getIdentity } from '../utils/identity';
+ import { transformPlainText } from '../utils/inlineTransforms';
+ 
+ // --- Exported state types ---
+@@ -233,6 +232,9 @@ export interface UseAnnotationHighlighterOptions {
+   selectedAnnotationId: string | null;
+   mode: EditorMode;
+   enabled?: boolean;
++  /** Whether owner gestures may create annotations. Restoration stays enabled
++   *  in read-only review so decided feedback remains anchored in the document. */
++  interactive?: boolean;
+   /** Opt-in: after a meta-based restore (`fromStore`), verify the painted text
+    *  matches the annotation's `originalText` (whitespace-normalized). On
+    *  mismatch the wrong highlight is removed and the text-search fallback
+@@ -284,6 +286,7 @@ export function useAnnotationHighlighter({
+   selectedAnnotationId,
+   mode,
+   enabled = true,
++  interactive = true,
+   verifyRestoredContent = false,
+   onRestoreMismatch,
+ }: UseAnnotationHighlighterOptions): UseAnnotationHighlighterReturn {
+@@ -506,7 +509,7 @@ export function useAnnotationHighlighter({
+       text,
+       originalText: source.text,
+       createdA: Date.now(),
+-      author: getIdentity(),
++      author: 'Owner',
+       startMeta: source.startMeta,
+       endMeta: source.endMeta,
+       images,
+@@ -555,7 +558,7 @@ export function useAnnotationHighlighter({
+       text,
+       originalText: source.text,
+       createdA: Date.now(),
+-      author: getIdentity(),
++      author: 'Owner',
+       images,
+       ...(isQuickLabel ? { isQuickLabel: true } : {}),
+       ...(quickLabelTip ? { quickLabelTip } : {}),
+@@ -833,6 +836,11 @@ export function useAnnotationHighlighter({
+ 
+     highlighter.on(Highlighter.event.CREATE, ({ sources, type }: { sources: any[]; type?: string }) => {
+       if (type === 'from-store') return;
++      if (!interactive) {
++        sources.forEach((source) => highlighter.remove(source.id));
++        window.getSelection()?.removeAllRanges();
++        return;
++      }
+       if (sources.length > 0) {
+         const source = sources[0];
+         const doms = highlighter.getDoms(source.id);
+@@ -887,6 +895,7 @@ export function useAnnotationHighlighter({
+     highlighter.run();
+ 
+     const handleMathMouseDown = (event: MouseEvent) => {
++      if (!interactive) return;
+       mouseDownMathRef.current = closestMathElement(event.target as Node, containerRef.current);
+       if (mouseDownMathRef.current) {
+         event.stopPropagation();
+@@ -906,6 +915,10 @@ export function useAnnotationHighlighter({
+       if (!mathElement) return;
+ 
+       const existingId = mathElement.dataset.bindId;
++      if (!interactive) {
++        if (existingId) onSelectAnnotationRef.current?.(existingId);
++        return;
++      }
+       const selectedText = selection?.toString().trim() ?? '';
+       if (!selectedText && existingId && modeRef.current !== 'redline') {
+         event.preventDefault();
+@@ -974,7 +987,7 @@ export function useAnnotationHighlighter({
+     // Mobile bridge
+     const isTouchPrimary = window.matchMedia('(pointer: coarse)').matches;
+     let selectionTimer: ReturnType<typeof setTimeout>;
+-    const handleSelectionChange = isTouchPrimary
++    const handleSelectionChange = isTouchPrimary && interactive
+       ? () => {
+           clearTimeout(selectionTimer);
+           selectionTimer = setTimeout(() => {
+@@ -999,7 +1012,7 @@ export function useAnnotationHighlighter({
+       containerRef.current?.removeEventListener('mouseup', handleMathMouseUp, true);
+       highlighter.dispose();
+     };
+-  }, [clearPendingSelection, enabled]);
++  }, [clearPendingSelection, enabled, interactive]);
+ 
+   const highlightRange = useCallback((range: Range, modeOverride?: EditorMode) => {
+     const highlighter = highlighterRef.current;
+diff --git a/utils/codeHighlight.ts b/utils/codeHighlight.ts
+index a51ea6e888f4baaa8295d1a4e78fddbacd22ba67..8e9f91fa776e8e83697a9cb7db5b51329c05f6aa 100644
+--- a/utils/codeHighlight.ts
++++ b/utils/codeHighlight.ts
+@@ -1,293 +1,36 @@
+-/**
+- * Syntax highlighting for markdown fences and suggestion snippets.
+- *
+- * There is exactly ONE highlighter in the app: the Shiki instance
+- * `@pierre/diffs` already runs for the code-review diff pane
+- * (`getSharedHighlighter`, driven by Shiki's JavaScript regex engine). Reusing
+- * it rather than standing up a second one buys three things:
+- *
+- *   - Fences render in the SAME resolved theme as the diff pane, so a code
+- *     block and a diff hunk finally agree about what "Kanagawa Wave" looks
+- *     like. See `./syntaxTheme.ts`.
+- *   - Zero added bundle weight. Pierre imports Shiki's full bundle, so every
+- *     grammar and theme is already inlined; a separate fine-grained highlighter
+- *     would have duplicated a subset of what is already there.
+- *   - Every language Shiki bundles, not a hand-curated shortlist.
+- *
+- * The API is deliberately imperative (`applyHighlight(el, ...)`) because that is
+- * exactly the shape the removed `hljs.highlightElement(el)` had. The annotation
+- * layer reaches into these `<code>` elements to wrap `<mark>`s and to restore
+- * plain text afterwards, so keeping the DOM contract identical keeps that code
+- * working untouched.
+- *
+- * Language-less fences are never highlighted and never guessed at — see #1212.
+- * There is no auto-detection anywhere in this module.
+- */
+-
+-type PierreModule = typeof import('@pierre/diffs');
+-
+-/**
+- * Structural class on every fenced-code `<code>` element.
+- *
+- * `blockTargeting`, the vim navigation layer and the print stylesheet all
+- * address code blocks through `pre > code.pn-code`. It used to be `.hljs`,
+- * which named a library the app no longer ships; the hook itself is unchanged,
+- * only the name is. The `language-*` class alongside it is still how
+- * `blockTargeting` reads a block's language back out of the DOM.
+- */
++/** Plain-text code fences for the embedded Proteus plan reviewer. */
+ export const CODE_BLOCK_CLASS = 'pn-code';
+ 
+ export function codeBlockClassName(language?: string): string {
+   return `${CODE_BLOCK_CLASS} font-mono${language ? ` language-${language}` : ''}`;
+ }
+ 
+-/** Shiki's `FontStyle` bitmask. Inlined so this module needs no shiki types. */
+-const FONT_STYLE_ITALIC = 1;
+-const FONT_STYLE_BOLD = 2;
+-const FONT_STYLE_UNDERLINE = 4;
+-const FONT_STYLE_STRIKETHROUGH = 8;
+-
+-let pierre: PierreModule | undefined;
+-let pierreLoad: Promise<PierreModule | undefined> | undefined;
+-
+-/** `${lang} ${theme}` pairs attached to the shared highlighter. */
+-const ready = new Set<string>();
+-/** Pairs the highlighter refused (unknown grammar or theme). Never retried. */
+-const rejected = new Set<string>();
+-const inflight = new Map<string, Promise<boolean>>();
+-
+-const pairKey = (lang: string, theme: string) => `${lang} ${theme}`;
+-
+-function loadPierre(): Promise<PierreModule | undefined> {
+-  pierreLoad ??= import('@pierre/diffs').then(
+-    (mod) => {
+-      pierre = mod;
+-      return mod;
+-    },
+-    () => undefined,
+-  );
+-  return pierreLoad;
++export function highlightToHtml(_code: string, _language: string, _theme: string): string | null {
++  return null;
+ }
+ 
+-function escapeHtml(value: string): string {
+-  return value
+-    .replace(/&/g, '&amp;')
+-    .replace(/</g, '&lt;')
+-    .replace(/>/g, '&gt;');
+-}
+-
+-interface ThemedTokenish {
+-  content: string;
+-  color?: string;
+-  bgColor?: string;
+-  fontStyle?: number;
+-  htmlStyle?: Record<string, string> | string;
+-}
+-
+-function tokenStyle(token: ThemedTokenish): string {
+-  if (typeof token.htmlStyle === 'string') return token.htmlStyle;
+-  const parts: string[] = [];
+-  if (token.htmlStyle) {
+-    for (const [prop, value] of Object.entries(token.htmlStyle)) parts.push(`${prop}:${value}`);
+-  }
+-  if (token.color) parts.push(`color:${token.color}`);
+-  if (token.bgColor) parts.push(`background-color:${token.bgColor}`);
+-  const fontStyle = token.fontStyle ?? 0;
+-  if (fontStyle > 0) {
+-    if (fontStyle & FONT_STYLE_ITALIC) parts.push('font-style:italic');
+-    if (fontStyle & FONT_STYLE_BOLD) parts.push('font-weight:bold');
+-    const decorations: string[] = [];
+-    if (fontStyle & FONT_STYLE_UNDERLINE) decorations.push('underline');
+-    if (fontStyle & FONT_STYLE_STRIKETHROUGH) decorations.push('line-through');
+-    if (decorations.length) parts.push(`text-decoration:${decorations.join(' ')}`);
+-  }
+-  return parts.join(';');
+-}
+-
+-/**
+- * Highlighted markup for `code`, or `null` when it cannot be produced right now
+- * (highlighter not loaded yet, grammar/theme not attached yet, or the tokens do
+- * not reconstruct the input exactly).
+- *
+- * Synchronous by design: once a (lang, theme) pair is attached, every later
+- * block using it highlights during the same tick, so there is no flicker on
+- * cached highlights.
+- */
+-export function highlightToHtml(code: string, lang: string, theme: string): string | null {
+-  const mod = pierre;
+-  if (!mod || !ready.has(pairKey(lang, theme))) return null;
+-  const highlighter = mod.getHighlighterIfLoaded();
+-  if (!highlighter) {
+-    // The shared highlighter was disposed out from under us; everything we
+-    // believed was attached is gone with it.
+-    ready.clear();
+-    return null;
+-  }
+-  let lines: ThemedTokenish[][];
+-  try {
+-    lines = highlighter.codeToTokens(code, { lang, theme }).tokens as ThemedTokenish[][];
+-  } catch {
+-    ready.delete(pairKey(lang, theme));
+-    return null;
+-  }
+-
+-  // Invariant: the rendered text must be byte-identical to the source. The
+-  // annotation layer addresses these blocks by text offset, so a tokenizer that
+-  // normalised line endings (or dropped a trailing newline) would silently
+-  // misplace every highlight in the block. Bail to plain text instead.
+-  let html = '';
+-  let plain = '';
+-  for (let i = 0; i < lines.length; i++) {
+-    if (i > 0) {
+-      html += '\n';
+-      plain += '\n';
+-    }
+-    for (const token of lines[i]!) {
+-      plain += token.content;
+-      const style = tokenStyle(token);
+-      html += style
+-        ? `<span style="${style}">${escapeHtml(token.content)}</span>`
+-        : escapeHtml(token.content);
+-    }
+-  }
+-  return plain === code ? html : null;
++export function ensureHighlight(_language: string, _theme: string): Promise<boolean> {
++  return Promise.resolve(false);
+ }
+ 
+-/**
+- * Attach `lang` + `theme` to the shared highlighter. Resolves `false` for
+- * grammars or themes Shiki does not know, which is a normal outcome for a fence
+- * tagged with something made up: that block simply stays plain.
+- */
+-export function ensureHighlight(lang: string, theme: string): Promise<boolean> {
+-  const key = pairKey(lang, theme);
+-  if (ready.has(key)) return Promise.resolve(true);
+-  if (rejected.has(key)) return Promise.resolve(false);
+-  const existing = inflight.get(key);
+-  if (existing) return existing;
++type HighlightSwapListener = (element: HTMLElement) => void;
++const listeners = new Set<HighlightSwapListener>();
+ 
+-  const load = loadPierre()
+-    .then(async (mod) => {
+-      if (!mod) return false;
+-      await mod.getSharedHighlighter({
+-        themes: [theme],
+-        langs: [lang],
+-        preferredHighlighter: 'shiki-js',
+-      });
+-      ready.add(key);
+-      return true;
+-    })
+-    .catch(() => {
+-      rejected.add(key);
+-      return false;
+-    })
+-    .then((ok) => {
+-      inflight.delete(key);
+-      return ok;
+-    });
+-
+-  inflight.set(key, load);
+-  return load;
+-}
+-
+-/** Monotonic stamp per element so a slow async highlight from a previous
+- *  content/theme never lands on top of a newer one. */
+-const renderSeq = new WeakMap<HTMLElement, number>();
+-let seqCounter = 0;
+-
+-type HighlightSwapListener = (el: HTMLElement) => void;
+-const swapListeners = new Set<HighlightSwapListener>();
+-
+-/**
+- * Observe every write `applyHighlight` makes to a `<code>` element.
+- *
+- * Each write REPLACES the element's children, which destroys anything the
+- * annotation layer wrapped inside it — a whole-fence `<mark data-bind-id>` is
+- * gone the moment the palette changes or the first async grammar attach lands.
+- * Listeners run SYNCHRONOUSLY, immediately after the write, so re-applying a
+- * mark from a listener is ordered by construction rather than by a timer: a
+- * restore that ran before the swap is re-established in the same task the swap
+- * happened in, and a restore that runs after it finds the mark already there.
+- *
+- * Returns an unsubscribe function.
+- */
+ export function onCodeHighlightSwap(listener: HighlightSwapListener): () => void {
+-  swapListeners.add(listener);
+-  return () => {
+-    swapListeners.delete(listener);
+-  };
+-}
+-
+-function notifyHighlightSwap(el: HTMLElement): void {
+-  if (swapListeners.size === 0) return;
+-  for (const listener of Array.from(swapListeners)) {
+-    // A misbehaving observer must never take syntax highlighting down with it.
+-    try {
+-      listener(el);
+-    } catch {}
+-  }
++  listeners.add(listener);
++  return () => listeners.delete(listener);
+ }
+ 
+-/**
+- * Drop-in replacement for `hljs.highlightElement(el)`.
+- *
+- * Writes plain text immediately so the block has its final size and content on
+- * the very first paint (no layout shift, no empty flash), then swaps in
+- * highlighted markup when the grammar is attached. When the grammar is already
+- * attached the highlighted markup is written straight away with no intermediate
+- * plain state.
+- */
+ export function applyHighlight(
+-  el: HTMLElement,
++  element: HTMLElement,
+   code: string,
+-  lang: string | undefined,
+-  theme: string,
++  _language?: string,
++  _theme?: string,
+ ): void {
+-  const seq = ++seqCounter;
+-  renderSeq.set(el, seq);
+-
+-  // #1212: a fence with no language stays plain. Never guess.
+-  if (!lang) {
+-    el.textContent = code;
+-    notifyHighlightSwap(el);
+-    return;
+-  }
+-
+-  const immediate = highlightToHtml(code, lang, theme);
+-  if (immediate !== null) {
+-    el.innerHTML = immediate;
+-    notifyHighlightSwap(el);
+-    return;
+-  }
+-
+-  el.textContent = code;
+-  notifyHighlightSwap(el);
+-  void ensureHighlight(lang, theme).then((ok) => {
+-    if (!ok || renderSeq.get(el) !== seq || !el.isConnected) return;
+-    const html = highlightToHtml(code, lang, theme);
+-    if (html === null) return;
+-    el.innerHTML = html;
+-    notifyHighlightSwap(el);
+-  });
++  element.textContent = code;
++  for (const listener of listeners) listener(element);
+ }
+ 
+-/** Test seam: forget every cached attachment and module handle. */
+ export function __resetCodeHighlightCacheForTests(): void {
+-  ready.clear();
+-  rejected.clear();
+-  inflight.clear();
+-  pierre = undefined;
+-  pierreLoad = undefined;
+-}
+-
+-/**
+- * Test seam: stand in for `@pierre/diffs` so a test can drive real swaps
+- * (including WHEN the async one lands) without loading Shiki's full bundle.
+- * Pass `undefined` to go back to the real dynamic import.
+- */
+-export function __setCodeHighlightModuleForTests(mod: PierreModule | undefined): void {
+-  ready.clear();
+-  rejected.clear();
+-  inflight.clear();
+-  pierre = mod;
+-  pierreLoad = mod ? Promise.resolve(mod) : undefined;
++  listeners.clear();
+ }
+diff --git a/utils/parser.ts b/utils/parser.ts
+index 7652f192ee19e9e8686570fa2821cc477ada1ea0..b03918879451f5dfa0d84079595cfdf565ae226c 100644
+--- a/utils/parser.ts
++++ b/utils/parser.ts
+@@ -1,6 +1,5 @@
+ import type { Block, Annotation, CodeAnnotation, EditorAnnotation, ImageAttachment } from '../types';
+ import { planDenyFeedback } from '@plannotator/core/feedback-templates';
+-import { skillReferenceExportBlock } from './skillReferences';
+ 
+ /**
+  * Parsed YAML frontmatter as key-value pairs.
+@@ -1154,10 +1153,6 @@ export const exportAnnotations = (
+     return a.startOffset - b.startOffset;
+   });
+ 
+-  // One injection per export: a human-only skill referenced by several
+-  // comments has its instructions injected once (see skillReferenceExportBlock).
+-  const injectedSkills = new Set<string>();
+-
+   let output = `# ${title}\n\n`;
+ 
+   if (opts.sourceConverted) {
+@@ -1217,14 +1212,6 @@ export const exportAnnotations = (
+     // Multi-target raw-HTML comments list every additional covered element.
+     output += additionalTargetsExportBlock(ann);
+ 
+-    // Skill references in the comment text (no-op unless a catalog is
+-    // registered). An annotation carrying a `source` arrived through the
+-    // external-annotations API, not from the reviewer — it may list skills
+-    // but must never cause a human-only skill's instructions to be injected.
+-    if (!ann.isQuickLabel) {
+-      output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
+-    }
+-
+     // Add attached images for this annotation
+     if (ann.images && ann.images.length > 0) {
+       output += `**Attached images:**\n`;
+@@ -1269,9 +1256,6 @@ export const exportLinkedDocAnnotations = (
+ ): string => {
+   let output = `\n# Linked Document Feedback\n\nThe following feedback is on documents referenced in the plan.\n\n`;
+ 
+-  // One injection per export, across all linked documents.
+-  const injectedSkills = new Set<string>();
+-
+   for (const [filepath, { annotations, globalAttachments, blocks: docBlocks, isConverted }] of docAnnotations) {
+     if (annotations.length === 0 && globalAttachments.length === 0) continue;
+ 
+@@ -1321,9 +1305,6 @@ export const exportLinkedDocAnnotations = (
+       // Multi-target raw-HTML comments list every additional covered element.
+       output += additionalTargetsExportBlock(ann);
+ 
+-      // External (tool-sourced) comments list skills but never inject.
+-      output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
+-
+       if (ann.images && ann.images.length > 0) {
+         output += `**Attached images:**\n`;
+         ann.images.forEach((img: ImageAttachment) => {
+@@ -1367,8 +1348,6 @@ export const exportCodeFileAnnotations = (annotations: CodeAnnotation[]): string
+   if (annotations.length === 0) return '';
+ 
+   let output = `\n# Code File Feedback\n\nThe following feedback is on code files referenced from the reviewed document.\n\n`;
+-  // One injection per export, across all code-file comments.
+-  const injectedSkills = new Set<string>();
+   const sorted = [...annotations].sort((a, b) => {
+     if (a.filePath !== b.filePath) return a.filePath.localeCompare(b.filePath);
+     if (a.lineStart !== b.lineStart) return a.lineStart - b.lineStart;
+@@ -1387,8 +1366,6 @@ export const exportCodeFileAnnotations = (annotations: CodeAnnotation[]): string
+     if (ann.text) {
+       output += `> ${ann.text}\n`;
+     }
+-    // External (tool-sourced) comments list skills but never inject.
+-    output += skillReferenceExportBlock(ann.text, injectedSkills, { external: !!ann.source });
+     if (ann.images && ann.images.length > 0) {
+       output += `**Attached images:**\n`;
+       ann.images.forEach((img) => {
+diff --git a/utils/upload.ts b/utils/upload.ts
+index 317d1ccb8f3e65544b55b18df197b4777a49a736..7586890640b433e2f6ffdfcee8f20cf02428ec41 100644
+--- a/utils/upload.ts
++++ b/utils/upload.ts
+@@ -31,8 +31,14 @@ const defaultUploadTransport: UploadTransport = {
+     const formData = new FormData();
+     formData.append('file', file);
+     const res = await fetch('/api/upload', { method: 'POST', body: formData });
+-    const data = await res.json();
+-    return { path: data.path, originalName: data.originalName };
++    const data: unknown = await res.json();
++    if (!data || typeof data !== 'object') throw new Error('Invalid upload response');
++    const path = Reflect.get(data, 'path');
++    const originalName = Reflect.get(data, 'originalName');
++    if (typeof path !== 'string' || typeof originalName !== 'string') {
++      throw new Error('Invalid upload response');
++    }
++    return { path, originalName };
+   },
+ };
+ 

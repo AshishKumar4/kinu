@@ -14,11 +14,11 @@
  *   workspace.createView("deploy-health", { v: 1, title: "Deploy health", blocks: [...] })
  */
 
+import * as v from 'valibot';
 import type { ExecutorProvider, ExecutorCapability, ResourceLimits } from './types.js';
 import type { VFS, Memory, SqlExecutor } from '../types/primitives.js';
 import type { CraftStore } from '../types/agent-runtime.js';
-import { appendMemoryNote, memoryIndexPath } from '../memory/note.js';
-import { ensureDir } from '../utils/vfs-helpers.js';
+import { appendMemoryNote } from '../memory/note.js';
 import { isVfsError, vfsAddressingHint, withVfsErrorHint } from '../vfs/errno.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
@@ -29,6 +29,28 @@ import { VIEW_DATA_SOURCES } from '../views/sources.js';
 import { createFileDispatcher } from '../tools/file-tool.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
 import { TurnContextBudget } from '../context-budget.js';
+import type { JsonValue } from '../utils/json.js';
+
+const StringSchema = v.string();
+const OptionalPathSchema = v.optional(v.string());
+const FileEditsSchema = v.array(v.object({
+  old_text: v.optional(v.string()),
+  new_text: v.optional(v.string()),
+}));
+const FileWriteSuccessSchema = v.object({
+  ok: v.literal(true),
+  path: v.string(),
+  bytes: v.number(),
+  action: v.picklist(['created', 'replaced']),
+});
+
+function parseInput<TSchema extends v.GenericSchema>(
+  schema: TSchema,
+  input: { value: unknown },
+): v.InferOutput<TSchema> | undefined {
+  const result = v.safeParse(schema, input.value);
+  return result.success ? result.output : undefined;
+}
 
 interface ShellExec {
   exec(command: string, opts?: { signal?: AbortSignal }): Promise<{ stdout: string; stderr: string; exitCode: number }>;
@@ -54,7 +76,7 @@ export interface InlineExecutorDeps {
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
   /**
    * The turn's read/edit ledger, read live — SHARED with the native `file`
-   * tool, so workspace.editFile's exact-match, read-before-write enforcement
+   * tool, so workspace.writeFile/editFile's read-before-write enforcement
    * is the SAME gate the native tool enforces (createFileDispatcher, tools/
    * file-tool.ts) over the SAME state, not a second implementation: a native
    * `file` edit never refuses a path this turn already read or wrote through
@@ -116,63 +138,73 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   const fallbackBudget = new TurnContextBudget();
   const currentLedger = (): TurnFileLedger => deps.ledger?.() ?? fallbackLedger;
   const currentBudget = (): TurnContextBudget => deps.budget?.() ?? fallbackBudget;
+  const currentFileDispatch = () => createFileDispatcher({
+    vfs,
+    ledger: currentLedger(),
+    budget: currentBudget(),
+    memory,
+  });
 
   const tools: ExecutorProvider['tools'] = {
     readFile: {
       description: 'Read a file from the agent workspace. Returns content as string.',
-      execute: async (path: unknown) => {
-        const p = String(path);
+      execute: async (...args: unknown[]) => {
+        const p = parseInput(StringSchema, { value: args[0] });
+        if (p === undefined) return 'readFile error: path must be a string';
         const content = await vfs.readFile(p, { encoding: 'utf8' });
+        const text = v.parse(v.string(), content);
         // The caller now has the WHOLE file, exactly like a native `file`
         // action=write's read-before-overwrite check would record — a
         // subsequent native `file` edit on this path is not refused as blind.
-        if (typeof content === 'string') currentLedger().observeWhole(p, content);
-        return content ?? `File not found: ${path}`;
+        currentLedger().observeWhole(p, text);
+        return text;
       },
     },
 
     writeFile: {
-      description: 'Write content to a file. Creates parent directories automatically.',
-      execute: async (path: unknown, content: unknown) => {
-        const p = String(path);
-        const dir = p.split('/').slice(0, -1).join('/');
-        if (dir) await ensureDir(vfs, dir);
-        const text = String(content);
-        await vfs.writeFile(p, text);
-        // Mirrors the native `file` tool's write: the caller just authored
-        // the WHOLE file, so it is known, not blind, to a later edit.
-        currentLedger().observeWhole(p, text);
-        const indexed = memoryIndexPath(p);
-        if (indexed) await memory.index(indexed);
-        return `Written ${text.length} bytes to ${p}`;
+      description: 'Write content to a file. Creates a new file immediately; replacing an existing file requires readFile first. Creates parent directories automatically.',
+      execute: async (...args: unknown[]) => {
+        const p = parseInput(StringSchema, { value: args[0] });
+        const text = parseInput(StringSchema, { value: args[1] });
+        if (p === undefined) return 'writeFile error: path must be a string';
+        if (text === undefined) return 'writeFile error: content must be a string';
+        const result = await currentFileDispatch()({ action: 'write', path: p, content: text });
+        const success = v.safeParse(FileWriteSuccessSchema, result);
+        return success.success
+          ? `Written ${success.output.bytes} bytes to ${success.output.path}`
+          : result;
       },
     },
 
     editFile: {
       description: 'Replace exact text inside a file — old_text must occur exactly once and match what a prior readFile/writeFile/editFile here showed; refused if the file was never read/written in this scope or has changed since.',
-      execute: async (path: unknown, edits: unknown) => {
-        const list = Array.isArray(edits) ? edits as Array<{ old_text?: string; new_text?: string }> : [];
+      execute: async (...args: unknown[]) => {
+        const path = parseInput(StringSchema, { value: args[0] });
+        if (path === undefined) return { error: 'editFile path must be a string' };
+        const list = parseInput(FileEditsSchema, { value: args[1] }) ?? [];
         // Built per call: the SAME dispatcher and ledger the native `file`
         // tool's edit action uses (createFileDispatcher, tools/file-tool.ts),
         // read live so an edit gated here refuses identically to a
         // native-tool edit over the SAME turn's read state — cheap
         // (closures only, no I/O), the same cost SessionSearchStore accepts.
-        const fileDispatch = createFileDispatcher({ vfs, ledger: currentLedger(), budget: currentBudget(), memory });
-        return fileDispatch({ action: 'edit', path: String(path), edits: list });
+        return currentFileDispatch()({ action: 'edit', path, edits: list });
       },
     },
 
     readdir: {
       description: 'List entries in a directory.',
-      execute: async (path: unknown) => {
-        return vfs.readdir(String(path || '/'));
+      execute: async (...args: unknown[]) => {
+        const path = parseInput(OptionalPathSchema, { value: args[0] });
+        if (args[0] !== undefined && path === undefined) return [];
+        return vfs.readdir(path || '/');
       },
     },
 
     exists: {
       description: 'Check if a path exists.',
-      execute: async (path: unknown) => {
-        return vfs.exists(String(path));
+      execute: async (...args: unknown[]) => {
+        const path = parseInput(StringSchema, { value: args[0] });
+        return path === undefined ? false : vfs.exists(path);
       },
     },
 
@@ -180,17 +212,21 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
       description:
         'Run a command in the workspace shell, over the SAME files readFile/readdir address. '
         + 'A real POSIX shell with ~95 coreutils, pipes, redirects, loops, variables and a working directory that persists across calls. '
-        + 'It has no compilers or package managers — build, test and install in sandbox/nimbus/laptop.',
-      execute: async (command: unknown, context?: unknown) => {
-        const signal = readExecSignal(context);
-        return formatExecResult(await shell.exec(String(command), signal ? { signal } : undefined));
+        + 'Available binaries and process features are listed in this workspace provider’s capabilities; use sandbox or laptop only when the task needs that separate machine.',
+      execute: async (...args: unknown[]) => {
+        const command = parseInput(StringSchema, { value: args[0] });
+        if (command === undefined) return 'exec error: command must be a string';
+        const signal = readExecSignal({ context: args[1] });
+        return formatExecResult(await shell.exec(command, signal ? { signal } : undefined));
       },
     },
 
     searchMemory: {
       description: 'Search long-term memory using FTS5 full-text search. Returns matching chunks.',
-      execute: async (query: unknown) => {
-        const results = await memory.search(String(query), 10);
+      execute: async (...args: unknown[]) => {
+        const query = parseInput(StringSchema, { value: args[0] });
+        if (query === undefined) return 'searchMemory error: query must be a string';
+        const results = await memory.search(query, 10);
         if (results.length === 0) return 'No results found.';
         return results.map(r => `[${r.path}:${r.startLine}-${r.endLine}] (score ${r.score.toFixed(2)})\n${r.snippet}`).join('\n\n');
       },
@@ -198,7 +234,12 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
     saveNote: {
       description: 'Save a note to long-term memory (MEMORY.md). The note is FTS5-indexed for search.',
-      execute: async (content: unknown) => appendMemoryNote(memory, String(content)),
+      execute: async (...args: unknown[]) => {
+        const content = parseInput(StringSchema, { value: args[0] });
+        return content === undefined
+          ? 'saveNote error: content must be a string'
+          : appendMemoryNote(memory, content);
+      },
     },
 
     listTools: {
@@ -232,12 +273,14 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         'Inside the body you may call `workspace.*`, `codemode.*`, and other crafted tools as `tools.<name>(args)`. ' +
         'Callable as `codemode.<name>(args)` or `tools.<name>(args)` on the NEXT execute_tools call in the same turn. ' +
         'Returns { ok, name, action: "created"|"updated" }.',
-      execute: async (name: unknown, description: unknown, code: unknown) => {
+      execute: async (...args: unknown[]): Promise<JsonValue> => {
+        const name = parseInput(StringSchema, { value: args[0] });
+        const description = parseInput(StringSchema, { value: args[1] });
+        const code = parseInput(StringSchema, { value: args[2] });
         if (!name || !description || !code) {
           return { ok: false, error: 'createTool requires name, description, and code arguments.' };
         }
-        const raw = String(name);
-        let toolName = raw.replace(/[^A-Za-z0-9_]/g, '_');
+        let toolName = name.replace(/[^A-Za-z0-9_]/g, '_');
         if (!toolName) return { ok: false, error: 'Tool name must contain at least one identifier character.' };
         if (/^[0-9]/.test(toolName)) toolName = '_' + toolName;
         try {
@@ -245,8 +288,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
           // case-insensitively is a collision — reject with an actionable
           // error so the LLM picks a distinct identity.
           const existing = craftStore.get(toolName);
-          const desc = String(description);
-          const codeStr = String(code);
+          const desc = description;
+          const codeStr = code;
           // The misevolution gate, before any write, on the `craft_tool`
           // surface — the safety-machinery criteria in full, deliberately
           // without `network-egress` (the same fetch runs unrestricted in an
@@ -319,17 +362,18 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
         'Publish a dashboard as a tab in the workspace UI. `spec` is declarative JSON — ' +
         'blocks are stat | table | list | kv | markdown | section, and every block reads from ' +
         'one of the allowed workspace RPCs. Upserts by name. Returns { ok, slug, version, action }.',
-      execute: async (name: unknown, spec: unknown) => {
+      execute: async (...args: unknown[]) => {
         if (!sql) return { ok: false, error: 'This workspace has no SQL store, so views cannot be published.' };
-        return createView({ vfs, sql }, name, spec);
+        return createView({ vfs, sql }, args[0], args[1]);
       },
     },
 
     deleteView: {
       description: 'Remove a published view. Its versions stay in the changelog and can be restored.',
-      execute: async (name: unknown) => {
+      execute: async (...args: unknown[]) => {
         if (!sql) return { ok: false, error: 'This workspace has no SQL store, so views cannot be removed.' };
-        const slug = viewSlug(String(name ?? ''));
+        const name = parseInput(StringSchema, { value: args[0] });
+        const slug = viewSlug(name ?? '');
         if (!slug) return { ok: false, error: 'A view name must contain at least one letter or digit.' };
         return deleteView({ vfs, sql }, slug);
       },
@@ -338,7 +382,7 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
 
   const types = `declare namespace workspace {
   function readFile(path: string): Promise<string>;
-  function writeFile(path: string, content: string): Promise<string>;
+  function writeFile(path: string, content: string): Promise<string | { error: string }>;
   /**
    * Replace exact text inside a file — old_text must occur exactly once,
    * copied verbatim (indentation and all) from what readFile/writeFile/
@@ -356,8 +400,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
   /**
    * Run a command in the workspace shell, over the SAME files the calls above
    * address. A real POSIX shell: ~95 coreutils, pipes, redirects, loops,
-   * variables, and a working directory that persists across calls. No
-   * compilers or package managers — build and test in sandbox/nimbus/laptop.
+   * variables, and a working directory that persists across calls. Runtime,
+   * process, and port support is declared by this provider's capabilities.
    */
   function exec(command: string): Promise<string>;
   function searchMemory(query: string): Promise<string>;
@@ -389,12 +433,11 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     | { type: 'section'; title: string; blocks: Exclude<ViewBlock, { type: 'section' }>[] };
 }`;
 
-  return {
+  const provider: ExecutorProvider = {
     name: 'workspace',
     kind: 'workspace',
     files: vfs,
     capabilities: new Set<ExecutorCapability>(['javascript', 'typescript', 'shell', 'fs_shared']),
-    ...(resourceLimits ? { resourceLimits } : {}),
     isAvailable: () => true,
     connect: async () => {},
     disconnect: async () => {},
@@ -415,4 +458,8 @@ export function createInlineExecutor(deps: InlineExecutorDeps): ExecutorProvider
     async unexposePort() { /* nothing to do */ },
     async listExposedPorts() { return []; },
   };
+  if (resourceLimits !== undefined) {
+    Object.assign(provider, { resourceLimits });
+  }
+  return provider;
 }

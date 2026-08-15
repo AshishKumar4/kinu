@@ -30,7 +30,13 @@ import type {
   ToolResultPart,
   UserModelMessage,
 } from 'ai';
-import { fnv1a64 } from '@proteus/core';
+import {
+  assistantModelMessageSchema,
+  modelMessageSchema,
+  toolModelMessageSchema,
+  userModelMessageSchema,
+} from 'ai';
+import { fnv1a64, parseJsonObject } from '@proteus/core';
 import {
   assistantRunsStage,
   contentHashKey,
@@ -51,6 +57,8 @@ import {
 
 type AssistantPart = Exclude<AssistantModelMessage['content'], string>[number];
 type UserPart = Exclude<UserModelMessage['content'], string>[number];
+type ToolPart = ToolModelMessage['content'][number];
+type NativeHandle = ModelMessage | AssistantPart | UserPart | ToolPart;
 
 /** One IR tool item owns the call part and its paired result: when the ladder
  *  drops the item, every native footprint vanishes; when it survives, each
@@ -61,6 +69,12 @@ export interface ToolPairHandle {
   inlineResult?: ToolResultPart;
   /** Result delivered by a following `role:'tool'` message. */
   result?: ToolResultPart;
+}
+
+const TOOL_PAIR_HANDLE = Symbol('proteus-tool-pair');
+
+interface StoredToolPairHandle extends ToolPairHandle {
+  [TOOL_PAIR_HANDLE]: true;
 }
 
 type ToolItem = Extract<Item, { kind: 'tool' }>;
@@ -199,7 +213,7 @@ function encodeGroup(group: ModelMessage[], claimKey: (base: string) => string):
     if (message.role === 'assistant') {
       encodeAssistant(message, key, items, pendingCalls);
     } else if (message.role === 'user') {
-      if (typeof message.content === 'string') {
+      if (isString(message.content)) {
         items.push({ kind: 'text', key: `${key}#${items.length}`, text: message.content, handle: message });
       } else {
         for (const part of message.content) {
@@ -235,7 +249,7 @@ function encodeAssistant(
   items: Item[],
   pendingCalls: Map<string, ToolPairHandle>,
 ): void {
-  if (typeof message.content === 'string') {
+  if (isString(message.content)) {
     items.push({ kind: 'text', key: `${turnKey}#${items.length}`, text: message.content, handle: message });
     return;
   }
@@ -245,7 +259,7 @@ function encodeAssistant(
     } else if (part.type === 'reasoning') {
       items.push({ kind: 'reasoning', key: `${turnKey}#${items.length}`, handle: part });
     } else if (part.type === 'tool-call') {
-      const pair: ToolPairHandle = { call: part };
+      const pair: StoredToolPairHandle = { [TOOL_PAIR_HANDLE]: true, call: part };
       pendingCalls.set(part.toolCallId, pair);
       items.push({ kind: 'tool', key: `${turnKey}#${items.length}`, callId: part.toolCallId, handle: pair });
     } else if (part.type === 'tool-result') {
@@ -280,18 +294,21 @@ function stampOf(key: string): number {
 
 /** Reference-identity survival sets over a turn's (possibly pruned) items. */
 interface Survival {
-  handles: Set<unknown>;
+  handles: Set<NativeHandle>;
   results: Set<ToolResultPart>;
 }
 
 function decodeTurn(turn: Turn): ModelMessage[] {
-  const group = turn.handle as ModelMessage[] | undefined;
-  if (!group) {
+  if (turn.handle === undefined) {
     // Ladder-synthesized turn (reference message, prefix summary).
     const text = syntheticText(turn.items);
     if (!text) return [];
     return [turn.role === 'user' ? { role: 'user', content: text } : { role: 'assistant', content: text }];
   }
+  if (!isModelMessageGroup(turn.handle)) {
+    throw new Error(`compaction codec: invalid native turn handle for ${turn.key}`);
+  }
+  const group = turn.handle;
 
   const survival = collectSurvival(turn.items);
   const hasAssistant = group.some((message) => message.role === 'assistant');
@@ -331,7 +348,7 @@ function collectSurvival(items: Item[]): Survival {
       const pair = pairOf(item);
       if (pair.result) survival.results.add(pair.result);
     } else {
-      survival.handles.add(item.handle);
+      survival.handles.add(nativeHandle(item.handle));
     }
   }
   return survival;
@@ -343,7 +360,7 @@ function rebuildAssistant(
   message: AssistantModelMessage,
   items: Item[],
 ): AssistantModelMessage | null {
-  if (typeof message.content === 'string') {
+  if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
     const synthetic = syntheticText(items);
     if (textSurvives && !synthetic) return message;
@@ -415,7 +432,7 @@ function isToolStub(item: Item): boolean {
 }
 
 function rebuildUser(message: UserModelMessage, items: Item[]): UserModelMessage | null {
-  if (typeof message.content === 'string') {
+  if (isString(message.content)) {
     const textSurvives = items.some((item) => item.kind === 'text' && item.handle === message);
     const synthetic = syntheticText(items);
     if (textSurvives && !synthetic) return message;
@@ -428,11 +445,9 @@ function rebuildUser(message: UserModelMessage, items: Item[]): UserModelMessage
   for (const item of items) {
     if (item.kind === 'synthetic') {
       parts.push({ type: 'text', text: item.text });
-    } else if (
-      (item.kind === 'text' || item.kind === 'opaque') &&
-      originalParts.has(item.handle as UserPart)
-    ) {
-      parts.push(item.handle as UserPart);
+    } else if ((item.kind === 'text' || item.kind === 'opaque') && isUserPart(item.handle)
+      && originalParts.has(item.handle)) {
+      parts.push(item.handle);
     }
   }
   if (parts.length === 0) return null;
@@ -464,7 +479,10 @@ function syntheticText(items: Item[]): string {
 }
 
 function pairOf(item: ToolItem): ToolPairHandle {
-  return item.handle as ToolPairHandle;
+  if (!isStoredToolPairHandle(item.handle)) {
+    throw new Error(`compaction codec: invalid tool-pair handle for ${item.key}`);
+  }
+  return item.handle;
 }
 
 /** Matches a legacy `{toolName:'skills', action:'read'|'invoke'}` call —
@@ -472,10 +490,14 @@ function pairOf(item: ToolItem): ToolPairHandle {
  *  in step with the current action set (the tool itself is gone). */
 function isSkillBodyLoad(call: ToolCallPart): boolean {
   if (call.toolName !== 'skills') return false;
-  const input = call.input;
-  if (typeof input !== 'object' || input === null) return false;
-  const action = (input as { action?: unknown }).action;
-  return action === 'read' || action === 'invoke';
+  try {
+    const serialized = JSON.stringify(call.input);
+    if (!isString(serialized)) return false;
+    const action = parseJsonObject(serialized).action;
+    return action === 'read' || action === 'invoke';
+  } catch {
+    return false;
+  }
 }
 
 function toolError(pair: ToolPairHandle): string | undefined {
@@ -511,22 +533,21 @@ function charsOfResultOutput(part: ToolResultPart): number {
   return jsonLength(output);
 }
 
-function charsOfOpaque(handle: unknown): number {
-  const part = handle as { type?: unknown; role?: unknown };
-  if (part.type === 'image' || part.type === 'file') return ESTIMATED_MEDIA_CHARS;
-  if (typeof part.role === 'string') {
-    const content = (handle as { content?: unknown }).content;
-    return typeof content === 'string' ? content.length : jsonLength(content);
+function charsOfOpaque<Handle>(handle: Handle): number {
+  const value = nativeHandle(handle);
+  if ((isAssistantPart(value) || isUserPart(value))
+      && (value.type === 'image' || value.type === 'file')) return ESTIMATED_MEDIA_CHARS;
+  if (isModelMessage(value)) {
+    return isString(value.content) ? value.content.length : jsonLength(value.content);
   }
-  return jsonLength(handle);
+  return jsonLength(value);
 }
 
-function reasoningText(handle: unknown): string {
-  const text = (handle as { text?: unknown }).text;
-  return typeof text === 'string' ? text : '';
+function reasoningText<Handle>(handle: Handle): string {
+  return isAssistantPart(handle) && handle.type === 'reasoning' ? handle.text : '';
 }
 
-function jsonLength(value: unknown): number {
+function jsonLength<Value>(value: Value): number {
   try {
     return JSON.stringify(value, binaryReplacer)?.length ?? 0;
   } catch {
@@ -554,25 +575,28 @@ function resultText(part: ToolResultPart): string {
   return previewJson(output);
 }
 
-function formatOpaque(handle: unknown): string {
-  const part = handle as { type?: string; role?: string; mediaType?: string; toolName?: string; toolCallId?: string };
-  if (part.type === 'image') return `[image ${part.mediaType ?? 'unknown'}]`;
-  if (part.type === 'file') return `[file ${part.mediaType ?? 'unknown'}]`;
-  if (part.type === 'tool-result') {
-    return `[orphaned tool result:${part.toolName}] callId=${part.toolCallId}\n${truncate(resultText(handle as ToolResultPart), TRANSCRIPT_PREVIEW_CHARS)}`;
+function formatOpaque<Handle>(handle: Handle): string {
+  const value = nativeHandle(handle);
+  if ((isAssistantPart(value) || isUserPart(value)) && value.type === 'image') {
+    return `[image ${value.mediaType ?? 'unknown'}]`;
   }
-  if (typeof part.role === 'string') {
-    const content = (handle as { content?: unknown }).content;
-    return `[${part.role}] ${typeof content === 'string' ? content : previewJson(content)}`;
+  if ((isAssistantPart(value) || isUserPart(value)) && value.type === 'file') {
+    return `[file ${value.mediaType ?? 'unknown'}]`;
   }
-  return `[${part.type ?? 'unknown'}] ${previewJson(handle)}`;
+  if (isToolPart(value) && value.type === 'tool-result') {
+    return `[orphaned tool result:${value.toolName}] callId=${value.toolCallId}\n${truncate(resultText(value), TRANSCRIPT_PREVIEW_CHARS)}`;
+  }
+  if (isModelMessage(value)) {
+    return `[${value.role}] ${isString(value.content) ? value.content : previewJson(value.content)}`;
+  }
+  return `[${value.type}] ${previewJson(value)}`;
 }
 
-function previewJson(value: unknown): string {
+function previewJson<Value>(value: Value): string {
   if (value === undefined) return '';
   try {
     return truncate(
-      typeof value === 'string' ? value : JSON.stringify(value, binaryReplacer),
+      isString(value) ? value : JSON.stringify(value, binaryReplacer),
       TRANSCRIPT_PREVIEW_CHARS,
     );
   } catch {
@@ -582,8 +606,48 @@ function previewJson(value: unknown): string {
 
 /** Binary payloads (image/file bytes) flatten to a size placeholder; every
  *  textual field serializes exactly. */
-function binaryReplacer(_key: string, value: unknown): unknown {
+function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
   if (value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
+  return value;
+}
+
+function isString<Value>(value: Value): value is Value & string {
+  return typeof value === 'string';
+}
+
+function isStoredToolPairHandle<Value>(value: Value): value is Value & StoredToolPairHandle {
+  return value !== null
+    && typeof value === 'object'
+    && TOOL_PAIR_HANDLE in value
+    && value[TOOL_PAIR_HANDLE] === true;
+}
+
+function isModelMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {
+  return Array.isArray(value) && value.every((message) => modelMessageSchema.safeParse(message).success);
+}
+
+function isModelMessage<Value>(value: Value): value is Value & ModelMessage {
+  return modelMessageSchema.safeParse(value).success;
+}
+
+function isAssistantPart<Value>(value: Value): value is Value & AssistantPart {
+  return assistantModelMessageSchema.safeParse({ role: 'assistant', content: [value] }).success;
+}
+
+function isUserPart<Value>(value: Value): value is Value & UserPart {
+  return userModelMessageSchema.safeParse({ role: 'user', content: [value] }).success;
+}
+
+function isToolPart<Value>(value: Value): value is Value & ToolPart {
+  return toolModelMessageSchema.safeParse({ role: 'tool', content: [value] }).success;
+}
+
+function isNativeHandle<Value>(value: Value): value is Value & NativeHandle {
+  return isModelMessage(value) || isAssistantPart(value) || isUserPart(value) || isToolPart(value);
+}
+
+function nativeHandle<Value>(value: Value): Value & NativeHandle {
+  if (!isNativeHandle(value)) throw new Error('compaction codec: invalid native item handle');
   return value;
 }

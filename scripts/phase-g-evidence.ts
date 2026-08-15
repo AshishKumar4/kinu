@@ -21,6 +21,8 @@
 
 import { appendFileSync, writeFileSync } from 'node:fs';
 import puppeteer from 'puppeteer';
+import * as v from 'valibot';
+import { JsonValueSchema, parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
 
 const BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost:5174';
 const AGENT_NAME = 'phase-g-' + Date.now();
@@ -28,7 +30,48 @@ const TIMEOUT_MS = 180_000;
 const TRANSCRIPT = '/tmp/phase-g-transcript.txt';
 const SCREENSHOT = '/tmp/phase-g-tools-pane.png';
 
-const allFrames: unknown[] = [];
+const allFrames: JsonValue[] = [];
+
+const messageSchema = v.object({
+  role: v.string(),
+  parts: v.optional(v.array(v.object({
+    type: v.string(),
+    text: v.optional(v.string()),
+  }))),
+});
+
+const chatFrameSchema = v.object({
+  type: v.string(),
+  id: v.optional(v.string()),
+  body: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+  messages: v.optional(v.array(messageSchema)),
+});
+
+const rpcFrameSchema = v.object({
+  type: v.string(),
+  id: v.string(),
+  success: v.boolean(),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(v.string()),
+});
+
+const craftedToolSchema = v.object({
+  name: v.string(),
+  description: v.string(),
+  qualityScore: v.optional(v.number()),
+  usageCount: v.optional(v.number()),
+  isLearned: v.optional(v.boolean()),
+});
+
+const toolListSchema = v.object({ crafted: v.array(craftedToolSchema) });
+const toolDescriptionsSchema = v.object({
+  builtIn: v.array(v.object({ name: v.string(), description: v.string() })),
+  crafted: v.array(craftedToolSchema),
+});
+
+type ChatMessage = v.InferOutput<typeof messageSchema>;
 
 function log(msg: string) {
   console.log(msg);
@@ -36,6 +79,10 @@ function log(msg: string) {
 }
 function uid() { return Math.random().toString(36).slice(2, 10); }
 function httpBase() { return BASE_URL.replace(/\/$/, ''); }
+
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
+}
 function wsUrl() {
   const u = new URL(BASE_URL);
   u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -49,22 +96,27 @@ async function connect(): Promise<WebSocket> {
     ws.onopen = () => { clearTimeout(t); resolve(ws); };
     ws.onerror = (e) => { clearTimeout(t); reject(new Error('WS error: ' + JSON.stringify(e))); };
     ws.onmessage = (e) => {
-      try { allFrames.push(JSON.parse(String(e.data))); } catch { allFrames.push(String(e.data)); }
+      try { allFrames.push(parseJsonValue(String(e.data))); } catch { allFrames.push(String(e.data)); }
     };
   });
 }
 
-async function rpc(ws: WebSocket, method: string, args: unknown[] = []): Promise<unknown> {
+async function rpc<Output>(
+  ws: WebSocket,
+  method: string,
+  outputSchema: v.GenericSchema<Output>,
+  args: JsonValue[] = [],
+): Promise<Output> {
   return new Promise((resolve, reject) => {
     const id = uid();
     const t = setTimeout(() => reject(new Error(`RPC ${method} timeout`)), 20_000);
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(rpcFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === 'rpc' && msg.id === id) {
           clearTimeout(t);
           ws.removeEventListener('message', handler);
-          if (msg.success) resolve(msg.result);
+          if (msg.success) resolve(v.parse(outputSchema, msg.result));
           else reject(new Error(String(msg.error ?? 'rpc failed')));
         }
       } catch {}
@@ -74,12 +126,12 @@ async function rpc(ws: WebSocket, method: string, args: unknown[] = []): Promise
   });
 }
 
-async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bodies: string[]; final: unknown[]; }> {
+async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bodies: string[]; final: ChatMessage[]; }> {
   return new Promise((resolve, reject) => {
     const reqId = uid();
     const timer = setTimeout(() => reject(new Error('chat timeout')), timeoutMs);
     const bodies: string[] = [];
-    let final: unknown[] = [];
+    let final: ChatMessage[] = [];
     let done = false;
     const finish = () => {
       clearTimeout(timer);
@@ -88,7 +140,7 @@ async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promis
     };
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(chatFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
           if (msg.body) bodies.push(msg.body);
           if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2500); }
@@ -116,10 +168,10 @@ async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promis
  * Chat-stream `step-finish` deltas are per-stream events and don't map
  * 1:1 to logical steps.
  */
-function countStepFinishes(frames: unknown[]): number {
+function countStepFinishes(frames: readonly JsonValue[]): number {
   let n = 0;
   for (const f of frames) {
-    const s = typeof f === 'string' ? f : JSON.stringify(f);
+    const s = JSON.stringify(f);
     // Each tool-output-available body is one completed step. Count
     // occurrences, not frames, because the websocket may pack multiple
     // chunks into a single frame.
@@ -142,8 +194,6 @@ async function main() {
   const ws = await connect();
   log('  connected');
 
-  const beforeAllFrames = 0;
-
   // ── Turn 1: create the tool only ──────
   log('\n--- Turn 1: create the tool "double" ---');
   const beforeTurn1 = allFrames.length;
@@ -155,7 +205,7 @@ async function main() {
   const body1 = r1.bodies.join('');
   const turn1Frames = allFrames.slice(beforeTurn1);
   log(`body1 length: ${body1.length} chars`);
-  const lastAssistant1 = (r1.final as Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>)
+  const lastAssistant1 = r1.final
     .filter(m => m.role === 'assistant').pop();
   const assistantText1 = lastAssistant1?.parts?.filter(p => p.type === 'text').map(p => p.text ?? '').join('') ?? '';
   log(`assistant text 1: ${JSON.stringify(assistantText1.slice(0, 300))}`);
@@ -174,7 +224,7 @@ async function main() {
   }
 
   // Verify via getToolList — this is the proof the tool was persisted.
-  const list1 = await rpc(ws, 'getToolList', []) as { crafted: Array<{ name: string; description: string; qualityScore: number; usageCount: number }> };
+  const list1 = await rpc(ws, 'getToolList', toolListSchema);
   log(`getToolList crafted after turn 1: ${JSON.stringify(list1.crafted)}`);
   const hasDouble = list1.crafted.some(t => t.name.toLowerCase() === 'double');
   if (!hasDouble) { log('FAIL: double not in CraftStore after turn 1'); process.exit(3); }
@@ -189,7 +239,7 @@ async function main() {
   const r2 = await chat(ws, prompt2, 90_000);
   const body2 = r2.bodies.join('');
   const turn2Frames = allFrames.slice(beforeTurn2);
-  const lastAssistant2 = (r2.final as Array<{ role: string; parts?: Array<{ type: string; text?: string }> }>)
+  const lastAssistant2 = r2.final
     .filter(m => m.role === 'assistant').pop();
   const assistantText2 = lastAssistant2?.parts?.filter(p => p.type === 'text').map(p => p.text ?? '').join('') ?? '';
   log(`assistant text 2: ${JSON.stringify(assistantText2.slice(0, 400))}`);
@@ -224,7 +274,7 @@ async function main() {
   const beforeTurn3 = allFrames.length;
   const prompt3 =
     'Use execute_tools once. Inside the async arrow, call workspace.createTool("Double", "different", "async (x) => x + 1") and return the result (an object). Reply with "done".';
-  const r3 = await chat(ws, prompt3);
+  await chat(ws, prompt3);
   const turn3Frames = allFrames.slice(beforeTurn3);
   const turn3Json = JSON.stringify(turn3Frames);
   const turn3CodegenErrs = (turn3Json.match(/Code generation from strings disallowed/g) ?? []).length;
@@ -233,7 +283,7 @@ async function main() {
   // Verify: the CraftStore has exactly one "double"-ish tool (created by turn 1),
   // plus possibly "Double" if the policy allows — but at minimum the existing
   // "double" is still there and was not overwritten/destroyed.
-  const list3 = await rpc(ws, 'getToolList', []) as { crafted: Array<{ name: string; description: string }> };
+  const list3 = await rpc(ws, 'getToolList', toolListSchema);
   log(`getToolList crafted after turn 3: ${JSON.stringify(list3.crafted)}`);
 
   // ── Tools pane data (source for the Learned badge) ────────────────────────
@@ -243,10 +293,7 @@ async function main() {
   // of getToolDescriptions. So capturing the RPC payload is the data-level
   // equivalent of a screenshot — if the payload is right, the badge renders.
   log('\n--- Tools pane data (Learned badge source) ---');
-  const desc = await rpc(ws, 'getToolDescriptions', []) as {
-    builtIn: Array<{ name: string; description: string }>;
-    crafted: Array<{ name: string; description: string; isLearned?: boolean; qualityScore?: number; usageCount?: number }>;
-  };
+  const desc = await rpc(ws, 'getToolDescriptions', toolDescriptionsSchema);
   log(`  builtIn count: ${desc.builtIn.length}`);
   log(`  crafted count: ${desc.crafted.length}`);
   log(`  crafted rows (what the Tools pane renders as 'Learned'):`);
@@ -268,9 +315,9 @@ async function main() {
     await page.goto(url, { waitUntil: 'networkidle2', timeout: 30_000 });
     try {
       await page.evaluate(() => {
-        const btn = Array.from(document.querySelectorAll('button, a')).find(el =>
+        const btn = Array.from(document.querySelectorAll<HTMLElement>('button, a')).find(el =>
           (el.textContent ?? '').trim().toLowerCase() === 'tools',
-        ) as HTMLElement | undefined;
+        );
         btn?.click();
       });
     } catch {}
@@ -279,7 +326,7 @@ async function main() {
     log(`  screenshot written to ${SCREENSHOT}`);
     await browser.close();
   } catch (e) {
-    log(`  screenshot skipped (env lacks Chrome deps): ${(e as Error).message.split('\n')[0]}`);
+    log(`  screenshot skipped (env lacks Chrome deps): ${errorMessage(e).split('\n')[0]}`);
     log('  Data-level evidence above is authoritative for the Learned badge.');
   }
 
@@ -292,8 +339,8 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(e => {
-  log(`FATAL: ${e instanceof Error ? e.message : String(e)}`);
-  log((e as Error).stack ?? '');
+main().catch(error => {
+  log(`FATAL: ${errorMessage(error)}`);
+  log(error instanceof Error ? error.stack ?? '' : '');
   process.exit(99);
 });

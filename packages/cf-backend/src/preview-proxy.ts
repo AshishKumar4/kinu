@@ -14,6 +14,7 @@
 import { proxyToSandbox } from "@cloudflare/sandbox";
 import { escapeHtml } from "./lib/http.js";
 import { containPreviewResponse } from "./lib/preview-origin.js";
+import { sanitizePreviewRequestHeaders } from "./lib/preview-request.js";
 
 /**
  * `proxyToSandbox` collapses every forwarding failure — overwhelmingly "the
@@ -28,12 +29,14 @@ export const SDK_FORWARD_FAILURE = { status: 500, body: 'Proxy routing error' } 
  * that does not resolve to an exposed port gets a 404, never the app.
  */
 export async function servePreviewRequest(request: Request, env: Env): Promise<Response> {
-  const response = await proxyToSandbox(request, env);
+  const response = await proxyToSandbox(new Request(request, {
+    headers: sanitizePreviewRequestHeaders(request.headers),
+  }), env);
   if (!response) {
     return containPreviewResponse(new Response(
       JSON.stringify({ error: 'This host serves sandbox previews only.', code: 'NOT_A_PREVIEW' }),
       { status: 404, headers: { 'content-type': 'application/json' } },
-    ), 'own-host');
+    ));
   }
 
   if (response.status === SDK_FORWARD_FAILURE.status
@@ -41,7 +44,7 @@ export async function servePreviewRequest(request: Request, env: Env): Promise<R
     return renderNotReadyPage(new URL(request.url).hostname);
   }
 
-  return containPreviewResponse(response, 'own-host');
+  return containPreviewResponse(response);
 }
 
 /**
@@ -113,5 +116,5 @@ function renderNotReadyPage(host: string): Response {
   return containPreviewResponse(new Response(html, {
     status: 503,
     headers: { "content-type": "text/html; charset=utf-8" },
-  }), 'own-host');
+  }));
 }

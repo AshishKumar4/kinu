@@ -103,7 +103,7 @@ export function recordRecoveryFinding(sql: SqlExecutor, finding: RecoveryFinding
     text,
     source: 'execution_recovery',
     status: 'provisional',
-    ...(now !== undefined ? { now } : {}),
+    now,
   });
   return true;
 }

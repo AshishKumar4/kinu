@@ -11,6 +11,9 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
+import { asFetchFunction, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
@@ -19,6 +22,12 @@ const READ_TOKEN = `pta_${USER_ID}_${'r'.repeat(44)}`;
 
 const ACCOUNT_ROOT = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1';
 const AI_BASE_URL = `${ACCOUNT_ROOT}/ai/v1`;
+const StringErrorSchema = v.object({ error: v.string() });
+const MessageErrorSchema = v.object({ error: v.object({ message: v.string() }) });
+const ModelListSchema = v.object({
+  object: v.string(),
+  data: v.array(v.object({ id: v.string(), object: v.string(), owned_by: v.string() })),
+});
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -27,14 +36,14 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
   const gatewayId = opts.gatewayId === undefined ? 'my-gw' : opts.gatewayId;
   const token = opts.token ?? 'cf-user';
   const userDO = {
-    async verifyCliToken(_caller: unknown, bearer: string) {
+    async verifyCliToken(_caller: UserCaller, bearer: string) {
       return {
         ok: bearer === SESSION_TOKEN,
         tokenHash: 'session-hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async verifyAccessToken(_caller: unknown, bearer: string) {
+    async verifyAccessToken(_caller: UserCaller, bearer: string) {
       const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
       if (!scopes) return { ok: false, error: 'invalid token' };
       return {
@@ -44,7 +53,7 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async getAuthHeaders(_caller: unknown, key: string, o?: { forceRefresh?: boolean }) {
+    async getAuthHeaders(_caller: UserCaller, key: string, o?: { forceRefresh?: boolean }) {
       const bearer = o?.forceRefresh ? (opts.freshToken ?? token) : token;
       if (key === 'cloudflare.oauth') return { authorization: `Bearer ${bearer}` };
       if (key === 'cloudflare.ai-gateway') {
@@ -52,44 +61,54 @@ function setupEnv(opts: { gatewayId?: string | null; token?: string; freshToken?
       }
       return null;
     },
-    async getCredentialBaseURL(_caller: unknown, key: string) {
+    async getCredentialBaseURL(_caller: UserCaller, key: string) {
       return (key === 'cloudflare.oauth' || key === 'cloudflare.ai-gateway') ? AI_BASE_URL : null;
     },
-    async listCredentials(_caller: unknown) {
+    async listCredentials(_caller: UserCaller) {
       return [{ key: 'cloudflare.oauth', kind: 'oauth', createdAt: 0, updatedAt: 0 }];
     },
   };
-  const env = {
-    UserDO: { idFromName: (n: string) => n, get: () => userDO }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, {
+    UserDO: { idFromName: (name: string) => name, get: () => userDO },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
+  // SAFETY: AI proxy tests reach only the constructed UserDO namespace and
+  // credential key; every binding they access is present above.
+  const env = partialEnv as Env;
   return { env };
 }
 
-function chatRequest(token: string | null, body: unknown, headers: Record<string, string> = {}) {
+function chatRequest(token: string | null, body: JsonValue, extraHeaders: Record<string, string> = {}) {
+  const headers = new Headers(extraHeaders);
+  headers.set('content-type', 'application/json');
+  if (token) headers.set('authorization', `Bearer ${token}`);
   return new Request('https://proteus.example.com/api/user/ai/v1/chat/completions', {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...headers,
-    },
+    headers,
     body: JSON.stringify(body),
   });
 }
 
-interface CapturedUpstream { url: string; headers: Headers; body: Record<string, unknown> }
+interface CapturedUpstream { url: string; headers: Headers; body: JsonObject }
 
 function captureUpstream(respond: (seen: CapturedUpstream) => Response): CapturedUpstream[] {
   const captured: CapturedUpstream[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const seen: CapturedUpstream = {
       url: String(input),
       headers: new Headers(init?.headers),
-      body: JSON.parse(String(init?.body)) as Record<string, unknown>,
+      body: parseJsonObject(String(init?.body)),
     };
     captured.push(seen);
     return respond(seen);
-  }) as typeof fetch;
+  });
   return captured;
+}
+
+function handled(response: Response | null): Response {
+  if (!response) throw new Error('AI proxy route did not handle the request');
+  return response;
 }
 
 function completionResponse(model: string): Response {
@@ -122,7 +141,7 @@ describe('AI proxy auth gate', () => {
 
     const denied = await handleCliRequest(chatRequest(READ_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
     expect(denied?.status).toBe(403);
-    expect((await denied?.json() as { error: string }).error).toContain('ai.proxy');
+    expect(v.parse(StringErrorSchema, await handled(denied).json()).error).toContain('ai.proxy');
 
     const scoped = await handleCliRequest(chatRequest(AI_TOKEN, { model: '@cf/moonshotai/kimi-k2.6', messages: [] }), env);
     expect(scoped?.status).toBe(200);
@@ -169,7 +188,7 @@ describe('AI proxy model → upstream selection', () => {
     const { env } = setupEnv();
     const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(400);
-    expect((await res?.json() as { error: { message: string } }).error.message).toContain('@cf/{model}');
+    expect(v.parse(MessageErrorSchema, await handled(res).json()).error.message).toContain('@cf/{model}');
   });
 
   test('a missing Cloudflare connection is an actionable 401, not an upstream call', async () => {
@@ -177,7 +196,7 @@ describe('AI proxy model → upstream selection', () => {
     const captured = captureUpstream(() => completionResponse('openai/gpt-4.1'));
     const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'openai/gpt-4.1', messages: [] }), env);
     expect(res?.status).toBe(401);
-    expect((await res?.json() as { error: { message: string } }).error.message).toContain('select an AI Gateway');
+    expect(v.parse(MessageErrorSchema, await handled(res).json()).error.message).toContain('select an AI Gateway');
     expect(captured).toHaveLength(0);
   });
 });
@@ -185,7 +204,7 @@ describe('AI proxy model → upstream selection', () => {
 describe('AI proxy streaming + refresh + error mapping', () => {
   test('SSE responses stream through untouched', async () => {
     const { env } = setupEnv();
-    const chunk = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`;
+    const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
     captureUpstream(() => new Response(
       new ReadableStream({
         start(controller) {
@@ -206,7 +225,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
     }), env);
     expect(res?.status).toBe(200);
     expect(res?.headers.get('content-type')).toBe('text/event-stream');
-    const text = await res?.text();
+    const text = await handled(res).text();
     expect(text).toContain('"content":"hel"');
     expect(text).toContain('"content":"lo"');
     expect(text).toContain('data: [DONE]');
@@ -235,7 +254,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
 
     const res = await handleCliRequest(chatRequest(SESSION_TOKEN, { model: 'minimax/m3', messages: [] }), env);
     expect(res?.status).toBe(400);
-    const message = (await res?.json() as { error: { message: string } }).error.message;
+    const message = v.parse(MessageErrorSchema, await handled(res).json()).error.message;
     expect(message).toContain('AI Gateway "my-gw"');
     expect(message).toMatch(/Provider Keys \(BYOK\)/);
     expect(message).toContain('minimax');
@@ -245,7 +264,7 @@ describe('AI proxy streaming + refresh + error mapping', () => {
 describe('AI proxy model listing', () => {
   test('GET /models lists the proxy-served wire ids in OpenAI list shape', async () => {
     const { env } = setupEnv({ gatewayId: 'byok-gw', token: `t-${Math.random()}` });
-    globalThis.fetch = (async (input: RequestInfo | URL) => {
+    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.startsWith('https://models.dev/')) {
         return Response.json({
@@ -270,13 +289,13 @@ describe('AI proxy model listing', () => {
         return Response.json({ success: true, result: { balance: 0 } });
       }
       throw new Error(`unexpected fetch: ${url}`);
-    }) as typeof fetch;
+    });
 
     const res = await handleCliRequest(new Request('https://proteus.example.com/api/user/ai/v1/models', {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
     expect(res?.status).toBe(200);
-    const body = await res?.json() as { object: string; data: Array<{ id: string; object: string; owned_by: string }> };
+    const body = v.parse(ModelListSchema, await handled(res).json());
     expect(body.object).toBe('list');
     expect(body.data).toContainEqual({ id: '@cf/moonshotai/kimi-k2.6', object: 'model', owned_by: 'workers-ai' });
     expect(body.data).toContainEqual({ id: 'openai/gpt-4.1', object: 'model', owned_by: 'my-gateway' });

@@ -7,15 +7,11 @@
 // owner-session by default, or a workspace capability token when the test is
 // specifically about attenuation.
 import type { UserCredentialSource } from '../../src/providers/agent-registry.js';
+import type { CredentialSummary } from '../../src/user/user-do.js';
 import { ownerCaller, type UserCaller } from '../../src/user/workspace-capability.js';
 import { TEST_USER_ENV } from './user-do.js';
 
-export interface CredentialSummaryDouble {
-  key: string;
-  kind: string;
-  createdAt: number;
-  updatedAt: number;
-}
+export type CredentialSummaryDouble = CredentialSummary;
 
 export interface CredentialStoreDouble {
   getAuthHeaders(key: string, opts?: { forceRefresh?: boolean }): Promise<Record<string, string> | null>;
@@ -32,6 +28,6 @@ export function userCredentialSource(store: CredentialStoreDouble): UserCredenti
         store.getAuthHeaders(key, opts),
       listCredentials: (_caller: UserCaller) => store.listCredentials(),
       getCredentialBaseURL: (_caller: UserCaller, key: string) => store.getCredentialBaseURL(key),
-    } as unknown as UserCredentialSource['stub'],
+    },
   };
 }

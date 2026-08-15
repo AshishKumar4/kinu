@@ -30,10 +30,12 @@
  * out-of-scope `{type:'rpc'}` frames before the agents-SDK dispatcher sees
  * them.
  */
+import { JsonValueSchema } from '@proteus/core';
 import type { OrchestratorAgent } from '../orchestrator.js';
 import {
   ACCESS_TOKEN_SCOPES, type AccessTokenScope, normalizeAccessTokenScopes,
 } from './access-token-store.js';
+import * as v from 'valibot';
 
 /** Worker→DO header carrying the verified connect-ticket scopes. Always
  *  rewritten by the edge after authentication so clients cannot smuggle it. */
@@ -78,6 +80,8 @@ export const AGENT_RPC_ACCESS = {
   getExecutors: 'workspace.read',
   getGepaRun: 'workspace.read',
   getGepaRuns: 'workspace.read',
+  getForkRun: 'workspace.read',
+  getHeadRun: 'workspace.read',
   getHeadRuns: 'workspace.read',
   getMctsNodeDetail: 'workspace.read',
   getMctsSearchRuns: 'workspace.read',
@@ -88,6 +92,7 @@ export const AGENT_RPC_ACCESS = {
   getReleaseBoard: 'workspace.read',
   getRunTimeline: 'workspace.read',
   getSearchTree: 'workspace.read',
+  getActivePlanReview: 'workspace.read',
   getStoredModelSpec: 'workspace.read',
   getReasoningEffort: 'workspace.read',
   getToolDescriptions: 'workspace.read',
@@ -131,7 +136,9 @@ export const AGENT_RPC_ACCESS = {
   // listing is interactive for the same reason `listPendingActions` is: it is
   // the surface an owner reads immediately before authorising something.
   decideDeferredApprovals: 'interactive',
+  decidePlanReview: 'interactive',
   listDeferredApprovals: 'interactive',
+  savePlanReviewAnnotations: 'interactive',
   dismissBackgroundJob: 'interactive',
   dismissSubordinate: 'interactive',
   // The owner's backup of their own workspace. Interactive-only: a CI token
@@ -200,26 +207,33 @@ export const AGENT_RPC_ACCESS = {
 
 export type AgentRpcMethod = keyof typeof AGENT_RPC_ACCESS;
 
+export function isAgentRpcMethod(method: string): method is AgentRpcMethod {
+  return Object.hasOwn(AGENT_RPC_ACCESS, method);
+}
+
 /** Compile-time proof that every table key is a real public method on the
  *  agent — renaming or deleting an orchestrator method breaks the build here
  *  instead of surfacing as a runtime dispatch failure. */
-type MethodShaped<T extends Record<AgentRpcMethod, (...args: never[]) => unknown>> = T;
-type _AgentRpcMethodsExist = MethodShaped<Pick<OrchestratorAgent, AgentRpcMethod>>;
+type AgentRpcMethodsExist = {
+  [Method in AgentRpcMethod]: OrchestratorAgent[Method] extends (...args: never[]) => infer _Result
+    ? true
+    : false;
+}[AgentRpcMethod];
+const agentRpcMethodsExist: AgentRpcMethodsExist = true;
+void agentRpcMethodsExist;
 
 /** The access class for a client-supplied method name; null when the method
  *  is off-table (never dispatch it). */
 export function requiredRpcAccess(method: string): AgentRpcAccess | null {
-  return Object.hasOwn(AGENT_RPC_ACCESS, method)
-    ? AGENT_RPC_ACCESS[method as AgentRpcMethod]
+  return isAgentRpcMethod(method)
+    ? AGENT_RPC_ACCESS[method]
     : null;
 }
 
 /** Narrow an access class to the scope it names; null for the
  *  interactive/never classes. */
 export function rpcAccessScope(access: AgentRpcAccess | null): AccessTokenScope | null {
-  return access !== null && (ACCESS_TOKEN_SCOPES as readonly string[]).includes(access)
-    ? access as AccessTokenScope
-    : null;
+  return v.is(v.picklist(ACCESS_TOKEN_SCOPES), access) ? access : null;
 }
 
 /** Build the connection tag for a verified scopes header value; null when the
@@ -246,18 +260,20 @@ export function cliScopesFromTags(tags: Iterable<string>): AccessTokenScope[] | 
  *  send back when the frame is an out-of-scope `{type:'rpc'}` request from an
  *  access-token connection; null when the frame may proceed (chat frames,
  *  scope-granted RPCs, and everything on unrestricted connections). */
-export function rejectOutOfScopeRpc(tags: Iterable<string>, message: unknown): string | null {
-  if (typeof message !== 'string') return null;
+const RpcFrameSchema = v.object({
+  type: v.literal('rpc'),
+  id: v.string(),
+  method: v.string(),
+  args: v.array(JsonValueSchema),
+});
+
+export function rejectOutOfScopeRpc<Message>(tags: Iterable<string>, message: Message): string | null {
+  if (!v.is(v.string(), message)) return null;
   const scopes = cliScopesFromTags(tags);
   if (scopes === null) return null;
 
-  let parsed: unknown;
-  try { parsed = JSON.parse(message); } catch { return null; }
-  // Match exactly the frames the agents-SDK dispatches as RPC.
-  if (!parsed || typeof parsed !== 'object') return null;
-  const frame = parsed as Record<string, unknown>;
-  if (frame.type !== 'rpc' || typeof frame.id !== 'string'
-    || typeof frame.method !== 'string' || !Array.isArray(frame.args)) return null;
+  let frame: v.InferOutput<typeof RpcFrameSchema>;
+  try { frame = v.parse(RpcFrameSchema, JSON.parse(message)); } catch { return null; }
 
   const access = requiredRpcAccess(frame.method);
   const required = rpcAccessScope(access);

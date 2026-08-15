@@ -25,6 +25,7 @@
  */
 
 import type { DynamicApproval } from '../prompting/volatile-context.js';
+import * as v from 'valibot';
 
 export const DEVICE_CONSENT_SCOPE = 'all_local_actions';
 export const DEVICE_CONSENT_SCOPE_FULL_FS = 'full_filesystem';
@@ -74,9 +75,10 @@ export function summarizeDeviceAction(method: string, params: unknown[]): Device
   };
 }
 
-function summarizeParam(value: unknown): string {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return (text ?? String(value)).slice(0, 120);
+function summarizeParam<Value>(value: Value): string {
+  const text = v.safeParse(v.string(), value);
+  const rendered = text.success ? text.output : JSON.stringify(value);
+  return (rendered ?? String(value)).slice(0, 120);
 }
 
 /** What the agent is asking permission for. */

@@ -20,7 +20,7 @@ import type { SearchNode } from '../types/mcts.js';
 
 export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
   return sql<SearchNode>`
-    SELECT id, parent_id, root_id, task, action, observation, code_used,
+    SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
            visits, value, depth, status, msg_id, branch_agent_key, created_at
     FROM search_nodes
     WHERE root_id = (
@@ -40,7 +40,7 @@ export function readLatestSearchTree(sql: SqlExecutor): SearchNode[] {
  */
 export function readSearchTree(sql: SqlExecutor, rootId: string): SearchNode[] {
   return sql<SearchNode>`
-    SELECT id, parent_id, root_id, task, action, observation, code_used,
+    SELECT id, parent_id, root_id, task, action, observation, code_used, code_language,
            visits, value, depth, status, msg_id, branch_agent_key, created_at
     FROM search_nodes WHERE root_id = ${rootId}
     ORDER BY depth, created_at`;

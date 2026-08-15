@@ -68,12 +68,12 @@ rather than from a comparison it has to make. The action names mirror the
 codemode calls (`workspace.readFile` / `writeFile`), so there is one vocabulary
 across the tool surface and the sandbox.
 
-Everything goes through `rt.storage.vfs` (the workspace filesystem, Nimbus over
-the host's SQLite), so one implementation serves both backends. There is
-deliberately no second filesystem path and no per-runtime variant. It addresses
-the workspace and only the workspace: every other environment is an executor
-with its own filesystem in its own native paths, reached through its namespace
-(`sandbox.*`, `nimbus.*`, `laptop.*`) rather than through a mount of this one.
+Everything goes through `rt.storage.vfs`. On the hosted backend that is the
+authoritative `NIMBUS_SESSION`; on the CLI it is the local workspace VFS. The
+same bytes are addressed by `file`, `run { runtime: "workspace" }`, and
+`workspace.*`. There is no second Nimbus filesystem. Optional containers and
+devices keep their own files and are reached through `sandbox.*` and
+`laptop.*`.
 
 ### Why it exists
 
@@ -154,7 +154,7 @@ and `list` address agents by name, and the name decides the transport:
 
 - **A subordinate** is a `SubordinateAgent` — a Durable Object facet of the same
   workspace that runs the *full* turn loop on its own workstream. It shares the
-  workspace's files through a parent-RPC VFS mount, so a subordinate and the
+  workspace's authoritative Nimbus session directly, so a subordinate and the
   orchestrator are looking at the same tree. `staff` takes a role plus a mission
   (the mission runs as its first turn); `ask` hands it further work; `send`
   injects a conversational note; `dismiss` retires it, keeping its context
@@ -181,20 +181,17 @@ return rather than leaving the sender to guess:
 | Field | Meaning |
 |-------|---------|
 | `event_id` | The admitted event's id — the same id the eventual `subordinate_report` cites, which is what correlates an answer arriving turns later with the thing that was asked |
-| `delivery` | `steering_live_turn` (the target was mid-turn, so the message splices into that turn's next agentic step), `starts_now` (it was idle; the drain turns the message into a turn), or `queued` (the log had already admitted this, so it rides that backlog) |
+| `delivery` | `starts_now` (the target was idle; the drain starts a turn) or `queued` (the target was busy or the event was already admitted, so it waits for its own Plan/Build-homogeneous turn) |
 | `subordinate_phase` | `{busy, lastActivityAt, workingOn}` — what the target was doing when the message landed |
 
 `send` additionally reports `status: delivered | queued`, the same vocabulary
 the peer transport uses: *delivered* means it reached the target's context,
 *queued* means it waits behind work already admitted.
 
-The mechanism behind `steering_live_turn` is the reactor drain
-(`core/src/orchestrator/agent-orchestrator.ts`) handing the batch to the one
-signal-delivery seam (`core/src/orchestrator/signals.ts`) with timing `now`: a
-batch bound while a turn is live is spliced by the `proteus.signals` extension
-instead of queueing behind the turn. This is why there is no delivery *mode* to
-choose — the caller states a timing, the seam picks the mechanism, and the
-return reports which branch it took.
+Delegated work never splices into a live turn: the reactor drain preserves its
+trusted Plan/Build mode and queues a separate turn when the target is busy.
+The mode is stamped by the host, not selected by the model. The shared drain
+and signal-delivery seam starts the next serialized turn with that same mode.
 
 ## execute_tools — Codemode Sandbox
 
@@ -204,8 +201,8 @@ The primary tool. The LLM writes JavaScript code that runs in an isolated Worker
 
 | API | Signature | What it does |
 |-----|-----------|-------------|
-| `workspace.readFile` | `(path: string) → string` | Read file contents from SqliteFS |
-| `workspace.writeFile` | `(path: string, content: string) → "ok"` | Write file to SqliteFS (auto-creates parents) |
+| `workspace.readFile` | `(path: string) → string` | Read from the canonical workspace VFS |
+| `workspace.writeFile` | `(path: string, content: string) → string \| {error}` | Write to the canonical workspace VFS (auto-creates parents; overwrites require a prior read) |
 | `workspace.editFile` | `(path: string, edits: [{old_text, new_text}]) → {ok, applied} \| {error}` | Exact-match edit — the SAME dispatcher (`createFileDispatcher`) and gate the native `file` tool's `edit` action uses |
 | `workspace.readdir` | `(path: string) → string[]` | List directory entries |
 | `workspace.exists` | `(path: string) → boolean` | Check if a path exists |
@@ -215,7 +212,7 @@ The primary tool. The LLM writes JavaScript code that runs in an isolated Worker
 | `workspace.listTools` | `() → Array<{name, description, qualityScore}>` | List crafted tools with their EMA scores |
 | `workspace.createTool` | `(name, description, code) → {ok, name, action}` | Create/update a crafted tool in CraftStore; callable on the next `execute_tools` call in the same turn |
 
-These come from `InlineExecutor` in `packages/core/src/execution/inline.ts`, registered as the `workspace` provider in the `ExecutionRouter`. `readFile`/`writeFile` observe into the SAME `TurnFileLedger` `editFile` gates against (a read/write on either surface is known to the other) — on CF, shared with the native `file` tool's own turn ledger via a live thunk; on the CLI backend, workspace.* currently uses its own private ledger (shared among `workspace.*` calls, not yet with the native tool's).
+These come from `InlineExecutor` in `packages/core/src/execution/inline.ts`, registered as the `workspace` provider in the `ExecutionRouter`. `readFile`/`writeFile` observe into the SAME `TurnFileLedger` `editFile` gates against (a read/write on either surface is known to the other). Both backends bind that live turn ledger into the executor after their loop exists, so a read or write through native `file` is immediately known to `workspace.*`, and vice versa.
 
 `/workspace/skills/*.md` is an ordinary path on this same VFS — `workspace.readFile`/`writeFile`/`readdir`/`exec('rm …')` are how skill CRUD happens now that there is no `skills` tool.
 
@@ -358,17 +355,16 @@ shell over the same bytes the `file` tool and `workspace.*` address, so a path
 means the same thing on every surface. Pipelines, redirects, chaining,
 variables, loops, a persistent working directory, and ~95 coreutils.
 
-What it does NOT have is native binaries: node, python, git, package managers
-and builds have no executable to run here and belong in an executor that
-supplies one.
+On the hosted backend this is the Nimbus workspace shell and supports the
+runtimes the live execution-status block declares, including native processes,
+git, Node, package managers, and exposed ports when configured. The local
+backend runs in the local workspace process environment.
 
-**Runtime routing**: the `runtime` parameter takes `workspace` (the default —
-the workspace shell above on the hosted backend, the real machine shell at the
-process cwd on cli-local), `nimbus`, `sandbox`, or `laptop` (the user's own PC,
-via the pc-agent daemon and a consent prompt on first use). Each of those is a
-DIFFERENT machine with its own filesystem (`nimbus` is a separate Nimbus
-session, not the shell above), and anything other than `workspace` dispatches
-through the `ExecutionRouter`. There is no fallback chain: asking for a runtime
+**Runtime routing**: the `runtime` parameter takes `workspace` (the default),
+`sandbox`, or `laptop` (the user's own PC, via the pc-agent daemon and a consent
+prompt on first use). Sandbox and laptop are different machines with their own
+filesystems; anything other than `workspace` dispatches through the
+`ExecutionRouter`. There is no fallback chain: asking for a runtime
 that isn't provisioned returns a structured `runtime_not_provisioned` error the
 UI turns into an install card, rather than silently routing elsewhere and
 letting the model believe it has more access than it does.
@@ -378,9 +374,8 @@ letting the model believe it has more access than it does.
 verdict is refused outright; a `gate` verdict is refused with an actionable note
 unless the workspace's shell approval mode is `allow_all`.
 
-**Blocked commands**: the workspace shell is an emulator, so real programs
-(`node`, `npm`, `git`, `python`, `docker`, …) exit 127 with a message pointing at
-a real runtime instead.
+The live executor status is authoritative for which workspace programs and
+runtimes are installed. Do not infer capability from older backend labels.
 
 ## agents fork — the ephemeral-fork rung
 

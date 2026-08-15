@@ -25,6 +25,7 @@
  *   code ran & PASSED                 0.60 + 0.40·j         [0.60, 1.00]
  *   code ran & FAILED                 0.05 + 0.25·j         [0.05, 0.30]
  *   code did not PARSE                0.05 (no judge)        0.05
+ *   code in an UNRUNNABLE language    0.30·j                [0.00, 0.30]
  *   prose only (no sibling code)      0.75·j                [0.00, 0.75]
  *   prose only (a sibling HAS code)   0.30·j                [0.00, 0.30]
  *
@@ -38,11 +39,14 @@
  * — is judged exactly as before, because there the judge's placement inside
  * the band is real information.
  *
- * The last row closes the loophole: without it a branch that dodged code
+ * The last prose row closes the loophole: without it a branch that dodged code
  * (prose, cap 0.75) outscored one that attempted code and FAILED (cap 0.30),
  * rewarding non-attempts. When any sibling in the expansion produced code, a
  * prose-only branch is capped at the FAIL ceiling (0.30) — it cannot beat a
  * failed executable sibling by declining to compete on execution.
+ * Unsupported fenced code is a distinct, named outcome. It is capped at the
+ * same ceiling because it was not executed and therefore cannot outrank a
+ * verified pass.
  *
  * The downstream thresholds are pinned to these band boundaries (see
  * config.ts): craftExtractionThreshold 0.80 = pass-band midpoint (executed +
@@ -62,7 +66,10 @@
  * (Koh et al. arXiv:2407.01476).
  */
 
+import * as v from 'valibot';
 import type { LLM, Executor } from '../types/primitives.js';
+import type { EvaluationGrounding } from '../types/evaluation.js';
+import { readProposalCode } from '../execution/code-fence.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { DEFAULT_CONFIG } from '../config.js';
@@ -120,17 +127,16 @@ async function completeWithinTimeout(judge: LLM, prompt: string, timeoutMs: numb
 
 export interface EvaluateBranchOptions {
   task: string;
-  /** The branch's exploration output (proposal text / trajectory). */
+  /** The branch proposal. Its fenced code is parsed centrally against the executor. */
   trajectory: string;
-  /** Code the branch extracted, if any. Falls back to the last JS-family
-   *  code fence in the trajectory. */
-  codeUsed?: string | null;
   /** Sibling proposals from the same expansion — judged relative to these. */
   siblings?: readonly string[];
   /** True when any sibling in this expansion produced runnable code. Caps a
    *  prose-only branch at the FAIL ceiling so declining to attempt code cannot
    *  beat a sibling that attempted it and failed (WP-A5 band loophole). */
   siblingsProducedCode?: boolean;
+  /** Plan mode uses judge-only scoring and must never invoke the executor. */
+  executionPolicy?: 'grounded' | 'judge-only';
   executor: Executor;
   /** Cross-model judge. Omitted → explorer judges (documented fallback). */
   judge?: LLM;
@@ -149,21 +155,21 @@ export interface EvaluateBranchOptions {
 export interface BranchEvaluation {
   /** [0..1] — what the engine backpropagates. */
   score: number;
-  /** 'execution' when the branch's code actually ran; 'judge' when prose-only. */
-  grounding: 'execution' | 'judge';
+  /** How the score was grounded. */
+  grounding: EvaluationGrounding;
   /** Execution verdict when grounding === 'execution'. */
   execution?: { passed: boolean; error?: string; assertionsGenerated: boolean };
+  /** Present when the branch offered code this executor cannot run. */
+  unrunnableLanguage?: string;
   /** Judge samples that parsed successfully (out of those attempted). Zero
    *  when the cascade short-circuited before the ensemble was sampled. */
   judgeSamplesUsed: number;
 }
 
-/** Engine messages for source that never became a program. Substring match
- *  (case-insensitive) because the two executors surface a thrown error's
- *  `.message` and the CLI subprocess surfaces stderr, so the `SyntaxError`
- *  name is present in some paths and absent in others. Conservative by
- *  construction: anything unrecognised falls through to the full judge path,
- *  i.e. to the behaviour that existed before the cascade. */
+/** Engine messages for source that never became a program. The signatures are
+ *  JavaScript-engine phrases; `syntaxerror` also covers interpreters that name
+ *  their parse failures that way. Anything unrecognised deliberately falls
+ *  through to judging instead of inventing a parse verdict. */
 const PARSE_FAILURE_SIGNATURES = [
   'syntaxerror',
   'unexpected token',
@@ -197,10 +203,11 @@ async function codeFailedToParse(
   executor: Executor,
   execution: NonNullable<BranchEvaluation['execution']>,
   code: string,
+  language: string,
 ): Promise<boolean> {
   if (execution.passed || !execution.error || !isParseFailure(execution.error)) return false;
   if (!execution.assertionsGenerated) return true;
-  const bare = await runForVerdict(executor, code, null);
+  const bare = await runForVerdict(executor, code, null, language);
   return !bare.passed && !!bare.error && isParseFailure(bare.error);
 }
 
@@ -220,22 +227,25 @@ export async function evaluateWithMultiModelJudging(
   const judge = opts.judge ?? opts.explorer;
   const judgeTimeoutMs = opts.judgeCallTimeoutMs ?? DEFAULT_JUDGE_CALL_TIMEOUT_MS;
 
-  const code = opts.codeUsed?.trim() || extractCode(trajectory);
+  const proposal = opts.executionPolicy === 'judge-only'
+    ? null
+    : readProposalCode(trajectory, opts.executor.languages);
 
   // Layer 1: execution grounding. Assertion generation costs 1 LLM call and
   // only runs when the budget leaves room for at least 1 judge sample.
   let execution: BranchEvaluation['execution'];
   let llmCallsLeft = maxLLMCalls;
-  if (code) {
+  if (proposal?.kind === 'runnable') {
+    const { code, language } = proposal;
     let assertions: string | null = null;
     if (llmCallsLeft >= 2) {
       llmCallsLeft--;
-      assertions = await generateAssertions(judge, opts.task, code, judgeTimeoutMs);
+      assertions = await generateAssertions(judge, opts.task, code, language, judgeTimeoutMs);
     }
-    execution = await runForVerdict(opts.executor, code, assertions);
+    execution = await runForVerdict(opts.executor, code, assertions, language);
     // Cascade stage 0: source that never parsed has decided its own verdict.
     // Spend no judge calls placing it inside a band it cannot leave.
-    if (await codeFailedToParse(opts.executor, execution, code)) {
+    if (await codeFailedToParse(opts.executor, execution, code, language)) {
       return { score: FAIL_FLOOR, grounding: 'execution', execution, judgeSamplesUsed: 0 };
     }
   }
@@ -255,6 +265,14 @@ export async function evaluateWithMultiModelJudging(
       : FAIL_FLOOR + FAIL_SPAN * (judgeScore ?? 0);
     return { score, grounding: 'execution', execution, judgeSamplesUsed: parsed.length };
   }
+  if (proposal?.kind === 'unrunnable') {
+    return {
+      score: FAIL_CEIL * (judgeScore ?? 0),
+      grounding: 'unrunnable',
+      unrunnableLanguage: proposal.language,
+      judgeSamplesUsed: parsed.length,
+    };
+  }
   // Prose-only: reduced confidence, and capped at the FAIL ceiling when a
   // sibling actually attempted code (WP-A5) — dodging execution must not
   // outscore attempting-and-failing.
@@ -264,15 +282,6 @@ export async function evaluateWithMultiModelJudging(
     grounding: 'judge',
     judgeSamplesUsed: parsed.length,
   };
-}
-
-/** Last JS-family code fence in the trajectory. Branch prompts ask for ```js;
- *  the executors are JS sandboxes, so other languages stay judge-only. */
-function extractCode(trajectory: string): string | null {
-  const blocks = [...trajectory.matchAll(/```(?:js|javascript|typescript|ts)\n([\s\S]*?)\n```/g)]
-    .map((m) => m[1]!.trim())
-    .filter((c) => c.length > 0);
-  return blocks.length > 0 ? blocks[blocks.length - 1]! : null;
 }
 
 /**
@@ -287,6 +296,7 @@ export async function generateAssertions(
   judge: LLM,
   task: string,
   code: string,
+  language: string,
   timeoutMs: number = DEFAULT_JUDGE_CALL_TIMEOUT_MS,
 ): Promise<string | null> {
   const prompt = `You are writing a verification harness for code proposed by another agent.
@@ -294,25 +304,24 @@ export async function generateAssertions(
 Task the code is meant to solve:
 ${evidenceWindow(task, EVIDENCE_BUDGETS.judgeTask)}
 
-Proposed code:
-\`\`\`js
+Proposed ${language} code:
+\`\`\`${language}
 ${evidenceWindow(code, EVIDENCE_BUDGETS.assertionCode)}
 \`\`\`
 
-Write a SHORT JavaScript snippet that runs AFTER the code above in the same
-scope and throws an Error if the code does not satisfy the task. If the code
+Write a SHORT ${language} snippet that runs AFTER the code above in the same
+scope and raises or throws if the code does not satisfy the task. If the code
 defines functions, call them with representative inputs and check the outputs.
-No imports, no network, no console — just exercise and throw on failure.
+No imports, no network, no printing — just exercise and fail loudly.
 
-Reply with ONLY a \`\`\`js code block. If the code cannot be meaningfully
+Reply with ONLY a \`\`\`${language} code block. If the code cannot be meaningfully
 verified by assertions, reply with exactly: UNVERIFIABLE`;
 
   try {
     const text = await completeWithinTimeout(judge, prompt, timeoutMs);
     if (/^\s*UNVERIFIABLE\s*$/.test(text)) return null;
-    const match = text.match(/```(?:js|javascript|typescript|ts)?\n([\s\S]*?)\n```/);
-    const snippet = match?.[1]?.trim();
-    return snippet && snippet.length > 0 ? snippet : null;
+    const assertion = readProposalCode(text, [language]);
+    return assertion?.kind === 'runnable' ? assertion.code : null;
   } catch {
     return null;
   }
@@ -320,10 +329,9 @@ verified by assertions, reply with exactly: UNVERIFIABLE`;
 
 /**
  * Run the branch's code (plus generated assertions, sharing its scope) as
- * plain statements — both executors (codemode DynamicWorkerExecutor on CF,
- * the subprocess executor on CLI) wrap statements and surface a thrown error
- * via ExecuteResult.error. A throwing executor counts as a failed run:
- * conservative, and consistent with "failures never look neutral".
+ * plain statements in the selected language. Executors surface thrown errors
+ * and non-zero interpreter exits through ExecuteResult.error. A throwing
+ * executor counts as a failed run, consistent with "failures never look neutral".
  * Known limit: a top-level `return` inside the proposed code skips appended
  * assertions (the bare run still grounds syntax/runtime errors).
  */
@@ -331,10 +339,11 @@ export async function runForVerdict(
   executor: Executor,
   code: string,
   assertions: string | null,
+  language: string,
 ): Promise<NonNullable<BranchEvaluation['execution']>> {
   const harness = assertions ? `${code}\n\n${assertions}` : code;
   try {
-    const { error } = await executor.execute(harness, []);
+    const { error } = await executor.execute(harness, [], { language });
     return error
       ? { passed: false, error, assertionsGenerated: assertions !== null }
       : { passed: true, assertionsGenerated: assertions !== null };
@@ -393,7 +402,9 @@ async function sampleJudgeScore(judge: LLM, prompt: string, timeoutMs: number): 
     return null;
   }
   try {
-    const parsed = extractJsonObject(text) as { score?: unknown };
+    const parsed = v.parse(v.object({
+      score: v.union([v.number(), v.string()]),
+    }), extractJsonObject(text));
     const score = Number(parsed.score);
     if (!Number.isFinite(score)) return null;
     return Math.min(1, Math.max(0, score));

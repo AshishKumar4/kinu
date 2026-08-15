@@ -3,7 +3,19 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { CODEX_CRED_KEY, createFileCodexAuthStore } from '../src/codex-auth-store.js';
-import { asFetchFunction } from '@proteus/core';
+import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@proteus/core';
+import * as v from 'valibot';
+
+const savedConfigSchema = v.object({
+  origin: v.optional(v.string()),
+  providers: v.optional(v.object({
+    openai: v.optional(v.object({ apiKey: v.optional(v.string()) })),
+    codex: v.optional(v.object({
+      refreshToken: v.optional(v.string()),
+      metadata: v.optional(JsonObjectSchema),
+    })),
+  })),
+});
 
 describe('createFileCodexAuthStore', () => {
   test('refreshes Codex OAuth credentials atomically and preserves config', async () => {
@@ -41,10 +53,7 @@ describe('createFileCodexAuthStore', () => {
     expect(auth?.headers.originator).toBe('codex_cli_rs');
     expect(auth?.headers['ChatGPT-Account-ID']).toBe('acct_123');
 
-    const saved = JSON.parse(readFileSync(configPath, 'utf-8')) as {
-      origin?: string;
-      providers?: { openai?: { apiKey?: string }; codex?: { refreshToken?: string; metadata?: Record<string, unknown> } };
-    };
+    const saved = v.parse(savedConfigSchema, JSON.parse(readFileSync(configPath, 'utf-8')));
     expect(saved.origin).toBe('https://proteus.example');
     expect(saved.providers?.openai?.apiKey).toBe('sk-openai');
     expect(saved.providers?.codex?.refreshToken).toBe('refresh-new');
@@ -56,7 +65,7 @@ describe('createFileCodexAuthStore', () => {
   });
 });
 
-function jwt(payload: Record<string, unknown>): string {
+function jwt(payload: JsonObject): string {
   return [
     b64url(JSON.stringify({ alg: 'none', typ: 'JWT' })),
     b64url(JSON.stringify(payload)),

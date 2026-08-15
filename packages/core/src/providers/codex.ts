@@ -18,7 +18,9 @@ import type { ModelProvider, ModelInfo, ModelInputModality } from './types.js';
 import { MODEL_INPUT_MODALITIES } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
 import { withRateLimitRetry } from './rate-limit-retry.js';
-import { authCacheKey, cloneModelInfos, isRecord, nonEmptyString, positiveInteger } from './util.js';
+import { authCacheKey, cloneModelInfos, nonEmptyString, positiveInteger } from './util.js';
+import * as v from 'valibot';
+import { JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue } from '../utils/json.js';
 
 export const CODEX_BASE_URL = 'https://chatgpt.com/backend-api/codex';
 export const CODEX_CRED_KEY = 'codex.oauth';
@@ -84,9 +86,7 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
     createModel(modelId, deps): LanguageModel {
       const baseFetch = withRateLimitRetry(deps.fetch ?? fetch);
       const customFetch = asFetchFunction(async (input, init) => {
-        const urlStr = typeof input === 'string' ? input
-                      : input instanceof URL ? input.toString()
-                      : (input as Request).url;
+        const urlStr = input instanceof Request ? input.url : input.toString();
         const t0 = Date.now();
         const auth = await deps.getAuth(CODEX_CRED_KEY);
         if (!auth) {
@@ -151,25 +151,26 @@ export function createCodexProvider(opts: CodexProviderOptions = {}): ModelProvi
   };
 }
 
-interface CodexModelsResponse {
-  models?: CodexModelInfo[];
-}
+const CodexModelsResponseSchema = v.object({
+  models: v.optional(v.array(v.object({
+    slug: v.optional(v.string()),
+    display_name: v.optional(v.string()),
+    visibility: v.optional(v.string()),
+    supported_in_api: v.optional(v.boolean()),
+    priority: v.optional(v.number()),
+    context_window: v.optional(v.number()),
+    max_context_window: v.optional(v.number()),
+    supported_reasoning_levels: v.optional(v.array(JsonValueSchema)),
+    input_modalities: v.optional(v.array(v.string())),
+  }))),
+});
 
-interface CodexModelInfo {
-  slug?: string;
-  display_name?: string;
-  visibility?: string;
-  supported_in_api?: boolean;
-  priority?: number;
-  context_window?: number;
-  max_context_window?: number;
-  supported_reasoning_levels?: unknown[];
-  input_modalities?: string[];
-}
+const ModelInputModalitySchema: v.GenericSchema<ModelInputModality> = v.picklist(MODEL_INPUT_MODALITIES);
 
-function parseCodexModels(body: unknown): ModelInfo[] {
-  if (!isRecord(body) || !Array.isArray((body as CodexModelsResponse).models)) return [];
-  const rows = (body as CodexModelsResponse).models ?? [];
+function parseCodexModels<T>(body: T): ModelInfo[] {
+  const parsed = v.safeParse(CodexModelsResponseSchema, body);
+  if (!parsed.success) return [];
+  const rows = parsed.output.models ?? [];
   const models: Array<ModelInfo & { priority: number }> = [];
   for (const row of rows) {
     if (row.visibility !== 'list' && row.visibility !== undefined) continue;
@@ -178,15 +179,18 @@ function parseCodexModels(body: unknown): ModelInfo[] {
     const capabilities: NonNullable<ModelInfo['capabilities']> = ['tools', 'streaming'];
     if ((row.supported_reasoning_levels?.length ?? 0) > 0) capabilities.push('reasoning');
     if (row.input_modalities?.includes('image')) capabilities.push('vision');
-    const inputModalities = (row.input_modalities ?? [])
-      .filter((m): m is ModelInputModality => (MODEL_INPUT_MODALITIES as readonly string[]).includes(m));
+    const inputModalities = (row.input_modalities ?? []).flatMap((modality) => {
+      const parsedModality = v.safeParse(ModelInputModalitySchema, modality);
+      return parsedModality.success ? [parsedModality.output] : [];
+    });
+    const priority = v.safeParse(v.number(), row.priority);
     models.push({
       id,
       label: nonEmptyString(row.display_name) ?? id,
       capabilities,
       contextWindow: positiveInteger(row.context_window) ?? positiveInteger(row.max_context_window),
-      ...(inputModalities.length > 0 ? { inputModalities } : {}),
-      priority: typeof row.priority === 'number' ? row.priority : 0,
+      inputModalities: inputModalities.length > 0 ? inputModalities : undefined,
+      priority: priority.success ? priority.output : 0,
     });
   }
   return models
@@ -195,23 +199,29 @@ function parseCodexModels(body: unknown): ModelInfo[] {
 }
 
 function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestInit | undefined {
-  if (!init || typeof init.body !== 'string') return init;
+  if (!init) return init;
+  const serializedBody = v.safeParse(v.string(), init.body);
+  if (!serializedBody.success) return init;
 
-  let body: unknown;
+  let decoded: JsonValue;
   try {
-    body = JSON.parse(init.body);
+    decoded = v.parse(JsonValueSchema, JSON.parse(serializedBody.output));
   } catch {
     return init;
   }
-  if (!isRecord(body)) return init;
-  if (typeof body.instructions === 'string' && body.instructions.trim().length > 0) return init;
-  const input = Array.isArray(body.input) ? body.input : [];
+  const parsedBody = v.safeParse(JsonObjectSchema, decoded);
+  if (!parsedBody.success) return init;
+  const body = parsedBody.output;
+  if (nonEmptyString(body.instructions)) return init;
+  const parsedInput = v.safeParse(JsonArraySchema, body.input);
+  const input = parsedInput.success ? parsedInput.output : [];
   const instructionParts: string[] = [];
-  const remainingInput: unknown[] = [];
+  const remainingInput: JsonValue[] = [];
 
   for (const item of input) {
-    if (isInstructionInputItem(item)) {
-      const text = contentToText(item.content);
+    const instruction = parseInstructionInputItem(item);
+    if (instruction) {
+      const text = contentToText(instruction.content);
       if (text) instructionParts.push(text);
     } else {
       remainingInput.push(item);
@@ -230,27 +240,37 @@ function normalizeCodexResponsesRequest(init: RequestInit | undefined): RequestI
   };
 }
 
-function isInstructionInputItem(value: unknown): value is { role: 'developer' | 'system'; content: unknown } {
-  return isRecord(value) && (value.role === 'developer' || value.role === 'system');
+const InstructionInputItemSchema = v.object({
+  role: v.picklist(['developer', 'system']),
+  content: JsonValueSchema,
+});
+
+function parseInstructionInputItem<T>(value: T): v.InferOutput<typeof InstructionInputItemSchema> | null {
+  const parsed = v.safeParse(InstructionInputItemSchema, value);
+  return parsed.success ? parsed.output : null;
 }
 
-function contentToText(content: unknown): string {
-  if (typeof content === 'string') return content.trim();
-  if (!Array.isArray(content)) return '';
-  return content
-    .map((part) => {
-      if (!isRecord(part)) return '';
-      const text = part.text;
-      return typeof text === 'string' ? text : '';
-    })
+const InstructionContentPartsSchema = v.array(v.object({ text: v.optional(v.string()) }));
+
+function contentToText<T>(content: T): string {
+  const text = v.safeParse(v.string(), content);
+  if (text.success) return text.output.trim();
+  const parts = v.safeParse(InstructionContentPartsSchema, content);
+  if (!parts.success) return '';
+  return parts.output
+    .map((part) => part.text ?? '')
     .filter(Boolean)
     .join('\n')
     .trim();
 }
 
 function debugCodex(message: string): void {
-  const globalWithProcess = globalThis as { process?: { env?: Record<string, string | undefined> } };
-  if (globalWithProcess.process?.env?.PROTEUS_PROVIDER_DEBUG === '1') {
+  const parsed = v.safeParse(v.object({
+    process: v.optional(v.object({
+      env: v.optional(v.object({ PROTEUS_PROVIDER_DEBUG: v.optional(v.string()) })),
+    })),
+  }), globalThis);
+  if (parsed.success && parsed.output.process?.env?.PROTEUS_PROVIDER_DEBUG === '1') {
     console.error(`[codex] ${message}`);
   }
 }

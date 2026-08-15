@@ -13,10 +13,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import * as v from 'valibot';
 
 import {
-  createWorkspace,
-  openWorkspace,
   buildBuiltinTools,
   BUILTIN_TOOLS,
   EvolutionEngine,
@@ -25,11 +24,14 @@ import {
   initScaffoldTables,
   initCraftScoreTables,
   readSoul,
+  JsonObjectSchema,
+  projectJsonValue,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
+import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index.js';
 import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
 
 // These suites prove behaviour against a real model. Without a token they
@@ -44,7 +46,7 @@ const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
   headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.6',
+  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-full-' + Date.now());
@@ -68,7 +70,7 @@ async function chatTurn(
   userMessage: string,
 ): Promise<CompletedTurn> {
   const start = Date.now();
-  const soul = readSoul(rt.storage.sql) ?? '';
+  const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const tcRecords: ToolCallRecord[] = [];
@@ -88,15 +90,19 @@ async function chatTurn(
       stepCount++;
       if (step.toolCalls) {
         for (const tc of step.toolCalls) {
-          const args = (tc as any).input ?? (tc as any).args ?? {};
-          tcRecords.push({ name: tc.toolName, args: args as Record<string, unknown>, result: null });
+          tcRecords.push({
+            name: tc.toolName,
+            args: v.parse(JsonObjectSchema, tc.input),
+            result: null,
+          });
         }
       }
       if (step.toolResults) {
         for (let i = 0; i < step.toolResults.length; i++) {
-          const tr = step.toolResults[i] as any;
+          const toolResult = step.toolResults[i];
           const idx = tcRecords.length - step.toolResults.length + i;
-          if (tcRecords[idx]) tcRecords[idx]!.result = tr?.output ?? tr?.result ?? null;
+          const record = tcRecords[idx];
+          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
         }
       }
     },
@@ -106,8 +112,8 @@ async function chatTurn(
   const responseText = collectStepText(result);
 
   const id = crypto.randomUUID();
-  rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e-full'}, ${'user'}, ${userMessage})`;
-  rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e-full'}, ${id}, ${'assistant'}, ${responseText})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e-full'}, ${'user'}, ${userMessage})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e-full'}, ${id}, ${'assistant'}, ${responseText})`;
 
   return {
     userMessage,
@@ -130,12 +136,12 @@ describe('E2E Full Lifecycle', () => {
   let agentId: string;
   let agentName: string;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
 
-    rt = createWorkspace(db, {
+    rt = await createWorkspace(db, {
       name: 'lifecycle-test',
       purpose: 'A coding assistant that helps write and test JavaScript code.',
       llm: LLM_CONFIG,
@@ -157,22 +163,25 @@ describe('E2E Full Lifecycle', () => {
 
   // ── Step 1: Verify creation ──────────────────────────────────
 
-  test('1. agent created with correct tables, SOUL.md, and identity', () => {
-    const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[])
+  test('1. agent created with correct tables, SOUL.md, and identity', async () => {
+    const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()
       .map(t => t.name);
 
     expect(tables).toContain('workspace_identity');
     expect(tables).toContain('messages');
-    expect(tables).toContain('vfs_files');
+    expect(tables).toContain('inodes');
     expect(tables).toContain('search_nodes');
     expect(tables).toContain('scaffold_versions');
     expect(tables).toContain('crafted_tools');
     expect(tables).toContain('fibers');
 
-    const soul = readSoul(rt.storage.sql) ?? '';
+    const soul = await readSoul(rt.storage.vfs) ?? '';
     expect(soul).toContain('JavaScript');
 
-    const identity = db.query('SELECT id, name FROM workspace_identity LIMIT 1').get() as { id: string; name: string };
+    const identity = db.query<{ id: string; name: string }, []>(
+      'SELECT id, name FROM workspace_identity LIMIT 1',
+    ).get();
+    if (!identity) throw new Error('workspace identity row was not created');
     expect(identity.id).toBeTruthy();
     expect(identity.name).toBe('lifecycle-test');
 
@@ -244,17 +253,17 @@ describe('E2E Full Lifecycle', () => {
 
     // Verify memory was updated
     const memory = await rt.memory.read('memory/MEMORY.md');
-    expect(memory).toBeTruthy();
-    console.log(`  Memory size: ${memory!.length} chars`);
+    if (!memory) throw new Error('memory note was not persisted');
+    console.log(`  Memory size: ${memory.length} chars`);
   }, 120_000);
 
   // ── Step 6: Close and reopen with openWorkspace ──────────────────
 
-  liveTest('6. close and reopen agent — verify persistence', () => {
+  liveTest('6. close and reopen agent — verify persistence', async () => {
     db.close();
 
     const db2 = new Database(DB_PATH);
-    const { rt: rt2, info } = openWorkspace(db2, { llm: LLM_CONFIG });
+    const { rt: rt2, info } = await openWorkspace(db2, { llm: LLM_CONFIG });
 
     // Identity survived
     expect(info.id).toBe(agentId);
@@ -270,7 +279,7 @@ describe('E2E Full Lifecycle', () => {
     expect(info.scaffoldVersion).toBeGreaterThanOrEqual(0);
 
     // Messages survived (at minimum: turns that completed × 2 messages each)
-    const msgCount = (db2.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
+    const msgCount = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
     expect(msgCount).toBeGreaterThanOrEqual(2); // at least 1 turn completed
 
     // SOUL.md survived
@@ -287,12 +296,13 @@ describe('E2E Full Lifecycle', () => {
 
     // Replace db reference for cleanup
     db = db2;
+    rt = rt2;
   });
 
   // ── Step 7: Print full DB state summary ──────────────────────
 
-  liveTest('7. full database state summary', () => {
-    const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[])
+  liveTest('7. full database state summary', async () => {
+    const tables = db.query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all()
       .map(t => t.name);
 
     console.log('\n  ═══ DATABASE STATE SUMMARY ═══');
@@ -300,22 +310,28 @@ describe('E2E Full Lifecycle', () => {
 
     for (const table of tables) {
       try {
-        const count = (db.query(`SELECT COUNT(*) as c FROM "${table}"`).get() as { c: number }).c;
+        const count = db.query<{ c: number }, []>(`SELECT COUNT(*) as c FROM "${table}"`).get()?.c ?? 0;
         if (count > 0) console.log(`  ${table}: ${count} rows`);
       } catch {}
     }
 
-    const identity = db.query('SELECT * FROM workspace_identity').get() as Record<string, unknown>;
+    const identity = db.query<{ id: string; name: string }, []>(
+      'SELECT id, name FROM workspace_identity',
+    ).get();
     console.log(`\n  Identity: ${JSON.stringify(identity)}`);
 
-    const soul = readSoul(rt.storage.sql) ?? '';
+    const soul = await readSoul(rt.storage.vfs) ?? '';
     console.log(`  SOUL.md: ${JSON.stringify(soul.slice(0, 120))}`);
 
-    const vfsFiles = (db.query('SELECT path, size FROM vfs_files ORDER BY path').all() as { path: string; size: number }[]);
+    const vfsFiles = db.query<{ path: string; size: number }, []>(
+      'SELECT path, size FROM inodes WHERE kind = 0 ORDER BY path',
+    ).all();
     console.log(`\n  VFS files:`);
     for (const f of vfsFiles) console.log(`    ${f.path} (${f.size} bytes)`);
 
-    const messages = (db.query('SELECT role, substr(content, 1, 80) as preview FROM messages ORDER BY created_at').all() as { role: string; preview: string }[]);
+    const messages = db.query<{ role: string; preview: string }, []>(
+      'SELECT role, substr(content, 1, 80) as preview FROM messages ORDER BY created_at',
+    ).all();
     console.log(`\n  Messages (${messages.length}):`);
     for (const m of messages) console.log(`    [${m.role}] ${m.preview}...`);
 

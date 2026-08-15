@@ -1,5 +1,6 @@
 // Behavior tests for the single-shot baseline strategy.
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
 import { createSingleShotStrategy, type StrategyContext } from '../src/index.ts';
 import { createTestRuntime } from '@proteus/test-utils';
 
@@ -7,29 +8,17 @@ import { createTestRuntime } from '@proteus/test-utils';
 // reads `specificationVersion`, `provider`, `modelId`, and doGenerate — we
 // mock the bare minimum to exercise the strategy without hitting a real LLM.
 function fakeModel(answer: string, usage = { inputTokens: 5, outputTokens: 10 }) {
-  return {
-    specificationVersion: 'v2',
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
+  return new MockLanguageModelV3({
     doGenerate: async () => ({
       content: [{ type: 'text', text: answer }],
-      finishReason: 'stop' as const,
-      usage,
-      response: { id: 'r', modelId: 'fake-model', timestamp: new Date() },
+      finishReason: { unified: 'stop', raw: undefined },
+      usage: {
+        inputTokens: { total: usage.inputTokens, noCache: usage.inputTokens, cacheRead: undefined, cacheWrite: undefined },
+        outputTokens: { total: usage.outputTokens, text: usage.outputTokens, reasoning: undefined },
+      },
       warnings: [],
     }),
-    doStream: async () => ({
-      stream: new ReadableStream({
-        start(controller) {
-          controller.enqueue({ type: 'text', text: answer });
-          controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
-          controller.close();
-        },
-      }),
-      response: { headers: {} },
-    }),
-  };
+  });
 }
 
 describe('single-shot strategy', () => {
@@ -45,8 +34,9 @@ describe('single-shot strategy', () => {
     const strategy = createSingleShotStrategy();
     const ctx: StrategyContext = {
       task: 'pick the best',
+      mode: 'build',
       rt,
-      model: fakeModel('here is your answer') as never,
+      model: fakeModel('here is your answer'),
     };
     const result = await strategy.explore(ctx);
     expect(result.strategy).toBe('single-shot');
@@ -59,8 +49,8 @@ describe('single-shot strategy', () => {
     const { rt } = createTestRuntime();
     const strategy = createSingleShotStrategy();
     const result = await strategy.explore({
-      task: 't', rt,
-      model: fakeModel('done', { inputTokens: 12, outputTokens: 34 }) as never,
+      task: 't', mode: 'build', rt,
+      model: fakeModel('done', { inputTokens: 12, outputTokens: 34 }),
     });
     expect(result.cost.iterations).toBe(1);
     expect(result.cost.tokens).toBe(46);

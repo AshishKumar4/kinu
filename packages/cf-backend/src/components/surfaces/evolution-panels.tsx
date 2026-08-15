@@ -205,12 +205,12 @@ function ReplayEvalPanel({ rows }: { rows: ReplayEvalRow[] }) {
 // Wilson interval, and a segment whose interval is too wide to read is drawn
 // muted, because the point of this panel is to stop small numbers being
 // over-read as progress.
-const TREND_STYLE: Record<AlignmentConvergence["trend"], { label: string; className: string }> = {
+const TREND_STYLE = {
   improving: { label: "improving", className: "p-success" },
   worsening: { label: "worsening", className: "p-danger" },
   flat: { label: "no detectable change", className: "p-text-2" },
   insufficient: { label: "not enough data", className: "p-text-3" },
-};
+} satisfies Record<AlignmentConvergence["trend"], { label: string; className: string }>;
 
 function AlignmentPanel({ k, calibration }: { k: AlignmentConvergence; calibration: CalibrationReport }) {
   const trend = TREND_STYLE[k.trend];

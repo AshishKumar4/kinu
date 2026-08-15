@@ -13,18 +13,26 @@
  */
 import { describe, test, expect } from 'bun:test';
 import { scaffoldChatTransform, type ChatEvent } from '../src/index.js';
+import type { ScaffoldRunOptions } from '../src/scaffold/executor.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-import type { Executor } from '../src/types/primitives.js';
+import type { Executor, ResolvedProvider } from '../src/types/primitives.js';
+import { decodeJsonValue, type JsonObject, type JsonValue } from '../src/utils/json.js';
 import { createTestRuntime } from './helpers.js';
 
 /** Sandbox semantics: provider namespaces visible as globals. */
 function evalExecutor(): Executor {
   return {
+    languages: ['javascript'],
     async execute(code, providers) {
-      const arr = providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>;
+      const arr: ResolvedProvider[] = Array.isArray(providers)
+        ? providers
+        : [{ name: 'workspace', fns: providers }];
       try {
         const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
-        return { result: await fn(...arr.map((p) => p.fns)) };
+        const result = await fn(...arr.map((p) => p.fns));
+        return {
+          result: result === undefined ? undefined : decodeJsonValue({ value: result }),
+        };
       } catch (err) {
         return { result: undefined, error: err instanceof Error ? err.message : String(err) };
       }
@@ -47,23 +55,28 @@ const TOOL_SCAFFOLD = `async function run({ task }) {
 
 function runtime(): AgentRuntime {
   const { rt } = createTestRuntime();
-  (rt as { executor: Executor }).executor = evalExecutor();
+  rt.executor = evalExecutor();
   return rt;
 }
 
-function runOpts(rt: AgentRuntime, scaffoldCode: string, callTool?: (n: string, a: Record<string, unknown>) => Promise<unknown>) {
-  return {
+function runOpts(
+  rt: AgentRuntime,
+  scaffoldCode: string,
+  callTool?: (n: string, a: JsonObject) => Promise<JsonValue | undefined>,
+): Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'> {
+  const options: Omit<ScaffoldRunOptions, 'emit' | 'defaultInference'> = {
     rt,
     task: 'the task',
     llmStream: async function* () { yield ''; },
     scaffoldCodeOverride: scaffoldCode,
     timeoutMs: 10_000,
-    ...(callTool ? { callTool } : {}),
   };
+  if (callTool) options.callTool = callTool;
+  return options;
 }
 
 /** A default turn, plus a flag recording whether anything ever started it. */
-function defaultTurn(events: ChatEvent[]): { chat: AsyncIterable<ChatEvent>; started: () => boolean } {
+function defaultTurn(events: ChatEvent[]) {
   let started = false;
   return {
     chat: (async function* () {
@@ -100,7 +113,7 @@ describe('scaffoldChatTransform', () => {
       currentVersion: 3, chat, run: runOpts(runtime(), CUSTOM_SCAFFOLD),
     }));
 
-    const text = events.filter((e) => e.type === 'text-delta').map((e) => e.delta).join('');
+    const text = events.flatMap((event) => event.type === 'text-delta' ? [event.delta] : []).join('');
     expect(text).toBe('scaffold answer for: the task');
     expect(text).not.toContain('default answer');
     // runChat is lazy — a scaffold that never delegates never fires a request.
@@ -134,6 +147,39 @@ describe('scaffoldChatTransform', () => {
     expect(done.responseMessages).toEqual([{ role: 'assistant', content: 'default answer' }]);
   });
 
+  test('delegating scaffold accepts optional SDK fields that are explicitly undefined', async () => {
+    const responseMessage = {
+      role: 'assistant' as const,
+      content: 'default answer',
+      providerOptions: undefined,
+    };
+    const { chat } = defaultTurn([
+      {
+        type: 'step-finish',
+        stepIndex: 1,
+        inputTokens: undefined,
+        outputTokens: undefined,
+        cachedInputTokens: undefined,
+      },
+      { type: 'done', text: 'default answer', responseMessages: [responseMessage] },
+    ]);
+
+    const events = await collect(scaffoldChatTransform({
+      currentVersion: 2,
+      chat,
+      run: runOpts(runtime(), DELEGATING_SCAFFOLD),
+    }));
+
+    expect(events).toEqual([
+      { type: 'step-finish', stepIndex: 1 },
+      {
+        type: 'done',
+        text: 'default answer',
+        responseMessages: [{ role: 'assistant', content: 'default answer' }],
+      },
+    ]);
+  });
+
   test('scaffold tool calls surface as tool-call / tool-result pairs', async () => {
     const { chat } = defaultTurn(DEFAULT_EVENTS);
     const events = await collect(scaffoldChatTransform({
@@ -142,8 +188,12 @@ describe('scaffoldChatTransform', () => {
       run: runOpts(runtime(), TOOL_SCAFFOLD, async () => ({ hits: 2 })),
     }));
 
-    const call = events.find((e) => e.type === 'tool-call');
-    const result = events.find((e) => e.type === 'tool-result');
+    const call = events.find(
+      (event): event is Extract<ChatEvent, { type: 'tool-call' }> => event.type === 'tool-call',
+    );
+    const result = events.find(
+      (event): event is Extract<ChatEvent, { type: 'tool-result' }> => event.type === 'tool-result',
+    );
     expect(call).toEqual({
       type: 'tool-call', toolName: 'search', toolCallId: expect.any(String), args: { q: 'the task' },
     });

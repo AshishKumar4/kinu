@@ -4,6 +4,7 @@
  * Architecture reference: docs/EVOLUTION.md — "CraftStore Lifecycle"
  */
 
+import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import { upsertCraftedTool } from './conflict.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
@@ -15,6 +16,18 @@ function truncateSource(code: string): string {
   return code.length <= EVIDENCE_BUDGETS.assertionCode
     ? code
     : `${code.slice(0, EVIDENCE_BUDGETS.assertionCode)}\n// [... ${code.length - EVIDENCE_BUDGETS.assertionCode} chars omitted — generalize what is shown]`;
+}
+
+const CRAFTABLE_LANGUAGES: ReadonlySet<string> = new Set(['javascript', 'typescript']);
+const GeneralizedToolSchema = v.object({
+  name: v.optional(v.string()),
+  description: v.optional(v.string()),
+  code: v.optional(v.string()),
+});
+
+/** Crafted tools execute inside codemode and therefore must be JS-family source. */
+export function isCraftable(language: string | null): boolean {
+  return language !== null && CRAFTABLE_LANGUAGES.has(language);
 }
 
 /**
@@ -43,7 +56,7 @@ export async function maybeStoreCraftedTool(
   );
 
   try {
-    const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string };
+    const parsed = v.parse(GeneralizedToolSchema, extractJsonObject(generalized));
     if (!parsed.name || !parsed.code) return;
 
     await upsertCraftedTool(rt, {

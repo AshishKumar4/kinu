@@ -18,9 +18,24 @@
  *                             was supposed to be managing.
  */
 
+import { safeValidateTypes } from '@ai-sdk/provider-utils';
 import { streamText, stepCountIs, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
 import { evidenceWindow } from '../prompts/evidence-window.js';
-import type { ScaffoldRunOptions } from '../scaffold/executor.js';
+import { decodeJsonValue } from '../utils/json.js';
+import type {
+  ScaffoldHistoryEntry,
+  ScaffoldHistoryPage,
+  ScaffoldHistoryQuery,
+  ScaffoldHistoryReader,
+  ScaffoldRunOptions,
+} from '../scaffold/executor.js';
+
+export type {
+  ScaffoldHistoryEntry,
+  ScaffoldHistoryPage,
+  ScaffoldHistoryQuery,
+  ScaffoldHistoryReader,
+} from '../scaffold/executor.js';
 
 export interface ScaffoldBridgeOpts {
   model: LanguageModel;
@@ -43,12 +58,10 @@ export function createScaffoldLLMStream(opts: ScaffoldBridgeOpts): ScaffoldRunOp
     const result = streamText({
       model: opts.model,
       system: call.system,
-      messages: call.messages.map((m) => ({
-        role: m.role as 'system' | 'user' | 'assistant', content: m.content,
-      })),
+      messages: call.messages,
       tools: toolSet,
       stopWhen: stepCountIs(call.maxSteps ?? opts.defaultMaxSteps),
-      ...(opts.streamOptions ?? {}),
+      ...opts.streamOptions,
     });
     for await (const chunk of result.textStream) yield chunk;
   };
@@ -67,61 +80,29 @@ export const SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS = 8_000;
  *  sandbox boundary — a read surface that can flood the caller is not budgeted. */
 export const SCAFFOLD_HISTORY_MAX_PAGE_CHARS = 40_000;
 
-export interface ScaffoldHistoryQuery {
-  /** Where the page starts. Negative counts back from the end, so -20 is "the
-   *  last 20 messages" without first asking how many there are. Defaults to the
-   *  tail: the recent end is what a turn is usually about. */
-  offset?: number;
-  limit?: number;
-  /** Characters kept per message, head and tail. */
-  maxChars?: number;
-}
-
-export interface ScaffoldHistoryEntry {
-  /** Position in the durable history — stable enough to page from. */
-  index: number;
-  role: string;
-  /** Length of the rendered message BEFORE budgeting, so the scaffold can see
-   *  what it is not being shown and decide whether to go and get it. */
-  chars: number;
-  text: string;
-  truncated: boolean;
-}
-
-export interface ScaffoldHistoryPage {
-  /** Messages in the whole history, not in this page. */
-  total: number;
-  offset: number;
-  entries: ScaffoldHistoryEntry[];
-  /** The page ended early against SCAFFOLD_HISTORY_MAX_PAGE_CHARS. */
-  clipped: boolean;
-}
-
 /** One message as text: prose verbatim, tool traffic named rather than dumped.
  *  A scaffold navigating its history needs to know a tool ran and roughly what
  *  it returned; the full result is a `workspace.readFile` away when it is
  *  spilled and a re-read away when it is not. */
 function renderMessage(message: ModelMessage): string {
-  const content: unknown = message.content;
-  if (typeof content === 'string') return content;
-  if (!Array.isArray(content)) return '';
-  return content.map((raw): string => {
-    const part = raw as { type?: string; text?: unknown; toolName?: unknown; input?: unknown; output?: unknown };
+  const content = message.content;
+  if (!Array.isArray(content)) return content;
+  return content.map((part): string => {
     switch (part.type) {
       case 'text':
       case 'reasoning':
-        return String(part.text ?? '');
+        return part.text;
       case 'tool-call':
-        return `[tool-call ${String(part.toolName ?? '?')} ${safeJson(part.input)}]`;
+        return `[tool-call ${part.toolName} ${safeJson(part.input)}]`;
       case 'tool-result':
-        return `[tool-result ${String(part.toolName ?? '?')} ${safeJson(part.output)}]`;
+        return `[tool-result ${part.toolName} ${safeJson(part.output)}]`;
       default:
-        return `[${String(part.type ?? 'part')}]`;
+        return `[${part.type}]`;
     }
   }).filter(Boolean).join('\n');
 }
 
-function safeJson(value: unknown): string {
+function safeJson<Value>(value: Value): string {
   try {
     return JSON.stringify(value) ?? 'null';
   } catch {
@@ -129,8 +110,8 @@ function safeJson(value: unknown): string {
   }
 }
 
-function clampInt(value: unknown, fallback: number, min: number, max: number): number {
-  const n = typeof value === 'number' && Number.isFinite(value) ? Math.floor(value) : fallback;
+function clampInt(value: number | undefined, fallback: number, min: number, max: number): number {
+  const n = value !== undefined && Number.isFinite(value) ? Math.floor(value) : fallback;
   return Math.min(max, Math.max(min, n));
 }
 
@@ -146,7 +127,7 @@ function clampInt(value: unknown, fallback: number, min: number, max: number): n
  */
 export function createScaffoldHistory(
   source: () => readonly ModelMessage[],
-): NonNullable<ScaffoldRunOptions['history']> {
+): ScaffoldHistoryReader {
   return async (query: ScaffoldHistoryQuery = {}) => {
     const messages = source();
     const total = messages.length;
@@ -154,7 +135,7 @@ export function createScaffoldHistory(
     const maxChars = clampInt(
       query.maxChars, SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, 1, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
     );
-    const requested = typeof query.offset === 'number' && Number.isFinite(query.offset)
+    const requested = query.offset !== undefined && Number.isFinite(query.offset)
       ? Math.floor(query.offset)
       : total - limit;
     const offset = Math.min(total, Math.max(0, requested < 0 ? total + requested : requested));
@@ -189,16 +170,15 @@ export function createScaffoldHistory(
 export function createScaffoldCallTool(tools: () => ToolSet): NonNullable<ScaffoldRunOptions['callTool']> {
   return async (name, args) => {
     const t = tools()[name];
-    if (!t || typeof t.execute !== 'function') return { error: `tool not found: ${name}` };
+    if (!t?.execute) return { error: `tool not found: ${name}` };
     try {
-      // `args as never` is the legitimate dynamic-dispatch escape: the tool is
-      // selected by string name at runtime, so its input type is unknown here.
-      // The options object IS statically known — typed precisely so a future
-      // required ToolCallOptions field can't silently slip through.
       const options: Parameters<NonNullable<ToolSet[string]['execute']>>[1] = {
         messages: [], toolCallId: `scaffold-${Date.now()}`,
       };
-      return await t.execute(args as never, options);
+      const input = await safeValidateTypes({ value: args, schema: t.inputSchema });
+      if (!input.success) return { error: input.error.message };
+      const result = await t.execute(input.value, options);
+      return result === undefined ? undefined : decodeJsonValue({ value: result });
     } catch (err) {
       return { error: err instanceof Error ? err.message : String(err) };
     }

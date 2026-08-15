@@ -2,24 +2,36 @@
 // over the user-level device hub. This is what beforeTurn refreshes so the
 // turn's context reflects a device that connected mid-session.
 import { describe, expect, test } from 'bun:test';
-import { createHubDeviceTransport, type DeviceHubClient } from '../src/device-transport.js';
+import type { JsonValue } from '@proteus/core';
+import {
+  createHubDeviceTransport,
+  type DeviceHubClient,
+  type DeviceRpcOptions,
+} from '../src/device-transport.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 
 const FAKE_CALLER = { workspaceToken: 'pwc_test' } as const;
 const caller = async () => FAKE_CALLER;
 
-function fakeHub(devices: () => Array<{ connected: boolean }>): DeviceHubClient & { rpcCalls: unknown[][] } {
-  const rpcCalls: unknown[][] = [];
+type RpcCall = [method: string, params: JsonValue[], opts: DeviceRpcOptions | undefined, caller: UserCaller];
+
+function fakeHub(devices: () => Array<{ connected: boolean }>): DeviceHubClient & { rpcCalls: RpcCall[] } {
+  const rpcCalls: RpcCall[] = [];
   return {
     rpcCalls,
     listDevices: async () => devices(),
     deviceRpc: async (caller, method, params, opts) => {
       rpcCalls.push([method, params, opts, caller]);
-      return { stdout: 'ok', stderr: '', exitCode: 0 };
+      return JSON.stringify({ stdout: 'ok', stderr: '', exitCode: 0 });
     },
   };
 }
 
-type RpcOpts = { agentName?: string; checkpoint?: { agent: string; turnId: string | null; sessionId: string | null; dir: string | null } };
+function requiredCall(calls: RpcCall[], index: number): RpcCall {
+  const call = calls[index];
+  if (!call) throw new Error(`expected RPC call ${index}`);
+  return call;
+}
 
 function makeClock(start = 1_000_000) {
   let t = start;
@@ -115,30 +127,27 @@ describe('createHubDeviceTransport', () => {
     await transport.rpc('writeFile', ['/home/u/proj/a.txt', 'data']);
     await transport.rpc('readFile', ['/home/u/proj/a.txt']);
 
-    const execOpts = hub.rpcCalls[0]?.[2] as RpcOpts;
-    expect(execOpts.checkpoint).toEqual({
+    expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toEqual({
       agent: 'agent-1', turnId: 'msg-42', sessionId: 'default', dir: '/home/u/proj',
     });
-    const writeOpts = hub.rpcCalls[1]?.[2] as RpcOpts;
-    expect(writeOpts.checkpoint).toEqual({
+    expect(requiredCall(hub.rpcCalls, 1)[2]?.checkpoint).toEqual({
       agent: 'agent-1', turnId: 'msg-42', sessionId: 'default', dir: null, // daemon derives from the path
     });
-    const readOpts = hub.rpcCalls[2]?.[2] as RpcOpts;
-    expect(readOpts.checkpoint).toBeUndefined();
+    expect(requiredCall(hub.rpcCalls, 2)[2]?.checkpoint).toBeUndefined();
   });
 
   test('no checkpoint hint outside a turn or when the meta seam is unwired', async () => {
     const hub = fakeHub(() => [{ connected: true }]);
     const unwired = createHubDeviceTransport({ hub: () => hub, caller, agentName: 'a', cliCwd: () => null });
     await unwired.rpc('exec', ['ls']);
-    expect((hub.rpcCalls[0]?.[2] as RpcOpts).checkpoint).toBeUndefined();
+    expect(requiredCall(hub.rpcCalls, 0)[2]?.checkpoint).toBeUndefined();
 
     const outsideTurn = createHubDeviceTransport({
       hub: () => hub, agentName: 'a', cliCwd: () => null, checkpointMeta: () => null,
       caller,
     });
     await outsideTurn.rpc('writeFile', ['/x', 'y']);
-    expect((hub.rpcCalls[1]?.[2] as RpcOpts).checkpoint).toBeUndefined();
+    expect(requiredCall(hub.rpcCalls, 1)[2]?.checkpoint).toBeUndefined();
   });
 
   test('exec calls are rewritten into the CLI-forwarded working directory', async () => {

@@ -4,11 +4,13 @@
  * and the inbound-email gate (one synthetic key for all senders).
  */
 
+import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives.js';
 
 const WINDOW_MS = 60_000;
 const DEFAULT_RATE_LIMIT_PER_MIN = 60;
 const MAX_RATE_LIMIT_PER_MIN = 10_000;
+const RateLimitInputSchema = v.union([v.number(), v.string(), v.null(), v.undefined()]);
 
 export interface WebhookRateLimitDecision {
   allowed: boolean;
@@ -33,9 +35,13 @@ export function initWebhookRateLimitTables(sql: SqlExec): void {
   `);
 }
 
-export function normalizeWebhookRateLimitPerMin(value: unknown): number {
-  if (value === undefined || value === null) return DEFAULT_RATE_LIMIT_PER_MIN;
-  const n = Number(value);
+export function normalizeWebhookRateLimitPerMin<Value>(value: Value): number {
+  const parsed = v.safeParse(RateLimitInputSchema, value);
+  if (!parsed.success) {
+    throw new Error(`rate_limit_per_min must be an integer between 1 and ${MAX_RATE_LIMIT_PER_MIN}`);
+  }
+  if (parsed.output === undefined || parsed.output === null) return DEFAULT_RATE_LIMIT_PER_MIN;
+  const n = Number(parsed.output);
   if (!Number.isInteger(n) || n < 1 || n > MAX_RATE_LIMIT_PER_MIN) {
     throw new Error(`rate_limit_per_min must be an integer between 1 and ${MAX_RATE_LIMIT_PER_MIN}`);
   }
@@ -45,7 +51,7 @@ export function normalizeWebhookRateLimitPerMin(value: unknown): number {
 export function tryConsumeWebhookRateLimit(
   sql: SqlExec,
   triggerId: string,
-  rateLimitPerMin: unknown,
+  rateLimitPerMin: number,
   now: number,
 ): WebhookRateLimitDecision {
   const limit = normalizeWebhookRateLimitPerMin(rateLimitPerMin);

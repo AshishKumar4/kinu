@@ -10,6 +10,7 @@
 //   - no key configured is a refusal, not a silent plaintext fallback
 import { testOwner } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import {
   TEST_CREDENTIAL_ENCRYPTION_KEY, createTestUserDO, sqlExec,
 } from './helpers/user-do.js';
@@ -23,7 +24,8 @@ const NEXT_KEY = 'a-different-credential-encryption-key-9876';
 
 function storedValue(harness: ReturnType<typeof createTestUserDO>, key: string): string | undefined {
   const rows = sqlExec(harness.db).exec('SELECT value FROM user_credentials WHERE key = ?', key).toArray();
-  return typeof rows[0]?.value === 'string' ? rows[0].value : undefined;
+  const parsed = v.safeParse(v.string(), rows[0]?.value);
+  return parsed.success ? parsed.output : undefined;
 }
 
 describe('the credential store is sealed at rest', () => {
@@ -178,7 +180,8 @@ describe('MCP server headers are sealed too', () => {
 
   function storedHeaders(harness: ReturnType<typeof createTestUserDO>, id: string): string | null {
     const row = sqlExec(harness.db).exec('SELECT headers FROM user_mcp_servers WHERE id = ?', id).toArray()[0];
-    return typeof row?.headers === 'string' ? row.headers : null;
+    const parsed = v.safeParse(v.string(), row?.headers);
+    return parsed.success ? parsed.output : null;
   }
 
   test('a bearer for a private MCP server never lands in SQLite in the clear', async () => {

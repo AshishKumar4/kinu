@@ -24,6 +24,7 @@
  */
 import { tool, jsonSchema } from 'ai';
 import type { LanguageModel, ToolSet } from 'ai';
+import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
   BUILTIN_TOOL_SPECS,
@@ -35,10 +36,14 @@ import {
 import { FORK_STRATEGY_ID } from '../strategy/heads.js';
 import { readSpawnStarted } from '../jobs/threshold.js';
 import { localMissionPort, readMissionLimits, type MissionGovernor } from '../mission-budget.js';
-import type { StrategyContext, StrategyRegistry } from '../strategy/types.js';
+import type {
+  BuiltinStrategyOptions, StrategyContext, StrategyRegistry,
+} from '../strategy/types.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MergeStrategy } from '../heads/types.js';
+import type { WorkMode } from '../prompting/surface.js';
 import { nanoid } from '../utils/nanoid.js';
+import { JsonObjectSchema, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json.js';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace DO's facet substrate: spawn =
@@ -67,14 +72,12 @@ export interface SubordinateRosterEntry {
  * This is NOT a mode the caller picks — there is one delivery policy (the
  * subordinate's own drain decides), and this reports which branch it took.
  *
- * - `steering_live_turn` — the subordinate was mid-turn, so the event splices
- *   into the next step of the turn it is already running.
  * - `starts_now` — the subordinate was idle; the drain turns the event into a
  *   turn immediately.
- * - `queued` — admission deduped against work already waiting; it lands with
- *   that backlog.
+ * - `queued` — the subordinate was busy or admission deduped against work
+ *   already waiting; the task gets its own mode-homogeneous turn.
  */
-export type SubordinateDelivery = 'steering_live_turn' | 'starts_now' | 'queued';
+export type SubordinateDelivery = 'starts_now' | 'queued';
 
 /** What the subordinate was doing when the handoff landed. */
 export interface SubordinatePhase {
@@ -98,31 +101,46 @@ export interface SubordinateHandoff {
 export interface TeamToolDeps {
   /** The workspace's subordinate roster (dismissed entries excluded). */
   list(): Promise<SubordinateRosterEntry[]>;
+  /** Create an idle durable subordinate identity. This is the owner-facing
+   *  operation: a mission defines the agent, but does not become a task until
+   *  the owner explicitly messages or assigns it. */
+  create(input: {
+    name?: string;
+    role: string;
+    mission: string;
+    model?: string;
+  }): Promise<{
+    name: string; displayName: string; subordinate: SubordinateRosterEntry;
+  }>;
   /** Create a durable subordinate; its first turn is the mission. */
   spawn(input: {
     name?: string;
     role: string;
     mission: string;
     model?: string;
-    /** Trusted caller attribution. The model tool omits this, so its spawns
-     * remain orchestrator-created; the interactive UI RPC supplies `user`. */
-    createdBy?: 'orchestrator' | 'user';
+    mode: WorkMode;
   }): Promise<{
     name: string; displayName: string;
   }>;
   /** Enqueue a task on the subordinate (drained as its next turn). */
-  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string }): Promise<
+  assign(input: { name: string; task: string; deliverable?: string; deadlineHint?: string; mode: WorkMode }): Promise<
     { ok: true; name: string } & SubordinateHandoff
   >;
   /** Roster row + live snapshot for one subordinate, or the whole roster. */
-  status(input: { name?: string }): Promise<unknown>;
+  status(input: { name?: string }): Promise<object>;
   /** Conversational injection into the subordinate's next turn. */
-  message(input: { name: string; content: string }): Promise<
+  message(input: { name: string; content: string; mode: WorkMode }): Promise<
     { ok: true; name: string } & SubordinateHandoff
   >;
   /** Retire a subordinate. Default is ARCHIVE (facet + context kept, no
    *  longer addressed); storage is wiped only on explicit keepHistory=false. */
-  dismiss(input: { name: string; keepHistory?: boolean }): Promise<{
+  dismiss(input: {
+    name: string;
+    keepHistory?: boolean;
+    /** Trusted caller attribution. The model tool omits this, while the owner
+     *  RPC supplies `user`; user-created agents cannot be retired by a model. */
+    requestedBy?: 'orchestrator' | 'user';
+  }): Promise<{
     ok: true; name: string; historyKept: boolean;
   }>;
 }
@@ -137,7 +155,7 @@ export type PeerSendOutcome =
   | { status: 'rejected'; reason: string };
 
 export type PeerAskOutcome =
-  | { status: 'replied'; from: string; reply: unknown }
+  | { status: 'replied'; from: string; reply: JsonValue | undefined }
   | { status: 'no_reply'; note: string }
   | { status: 'rejected'; reason: string };
 
@@ -149,13 +167,13 @@ export interface PeersToolDeps {
   /** The owner's other workspaces' agents this one may address (self excluded). */
   listPeers(): Promise<Array<{ name: string; displayName?: string }>>;
   /** Send-and-await: deliver a message and wait for the peer's reply. */
-  ask(input: { agent: string; topic: string; message: string; timeoutMs: number }): Promise<PeerAskOutcome>;
+  ask(input: { agent: string; topic: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerAskOutcome>;
   /** Fire-and-forget: deliver a message without waiting for a reply. */
-  send(input: { agent: string; topic: string; message: string }): Promise<PeerSendOutcome>;
+  send(input: { agent: string; topic: string; message: string; mode: WorkMode }): Promise<PeerSendOutcome>;
   /** Answer a peer message event received this (or an earlier) turn. */
   reply(input: { eventId: string; message: string }): Promise<PeerReplyOutcome>;
   /** Create (or reuse by name) a specialist workspace, message its agent, await the result. */
-  spawnWorkspace(input: { name?: string; purpose: string; message: string; timeoutMs: number }): Promise<PeerSpawnOutcome>;
+  spawnWorkspace(input: { name?: string; purpose: string; message: string; timeoutMs: number; mode: WorkMode }): Promise<PeerSpawnOutcome>;
 }
 
 /** Reserved topic for transport-generated reply envelopes; user sends must not claim it. */
@@ -171,11 +189,7 @@ function askTimeoutMs(timeoutSeconds: number | undefined): number {
 }
 
 /** What the sender is told about a handoff, in the tool's snake_case shape. */
-function renderHandoff(handoff: SubordinateHandoff): {
-  event_id: string;
-  delivery: SubordinateDelivery;
-  subordinate_phase: SubordinatePhase;
-} {
+function renderHandoff(handoff: SubordinateHandoff) {
   return {
     event_id: handoff.eventId,
     delivery: handoff.delivery,
@@ -183,11 +197,10 @@ function renderHandoff(handoff: SubordinateHandoff): {
   };
 }
 
-const ASSIGN_NOTES: Record<SubordinateDelivery, string> = {
-  steering_live_turn: 'Assigned. The subordinate is mid-turn, so this steers it at its next step rather than waiting for it to go idle.',
+const ASSIGN_NOTES = {
   starts_now: 'Assigned. The subordinate was idle and starts on it now.',
-  queued: 'Already waiting for the subordinate — it picks this up with the work it has queued.',
-};
+  queued: 'Queued behind the subordinate\'s current or already-admitted work as its own turn.',
+} satisfies Record<SubordinateDelivery, string>;
 
 // ── Fork (exploration strategy) deps contract ───────────────────────────────
 
@@ -199,10 +212,14 @@ export interface AgentsForkDeps {
    *  e.g. `{ mcts: { session }, heads: { controller, inheritedContext, onPhase } }`.
    *  Called once per fork invocation and deep-merged (one level) under the
    *  caller's options so injected infra survives caller-supplied tuning. */
-  defaultOptions?: () => Record<string, unknown>;
+  defaultOptions?: () => BuiltinStrategyOptions;
 }
 
 export interface AgentsToolDeps {
+  /** Trusted mode of the turn executing this dispatch. It is host-owned and
+   * never appears in the model schema, so a delegated child cannot opt out of
+   * a Plan turn's mutation bar. */
+  mode: WorkMode;
   /** Ephemeral forks (the heads runtime + MCTS settle). Wired wherever the
    *  backend has an exploration substrate — both backends, subordinates too. */
   fork?: AgentsForkDeps;
@@ -217,13 +234,19 @@ export interface AgentsToolDeps {
   budget?: MissionGovernor;
 }
 
+interface UnifiedRosterResult {
+  subordinates?: SubordinateRosterEntry[];
+  peers?: Array<{ name: string; displayName?: string }>;
+  note?: string;
+}
+
 /** Which actions this deps set structurally supports. The single gating rule
  *  shared by the tool schema, the system prompt's Delegation section and the
  *  `agents.*` codemode namespace.
  *  Presence-typed so prompt assembly can ask without building fork deps. */
-export function agentsActionsFor(deps: { fork?: unknown; team?: unknown; peers?: unknown }): AgentsToolAction[] {
+export function agentsActionsFor(deps: { fork?: object; team?: object; peers?: object }): AgentsToolAction[] {
   const converse = !!deps.team || !!deps.peers;
-  const present: Record<AgentsToolAction, boolean> = {
+  const present = {
     fork: !!deps.fork,
     staff: converse,
     ask: converse,
@@ -231,7 +254,7 @@ export function agentsActionsFor(deps: { fork?: unknown; team?: unknown; peers?:
     reply: !!deps.peers,
     list: converse,
     dismiss: !!deps.team,
-  };
+  } satisfies Record<AgentsToolAction, boolean>;
   return AGENTS_TOOL_ACTIONS.filter((action) => present[action]);
 }
 
@@ -281,7 +304,7 @@ export interface AgentsToolInput {
   merge_strategy?: MergeStrategy;
   budget?: number;
   wall_clock_ms?: number;
-  options?: Record<string, unknown>;
+  options?: JsonObject;
   /** Cumulative spend cap for everything this helper transitively spawns.
    *  Nests under the caller's mission scope, so an inner cap can only ever be
    *  tighter than the outer one. Omit for the uncapped default. */
@@ -305,8 +328,49 @@ export interface AgentsToolInput {
   keep_history?: boolean;
 }
 
-function isPlainObject(v: unknown): v is Record<string, unknown> {
-  return typeof v === 'object' && v !== null && !Array.isArray(v);
+function isMergeableOption<T>(value: T): value is T & object {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+interface HeadsOptionOverlay {
+  heads?: ForkSpec[];
+  mergeStrategy?: MergeStrategy;
+}
+
+const ForkSpecSchema = v.object({
+  task: v.string(),
+  rationale: v.string(),
+  model: v.optional(v.string()),
+  allowedTools: v.optional(v.array(v.string())),
+});
+const AgentsToolInputSchema = v.object({
+  action: v.picklist(AGENTS_TOOL_ACTIONS),
+  task: v.optional(v.string()),
+  forks: v.optional(v.array(ForkSpecSchema)),
+  settle: v.optional(v.string()),
+  merge_strategy: v.optional(v.picklist(['synthesize', 'best_of', 'consensus'])),
+  budget: v.optional(v.number()),
+  wall_clock_ms: v.optional(v.number()),
+  options: v.optional(JsonObjectSchema),
+  budget_usd: v.optional(v.number()),
+  budget_tokens: v.optional(v.number()),
+  budget_label: v.optional(v.string()),
+  agent: v.optional(v.string()),
+  role: v.optional(v.string()),
+  mission: v.optional(v.string()),
+  model: v.optional(v.string()),
+  scope: v.optional(v.picklist(['subordinate', 'workspace'])),
+  message: v.optional(v.string()),
+  topic: v.optional(v.string()),
+  deliverable: v.optional(v.string()),
+  deadline_hint: v.optional(v.string()),
+  timeout_seconds: v.optional(v.number()),
+  event_id: v.optional(v.string()),
+  keep_history: v.optional(v.boolean()),
+});
+
+export function parseAgentsToolInput<T>(input: T): AgentsToolInput {
+  return v.parse(AgentsToolInputSchema, input);
 }
 
 /**
@@ -316,38 +380,47 @@ function isPlainObject(v: unknown): v is Record<string, unknown> {
  * re-execute, translating rows stored by the pre-unification `think` tool
  * (strategy → settle, heads → forks), or null when the job is not resumable.
  */
-export function resumableForkInput(kind: string, input: unknown): AgentsToolInput | null {
+const LegacyForkInputSchema = v.object({
+  strategy: v.optional(v.string()),
+  task: v.string(),
+  heads: v.optional(v.array(ForkSpecSchema)),
+  merge_strategy: v.optional(v.picklist(['synthesize', 'best_of', 'consensus'])),
+  budget: v.optional(v.number()),
+  wall_clock_ms: v.optional(v.number()),
+  options: v.optional(JsonObjectSchema),
+});
+
+export function resumableForkInput<T>(kind: string, input: T): AgentsToolInput | null {
   if (kind === 'agents') {
-    return isPlainObject(input) && input.action === 'fork' ? input as unknown as AgentsToolInput : null;
+    const parsed = v.safeParse(AgentsToolInputSchema, input);
+    return parsed.success && parsed.output.action === 'fork' ? parsed.output : null;
   }
-  if (kind !== 'think' || !isPlainObject(input)) return null;
-  const legacy = input as {
-    strategy?: string; task?: string; heads?: ForkSpec[];
-    merge_strategy?: MergeStrategy;
-    budget?: number; wall_clock_ms?: number; options?: Record<string, unknown>;
-  };
-  if (typeof legacy.task !== 'string') return null;
+  if (kind !== 'think') return null;
+  const parsed = v.safeParse(LegacyForkInputSchema, input);
+  if (!parsed.success) return null;
+  const legacy = parsed.output;
   const settle = legacy.strategy === undefined || legacy.strategy === FORK_STRATEGY_ID
     ? undefined
     : legacy.strategy;
-  return {
+  const resumed: AgentsToolInput = {
     action: 'fork',
     task: legacy.task,
-    ...(settle !== undefined ? { settle } : {}),
-    ...(legacy.heads ? { forks: legacy.heads } : {}),
-    ...(legacy.merge_strategy ? { merge_strategy: legacy.merge_strategy } : {}),
-    ...(legacy.budget !== undefined ? { budget: legacy.budget } : {}),
-    ...(legacy.wall_clock_ms !== undefined ? { wall_clock_ms: legacy.wall_clock_ms } : {}),
-    ...(legacy.options ? { options: legacy.options } : {}),
   };
+  if (settle !== undefined) Object.assign(resumed, { settle });
+  if (legacy.heads) Object.assign(resumed, { forks: legacy.heads });
+  if (legacy.merge_strategy) Object.assign(resumed, { merge_strategy: legacy.merge_strategy });
+  if (legacy.budget !== undefined) Object.assign(resumed, { budget: legacy.budget });
+  if (legacy.wall_clock_ms !== undefined) Object.assign(resumed, { wall_clock_ms: legacy.wall_clock_ms });
+  if (legacy.options) Object.assign(resumed, { options: legacy.options });
+  return resumed;
 }
 
-function readAbortSignal(options: unknown): AbortSignal | undefined {
-  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
-  const signal = (options as { abortSignal?: unknown }).abortSignal;
-  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
-    ? signal as AbortSignal
-    : undefined;
+interface AgentsToolCallOptions {
+  abortSignal?: AbortSignal;
+}
+
+function readAbortSignal(options: AgentsToolCallOptions | undefined): AbortSignal | undefined {
+  return options?.abortSignal;
 }
 
 // ── Fork dispatch (the former think tool, verbatim semantics) ───────────────
@@ -375,9 +448,10 @@ function forkMissionScope(
 async function runFork(
   deps: AgentsForkDeps,
   input: AgentsToolInput,
-  toolOptions: unknown,
+  mode: WorkMode,
+  toolOptions: AgentsToolCallOptions | undefined,
   budget?: MissionGovernor,
-): Promise<unknown> {
+): Promise<object> {
   if (!input.task) return { error: 'fork requires task' };
   const settle = input.settle ?? 'merge';
   const strategyId = settle === 'merge' ? FORK_STRATEGY_ID : settle;
@@ -390,22 +464,30 @@ async function runFork(
   // One-level deep merge: caller tuning sits alongside injected infra
   // (session / controller / onPhase) instead of replacing the whole
   // per-strategy bag.
-  const defaults = deps.defaultOptions?.() ?? {};
+  const defaults = deps.defaultOptions?.();
   const callerOpts = input.options ?? {};
-  const options: Record<string, unknown> = { ...defaults };
-  for (const [k, v] of Object.entries(callerOpts)) {
-    const d = options[k];
-    options[k] = isPlainObject(d) && isPlainObject(v) ? { ...d, ...v } : v;
+  const options = defaults instanceof Map
+    ? new Map(defaults)
+    : new Map(Object.entries(defaults ?? {}));
+  for (const [key, value] of Object.entries(callerOpts)) {
+    const existing = options.get(key);
+    options.set(
+      key,
+      isMergeableOption(existing) && isMergeableOption(value)
+        ? Object.assign({}, existing, value)
+        : value,
+    );
   }
 
   // Ergonomic fork input: fold the typed top-level fields into options.heads,
   // preserving the injected controller/context/onPhase.
   if (input.forks) {
-    options.heads = {
-      ...(isPlainObject(options.heads) ? options.heads : {}),
-      heads: input.forks,
-      ...(input.merge_strategy ? { mergeStrategy: input.merge_strategy } : {}),
-    };
+    const headsOptions: HeadsOptionOverlay = {};
+    const existingHeads = options.get('heads');
+    if (isMergeableOption(existingHeads)) Object.assign(headsOptions, existingHeads);
+    Object.assign(headsOptions, { heads: input.forks });
+    if (input.merge_strategy) Object.assign(headsOptions, { mergeStrategy: input.merge_strategy });
+    options.set('heads', headsOptions);
   }
 
   // The fork's mission scope, and with it the model-call seam for everything
@@ -413,26 +495,26 @@ async function runFork(
   // ensemble, convergence. Metering and enforcement ride the same wrapper, so
   // an exhausted label stops the search mid-flight rather than after it.
   const mission = forkMissionScope(budget, input);
-  const rt: AgentRuntime = mission
-    ? {
-        ...deps.rt,
-        llm: mission.governor.govern(deps.rt.llm, mission.labels),
-        ...(deps.rt.judgeModel
-          ? { judgeModel: mission.governor.govern(deps.rt.judgeModel, mission.labels) }
-          : {}),
-      }
-    : deps.rt;
+  let rt: AgentRuntime = deps.rt;
+  if (mission) {
+    rt = {
+      ...deps.rt,
+      llm: mission.governor.govern(deps.rt.llm, mission.labels),
+    };
+    if (deps.rt.judgeModel) {
+      Object.assign(rt, { judgeModel: mission.governor.govern(deps.rt.judgeModel, mission.labels) });
+    }
+  }
 
   const ctx: StrategyContext = {
     task: input.task,
+    mode,
     rt,
     model: deps.model,
-    signal: readAbortSignal(toolOptions),
     // The governed `rt.llm` above covers everything that reaches a model
     // through this process. A head does not: it resolves its own model in its
     // own runtime, so it needs the ledger itself, and that is what this
     // carries. Only present when a budget was actually declared.
-    ...(mission ? { mission: { labels: mission.labels, port: localMissionPort(mission.governor) } } : {}),
     budget: {
       // Unset = strategy default (lets stored agent-config overrides apply).
       maxIterations: input.budget,
@@ -446,6 +528,13 @@ async function runFork(
     },
     options,
   };
+  const signal = readAbortSignal(toolOptions);
+  if (signal) Object.assign(ctx, { signal });
+  if (mission) {
+    Object.assign(ctx, {
+      mission: { labels: mission.labels, port: localMissionPort(mission.governor) },
+    });
+  }
   // The spawn is validated and about to be in flight — tell the background
   // wrapper, which detaches the call right now instead of racing a threshold
   // whose wait could only be dead air (withSpawnDetach). Every validation
@@ -465,27 +554,50 @@ async function runFork(
       labels: mission.labels,
       spawns: 1,
     });
-    return {
+    const cost: JsonObject = { durationMs: result.cost.durationMs };
+    if (result.cost.tokens !== undefined) Object.assign(cost, { tokens: result.cost.tokens });
+    if (result.cost.iterations !== undefined) Object.assign(cost, { iterations: result.cost.iterations });
+    if (result.cost.selfMetered !== undefined) Object.assign(cost, { selfMetered: result.cost.selfMetered });
+    if (result.cost.filesChanged !== undefined) Object.assign(cost, { filesChanged: result.cost.filesChanged });
+    const output: JsonObject = {
       strategy: result.strategy,
       text: result.best.text,
       score: result.best.score,
-      trace: result.trace,
-      cost: result.cost,
-      ...(mission ? { mission_budget: mission.governor.snapshot(mission.labels[0]!)[0] } : {}),
+      cost,
     };
+    if (result.trace !== undefined) Object.assign(output, { trace: result.trace });
+    if (mission) {
+      const label = mission.labels[0];
+      const snapshot = label ? mission.governor.snapshot(label)[0] : undefined;
+      if (snapshot) {
+        Object.assign(output, { mission_budget: parseJsonObject(JSON.stringify(snapshot)) });
+      }
+    }
+    return output;
   } catch (err) {
-    return { error: `Fork (settle=${settle}) failed: ${(err as Error).message}` };
+    return { error: `Fork (settle=${settle}) failed: ${err instanceof Error ? err.message : String(err)}` };
   }
 }
 
 // ── Schema assembly ─────────────────────────────────────────────────────────
 
-type SchemaProps = Record<string, unknown>;
+interface ForkSchemaProperties {
+  task?: JsonObject;
+  forks?: JsonObject;
+  settle?: JsonObject;
+  merge_strategy?: JsonObject;
+  budget?: JsonObject;
+  wall_clock_ms?: JsonObject;
+  options?: JsonObject;
+  budget_usd?: JsonObject;
+  budget_tokens?: JsonObject;
+  budget_label?: JsonObject;
+}
 
-function forkProperties(deps: AgentsToolDeps): SchemaProps {
+function forkProperties(deps: AgentsToolDeps): ForkSchemaProperties {
   if (!deps.fork) return {};
   const hasMcts = !!deps.fork.registry.get('mcts');
-  return {
+  const properties: ForkSchemaProperties = {
     task: { type: 'string', description: 'For action=fork: the concrete task the forks explore together.' },
     forks: {
       type: 'array',
@@ -512,13 +624,6 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
         },
       },
     },
-    ...(hasMcts ? {
-      settle: {
-        type: 'string',
-        enum: ['merge', 'mcts'],
-        description: 'For action=fork: how forks are settled. Default merge — the forks\' findings merge back into this turn. mcts scores competing approaches against each other by execution instead.',
-      },
-    } : {}),
     // Three distinct behaviours whose names alone do not give them away, and
     // whose semantics lived only in buildMergePrompt (heads/controller.ts) —
     // instructions addressed to the merge model, not to the caller choosing
@@ -551,14 +656,37 @@ function forkProperties(deps: AgentsToolDeps): SchemaProps {
       description: 'For action=fork: name the sub-ledger so several fork calls share one cumulative budget. Omit for a fresh one per call.',
     },
   };
+  if (hasMcts) {
+    properties.settle = {
+      type: 'string',
+      enum: ['merge', 'mcts'],
+      description: 'For action=fork: how forks are settled. Default merge — the forks\' findings merge back into this turn. mcts scores competing approaches against each other by execution instead.',
+    };
+  }
+  return properties;
 }
 
-function converseProperties(deps: AgentsToolDeps): SchemaProps {
+interface ConverseSchemaProperties {
+  agent?: JsonObject;
+  role?: JsonObject;
+  mission?: JsonObject;
+  model?: JsonObject;
+  scope?: JsonObject;
+  message?: JsonObject;
+  topic?: JsonObject;
+  timeout_seconds?: JsonObject;
+  event_id?: JsonObject;
+  deliverable?: JsonObject;
+  deadline_hint?: JsonObject;
+  keep_history?: JsonObject;
+}
+
+function converseProperties(deps: AgentsToolDeps): ConverseSchemaProperties {
   if (!deps.team && !deps.peers) return {};
   const askTargets = deps.team && deps.peers
     ? 'a subordinate here or a peer workspace agent (subordinate names win a collision)'
     : deps.team ? 'a subordinate' : 'a peer workspace agent';
-  return {
+  const properties: ConverseSchemaProperties = {
     agent: {
       type: 'string',
       description: `Agent name: ${askTargets}. Target for ask/send/dismiss; optional name for staff (auto-generated from the role when omitted) and detail filter for list.`,
@@ -566,28 +694,31 @@ function converseProperties(deps: AgentsToolDeps): SchemaProps {
     role: { type: 'string', maxLength: 200, description: 'For action=staff: one freeform role/purpose line (e.g. "researcher — competitive landscape").' },
     mission: { type: 'string', maxLength: 20000, description: "For action=staff: the helper's mission — it seeds its identity and runs as its first turn." },
     model: { type: 'string', description: 'For action=staff: optional model spec override (defaults to the workspace model).' },
-    ...(deps.peers ? {
+    message: {
+      type: 'string', maxLength: 20000,
+      description: 'The work or note for ask/send, the answer for reply, or the first delegated task for staff scope=workspace.',
+    },
+  };
+  if (deps.peers) {
+    Object.assign(properties, {
       scope: {
         type: 'string',
         enum: ['subordinate', 'workspace'],
         description: 'For action=staff: subordinate (default) staffs THIS workspace; workspace creates (or reuses by name) a specialist workspace of its own, sends `message` to it, and awaits the result.',
       },
-    } : {}),
-    message: {
-      type: 'string', maxLength: 20000,
-      description: 'The work or note for ask/send, the answer for reply, or the first delegated task for staff scope=workspace.',
-    },
-    ...(deps.peers ? {
       topic: { type: 'string', maxLength: 80, description: 'Optional short label for a peer ask/send (default "message").' },
       timeout_seconds: { type: 'number', description: 'For a peer ask / staff scope=workspace: seconds to wait for the reply (default 120, max 600). On timeout the reply still arrives later as an event.' },
       event_id: { type: 'string', description: 'For action=reply: the agent message event id you were given.' },
-    } : {}),
-    ...(deps.team ? {
+    });
+  }
+  if (deps.team) {
+    Object.assign(properties, {
       deliverable: { type: 'string', maxLength: 2000, description: 'For ask to a subordinate: what the finished result should be (optional).' },
       deadline_hint: { type: 'string', maxLength: 200, description: 'For ask to a subordinate: optional urgency/deadline hint.' },
       keep_history: { type: 'boolean', description: 'For action=dismiss: keep the subordinate archived with its context (default true). Set false ONLY to permanently wipe its storage.' },
-    } : {}),
-  };
+    });
+  }
+  return properties;
 }
 
 /**
@@ -607,9 +738,10 @@ function converseProperties(deps: AgentsToolDeps): SchemaProps {
 export async function dispatchAgentsAction(
   deps: AgentsToolDeps,
   input: AgentsToolInput,
-  toolOptions?: unknown,
-): Promise<unknown> {
+  toolOptions?: AgentsToolCallOptions,
+): Promise<object> {
   const actions = agentsActionsFor(deps);
+  const mode = deps.mode;
   const team = deps.team;
   const peers = deps.peers;
   const isSubordinate = async (name: string): Promise<boolean> => {
@@ -639,38 +771,44 @@ export async function dispatchAgentsAction(
     }
     switch (input.action) {
       case 'fork':
-        return await runFork(deps.fork!, input, toolOptions, deps.budget);
+        return await runFork(deps.fork!, input, mode, toolOptions, deps.budget);
 
       case 'staff': {
         if ((input.scope ?? 'subordinate') === 'workspace') {
           if (!peers) return { error: 'staff scope=workspace needs the peer transport, which this actor does not have' };
           if (!input.mission || !input.message) return { error: 'staff scope=workspace requires mission and message' };
-          return await peers.spawnWorkspace({
-            ...(input.agent ? { name: input.agent } : {}),
+          const request: Parameters<PeersToolDeps['spawnWorkspace']>[0] = {
             purpose: input.mission,
             message: input.message,
             timeoutMs: askTimeoutMs(input.timeout_seconds),
-          });
+            mode,
+          };
+          if (input.agent) Object.assign(request, { name: input.agent });
+          return await peers.spawnWorkspace(request);
         }
         if (!team) return { error: 'staffing subordinates is not available on this actor' };
         if (!input.role || !input.mission) return { error: 'staff requires role and mission' };
-        return await team.spawn({
-          ...(input.agent ? { name: input.agent } : {}),
+        const request: Parameters<TeamToolDeps['spawn']>[0] = {
           role: input.role,
           mission: input.mission,
-          ...(input.model ? { model: input.model } : {}),
-        });
+          mode,
+        };
+        if (input.agent) Object.assign(request, { name: input.agent });
+        if (input.model) Object.assign(request, { model: input.model });
+        return await team.spawn(request);
       }
 
       case 'ask': {
         if (!input.agent || !input.message) return { error: 'ask requires agent and message' };
         if (team && await isSubordinate(input.agent)) {
-          const handoff = await team.assign({
+          const assignment: Parameters<TeamToolDeps['assign']>[0] = {
             name: input.agent,
             task: input.message,
-            ...(input.deliverable ? { deliverable: input.deliverable } : {}),
-            ...(input.deadline_hint ? { deadlineHint: input.deadline_hint } : {}),
-          });
+            mode,
+          };
+          if (input.deliverable) Object.assign(assignment, { deliverable: input.deliverable });
+          if (input.deadline_hint) Object.assign(assignment, { deadlineHint: input.deadline_hint });
+          const handoff = await team.assign(assignment);
           return {
             status: 'working',
             agent: input.agent,
@@ -682,6 +820,7 @@ export async function dispatchAgentsAction(
           return await peers.ask({
             agent: input.agent, topic, message: input.message,
             timeoutMs: askTimeoutMs(input.timeout_seconds),
+            mode,
           });
         }
         return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
@@ -690,7 +829,7 @@ export async function dispatchAgentsAction(
       case 'send': {
         if (!input.agent || !input.message) return { error: 'send requires agent and message' };
         if (team && await isSubordinate(input.agent)) {
-          const handoff = await team.message({ name: input.agent, content: input.message });
+          const handoff = await team.message({ name: input.agent, content: input.message, mode });
           // Same delivered/queued vocabulary the peer transport already uses:
           // delivered = it reached the target's context, queued = it waits
           // behind work already admitted.
@@ -701,7 +840,7 @@ export async function dispatchAgentsAction(
           };
         }
         if (peers) {
-          return await peers.send({ agent: input.agent, topic, message: input.message });
+          return await peers.send({ agent: input.agent, topic, message: input.message, mode });
         }
         return { error: `unknown agent "${input.agent}" — check the roster with action:"list"` };
       }
@@ -718,11 +857,11 @@ export async function dispatchAgentsAction(
         const subordinates = team ? await team.list() : undefined;
         const peerRoster = peers ? await peers.listPeers() : undefined;
         const empty = (subordinates?.length ?? 0) === 0 && (peerRoster?.length ?? 0) === 0;
-        return {
-          ...(subordinates ? { subordinates } : {}),
-          ...(peerRoster ? { peers: peerRoster } : {}),
-          ...(empty ? { note: 'No helper agents yet — create one with action:"staff".' } : {}),
-        };
+        const roster: UnifiedRosterResult = {};
+        if (subordinates) Object.assign(roster, { subordinates });
+        if (peerRoster) Object.assign(roster, { peers: peerRoster });
+        if (empty) Object.assign(roster, { note: 'No helper agents yet — create one with action:"staff".' });
+        return roster;
       }
 
       case 'dismiss':
@@ -767,7 +906,7 @@ export function createAgentsTool(deps: AgentsToolDeps): ToolSet[string] {
         ...converseProperties(deps),
       },
     }),
-    execute: async (input: AgentsToolInput, toolOptions?: unknown) =>
+    execute: async (input: AgentsToolInput, toolOptions?: AgentsToolCallOptions) =>
       dispatchAgentsAction(deps, input, toolOptions),
   });
 }

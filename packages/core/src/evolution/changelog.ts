@@ -11,6 +11,7 @@
  * craft retire, fact forget.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives.js';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { FactsStore } from '../memory/facts.js';
@@ -23,6 +24,11 @@ import { listReplayEvals } from './replay.js';
 import { listTurnOutcomes, TURN_OUTCOMES } from './outcomes.js';
 import { describePathology } from './pathology.js';
 import { formatScoreInterval, lossInterval } from '../utils/stats.js';
+
+const ScaffoldRunEventSchema = v.object({
+  fromVersion: v.optional(v.number()),
+  toVersion: v.optional(v.number()),
+});
 
 export type ChangelogEntryKind = 'scaffold' | 'tool' | 'view' | 'fact' | 'gepa' | 'replay' | 'outcomes';
 
@@ -76,9 +82,9 @@ function scaffoldStatusChangeAt(sql: SqlExecutor): Map<number, number> {
       const at = Date.parse(r.ts);
       if (!Number.isFinite(at)) continue;
       try {
-        const p = JSON.parse(r.payload) as { fromVersion?: number; toVersion?: number };
+        const p = v.parse(ScaffoldRunEventSchema, JSON.parse(r.payload));
         const version = r.type === 'scaffold_promotion' ? p.toVersion : p.fromVersion;
-        if (typeof version === 'number' && at > (byVersion.get(version) ?? 0)) {
+        if (version !== undefined && at > (byVersion.get(version) ?? 0)) {
           byVersion.set(version, at);
         }
       } catch { /* malformed payload — written_at stands */ }
@@ -114,15 +120,16 @@ function scaffoldEntries(sql: SqlExecutor): ChangelogEntry[] {
           : e.status === 'rolled_back'
             ? 'I reverted a change to how I work'
             : 'I replaced an earlier way of working';
-    return {
+    const entry: ChangelogEntry = {
       id: `scaffold:v${e.version}:${e.status}`,
-      kind: 'scaffold' as const,
+      kind: 'scaffold',
       at: Math.max(e.writtenAt, changedAt.get(e.version) ?? 0),
       summary,
       evidence: `${verb} v${e.version}${trial} — ${e.rationale} · ${record}${targeting}`,
-      ...(revertable ? { revert: { type: 'scaffold_rollback' as const, target: String(e.version) } } : {}),
       scaffoldVersion: e.version,
     };
+    if (revertable) entry.revert = { type: 'scaffold_rollback', target: String(e.version) };
+    return entry;
   });
 }
 
@@ -172,20 +179,23 @@ function viewEntries(sql: SqlExecutor, limit: number): ChangelogEntry[] {
     const rows = sql<{ slug: string; title: string; version: number; written_at: number; status: string }>`
       SELECT slug, title, version, written_at, status
       FROM agent_views ORDER BY written_at DESC LIMIT ${limit}`;
-    return rows.map((r) => ({
-      id: `view:${r.slug}:v${r.version}`,
-      kind: 'view' as const,
-      at: r.written_at,
-      summary: r.version === 1
-        ? `Added a view to the workspace UI: ${r.title}`
-        : `Updated the ${r.title} view (v${r.version})`,
-      evidence: r.status === 'deleted'
-        ? `views/${r.slug}.json v${r.version} — removed`
-        : `views/${r.slug}.json v${r.version} — ${r.status}`,
-      // Only the live version is revertible: an older row is already reverted,
-      // and a deleted one has no tab to take back.
-      ...(r.status === 'current' ? { revert: { type: 'view_revert' as const, target: r.slug } } : {}),
-    }));
+    return rows.map((r) => {
+      const entry: ChangelogEntry = {
+        id: `view:${r.slug}:v${r.version}`,
+        kind: 'view',
+        at: r.written_at,
+        summary: r.version === 1
+          ? `Added a view to the workspace UI: ${r.title}`
+          : `Updated the ${r.title} view (v${r.version})`,
+        evidence: r.status === 'deleted'
+          ? `views/${r.slug}.json v${r.version} — removed`
+          : `views/${r.slug}.json v${r.version} — ${r.status}`,
+        // Only the live version is revertible: an older row is already reverted,
+        // and a deleted one has no tab to take back.
+      };
+      if (r.status === 'current') entry.revert = { type: 'view_revert', target: r.slug };
+      return entry;
+    });
   } catch {
     return [];
   }
@@ -222,8 +232,9 @@ function factEntries(sql: SqlExecutor, limit: number): FactChangelogEntry[] {
     return rows.map((r) => {
       let value = r.value_json;
       try {
-        const parsed = JSON.parse(r.value_json) as unknown;
-        value = typeof parsed === 'string' ? parsed : JSON.stringify(parsed);
+        const parsed = JSON.parse(r.value_json);
+        const text = v.safeParse(v.string(), parsed);
+        value = text.success ? text.output : JSON.stringify(parsed);
       } catch { /* stored as raw text */ }
       return {
         id: `fact:${r.key}`,
@@ -371,9 +382,9 @@ export function countUnseenChangelog(sql: SqlExecutor, seenAt: number): number {
 
 // ── The one text renderer (TUI overlay + classic print + tests) ──
 
-const KIND_GLYPH: Record<ChangelogEntryKind, string> = {
+const KIND_GLYPH = {
   scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
-};
+} satisfies Record<ChangelogEntryKind, string>;
 
 export function renderChangelogText(
   entries: ReadonlyArray<ChangelogEntry>,
@@ -439,8 +450,8 @@ async function revertScaffoldVersion(rt: AgentRuntime, version: number): Promise
   if (!prev) return { ok: false, error: `scaffold v${version} has no earlier version to roll back to` };
   const restored = await rollbackScaffold(rt, prev.version);
   if (!restored.ok) return { ok: false, error: restored.error };
-  sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = ${version}`;
-  sql`UPDATE scaffold_versions SET status = 'current' WHERE version = ${prev.version}`;
+  void sql`UPDATE scaffold_versions SET status = 'rolled_back' WHERE version = ${version}`;
+  void sql`UPDATE scaffold_versions SET status = 'current' WHERE version = ${prev.version}`;
   return { ok: true, detail: `rolled back to v${prev.version}` };
 }
 
@@ -463,7 +474,7 @@ export async function executeChangelogRevert(
       }
       ctx.rt.craftStore.delete(action.target);
       try {
-        ctx.rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${action.target}`;
+        void ctx.rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${action.target}`;
       } catch { /* no scores table — the tool itself is gone, which is the revert */ }
       return { ok: true, detail: `retired crafted tool ${action.target}` };
     }

@@ -24,9 +24,6 @@
 import { wilsonInterval } from '../utils/stats.js';
 import type { SqlExecutor } from '../types/primitives.js';
 
-/** 95% two-sided normal quantile. */
-const Z_95 = 1.959963984540054;
-
 /** A rate is worth reading when its 95% interval spans no more than 20 points
  *  per 100 turns (±10). This replaces an arbitrary minimum-n rule: precision
  *  is what actually decides whether a rate is informative, and the n needed to

@@ -166,7 +166,7 @@ function isSafeChangeId(id: string): boolean {
 
 /** wrangler ≥3 prints "Current Version ID: <uuid>"; older prints
  *  "Current Deployment ID: <uuid>". Both are REAL deploy identities. */
-export function parseDeployOutput(output: string): { versionId: string | null; deploymentId: string | null } {
+export function parseDeployOutput(output: string) {
   const version = /Current Version ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output)
     ?? /\bVersion ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output);
   const deployment = /Current Deployment ID:\s*([0-9a-z][0-9a-z-]{7,})/i.exec(output)
@@ -320,16 +320,16 @@ export class ReleaseEngine {
 
   /** Walk the change to `patching` through allowed lifecycle edges. */
   private async normalizeToPatching(change: ReleaseChange): Promise<string | null> {
-    const steps: Partial<Record<ReleaseStatus, ReleaseStatus[]>> = {
-      draft: ['planning', 'patching'],
-      planning: ['patching'],
-      patching: [],
-      validating: ['patching'],
-      preview_ready: ['patching'],
-      awaiting_approval: ['preview_ready', 'patching'],
-      failed: ['patching'],
-    };
-    const path = steps[change.status];
+    const steps = new Map<ReleaseStatus, readonly ReleaseStatus[]>([
+      ['draft', ['planning', 'patching']],
+      ['planning', ['patching']],
+      ['patching', []],
+      ['validating', ['patching']],
+      ['preview_ready', ['patching']],
+      ['awaiting_approval', ['preview_ready', 'patching']],
+      ['failed', ['patching']],
+    ]);
+    const path = steps.get(change.status);
     if (!path) return `cannot apply a change in terminal status '${change.status}'`;
     for (const next of path) await this.ledger.transition(change.id, next);
     return null;

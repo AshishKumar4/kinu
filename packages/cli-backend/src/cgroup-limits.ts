@@ -89,7 +89,10 @@ function parseMemory(raw: string | null): number | undefined {
 function readCpus(root: string, procSelfCgroup: string): number | undefined {
   for (const dir of candidates(root, selfPath(procSelfCgroup, null))) {
     const unified = read(`${dir}/cpu.max`);
-    if (unified !== null) return parseCpus(...(unified.split(/\s+/) as [string?, string?]));
+    if (unified !== null) {
+      const [quota, period] = unified.split(/\s+/);
+      return parseCpus(quota, period);
+    }
   }
   // v1: quota and period must come from the SAME controller directory.
   for (const dir of candidates(`${root}/cpu`, selfPath(procSelfCgroup, 'cpu'))) {
@@ -119,7 +122,10 @@ export function readCgroupLimits(source: CgroupSource = {}): ResourceLimits | nu
   const cpus = readCpus(root, procSelfCgroup);
   const memBytes = readMemory(root, procSelfCgroup);
   if (cpus === undefined && memBytes === undefined) return null;
-  return { ...(cpus !== undefined ? { cpus } : {}), ...(memBytes !== undefined ? { memBytes } : {}) };
+  if (cpus !== undefined && memBytes !== undefined) return { cpus, memBytes };
+  if (cpus !== undefined) return { cpus };
+  if (memBytes !== undefined) return { memBytes };
+  return null;
 }
 
 let memoized: ResourceLimits | null | undefined;

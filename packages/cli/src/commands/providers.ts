@@ -4,19 +4,10 @@ import { loadConfigFile, resolveCloudSession, updateConfigFile, type ProteusConf
 import { ACCENT, DIM, OK, WARN } from '../display.js';
 import { authCommand } from './auth.js';
 import { setupCommand } from './setup.js';
+import * as v from 'valibot';
 
 type ProviderAction = 'list' | 'connect' | 'disconnect';
-type ProviderName =
-  | 'cloudflare'
-  | 'claude'
-  | 'codex'
-  | 'openai'
-  | 'openrouter'
-  | 'anthropic'
-  | 'openai-compatible'
-  | 'opencode';
-
-const PROVIDERS = new Set<ProviderName>([
+const ProviderNameSchema = v.picklist([
   'cloudflare',
   'claude',
   'codex',
@@ -26,6 +17,21 @@ const PROVIDERS = new Set<ProviderName>([
   'openai-compatible',
   'opencode',
 ]);
+type ProviderName = v.InferOutput<typeof ProviderNameSchema>;
+
+interface ParsedProviderArgs {
+  action: ProviderAction;
+  provider?: ProviderName;
+  /** What the user typed, when it named nothing this CLI knows. */
+  raw?: string;
+}
+
+interface LocalCredential {
+  clear: (providers: NonNullable<ProteusConfig['providers']>) => boolean;
+  envVars: string[];
+  /** The account-side key the same provider is stored under, when it can be. */
+  credKey?: string;
+}
 
 const CLAUDE_INSTALL_HINT = 'Install Claude Code: https://docs.claude.com/en/docs/claude-code/setup';
 const CLAUDE_LOGIN_HINT = 'Run `claude` once to sign in to your Claude subscription.';
@@ -135,12 +141,7 @@ async function connectOpenCode(opts: { model?: string }): Promise<void> {
 const INSTALL_HINT_OPENCODE = 'Install opencode: https://opencode.ai';
 const LOGIN_HINT_OPENCODE = 'Run `opencode auth login` to authenticate opencode, then run `proteus setup` again.';
 
-function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): {
-  action: ProviderAction;
-  provider?: ProviderName;
-  /** What the user typed, when it named nothing this CLI knows. */
-  raw?: string;
-} {
+function parseArgs(actionOrProvider: string | undefined, providerArg: string | undefined): ParsedProviderArgs {
   if (!actionOrProvider) return { action: 'list' };
 
   const first = normalizeToken(actionOrProvider);
@@ -162,39 +163,32 @@ function parseArgs(actionOrProvider: string | undefined, providerArg: string | u
 /** The credential a provider stores in ~/.proteus/config.json, and the env
  *  vars that would keep supplying it after the file entry is gone. Providers
  *  absent from this map hold no Proteus-owned credential. */
-const LOCAL_CREDENTIALS: Partial<Record<ProviderName, {
-  clear: (providers: NonNullable<ProteusConfig['providers']>) => boolean;
-  envVars: string[];
-  /** The account-side key the same provider is stored under, when it can be.
-   *  Absent for codex: its subscription token is deliberately machine-local
-   *  (the Codex endpoint refuses Cloudflare Workers egress). */
-  credKey?: string;
-}>> = {
-  codex: {
+const LOCAL_CREDENTIALS = new Map<ProviderName, LocalCredential>([
+  ['codex', {
     clear: (p) => deleteKey(p, 'codex'),
     envVars: ['CODEX_ACCESS_TOKEN'],
-  },
-  openai: {
+  }],
+  ['openai', {
     clear: (p) => deleteKey(p, 'openai'),
     envVars: ['OPENAI_API_KEY'],
     credKey: 'openai.bearer',
-  },
-  anthropic: {
+  }],
+  ['anthropic', {
     clear: (p) => deleteKey(p, 'anthropic'),
     envVars: ['ANTHROPIC_API_KEY'],
     credKey: 'anthropic.bearer',
-  },
-  openrouter: {
+  }],
+  ['openrouter', {
     clear: (p) => deleteKey(p, 'openrouter'),
     envVars: ['OPENROUTER_API_KEY'],
     credKey: 'openrouter.bearer',
-  },
-  'openai-compatible': {
+  }],
+  ['openai-compatible', {
     clear: (p) => deleteKey(p, 'openaiCompat'),
     envVars: ['PROTEUS_BASE_URL', 'PROTEUS_AUTH'],
     credKey: 'openai-compat.default',
-  },
-};
+  }],
+]);
 
 function deleteKey<K extends keyof NonNullable<ProteusConfig['providers']>>(
   providers: NonNullable<ProteusConfig['providers']>,
@@ -208,16 +202,16 @@ function deleteKey<K extends keyof NonNullable<ProteusConfig['providers']>>(
 /** The model-spec prefixes a provider serves — a default model left pointing
  *  at a disconnected provider is exactly the "no connected provider" trap
  *  `proteus create` warns about, so the pointer goes with the credential. */
-const MODEL_SPEC_PREFIXES: Partial<Record<ProviderName, readonly string[]>> = {
-  codex: ['codex/'],
-  openai: ['openai/'],
-  anthropic: ['anthropic/'],
-  openrouter: ['openrouter/'],
-  'openai-compatible': ['openai-compat/', 'openai-compat:'],
-  claude: ['claude/'],
-  opencode: ['opencode/'],
-  cloudflare: ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/'],
-};
+const MODEL_SPEC_PREFIXES = new Map<ProviderName, readonly string[]>([
+  ['codex', ['codex/']],
+  ['openai', ['openai/']],
+  ['anthropic', ['anthropic/']],
+  ['openrouter', ['openrouter/']],
+  ['openai-compatible', ['openai-compat/', 'openai-compat:']],
+  ['claude', ['claude/']],
+  ['opencode', ['opencode/']],
+  ['cloudflare', ['workers-ai/', 'my-gateway/', 'ai-gateway/', '@cf/']],
+]);
 
 /**
  * The inverse of `provider connect`: remove the stored credential.
@@ -244,7 +238,7 @@ async function disconnectProvider(provider: ProviderName): Promise<void> {
     return;
   }
 
-  const credential = LOCAL_CREDENTIALS[provider];
+  const credential = LOCAL_CREDENTIALS.get(provider);
   if (!credential) throw new Error(`No local credential is stored for ${provider}.`);
 
   let removed = false;
@@ -302,7 +296,7 @@ async function disconnectAccountProvider(name: string): Promise<void> {
 
 /** Drop the default model spec when it names the provider being removed. */
 function clearDefaultModelFor(provider: ProviderName): void {
-  clearDefaultModelPrefixes(MODEL_SPEC_PREFIXES[provider] ?? []);
+  clearDefaultModelPrefixes(MODEL_SPEC_PREFIXES.get(provider) ?? []);
 }
 
 function clearDefaultModelPrefixes(prefixes: readonly string[]): void {
@@ -322,20 +316,21 @@ function maybeProvider(value: string): ProviderName | undefined {
 }
 
 function normalizeProvider(value: string): ProviderName {
-  const v = normalizeToken(value);
+  const token = normalizeToken(value);
   const provider =
-    v === 'cf' || v === 'workers-ai' || v === 'account'
+    token === 'cf' || token === 'workers-ai' || token === 'account'
       ? 'cloudflare'
-      : v === 'claude-code' || v === 'subscription' || v === 'claude-subscription'
+      : token === 'claude-code' || token === 'subscription' || token === 'claude-subscription'
         ? 'claude'
-        : v === 'chatgpt' || v === 'chatgpt-codex'
+        : token === 'chatgpt' || token === 'chatgpt-codex'
           ? 'codex'
-          : v === 'compat' || v === 'ollama'
+          : token === 'compat' || token === 'ollama'
             ? 'openai-compatible'
-            : v === 'opencode' ? 'opencode'
-            : v;
+            : token === 'opencode' ? 'opencode'
+            : token;
 
-  if (PROVIDERS.has(provider as ProviderName)) return provider as ProviderName;
+  const parsed = v.safeParse(ProviderNameSchema, provider);
+  if (parsed.success) return parsed.output;
   throw new Error('Provider must be cloudflare, claude, codex, openai, openrouter, anthropic, openai-compatible, or opencode.');
 }
 
@@ -432,5 +427,3 @@ function currentModel(model: string | undefined, prefix: string): string | undef
   if (!model?.startsWith(`${prefix}/`)) return undefined;
   return model.slice(prefix.length + 1);
 }
-
-

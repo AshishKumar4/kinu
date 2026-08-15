@@ -12,7 +12,7 @@ function registeredPaths(cmd: Command, prefix = ''): string[] {
 }
 
 function stripAnsi(text: string): string {
-  return text.replace(/\x1b\[[0-9;]*m/g, '');
+  return text.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 }
 
 describe('root help', () => {

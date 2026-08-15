@@ -68,7 +68,14 @@ import {
   mcpToolKey,
   type DeviceCodeStart,
   type DeviceCheckpointHint,
+  type DeviceConsentRequest,
+  type JsonObject,
+  type JsonValue,
+  type OAuthCredential,
+  JsonObjectSchema,
+  decodeJsonValue,
 } from '@proteus/core';
+import * as v from 'valibot';
 import { initUserTables } from './schema.js';
 import {
   mintWorkspaceCapability,
@@ -151,7 +158,26 @@ export interface McpToolSurface {
   unavailable: McpServerUnavailable[];
 }
 
-interface SqlRow extends Record<string, unknown> {}
+interface SqlRow extends Record<string, SqlStorageValue> {}
+
+const DeviceHelloSchema = v.object({
+  type: v.literal('HELLO'),
+  os: v.optional(v.string()),
+  hostname: v.optional(v.string()),
+});
+const LooseObjectSchema = v.looseObject({});
+const NullableStringArraySchema = v.nullable(v.array(v.string()));
+const NullableStringRecordSchema = v.nullable(v.record(v.string(), v.string()));
+
+function errorMessage<ErrorValue>(error: ErrorValue): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function isTextWebSocketMessage(
+  message: string | ArrayBuffer | ArrayBufferView,
+): message is string {
+  return v.is(v.string(), message);
+}
 
 export interface UserProfile {
   email: string;
@@ -255,9 +281,9 @@ export class UserDO extends Agent<Env> {
     this._initialized = true;
   }
 
-  private sqlx<T = SqlRow>(query: string, ...bindings: unknown[]): T[] {
+  private sqlx<T extends SqlRow = SqlRow>(query: string, ...bindings: SqlStorageValue[]): T[] {
     this.ensureInit();
-    return this.ctx.storage.sql.exec(query, ...bindings).toArray() as T[];
+    return this.ctx.storage.sql.exec<T>(query, ...bindings).toArray();
   }
 
   /** The attenuation gate. First statement of every privileged method below —
@@ -329,9 +355,9 @@ export class UserDO extends Agent<Env> {
       const presentedHash = await stub.getWorkspaceCapabilityHash();
       await this.ensureWorkspaceCapability(name, presentedHash);
     }));
-    const failed = settled.filter((r) => r.status === 'rejected');
+    const failed = settled.filter((result): result is PromiseRejectedResult => result.status === 'rejected');
     for (const failure of failed) {
-      console.warn('[user-do] capability backfill failed for a workspace:', (failure as PromiseRejectedResult).reason);
+      console.warn('[user-do] capability backfill failed for a workspace:', failure.reason);
     }
     // Only a clean sweep retires the marker; a partial one retries next boot.
     if (failed.length === 0) {
@@ -431,6 +457,66 @@ export class UserDO extends Agent<Env> {
     };
   }
 
+  /** Reserve a previously unused name without changing an existing row. Fork
+   * creation uses this stricter operation so a conflict cannot unarchive or
+   * retitle the workspace that already owns the name. */
+  async reserveWorkspace(caller: UserCaller, name: string, displayName?: string): Promise<{ entry: WorkspaceEntry; reserved: boolean }> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    const existing = this.sqlx<{
+      name: string;
+      display_name: string;
+      created_at: number;
+      last_visited: number;
+      archived_at: number | null;
+    }>(
+      `SELECT name, display_name, created_at, last_visited, archived_at
+       FROM user_workspaces WHERE name = ?`,
+      name,
+    )[0];
+    if (existing) {
+      return {
+        entry: {
+          name: existing.name,
+          displayName: existing.display_name,
+          createdAt: existing.created_at,
+          lastVisited: existing.last_visited,
+          archivedAt: existing.archived_at,
+        },
+        reserved: false,
+      };
+    }
+
+    const now = Date.now();
+    const title = resolveWorkspaceTitle({ explicit: displayName, slug: name });
+    this.sqlx(
+      `INSERT INTO user_workspaces (name, display_name, created_at, last_visited)
+       VALUES (?, ?, ?, ?)`,
+      name, title, now, now,
+    );
+    return {
+      entry: { name, displayName: title, createdAt: now, lastVisited: now, archivedAt: null },
+      reserved: true,
+    };
+  }
+
+  /** Drop only the exact roster row a failed fork reservation inserted. This
+   * never contacts the target DO: the caller uses it only when that target
+   * proved it already belongs to another user and was left untouched. */
+  async releaseWorkspaceReservation(caller: UserCaller, name: string, createdAt: number): Promise<boolean> {
+    await this.requireTier(caller, 'workspaces.write');
+    validateWorkspaceName(name);
+    if (!Number.isFinite(createdAt)) return false;
+    const row = this.sqlx<{ created_at: number }>(
+      `SELECT created_at FROM user_workspaces WHERE name = ?`,
+      name,
+    )[0];
+    if (!row || row.created_at !== createdAt) return false;
+    this.sqlx(`DELETE FROM user_workspaces WHERE name = ? AND created_at = ?`, name, createdAt);
+    revokeWorkspaceCapability(this.ctx.storage.sql, name);
+    return true;
+  }
+
   async touchWorkspace(caller: UserCaller, name: string): Promise<void> {
     await this.requireTier(caller, 'workspaces.write');
     validateWorkspaceName(name);
@@ -444,15 +530,16 @@ export class UserDO extends Agent<Env> {
     // Tear down the agent's Durable Object (storage, alarm, sandbox) BEFORE
     // dropping it from the registry — otherwise the DO's SQLite (conversation,
     // model, scaffold, triggers) survives and a same-name recreate inherits
-    // stale state, and its alarm keeps firing. Best-effort: the registry row is
-    // removed even if teardown fails.
+    // stale state, and its alarm keeps firing. A real teardown failure is
+    // fail-closed: keeping the registry row prevents a same-name recreation
+    // from reconnecting to resources that were not actually destroyed.
     try {
       const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
       await stub.destroyAgent(ownerUserId);
     } catch (err) {
-      if (!(err instanceof Error) || err.message !== 'destroyed') {
-        console.warn('[proteus] removeWorkspace: agent teardown failed:', err instanceof Error ? err.message : err);
-      }
+      // agents-SDK destroy aborts its own isolate after the durable wipe. That
+      // exact sentinel is successful completion; every other error is real.
+      if (!(err instanceof Error) || err.message !== 'destroyed') throw err;
     }
     this.sqlx(`DELETE FROM user_workspaces WHERE name = ?`, name);
     // The workspace's identity dies with it, so a same-name recreate is issued
@@ -686,14 +773,15 @@ export class UserDO extends Agent<Env> {
     if (!bearerScopes) return { ok: false, error: 'invalid CLI token' };
     const profile = await this.getProfile(await ownerCaller(this.env));
     if (!profile) return { ok: false, error: 'profile missing' };
-    return {
+    const verification: CliAgentConnectTicketVerification = {
       ok: true,
       user: { id: expected.userId, email: profile.email, displayName: profile.displayName },
       tokenHash: row.cli_token_hash,
       expiresAt: row.expires_at,
       capabilities,
-      ...(bearerScopes === 'all' ? {} : { scopes: bearerScopes }),
     };
+    if (bearerScopes !== 'all') verification.scopes = bearerScopes;
+    return verification;
   }
 
   /** A connect ticket stays bound to the bearer that minted it: an
@@ -746,20 +834,30 @@ export class UserDO extends Agent<Env> {
     this._devices.accept(verified.deviceId, server);
     const now = Date.now();
     this.sqlx(`UPDATE user_devices SET connected_at = ?, last_seen_at = ? WHERE id = ?`, now, now, verified.deviceId);
-    return new Response(null, { status: 101, webSocket: client } as ResponseInit & { webSocket: WebSocket });
+    const init: ResponseInit & { webSocket: WebSocket } = { status: 101, webSocket: client };
+    return new Response(null, init);
   }
 
   override async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer | ArrayBufferView): Promise<void> {
     const deviceId = deviceIdFromSocket(ws);
     if (!deviceId) return super.webSocketMessage(ws, message);
     this.ensureInit();
-    const data = typeof message === 'string' ? message : new TextDecoder().decode(message);
+    let data: string;
+    if (isTextWebSocketMessage(message)) {
+      data = message;
+    } else if (message instanceof ArrayBuffer) {
+      data = new TextDecoder().decode(message);
+    } else {
+      const bytes = new Uint8Array(message.byteLength);
+      bytes.set(new Uint8Array(message.buffer, message.byteOffset, message.byteLength));
+      data = new TextDecoder().decode(bytes);
+    }
     // The daemon's HELLO carries metadata; everything else is an RPC response.
     try {
-      const m = JSON.parse(data) as { type?: string; os?: string; hostname?: string };
-      if (m.type === 'HELLO') {
+      const hello = v.safeParse(DeviceHelloSchema, JSON.parse(data));
+      if (hello.success) {
         this.sqlx(`UPDATE user_devices SET os = ?, hostname = ?, last_seen_at = ? WHERE id = ?`,
-          m.os ?? null, m.hostname ?? null, Date.now(), deviceId);
+          hello.output.os ?? null, hello.output.hostname ?? null, Date.now(), deviceId);
         return;
       }
     } catch { /* not JSON / not HELLO — fall through to RPC */ }
@@ -777,7 +875,7 @@ export class UserDO extends Agent<Env> {
     }
   }
 
-  override async webSocketError(ws: WebSocket, error: unknown): Promise<void> {
+  override async webSocketError<ErrorValue>(ws: WebSocket, error: ErrorValue): Promise<void> {
     // Device sockets clean up in webSocketClose, which the runtime fires next.
     if (!deviceIdFromSocket(ws)) return super.webSocketError(ws, error);
   }
@@ -869,9 +967,9 @@ export class UserDO extends Agent<Env> {
   async deviceRpc(
     caller: UserCaller,
     method: string,
-    params: unknown[],
+    params: JsonValue[],
     opts?: { deviceId?: string; agentName?: string; checkpoint?: DeviceCheckpointHint; timeoutMs?: number },
-  ): Promise<unknown> {
+  ): Promise<string | undefined> {
     const resolved = await this.requireTier(caller, 'device.rpc');
     const deviceId = this._devices.connectedDeviceId(opts?.deviceId);
     if (!deviceId) throw new Error(NO_DEVICE_CONNECTED);
@@ -885,10 +983,20 @@ export class UserDO extends Agent<Env> {
     }
     const tunnel = this._devices.tunnel(deviceId);
     if (!tunnel) throw new Error(NO_DEVICE_CONNECTED);
-    return tunnel.rpc(method, params, {
-      ...(opts?.checkpoint ? { extra: { checkpoint: opts.checkpoint } } : {}),
-      ...(opts?.timeoutMs !== undefined ? { timeoutMs: opts.timeoutMs } : {}),
-    });
+    const rpcOptions: NonNullable<Parameters<typeof tunnel.rpc>[2]> = {};
+    if (opts?.checkpoint) {
+      rpcOptions.extra = {
+        checkpoint: {
+          agent: opts.checkpoint.agent,
+          turnId: opts.checkpoint.turnId,
+          sessionId: opts.checkpoint.sessionId,
+          dir: opts.checkpoint.dir,
+        },
+      };
+    }
+    if (opts?.timeoutMs !== undefined) rpcOptions.timeoutMs = opts.timeoutMs;
+    const result = await tunnel.rpc(method, params, rpcOptions);
+    return result === undefined ? undefined : JSON.stringify(result);
   }
 
   // ── Device consent (ask-once-then-remember) ──────────────────────────
@@ -939,7 +1047,7 @@ export class UserDO extends Agent<Env> {
    * concludes the capability was taken away and stops asking for it.
    */
   private async checkDeviceConsent(
-    agentName: string, deviceId: string, method: string, params: unknown[],
+    agentName: string, deviceId: string, method: string, params: JsonValue[],
   ): Promise<{ allowed: true } | { allowed: false; reason: string }> {
     const policy = this.getDeviceConsentPolicy(agentName, deviceId);
     if (policy?.policy === 'allow') return { allowed: true };
@@ -947,22 +1055,15 @@ export class UserDO extends Agent<Env> {
     const action = summarizeDeviceAction(method, params);
     let decision: DeviceConsentDecision;
     try {
-      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName)) as unknown as {
-        awaitDeviceConsent(req: {
-          deviceId: string;
-          deviceLabel: string;
-          method: string;
-          command: string;
-          scope: DeviceConsentScope;
-        }): Promise<DeviceConsentDecision>;
-      };
-      decision = await stub.awaitDeviceConsent({
+      const stub = this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(agentName));
+      const request: DeviceConsentRequest = {
         deviceId,
         deviceLabel: this.deviceLabel(deviceId),
         method: action.method,
         command: action.command,
         scope: DEVICE_CONSENT_SCOPE,
-      });
+      };
+      decision = await stub.awaitDeviceConsent(request);
     } catch {
       // The agent could not be reached to raise the card at all — nobody was
       // asked, so this is the unanswered case, not a refusal.
@@ -1164,10 +1265,9 @@ export class UserDO extends Agent<Env> {
     options: { query?: string; kind?: ExperienceKind; limit?: number } = {},
   ): Promise<ExperienceEntry[]> {
     const resolved = await this.requireTier(caller, 'experience.read');
-    return this.experienceLibrary().search({
-      ...options,
-      ...(resolved.kind === 'workspace' ? { excludeWorkspace: resolved.workspace } : {}),
-    });
+    const searchOptions: typeof options & { excludeWorkspace?: string } = { ...options };
+    if (resolved.kind === 'workspace') searchOptions.excludeWorkspace = resolved.workspace;
+    return this.experienceLibrary().search(searchOptions);
   }
 
   async getExperienceEntry(caller: UserCaller, id: string): Promise<ExperienceEntry | null> {
@@ -1186,12 +1286,12 @@ export class UserDO extends Agent<Env> {
    *  GitHub PAT. Model providers stay listed so the model picker still works. */
   private credentialSummaries(resolved: ResolvedCaller): CredentialSummary[] {
     const attenuated = resolved.kind === 'workspace' && resolved.tier === 'shared';
-    return this.sqlx<{ key: string; kind: string; created_at: number; updated_at: number }>(
+    return this.sqlx<{ key: string; kind: CredentialSummary['kind']; created_at: number; updated_at: number }>(
       `SELECT key, kind, created_at, updated_at FROM user_credentials ORDER BY key`,
     ).filter((r) => !attenuated || isModelInferenceCredentialKey(r.key))
       .map((r) => ({
         key: r.key,
-        kind: r.kind as CredentialSummary['kind'],
+        kind: r.kind,
         createdAt: r.created_at,
         updatedAt: r.updated_at,
       }));
@@ -1204,7 +1304,7 @@ export class UserDO extends Agent<Env> {
     return this.requireTier(caller, isModelInferenceCredentialKey(key) ? 'credentials.model' : 'credentials.other');
   }
 
-  async setCredential(caller: UserCaller, key: string, credentialJson: unknown): Promise<void> {
+  async setCredential<CredentialInput>(caller: UserCaller, key: string, credentialJson: CredentialInput): Promise<void> {
     await this.requireTier(caller, 'credentials.other');
     validateCredentialKey(key);
     if (key === CLOUDFLARE_AI_GATEWAY_CRED_KEY) {
@@ -1253,12 +1353,12 @@ export class UserDO extends Agent<Env> {
     let plaintext: string;
     try { plaintext = await (await this.cipher()).open(this.credentialAad(key), row.value); }
     catch (err) {
-      console.warn(`[user-do] credential ${key} is unreadable:`, (err as Error).message);
+      console.warn(`[user-do] credential ${key} is unreadable:`, errorMessage(err));
       return null;
     }
     // Parsed outside the catch above on purpose: a JSON error message quotes
     // the input it choked on, and that input is the decrypted secret.
-    try { return JSON.parse(plaintext) as Credential; }
+    try { return validateCredential(JSON.parse(plaintext)); }
     catch {
       console.warn(`[user-do] credential ${key} did not decode as JSON`);
       return null;
@@ -1309,7 +1409,7 @@ export class UserDO extends Agent<Env> {
           );
         } catch (err) {
           clean = false;
-          console.warn(`[user-do] credential ${row.key} could not be re-sealed:`, (err as Error).message);
+          console.warn(`[user-do] credential ${row.key} could not be re-sealed:`, errorMessage(err));
         }
       }
       for (const row of this.sqlx<{ id: string; headers: string }>(
@@ -1323,7 +1423,7 @@ export class UserDO extends Agent<Env> {
           );
         } catch (err) {
           clean = false;
-          console.warn(`[user-do] MCP headers for ${row.id} could not be re-sealed:`, (err as Error).message);
+          console.warn(`[user-do] MCP headers for ${row.id} could not be re-sealed:`, errorMessage(err));
         }
       }
       // The marker claims the WHOLE store is sealed under this key, and the
@@ -1359,7 +1459,7 @@ export class UserDO extends Agent<Env> {
     if (stored === null) return null;
     try { return await (await this.cipher()).open(this.mcpHeadersAad(serverId), stored); }
     catch (err) {
-      console.warn(`[user-do] MCP headers for ${serverId} are unreadable:`, (err as Error).message);
+      console.warn(`[user-do] MCP headers for ${serverId} are unreadable:`, errorMessage(err));
       return null;
     }
   }
@@ -1486,7 +1586,7 @@ export class UserDO extends Agent<Env> {
       }
       return { connected: true, selectedId, gateways, error: null };
     } catch (err) {
-      return { connected: true, selectedId, gateways: [], error: (err as Error).message };
+      return { connected: true, selectedId, gateways: [], error: errorMessage(err) };
     }
   }
 
@@ -1506,11 +1606,11 @@ export class UserDO extends Agent<Env> {
    *  the dead refresh token is stripped from storage so the credential
    *  stops counting as usable and the connect CTA resurfaces, instead of
    *  advertising a provider whose every call would 401. */
-  private async refreshCloudflareInternal(current: Credential & { kind: 'oauth' }): Promise<(Credential & { kind: 'oauth' }) | 'revoked' | null> {
+  private async refreshCloudflareInternal(current: OAuthCredential): Promise<OAuthCredential | 'revoked' | null> {
     try {
       const next = await refreshCloudflareCredential(this.env, current);
       await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, next);
-      return next as Credential & { kind: 'oauth' };
+      return next;
     } catch (err) {
       if (err instanceof CloudflareOAuthTokenError && err.oauthError === 'invalid_grant') {
         console.warn('[user-do] cloudflare refresh token revoked; reconnect required:', err.message);
@@ -1518,16 +1618,16 @@ export class UserDO extends Agent<Env> {
         await this.writeCredential(CLOUDFLARE_OAUTH_CRED_KEY, rest);
         return 'revoked';
       }
-      console.warn('[user-do] cloudflare refresh failed; keeping current credential:', (err as Error).message);
+      console.warn('[user-do] cloudflare refresh failed; keeping current credential:', errorMessage(err));
       return null;
     }
   }
 
-  private async refreshCodexInternal(current: Credential & { kind: 'oauth'; refreshToken: string }): Promise<(Credential & { kind: 'oauth' }) | null> {
+  private async refreshCodexInternal(current: OAuthCredential & { refreshToken: string }): Promise<OAuthCredential | null> {
     const client = createCodexOAuthClient();
     try {
       const fresh = await client.refresh(current.refreshToken);
-      const next: Credential = {
+      const next: OAuthCredential = {
         kind: 'oauth',
         accessToken: fresh.accessToken,
         refreshToken: fresh.refreshToken,
@@ -1535,9 +1635,9 @@ export class UserDO extends Agent<Env> {
         metadata: current.metadata,
       };
       await this.writeCredential(CODEX_CRED_KEY, next);
-      return next as Credential & { kind: 'oauth' };
+      return next;
     } catch (err) {
-      console.warn('[user-do] codex refresh failed; keeping current credential:', (err as Error).message);
+      console.warn('[user-do] codex refresh failed; keeping current credential:', errorMessage(err));
       return null;
     }
   }
@@ -1574,7 +1674,7 @@ export class UserDO extends Agent<Env> {
       this.sqlx(`DELETE FROM codex_device_flow`);
       return { connected: true, accountId: accountId ?? undefined };
     } catch (err) {
-      return { connected: false, error: (err as Error).message };
+      return { connected: false, error: errorMessage(err) };
     }
   }
 
@@ -1664,17 +1764,17 @@ export class UserDO extends Agent<Env> {
    *  first orchestrator turn, not on its critical path. Fire-and-forget. */
   async userMcp_warmConnections(caller: UserCaller): Promise<{ servers: number }> {
     await this.requireTier(caller, 'mcp.manage');
-    const rows = this.sqlx(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0] as { n: number };
+    const rows = this.sqlx<{ n: number }>(`SELECT COUNT(*) AS n FROM user_mcp_servers`)[0];
     if (!rows || rows.n === 0) return { servers: 0 };
     try { await this.userMcp().restoreConnectionsFromStorage('proteus-user-mcp'); }
-    catch (err) { console.warn('[user-do] userMcp_warmConnections failed:', (err as Error).message); }
+    catch (err) { console.warn('[user-do] userMcp_warmConnections failed:', errorMessage(err)); }
     return { servers: rows.n };
   }
 
   async userMcp_list(caller: UserCaller): Promise<McpServerSummary[]> {
     await this.requireTier(caller, 'mcp.manage');
     const rows = this.sqlx<{
-      id: string; name: string; server_url: string; transport: string;
+      id: string; name: string; server_url: string; transport: McpTransport;
       allowed_tools: string | null; created_at: number; updated_at: number;
     }>(
       `SELECT id, name, server_url, transport, allowed_tools, created_at, updated_at
@@ -1706,7 +1806,7 @@ export class UserDO extends Agent<Env> {
         id: r.id,
         name: r.name,
         serverUrl: r.server_url,
-        transport: (r.transport as McpTransport),
+        transport: r.transport,
         status,
         error: conn?.connectionError ?? null,
         toolsCount,
@@ -1722,14 +1822,14 @@ export class UserDO extends Agent<Env> {
    *  Worker should redirect OAuth callbacks to (e.g. `https://proteus.example`).
    *  The routes layer derives it from the inbound request's `Origin` /
    *  `Host` header — UserDO doesn't see the request. */
-  async userMcp_add(
+  async userMcp_add<McpInput>(
     caller: UserCaller,
-    input: unknown,
+    input: McpInput,
     publicOrigin: string,
   ): Promise<{ id: string; authUrl: string | null }> {
     await this.requireTier(caller, 'mcp.manage');
     const cfg = validateMcpServerInput(input);
-    if (typeof publicOrigin !== 'string' || !/^https?:\/\//.test(publicOrigin)) {
+    if (!/^https?:\/\//.test(publicOrigin)) {
       throw new Error('publicOrigin must be a full https?:// origin.');
     }
     this.requireFreeMcpServerName(cfg.name, null);
@@ -1788,7 +1888,7 @@ export class UserDO extends Agent<Env> {
       try { await this.userMcp().removeServer(id); } catch { /* nop */ }
       this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
       this._userMcpUpdatedAt = Date.now();
-      throw new Error(`MCP connect failed: ${(err as Error).message}`);
+      throw new Error(`MCP connect failed: ${errorMessage(err)}`);
     }
     return { id, authUrl };
   }
@@ -1797,7 +1897,7 @@ export class UserDO extends Agent<Env> {
     await this.requireTier(caller, 'mcp.manage');
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
     try { await this.userMcp().removeServer(id); }
-    catch (err) { console.warn('[user-do] removeServer (live):', (err as Error).message); }
+    catch (err) { console.warn('[user-do] removeServer (live):', errorMessage(err)); }
     this.sqlx(`DELETE FROM user_mcp_servers WHERE id = ?`, id);
     this._userMcpUpdatedAt = Date.now();
   }
@@ -1820,37 +1920,36 @@ export class UserDO extends Agent<Env> {
    *  time, so a rotated bearer only takes effect (and re-persists into the
    *  SDK's snapshot) after a reconnect. `serverUrl` / `transport` changes still
    *  require remove + re-add (the SDK doesn't support live re-targeting). */
-  async userMcp_update(caller: UserCaller, id: string, patch: unknown): Promise<void> {
+  async userMcp_update<Patch>(caller: UserCaller, id: string, patch: Patch): Promise<void> {
     await this.requireTier(caller, 'mcp.manage');
     if (!/^[A-Za-z0-9_-]{1,32}$/.test(id)) throw new Error('Invalid server id.');
-    if (!patch || typeof patch !== 'object') throw new Error('patch must be a JSON object.');
-    const p = patch as Record<string, unknown>;
+    const parsedPatch = v.safeParse(LooseObjectSchema, patch);
+    if (!parsedPatch.success) throw new Error('patch must be a JSON object.');
+    const p = parsedPatch.output;
     const sets: string[] = [];
-    const args: unknown[] = [];
-    if (typeof p.name === 'string') {
-      if (!p.name.trim() || p.name.length > 64) throw new Error('name must be 1..64 chars.');
-      this.requireFreeMcpServerName(p.name.trim(), id);
-      sets.push('name = ?'); args.push(p.name.trim());
+    const args: SqlStorageValue[] = [];
+    const parsedName = v.safeParse(v.string(), p.name);
+    if (parsedName.success) {
+      if (!parsedName.output.trim() || parsedName.output.length > 64) throw new Error('name must be 1..64 chars.');
+      this.requireFreeMcpServerName(parsedName.output.trim(), id);
+      sets.push('name = ?'); args.push(parsedName.output.trim());
     }
     if (p.allowedTools !== undefined) {
-      if (p.allowedTools === null) {
+      const allowedTools = v.safeParse(NullableStringArraySchema, p.allowedTools);
+      if (!allowedTools.success) throw new Error('allowedTools must be string[] or null.');
+      if (allowedTools.output === null) {
         sets.push('allowed_tools = ?'); args.push(null);
-      } else if (Array.isArray(p.allowedTools) && p.allowedTools.every((t) => typeof t === 'string')) {
-        sets.push('allowed_tools = ?'); args.push(JSON.stringify(p.allowedTools));
       } else {
-        throw new Error('allowedTools must be string[] or null.');
+        sets.push('allowed_tools = ?'); args.push(JSON.stringify(allowedTools.output));
       }
     }
     if (p.headers !== undefined) {
-      if (p.headers === null) {
+      const headers = v.safeParse(NullableStringRecordSchema, p.headers);
+      if (!headers.success) throw new Error('headers must be Record<string,string> or null.');
+      if (headers.output === null) {
         sets.push('headers = ?'); args.push(null);
-      } else if (
-        typeof p.headers === 'object' && !Array.isArray(p.headers)
-        && Object.values(p.headers as Record<string, unknown>).every((v) => typeof v === 'string')
-      ) {
-        sets.push('headers = ?'); args.push(await this.sealMcpHeaders(id, JSON.stringify(p.headers)));
       } else {
-        throw new Error('headers must be Record<string,string> or null.');
+        sets.push('headers = ?'); args.push(await this.sealMcpHeaders(id, JSON.stringify(headers.output)));
       }
     }
     if (sets.length === 0) return;
@@ -1864,7 +1963,7 @@ export class UserDO extends Agent<Env> {
     // stored snapshot) — writing the SQL column alone never reaches the wire.
     if (p.headers !== undefined) {
       try { await this.reregisterUserMcpServer(id); }
-      catch (err) { console.warn('[user-do] userMcp_update header re-register:', (err as Error).message); }
+      catch (err) { console.warn('[user-do] userMcp_update header re-register:', errorMessage(err)); }
     }
   }
 
@@ -1875,14 +1974,14 @@ export class UserDO extends Agent<Env> {
    *  headers into the SDK's `server_options` snapshot). Any OAuth callback URL
    *  is preserved across the re-register. */
   private async reregisterUserMcpServer(id: string): Promise<void> {
-    const row = this.sqlx<{ name: string; server_url: string; transport: string; headers: string | null }>(
+    const row = this.sqlx<{ name: string; server_url: string; transport: McpTransport; headers: string | null }>(
       `SELECT name, server_url, transport, headers FROM user_mcp_servers WHERE id = ?`, id,
     )[0];
     if (!row) return;
     const mgr = this.userMcp();
     const callbackUrl = mgr.listServers().find((s) => s.id === id)?.callback_url ?? '';
     try { await mgr.removeServer(id); }
-    catch (err) { console.warn('[user-do] reregister removeServer:', (err as Error).message); }
+    catch (err) { console.warn('[user-do] reregister removeServer:', errorMessage(err)); }
 
     const headerOpts = buildMcpHeaderTransportOpts(parseMcpHeaders(await this.openMcpHeaders(id, row.headers))) ?? {};
     let authProvider: AgentMcpOAuthProvider | undefined;
@@ -1890,15 +1989,16 @@ export class UserDO extends Agent<Env> {
       authProvider = new DurableObjectOAuthClientProvider(this.ctx.storage, 'proteus-user-mcp', callbackUrl);
       authProvider.serverId = id;
     }
+    const transport: NonNullable<Parameters<MCPClientManager['registerServer']>[1]['transport']> = {
+      ...headerOpts,
+      type: row.transport,
+    };
+    if (authProvider) transport.authProvider = authProvider;
     await mgr.registerServer(id, {
       url: row.server_url,
       name: row.name,
       callbackUrl,
-      transport: {
-        ...headerOpts,
-        ...(authProvider ? { authProvider } : {}),
-        type: (row.transport as McpTransport) ?? 'auto',
-      },
+      transport,
     });
     void mgr.establishConnection(id).catch(() => undefined);
   }
@@ -1918,12 +2018,12 @@ export class UserDO extends Agent<Env> {
    *  its tools are simply ABSENT from the turn — so without this the model
    *  plans as if a capability the user gave it does not exist, and cannot
    *  explain why. The bound stays; the silence does not. */
-  async userMcp_toolDescriptors(caller: UserCaller): Promise<McpToolSurface> {
+  async userMcp_toolDescriptors(caller: UserCaller): Promise<string> {
     await this.requireTier(caller, 'mcp.tools');
     const rows = this.sqlx<{ id: string; name: string; allowed_tools: string | null }>(
       `SELECT id, name, allowed_tools FROM user_mcp_servers`,
     );
-    if (rows.length === 0) return { descriptors: [], unavailable: [] };
+    if (rows.length === 0) return JSON.stringify({ descriptors: [], unavailable: [] } satisfies McpToolSurface);
 
     // Ensure connections are restored. Don't await failures — partial
     // descriptors are better than none.
@@ -1932,7 +2032,7 @@ export class UserDO extends Agent<Env> {
       // Cap at 5s so a single slow server can't block a turn indefinitely.
       await this.userMcp().waitForConnections({ timeout: MCP_WARMUP_TIMEOUT_MS });
     } catch (err) {
-      console.warn('[user-do] userMcp_toolDescriptors warmup:', (err as Error).message);
+      console.warn('[user-do] userMcp_toolDescriptors warmup:', errorMessage(err));
     }
 
     const out: SerializableToolDescriptor[] = [];
@@ -1949,17 +2049,17 @@ export class UserDO extends Agent<Env> {
       if (!meta) continue;
       for (const tool of conn.tools) {
         if (allowed && !allowed.has(tool.name)) continue;
-        out.push({
+        const descriptor: SerializableToolDescriptor = {
           serverId: id,
           serverName: meta.name,
           name: tool.name,
           toolKey: mcpToolKey(meta.name, tool.name),
           description: tool.description,
-          title: (tool as { title?: string }).title
-            ?? (tool as { annotations?: { title?: string } }).annotations?.title,
-          inputSchema: tool.inputSchema as Record<string, unknown> | undefined,
-          outputSchema: (tool as { outputSchema?: Record<string, unknown> }).outputSchema,
-        });
+          title: tool.title ?? tool.annotations?.title,
+          inputSchema: v.parse(JsonObjectSchema, tool.inputSchema),
+        };
+        if (tool.outputSchema) descriptor.outputSchema = v.parse(JsonObjectSchema, tool.outputSchema);
+        out.push(descriptor);
       }
     }
     const served = new Set(out.map((d) => d.serverId));
@@ -1969,7 +2069,7 @@ export class UserDO extends Agent<Env> {
         server: r.name,
         reason: `not connected within ${MCP_WARMUP_TIMEOUT_MS / 1000}s of this turn starting — its tools are absent`,
       }));
-    return { descriptors: out, unavailable };
+    return JSON.stringify({ descriptors: out, unavailable } satisfies McpToolSurface);
   }
 
   /** Execute a single MCP tool call. Called over RPC by the orchestrator's
@@ -1979,17 +2079,18 @@ export class UserDO extends Agent<Env> {
     caller: UserCaller,
     serverId: string,
     name: string,
-    args: unknown,
-  ): Promise<unknown> {
+    args: JsonObject,
+  ): Promise<string> {
     // Caller identity is proven by the capability token rather than claimed in
     // an argument, so there is no agent name left to spoof: a token exists only
     // for a workspace this user's registry issued one to, and dies with it.
     await this.requireTier(caller, 'mcp.tools');
-    if (!this._userMcp) {
+    const wasCold = this._userMcp === null;
+    const manager = this.userMcp();
+    if (wasCold) {
       // Cold start: hydrate the manager before dispatching.
-      this.userMcp();
-      try { await this._userMcp!.restoreConnectionsFromStorage('proteus-user-mcp'); }
-      catch (err) { throw new Error(`MCP not ready: ${(err as Error).message}`); }
+      try { await manager.restoreConnectionsFromStorage('proteus-user-mcp'); }
+      catch (err) { throw new Error(`MCP not ready: ${errorMessage(err)}`); }
     }
     // Type-check the server membership inside our SQL so a stale orchestrator
     // closure can't dispatch to a server the user just deleted.
@@ -2001,11 +2102,12 @@ export class UserDO extends Agent<Env> {
     if (allowed && !allowed.includes(name)) {
       throw new Error(`Tool '${name}' is not in the allowed_tools list for this server.`);
     }
-    const params = (args && typeof args === 'object') ? args as Record<string, unknown> : {};
-    const result = await this._userMcp!.callTool({
+    const parsedParams = v.safeParse(JsonObjectSchema, args);
+    const params = parsedParams.success ? parsedParams.output : {};
+    const result = await manager.callTool({
       serverId, name, arguments: params,
     });
-    return result;
+    return JSON.stringify(decodeJsonValue({ value: result }));
   }
 
   /** OAuth callback receiver. The routes layer matches the incoming
@@ -2023,7 +2125,7 @@ export class UserDO extends Agent<Env> {
       }
       return { ok: false, serverId: result.serverId ?? null, error: result.authError };
     } catch (err) {
-      return { ok: false, serverId: null, error: (err as Error).message };
+      return { ok: false, serverId: null, error: errorMessage(err) };
     }
   }
 

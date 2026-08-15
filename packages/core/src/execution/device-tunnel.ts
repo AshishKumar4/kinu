@@ -10,6 +10,9 @@
 // unit-testable home shared by the connection owner (UserDO) regardless of which
 // agent ultimately drives a command.
 
+import * as v from 'valibot';
+import { JsonValueSchema, parseJsonValue, type JsonObject, type JsonValue } from '../utils/json.js';
+
 /** Minimal socket surface — platform WebSocket or any send()/readyState impl. */
 export interface TunnelSocket {
   send(data: string): void;
@@ -59,7 +62,7 @@ export const DEVICE_UNRESPONSIVE = 'device stopped responding';
 export interface DeviceRpcOptions {
   /** Extra fields riding on the frame next to id/method/params (e.g. the
    *  pre-mutation `checkpoint` hint the daemon acts on before executing). */
-  extra?: Record<string, unknown>;
+  extra?: JsonObject;
   /** Wall clock for THIS call. Pass 0 for arbitrary-length work — the call
    *  then ends only when the device answers, the caller aborts, or the device
    *  goes away. Defaults to the tunnel's control-RPC deadline. */
@@ -67,14 +70,18 @@ export interface DeviceRpcOptions {
 }
 
 interface Pending {
-  resolve: (value: unknown) => void;
+  resolve: (value: JsonValue | undefined) => void;
   reject: (err: Error) => void;
   /** Cancels whichever bound this call is riding — a work deadline or the
    *  liveness probe. */
   stop: () => void;
 }
 
-interface RpcResponse { id?: string; result?: unknown; error?: string }
+const RpcResponseSchema = v.object({
+  id: v.optional(v.string()),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(v.string()),
+});
 
 export const TUNNEL_DISCONNECTED = 'device tunnel not connected';
 
@@ -85,7 +92,7 @@ export const NO_DEVICE_CONNECTED = 'no device connected';
 
 /** Both the hub's "no socket" rejection and the tunnel's "socket dropped"
  *  rejection mean the same thing to callers: the device is not connected. */
-export function isDeviceNotConnectedError(err: unknown): boolean {
+export function isDeviceNotConnectedError<T>(err: T): boolean {
   const message = err instanceof Error ? err.message : String(err);
   return message.includes(NO_DEVICE_CONNECTED) || message.includes(TUNNEL_DISCONNECTED);
 }
@@ -123,7 +130,7 @@ export class DeviceTunnel {
    * heartbeat catches the half-open case at the next probe. Either way the
    * message names the device, not a deadline the work never actually hit.
    */
-  rpc(method: string, params: unknown[], opts?: DeviceRpcOptions): Promise<unknown> {
+  rpc(method: string, params: JsonValue[], opts?: DeviceRpcOptions): Promise<JsonValue | undefined> {
     return new Promise((resolve, reject) => {
       if (!this.isConnected()) { reject(new Error(TUNNEL_DISCONNECTED)); return; }
       const id = `rpc-${++this.seq}`;
@@ -162,12 +169,15 @@ export class DeviceTunnel {
   /** Feed an incoming socket message; resolves/rejects the matching pending call.
    *  Ignores non-response frames (e.g. the daemon's HELLO). */
   handleMessage(raw: string): void {
-    let msg: RpcResponse;
-    try { msg = JSON.parse(raw) as RpcResponse; } catch { return; }
+    let decoded: JsonValue;
+    try { decoded = parseJsonValue(raw); } catch { return; }
+    const parsed = v.safeParse(RpcResponseSchema, decoded);
+    if (!parsed.success) return;
+    const msg = parsed.output;
     // Any well-formed frame — a result, an error, the daemon's HELLO — is the
     // device speaking, which is the only thing liveness actually asks about.
     this.lastFrameAt = Date.now();
-    if (typeof msg.id !== 'string') return;
+    if (msg.id === undefined) return;
     const p = this.pending.get(msg.id);
     if (!p) return;
     this.pending.delete(msg.id);
@@ -223,7 +233,7 @@ export class DeviceTunnel {
   }
 
   private failOpenEnded(reason: string): void {
-    for (const id of [...this.openEnded]) {
+    for (const id of this.openEnded) {
       const p = this.pending.get(id);
       if (!p) { this.openEnded.delete(id); continue; }
       this.pending.delete(id);

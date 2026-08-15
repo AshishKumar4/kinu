@@ -286,7 +286,9 @@ export function ForkTree({ root, width = 800, height = 600, onNodeClick, selecte
 	// palette actually changes. The hook upstream only swaps `root` identity
 	// when the row set changed, so steady-state polls never reach here.
 	useEffect(() => {
-		const g = d3.select(gRef.current!);
+		const rootGroup = gRef.current;
+		if (rootGroup === null) return;
+		const g = d3.select(rootGroup);
 		g.selectAll("*").remove();
 
 		const hierarchy = d3.hierarchy(root, (d) => (collapsed.has(d.id) ? [] : d.children));
@@ -300,12 +302,13 @@ export function ForkTree({ root, width = 800, height = 600, onNodeClick, selecte
 		const radiusOf = (node: ForkNode) => (competed ? nodeRadius(node.visits, visitMax) : NODE_R_UNSCORED);
 		const pv = principalVariation(root);
 		const depth = d3.max(nodes, (d) => d.depth) ?? 0;
-		const rowSpan = d3.extent(nodes, (d) => d.x) as [number, number];
+		const [rowStart, rowEnd] = d3.extent(nodes, (d) => d.x);
+		if (rowStart === undefined || rowEnd === undefined) return;
 		const state: RenderState = {
 			pv, competed, visitMax, depth,
 			byId: new Map(nodes.map((d) => [d.data.id, d])),
 			// Screen axes are swapped: depth runs along x, rows down y.
-			extent: { x0: -NODE_R_MAX, x1: depth * COL + LABEL_W, y0: rowSpan[0] - ROW, y1: rowSpan[1] + ROW },
+			extent: { x0: -NODE_R_MAX, x1: depth * COL + LABEL_W, y0: rowStart - ROW, y1: rowEnd + ROW },
 		};
 		stateRef.current = state;
 
@@ -315,7 +318,7 @@ export function ForkTree({ root, width = 800, height = 600, onNodeClick, selecte
 			.data(d3.range(depth + 1))
 			.join("line")
 			.attr("x1", (d) => d * COL).attr("x2", (d) => d * COL)
-			.attr("y1", rowSpan[0] - ROW).attr("y2", rowSpan[1] + ROW)
+			.attr("y1", rowStart - ROW).attr("y2", rowEnd + ROW)
 			.attr("stroke", "var(--c-border)").attr("stroke-width", 1);
 
 		g.append("g").attr("class", "mcts-links").attr("fill", "none")
@@ -565,7 +568,7 @@ function positionRuler(
 /** What a branch's state MEANS depends on how the fork settled: `open` is
  *  "still explorable" in a competition and "done, its findings went into the
  *  merge" in a merge. Same word in the data, two different facts. */
-const STATUS_NOTE: Record<"competed" | "merged", Record<string, string>> = {
+const STATUS_NOTE = {
 	competed: {
 		open: "still explorable",
 		terminal: "the answer the search settled on",
@@ -580,7 +583,7 @@ const STATUS_NOTE: Record<"competed" | "merged", Record<string, string>> = {
 		failed: "this branch errored",
 		running: "still running",
 	},
-};
+} satisfies Record<"competed" | "merged", Record<ForkNode["status"], string>>;
 
 function NodeTip(
 	{ node, x, y, width, competed }:

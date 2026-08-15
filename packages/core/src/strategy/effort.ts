@@ -17,7 +17,7 @@ export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 type ProviderOptions = NonNullable<Parameters<typeof streamText>[0]['providerOptions']>;
 
-export function isReasoningEffort(value: unknown): value is ReasoningEffort {
+export function isReasoningEffort<Value>(value: Value): value is Value & ReasoningEffort {
   return value === 'low' || value === 'medium' || value === 'high';
 }
 
@@ -32,7 +32,7 @@ export type InferenceStage =
   | 'head_merge'        // LLM-driven merge of parallel heads
   | 'memory_compress';  // Background sleep-time compute (compress memory)
 
-export const REASONING_EFFORT_FOR_STAGE: Record<InferenceStage, ReasoningEffort> = {
+export const REASONING_EFFORT_FOR_STAGE = {
   chat: 'medium',
   judge: 'medium',
   reflection: 'low',
@@ -42,23 +42,23 @@ export const REASONING_EFFORT_FOR_STAGE: Record<InferenceStage, ReasoningEffort>
   scaffold_mutation: 'high',
   head_merge: 'medium',
   memory_compress: 'low',
-};
+} satisfies Record<InferenceStage, ReasoningEffort>;
 
 /** Build the `providerOptions` AI-SDK option that carries reasoning_effort
  *  through to Workers AI's underlying `binding.run(model, { reasoning_effort })`.
  *  Returns `{}` when effort is undefined so callers can spread unconditionally. */
 export function workersAIEffortOption(
   effort?: ReasoningEffort | undefined,
-): { providerOptions?: { 'workers-ai': { reasoning_effort: ReasoningEffort } } } {
+) {
   if (!effort) return {};
   return { providerOptions: { 'workers-ai': { reasoning_effort: effort } } };
 }
 
-const ANTHROPIC_THINKING_BUDGET: Record<ReasoningEffort, number> = {
+const ANTHROPIC_THINKING_BUDGET = {
   low: 4_000,
   medium: 16_000,
   high: 32_000,
-};
+} satisfies Record<ReasoningEffort, number>;
 
 /** Provider-native reasoning options for a resolved model-spec prefix. */
 export function reasoningEffortOptions(
@@ -98,7 +98,7 @@ export function mergeProviderOptions(
   if (!override) return base;
   const merged: ProviderOptions = { ...base };
   for (const [provider, options] of Object.entries(override)) {
-    merged[provider] = { ...(base[provider] ?? {}), ...options };
+    merged[provider] = { ...base[provider], ...options };
   }
   return merged;
 }

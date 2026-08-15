@@ -24,7 +24,7 @@ export function rowDataToBytes(data: SqlValue | Uint8Array | undefined): Uint8Ar
 	if (data == null) return new Uint8Array(0);
 	if (data instanceof Uint8Array) return data;
 	if (data instanceof ArrayBuffer) return new Uint8Array(data);
-	if (typeof data === "string") {
+	if (isString(data)) {
 		// Legacy base64-encoded data from v1 schema
 		const binary = atob(data);
 		const bytes = new Uint8Array(binary.length);
@@ -36,11 +36,11 @@ export function rowDataToBytes(data: SqlValue | Uint8Array | undefined): Uint8Ar
 	return new Uint8Array(0);
 }
 
-/** Ensure the returned ArrayBuffer is exact-sized (copies if the Uint8Array is a sub-view). */
+function isString(value: SqlValue | Uint8Array | undefined): value is string {
+	return typeof value === "string";
+}
+
+/** Return an exact-sized ArrayBuffer, independent of the input view. */
 export function toBuffer(data: Uint8Array): ArrayBuffer {
-	// If the Uint8Array is a view over a larger buffer, copy to get an exact-sized ArrayBuffer
-	if (data.byteOffset !== 0 || data.byteLength !== data.buffer.byteLength) {
-		return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-	}
-	return data.buffer as ArrayBuffer;
+	return Uint8Array.from(data).buffer;
 }

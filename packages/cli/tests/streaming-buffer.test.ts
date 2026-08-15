@@ -5,13 +5,15 @@ describe('TUI streaming buffer', () => {
   test('coalesces token deltas before flushing to React state', () => {
     const updates: Array<string | null> = [];
     const scheduled: Array<() => void> = [];
+    const timerHandle = setTimeout(() => {}, 0);
+    clearTimeout(timerHandle);
     const buffer = createStreamingBufferController(
       (value) => updates.push(value),
       50,
       {
         setTimeout(callback) {
           scheduled.push(callback);
-          return 1 as unknown as ReturnType<typeof setTimeout>;
+          return timerHandle;
         },
         clearTimeout() {
           scheduled.length = 0;

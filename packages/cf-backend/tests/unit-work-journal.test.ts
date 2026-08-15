@@ -16,7 +16,7 @@ import { LIVE_DATA_REFRESH_MS } from '../src/hooks/use-proteus.ts';
 
 function job(over: Partial<BackgroundJob> & { id: string }): BackgroundJob {
   return {
-    kind: 'run', label: null, status: 'completed', result: null, error: null,
+    kind: 'run', label: null, workMode: 'build', status: 'completed', result: null, error: null,
     createdAt: 0, settledAt: 0, ...over,
   };
 }

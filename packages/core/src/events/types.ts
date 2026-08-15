@@ -10,6 +10,7 @@
  */
 
 import type { ContextBudgetSnapshot } from '../context-budget.js';
+import type { JsonObject, JsonValue } from '../utils/json.js';
 import type { ContextComposition } from '../context-meter.js';
 import type { FileEditSnapshot } from '../tools/file-ledger.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
@@ -74,8 +75,8 @@ export type RunEvent =
       trigger_id?: string })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
   | (RunEventBase & { type: 'text_delta'; text: string })
-  | (RunEventBase & { type: 'tool_call_start'; name: string; args: Record<string, unknown>; toolCallId: string })
-  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: unknown; error?: string; durationMs?: number })
+  | (RunEventBase & { type: 'tool_call_start'; name: string; args: JsonObject; toolCallId: string })
+  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: JsonValue; error?: string; durationMs?: number })
   /** One model request completed. `usage` is the provider's own report of that
    *  request — the authority on what it cost. `context` is what the request
    *  was locally measured to be made of; the two do not reconcile exactly and

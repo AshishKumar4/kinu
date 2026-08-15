@@ -9,6 +9,7 @@
 // reported as a success, and an approval is never reported as an effect.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { toolExecute } from '@proteus/test-utils';
 import {
   DeferredApprovalQueue, DeferredApprovalStore, initDeferredApprovalsTable,
   DEFERRED_APPROVAL_SIGNAL, withApprovalGatedShell, buildBuiltinTools,
@@ -52,13 +53,17 @@ function setup(opts: {
   };
   const policy: ShellApprovalPolicy = {
     mode: () => opts.mode ?? 'strict',
-    ...(opts.approve ? { requestApproval: opts.approve } : {}),
-    ...(opts.noQueue ? {} : { deferrals: queue.channel }),
   };
+  if (opts.approve) policy.requestApproval = opts.approve;
+  if (!opts.noQueue) policy.deferrals = queue.channel;
   const shell = withApprovalGatedShell(rawShell, policy);
   const { rt } = createTestRuntime();
-  const tools = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime });
-  return { queue, store, shell, executed, delivered, run: tools.run as unknown as RunTool };
+  const runtime: AgentRuntime = { ...rt, shell };
+  const tools = buildBuiltinTools({ rt: runtime });
+  const run: RunTool = {
+    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
+  };
+  return { queue, store, shell, executed, delivered, run };
 }
 
 describe('a gated action nobody is there to approve', () => {

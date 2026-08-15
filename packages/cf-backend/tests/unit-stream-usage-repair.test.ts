@@ -129,9 +129,10 @@ describe('cached-usage accounting end to end (workers-ai provider)', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub(),
-      fetch: (async () => sseResponse(
-        sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]'),
-      )) as unknown as typeof fetch,
+      fetch: Object.assign(
+        async () => sseResponse(sse(DELTA_CHUNK, MODEL_USAGE_CHUNK, ZEROED_USAGE_CHUNK, 'data: [DONE]')),
+        { preconnect: globalThis.fetch.preconnect },
+      ),
       workersAI: { sessionAffinity: 'proteus-jarvis' },
     });
     const result = streamText({

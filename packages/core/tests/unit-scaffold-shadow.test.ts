@@ -28,7 +28,7 @@ import {
 import { makeSql, makeExecRaw } from './helpers.js';
 import { createTestRuntime } from './helpers.js';
 
-function setup(): { sql: ReturnType<typeof makeSql>; execRaw: ReturnType<typeof makeExecRaw>; db: Database } {
+function setup() {
   const db = new Database(':memory:');
   const execRaw = makeExecRaw(db);
   initScaffoldTables(execRaw);
@@ -62,7 +62,7 @@ describe('getPendingScaffold', () => {
 
   test('returns the pending version with zero counts initially', () => {
     const { sql } = setup();
-    sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
         VALUES (3, ${Date.now()}, 'try new loop', 'pending')`;
     const p = getPendingScaffold(sql);
     expect(p).not.toBeNull();
@@ -74,7 +74,7 @@ describe('getPendingScaffold', () => {
 
   test('aggregates evaluation counts correctly', () => {
     const { sql } = setup();
-    sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
         VALUES (4, ${Date.now()}, 'try new loop', 'pending')`;
 
     const judge = { winner: 'pending' as const, rationale: '', currentScore: 0.5, pendingScore: 0.8 };
@@ -254,7 +254,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
     const v0Code = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0Code);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     const pendingCode = 'async function* run(rt, task) { yield "v1-pending"; }';
@@ -285,7 +285,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
 
     const v0Code = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0Code);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     await modifyScaffold(
@@ -313,7 +313,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
     await rt.identity.scaffold.write('async function* run(rt, task) { yield "v0"; }');
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     const first = await modifyScaffold(
@@ -331,7 +331,8 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     expect(second.stage).toBe(3);
     // v1's versioned code is intact (not clobbered by the refused proposal).
     const v1 = await rt.storage.vfs.readFile('scaffold/agent.js.v1', { encoding: 'utf8' });
-    expect(typeof v1 === 'string' ? v1 : new TextDecoder().decode(v1)).toContain('v1');
+    const v1Text = v1 instanceof Uint8Array ? new TextDecoder().decode(v1) : v1;
+    expect(v1Text).toContain('v1');
   });
 
   test('promote → modify → rollback cycle restores the correct current version', async () => {
@@ -343,7 +344,7 @@ describe('applyPromotionDecision — closes the proposal→promote loop', () => 
     initShadowTables(rt.storage.execRaw);
     const v0 = 'async function* run(rt, task) { yield "v0"; }';
     await rt.identity.scaffold.write(v0);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (0, ${Date.now()}, ${'bootstrap'}, 'current')`;
 
     // Propose + promote v1.

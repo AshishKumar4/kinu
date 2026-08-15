@@ -41,7 +41,10 @@ export const STEP_UP_WINDOW_MS = 5 * 60 * 1000;
  *  requires a live browser approval, so it is the CLI's interactive-auth
  *  timestamp). */
 export function isFreshAuthTime(authTimeMs: number | null | undefined, now = Date.now()): boolean {
-  return typeof authTimeMs === 'number' && authTimeMs > 0 && now - authTimeMs <= STEP_UP_WINDOW_MS;
+  return authTimeMs !== null
+    && authTimeMs !== undefined
+    && authTimeMs > 0
+    && now - authTimeMs <= STEP_UP_WINDOW_MS;
 }
 
 export class AuthError extends Error {
@@ -142,7 +145,7 @@ function originOf(value: string | null): string | null {
   try { return new URL(value).origin; } catch { return null; }
 }
 
-/** Public routes on the app's own host that bypass auth. (Sandbox previews are
+/** Public routes on the app's own host that bypass auth. (Preview hosts are
  *  not here: they are served on the preview host, which never reaches this.) */
 export function isPublicPath(pathname: string): boolean {
   if (pathname === '/api/health') return true;

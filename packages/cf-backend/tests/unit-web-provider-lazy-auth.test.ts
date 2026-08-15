@@ -21,16 +21,18 @@ const TAVILY_BODY = JSON.stringify({
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
-function stubGlobalFetch(): { authHeaders: Array<string | null> } {
+interface FetchRecorder { readonly authHeaders: Array<string | null> }
+
+function stubGlobalFetch(): FetchRecorder {
   const authHeaders: Array<string | null> = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString();
+  globalThis.fetch = Object.assign(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new Request(input, init).url;
     if (url.includes('tavily.com')) {
       authHeaders.push(new Headers(init?.headers).get('authorization'));
       return new Response(TAVILY_BODY, { headers: { 'content-type': 'application/json' } });
     }
     return new Response(DDG_HTML, { headers: { 'content-type': 'text/html' } });
-  }) as typeof fetch;
+  }, { preconnect: realFetch.preconnect });
   return { authHeaders };
 }
 

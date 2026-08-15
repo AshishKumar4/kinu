@@ -26,6 +26,7 @@
 
 import type { ToolCallRecord } from '../evolution/types.js';
 import type { HeadFileChange } from './file-changes.js';
+import type { EvaluationGrounding } from '../types/evaluation.js';
 
 /** What a head did to the shared filesystem — see heads/file-changes.ts. */
 export type { HeadFileChange };
@@ -82,6 +83,7 @@ export interface HeadInput {
   readonly parentId: HeadId | null;        // null only for the root head
   readonly depth: number;                  // 0 for root, +1 per spawn
   readonly task: string;                   // what this head should explore
+  readonly mode: WorkMode;                 // inherited mutation boundary
   readonly rationale: string;              // why this head was spawned (carried for merge prompt)
   readonly inheritedContext: SerializedMessage[];
   readonly budget: HeadBudget;
@@ -289,7 +291,7 @@ export interface HeadScore {
   readonly status: HeadReport['status'];
   /** [0,1] — grounded outcome (execution band when the head ran code, else judge). */
   readonly score: number;
-  readonly grounding: 'execution' | 'judge';
+  readonly grounding: EvaluationGrounding;
 }
 
 /**
@@ -315,11 +317,12 @@ export const DEFAULT_MERGE_STRATEGY: MergeStrategy = 'synthesize';
  * requested there is nothing to clamp and the child, like the parent, just runs.
  */
 export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()): HeadBudget {
+  if (parent.maxWallClockMs === undefined) {
+    return { maxDepth: parent.maxDepth - 1, spawnedAt: now };
+  }
   return {
     maxDepth: parent.maxDepth - 1,
-    ...(parent.maxWallClockMs === undefined
-      ? {}
-      : { maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)) }),
+    maxWallClockMs: Math.max(0, parent.maxWallClockMs - (now - parent.spawnedAt)),
     spawnedAt: now,
   };
 }
@@ -333,10 +336,11 @@ export function deriveChildBudget(parent: HeadBudget, now: number = Date.now()):
  * across a whole mission instead of a per-head pool that starves a fork before
  * it can do the work the split assumed.
  */
-export function budgetExhausted(b: HeadBudget): { exhausted: boolean; reason?: string } {
+export function budgetExhausted(b: HeadBudget) {
   if (b.maxDepth <= 0) return { exhausted: true, reason: 'max-depth' };
   if (b.maxWallClockMs !== undefined && Date.now() - b.spawnedAt >= b.maxWallClockMs) {
     return { exhausted: true, reason: 'wall-clock' };
   }
   return { exhausted: false };
 }
+import type { WorkMode } from '../prompting/surface.js';

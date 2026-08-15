@@ -7,34 +7,13 @@
 // tests pin the prompt to the real contract and prove a proposal written
 // against the documented API survives the executor's smoke path.
 import { describe, test, expect } from 'bun:test';
-import { buildScaffoldProposalPrompt } from '../src/evolution/engine.js';
+import { buildScaffoldProposalPrompt, EvolutionEngine } from '../src/evolution/engine.js';
 import { renderScaffoldHandbook } from '../src/evolution/scaffold-handbook.js';
 import { modifyScaffold } from '../src/scaffold/modify.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { readScaffoldVersion } from '../src/scaffold/shadow.js';
 import { runScaffold, SCAFFOLD_HOST_TYPES, type ScaffoldEvent } from '../src/scaffold/executor.js';
-import type { Executor } from '../src/types/primitives.js';
-import { createTestRuntime } from './helpers.js';
-
-/**
- * An executor with DynamicWorkerExecutor's semantics: the code is statements
- * wrapped in an async IIFE, and each provider's fns are visible as a global
- * object named after the provider (host.*, workspace.*, ...).
- */
-function evalExecutor(): Executor {
-  return {
-    async execute(code, providers) {
-      const arr = providers as Array<{ name: string; fns: Record<string, (...args: unknown[]) => Promise<unknown>> }>;
-      try {
-        const fn = new Function(...arr.map((p) => p.name), `return (async () => {\n${code}\n})();`);
-        const result = await fn(...arr.map((p) => p.fns));
-        return { result };
-      } catch (err) {
-        return { result: undefined, error: err instanceof Error ? err.message : String(err) };
-      }
-    },
-  };
-}
+import { createEvalExecutor, createTestRuntime } from './helpers.js';
 
 /** A proposal that follows the prompt's documented contract to the letter. */
 const CONTRACT_PROPOSAL = `\
@@ -79,7 +58,7 @@ describe('a proposal written against the documented API', () => {
   test('passes the 4-gate pipeline and survives the executor smoke path', async () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
-    (rt as { executor: Executor }).executor = evalExecutor();
+    rt.executor = createEvalExecutor();
 
     // Gates 1-4: structural, parse, version checkpoint, versioned write.
     const mod = await modifyScaffold(
@@ -90,8 +69,10 @@ describe('a proposal written against the documented API', () => {
     expect(mod.ok).toBe(true);
 
     // Shadow-eval smoke path: run the pending version exactly like auto-judge does.
-    const pendingCode = await readScaffoldVersion(rt, mod.version!);
+    if (mod.version === undefined) throw new Error('expected pending scaffold version');
+    const pendingCode = await readScaffoldVersion(rt, mod.version);
     expect(pendingCode).toBe(CONTRACT_PROPOSAL);
+    if (!pendingCode) throw new Error('expected pending scaffold source');
 
     const events: ScaffoldEvent[] = [];
     const result = await runScaffold({
@@ -99,17 +80,58 @@ describe('a proposal written against the documented API', () => {
       task: 'summarize the release notes',
       emit: (e) => { events.push(e); },
       llmStream: async function* () { yield 'the answer'; },
-      scaffoldCodeOverride: pendingCode!,
+      scaffoldCodeOverride: pendingCode,
     });
 
     expect(result.error).toBeUndefined();
     expect(result.ok).toBe(true);
     expect(result.doneEmitted).toBe(true);
     // The yielded chunk reached the client as a text_delta...
-    const deltas = events.filter((e) => e.type === 'text_delta').map((e) => (e as { text: string }).text);
+    const deltas = events.filter((event) => event.type === 'text_delta').map((event) => event.text);
     expect(deltas).toContain('the answer');
     // ...and host.appendMemory really bridged to rt.memory.
     const memory = await rt.memory.read('memory/MEMORY.md');
     expect(memory).toContain('scaffold handled: summarize the release notes');
   });
+});
+
+test('a prose-wrapped typescript fence stores only the scaffold source', async () => {
+  const { rt } = createTestRuntime({
+    llmResponses: {
+      'Recent lessons': 'The loop re-reads files it already read.',
+      'Return ONLY the JavaScript code': `Here is the revision:\n\n\`\`\`typescript\n${CONTRACT_PROPOSAL}\n\`\`\`\n\nDone.`,
+    },
+  });
+  initScaffoldTables(rt.storage.execRaw);
+  rt.executor = createEvalExecutor();
+  await rt.identity.scaffold.write(CONTRACT_PROPOSAL);
+  await rt.memory.append('memory/MEMORY.md', '\n### Lesson\nThe loop re-read the same file.\n');
+
+  const engine = new EvolutionEngine(rt, { lifetimeEvolutionInterval: 1000 });
+  const turns = [1, 2, 3].map((number) => ({
+    userMessage: 'rotate the staging keys',
+    assistantResponse: 'a response with enough substance to be graded on',
+    toolCalls: [],
+    steps: 1,
+    durationMs: 1000,
+    feedback: null,
+    hadError: number === 1,
+    turnId: `t${number}`,
+    sessionId: 'default',
+    origin: 'user' as const,
+  }));
+  const window = {
+    sessionId: 'test',
+    turns,
+    startedAt: Date.now() - 60_000,
+    endedAt: Date.now(),
+  };
+  for (let index = 0; index < 3; index++) await engine.onSessionComplete(window);
+
+  const pending = rt.storage.sql<{ version: number }>`
+    SELECT version FROM scaffold_versions WHERE status = 'pending'`;
+  expect(pending).toHaveLength(1);
+  const pendingVersion = pending[0]?.version;
+  if (pendingVersion === undefined) throw new Error('expected one pending scaffold version');
+  expect(await readScaffoldVersion(rt, pendingVersion)).toBe(CONTRACT_PROPOSAL);
 });

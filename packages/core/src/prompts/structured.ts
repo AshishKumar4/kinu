@@ -1,7 +1,26 @@
 import { generateText, type LanguageModel } from 'ai';
 import * as v from 'valibot';
+import { parseJsonArray, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json.js';
 
 const JSON_FENCE = /```(?:json)?\s*([\s\S]*?)```/i;
+
+export interface MarkdownFencedBlock {
+  readonly tag: string | null;
+  readonly code: string;
+}
+
+/** Parse Markdown fences without assigning any execution semantics to the tag. */
+export function markdownFencedBlocks(text: string): MarkdownFencedBlock[] {
+  return [...text.matchAll(/```([^\n`]*)\n([\s\S]*?)```/g)].map((match) => ({
+    tag: match[1]!.trim().split(/\s+/)[0]?.toLowerCase() || null,
+    code: match[2]!.trim(),
+  }));
+}
+
+/** Return the first fenced payload, or the trimmed response when there is no fence. */
+export function stripMarkdownFences(raw: string): string {
+  return markdownFencedBlocks(raw)[0]?.code ?? raw.trim();
+}
 
 export function jsonObjectOnlyInstruction(): string {
   return 'Return ONLY a single minified JSON object. Do not include markdown fences or prose.';
@@ -11,12 +30,12 @@ export function jsonArrayOnlyInstruction(): string {
   return 'Return ONLY a single minified JSON array. Do not include markdown fences or prose.';
 }
 
-export function extractJsonObject(text: string): unknown {
-  return JSON.parse(extractBalancedJson(text, '{', '}'));
+export function extractJsonObject(text: string): JsonObject {
+  return parseJsonObject(extractBalancedJson(text, '{', '}'));
 }
 
-export function extractJsonArray(text: string): unknown {
-  return JSON.parse(extractBalancedJson(text, '[', ']'));
+export function extractJsonArray(text: string): JsonValue[] {
+  return parseJsonArray(extractBalancedJson(text, '[', ']'));
 }
 
 function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): string {
@@ -47,8 +66,8 @@ function extractBalancedJson(text: string, open: '{' | '[', close: '}' | ']'): s
  * Generate a schema-validated object from a model.
  *
  * ai-SDK v6 `generateObject` drives object generation through a synthetic tool
- * call and reads `toolCall.input`; the Workers AI provider (the default — Kimi)
- * does not reliably emit that tool, so the SDK dereferences `.input` on an
+ * call and reads `toolCall.input`; some Workers AI models, including Kimi,
+ * do not reliably emit that tool, so the SDK dereferences `.input` on an
  * undefined call and throws "Cannot read properties of undefined (reading
  * 'input')". So this asks for JSON via plain `generateText`, extracts the
  * object, and validates it against the same schema — which works on every
@@ -68,8 +87,8 @@ export async function generateJson<TOutput>(opts: {
   const { text } = await generateText({
     model: opts.model,
     prompt: `${opts.prompt}\n\n${jsonObjectOnlyInstruction()}`,
-    ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
-    ...(opts.providerOptions ? { providerOptions: opts.providerOptions } : {}),
+    maxOutputTokens: opts.maxOutputTokens,
+    providerOptions: opts.providerOptions,
   });
   return v.parse(opts.schema, extractJsonObject(text));
 }

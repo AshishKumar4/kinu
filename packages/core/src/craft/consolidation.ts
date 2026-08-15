@@ -60,7 +60,7 @@ export async function periodicCraftConsolidation(rt: AgentRuntime): Promise<void
 
   for (const name of toRetire) {
     rt.craftStore.delete(name);
-    rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${name}`;
+    void rt.storage.sql`DELETE FROM craft_scores WHERE tool_name = ${name}`;
   }
 
   await rt.memory.append(
