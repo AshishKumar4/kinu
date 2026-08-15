@@ -11,6 +11,8 @@
 // it and never picks a mechanism — starting a turn is simply what "next step"
 // means when no turn is running.
 
+import type { JsonObject } from '../utils/json.js';
+
 /** Why a queued signal never became a turn: 'preempted' = a newer turn
  *  generation won the queue slot; 'failed' = the platform enqueue threw. */
 export type SignalUndeliveredReason = 'preempted' | 'failed';
@@ -37,7 +39,10 @@ export interface AgentSignal {
    *  (email_thread → outbound reply) by one id whichever way it landed. */
   readonly replyTurnId?: string;
   /** Extra metadata stamped on the queued turn alongside `proteusEvent`. */
-  readonly metadata?: Readonly<Record<string, unknown>>;
+  readonly metadata?: Readonly<JsonObject> | undefined;
+  /** This signal carries a trusted turn mode and must not be spliced into a
+   * differently-modeled live turn. Queue it as its own turn instead. */
+  readonly requiresOwnTurn?: boolean | undefined;
   /** Put the work back where a later drain can pick it up — called when the
    *  queued turn was pre-empted or the enqueue threw. Never called for a
    *  signal that reached a step boundary. */
@@ -88,7 +93,7 @@ export type SignalCardEvent =
     readonly id: string;
     readonly state: 'pending';
     /** Turn metadata: `proteusEvent` + the producer's own. */
-    readonly metadata: Readonly<Record<string, unknown>>;
+    readonly metadata: Readonly<JsonObject>;
     /** The signal exactly as this delivery will present it to the model. */
     readonly text: string;
   }

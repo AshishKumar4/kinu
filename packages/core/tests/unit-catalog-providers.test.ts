@@ -3,6 +3,7 @@
 // bespoke (statically registered) providers stay authoritative for their ids.
 import { describe, test, expect } from 'bun:test';
 import { generateText } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
 import {
   createProviderRegistry,
   createModelsDevCatalogSource,
@@ -12,6 +13,7 @@ import {
   modelsDevCompatBaseURL,
   type ProviderDeps, type AuthResolution, type ModelProvider,
 } from '../src/index.ts';
+import { describeProviderError } from '../src/providers/util.js';
 import { createMockFetch } from '@proteus/test-utils';
 
 const CATALOG = {
@@ -75,13 +77,16 @@ function catalogMock(extraHandlers: Parameters<typeof createMockFetch>[0] = []) 
   ]);
 }
 
-function staticProvider(id: string, modelId: string): ModelProvider {
+function staticProvider(id: string, modelId: string, onCreate: () => void = () => undefined): ModelProvider {
   return {
     id,
     defaultModel: modelId,
     isAvailable: () => true,
     listModels: () => [{ id: modelId, label: `${id} static` }],
-    createModel: () => ({ specificationVersion: 'v2', provider: `static-${id}`, modelId } as never),
+    createModel: () => {
+      onCreate();
+      return new MockLanguageModelV3({ provider: `static-${id}`, modelId });
+    },
   };
 }
 
@@ -198,15 +203,18 @@ describe('registry with dynamic catalog source', () => {
 
   test('bespoke providers stay authoritative — no duplicate resolution path', async () => {
     const mock = catalogMock();
-    const registry = makeRegistry();
+    let staticCreates = 0;
+    const registry = createProviderRegistry();
+    registry.register(staticProvider('openai', 'gpt-5.5', () => { staticCreates++; }));
+    registry.registerDynamic(createModelsDevCatalogSource());
     const deps = makeDeps({
       [catalogCredKey('openai')]: { headers: { Authorization: 'Bearer sk' } },
       [catalogCredKey('groq')]: { headers: { Authorization: 'Bearer gsk' } },
     }, mock.fetch);
 
     // resolve() goes through the static provider, not the catalog.
-    const model = registry.resolve('openai/gpt-5.5', deps) as { provider?: string };
-    expect(model.provider).toBe('static-openai');
+    registry.resolve('openai/gpt-5.5', deps);
+    expect(staticCreates).toBe(1);
 
     // listings contain openai exactly once (the static entry).
     const { models } = await registry.listAllModels(deps);
@@ -245,8 +253,7 @@ describe('registry with dynamic catalog source', () => {
     try {
       await generateText({ model, prompt: 'hello', maxOutputTokens: 16 });
     } catch (err) {
-      const e = err as Error & { responseBody?: string };
-      detail = `${e.message} ${e.responseBody ?? ''}`;
+      detail = describeProviderError(err);
     }
     expect(detail).toContain('models.dev');
   });

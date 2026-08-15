@@ -38,14 +38,18 @@ export {
   TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
 } from './device-tunnel.js';
 
-// Nimbus — WebSocket client for github.com/AshishKumar4/Nimbus.
-// Stays in this directory because Nimbus is just another ExecutorProvider.
+// Reusable Nimbus adapter. Cloudflare composes the session as its authoritative
+// workspace; the standalone factory remains available to other backends.
 export {
   createNimbusExecutor,
+  createNimbusWorkspaceExecutor,
+  nimbusSessionShell,
   type NimbusExecutorOpts,
+  type NimbusWorkspaceExecutorOpts,
   type NimbusSandboxHandle,
   type NimbusExecOptions,
   type NimbusExecResult,
+  type NimbusStartResult,
 } from './nimbus.js';
 
 export {

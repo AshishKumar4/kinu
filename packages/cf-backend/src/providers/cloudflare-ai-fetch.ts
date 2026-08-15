@@ -7,6 +7,18 @@
 import type { AuthResolution, AuthResolver } from '@proteus/core';
 import { asFetchFunction, withRateLimitRetry } from '@proteus/core';
 import { repairSseCachedUsage } from './stream-usage-repair.js';
+import * as v from 'valibot';
+
+interface GatewayErrorDetail { code: number | null; message: string | null }
+const V4ErrorSchema = v.object({
+  errors: v.array(v.object({ code: v.optional(v.number()), message: v.optional(v.string()) })),
+});
+const OpenAIErrorSchema = v.object({
+  error: v.union([
+    v.string(),
+    v.object({ code: v.optional(v.number()), message: v.optional(v.string()) }),
+  ]),
+});
 
 export interface CloudflareAIFetchOptions {
   /** Credential key resolved through `getAuth` on every request
@@ -35,7 +47,7 @@ export function createCloudflareAIFetch(opts: CloudflareAIFetchOptions): typeof 
     const auth = await opts.getAuth(opts.credKey);
     if (!auth?.baseURL) return errorResponse(401, opts.missingCredentialMessage);
 
-    const originalUrl = typeof input === 'string' ? input
+    const originalUrl = v.is(v.string(), input) ? input
       : input instanceof URL ? input.toString()
         : input.url;
     const send = async (resolved: AuthResolution) => {
@@ -84,7 +96,7 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
     friendly = `${gateway} has no working credentials for "${author}" — add a ${author} key under AI Gateway → Provider Keys (BYOK), or load Unified Billing credits in your Cloudflare account.`;
   } else if (res.status === 401) {
     // Still 401 AFTER the forced-refresh retry → the Cloudflare login is dead.
-    friendly = 'Your Cloudflare login is no longer valid — reconnect Cloudflare in User settings.';
+    friendly = 'Your Cloudflare login is no longer valid. Reconnect Cloudflare in User settings.';
   }
   if (!friendly) {
     // Unknown failure — keep the original payload intact for the caller.
@@ -97,28 +109,25 @@ export async function mapGatewayError(res: Response, modelId: string, gatewayId:
   return errorResponse(res.status, `${friendly}${detail}`);
 }
 
-function extractGatewayError(body: string): { code: number | null; message: string | null } {
+function extractGatewayError(body: string): GatewayErrorDetail {
   try {
-    const parsed = JSON.parse(body) as Record<string, unknown>;
+    const decoded = JSON.parse(body);
     // Cloudflare v4 envelope: { success, errors: [{ code, message }] }
-    const errors = Array.isArray(parsed.errors) ? parsed.errors : [];
-    const first = errors[0] as Record<string, unknown> | undefined;
+    const v4 = v.safeParse(V4ErrorSchema, decoded);
+    const first = v4.success ? v4.output.errors[0] : undefined;
     if (first) {
       return {
-        code: typeof first.code === 'number' ? first.code : null,
-        message: typeof first.message === 'string' ? first.message : null,
+        code: first.code ?? null,
+        message: first.message ?? null,
       };
     }
     // Gateway / OpenAI-style: { error: { code?, message } } or { error: "..." }
-    const error = parsed.error;
-    if (typeof error === 'string') return { code: null, message: error };
-    if (error && typeof error === 'object') {
-      const obj = error as Record<string, unknown>;
-      return {
-        code: typeof obj.code === 'number' ? obj.code : null,
-        message: typeof obj.message === 'string' ? obj.message : null,
-      };
-    }
+    const openAI = v.safeParse(OpenAIErrorSchema, decoded);
+    if (!openAI.success) throw new Error('unrecognized gateway error envelope');
+    const error = openAI.output.error;
+    return v.is(v.string(), error)
+      ? { code: null, message: error }
+      : { code: error.code ?? null, message: error.message ?? null };
   } catch { /* not JSON */ }
   return { code: null, message: body.trim() ? body.trim().slice(0, 200) : null };
 }

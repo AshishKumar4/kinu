@@ -8,8 +8,8 @@
 
 import { createDefaultWebSearchProvider, type AuthResolver, type WebSearchProvider } from "@proteus/core";
 
-interface AiToMarkdown {
-  toMarkdown?: (docs: Array<{ name: string; blob: Blob }>) => Promise<Array<{ data: string }>>;
+interface WebProviderEnv {
+  readonly AI?: Env['AI'];
 }
 
 /**
@@ -20,25 +20,25 @@ interface AiToMarkdown {
  *   resolver would then never see the Tavily credential even after the claim.
  */
 export function buildCfWebSearchProvider(
-  env: unknown,
+  env: WebProviderEnv,
   resolveAuth: () => AuthResolver | undefined,
 ): WebSearchProvider {
-  const ai = (env as { AI?: AiToMarkdown }).AI;
-  return createDefaultWebSearchProvider({
+  const ai = env.AI;
+  const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
     fetch: globalThis.fetch,
     getAuth: async (key, opts) => {
       const auth = resolveAuth();
       return auth ? auth(key, opts) : null;
     },
-    ...(ai?.toMarkdown
-      ? {
-          htmlToMarkdown: async (html: string, opts?: { url?: string }) => {
-            const name = (opts?.url ?? "page") + ".html";
-            const blob = new Blob([html], { type: "text/html" });
-            const out = await ai.toMarkdown!([{ name, blob }]);
-            return out[0]?.data ?? "";
-          },
-        }
-      : {}),
-  });
+  };
+  if (ai) {
+    options.htmlToMarkdown = async (html: string, opts?: { url?: string }) => {
+      const name = (opts?.url ?? "page") + ".html";
+      const blob = new Blob([html], { type: "text/html" });
+      const out = await ai.toMarkdown([{ name, blob }]);
+      const converted = out[0];
+      return converted?.format === "markdown" ? converted.data : "";
+    };
+  }
+  return createDefaultWebSearchProvider(options);
 }

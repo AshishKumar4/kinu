@@ -23,6 +23,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import { describeError } from "@/hooks/use-async-resource";
 import { useTheme, type ThemeMode } from "@/hooks/use-theme";
+import type { ExecutorCommandResult } from "@/lib/protocol";
 
 export interface TerminalOutput {
   id: string;
@@ -36,7 +37,7 @@ export interface TerminalOutput {
 export interface ExecutorTerminalProps {
   executor: string;
   outputs: TerminalOutput[];
-  onExecute: (cmd: string) => Promise<unknown>;
+  onExecute: (cmd: string) => Promise<ExecutorCommandResult>;
 }
 
 export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTerminalProps) {
@@ -86,7 +87,7 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
             runningRef.current = true;
             busyRef.current = true;
             t.write(BUSY);
-            Promise.resolve(onExecute(cmd)).catch((err: unknown) => {
+            Promise.resolve(onExecute(cmd)).catch((err) => {
               // A rejected exec produces no output row, so nothing else will
               // ever clear the marker or reprint the prompt — the terminal
               // used to just stop reading.
@@ -125,7 +126,6 @@ export function ExecutorTerminal({ executor, outputs, onExecute }: ExecutorTermi
       termRef.current = null;
       fitRef.current = null;
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // xterm can't read CSS variables, so the palette is applied imperatively —

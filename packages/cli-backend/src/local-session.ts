@@ -13,13 +13,15 @@
  */
 
 import type { ModelMessage, ToolSet, LanguageModel } from 'ai';
+import type { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   createCompactionExtension, createVfsTranscriptStore,
   createCompactionStateStore, createModelSummarizer,
   type CompactionStateStore,
 } from '@proteus/compaction';
 import type {
-  ChatOptions,
+  ChatOptions, ChatEvent,
   AgentRuntime, LLMProviderConfig, CompletedTurn, TurnContinuity, FiberCtx,
   BackendHost, BroadcastEvent, ProgrammaticTurn, EnqueueTurnResult, PromptFile,
   SessionWriter, SkillsVfs, ActiveSkillSet, TurnSkillSurface, FactsStore, ProteusExtension,
@@ -30,10 +32,11 @@ import type {
   RunEvent, RunEventInput, RunEventQuery,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
   FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
+  WorkMode,
 } from '@proteus/core';
 import {
   AgentOrchestrator,
-  BackgroundJobStore, BackgroundJobRunner, JobNotResumable, TaskListStore,
+  BackgroundJobStore, BackgroundJobRunner, TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob, BACKGROUND_POLICY, type BackgroundPolicy,
   MctsSearchStore, createDurableMctsSession,
   EventLog, ReplyChannelStore,
@@ -54,7 +57,7 @@ import {
   recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnEvent,
+  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnMetadata,
   createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
@@ -67,16 +70,19 @@ import {
   createMemoryCodemodeProvider, createTasksCodemodeProvider,
   MissionGovernor,
   DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
+  listRecoveryFindings,
   type DynamicContext,
   type MediaModality,
-  createReleaseStore, initReleaseTables, releaseSqlFromExec, initWorkspaceSchema,
+  createReleaseStore, initReleaseTables, releaseSqlFromExec,
+  initWorkspaceBaselineTable, initWorkspaceSchema,
   // The scaffold evolution control plane — core owns the drivers; this session
   // supplies the local surface they run against.
   applyScaffoldDecision, createLlmJsonJudge, getShadowStatus, listGepaRuns, listScaffoldVersions,
   previewScaffoldLive, proposeScaffold, runScaffoldGepaOptimization, runScaffoldOnce,
-  runTurnShadowEval,
+  queueTurnShadowTrial, runQueuedShadowTrials,
   type GepaOptimizationResult, type GepaRunSummary, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldVersionView, type ShadowStatus,
+  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldVersionView,
+  type ShadowStatus,
   listReplayEvals, type ReplayEvalSummary,
   revertChangelogEntryById, type ChangelogRevertResult,
   claimAlternateTakesForTurn, purgeUnclaimedAlternateTakes, latestAlternateTakeSet,
@@ -92,7 +98,7 @@ import {
   type TimerTrigger, type TimerTriggerOpts, type TriggerView,
   type WebhookDelivery, type WebhookDeliveryResult, type WebhookSecretStore,
   reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
-  type ReasoningEffort, type CacheRetention,
+  type ReasoningEffort, decodeJsonValue, projectJsonValue,
   createAgentSelfProvider,
   // ── Read models: the same implementations the cloud backend's RPCs call ──
   cancelBackgroundJob, jobResult, listBackgroundJobs,
@@ -157,6 +163,9 @@ function olderHistoryNotice(omitted: number, sessionId: string): ModelMessage {
  *  its abort signal and its extension host. */
 type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
 
+type ToolCallArguments = Extract<ChatEvent, { type: 'tool-call' }>['args'];
+type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
+
 /**
  * Per-message AGGREGATE cap on raw attachment bytes inlined into a chat message
  * as data-URL file parts, for agents running on THIS backend.
@@ -177,16 +186,14 @@ type LiveTurnOpts = Omit<ChatOptions, 'signal' | 'extensions'>;
 export const LOCAL_MAX_INLINE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 
 /** The minimal bun:sqlite handle the EventsHub SqlExec adapter needs. */
-export interface LocalSessionDb {
-  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-}
+export type LocalSessionDb = Pick<Database, 'prepare'>;
 
 /** What the frontends render. A superset of runChat's ChatEvent with the
  *  lifecycle + side-channel (evolution, broadcast, background) events. */
 export type SessionEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: ToolCallArguments }
   | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
   | { type: 'turn-end'; turn: CompletedTurn }
   | { type: 'error'; message: string }
@@ -212,6 +219,12 @@ export interface LocalPublishEventInput {
 export interface LocalPublishEventResult {
   event_id: string;
   admitted: boolean;
+}
+
+export interface LocalDurableWebhook {
+  trigger_id: string;
+  auth_mode: 'hmac' | 'bearer' | 'mtls';
+  secret: string | null;
 }
 
 export interface LocalAgentSessionOpts {
@@ -275,6 +288,7 @@ export class LocalAgentSession implements BackendHost {
    *  uses `tools`; job resume runs the raw tool so a re-drive can't detach a
    *  second job (the DO's getRawTools). */
   private rawTools: ToolSet = {};
+  private readonly toolSets: Partial<Record<WorkMode, { raw: ToolSet; wrapped: ToolSet }>> = {};
   private readonly engine: EvolutionEngine;
   private readonly orch: AgentOrchestrator;
   private readonly jobs: BackgroundJobStore;
@@ -334,6 +348,7 @@ export class LocalAgentSession implements BackendHost {
   private readonly cwd: string;
   private readonly persistMessagesEnabled: boolean;
   private readonly history: ModelMessage[] = [];
+  private turnWorkMode: WorkMode = 'build';
 
   /** Dynamic-context blocks for this CLI session (core volatile-context.ts),
    *  re-read and re-woven at every model step by the shared step pipeline.
@@ -399,6 +414,22 @@ export class LocalAgentSession implements BackendHost {
       // machine and can block on shell approvals — so CLI replay measures the
       // prompt/model config, not tool trajectories.
       replayTaskRunner: (task) => this.runReplayTask(task),
+      shadowTrialQueue: (turn) => queueTurnShadowTrial(this.scaffoldControl, turn),
+      // The trial itself runs on the cadence lane. A resolved gate changes the
+      // live scaffold under us, so the session's model-bound state is dropped
+      // and the decision is surfaced like any other self-change.
+      shadowTrialRunner: async () => {
+        const drain = await runQueuedShadowTrials(this.scaffoldControl);
+        if (drain.applied) {
+          this.emit({
+            type: 'evolution',
+            event: drain.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
+            message: `Shadow eval ${drain.applied}d the pending scaffold after ${drain.trials} trial(s)`,
+          });
+          this.invalidateModelState();
+        }
+        return drain;
+      },
     });
     this.engine.onEvent((e) => this.emit({ type: 'evolution', event: e.type, message: e.message }));
 
@@ -408,6 +439,7 @@ export class LocalAgentSession implements BackendHost {
     // too rather than trusting an earlier caller.
     const hubSql = makeSqlExec(opts.db);
     initWorkspaceSchema({ execRaw: this.rt.storage.execRaw, sql: this.rt.storage.sql, exec: hubSql });
+    initWorkspaceBaselineTable(this.rt.storage.execRaw);
 
     // Background-job lifecycle over the durable local fiber (createLinuxFiber) +
     // this session as the BackendHost (enqueueTurn wakes the agent).
@@ -420,7 +452,7 @@ export class LocalAgentSession implements BackendHost {
 
     // Better-compact is THE default (and only) compaction path — the same
     // staged transformContext ladder the cloud backend registers, over the
-    // same shared stores (transcripts in the composite VFS, plan + trigger
+    // same shared stores (transcripts in the canonical VFS, plan + trigger
     // state in agent.db). The summarizer rides the session's active model.
     this.compactionState = createCompactionStateStore(this.rt.storage.sql);
     this.compactionExtension = createCompactionExtension({
@@ -451,7 +483,7 @@ export class LocalAgentSession implements BackendHost {
       },
     });
 
-    this._headRuntime = createCLIHeadRuntime({
+    const headRuntimeOptions: Parameters<typeof createCLIHeadRuntime>[0] = {
       model: this.fallbackModel,
       providerFamily: providerFamilyForSpec(this.fallbackModelSpec),
       parentRuntime: this.rt,
@@ -460,7 +492,14 @@ export class LocalAgentSession implements BackendHost {
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
-    });
+    };
+    // Per-fork models only mean something where a resolver exists; a static
+    // model session has one model and every fork inherits it, as before.
+    if (this.modelResolver) {
+      const modelResolver = this.modelResolver;
+      headRuntimeOptions.resolveModel = (spec) => modelResolver.resolveModel(spec);
+    }
+    this._headRuntime = createCLIHeadRuntime(headRuntimeOptions);
     this.headController = new HeadController(this._headRuntime, this.headJournal);
 
     // The EventsHub substrate (reactor source of truth). Local external
@@ -517,6 +556,7 @@ export class LocalAgentSession implements BackendHost {
         onStepEvent: (ev) => this.recordRunEvent({ type: 'step_finish', ...ev }),
       },
     });
+    this.rt.setTurnFileLedgerProvider?.(() => this.orch.acc.files);
     this.jobRunner = new BackgroundJobRunner({
       store: this.jobs,
       policy: () => opts.backgroundPolicy ?? BACKGROUND_POLICY.interactive,
@@ -527,7 +567,7 @@ export class LocalAgentSession implements BackendHost {
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
       // Process exit is the local analogue of a DO eviction: re-drive an
       // interrupted job from its durable checkpoint instead of failing it.
-      resume: (kind, input, signal) => this.resumeBackgroundJob(kind, input, signal),
+      resume: (kind, input, mode, signal) => this.resumeBackgroundJob(kind, { value: input }, mode, signal),
     });
     // Scaffold cold-start heal (the DO's onStart parity): a workspace created
     // before scaffold bootstrap landed has no scaffold/agent.js, and
@@ -551,7 +591,7 @@ export class LocalAgentSession implements BackendHost {
   describeTools(): Array<{ name: string; description: string }> {
     this.ensureModelState();
     return Object.entries({ ...this.tools, ...this.extraTools }).map(([name, t]) => ({
-      name, description: (t as { description?: string }).description ?? '',
+      name, description: t.description ?? '',
     }));
   }
 
@@ -587,7 +627,7 @@ export class LocalAgentSession implements BackendHost {
     return getShellApprovalMode(this.config);
   }
 
-  setShellApprovalMode(mode: ShellApprovalMode): { ok: true; mode: ShellApprovalMode } {
+  setShellApprovalMode(mode: ShellApprovalMode): ReturnType<typeof setShellApprovalMode> {
     return setShellApprovalMode({ config: this.config, onChanged: () => this.rebuildToolSurface() }, mode);
   }
 
@@ -596,8 +636,8 @@ export class LocalAgentSession implements BackendHost {
    *  one, 'strict' keeps rejecting gate hits with its explanatory message.
    *  Wired straight onto `rt.setShellApprovalChannel` — the SAME channel
    *  `rt.shell` and every `rt.executionRouter` provider consult, so an
-   *  approval answers `run` and a codemode `workspace.exec()`/`nimbus.exec()`/
-   *  `sandbox.exec()`/`laptop.exec()` call identically. Returns a disposer so
+   *  approval answers `run` and every registered codemode executor's `exec()`
+   *  call identically. Returns a disposer so
    *  a surface can detach on disconnect. */
   setShellApprovalHandler(handler: ShellApprovalHandler | null): () => void {
     this.shellApprovalHandler = handler;
@@ -634,7 +674,7 @@ export class LocalAgentSession implements BackendHost {
 
   /** Validate + store a new model spec. Effective on the next turn and for new
    *  think/head runs, matching the DO backend's setModel behavior. */
-  setModel(spec: string): { ok: true; spec: string } {
+  setModel(spec: string): ReturnType<typeof setModel> {
     return setModel({
       config: this.config,
       normalize: (s) => this.normalizeModelSpec(s),
@@ -646,7 +686,9 @@ export class LocalAgentSession implements BackendHost {
     return getReasoningEffort(this.config);
   }
 
-  setReasoningEffort(effort: unknown): { ok: true; effort: ReasoningEffort } {
+  setReasoningEffort(
+    effort: Parameters<typeof setReasoningEffort>[1],
+  ): ReturnType<typeof setReasoningEffort> {
     return setReasoningEffort(this.config, effort);
   }
 
@@ -690,7 +732,7 @@ export class LocalAgentSession implements BackendHost {
     return listTriggers(this.triggerRegistry);
   }
 
-  cancelTrigger(trigger_id: string): { ok: true; changed: boolean } {
+  cancelTrigger(trigger_id: string): ReturnType<typeof cancelTrigger> {
     const result = cancelTrigger(this.triggerRegistry, trigger_id, Date.now());
     this.rearmLocalAlarm();
     return result;
@@ -724,7 +766,7 @@ export class LocalAgentSession implements BackendHost {
     secret?: string;
     accepted_content_type?: string;
     rate_limit_per_min?: number;
-  }): { trigger_id: string; auth_mode: 'hmac' | 'bearer' | 'mtls'; secret: string | null } {
+  }): LocalDurableWebhook {
     const now = Date.now();
     const webhook = registerDurableWebhook(this.triggerRegistry, opts, now);
     if (opts.secret) this.webhookSecrets.put(webhook.secret_id, webhook.trigger_id, opts.secret, now);
@@ -782,7 +824,7 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /** The operator viewed the changelog — zero the unseen badge. */
-  markChangelogSeen(): { ok: true; seenAt: number } {
+  markChangelogSeen(): ReturnType<typeof markChangelogSeen> {
     return markChangelogSeen(this.config);
   }
 
@@ -838,11 +880,12 @@ export class LocalAgentSession implements BackendHost {
    *  + judge the MCTS engine scores branches with, so head outcomes and the merge
    *  are grounded. Sample knobs default from DEFAULT_CONFIG inside core. */
   private buildHeadGrounding(): HeadGrounding {
-    return {
+    if (this.rt.judgeModel) return {
       executor: this.rt.executor,
       explorer: this.rt.llm,
-      ...(this.rt.judgeModel ? { judge: this.rt.judgeModel } : {}),
+      judge: this.rt.judgeModel,
     };
+    return { executor: this.rt.executor, explorer: this.rt.llm };
   }
 
   /** The codemode namespaces a head's execute_tools gets beyond its runtime's
@@ -850,12 +893,11 @@ export class LocalAgentSession implements BackendHost {
    *  NOT `agents.*`/`agent.*` — a head forks its parent's resources, never its
    *  authority to delegate. */
   private headCodemodeExtras(): CodemodeProvider[] {
-    return [
-      createWebCodemodeProvider(this.getWebSearchProvider()),
-      ...(this.modelResolver
-        ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
-        : []),
-    ];
+    const providers: CodemodeProvider[] = [createWebCodemodeProvider(this.getWebSearchProvider())];
+    if (this.modelResolver) {
+      providers.push(createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec()));
+    }
+    return providers;
   }
 
   /** Alternate-Takes capture of a completed heads run (core heads-support). */
@@ -869,8 +911,8 @@ export class LocalAgentSession implements BackendHost {
   setTimer(fn: () => Promise<void>, ms: number): void {
     setTimeout(() => {
       if (this.ended) return;
-      void fn().catch((err: unknown) =>
-        console.warn('[proteus] drain timer callback failed:', (err as Error).message));
+      void fn().catch((error) =>
+        console.warn('[proteus] drain timer callback failed:', errorMessage({ error })));
     }, ms);
   }
 
@@ -878,6 +920,11 @@ export class LocalAgentSession implements BackendHost {
    *  backs the reactor + background-job wake. Self-starts the pump when idle so
    *  a job that settles mid-idle wakes the agent immediately. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
+    if (promptModeForTurnMetadata(input.metadata) === 'plan') {
+      return Promise.reject(new Error(
+        'Plan review is available in the hosted workspace UI; this local session has no review surface.',
+      ));
+    }
     // A job settling during shutdown must not start a turn the ending session
     // will never drain: 'skipped' sends the caller down its durable-breadcrumb
     // path instead, and the next run drains it from the event log.
@@ -917,7 +964,7 @@ export class LocalAgentSession implements BackendHost {
    *  the user's own turn has finished. Attachments (data-URL PromptFiles)
    *  become file parts on the turn's user message. */
   send(input: string | { text: string; files: ReadonlyArray<PromptFile> }): Promise<void> {
-    const { text, files } = typeof input === 'string' ? { text: input, files: undefined } : input;
+    const { text, files } = normalizePromptInput(input);
     return new Promise((resolve) => {
       this.queue.push({ text, files, kind: 'user', resolve });
       void this.pump();
@@ -933,7 +980,7 @@ export class LocalAgentSession implements BackendHost {
    */
   steer(input: string | { text: string; files: ReadonlyArray<PromptFile> }): boolean {
     if (!this.pumping) return false;
-    const { text, files } = typeof input === 'string' ? { text: input, files: undefined } : input;
+    const { text, files } = normalizePromptInput(input);
     this.pendingSteers.push({ text, files });
     return true;
   }
@@ -1097,36 +1144,71 @@ export class LocalAgentSession implements BackendHost {
     while (this.backgroundFibers.size > 0) {
       const remaining = deadline - Date.now();
       if (remaining <= 0) {
-        this.emit({
-          type: 'evolution', event: 'bg_jobs_abandoned',
-          message:
-            `${this.backgroundFibers.size} background job(s) did not finish in time and were left running; ` +
-            'their results are not part of this run.',
-        });
+        this.announceAbandonedJobs();
         return false;
       }
-      await raceDeadline(Promise.allSettled([...this.backgroundFibers]), remaining);
+      await raceDeadline(Promise.allSettled(this.backgroundFibers), remaining);
     }
     return true;
   }
 
   /**
-   * Recover background jobs orphaned by a previous CLI exit (durable detach). An
-   * interrupted bg:* fiber leaves a row stashed phase 'running': a checkpoint-
-   * backed kind is re-driven under a fresh lease epoch, anything else fails +
-   * wakes (DO onFiberRecovered parity). Then clear all stale fiber rows from the
-   * prior run — a resume runs in a NEW fiber row, so this never deletes it.
-   * Call once at startup (no fibers are live yet, so every row is an orphan).
+   * Say plainly what is being left behind, because the answer is not "nothing".
+   *
+   * The in-flight work dies with this process, but the job rows stay `running`
+   * and are checkpoint-backed, so the next start of this workspace re-drives
+   * them — and one of the things that starts this workspace is the local
+   * scheduler daemon, with nobody watching. A resumed job runs the agent's own
+   * tools: it executes commands and writes files here, minutes after the
+   * command that started it returned. That is a thing an operator has to be
+   * told BEFORE it happens, so the notice goes to stderr as well as to the
+   * event stream — stderr is the one channel every surface shows and no
+   * machine-readable stdout stream can be corrupted by.
+   */
+  private announceAbandonedJobs(): void {
+    const interrupted = this.jobs.listRunning();
+    const roster = interrupted
+      .map((job) => `${job.id} (${job.kind}${job.label ? `: ${job.label}` : ''})`)
+      .join(', ');
+    const message =
+      `${this.backgroundFibers.size} background job(s) did not finish in time and were interrupted by this ` +
+      'exit. They are checkpointed, so this workspace resumes them the next time it starts — including ' +
+      'unattended, under the local scheduler daemon — and a resumed job runs commands and writes files on ' +
+      `this machine. Cancel with: proteus jobs ${this.agentName()} cancel <id>.` +
+      (roster ? ` Interrupted: ${roster}.` : '');
+    this.emit({ type: 'evolution', event: 'bg_jobs_abandoned', message });
+    console.warn(`[proteus] ${message}`);
+  }
+
+  /**
+   * Recover background jobs orphaned by a previous CLI exit (durable detach).
+   *
+   * Two passes, because the fiber rows and the job registry each know something
+   * the other does not. An interrupted bg:* fiber row says its job's executor
+   * died AFTER settling, which is the only way a lost wake can be re-delivered
+   * (DO onFiberRecovered parity); the registry says which jobs are still
+   * `running` at all, including the ones whose fiber row did not survive. Stale
+   * fiber rows from the prior run are cleared as they are read — a resume runs
+   * in a NEW fiber row, so this never deletes it.
+   *
+   * Call once at startup: no fibers are live yet, so every row is an orphan.
    */
   async recoverBackgroundJobs(): Promise<void> {
-    let orphans: ReturnType<typeof detectOrphanedFibers>;
-    try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { return; }
+    let orphans: ReturnType<typeof detectOrphanedFibers> = [];
+    try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { /* no fibers table yet */ }
     for (const o of orphans) {
       if (o.name.startsWith('bg:')) {
         try { await this.jobRunner.recover(o.snapshot); } catch { /* best effort */ }
       }
-      try { this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`; } catch { /* nop */ }
+      try { void this.rt.storage.sql`DELETE FROM fibers WHERE id = ${o.id}`; } catch { /* nop */ }
     }
+    // Fiber rows are not the source of truth for job liveness. A settlement
+    // whose database was closed under it at teardown writes neither its outcome
+    // nor its force-fail, and its fiber row dies with the process — leaving a
+    // `running` row no orphan fiber points at, which the loop above can never
+    // reach. Nothing in this process owns a job yet, so every remaining
+    // `running` row is an orphan too.
+    try { await this.jobRunner.recoverOrphans(); } catch { /* best effort */ }
   }
 
   /** Re-drive a background job interrupted by a previous process exit — the
@@ -1134,11 +1216,17 @@ export class LocalAgentSession implements BackendHost {
    *  surface, so a re-drive can't detach a second job. Legacy 'think' jobs
    *  translate onto the same fork path; the model-bound surface resolves
    *  inside the thunk, only for a resumable kind. */
-  private resumeBackgroundJob(kind: string, input: unknown, signal: AbortSignal): Promise<unknown> {
-    return resumeForkBackgroundJob(() => {
+  private resumeBackgroundJob(
+    kind: string,
+    input: { value: unknown },
+    mode: WorkMode,
+    signal: AbortSignal,
+  ) {
+    return resumeForkBackgroundJob((resumeMode) => {
       this.ensureModelState();
-      return this.rawTools;
-    }, kind, input, signal);
+      return this.toolSets[resumeMode]?.raw ?? {};
+    }, kind, decodeJsonValue({ value: input.value }), mode, signal).then((value) =>
+      value === undefined ? undefined : decodeJsonValue({ value }));
   }
 
   // ── Internals ──────────────────────────────────────────────────────
@@ -1180,7 +1268,10 @@ export class LocalAgentSession implements BackendHost {
   private nextScheduledTriggerAt(): number | null {
     const upcoming = this.triggerRegistry.list({ state: 'active' })
       .map((t) => t.next_fire_at)
-      .filter((t): t is number => typeof t === 'number')
+      .flatMap((value) => {
+        const parsed = v.safeParse(v.number(), value);
+        return parsed.success ? [parsed.output] : [];
+      })
       .sort((a, b) => a - b)[0];
     return upcoming ?? null;
   }
@@ -1262,7 +1353,7 @@ export class LocalAgentSession implements BackendHost {
    *  Idempotent per run — clearing the id makes a second call a no-op. */
   private closeRun(error: string | null): void {
     if (!this.currentRunId) return;
-    closeTurnRun(this.eventRecorder, this.currentRunId, {
+    const outcome: Parameters<typeof closeTurnRun>[2] = {
       turnIndex: this.orch.sessionTurnIndex,
       usage: this.orch.acc.usage,
       context: this.orch.acc.context,
@@ -1270,9 +1361,11 @@ export class LocalAgentSession implements BackendHost {
       steering: this.orch.steering.snapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
+      recoveries: this.orch.recoverySnapshot(),
       reason: this.orch.acc.hadError ? 'error' : 'completed',
-      ...(error ? { error } : {}),
-    });
+    };
+    if (error) outcome.error = error;
+    closeTurnRun(this.eventRecorder, this.currentRunId, outcome);
     this.currentRunId = null;
   }
 
@@ -1287,8 +1380,23 @@ export class LocalAgentSession implements BackendHost {
     return listRuns(this.eventRecorder, limit);
   }
 
+  /**
+   * Run one queued turn under the guarantee every surface above depends on: a
+   * turn that starts always terminates — exactly one `turn-end`, and a run that
+   * is always closed.
+   *
+   * The turn's own stream has a failure path that emits `error`, flags the
+   * accumulator and finalizes normally. Everything BEFORE that stream exists —
+   * resolving the model, the skills, the system prompt — had no such path and
+   * threw straight out of the method, past an opened run and before any
+   * `turn-end`. The pump then logged it to stderr and resolved the caller, so a
+   * turn that never ran a step was reported as a turn that succeeded.
+   */
   private async processTurn(item: QueueItem): Promise<void> {
-    const event = typeof item.metadata?.proteusEvent === 'string' ? item.metadata.proteusEvent : undefined;
+    const parsedEvent = v.safeParse(v.string(), item.metadata?.proteusEvent);
+    const event = parsedEvent.success ? parsedEvent.output : undefined;
+    const promptMode = promptModeForTurnMetadata(item.metadata);
+    this.turnWorkMode = promptMode === 'plan' ? 'plan' : 'build';
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
 
     const startedAt = Date.now();
@@ -1305,6 +1413,33 @@ export class LocalAgentSession implements BackendHost {
       userMessage: item.text,
       turnIndex: this.orch.sessionTurnIndex,
     });
+    try {
+      await this.runTurn(item, event, startedAt);
+    } catch (error) {
+      const message = errorMessage({ error });
+      this.orch.acc.hadError = true;
+      this.closeRun(message.slice(0, 500));
+      this.emit({ type: 'error', message });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, '') });
+    }
+  }
+
+  /** The turn as it stands — the one shape the normal end and both failure
+   *  paths report. */
+  private snapshotTurn(item: QueueItem, assistantResponse: string, turnId?: string | null): CompletedTurn {
+    const completedTurn: Parameters<typeof snapshotCompletedTurn>[1] = {
+      userMessage: item.text,
+      assistantResponse,
+      sessionId: this.sessionId,
+      origin: item.kind,
+    };
+    if (turnId) completedTurn.turnId = turnId;
+    return snapshotCompletedTurn(this.orch.acc, completedTurn);
+  }
+
+  /** The turn itself: assemble it, stream it, finalize it. Everything here may
+   *  throw; processTurn owns what that means. */
+  private async runTurn(item: QueueItem, event: string | undefined, startedAt: number): Promise<void> {
     // Shadow-git checkpoints: arm the per-turn dedup so the first host-FS
     // mutation of this turn snapshots its working directory (invisible /undo
     // substrate — see core checkpoints/types.ts).
@@ -1318,6 +1453,7 @@ export class LocalAgentSession implements BackendHost {
     // to push back — so it arms the completion gate. Nothing else does.
     if (item.kind === 'user' && this.oneShot) this.completionGate.arm(item.text);
     const model = this.ensureModelState();
+    this.activateToolMode(this.turnWorkMode);
 
     // MEMORY.md is append-only — the TAIL holds the newest lessons/reflections.
     // It is per-turn-read live state (lessons/reflections/take-pick
@@ -1342,22 +1478,24 @@ export class LocalAgentSession implements BackendHost {
     // The byte-stable cache prefix — system state (facts, executor status)
     // rides the dynamic ledger and activation reasons ride the turn-local
     // tail below, sharing the seam with the DO backend.
-    const systemPrompt = buildSystemPromptSync(this.rt, {
+    const systemPromptOptions: Parameters<typeof buildSystemPromptSync>[1] = {
       executors,
       availableTools: availableBuiltins,
-      agentsActions: agentsActionsFor({ fork: true }),
+      agentsActions: agentsActionsFor(this.agentsToolDeps(this.turnWorkMode)),
       // Matches the execute_tools wiring: llm.query exists only with a resolver.
       rlmAvailable: this.modelResolver !== null,
       externalTools,
       backend: 'cli-local',
-      mode: promptModeForTurnEvent(event),
+      mode: promptModeForTurnMetadata(item.metadata),
+      planSubmissionAvailable: false,
       model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
       currentDate: currentDateForPrompt(),
-      ...(agentsMd.length > 0 ? { agentsMd } : {}),
-      ...(availableSkills.length > 0 ? { availableSkills } : {}),
-      ...(activeSkills ? { activeSkills } : {}),
-    });
+    };
+    if (agentsMd.length > 0) systemPromptOptions.agentsMd = agentsMd;
+    if (availableSkills.length > 0) systemPromptOptions.availableSkills = availableSkills;
+    if (activeSkills) systemPromptOptions.activeSkills = activeSkills;
+    const systemPrompt = buildSystemPromptSync(this.rt, systemPromptOptions);
     this.recordSystemPromptHash(systemPrompt);
 
     // Attachments ride as ModelMessage file parts (the same shape ai's
@@ -1383,7 +1521,7 @@ export class LocalAgentSession implements BackendHost {
     };
     const turnLocalMsg = turnLocalContextMessage(activeSkills ? { activeSkills } : {});
 
-    const pendingCalls: Array<{ toolName: string; toolCallId: string; args: Record<string, unknown> }> = [];
+    const pendingCalls: Array<{ toolName: string; toolCallId: string; args: ToolCallArguments }> = [];
     let fullText = '';
     /** The turn's terminal failure text, persisted on run_end so a post-hoc
      *  read of the log carries the same evidence the cf run_end does. */
@@ -1439,7 +1577,7 @@ export class LocalAgentSession implements BackendHost {
     // replays the live turn rather than a reconstruction of it — the local peer
     // of the DO's `_lastTurnOpts` stash. `this.history` is snapshotted because
     // the assistant's answer is appended to it before the eval runs.
-    const liveTurnOpts = {
+    const liveTurnOpts: LiveTurnOpts = {
       model,
       modelContext: { id: this.effectiveModelSpec(), contextWindow },
       system: systemPrompt,
@@ -1454,13 +1592,13 @@ export class LocalAgentSession implements BackendHost {
       dynamicContext,
       turnLocal: turnLocalMsg ? [turnLocalMsg] : undefined,
       tools: turnTools,
-      ...(lastPromptTokens !== null ? { providerReportedTokens: lastPromptTokens } : {}),
       transformTrigger,
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       cache,
       budget: this.budget,
-      ...(providerOptions ? { providerOptions } : {}),
     };
+    if (lastPromptTokens !== null) liveTurnOpts.providerReportedTokens = lastPromptTokens;
+    if (providerOptions) liveTurnOpts.providerOptions = providerOptions;
     // `meter` rides the LIVE turn only, never liveTurnOpts: a shadow-eval
     // replay re-runs those opts off the priced path, and its composition would
     // otherwise overwrite the measurement the next real step reports.
@@ -1569,13 +1707,6 @@ export class LocalAgentSession implements BackendHost {
     this.orch.signals.settle({ completed: runError === null });
 
     let assistantMsgId: string | null = null;
-    const snapshotTurn = (): CompletedTurn => snapshotCompletedTurn(this.orch.acc, {
-      userMessage: item.text,
-      assistantResponse: fullText,
-      ...(assistantMsgId ? { turnId: assistantMsgId } : {}),
-      sessionId: this.sessionId,
-      origin: item.kind,
-    });
 
     try {
       // The NEXT turn's measured compaction trigger (core turn-lifecycle).
@@ -1595,7 +1726,7 @@ export class LocalAgentSession implements BackendHost {
 
       // The completion gate: on the one-shot surface a turn that did work does
       // not get to be the last word on its own say-so.
-      await this.applyCompletionGate(runError === null);
+      if (this.turnWorkMode !== 'plan') await this.applyCompletionGate(runError === null);
 
       // One durable row PER steer (not per drain): the walk-back fork pivot
       // matches individual user messages verbatim, exactly as surfaces and the
@@ -1609,7 +1740,7 @@ export class LocalAgentSession implements BackendHost {
       // credited, so its captures are purged (mirroring the cf backend's
       // purge-on-error) and the next turn never claims them as its own.
       try {
-        if (assistantMsgId && !this.orch.acc.hadError) {
+        if (this.turnWorkMode !== 'plan' && assistantMsgId && !this.orch.acc.hadError) {
           claimAlternateTakesForTurn(this.rt.storage.sql, {
             turnId: assistantMsgId, sessionId: this.sessionId, startedAt,
           });
@@ -1620,7 +1751,9 @@ export class LocalAgentSession implements BackendHost {
 
       // Steer-as-Branch redirects launched during this turn settle against its
       // answer — detached, so a slow branch never delays turn-end.
-      this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
+      if (this.turnWorkMode !== 'plan') {
+        this.settlePendingBranches(this.orch.acc.hadError ? null : assistantMsgId, fullText);
+      }
 
       // The confirming turn is over: what the agent did with its free re-look
       // IS the gate's conversion number, and closeRun writes it.
@@ -1628,36 +1761,16 @@ export class LocalAgentSession implements BackendHost {
         this.completionGate.settle({ toolCalls: this.orch.acc.toolCalls.length });
       }
 
-      const turn = snapshotTurn();
+      const turn = this.snapshotTurn(item, fullText, assistantMsgId);
       this.closeRun(runError);
       // Cadence (turn + session evolution) + the reactor drain — may enqueue more.
       await this.orch.completeTurn(turn, this.turnContinuity);
-      // Sampled auto-judge shadow rollout — core's control plane, the same
-      // driver the cloud backend runs. Tracked rather than fire-and-forget: a
-      // `proteus exec` process exits the moment the turn ends, and the
-      // evaluation that resolves a pending scaffold must not die with it.
-      this.orch.track(
-        runTurnShadowEval(this.scaffoldControl, {
-          task: item.text,
-          currentOutput: fullText,
-          // A candidate that delegates is judged on the scaffold delta alone,
-          // so it replays the live turn's OWN inference — same system prompt,
-          // same tool surface, same conversational history, same step budget.
-          replayLiveTurn: () => runChat(liveTurnOpts),
-        }).then((result) => {
-          // What a local session does with the verdict: surface it, and drop
-          // the model-bound state so the next turn's toolset is rebuilt over
-          // whichever scaffold now stands.
-          if (!result?.applied) return;
-          this.emit({
-            type: 'evolution',
-            event: result.applied === 'promote' ? 'scaffold_promotion' : 'scaffold_rollback',
-            message: `Shadow eval ${result.applied}d the pending scaffold`,
-          });
-          this.invalidateModelState();
-        }),
-        'Scaffold shadow eval',
-      );
+      // The turn's contribution to the promotion gate: one row recording the
+      // task, the answer, and the conversation it was asked in. The rollout it
+      // pays for runs on the cadence lane, which is why this is not tracked —
+      // a `proteus exec` process no longer waits out a candidate turn before
+      // it can exit.
+      if (this.turnWorkMode !== 'plan') this.engine.queueShadowTrial(turn, liveTurnOpts.history);
       this.emit({ type: 'turn-end', turn });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -1669,7 +1782,7 @@ export class LocalAgentSession implements BackendHost {
       // potentially partial side effects, and failed persistence cannot survive
       // a restart, so surface both the failure and a terminal turn event.
       this.emit({ type: 'error', message });
-      this.emit({ type: 'turn-end', turn: snapshotTurn() });
+      this.emit({ type: 'turn-end', turn: this.snapshotTurn(item, fullText, assistantMsgId) });
     }
   }
 
@@ -1750,7 +1863,7 @@ export class LocalAgentSession implements BackendHost {
    *  per-conversation key (the agent's affinity key + session id — same
    *  `proteus-<name>` scheme Workers AI affinity pins with), and the agent's
    *  configured retention. */
-  private cacheIdentity(): { providerId?: string; modelId?: string; sessionKey: string; retention: CacheRetention } {
+  private cacheIdentity(): PromptCacheIdentity {
     const sessionKey = `${agentAffinityKey(this.agentName())}:${this.sessionId}`;
     const retention = this.config.getCacheRetention();
     const spec = this.effectiveModelSpec();
@@ -1781,10 +1894,11 @@ export class LocalAgentSession implements BackendHost {
   private getWebSearchProvider(): WebSearchProvider {
     if (this._webSearchProvider) return this._webSearchProvider;
     const getAuth = this.modelResolver?.getAuth;
-    this._webSearchProvider = createDefaultWebSearchProvider({
+    const options: Parameters<typeof createDefaultWebSearchProvider>[0] = {
       fetch: globalThis.fetch,
-      ...(getAuth ? { getAuth } : {}),
-    });
+    };
+    if (getAuth) options.getAuth = getAuth;
+    this._webSearchProvider = createDefaultWebSearchProvider(options);
     return this._webSearchProvider;
   }
 
@@ -1815,13 +1929,13 @@ export class LocalAgentSession implements BackendHost {
       rt: this.rt,
       sql: this.rt.storage.sql,
       config: this.config,
-      surface: (task) => {
+      surface: (task, context) => {
         const model = this.ensureModelState();
         return {
           llmStream: this.makeScaffoldLLMStream(model, this.tools),
           callTool: this.makeScaffoldCallTool(this.tools),
           history: this.makeScaffoldHistory(),
-          defaultInference: () => this.scaffoldDefaultInference(task, model),
+          defaultInference: () => this.scaffoldDefaultInference(task, model, context),
         };
       },
       model: () => this.ensureModelState(),
@@ -1831,9 +1945,14 @@ export class LocalAgentSession implements BackendHost {
 
   /** `host.defaultInference()` for a scaffold run outside a live turn — the
    *  ordinary local loop over this session's whole tool surface, which is what
-   *  the cloud backend's streamText bridge gives a candidate there. */
-  private scaffoldDefaultInference(task: string, model: LanguageModel): AsyncIterable<unknown> {
-    return runChat({
+   *  the cloud backend's streamText bridge gives a candidate there. `context`
+   *  is the conversation a queued trial's turn was asked in, replayed so a
+   *  delegating candidate is judged on the scaffold delta rather than on a
+   *  handicap; without one the task is all there is. */
+  private async *scaffoldDefaultInference(
+    task: string, model: LanguageModel, context?: ScaffoldReplayContext,
+  ): ReturnType<NonNullable<ScaffoldRunOptions['defaultInference']>> {
+    const stream = runChat({
       model,
       modelContext: { id: this.effectiveModelSpec(), contextWindow: this.sessionContextWindow() },
       system: buildSystemPromptSync(this.rt, {
@@ -1842,10 +1961,11 @@ export class LocalAgentSession implements BackendHost {
         model: { id: this.effectiveModelSpec() },
         currentDate: currentDateForPrompt(),
       }),
-      history: [{ role: 'user', content: task }],
+      history: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
       tools: this.tools,
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
     });
+    for await (const value of stream) yield { value: projectJsonValue({ value }) };
   }
 
   /** The pending scaffold's rollout state — trials so far and what the
@@ -1969,6 +2089,7 @@ export class LocalAgentSession implements BackendHost {
     return agentDynamicContext({
       factsBlock: this.renderFactsForTurn(),
       memoryTail,
+      recoveryFindings: listRecoveryFindings(this.rt.storage.sql),
       executors: this.rt.executionRouter?.listExecutors() ?? [],
       runningJobs: this.jobs.listRunning(),
       openTasks: this.taskList.listOpen(),
@@ -2001,7 +2122,7 @@ export class LocalAgentSession implements BackendHost {
    *  recomputed per fork call. MCTS explores over rt.spawnBranch; heads run
    *  in-process via the CLI HeadRuntime. The CLI wires no team or peer
    *  transport, so fork is the tool's only action here. */
-  private buildAgentsForkDeps(): AgentsForkDeps {
+  private buildAgentsForkDeps(mode: WorkMode): AgentsForkDeps {
     return buildStrategyForkDeps({
       rt: this.rt,
       model: this.cachedModel ?? this.fallbackModel,
@@ -2018,7 +2139,9 @@ export class LocalAgentSession implements BackendHost {
           const runId = this.currentRunId;
           return (e: SplitPhaseEvent) => this.emitHeadPhase(e, runId);
         },
-        onComplete: (merge: MergeResult, task: string) => this.recordHeadsTake(merge, task),
+        onComplete: (merge: MergeResult, task: string) => {
+          if (mode === 'build') this.recordHeadsTake(merge, task);
+        },
       },
     });
   }
@@ -2029,8 +2152,8 @@ export class LocalAgentSession implements BackendHost {
    *  Absent deps → those actions are structurally missing from the `agents`
    *  tool, from the `agents.*` sandbox namespace, and from the prompt ladder.
    *  Hosted agents get the full surface. */
-  private agentsToolDeps(): AgentsToolDeps {
-    return { fork: this.buildAgentsForkDeps(), budget: this.budget };
+  private agentsToolDeps(mode: WorkMode): AgentsToolDeps {
+    return { mode, fork: this.buildAgentsForkDeps(mode), budget: this.budget };
   }
 
   /** The recent conversation handed to each spawned head as inherited context
@@ -2071,7 +2194,7 @@ export class LocalAgentSession implements BackendHost {
   /** The shared background wrap (core background-tools) — the SAME wrapper
    *  the cf backend applies: shallow clone, 30s threshold, per-call abort. */
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
-    return wrapToolsForBackground(raw, { jobRunner: this.jobRunner });
+    return wrapToolsForBackground(raw, { jobRunner: this.jobRunner, mode: () => this.turnWorkMode });
   }
 
   /** Persist the exchange (user, any mid-turn steers, assistant); returns the
@@ -2081,16 +2204,16 @@ export class LocalAgentSession implements BackendHost {
     if (!this.persistMessagesEnabled) return null;
     const msgId = crypto.randomUUID();
     const assistantId = crypto.randomUUID();
-    this.rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
+    void this.rt.storage.sql`INSERT INTO messages (id, session_id, role, content)
       VALUES (${msgId}, ${this.sessionId}, ${'user'}, ${userText})`;
     let parentId = msgId;
     for (const steered of steeredTexts) {
       const steerId = crypto.randomUUID();
-      this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+      void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
         VALUES (${steerId}, ${this.sessionId}, ${parentId}, ${'user'}, ${steered})`;
       parentId = steerId;
     }
-    this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+    void this.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
       VALUES (${assistantId}, ${this.sessionId}, ${parentId}, ${'assistant'}, ${assistantText})`;
     return assistantId;
   }
@@ -2205,8 +2328,9 @@ export class LocalAgentSession implements BackendHost {
     });
     this.headController = new HeadController(this._headRuntime, this.headJournal);
 
-    const rawTools = buildBuiltinTools({
-      rt: this.rt,
+    for (const mode of ['build'] as const) {
+      const raw = buildBuiltinTools({
+        rt: this.rt,
       // No shellApprovalMode/requestShellApproval here — the gate lives at
       // the execution seam now (rt.shell / rt.executionRouter, wired once in
       // runtime.ts off agent_config live and the channel `setShellApprovalHandler`
@@ -2219,12 +2343,12 @@ export class LocalAgentSession implements BackendHost {
       // counters the `file` tool writes.
       fileLedger: this.orch.acc.files,
       craftedToolExecute: createNodeCraftedExecute(),
-      createExecuteTool: createNodeExecuteToolFactory({
-        extraProviders: [
+        createExecuteTool: createNodeExecuteToolFactory({
+          extraProviders: [
           createAgentSelfProvider(this),
           // `agents.*` — the delegation tool projected into the sandbox, over
           // the same deps the top-level tool holds. Locally that is fork only.
-          createAgentsCodemodeProvider(() => this.agentsToolDeps()),
+          createAgentsCodemodeProvider(() => this.agentsToolDeps(mode)),
           createWebCodemodeProvider(this.getWebSearchProvider()),
           // `memory.*` / `tasks.*` — unconditional codemode projections of
           // the same-named native tools (tools/memory-tool.ts, tools/tasks-
@@ -2239,21 +2363,29 @@ export class LocalAgentSession implements BackendHost {
           // `release.*` — left the native surface for codemode-only reach
           // (tools/release-codemode.ts); deps read live so a rebind lands
           // without rebuilding this toolset.
-          createReleaseCodemodeProvider(() => this.releaseToolDeps()),
+          ...(mode === 'build' ? [createReleaseCodemodeProvider(() => this.releaseToolDeps())] : []),
           // llm.query (RLM) — CLI parity with the cf backend. Needs a real
           // resolver to spawn sub-calls; static-model sessions have none.
           ...(this.modelResolver
             ? [createRLMProvider(this.modelResolver, () => this.getEffectiveModelSpec())]
             : []),
-        ],
-      }),
-      codemodeLoader: { __cli: true },
-      agents: this.agentsToolDeps(),
-      facts: this.factsStore,
-      webSearch: this.getWebSearchProvider(),
-    });
-    this.rawTools = rawTools;
-    this.tools = this.wrapToolsForBackground(rawTools);
+          ],
+        }),
+        codemodeLoader: { __cli: true },
+        agents: this.agentsToolDeps(mode),
+        facts: this.factsStore,
+        webSearch: this.getWebSearchProvider(),
+      });
+      this.toolSets[mode] = { raw, wrapped: this.wrapToolsForBackground(raw) };
+    }
+    this.activateToolMode(this.turnWorkMode);
+  }
+
+  private activateToolMode(mode: WorkMode): void {
+    const surface = this.toolSets[mode];
+    if (!surface) throw new Error(`tool surface for ${mode} mode is unavailable`);
+    this.rawTools = surface.raw;
+    this.tools = surface.wrapped;
   }
 }
 
@@ -2273,6 +2405,27 @@ function steerUserMessage(drained: ReadonlyArray<{ text: string; files?: Readonl
 }
 
 export { serializeContentForHeads } from '@proteus/core';
+
+interface PromptInputParts {
+  text: string;
+  files?: ReadonlyArray<PromptFile>;
+}
+
+function normalizePromptInput(
+  input: string | { text: string; files: ReadonlyArray<PromptFile> },
+): PromptInputParts {
+  const text = v.safeParse(v.string(), input);
+  if (text.success) return { text: text.output };
+  return v.parse(v.object({
+    text: v.string(),
+    files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
+  }), input);
+}
+
+function errorMessage(input: { error: unknown }): string {
+  const error = v.safeParse(v.instance(Error), input.error);
+  return error.success ? error.output.message : String(input.error);
+}
 
 /** Resolve when `work` settles or `ms` elapses, whichever comes first. The timer
  *  is always cleared, so a fast settle leaves nothing holding the event loop. */

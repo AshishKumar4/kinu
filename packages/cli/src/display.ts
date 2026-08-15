@@ -6,9 +6,11 @@
 import chalk from 'chalk';
 import type { Command } from 'commander';
 import { BUILTIN_TOOLS } from '@proteus/core';
-import type { WorkspaceInfo, SearchNode, ReasoningEffort } from '@proteus/core';
-import { guideFailure } from './provider-guidance.js';
+import type { SearchNode, ReasoningEffort, JsonObject } from '@proteus/core';
+import type { WorkspaceInfo } from '@proteus/core/identity';
+import { guideFailure, type ProviderFailure } from './provider-guidance.js';
 import cliPackage from '../package.json' with { type: 'json' };
+import * as v from 'valibot';
 
 // ── Brand ────────────────────────────────────────────────────────
 
@@ -46,7 +48,7 @@ function boxRow(label: string, value: string, width: number): string {
 }
 
 function stripAnsi(s: string): string {
-  return s.replace(/\x1b\[[0-9;]*m/g, '');
+  return s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, 'g'), '');
 }
 
 // ── Spinner ──────────────────────────────────────────────────────
@@ -234,10 +236,11 @@ export function printSearchTree(nodes: SearchNode[]): void {
 
 // ── Tool call display (for chat) ─────────────────────────────────
 
-export function printToolCall(toolName: string, args: Record<string, unknown>): void {
+export function printToolCall(toolName: string, args: JsonObject): void {
   const argStr = Object.entries(args)
-    .map(([k, v]) => {
-      const s = typeof v === 'string' ? v : JSON.stringify(v);
+    .map(([, value]) => {
+      const text = v.safeParse(v.string(), value);
+      const s = text.success ? text.output : JSON.stringify(value);
       return s.length > 60 ? s.slice(0, 57) + '...' : s;
     })
     .join(', ');
@@ -256,13 +259,13 @@ export function printToolResult(result: string): void {
 
 // ── Evolution event (for chat) ───────────────────────────────────
 
-const EVOLUTION_ICONS: Record<string, string> = {
-  reflection: '💡', craft_discovered: '🔧', consolidation: '🧹',
-  scaffold_proposed: '🧬', mcts_started: '🔍', mcts_complete: '✓',
-};
+const EVOLUTION_ICONS = new Map([
+  ['reflection', '💡'], ['craft_discovered', '🔧'], ['consolidation', '🧹'],
+  ['scaffold_proposed', '🧬'], ['mcts_started', '🔍'], ['mcts_complete', '✓'],
+]);
 
 export function printEvolutionEvent(type: string, message: string): void {
-  const icon = EVOLUTION_ICONS[type] ?? '•';
+  const icon = EVOLUTION_ICONS.get(type) ?? '•';
   console.log(MUTED(`  ${icon} ${message.slice(0, 70)}`));
 }
 
@@ -277,7 +280,7 @@ export function printError(message: string, hint?: string): void {
 /** A command that could not complete: the failure in the provider's words,
  *  plus the next command when the failure class implies one. Every command
  *  action funnels here, so no thrown value can reach a user unrendered. */
-export function printFailure(error: unknown): void {
+export function printFailure(error: ProviderFailure): void {
   const { message, hint } = guideFailure(error);
   printError(message, hint);
 }
@@ -285,7 +288,7 @@ export function printFailure(error: unknown): void {
 /** The same block for surfaces that own their output stream — the run/chat
  *  transcripts, where an error is one entry among the streamed events rather
  *  than the end of the process. */
-export function formatFailure(error: unknown): string {
+export function formatFailure(error: ProviderFailure): string {
   const { message, hint } = guideFailure(error);
   return hint ? `${ERR('error')} ${message}\n${DIM('hint:')} ${hint}` : `${ERR('error')} ${message}`;
 }

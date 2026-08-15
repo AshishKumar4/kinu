@@ -15,14 +15,16 @@
 import type { ToolSet } from 'ai';
 
 import type { BackgroundJob, BackgroundJobStore } from '../jobs/store.js';
+import type { WorkMode } from '../prompting/surface.js';
+import { decodeJsonValue, parseJsonValue, type JsonValue } from '../utils/json.js';
 
 /** The four things the control plane asks of a running job registry —
  *  BackgroundJobRunner's public surface, named at the width this plane uses. */
 export interface BackgroundJobControl {
   cancel(jobId: string): boolean;
   cancelRunning(): string[];
-  create(kind: string, input: unknown, controller: AbortController): string;
-  detach(jobId: string, kind: string, promise: Promise<unknown>): void;
+  create(kind: string, input: JsonValue, mode: WorkMode, controller: AbortController): string;
+  detach(jobId: string, kind: string, promise: Promise<JsonValue | undefined>): void;
 }
 
 export interface BackgroundJobPlaneDeps {
@@ -30,7 +32,7 @@ export interface BackgroundJobPlaneDeps {
   readonly jobRunner: BackgroundJobControl;
   /** The RAW tool surface a retry re-invokes through — raw, so a re-drive
    *  cannot detach a second job on top of the one it is replaying. */
-  readonly rawTools: () => ToolSet;
+  readonly rawTools: (mode: WorkMode) => ToolSet;
   readonly logActivity: (event: string, detail?: string) => void;
 }
 
@@ -49,17 +51,17 @@ export function listBackgroundJobs(jobs: BackgroundJobStore, limit = 20): Backgr
 /** Hard-cancel a running job: abort the underlying work (its merged
  *  AbortSignal) and mark it cancelled. The detach fiber sees 'cancelled' and
  *  won't relabel the abort rejection or wake the agent. */
-export function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId: string): { ok: boolean } {
+export function cancelBackgroundJob(jobRunner: BackgroundJobControl, jobId: string) {
   return { ok: jobRunner.cancel(jobId) };
 }
 
 /** Remove a settled job from the registry (an operator dismiss). */
-export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string): { ok: boolean } {
+export function dismissBackgroundJob(jobs: BackgroundJobStore, jobId: string) {
   try { jobs.dismiss(jobId); return { ok: true }; } catch { return { ok: false }; }
 }
 
 /** Clear all settled jobs, keeping running ones. */
-export function clearBackgroundJobs(jobs: BackgroundJobStore): { ok: boolean } {
+export function clearBackgroundJobs(jobs: BackgroundJobStore) {
   try { jobs.clearSettled(); return { ok: true }; } catch { return { ok: false }; }
 }
 
@@ -73,18 +75,16 @@ export function retryBackgroundJob(deps: BackgroundJobPlaneDeps, jobId: string):
   if (job.status === 'running') return { ok: false, error: 'job still running' };
   const inputJson = deps.jobs.getInput(jobId);
   if (inputJson == null) return { ok: false, error: 'no stored input to retry' };
-  const tool = deps.rawTools()[job.kind];
-  if (!tool || typeof tool.execute !== 'function') return { ok: false, error: `tool "${job.kind}" unavailable` };
-  let input: unknown;
-  try { input = JSON.parse(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
+  const tool = deps.rawTools(job.workMode)[job.kind];
+  if (!tool?.execute) return { ok: false, error: `tool "${job.kind}" unavailable` };
+  let input: JsonValue;
+  try { input = parseJsonValue(inputJson); } catch { return { ok: false, error: 'stored input is unreadable' }; }
   const controller = new AbortController();
-  const newId = deps.jobRunner.create(job.kind, input, controller);
+  const newId = deps.jobRunner.create(job.kind, input, job.workMode, controller);
   deps.logActivity('bg_job_retry', `${jobId} → ${newId}`);
-  const promise = Promise.resolve(
-    (tool.execute as (i: unknown, o: unknown) => unknown)(input, {
+  const promise = Promise.resolve(tool.execute(input, {
       abortSignal: controller.signal, toolCallId: newId, messages: [],
-    }),
-  );
+    })).then((result) => result === undefined ? undefined : decodeJsonValue({ value: result }));
   deps.jobRunner.detach(newId, job.kind, promise);
   return { ok: true, jobId: newId };
 }
@@ -110,7 +110,7 @@ export interface CancelWorkDeps {
 export function cancelCurrentWork(deps: CancelWorkDeps): CancelWorkOutcome {
   const cancelledJobs = deps.jobRunner.cancelRunning();
   let abortedTools = 0;
-  for (const controller of [...deps.activeToolControllers]) {
+  for (const controller of deps.activeToolControllers) {
     if (!controller.signal.aborted) {
       try { controller.abort(new Error('cancelled by operator')); } catch { /* nop */ }
       abortedTools++;

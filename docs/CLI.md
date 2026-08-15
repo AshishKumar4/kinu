@@ -35,7 +35,7 @@ proteus <command> [options]
 | [`proteus alias <workspace> [alias]`](#proteus-alias-workspace-alias) | Create an executable command alias for a workspace |
 | [`proteus unalias <alias>`](#proteus-unalias-alias) | Remove an executable command alias |
 | [`proteus aliases`](#proteus-aliases) | List configured workspace aliases |
-| [`proteus export <name>`](#proteus-export-name) | Back up a workspace — local or cloud — to a portable archive |
+| [`proteus export <name>`](#proteus-export-name) | Back up a workspace (local or cloud) to a portable archive |
 | [`proteus import <file>`](#proteus-import-file) | Restore a workspace archive into a local workspace |
 
 ### Running
@@ -72,7 +72,7 @@ proteus <command> [options]
 | [`proteus timeline <name>`](#proteus-timeline-name) | List the run/evolution/MCTS timeline |
 | [`proteus mcts <name> [nodeId]`](#proteus-mcts-name-nodeid) | Inspect MCTS search history |
 | [`proteus heads <name>`](#proteus-heads-name) | Inspect parallel reasoning branch runs |
-| [`proteus debug <name>`](#proteus-debug-name) | Fetch everything about a workspace — identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts — into one bundle |
+| [`proteus debug <name>`](#proteus-debug-name) | Fetch everything about a workspace into one bundle: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts |
 | [`proteus gepa <name> [runId]`](#proteus-gepa-name-runid) | Inspect GEPA optimization runs, or run a pass with --run |
 | [`proteus alignment <name>`](#proteus-alignment-name) | K_align: correction rate per 100 graded turns, by scaffold version, with 95% intervals |
 | [`proteus label [action] [name] [file]`](#proteus-label-action-name-file) | Hand-label turn outcomes (export \| ingest \| ensemble \| report) to measure and correct the classifier; mine \| score for the free behavioural corpus |
@@ -202,7 +202,7 @@ List configured workspace aliases.
 
 ### proteus export <name>
 
-Back up a workspace — local or cloud — to a portable archive.
+Back up a workspace (local or cloud) to a portable archive.
 
 | Option | What it does |
 | --- | --- |
@@ -437,7 +437,7 @@ Inspect parallel reasoning branch runs.
 
 ### proteus debug <name>
 
-Fetch everything about a workspace — identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts — into one bundle.
+Fetch everything about a workspace into one bundle: identity, messages, runs and their events, heads, MCTS searches, background jobs, evolution state, memory and facts.
 
 | Option | What it does |
 | --- | --- |

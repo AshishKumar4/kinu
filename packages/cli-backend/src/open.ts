@@ -10,10 +10,14 @@
 import type { AgentRuntime } from '@proteus/core';
 import type { LLMProviderConfig } from '@proteus/core';
 import type { OAuthCredential } from '@proteus/core';
-import { initWorkspaceSchema, readSoul, summarizeSoul, getCurrentScaffoldVersion, memoryBytes } from '@proteus/core';
+import {
+  initWorkspaceBaselineTable, initWorkspaceSchema, readSoul, summarizeSoul,
+  getCurrentScaffoldVersion, memoryBytes,
+} from '@proteus/core';
 import { createCLIRuntime, makeSql, makeWorkspaceSchemaSql } from './runtime.js';
 import type { LocalProviderCredentials } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
+import type { Database } from 'bun:sqlite';
 
 export interface WorkspaceInfo {
   id: string;
@@ -39,13 +43,6 @@ export interface CLIOpenConfig {
   checkpointKeep?: number;
 }
 
-type AgentDb = {
-  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-  exec(sql: string): void;
-  run(sql: string, params?: unknown[]): void;
-  query(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown[] };
-};
-
 /**
  * Open an existing workspace using the full CLI backend runtime.
  *
@@ -58,7 +55,7 @@ type AgentDb = {
  * - Proper CraftStore with FTS5 search
  */
 export async function openWorkspaceCLI(
-  db: AgentDb,
+  db: Database,
   dbPath: string,
   config: CLIOpenConfig,
 ): Promise<{ rt: AgentRuntime; info: WorkspaceInfo }> {
@@ -68,6 +65,7 @@ export async function openWorkspaceCLI(
   // is the only moment a workspace made by an older build (or by another
   // backend) can gain what it is missing, so the full set runs here.
   initWorkspaceSchema(makeWorkspaceSchemaSql(db));
+  initWorkspaceBaselineTable((ddl) => db.exec(ddl));
 
   // Read identity
   const identity = sql<{ id: string; name: string; created_at: number }>`

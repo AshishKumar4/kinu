@@ -18,7 +18,7 @@ afterEach(() => {
 
 function freshRuntime() {
   const db = new Database(':memory:');
-  return createCLIRuntime(db as never, {
+  return createCLIRuntime(db, {
     dbPath: `/tmp/proteus-mount-${Math.floor(performance.now())}.db`,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });

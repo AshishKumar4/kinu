@@ -66,8 +66,9 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
       orchestrator.indexOf("async onStart()"),
       orchestrator.indexOf("async _proteusTimerTick()"),
     );
-    expect(onStart).toContain("if (isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
-    expect(onStart).toContain("void readSoul(this.rt.storage.vfs).then((soul) => this.maybeAutoTitleWorkspace(summarizeSoul(soul ?? '')))");
+    expect(onStart).toContain("if (this.getOwnerUserId() && isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
+    expect(onStart).toContain("void readSoul(this.rt.storage.vfs)");
+    expect(onStart).toContain(".catch((error) =>");
   });
 
   // A workspace is titled after what it is FOR. Titling it from the first

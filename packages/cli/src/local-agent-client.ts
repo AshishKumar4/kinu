@@ -1,7 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { Database } from 'bun:sqlite';
-import type { WorkspaceInfo, AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort } from '@proteus/core';
-import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, type GepaOptimizationResult } from '@proteus/core';
+import type { AgentRuntime, SessionSurface, ShellApprovalMode, ReasoningEffort, JsonObject } from '@proteus/core';
+import type { WorkspaceInfo } from '@proteus/core/identity';
+import { applyWorkspaceTitle, createAgentConfigStore, initAgentConfigTable, readLatestSearchTree, BACKGROUND_POLICY, decodeJsonValue, type GepaOptimizationResult } from '@proteus/core';
 import {
   LOCAL_MAX_INLINE_ATTACHMENT_BYTES,
   LocalAgentSession,
@@ -37,6 +38,7 @@ import { SessionRecorder } from './session-recorder.js';
 import { normalizeModelMenu, type AgentModelMenu } from './model-catalog.js';
 import {
   findForkPivot,
+  asRecord,
   promptFiles,
   promptText,
 } from './agent-client.js';
@@ -174,7 +176,27 @@ export interface LocalAgentClientDeps {
 }
 
 interface PendingLocalTurn {
-  result: AgentTurnResult;
+  /** Null until the turn's own `turn-end` arrives — see `unfinishedTurn`. */
+  result: AgentTurnResult | null;
+}
+
+/**
+ * What a turn that never reported an end is worth.
+ *
+ * `send()` resolves when the pump lets go of the queued item, which it also
+ * does when the turn died in a way that produced no `turn-end` at all. Seeding
+ * the pending turn with a zeroed SUCCESS made that indistinguishable from a
+ * clean empty answer, and `proteus exec` exited 0 on a turn that never ran —
+ * the one thing a CI consumer cannot recover from.
+ *
+ * The turn lifecycle itself is now total (LocalAgentSession.processTurn), so
+ * nothing in this process can reach this state; it is kept because the exit
+ * code has to stay honest for causes that are NOT in this process, and because
+ * "no completion" must never again be spelled the same way as "completed with
+ * nothing to say".
+ */
+function unfinishedTurn(): AgentTurnResult {
+  return { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: true };
 }
 
 export class LocalAgentClient implements AgentClient {
@@ -244,19 +266,18 @@ export class LocalAgentClient implements AgentClient {
     const text = promptText(prompt);
     const files = promptFiles(prompt);
     // The JSONL log records attachment names, never the data-URL payloads.
-    this.activeCliSession.append('user', {
+    const sessionEntry: JsonObject = {
       text,
       cwd: opts.cwd ?? process.cwd(),
       backend: 'local',
-      ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
-    });
-    const pending: PendingLocalTurn = {
-      result: { text: '', toolCalls: [], steps: 0, durationMs: 0, hadError: false },
     };
+    if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
+    this.activeCliSession.append('user', sessionEntry);
+    const pending: PendingLocalTurn = { result: null };
     this.pending = pending;
     try {
       await this.session.send(files.length > 0 ? { text, files } : text);
-      return pending.result;
+      return pending.result ?? unfinishedTurn();
     } finally {
       if (this.pending === pending) this.pending = null;
     }
@@ -267,13 +288,14 @@ export class LocalAgentClient implements AgentClient {
     const files = promptFiles(prompt);
     const accepted = this.session.steer(files.length > 0 ? { text, files } : text);
     if (!accepted) return false;
-    this.activeCliSession.append('user', {
+    const sessionEntry: JsonObject = {
       text,
       steered: true,
       cwd: opts.cwd ?? process.cwd(),
       backend: 'local',
-      ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
-    });
+    };
+    if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
+    this.activeCliSession.append('user', sessionEntry);
     return true;
   }
 
@@ -326,8 +348,8 @@ export class LocalAgentClient implements AgentClient {
       const newId = crypto.randomUUID();
       idMap.set(row.id, newId);
       const parent = row.parent_id ? idMap.get(row.parent_id) ?? null : null;
-      this.deps.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
-        VALUES (${newId}, ${next.conversationId}, ${parent}, ${row.role}, ${row.content}, ${row.created_at})`;
+      void this.deps.rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content, created_at)
+                                    VALUES (${newId}, ${next.conversationId}, ${parent}, ${row.role}, ${row.content}, ${row.created_at})`;
     }
 
     await this.session.end().catch(() => {});
@@ -471,7 +493,7 @@ export class LocalAgentClient implements AgentClient {
   }
 
   async listModels(): Promise<AgentModelMenu> {
-    return normalizeModelMenu(await this.session.listAvailableModels());
+    return normalizeModelMenu({ payload: await this.session.listAvailableModels() });
   }
 
   private conversationIdForAgentSession(): string {
@@ -521,20 +543,21 @@ function mapSessionEvent(event: SessionEvent): AgentClientEvent | null {
     case 'tool-result':
       return { type: 'tool-result', toolName: event.toolName, toolCallId: event.toolCallId, result: event.result, success: event.success };
     case 'turn-end':
+      const turn: AgentTurnResult = {
+        text: event.turn.assistantResponse,
+        steps: event.turn.steps,
+        durationMs: event.turn.durationMs,
+        hadError: event.turn.hadError,
+        toolCalls: event.turn.toolCalls.map((call) => ({
+          name: call.name,
+          args: asRecord({ value: decodeJsonValue({ value: call.args }) }),
+          result: call.result === undefined ? undefined : String(call.result),
+        })),
+      };
+      if (event.turn.usage) turn.usage = event.turn.usage;
       return {
         type: 'turn-end',
-        turn: {
-          text: event.turn.assistantResponse,
-          steps: event.turn.steps,
-          durationMs: event.turn.durationMs,
-          hadError: event.turn.hadError,
-          toolCalls: event.turn.toolCalls.map((call) => ({
-            name: call.name,
-            args: call.args,
-            result: call.result === undefined ? undefined : String(call.result),
-          })),
-          ...(event.turn.usage ? { usage: event.turn.usage } : {}),
-        },
+        turn,
       };
     case 'evolution':
       return { type: 'evolution', event: event.event, message: event.message };

@@ -18,10 +18,13 @@ export interface BenchSuite {
   guarded: readonly string[];
 }
 
+const BENCH_SUITE_NAMES = ['core', 'lean'] as const;
+type BenchSuiteName = (typeof BENCH_SUITE_NAMES)[number];
+
 /** The verifiable outcomes this repo already supplies. `core` is the whole core
  *  suite plus its typecheck — running the FULL suite (1.6s) rather than just the
  *  target test is deliberate: it scores collateral damage for free. */
-export const BENCH_SUITES: Readonly<Record<string, BenchSuite>> = Object.freeze({
+export const BENCH_SUITES: Readonly<Record<BenchSuiteName, BenchSuite>> = Object.freeze({
   core: {
     checks: [
       { id: 'core-tests', command: ['bun', 'test', '--cwd', 'packages/core'], timeoutMs: 180_000 },
@@ -43,7 +46,7 @@ const TaskLineSchema = v.object({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase kebab-case')),
   title: v.pipe(v.string(), v.minLength(1)),
   prompt: v.pipe(v.string(), v.minLength(1)),
-  suite: v.picklist(Object.keys(BENCH_SUITES) as [string, ...string[]]),
+  suite: v.picklist(BENCH_SUITE_NAMES),
   editable: v.array(v.pipe(v.string(), v.minLength(1))),
   tags: v.optional(v.array(v.string())),
 });
@@ -53,6 +56,10 @@ export interface LoadedCorpus {
   /** Defect diff per task id, applied forward to break, reversed to fix. */
   patches: ReadonlyMap<string, string>;
   path: string;
+}
+
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function benchCorpusDir(repoRoot: string): string {
@@ -73,7 +80,7 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
     try {
       parsedJson = JSON.parse(text);
     } catch (err) {
-      throw new Error(`${path}:${i + 1}: not valid JSON — ${(err as Error).message}`);
+      throw new Error(`${path}:${i + 1}: not valid JSON — ${errorMessage(err)}`);
     }
     const parsed = v.safeParse(TaskLineSchema, parsedJson);
     if (!parsed.success) {
@@ -87,17 +94,18 @@ export function loadBenchCorpus(repoRoot: string, opts: PartitionOptions = {}): 
     const leak = promptLeaksFix(line_.prompt, patch);
     if (leak) throw new Error(`${path}:${i + 1}: prompt quotes the fix ("${leak}") — that is not a task`);
 
-    const suite = BENCH_SUITES[line_.suite]!;
+    const suite = BENCH_SUITES[line_.suite];
     patches.set(line_.id, patch);
-    tasks.push({
+    const task: BenchTask = {
       id: line_.id,
       title: line_.title,
       prompt: line_.prompt,
       editable: line_.editable,
       guarded: suite.guarded,
       checks: suite.checks,
-      ...(line_.tags ? { tags: line_.tags } : {}),
-    });
+    };
+    if (line_.tags) task.tags = line_.tags;
+    tasks.push(task);
   });
 
   if (tasks.length === 0) throw new Error(`${path}: no tasks — an empty corpus proves nothing`);

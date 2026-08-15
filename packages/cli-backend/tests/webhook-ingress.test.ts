@@ -10,6 +10,7 @@
 import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { LanguageModel } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
 import { hmacSha256Hex, type LLMProviderConfig, type WebhookDelivery } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession } from '../src/local-session.js';
@@ -19,9 +20,7 @@ const DUMMY_LLM: LLMProviderConfig = {
 };
 
 /** Never asked for inference: no turn runs here, only ingress. */
-const idleModel = {
-  specificationVersion: 'v2', provider: 'fake', modelId: 'fake-model', supportedUrls: {},
-} as unknown as LanguageModel;
+const idleModel: LanguageModel = new TestLanguageModelV2({ provider: 'fake', modelId: 'fake-model' });
 
 const sessions: LocalAgentSession[] = [];
 
@@ -31,7 +30,7 @@ afterEach(async () => {
 
 function localSession(): LocalAgentSession {
   const db = new Database(':memory:');
-  const rt = createCLIRuntime(db as never, {
+  const rt = createCLIRuntime(db, {
     dbPath: `/tmp/proteus-webhook-${Math.floor(performance.now())}.db`, llm: DUMMY_LLM,
   });
   const session = new LocalAgentSession({

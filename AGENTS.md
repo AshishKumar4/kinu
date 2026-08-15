@@ -14,7 +14,8 @@ Monorepo with `bun` workspaces: `packages/*`.
 
 ```bash
 bun install                              # install all dependencies
-bun run check                            # TypeScript type-check (tsc --noEmit)
+bun run check                            # strict lint + TypeScript type-check
+bun run lint                             # strict Oxlint + anti-slop rule contracts
 bun test --cwd packages/core             # run all unit tests
 bun test packages/core/tests/unit-*.test.ts  # run only unit tests
 bun test tests/e2e-lifecycle.test.ts     # run E2E tests (needs LLM credentials)
@@ -26,7 +27,8 @@ bun run deploy                           # production deploy (scripts/deploy.sh)
 bash scripts/setup-worktree.sh           # prepare a git worktree (see below)
 ```
 
-No lint command configured. Type-checking via `tsc --noEmit` is the primary gate.
+`bun run check` runs the strict lint gate before TypeScript. All anti-slop rules are
+errors, warnings fail the gate, and unused disable directives are errors.
 
 ## Working In A Git Worktree
 
@@ -75,9 +77,9 @@ bench/clbench/  Proteus as a system for the external Continual Learning Bench
 
 ### cf-backend Architecture
 
-- `OrchestratorAgent extends ActorAgent` — chat, the 10 builtin tools, evolution hooks
-- `SubordinateAgent extends ActorAgent` — a persistent helper agent as a Facet of the same workspace
-- `ExplorationAgent extends Agent` — fork/MCTS branch sub-agent via Facets
+- `OrchestratorAgent extends ActorAgent` — chat, built-in tools, evolution hooks
+- `SubordinateAgent extends ActorAgent` — a persistent helper facet sharing workspace files with actor-private shell/scaffold state
+- `ExplorationAgent extends Agent` — a toolless MCTS rollout or tool-using head via Facets
 - `runtime.ts` — `createCFRuntime()` bridges Think DO context to `AgentRuntime`
 - `wrangler.jsonc` — DO bindings, worker_loaders, AI Gateway, SPA assets
 - `vite.config.ts` — cloudflare() + react() + agents() + tailwindcss() plugins
@@ -93,24 +95,23 @@ bench/clbench/  Proteus as a system for the external Continual Learning Bench
 | mcts/       | Monte Carlo Tree Search — UCT, backprop, convergence     |
 | scaffold/   | Agentic loop versioning — bootstrap, modify, rollback    |
 | craft/      | Tool quality store — EMA scoring, discovery, conflict    |
-| execution/  | Multi-executor routing: workspace, nimbus, sandbox, laptop, parent|
+| execution/  | Multi-executor routing: workspace, sandbox, laptop, parent |
 | types/      | TypeScript interfaces for all primitives                 |
 | utils/      | nanoid, date helpers                                     |
 | layergate/  | Per-layer deterministic regression gate over the turn pipeline |
 
 ## Execution Layer
 
-Each environment is a codemode `ExecutorProvider` with namespace.* APIs, and
-each is its OWN filesystem in its own native paths — there is no mount table.
-`workspace` is the agent's own; every other row is a different machine. Note
-that Nimbus runs BOTH the workspace filesystem (over the host's SQLite,
-`core/src/vfs/nimbus-workspace.ts`) and the `nimbus` executor (a separate
-NimbusSession DO); they share software, not bytes.
+Each environment is a codemode `ExecutorProvider` with namespace.* APIs.
+`workspace` is the one authoritative file and execution plane: on the hosted
+backend it is the workspace's `NIMBUS_SESSION`, and on the CLI it is the local
+workspace. Optional sandbox and laptop rows are genuinely different machines
+with their own native paths. There is no mount table and no second Nimbus
+executor or filesystem.
 
 | Executor   | Namespace  | Binding Required          | Capabilities                |
 |-----------|------------|---------------------------|-----------------------------|
-| Inline    | workspace  | (always available)        | the workspace filesystem + its Nimbus shell, memory, craft — no native binaries |
-| Nimbus    | nimbus     | NIMBUS_SESSION DO binding | a separate lightweight Linux session: on-demand runtimes, processes, ports |
+| Workspace | workspace  | NIMBUS_SESSION on hosted  | canonical files, POSIX shell, runtimes, processes, ports |
 | Container | sandbox    | Sandbox DO + Container    | full Linux container, long processes, live previews |
 | Device    | laptop     | WebSocket tunnel from user| the user's own machine, behind consent |
 | Parent    | parent     | (forks only)              | the forked-from workspace's real shell over DO RPC |
@@ -148,9 +149,9 @@ available bindings. `getProviders()` filters to available-only for `createExecut
   lifecycle hooks, sessions and fibers. Proteus overrides the loop's inputs
   (`getModel` / `getSystemPrompt` / `getTools` / `beforeTurn`) and leaves Think's
   own workspace, skills, actions, channels and scheduled tasks unused
-- `getModel()` resolves from `agent_config` table, default: `@cf/moonshotai/kimi-k2.6` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
-- `getTools()` builds the 9-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `file`, `skills`, `agents`, `memory`, `web`, `report`, `release`; results are cached per CraftStore version
-- Only `execute_tools`, `run`, `file` and `memory` are unconditional. Every other tool registers when — and only when — the backend wires its deps, which is how a subordinate gets `report` and a head gets no delegation at all. See [docs/TOOLS.md](docs/TOOLS.md)
+- `getModel()` resolves from `agent_config` table, default: `@cf/deepseek-ai/deepseek-v4-pro-0813` (`DEFAULT_WORKERS_AI_MODEL_ID` in `@proteus/core`)
+- `getTools()` builds the 8-builtin ToolSet (`BUILTIN_TOOLS` in `core/src/tools/registry.ts`): `execute_tools`, `run`, `file`, `agents`, `memory`, `tasks`, `web`, `report`; results are cached per CraftStore version
+- `agents`, `web`, and `report` are dependency-gated native builtins. `report` appears only on a subordinate's assigned turn, while the `agents` action schema is derived from the actor's wired fork/team/peer capabilities. Release is codemode-only and mechanically omitted in Plan mode. See [docs/TOOLS.md](docs/TOOLS.md)
 - `agents` is the ONE delegation surface (`fork | staff | ask | send | reply | list | dismiss`), and it is projected into the codemode sandbox as the `agents.*` namespace over the same dispatch — so a script can delegate with ordinary control flow. Do not reintroduce `think` / `team` / `peers` as separate tools
 - `memory` is the ONE durable-state surface (`save | search | sessions` prose, `remember | recall | forget` keyed facts — the last three gated on the FactsStore dep) and `web` the ONE live-web surface (`search | fetch`). Prose versus keyed rows is OUR storage shape, and discovery versus retrieval is one capability used as a pair: neither is a tool choice the model should have to make. Do not reintroduce `fact` / `web_search` / `web_fetch`
 - `file` is the ONE file plane (`read | edit | write`) over the same workspace filesystem `run` and `execute_tools` address — do not split it into separate `read`/`write`/`edit` tools, and do not add a second filesystem path for it. Its load-bearing property is that an `edit` whose `old_text` is absent or repeated FAILS naming the problem, and that `edit`/overwriting `write` require the file to have been read first. Both are locked by the `file-plane` layergate layer; losing either is what the `file-plane/edits-land-blind` fault models
@@ -160,7 +161,7 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 - `beforeTurn()` resets per-turn state counters
 - `configureSession()` adds memory context + cached prompt
 - `@callable()` methods for RPC from React UI via `agent.call()`
-- ExplorationAgent uses `@callable()` for MCTS branch operations
+- ExplorationAgent uses `@callable()` for MCTS branch and head operations; MCTS rollouts are toolless, while heads share the canonical file plane with actor-scoped shell/scaffold state
 
 ## Architecture Invariants
 
@@ -187,13 +188,15 @@ available bindings. `getProviders()` filters to available-only for `createExecut
 // Executor tool pattern — positional args, string returns, no throws
 tools.exec = {
   description: 'Run a command in the environment.',
-  execute: async (command: unknown): Promise<string> => {
+  execute: async (...args: unknown[]): Promise<string> => {
+    const command = parseInput(StringSchema, { value: args[0] });
+    if (command === undefined) return 'exec error: command must be a string';
     if (!connected) return NOT_CONNECTED_MSG;
     try {
-      const result = await doExec(String(command));
+      const result = await doExec(command);
       return result.stdout || '(no output)';
     } catch (err) {
-      return `exec error: ${err instanceof Error ? err.message : String(err)}`;
+      return `exec error: ${errorMessage({ error: err })}`;
     }
   },
 };

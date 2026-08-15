@@ -3,8 +3,9 @@ import {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
 } from '../src/evolution/delegation-features.js';
 import type { ToolCallRecord } from '../src/evolution/types.js';
+import type { JsonObject } from '../src/utils/json.js';
 
-const call = (name: string, args: Record<string, unknown> = {}): ToolCallRecord =>
+const call = (name: string, args: JsonObject = {}): ToolCallRecord =>
   ({ name, args, result: null });
 
 const write = (path: string): ToolCallRecord =>

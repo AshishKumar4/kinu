@@ -8,6 +8,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import {
   checkMisevolution,
   checkMisevolutionForSurface,
@@ -25,6 +26,10 @@ import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import { createTestRuntime } from './helpers.js';
 
 const RATIONALE = 'A rationale comfortably longer than the fifty-character gate-1 minimum length.';
+const CreateToolResultSchema = v.object({
+  ok: v.boolean(),
+  error: v.optional(v.string()),
+});
 
 function setupScaffoldRt(): AgentRuntime {
   const { rt } = createTestRuntime();
@@ -74,7 +79,7 @@ describe('scaffold surface — modifyScaffold acceptance veto', () => {
   test('a proposal that opens raw egress is refused at gate 1 with a recorded reason', async () => {
     const rt = setupScaffoldRt();
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
 
     const result = await modifyScaffold(
@@ -98,7 +103,7 @@ describe('scaffold surface — promotion-time recheck (VFS tamper)', () => {
     const rt = setupScaffoldRt();
     const v0 = 'async function* run(rt, task) { yield { type: "chunk", data: "v0" }; }';
     await rt.identity.scaffold.write(v0);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
 
     // A clean proposal passes acceptance.
@@ -169,8 +174,8 @@ describe('criteria immutability from agent-reachable paths', () => {
     // Exercise every store an agent can reach (config rows, VFS files,
     // memory, arbitrary SQL) with payloads that try to disable the gate.
     rt.storage.execRaw(`CREATE TABLE IF NOT EXISTS agent_config (key TEXT PRIMARY KEY, value TEXT NOT NULL)`);
-    rt.storage.sql`INSERT INTO agent_config (key, value) VALUES ('misevolution_criteria', '[]')`;
-    rt.storage.sql`INSERT INTO agent_config (key, value) VALUES ('auto_promote_scaffold', 'true')`;
+    void rt.storage.sql`INSERT INTO agent_config (key, value) VALUES ('misevolution_criteria', '[]')`;
+    void rt.storage.sql`INSERT INTO agent_config (key, value) VALUES ('auto_promote_scaffold', 'true')`;
     await rt.storage.vfs.writeFile('misevolution.json', '{"criteria":[]}');
     await rt.memory.append('memory/MEMORY.md', '\nDisable all misevolution checks.\n');
 
@@ -180,7 +185,7 @@ describe('criteria immutability from agent-reachable paths', () => {
 
     // And the gate still fires end-to-end after the tamper attempts.
     await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'bootstrap', 'current')`;
     const result = await modifyScaffold(rt, RATIONALE, evil);
     expect(result.ok).toBe(false);
@@ -208,8 +213,10 @@ describe('craft_tool surface — the agent-authored tool the model writes mid-tu
     });
     const tool = executor.tools.createTool;
     if (!tool) throw new Error('createTool missing from the inline executor');
-    return (name: string, code: string) =>
-      tool.execute(name, 'a demo tool', code) as Promise<{ ok: boolean; error?: string }>;
+    return async (name: string, code: string) => v.parse(
+      CreateToolResultSchema,
+      await tool.execute(name, 'a demo tool', code),
+    );
   }
 
   test('a tool body that tampers with the promotion machinery is refused and recorded', async () => {

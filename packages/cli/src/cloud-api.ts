@@ -1,5 +1,6 @@
 import { resolveCloudOrigin } from './config.js';
-import type { ReasoningEffort } from '@proteus/core';
+import { decodeJsonValue, JsonValueSchema, type JsonValue, type ReasoningEffort } from '@proteus/core';
+import * as v from 'valibot';
 
 export interface CliAuthStart {
   deviceToken: string;
@@ -73,14 +74,14 @@ export interface CloudChatMessage {
 export interface CloudToolDescriptions {
   builtIn: Array<{ name: string; description: string }>;
   crafted: Array<{ name: string; description: string; isLearned?: boolean; qualityScore?: number; usageCount?: number }>;
-  executors: unknown[];
+  executors: JsonValue[];
 }
 
 export interface CloudTriggerList {
   triggers: Array<{
     id: string;
     kind: string;
-    spec: unknown;
+    spec: JsonValue;
     state: string;
     created_at: number;
     next_fire_at?: number | null;
@@ -121,6 +122,81 @@ export interface CloudWebhookTriggerInput {
   rate_limit_per_min?: number;
 }
 
+export interface CloudWebhookTrigger {
+  trigger_id: string;
+  url: string;
+  auth_mode: 'hmac' | 'bearer' | 'mtls';
+  secret: string | null;
+}
+
+const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
+const CliAuthStartSchema: v.GenericSchema<CliAuthStart> = v.object({
+  deviceToken: v.string(), userCode: v.string(), verificationUrl: v.string(),
+  expiresAt: v.string(), intervalSeconds: v.number(),
+});
+const CliAuthPollSchema: v.GenericSchema<CliAuthPoll> = v.object({
+  status: v.picklist(['pending', 'approved', 'expired']),
+  message: v.optional(v.string()), origin: v.optional(v.string()), token: v.optional(v.string()),
+  expiresAt: v.optional(v.string()),
+  user: v.optional(v.object({ id: v.string(), email: v.string() })),
+});
+const CloudAgentSchema: v.GenericSchema<CloudAgent> = v.object({
+  name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(), archivedAt: v.nullable(v.number()),
+});
+const CloudDeviceRegistrationSchema: v.GenericSchema<CloudDeviceRegistration> = v.object({
+  deviceId: v.string(), token: v.string(), userId: v.string(), origin: v.string(),
+});
+const CloudDeviceSchema: v.GenericSchema<CloudDevice> = v.object({
+  id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
+  connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()),
+});
+const CloudAgentConnectTicketSchema: v.GenericSchema<CloudAgentConnectTicket> = v.object({
+  ticket: v.string(), expiresAt: v.number(),
+});
+export const CloudAgentStatusSchema: v.GenericSchema<CloudAgentStatus> = v.object({
+  id: v.string(), name: v.string(), displayName: v.optional(v.string()), purpose: v.string(), soul: v.string(),
+  createdAt: v.number(), scaffoldVersion: v.number(), searchNodeCount: v.number(), craftedToolCount: v.number(),
+  messageCount: v.number(), model: v.optional(v.nullable(v.string())), reasoningEffort: v.optional(v.nullable(ReasoningEffortSchema)),
+});
+const ToolDescriptionSchema = v.object({ name: v.string(), description: v.string() });
+export const CloudToolDescriptionsSchema: v.GenericSchema<CloudToolDescriptions> = v.object({
+  builtIn: v.array(ToolDescriptionSchema),
+  crafted: v.array(v.object({
+    name: v.string(), description: v.string(), isLearned: v.optional(v.boolean()),
+    qualityScore: v.optional(v.number()), usageCount: v.optional(v.number()),
+  })),
+  executors: v.array(JsonValueSchema),
+});
+const CloudTriggerSchema = v.object({
+  id: v.string(), kind: v.string(), spec: JsonValueSchema, state: v.string(), created_at: v.number(),
+  next_fire_at: v.optional(v.nullable(v.number())), last_fire_at: v.optional(v.nullable(v.number())),
+  fire_count: v.optional(v.number()),
+});
+export const CloudTriggerListSchema: v.GenericSchema<CloudTriggerList> = v.object({ triggers: v.array(CloudTriggerSchema) });
+export const CloudBackgroundJobSchema: v.GenericSchema<CloudBackgroundJob> = v.object({
+  id: v.string(), kind: v.string(), status: v.string(), createdAt: v.optional(v.number()),
+  settledAt: v.optional(v.nullable(v.number())), error: v.optional(v.nullable(v.string())),
+});
+const CloudModelMenuSchema: v.GenericSchema<CloudModelMenu> = v.object({
+  models: v.array(v.object({
+    spec: v.string(), label: v.string(), provider: v.string(),
+    capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
+  })),
+  failures: v.array(v.object({ provider: v.string(), label: v.optional(v.string()), reason: v.string() })),
+});
+const CloudCredentialSummarySchema: v.GenericSchema<CloudCredentialSummary> = v.object({
+  key: v.string(), kind: v.string(), createdAt: v.number(), updatedAt: v.number(),
+});
+const CloudWebhookTriggerSchema: v.GenericSchema<CloudWebhookTrigger> = v.object({
+  trigger_id: v.string(), url: v.string(), auth_mode: v.picklist(['hmac', 'bearer', 'mtls']), secret: v.nullable(v.string()),
+});
+const CloudAccessTokenSchema: v.GenericSchema<CloudAccessToken> = v.object({
+  tokenHash: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number(), lastUsedAt: v.nullable(v.number()),
+});
+const OkSchema = v.object({ ok: v.boolean() });
+const WhoamiSchema = v.object({ user: v.object({ id: v.string(), email: v.string(), displayName: v.optional(v.nullable(v.string())) }) });
+const CreatedAccessTokenSchema = v.object({ token: v.string(), name: v.string(), scopes: v.array(v.string()), createdAt: v.number() });
+
 /**
  * Invoke a named agent method over the generic RPC transport —
  * POST /api/cli/workspaces/:name/rpc `{ method, args }` → `{ result }`.
@@ -133,44 +209,45 @@ export async function callAgentRpc<T>(
   token: string,
   name: string,
   method: string,
-  args: unknown[] = [],
+  schema: v.GenericSchema<T>,
+  args: JsonValue[] = [],
 ): Promise<T> {
-  const body = await cloudJson<{ result: T }>(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
+  const body = await cloudJson(v.object({ result: JsonValueSchema }), origin, `/api/cli/workspaces/${encodeURIComponent(name)}/rpc`, {
     method: 'POST',
     token,
     body: { method, args },
   });
-  return body.result;
+  return v.parse(schema, body.result);
 }
 
 export async function startCliAuth(origin: string, deviceName: string): Promise<CliAuthStart> {
-  return cloudJson<CliAuthStart>(origin, '/api/cli/auth/start', {
+  return cloudJson(CliAuthStartSchema, origin, '/api/cli/auth/start', {
     method: 'POST',
     body: { deviceName },
   });
 }
 
 export async function pollCliAuth(origin: string, deviceToken: string): Promise<CliAuthPoll> {
-  return cloudJson<CliAuthPoll>(origin, '/api/cli/auth/poll', {
+  return cloudJson(CliAuthPollSchema, origin, '/api/cli/auth/poll', {
     method: 'POST',
     body: { deviceToken },
   });
 }
 
 export async function whoami(origin: string, token: string): Promise<{ user: { id: string; email: string; displayName?: string | null } }> {
-  return cloudJson(origin, '/api/cli/me', { token });
+  return cloudJson(WhoamiSchema, origin, '/api/cli/me', { token });
 }
 
 export async function logout(origin: string, token: string): Promise<{ ok: boolean }> {
-  return cloudJson(origin, '/api/cli/logout', { method: 'POST', token });
+  return cloudJson(OkSchema, origin, '/api/cli/logout', { method: 'POST', token });
 }
 
 export async function listCloudAgents(origin: string, token: string): Promise<CloudAgent[]> {
-  return cloudJson(origin, '/api/cli/workspaces', { token });
+  return cloudJson(v.array(CloudAgentSchema), origin, '/api/cli/workspaces', { token });
 }
 
 export async function listCloudAvailableModels(origin: string, token: string): Promise<CloudModelMenu> {
-  return cloudJson(origin, '/api/cli/models', { token });
+  return cloudJson(CloudModelMenuSchema, origin, '/api/cli/models', { token });
 }
 
 /** A stored credential as the account will describe it — key, kind, and when
@@ -184,16 +261,16 @@ export interface CloudCredentialSummary {
 }
 
 export async function listCloudCredentials(origin: string, token: string): Promise<CloudCredentialSummary[]> {
-  return cloudJson(origin, '/api/cli/credentials', { token });
+  return cloudJson(v.array(CloudCredentialSummarySchema), origin, '/api/cli/credentials', { token });
 }
 
 /** Put a provider secret in the owner's account rather than on this disk. It
  *  is sealed at rest there, and every machine signed into the account reaches
  *  it through the provider proxy without holding a copy. */
 export async function setCloudCredential(
-  origin: string, token: string, key: string, credential: unknown,
+  origin: string, token: string, key: string, credential: JsonValue,
 ): Promise<{ ok: boolean }> {
-  return cloudJson(origin, `/api/cli/credentials/${encodeURIComponent(key)}`, {
+  return cloudJson(OkSchema, origin, `/api/cli/credentials/${encodeURIComponent(key)}`, {
     method: 'POST', token, body: credential,
   });
 }
@@ -201,7 +278,7 @@ export async function setCloudCredential(
 export async function deleteCloudCredential(
   origin: string, token: string, key: string,
 ): Promise<{ ok: boolean }> {
-  return cloudJson(origin, `/api/cli/credentials/${encodeURIComponent(key)}`, { method: 'DELETE', token });
+  return cloudJson(OkSchema, origin, `/api/cli/credentials/${encodeURIComponent(key)}`, { method: 'DELETE', token });
 }
 
 export interface CreateCloudAgentInput {
@@ -213,15 +290,15 @@ export interface CreateCloudAgentInput {
 }
 
 export async function createCloudAgent(origin: string, token: string, input: CreateCloudAgentInput): Promise<CloudAgent> {
-  return cloudJson(origin, '/api/cli/workspaces', { method: 'POST', token, body: input });
+  return cloudJson(CloudAgentSchema, origin, '/api/cli/workspaces', { method: 'POST', token, body: decodeJsonValue({ value: input }) });
 }
 
 export async function deleteCloudAgent(origin: string, token: string, name: string): Promise<{ ok: boolean }> {
-  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', token });
+  return cloudJson(OkSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}`, { method: 'DELETE', token });
 }
 
 export async function createCloudAgentConnectTicket(origin: string, token: string, name: string): Promise<CloudAgentConnectTicket> {
-  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/connect-ticket`, {
+  return cloudJson(CloudAgentConnectTicketSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}/connect-ticket`, {
     method: 'POST',
     token,
   });
@@ -234,11 +311,11 @@ export async function createCloudWebhookTrigger(
   token: string,
   name: string,
   input: CloudWebhookTriggerInput,
-): Promise<unknown> {
-  return cloudJson(origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/webhook`, {
+): Promise<CloudWebhookTrigger> {
+  return cloudJson(CloudWebhookTriggerSchema, origin, `/api/cli/workspaces/${encodeURIComponent(name)}/triggers/webhook`, {
     method: 'POST',
     token,
-    body: input,
+    body: decodeJsonValue({ value: input }),
   });
 }
 
@@ -255,49 +332,50 @@ export async function createCliAccessToken(
   token: string,
   input: { name: string; scopes: string[] },
 ): Promise<{ token: string; name: string; scopes: string[]; createdAt: number }> {
-  return cloudJson(origin, '/api/cli/tokens', { method: 'POST', token, body: input });
+  return cloudJson(CreatedAccessTokenSchema, origin, '/api/cli/tokens', { method: 'POST', token, body: decodeJsonValue({ value: input }) });
 }
 
 export async function listCliAccessTokens(origin: string, token: string): Promise<{ tokens: CloudAccessToken[] }> {
-  return cloudJson(origin, '/api/cli/tokens', { token });
+  return cloudJson(v.object({ tokens: v.array(CloudAccessTokenSchema) }), origin, '/api/cli/tokens', { token });
 }
 
 export async function revokeCliAccessToken(origin: string, token: string, ref: string): Promise<{ ok: boolean }> {
-  return cloudJson(origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token });
+  return cloudJson(OkSchema, origin, `/api/cli/tokens/${encodeURIComponent(ref)}`, { method: 'DELETE', token });
 }
 
 export async function registerCloudDevice(origin: string, token: string, label?: string): Promise<CloudDeviceRegistration> {
-  return cloudJson(origin, '/api/cli/devices', { method: 'POST', token, body: { label } });
+  const body: JsonValue = label ? { label } : {};
+  return cloudJson(CloudDeviceRegistrationSchema, origin, '/api/cli/devices', { method: 'POST', token, body });
 }
 
 export async function listCloudDevices(origin: string, token: string): Promise<CloudDevice[]> {
-  return cloudJson(origin, '/api/cli/devices', { token });
+  return cloudJson(v.array(CloudDeviceSchema), origin, '/api/cli/devices', { token });
 }
 
 async function cloudJson<T>(
+  schema: v.GenericSchema<T>,
   origin: string,
   path: string,
-  opts: { method?: string; body?: unknown; token?: string } = {},
+  opts: { method?: string; body?: JsonValue; token?: string } = {},
 ): Promise<T> {
+  const headers = new Headers();
+  if (opts.body !== undefined) headers.set('content-type', 'application/json');
+  if (opts.token) headers.set('authorization', `Bearer ${opts.token}`);
   const res = await fetch(`${origin.replace(/\/+$/, '')}${path}`, {
     method: opts.method ?? 'GET',
-    headers: {
-      ...(opts.body === undefined ? {} : { 'content-type': 'application/json' }),
-      ...(opts.token ? { authorization: `Bearer ${opts.token}` } : {}),
-    },
+    headers,
     body: opts.body === undefined ? undefined : JSON.stringify(opts.body),
   });
   const contentType = res.headers.get('content-type') ?? '';
-  const body = contentType.includes('application/json')
-    ? await res.json().catch(() => ({}))
+  const body: JsonValue = contentType.includes('application/json')
+    ? await res.json().then((value) => decodeJsonValue({ value })).catch(() => ({}))
     : { error: await res.text().catch(() => '') };
   if (!res.ok) {
-    const message = typeof (body as { error?: unknown }).error === 'string'
-      ? (body as { error: string }).error
-      : `HTTP ${res.status}`;
+    const error = v.safeParse(v.object({ error: v.string() }), body);
+    const message = error.success ? error.output.error : `HTTP ${res.status}`;
     throw new Error(message);
   }
-  return body as T;
+  return v.parse(schema, body);
 }
 
 export function defaultOrigin(opts?: { origin?: string }): string {

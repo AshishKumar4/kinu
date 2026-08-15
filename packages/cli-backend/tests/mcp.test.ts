@@ -3,6 +3,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
 import { mcpToolKey, type LLMProviderConfig } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
 import { LocalAgentSession, type SessionEvent } from '../src/local-session.js';
@@ -25,12 +26,10 @@ function mcpServers() {
 }
 
 function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (options: { tools?: Array<{ name: string }> }) => {
+    doStream: async (options) => {
       sink((options.tools ?? []).map((t) => t.name));
       return {
         stream: new ReadableStream({
@@ -50,7 +49,7 @@ function capturingModel(sink: (toolNames: string[]) => void): LanguageModel {
         response: { headers: {} },
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 function sessionWithModel(model: LanguageModel) {
@@ -59,7 +58,7 @@ function sessionWithModel(model: LanguageModel) {
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db as never, {
+  const rt = createCLIRuntime(db, {
     dbPath: `/tmp/proteus-mcp-test-${Math.floor(performance.now())}.db`,
     llm: DUMMY_LLM,
   });

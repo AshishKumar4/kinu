@@ -17,10 +17,7 @@ export {
   summarizeSoul,
   writeSoul,
 } from './identity/soul.js';
-export { createWorkspace, wrapDatabase, type WorkspaceBirthConfig, type AgentDatabase } from './identity/create.js';
 export { WORKSPACE_IDENTITY_DDL } from './identity/schema.js';
-export { createInlineWorkspace } from './identity/inline-primitives.js';
-export { openWorkspace, type WorkspaceResumeConfig, type WorkspaceInfo } from './identity/open.js';
 export {
   forkWorkspaceStorage, snapshotWorkspaceForFork, writeForkSnapshot, readForkLineage,
   type ForkOpts, type ForkResult, type ForkLineageRow, type ForkSnapshot,
@@ -32,8 +29,10 @@ export {
 export {
   WORKSPACE_ARCHIVE_EXTENSION, WORKSPACE_ARCHIVE_VERSION,
   archiveSqlFromDatabase, readWorkspaceArchivePage, restoreWorkspaceArchive, writeWorkspaceArchive,
-  type ArchiveCursor, type ArchiveExportOptions, type ArchivePage,
-  type ArchiveRestoreResult,
+  type ArchiveCursor, type ArchiveSqlCursor, type ArchiveFilesCursor,
+  type ArchiveExportOptions, type ArchivePage,
+  type ArchiveFileEntry, type ArchiveFileSource, type ArchiveFileTarget,
+  type ArchiveRestoreOptions, type ArchiveRestoreResult,
 } from './identity/archive.js';
 export {
   WORKSPACE_TITLE_SYSTEM_PROMPT,
@@ -62,6 +61,7 @@ export {
   DEFAULT_EVOLUTION_CONFIG,
   type EvolutionConfig, type EvolutionEvent, type EvolutionListener,
   type CompletedTurn, type CompletedSession, type ToolCallRecord, type TurnUsage,
+  type ShadowTrialDrain, type ShadowTrialTurn,
 } from './evolution/types.js';
 export {
   delegationFeatures, renderDelegationFeatures, executionPathSignals,
@@ -91,6 +91,12 @@ export {
   type OutcomeSplitDegeneracy,
   type LessonRow, type LessonSource, type LessonStatus, type RealOutcomeRate,
 } from './evolution/outcomes.js';
+// The step clock's knowledge channel — execution recoveries observed by the
+// turn's own failure ledger, injected for the rest of the episode.
+export {
+  recordRecoveryFinding, listRecoveryFindings, recoveryFindingText,
+  MAX_RECOVERY_FINDINGS, type RecoveryFinding,
+} from './evolution/recovery.js';
 // C8/C11 — the hand-labeled calibration set, and the bias-corrected view of
 // every rate the classifier feeds. Uncalibrated is reported as such, never
 // approximated away.
@@ -482,7 +488,10 @@ export {
 export {
   compilePromptSurface,
   executorIsSelectable,
+  isWorkMode,
   promptModeForTurnEvent,
+  promptModeForTurnMetadata,
+  workModeForPromptMode,
   uniqueBuiltinTools,
   uniqueExternalTools,
   uniquePromptExecutors,
@@ -490,6 +499,7 @@ export {
   type PromptExecutorInfo,
   type PromptExternalToolInfo,
   type PromptMode,
+  type WorkMode,
   type PromptSurface,
   type PromptSurfaceOptions,
 } from './prompting/surface.js';
@@ -561,6 +571,7 @@ export {
   generateJson,
   jsonArrayOnlyInstruction,
   jsonObjectOnlyInstruction,
+  stripMarkdownFences,
 } from './prompts/structured.js';
 export { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
 
@@ -580,9 +591,13 @@ export { pruneLowValueBranches } from './mcts/pruning.js';
 export { diversityDirective, diversityAngle, siblingAngles } from './mcts/diversity.js';
 // The one question a branch is asked, whatever substrate runs it.
 export {
-  explorePrompt, reflectionPrompt, extractCodeBlock,
+  explorePrompt, reflectionPrompt,
   type ExplorePrompt, type ExplorePromptInput, type ExploreToolHint,
 } from './mcts/explore-prompt.js';
+export {
+  canonicalLanguage, fencedBlocks, readProposalCode,
+  type FencedBlock, type ProposalCode,
+} from './execution/code-fence.js';
 // Whole-message branch context inheritance (shared by every explore() backend).
 export {
   formatInheritedContext, DEFAULT_INHERITED_MESSAGES,
@@ -594,6 +609,7 @@ export {
   evaluateWithMultiModelJudging, median,
   type EvaluateBranchOptions, type BranchEvaluation,
 } from './mcts/evaluation.js';
+export type { EvaluationGrounding } from './types/evaluation.js';
 export { estimateCost } from './mcts/cost.js';
 // Alternate Takes — near-tied convergence candidates + the pick→ledger signal.
 export {
@@ -607,7 +623,8 @@ export {
 // Steer-as-Branch — a mid-turn redirect run as a parallel head that settles
 // into the Alternate Takes pipeline against the live turn's answer.
 export {
-  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, newBranchId, isSteerBranchRunId,
+  BRANCH_HEAD_BUDGET, BRANCH_RATIONALE, STEER_BRANCH_RUN_ID_PREFIX,
+  newBranchId, isSteerBranchRunId,
   startBranchHead, settleBranchIntoTakes, settlePendingBranch, settlePendingBranches,
   type BranchStatusEvent, type BranchStartInput, type SteerBranchHandle,
   type BranchSettleOutcome, type PendingBranch,
@@ -651,6 +668,7 @@ export {
   SCAFFOLD_TURN_TIMEOUT_MS,
   type ScaffoldRunOptions,
   type ScaffoldRunResult,
+  type ScaffoldDefaultInferenceChunk,
   type ScaffoldEvent,
   type ScaffoldEmitFn,
 } from './scaffold/executor.js';
@@ -670,7 +688,18 @@ export {
   decidePromotion,
   applyPromotionDecision,
   DEFAULT_SHADOW_CONFIG,
+  // The trial queue — what a turn contributes to the promotion gate before
+  // anything expensive runs, kept out of scaffold_evaluations so unrun trials
+  // can never walk the calibrated ladder.
+  queueShadowTrial,
+  listQueuedShadowTrials,
+  countQueuedShadowTrials,
+  dropQueuedShadowTrial,
+  purgeQueuedShadowTrials,
+  MAX_QUEUED_SHADOW_TRIALS,
+  SHADOW_TRIAL_CONTEXT_CHARS,
   type PendingScaffold,
+  type QueuedShadowTrial,
   type ShadowEvaluationRow,
   type ShadowVerdict,
   type ShadowVerdictTrial,
@@ -679,10 +708,10 @@ export {
   type JudgeFn,
   type ShadowTrialVerdict,
 } from './scaffold/shadow.js';
-// auto-judge shadow evaluation — sampled-per-turn closure of the
-// shadow-rollout loop. Picks up pending scaffolds, runs them against the
-// same task, asks a judge LLM to compare, records the result, optionally
-// auto-applies promotion/rollback when minTrials is reached.
+// auto-judge shadow evaluation — ONE queued trial, executed: runs the pending
+// scaffold against the recorded task, asks a judge LLM to compare, records the
+// result, optionally auto-applies promotion/rollback once the gate is
+// conclusive.
 export {
   runAutoShadowEval,
   createStructuredJudge,
@@ -718,7 +747,9 @@ export {
   DEVICE_PRESENCE_CONFIG_KEY,
   type DeviceStatus, type DevicePresence, type DevicePresenceStore,
   DeviceTunnel, type TunnelSocket, TUNNEL_DISCONNECTED, NO_DEVICE_CONNECTED, isDeviceNotConnectedError,
-  createNimbusExecutor, type NimbusExecutorOpts, type NimbusSandboxHandle,
+  createNimbusExecutor, createNimbusWorkspaceExecutor, nimbusSessionShell,
+  type NimbusExecutorOpts, type NimbusWorkspaceExecutorOpts, type NimbusSandboxHandle,
+  type NimbusStartResult,
   type ExecutorCapability, type ExecutorKind, type ExecutorProvider,
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
@@ -728,14 +759,21 @@ export {
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,
 } from './execution/index.js';
 
-// The workspace filesystem — Nimbus, with nothing layered over it.
+// Client-safe workspace addressing and VFS contracts. The embedded Nimbus
+// workspace host is exported separately from `@proteus/core/workspace` so a
+// browser import of the main barrel cannot pull the server runtime into its
+// bundle.
 export {
-  createWorkspace as createWorkspaceFilesystem, nextWorkspaceGeneration, workspacePath, WORKSPACE_ROOT,
+  workspacePath, WORKSPACE_ROOT,
+} from './vfs/workspace-path.js';
+export type {
+  WorkspaceBundle, WorkspaceOptions, WorkspaceVFS,
+} from './vfs/nimbus-workspace.js';
+export {
   makeVfsError, isVfsError, ERRNO, withVfsErrorHint, vfsAddressingHint,
-  observeWrites,
-  type WorkspaceBundle, type WorkspaceOptions, type WorkspaceVFS,
-  type VfsError, type VfsErrorCode, type WriteEvent, type WriteObserver,
-} from './vfs/index.js';
+  type VfsError, type VfsErrorCode,
+} from './vfs/errno.js';
+export { observeWrites, type WriteEvent, type WriteObserver } from './vfs/observe.js';
 
 // File checkpoints — the shadow-git snapshot seam (backends implement it)
 export {
@@ -796,6 +834,11 @@ export {
   initFactsTable, createFactsStore, renderFactsBlock,
   type Fact, type FactsStore, type FactUpsertResult,
 } from './memory/facts.js';
+export {
+  JsonValueSchema, JsonObjectSchema, JsonArraySchema,
+  parseJsonValue, parseJsonObject, parseJsonArray, decodeJsonValue, projectJsonValue,
+  type JsonPrimitive, type JsonObject, type JsonValue,
+} from './utils/json.js';
 
 // Sleep-time compute — between-turn background memory compression
 // (Letta-style; ~50% test-time token reduction reported).
@@ -811,6 +854,7 @@ export {
 export type {
   RunEvent, RunEventBase, RunEventInput, RunEventType, StepUsage,
   CompletionGateRecord, TurnSteeringRecord, TurnSteeringTrigger, CraftCycleRecord,
+  ExecutionRecoveryRecord,
   CacheHitStats, StepTelemetry,
 } from './events/index.js';
 export {
@@ -859,6 +903,29 @@ export * from './providers/index.js';
 // CredentialStore interface is gone).
 export type { Credential, BearerCredential, OAuthCredential, OpenAICompatCredential } from './credentials/store.js';
 
+// Durable plan review — shared domain and the submit_plan edit contract.
+export {
+  MAX_PLAN_ANNOTATIONS_BYTES,
+  MAX_PLAN_CONTENT_BYTES,
+  PlanReviewStore,
+  admitPlanReviewAnnotations,
+  applyPlanEdits,
+  formatPlanWithLineNumbers,
+  initPlanReviewTable,
+  planReviewAwaitingDecision,
+  validatePlanEdits,
+  type PlanEdit,
+  type PlanAnnotationMathTarget,
+  type PlanAnnotationTextPosition,
+  type PlanReview,
+  type PlanReviewAnnotation,
+  type PlanReviewDecision,
+  type PlanReviewResult,
+  type PlanReviewStatus,
+  type PlanReviewStoreOptions,
+  type SubmitPlanToolDeps,
+} from './plans/index.js';
+
 // Wire constants shared by the cf-backend Worker and the CLI.
 export {
   CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
@@ -881,6 +948,20 @@ export {
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
   type ShellApprovalPolicy,
+  type DeferredApprovalChannel,
+  DeferredApprovalQueue,
+  DeferredApprovalStore,
+  initDeferredApprovalsTable,
+  queuedActionMessage,
+  deniedActionMessage,
+  decisionWakeMessage,
+  DEFERRED_APPROVAL_SIGNAL,
+  type DeferredApproval,
+  type DeferredApprovalStatus,
+  type DeferredApprovalAnswer,
+  type DeferredApprovalVerdict,
+  type DeferredApprovalNotice,
+  type DeferredApprovalQueueDeps,
   argumentDigest,
   sha256Hex,
   stableStringify,
@@ -936,7 +1017,7 @@ export {
   extractHeadSteps, extractFinalText, synthesizeHeadSummary, headProducedFindings,
   HeadCapture, runHeadInference, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, withHeadCaptureRecording,
-  type HeadInferenceDeps,
+  type HeadInferenceDeps, type HeadWorkspaceLayout,
   buildHeadToolSet, HEAD_BUILTIN_TOOLS,
   type HeadToolDeps, type HeadSplitRequest, type HeadSplitResult,
   HeadFileChanges, formatHeadFileChanges, HEAD_FILE_CHANGE_PROVENANCE,
@@ -973,6 +1054,8 @@ export { SignalDelivery } from './orchestrator/signals.js';
 export {
   TurnSteering, isFailingToolResult, TURN_STEERING_HEADER,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
+  STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
+  type TurnProgressInputs,
 } from './orchestrator/turn-steering.js';
 export { CraftCycle } from './orchestrator/craft-cycle.js';
 export {
@@ -992,7 +1075,7 @@ export {
   SCAFFOLD_HISTORY_DEFAULT_LIMIT, SCAFFOLD_HISTORY_MAX_LIMIT,
   SCAFFOLD_HISTORY_DEFAULT_MESSAGE_CHARS, SCAFFOLD_HISTORY_MAX_MESSAGE_CHARS,
   SCAFFOLD_HISTORY_MAX_PAGE_CHARS,
-  type ScaffoldBridgeOpts, type ScaffoldHistoryQuery,
+  type ScaffoldBridgeOpts, type ScaffoldHistoryQuery, type ScaffoldHistoryReader,
   type ScaffoldHistoryEntry, type ScaffoldHistoryPage,
 } from './orchestrator/scaffold-host.js';
 export {
@@ -1044,10 +1127,11 @@ export type {
 // from the CLI at all; both backends now call these.
 export {
   applyScaffoldDecision, createJsonJudge, createLlmJsonJudge, getShadowStatus, listScaffoldVersions,
-  previewScaffoldLive, proposeScaffold, runScaffoldCaptureText, runScaffoldGepaOptimization,
-  runScaffoldOnce, runTurnShadowEval,
+  previewScaffoldLive, proposeScaffold, queueTurnShadowTrial, runQueuedShadowTrials,
+  runScaffoldCaptureText, runScaffoldGepaOptimization, runScaffoldOnce,
   type GepaOptimizationResult, type JsonGenerator, type ScaffoldControl,
-  type ScaffoldDecisionResult, type ScaffoldSurface, type ScaffoldVersionView, type ShadowStatus,
+  type ScaffoldDecisionResult, type ScaffoldReplayContext, type ScaffoldSurface,
+  type ScaffoldVersionView, type ShadowStatus, type ShadowTrialQueueOutcome,
 } from './evolution/control.js';
 export {
   runGepa, runScaffoldGepa,
@@ -1109,7 +1193,7 @@ export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
 export type { RunListEntry, RunSummary } from './read-models/runs.js';
 export {
   captureWorkspaceBaseline, getExecutorDiff, getWorkspaceDiff, readWorkspaceFiles,
-  resetWorkspaceBaseline,
+  initWorkspaceBaselineTable, resetWorkspaceBaseline,
 } from './read-models/workspace-diff.js';
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff.js';
 export {
@@ -1125,7 +1209,7 @@ export type {
   EnvironmentInfo, MountInfo,
 } from './read-models/files.js';
 export { readLatestSearchTree, readSearchTree } from './read-models/search-tree.js';
-export { listForkRuns } from './read-models/fork-runs.js';
+export { listForkRuns, readForkRun } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
 export { buildPendingActions } from './read-models/pending-actions.js';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';

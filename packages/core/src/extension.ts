@@ -17,6 +17,7 @@
  */
 
 import type { ModelMessage, ToolSet } from 'ai';
+import type { JsonObject } from './utils/json.js';
 
 export interface TurnStartContext {
   readonly system: string;
@@ -25,7 +26,7 @@ export interface TurnStartContext {
 
 export interface ToolCallContext {
   readonly toolName: string;
-  readonly args: Record<string, unknown>;
+  readonly args: JsonObject;
 }
 
 export interface ToolResultContext {
@@ -33,7 +34,7 @@ export interface ToolResultContext {
   /** The call's own input, carried through so a consumer can tell one call of
    *  a tool from another without re-pairing on ids (the repeat detector in
    *  orchestrator/turn-steering.ts). Both backends have it at result time. */
-  readonly args: Record<string, unknown>;
+  readonly args: JsonObject;
   /** The call's full rendered output — never a slice. Consumers key on it
    *  (the repeat detector hashes it as the call's identity) and read it for
    *  failure shapes that can sit anywhere in the text, both of which a head

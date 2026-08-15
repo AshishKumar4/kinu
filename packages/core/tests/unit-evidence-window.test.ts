@@ -6,10 +6,12 @@
 // the thing that is supposed to select for it.
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
 import {
   EVIDENCE_BUDGETS, evidenceWindow,
-  initScaffoldTables, initShadowTables, runAutoShadowEval, runTurnShadowEval, type AgentConfigStore,
-  type JudgeOutput,
+  initScaffoldTables, initShadowTables, runAutoShadowEval, queueTurnShadowTrial,
+  runQueuedShadowTrials, type JudgeOutput, type ScaffoldControl,
 } from '../src/index.js';
 import { renderReflectionPrompt } from '../src/evolution/gepa/mutate.js';
 import type { GepaCandidate } from '../src/evolution/gepa/types.js';
@@ -77,9 +79,9 @@ describe('the readers can see the end of a long turn', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
@@ -95,7 +97,6 @@ describe('the readers can see the end of a long turn', () => {
       currentOutput: trajectory(40_000, `CURRENT-${ending}`),
       judge,
       llmStream: async function* () { yield ''; },
-      config: { sampleRate: 1 },
       random: () => 0,
     });
 
@@ -121,36 +122,44 @@ describe('the readers can see the end of a long turn', () => {
     const { rt } = createTestRuntime();
     initScaffoldTables(rt.storage.execRaw);
     initShadowTables(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (0, ${Date.now()}, 'initial', 'current')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
       VALUES (1, ${Date.now()}, 'alternative', 'pending')`;
     await rt.storage.vfs.writeFile('scaffold/agent.js.v1', 'async function* run() {}');
 
     const prompts: string[] = [];
     const currentOutput = trajectory(200_000, `CURRENT-${ending}`);
-    await runTurnShadowEval({
+    const control: ScaffoldControl = {
       rt,
       sql: rt.storage.sql,
-      config: { getShadowSampleRate: () => 1, getAutoPromoteScaffold: () => false } as unknown as AgentConfigStore,
+      config: {
+        getShadowSampleRate: () => 1,
+        getAutoPromoteScaffold: () => false,
+        getGepaEvalBudget: () => 1,
+      },
       surface: () => ({
         llmStream: async function* () { yield ''; },
         callTool: async () => ({}),
         history: async () => ({ total: 0, offset: 0, entries: [], clipped: false }),
+        defaultInference: async function* () { yield { value: '' }; },
       }),
-      model: () => ({}) as never,
-      judge: async ({ prompt }) => {
+      model: () => new MockLanguageModelV3(),
+      judge: async ({ prompt, schema }) => {
         prompts.push(prompt);
-        return { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 } as never;
+        return v.parse(schema, { winner: 'tie', rationale: 'm', scoreA: 0.5, scoreB: 0.5 });
       },
-    }, {
-      task: 'short task',
-      currentOutput,
-      replayLiveTurn: async function* () { yield ''; },
-    });
+    };
+    // The turn stores the live output WHOLE; the drain windows it once.
+    expect(queueTurnShadowTrial(control, {
+      task: 'short task', currentOutput, context: [{ role: 'user', content: 'short task' }],
+    })).toBe('queued');
+    await runQueuedShadowTrials(control);
 
     expect(prompts.length).toBeGreaterThan(0);
-    const omissions = [...prompts[0]!.matchAll(/(\d+) chars omitted from the middle/g)].map((m) => Number(m[1]));
+    const prompt = prompts[0];
+    if (!prompt) throw new Error('expected shadow judge prompt');
+    const omissions = [...prompt.matchAll(/(\d+) chars omitted from the middle/g)].map((match) => Number(match[1]));
     // One window over the live output, reporting what it really dropped.
     expect(omissions).toEqual([currentOutput.length - EVIDENCE_BUDGETS.shadowOutput]);
   });

@@ -9,12 +9,11 @@ import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { buildBuiltinTools, DEFAULT_TOOL_RESULT_MAX_CHARS } from '@proteus/core';
 import { createCLIRuntime } from '../src/runtime.js';
-
-type RunTool = { execute: (args: { command: string; runtime?: string }, options?: unknown) => Promise<string> };
+import { toolExecute } from '@proteus/test-utils';
 
 function localRuntime() {
   const db = new Database(':memory:');
-  return createCLIRuntime(db as never, {
+  return createCLIRuntime(db, {
     dbPath: `/tmp/proteus-clamp-${Math.floor(performance.now())}.db`,
     llm: { name: 'x', baseURL: 'http://localhost:0', headers: {}, model: 'm' },
   });
@@ -24,12 +23,12 @@ describe('clamped run output on the local backend', () => {
   test('the marker remedy round-trips: workspace.readFile restores what the host shell cannot see', async () => {
     const rt = localRuntime();
     const tools = buildBuiltinTools({ rt });
-    const run = tools.run as unknown as RunTool;
+    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.run);
 
     // A real HOST command whose output blows the clamp budget. `laptop` is
     // where the machine is now — the default `workspace` runtime is the
     // agent's own filesystem and its own shell.
-    const clamped = await run.execute({
+    const clamped = await run({
       runtime: 'laptop',
       command: `awk 'BEGIN { for (i = 0; i < 9000; i++) print "padding log line", i; print "FINAL-ERROR-LINE" }'`,
     });
@@ -54,11 +53,11 @@ describe('clamped run output on the local backend', () => {
     // The offload lands in the agent's OWN filesystem, so the workspace shell
     // can also grep it — a remedy the marker could not offer while that shell
     // was an emulator over a different plane.
-    const grepped = await run.execute({ command: `grep FINAL-ERROR-LINE ${path}` });
+    const grepped = await run({ command: `grep FINAL-ERROR-LINE ${path}` });
     expect(grepped).toContain('FINAL-ERROR-LINE');
     // The host shell cannot: it is a different machine with a different
     // filesystem, which is exactly why the marker names workspace.readFile.
-    const onHost = await run.execute({ runtime: 'laptop', command: `grep FINAL-ERROR-LINE ${path}` });
+    const onHost = await run({ runtime: 'laptop', command: `grep FINAL-ERROR-LINE ${path}` });
     expect(onHost).toContain('Error');
   });
 });

@@ -7,6 +7,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { isE2EConfigured, loadAIGatewayProviders } from './ai-gateway-llm.js';
 import { runMCTS } from '../../src/mcts/engine.js';
 import { initSearchTables } from '../../src/mcts/schemas.js';
@@ -49,7 +50,7 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
           `Prior context:\n${context.slice(-500)}\n\n` +
           `Propose ONE specific concrete approach in 2-3 sentences. Be specific about what to change.`,
         );
-        return { text, codeUsed: null };
+        return { text };
       },
       async generateReflection(task) {
         return { text: await branchLLM.complete(
@@ -66,8 +67,9 @@ function createE2ERuntime(llm: LLM, judgeLlm: LLM) {
     identity: {
       id: 'e2e-agent', name: 'e2e-test',
       scaffold: {
+        path: 'scaffold/agent.js',
         exists: () => vfs.exists('scaffold/agent.js'),
-        read: () => vfs.readFile('scaffold/agent.js', { encoding: 'utf8' }) as Promise<string>,
+        read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
         write: (code) => vfs.writeFile('scaffold/agent.js', code),
         version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
       },
@@ -93,7 +95,8 @@ function createE2ESession(): SessionWriter {
       let current = messages.find(m => m.id === leafId);
       while (current) {
         result.unshift({ role: current.role, content: current.content });
-        current = current.parentId ? messages.find(m => m.id === current!.parentId) : undefined;
+        const parentId = current.parentId;
+        current = parentId ? messages.find(m => m.id === parentId) : undefined;
       }
       return result;
     },
@@ -101,9 +104,10 @@ function createE2ESession(): SessionWriter {
 }
 
 function printTree(db: Database) {
-  const nodes = db.query(
-    'SELECT id, parent_id, depth, visits, value, status, substr(action, 1, 80) as action FROM search_nodes ORDER BY depth, created_at',
-  ).all() as Array<SearchNode & { action: string }>;
+  const sql = makeSql(db);
+  const nodes = sql<SearchNode & { action: string }>`
+    SELECT id, parent_id, depth, visits, value, status, substr(action, 1, 80) as action
+    FROM search_nodes ORDER BY depth, created_at`;
 
   console.log('\n--- MCTS SEARCH TREE ---');
   for (const n of nodes) {
@@ -130,13 +134,14 @@ describe.skipIf(!isE2EConfigured())('E2E MCTS with real LLM', () => {
 
     printTree(db);
 
-    const allNodes = db.query('SELECT * FROM search_nodes').all() as SearchNode[];
+    const allNodes = makeSql(db)<SearchNode>`SELECT * FROM search_nodes`;
     console.log(`Tree: ${allNodes.length} nodes, converged=${result.converged}, winner=${result.winnerValue.toFixed(3)}`);
 
     expect(allNodes.length).toBe(3); // 1 root + 1 iteration * 2 branches
     const root = allNodes.find(n => n.parent_id === null);
     expect(root).toBeDefined();
-    expect(root!.visits).toBeGreaterThan(0);
+    if (!root) throw new Error('MCTS root node was not persisted');
+    expect(root.visits).toBeGreaterThan(0);
 
     for (const n of allNodes) {
       expect(n.value).toBeGreaterThanOrEqual(0);

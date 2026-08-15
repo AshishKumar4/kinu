@@ -120,12 +120,6 @@ describe('runGepa with Merge end-to-end', () => {
     //   spec-A → 0.9 on i1, 0.3 on i2  (i1 specialist)
     //   spec-B → 0.3 on i1, 0.9 on i2  (i2 specialist; complementary to A)
     //   merged → 0.9 on both (best of both)
-    const metric = async (source: string): Promise<MetricOutcome> => {
-      if (source === 'merged') return { score: 0.9, feedback: 'best' };
-      if (source === 'spec-A') return { score: 0.5, feedback: 'A' }; // placeholder for both
-      if (source === 'spec-B') return { score: 0.5, feedback: 'B' };
-      return { score: 0.5, feedback: 'seed' };
-    };
     // Override metric per-instance:
     const richMetric = async (source: string, inst: EvalInstance<string>): Promise<MetricOutcome> => {
       const i = inst.id;

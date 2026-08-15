@@ -2,10 +2,38 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
+import {
+  parseJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from "@proteus/core";
+import * as v from "valibot";
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
+const RequestBodySchema = v.object({ stream: v.optional(v.boolean()) });
+const SessionEventSchema = v.object({ id: v.string() });
+const RunEventEnvelopeSchema = v.object({
+  type: v.literal("run_event"),
+  event: v.object({ type: v.string(), runId: v.string() }),
+});
+const SteeringEnvelopeSchema = v.object({
+  type: v.literal("run_event"),
+  event: v.object({
+    type: v.literal("turn_steering"),
+    runId: v.string(),
+    step: v.number(),
+    trigger: v.string(),
+    tool: v.string(),
+    converted: v.boolean(),
+  }),
+});
+const ErrorEventSchema = v.object({
+  type: v.literal("error"),
+  message: v.string(),
+  hint: v.string(),
+});
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) {
@@ -26,18 +54,38 @@ function stopLocalDaemon(home: string): void {
 }
 
 function runCli(args: string[], opts: { home?: string; stdin?: string; env?: Record<string, string> } = {}) {
+  const env = { ...process.env, ...opts.env };
+  if (opts.home) env.PROTEUS_HOME = opts.home;
   return Bun.spawnSync({
     cmd: [process.execPath, cliBin, ...args],
     cwd: repoRoot,
     stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
     stdout: "pipe",
     stderr: "pipe",
-    env: {
-      ...process.env,
-      ...(opts.home ? { PROTEUS_HOME: opts.home } : {}),
-      ...(opts.env ?? {}),
-    },
+    env,
   });
+}
+
+async function runCliAsync(
+  args: string[],
+  opts: { home?: string; stdin?: string; env?: Record<string, string> } = {},
+) {
+  const env = { ...process.env, ...opts.env };
+  if (opts.home) env.PROTEUS_HOME = opts.home;
+  const proc = Bun.spawn({
+    cmd: [process.execPath, cliBin, ...args],
+    cwd: repoRoot,
+    stdin: opts.stdin ? Buffer.from(opts.stdin) : undefined,
+    stdout: "pipe",
+    stderr: "pipe",
+    env,
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer(),
+    new Response(proc.stderr).arrayBuffer(),
+    proc.exited,
+  ]);
+  return { stdout: Buffer.from(stdout), stderr: Buffer.from(stderr), exitCode };
 }
 
 function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
@@ -58,7 +106,7 @@ function runCliInPty(args: string[], opts: { home: string; stdin?: string }) {
   });
 }
 
-function writeConfig(home: string, body: unknown) {
+function writeConfig(home: string, body: JsonObject) {
   writeFileSync(join(home, "config.json"), `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
 }
 
@@ -248,14 +296,14 @@ describe("proteus exec (headless)", () => {
         PROTEUS_MODEL: "mock-model",
       };
 
-      const created = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke test agent"], { home, env });
+      const created = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke test agent"], { home, env });
       expect(created.exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], { home, env });
+      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], { home, env });
       expect(proc.stderr.toString()).toBe("");
       expect(proc.exitCode).toBe(0);
 
-      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
       expect(events[0]).toMatchObject({ type: "session", workspace: "smokey", backend: "local" });
       expect(events).toContainEqual(expect.objectContaining({ type: "turn_start", kind: "user", text: "Say hello" }));
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
@@ -265,25 +313,29 @@ describe("proteus exec (headless)", () => {
       // The durable run-event ledger rides the same stream. Without it the log
       // is readable only from inside the agent's own database, which a
       // container-scoped run destroys on exit.
-      const ledger = events
-        .filter((e) => e.type === "run_event")
-        .map((e) => (e as { event: { type: string; runId?: unknown } }).event);
+      const ledger = events.flatMap((event) => {
+        const parsed = v.safeParse(RunEventEnvelopeSchema, event);
+        return parsed.success ? [parsed.output.event] : [];
+      });
       expect(ledger.map((e) => e.type)).toEqual(["run_start", "turn_start", "step_finish", "turn_end", "run_end"]);
-      expect(ledger.every((e) => typeof (e as { runId?: unknown }).runId === "string")).toBe(true);
+      expect(ledger.every((e) => e.runId.length > 0)).toBe(true);
       expect(new Set(ledger.map((e) => e.runId)).size).toBe(1);
 
       // --resume continues the same recorded session instead of opening a new one.
-      const sessionId = String((events[0] as { id: string }).id);
-      const resumed = runCli(["exec", "--workspace", "smokey", "--json", "--resume", sessionId, "Say hello again"], { home, env });
+      const sessionId = v.parse(SessionEventSchema, events[0]).id;
+      const resumed = await runCliAsync(["exec", "--workspace", "smokey", "--json", "--resume", sessionId, "Say hello again"], { home, env });
       expect(resumed.exitCode).toBe(0);
-      const resumedHeader = JSON.parse(resumed.stdout.toString().trim().split("\n")[0]!) as { id: string };
+      const resumedHeader = v.parse(
+        SessionEventSchema,
+        parseJsonObject(resumed.stdout.toString().trim().split("\n")[0]!),
+      );
       expect(resumedHeader.id).toBe(sessionId);
     } finally {
       server.stop();
     }
   }, 120_000);
 
-  test("exits nonzero when the model endpoint fails", () => {
+  test("exits nonzero when the model endpoint fails", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-exec-fail-"));
     tempDirs.push(home);
     const good = startMockLlm("ok");
@@ -294,14 +346,14 @@ describe("proteus exec (headless)", () => {
         PROTEUS_AUTH: "Bearer mock",
         PROTEUS_MODEL: "mock-model",
       };
-      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv }).exitCode).toBe(0);
+      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env: goodEnv })).exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], {
+      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
         env: { ...goodEnv, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
       expect(proc.exitCode).toBe(1);
-      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
       expect(events.some((e) => e.type === "error" || (e.type === "turn_end" && e.hadError === true))).toBe(true);
     } finally {
       good.stop();
@@ -321,12 +373,12 @@ describe("proteus exec (headless)", () => {
         PROTEUS_AUTH: "Bearer mock",
         PROTEUS_MODEL: "mock-model",
       };
-      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
+      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "--no-auto-evolve", "Say hello"], { home, env });
       expect(proc.stderr.toString()).toBe("");
       expect(proc.exitCode).toBe(0);
-      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
+      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
       expect(events).toContainEqual(expect.objectContaining({ type: "message_end", role: "assistant", text: "Hello from mock." }));
       expect(events.some((e) => e.type === "evolution")).toBe(false);
     } finally {
@@ -375,16 +427,16 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
         PROTEUS_AUTH: "Bearer mock",
         PROTEUS_MODEL: "mock-model",
       };
-      expect(runCli(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+      expect((await runCliAsync(["create", "nudgey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
+      const proc = await runCliAsync(["exec", "--workspace", "nudgey", "--json", "--no-auto-evolve", "Fix it"], { home, env });
       const lines = proc.stdout.toString().trim().split("\n");
-      const events = lines.map((line) => JSON.parse(line) as Record<string, unknown>);
+      const events = lines.map(parseJsonObject);
 
-      const steers = events
-        .filter((e) => e.type === "run_event")
-        .map((e) => (e as { event: Record<string, unknown> }).event)
-        .filter((e) => e.type === "turn_steering");
+      const steers = events.flatMap((event) => {
+        const parsed = v.safeParse(SteeringEnvelopeSchema, event);
+        return parsed.success ? [parsed.output.event] : [];
+      });
       expect(steers).toHaveLength(1);
       expect(steers[0]).toMatchObject({
         // repeated_call, not repeated_failure: the mock grinds the SAME call
@@ -395,7 +447,7 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
         // The model was told and pushed on alone — the conversion denominator.
         converted: false,
       });
-      expect(typeof steers[0]!.step).toBe("number");
+      expect(steers[0]?.step).toBeNumber();
     } finally {
       server.stop();
     }
@@ -404,7 +456,7 @@ describe("proteus exec --json — the delegation nudge is observable from outsid
 
 /** Minimal OpenAI-compatible /chat/completions endpoint: streams SSE chunks
  *  for stream requests and returns a completion object otherwise. */
-function startMockLlm(answer: string): { port: number; stop(): void } {
+function startMockLlm(answer: string) {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -412,7 +464,7 @@ function startMockLlm(answer: string): { port: number; stop(): void } {
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      const body = await request.json().catch(() => ({})) as { stream?: boolean };
+      const body = v.parse(RequestBodySchema, await request.json().catch(() => ({})));
       const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
       if (!body.stream) {
         return Response.json({
@@ -424,7 +476,7 @@ function startMockLlm(answer: string): { port: number; stop(): void } {
           usage,
         });
       }
-      const chunk = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`;
+      const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
       const sse = [
         chunk({
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
@@ -449,7 +501,7 @@ function startToolLoopMockLlm(
   call: { name: string; arguments: string },
   calls: number,
   answer: string,
-): { port: number; stop(): void } {
+) {
   let streamed = 0;
   const server = Bun.serve({
     port: 0,
@@ -458,7 +510,7 @@ function startToolLoopMockLlm(
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      const body = await request.json().catch(() => ({})) as { stream?: boolean };
+      const body = v.parse(RequestBodySchema, await request.json().catch(() => ({})));
       const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
       if (!body.stream) {
         return Response.json({
@@ -468,7 +520,7 @@ function startToolLoopMockLlm(
         });
       }
       const step = streamed++;
-      const chunk = (choice: unknown, extra: Record<string, unknown> = {}) =>
+      const chunk = (choice: JsonObject, extra: JsonObject = {}) =>
         `data: ${JSON.stringify({
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
           choices: [choice], ...extra,
@@ -500,7 +552,7 @@ function startToolLoopMockLlm(
   return { port: server.port!, stop: () => server.stop(true) };
 }
 
-function startFailingLlm(): { port: number; stop(): void } {
+function startFailingLlm() {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -514,12 +566,12 @@ function startFailingLlm(): { port: number; stop(): void } {
 /** 200 OK, then an OpenAI-shaped error object in the SSE body — the shape a
  *  provider uses to reject a request mid-stream, and the one that reached
  *  users as `[object Object]`. */
-function startInBandErrorLlm(payload: unknown): { port: number; stop(): void } {
+function startInBandErrorLlm(payload: JsonValue) {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
     async fetch(request) {
-      const body = await request.json().catch(() => ({})) as { stream?: boolean };
+      const body = v.parse(RequestBodySchema, await request.json().catch(() => ({})));
       if (!body.stream) return Response.json(payload, { status: 400 });
       return new Response(`data: ${JSON.stringify(payload)}\n\ndata: [DONE]\n\n`, {
         headers: { "content-type": "text/event-stream" },
@@ -532,7 +584,7 @@ function startInBandErrorLlm(payload: unknown): { port: number; stop(): void } {
 /** The Proteus worker as far as the CLI's provider registry cares: a model
  *  menu. An empty one is a signed-in account whose Cloudflare AI was never
  *  granted — the case that produced a workspace nothing could run. */
-function startEmptyModelMenuOrigin(): { port: number; stop(): void } {
+function startEmptyModelMenuOrigin() {
   const server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -545,7 +597,7 @@ function startEmptyModelMenuOrigin(): { port: number; stop(): void } {
 }
 
 describe("proteus create — an unusable model is named at creation", () => {
-  test("warns when the workspace's model has no connected provider", () => {
+  test("warns when the workspace's model has no connected provider", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-unusable-"));
     tempDirs.push(home);
     const origin = startEmptyModelMenuOrigin();
@@ -560,7 +612,7 @@ describe("proteus create — an unusable model is named at creation", () => {
       // PROTEUS_MODEL direct-endpoint override another test file sets on this
       // process — would supply a working provider and correctly suppress the
       // warning. The subprocess starts without them.
-      const proc = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
+      const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
           OPENAI_API_KEY: "", ANTHROPIC_API_KEY: "", OPENROUTER_API_KEY: "",
@@ -577,12 +629,12 @@ describe("proteus create — an unusable model is named at creation", () => {
     }
   }, 120_000);
 
-  test("stays quiet when the model resolves through a working provider", () => {
+  test("stays quiet when the model resolves through a working provider", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-create-usable-"));
     tempDirs.push(home);
     const server = startMockLlm("ok");
     try {
-      const proc = runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
+      const proc = await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], {
         home,
         env: {
           PROTEUS_BASE_URL: `http://127.0.0.1:${server.port}`,
@@ -603,11 +655,11 @@ describe("proteus create — an unusable model is named at creation", () => {
 // default `console.error(rawPayload)` dump, once as our own `error
 // [object Object]` — and never said which command fixed it.
 describe("proteus exec — provider failures are legible and actionable", () => {
-  const BILLING_ERROR = {
+  const BILLING_ERROR: JsonObject = {
     error: { message: "Your account is not active.", type: "invalid_request_error", code: "billing_not_active" },
   };
 
-  test("renders the provider's own words once, with the command that resolves it", () => {
+  test("renders the provider's own words once, with the command that resolves it", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-provider-err-"));
     tempDirs.push(home);
     const good = startMockLlm("ok");
@@ -618,9 +670,9 @@ describe("proteus exec — provider failures are legible and actionable", () => 
         PROTEUS_AUTH: "Bearer mock",
         PROTEUS_MODEL: "mock-model",
       };
-      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--workspace", "smokey", "Say hello"], {
+      const proc = await runCliAsync(["exec", "--workspace", "smokey", "Say hello"], {
         home,
         env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
@@ -636,7 +688,7 @@ describe("proteus exec — provider failures are legible and actionable", () => 
     }
   }, 120_000);
 
-  test("--json carries the guidance as a field, not just as terminal decoration", () => {
+  test("--json carries the guidance as a field, not just as terminal decoration", async () => {
     const home = mkdtempSync(join(tmpdir(), "proteus-cli-provider-err-json-"));
     tempDirs.push(home);
     const good = startMockLlm("ok");
@@ -647,19 +699,22 @@ describe("proteus exec — provider failures are legible and actionable", () => 
         PROTEUS_AUTH: "Bearer mock",
         PROTEUS_MODEL: "mock-model",
       };
-      expect(runCli(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env }).exitCode).toBe(0);
+      expect((await runCliAsync(["create", "smokey", "--mode", "local", "--purpose", "smoke"], { home, env })).exitCode).toBe(0);
 
-      const proc = runCli(["exec", "--workspace", "smokey", "--json", "Say hello"], {
+      const proc = await runCliAsync(["exec", "--workspace", "smokey", "--json", "Say hello"], {
         home,
         env: { ...env, PROTEUS_BASE_URL: `http://127.0.0.1:${bad.port}` },
       });
 
       expect(proc.exitCode).toBe(1);
-      const events = proc.stdout.toString().trim().split("\n").map((line) => JSON.parse(line) as Record<string, unknown>);
-      const error = events.find((event) => event.type === "error");
+      const events = proc.stdout.toString().trim().split("\n").map(parseJsonObject);
+      const error = events.flatMap((event) => {
+        const parsed = v.safeParse(ErrorEventSchema, event);
+        return parsed.success ? [parsed.output] : [];
+      })[0];
       expect(error).toBeDefined();
-      expect(String(error!.message)).toContain("Your account is not active.");
-      expect(String(error!.hint)).toContain("proteus provider");
+      expect(error?.message).toContain("Your account is not active.");
+      expect(error?.hint).toContain("proteus provider");
     } finally {
       good.stop();
       bad.stop();

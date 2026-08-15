@@ -26,19 +26,16 @@ import {
 } from "@phosphor-icons/react";
 import type { ForkRunSummary, HeadRunHeadView, HeadRunView, HeadStep } from "@proteus/core";
 import { ForkTree } from "@/components/fork-tree";
-import { cleanNodeLabel, isCompeted, treeStats } from "@/components/fork-tree-model";
+import { cleanNodeLabel, findForkNode, isCompeted, terminalForkNode, treeStats } from "@/components/fork-tree-model";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
-import type { ForkNode, Rpc } from "@/lib/protocol";
+import type { BackgroundJob, ForkNode, Rpc } from "@/lib/protocol";
 import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import {
   DetailSection, EmptyState, EMPTY_HINTS, formatScore, MarkdownContent, Metric, scoreColor,
 } from "./shared";
-import { findHead, forkRunsRevalidateMs, headRunToTree } from "./fork-runs";
-
-/** How many forks the list reaches back over. Past runs are reached by
- *  scrolling this list, not by a second tab. */
-const RUN_LIMIT = 30;
+import { findHead, headRunToTree, useLiveForkRuns } from "./fork-runs";
+import * as v from "valibot";
 
 export interface ExplorationSurfaceProps {
   /** The tree of the search in flight, fed by `mcts-progress` broadcasts. Used
@@ -47,20 +44,16 @@ export interface ExplorationSurfaceProps {
   liveTree: ForkNode | null;
   /** A turn is in flight — new forks and branches land while it is. */
   isStreaming: boolean;
+  /** Detached work can create or continue a fork without a streaming turn. */
+  backgroundJobs: readonly BackgroundJob[];
   rpc: Rpc;
 }
 
-export function ExplorationSurface({ liveTree, isStreaming, rpc }: ExplorationSurfaceProps) {
+export function ExplorationSurface({ liveTree, isStreaming, backgroundJobs, rpc }: ExplorationSurfaceProps) {
   const { agentId } = useParams();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  const loadRuns = useCallback(() => rpc<ForkRunSummary[]>("listForkRuns", [RUN_LIMIT]), [rpc]);
-  const revalidate = useCallback(
-    (runs: ForkRunSummary[] | null) => forkRunsRevalidateMs(runs, isStreaming),
-    [isStreaming],
-  );
-  const { resource, reload } = useAsyncResource(loadRuns, revalidate);
-  const runs = lastValue(resource);
+  const { resource, reload, runs, hasActiveWork } = useLiveForkRuns(rpc, isStreaming, backgroundJobs);
 
   if (runs === null) {
     return resource.status === "error"
@@ -76,10 +69,14 @@ export function ExplorationSurface({ liveTree, isStreaming, rpc }: ExplorationSu
   const selected = runs.find((run) => run.id === selectedId) ?? runs[0]!;
 
   return (
-    // Stacked, the list is content-height (capped, then it scrolls) so it
-    // cannot stretch into dead space above the tree; side by side it fills its
-    // column.
-    <div className="h-full min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)] animate-fade-in">
+    <div className="h-full min-h-0 flex flex-col gap-2 animate-fade-in">
+      {resource.status === "error" && (
+        <LoadFailure what="fresh fork runs" message={resource.message} onRetry={reload} />
+      )}
+      {/* Stacked, the list is content-height (capped, then it scrolls) so it
+          cannot stretch into dead space above the tree; side by side it fills
+          its column. */}
+      <div className="flex-1 min-h-0 grid gap-3 grid-rows-[auto_minmax(0,1fr)] @3xl:grid-rows-1 @3xl:grid-cols-[minmax(220px,280px)_minmax(0,1fr)]">
       <div className="min-h-0 max-h-44 @3xl:max-h-none overflow-y-auto rounded-lg border p-border p-surface p-1.5 space-y-0.5">
         {runs.map((run) => (
           <ForkRunRow key={run.id} run={run} selected={selected.id === run.id}
@@ -89,21 +86,22 @@ export function ExplorationSurface({ liveTree, isStreaming, rpc }: ExplorationSu
       <ForkRunDetail
         key={selected.id} run={selected} rpc={rpc}
         liveTree={liveTree?.id === selected.id ? liveTree : null}
-        isStreaming={isStreaming}
+        hasActiveWork={hasActiveWork}
         expandTo={agentId ? `/mcts/${agentId}?run=${encodeURIComponent(selected.id)}` : null}
       />
+      </div>
     </div>
   );
 }
 
 /* ── the run list ──────────────────────────────────────────────── */
 
-const RUN_DOT: Record<ForkRunSummary["status"], string> = {
+const RUN_DOT = {
   running: "p-dot-warning",
   completed: "p-dot-success",
   failed: "p-dot-danger",
   partial: "p-dot-neutral",
-};
+} satisfies Record<ForkRunSummary["status"], string>;
 
 /** How the fork settled, as a property of the row rather than as navigation —
  *  which is exactly where an implementation detail belongs. */
@@ -141,23 +139,22 @@ function ForkRunRow(
  * polling for that would be both slower and noisier.
  */
 export function useForkRunTree(
-  run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, isStreaming: boolean,
+  run: ForkRunSummary, rpc: Rpc, liveTree: ForkNode | null, hasActiveWork: boolean,
 ) {
   const load = useCallback(async (): Promise<{ tree: ForkNode | null; headRun: HeadRunView | null }> => {
     if (run.settle === "competed") {
       const rows = await rpc<MctsRow[]>("getSearchTree", [run.id]);
       return { tree: rows.length > 0 ? buildTree(rows) : null, headRun: null };
     }
-    const headRuns = await rpc<HeadRunView[]>("getHeadRuns", [RUN_LIMIT]);
-    const found = headRuns.find((candidate) => candidate.rootId === run.id) ?? null;
+    const found = await rpc<HeadRunView | null>("getHeadRun", [run.id]);
     return { tree: found ? headRunToTree(found) : null, headRun: found };
   }, [rpc, run.id, run.settle]);
 
   const revalidate = useCallback(
-    () => (run.status === "running" || isStreaming ? 1500 : null),
-    [run.status, isStreaming],
+    () => (run.status === "running" || hasActiveWork ? 1500 : null),
+    [run.status, hasActiveWork],
   );
-  const { resource, reload } = useAsyncResource(load, revalidate);
+  const { resource, reload } = useAsyncResource(load, revalidate, `${run.settle}:${run.id}`);
   const loaded = lastValue(resource);
   return { tree: liveTree ?? loaded?.tree ?? null, headRun: loaded?.headRun ?? null, resource, reload };
 }
@@ -172,21 +169,14 @@ export function useForkRunTree(
  * a full tree is a third of the surface spent on a prompt to click.
  */
 function defaultSelection(tree: ForkNode): ForkNode {
-  if (!isCompeted(tree)) return tree;
-  let best = tree;
-  const walk = (node: ForkNode): void => {
-    if (node.status === "terminal" && (node.value ?? 0) >= (best.value ?? 0)) best = node;
-    node.children.forEach(walk);
-  };
-  walk(tree);
-  return best;
+  return isCompeted(tree) ? terminalForkNode(tree) ?? tree : tree;
 }
 
 function ForkRunDetail(
-  { run, rpc, liveTree, isStreaming, expandTo }:
-  { run: ForkRunSummary; rpc: Rpc; liveTree: ForkNode | null; isStreaming: boolean; expandTo: string | null },
+  { run, rpc, liveTree, hasActiveWork, expandTo }:
+  { run: ForkRunSummary; rpc: Rpc; liveTree: ForkNode | null; hasActiveWork: boolean; expandTo: string | null },
 ) {
-  const [selectedNode, setSelectedNode] = useState<ForkNode | null>(null);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const graphRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 700, h: 460 });
 
@@ -200,7 +190,7 @@ function ForkRunDetail(
     return () => ro.disconnect();
   }, []);
 
-  const { tree, headRun, resource, reload } = useForkRunTree(run, rpc, liveTree, isStreaming);
+  const { tree, headRun, resource, reload } = useForkRunTree(run, rpc, liveTree, hasActiveWork);
 
   // Only ever the FIRST selection for this run: the component is keyed on the
   // run id, so a poll that grows the tree must not drag the pane off whatever
@@ -209,7 +199,7 @@ function ForkRunDetail(
   useEffect(() => {
     if (picked.current || tree === null) return;
     picked.current = true;
-    setSelectedNode(defaultSelection(tree));
+    setSelectedNodeId(defaultSelection(tree).id);
   }, [tree]);
 
   if (tree === null) {
@@ -220,14 +210,19 @@ function ForkRunDetail(
           : resource.status === "loading"
             ? <div className="flex justify-center py-8"><Loader size="sm" /></div>
             : <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
-                hint="The run is in the ledger but its branches were never written — it was interrupted before the first one landed." />}
+                hint="The run is in the ledger but its branches were never written. It was interrupted before the first one landed." />}
       </div>
     );
   }
 
   const stats = treeStats(tree);
+  const selectedNode = selectedNodeId ? findForkNode(tree, selectedNodeId) : null;
   return (
-    <div className="min-h-0 grid gap-3 grid-rows-[minmax(340px,1fr)_auto] @6xl:grid-rows-1 @6xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
+    <div className="min-h-0 flex flex-col gap-2">
+      {resource.status === "error" && (
+        <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload} />
+      )}
+      <div className="flex-1 min-h-0 grid gap-3 grid-rows-[minmax(340px,1fr)_auto] @6xl:grid-rows-1 @6xl:grid-cols-[minmax(0,1fr)_minmax(300px,360px)]">
       <div className="min-h-0 flex flex-col">
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 mb-2 text-xs p-text-2 shrink-0">
           <span>Branches: <span className="p-text font-mono">{Math.max(0, stats.nodes - 1)}</span></span>
@@ -243,26 +238,18 @@ function ForkRunDetail(
         <div ref={graphRef} className="flex-1 min-h-0 overflow-hidden rounded-lg border p-border p-surface">
           {dims.w > 0 && (
             <ForkTree root={tree} width={dims.w} height={dims.h}
-              onNodeClick={setSelectedNode} selectedNode={selectedNode} />
+              onNodeClick={(node) => setSelectedNodeId(node.id)} selectedNode={selectedNode} />
           )}
         </div>
       </div>
       <BranchInspector
         node={selectedNode} tree={tree} run={run} headRun={headRun} rpc={rpc}
-        onClose={() => setSelectedNode(null)}
-        onOpenNode={(id) => setSelectedNode(findNode(tree, id))}
+        onClose={() => setSelectedNodeId(null)}
+        onOpenNode={(id) => setSelectedNodeId(findForkNode(tree, id)?.id ?? null)}
       />
+      </div>
     </div>
   );
-}
-
-function findNode(root: ForkNode, id: string): ForkNode | null {
-  if (root.id === id) return root;
-  for (const child of root.children) {
-    const found = findNode(child, id);
-    if (found) return found;
-  }
-  return null;
 }
 
 function pathTo(root: ForkNode, id: string): ForkNode[] {
@@ -418,13 +405,13 @@ function BranchInspector({
   );
 }
 
-const COMPETED_VERDICT: Record<string, string> = {
+const COMPETED_VERDICT = {
   terminal: "Selected as the best branch in this search.",
   pruned: "No longer being explored after scoring and comparison.",
   failed: "The branch failed or could not be evaluated usefully.",
   running: "Still running.",
   open: "Still available for further exploration.",
-};
+} satisfies Record<ForkNode["status"], string>;
 
 function CompetedVerdict({ node, path }: { node: ForkNode; path: ForkNode[] }) {
   const visits = node.visits ?? 0;
@@ -440,7 +427,7 @@ function CompetedVerdict({ node, path }: { node: ForkNode; path: ForkNode[] }) {
         </div>
         <div className="min-w-0 flex-1">
           <div className="text-[11px] font-medium p-text">Search verdict</div>
-          <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">{COMPETED_VERDICT[node.status] ?? node.status}</div>
+          <div className="text-[11px] p-text-3 leading-relaxed mt-0.5">{COMPETED_VERDICT[node.status]}</div>
         </div>
       </div>
       <div className="grid grid-cols-2 gap-2 mt-3">
@@ -510,10 +497,10 @@ function CompetedExtras({ node, rpc }: { node: ForkNode; rpc: Rpc }) {
 /* ── a branch's trace (merged forks) ───────────────────────────── */
 
 /** Compact one-line digest of a tool call's input/output value. */
-function digestValue(v: unknown): string {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  try { return JSON.stringify(v); } catch { return String(v); }
+function digestValue<Value>(value: Value): string {
+  if (value == null) return "";
+  if (v.is(v.string(), value)) return value;
+  try { return JSON.stringify(value); } catch { return String(value); }
 }
 
 // One reasoning step: ordinal + optional reasoning + prose + its tool calls

@@ -7,33 +7,41 @@
  * (`consents`, `localControls`, `checkpoints`) and is null elsewhere.
  */
 
+import { JsonObjectSchema } from '@proteus/core';
 import type {
   BroadcastEvent, ChangelogEntry, ChangelogRevertResult, PromptFile, ShellApprovalMode,
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
   AlternateTakeSet, TakePickOutcome,
-  ReasoningEffort, TurnUsage, RunEvent,
+  ReasoningEffort, TurnUsage, RunEvent, JsonObject, JsonValue,
 } from '@proteus/core';
 import type { ShellApprovalHandler } from '@proteus/cli-backend';
 import type { CliSession, CliSessionInfo } from './session.js';
 import type { AgentModelMenu } from './model-catalog.js';
+import * as v from 'valibot';
 
 export type AgentClientMode = 'local' | 'cloud';
 
 /** A user prompt: plain text, or text plus file attachments (data-URL
  *  PromptFiles, built from @path mentions by the chat surfaces). */
 export type AgentPrompt = string | { text: string; files: ReadonlyArray<PromptFile> };
+const AgentPromptObjectSchema = v.object({
+  text: v.string(),
+  files: v.array(v.object({ filename: v.string(), mediaType: v.string(), url: v.string() })),
+});
 
 export function promptText(prompt: AgentPrompt): string {
-  return typeof prompt === 'string' ? prompt : prompt.text;
+  const text = v.safeParse(v.string(), prompt);
+  return text.success ? text.output : v.parse(AgentPromptObjectSchema, prompt).text;
 }
 
 export function promptFiles(prompt: AgentPrompt): ReadonlyArray<PromptFile> {
-  return typeof prompt === 'string' ? [] : prompt.files;
+  const text = v.safeParse(v.string(), prompt);
+  return text.success ? [] : v.parse(AgentPromptObjectSchema, prompt).files;
 }
 
 export interface AgentToolCallResult {
   name: string;
-  args: unknown;
+  args: JsonObject;
   result?: string;
 }
 
@@ -51,7 +59,7 @@ export interface AgentTurnResult {
 export type AgentClientEvent =
   | { type: 'turn-start'; kind: 'user' | 'programmatic'; text: string; event?: string }
   | { type: 'text-delta'; delta: string }
-  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
   | { type: 'tool-result'; toolName: string; toolCallId: string; result: string; success: boolean }
   | { type: 'step-finish'; stepIndex: number }
   | { type: 'turn-end'; turn: AgentTurnResult }
@@ -319,22 +327,26 @@ export interface AgentClient {
 export interface AgentUiMessage {
   id: string;
   role: 'system' | 'user' | 'assistant';
-  parts: Array<Record<string, unknown>>;
+  parts: AgentUiMessagePart[];
 }
 
+export type AgentUiMessagePart =
+  | { type: 'file'; mediaType: string; filename: string; url: string }
+  | { type: 'text'; text: string };
+
 export function createUserUiMessage(text: string, files: ReadonlyArray<PromptFile> = []): AgentUiMessage {
+  const parts: AgentUiMessagePart[] = files.map((file) => ({
+    type: 'file', mediaType: file.mediaType, filename: file.filename, url: file.url,
+  }));
+  if (text || files.length === 0) parts.push({ type: 'text', text });
   return {
     id: crypto.randomUUID(),
     role: 'user',
-    parts: [
-      ...files.map((f) => ({ type: 'file', mediaType: f.mediaType, filename: f.filename, url: f.url })),
-      ...(text || files.length === 0 ? [{ type: 'text', text }] : []),
-    ],
+    parts,
   };
 }
 
-export function asRecord(value: unknown): Record<string, unknown> {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : { input: value };
+export function asRecord(input: { value: JsonValue }): JsonObject {
+  const parsed = v.safeParse(JsonObjectSchema, input.value);
+  return parsed.success ? parsed.output : { input: input.value };
 }

@@ -2,13 +2,12 @@ import { describe, test, expect } from 'bun:test';
 import {
   initCurriculumTable, proposeNextTasks, listProposedTasks, updateProposedTaskStatus,
 } from '../src/curriculum/proposer.ts';
-import { createTestSql, createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
-import type { AgentRuntime } from '../src/index.ts';
+import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
+import { createTestRuntime } from './helpers.js';
 
 function setup() {
-  const { sql, execRaw } = createTestSql();
-  initCurriculumTable(execRaw);
-  const rt = { storage: { sql, execRaw, vfs: {} as never } } as unknown as AgentRuntime;
+  const { rt } = createTestRuntime();
+  initCurriculumTable(rt.storage.execRaw);
   return { rt };
 }
 

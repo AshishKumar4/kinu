@@ -8,6 +8,7 @@
 // mechanism. It STEERS and never blocks: the contract these tests pin is that
 // the command runs, its output arrives whole, and a note names `file`.
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { handRolledFileWrite, fileToolSteer, createFileToolSteer } from '../src/tools/run-file-steer.js';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
@@ -22,7 +23,12 @@ const echoShell = (): Shell => ({
 
 const runToolOver = (shell: Shell): RunTool => {
   const { rt } = createTestRuntime();
-  return buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime }).run as unknown as RunTool;
+  const runtime: AgentRuntime = { ...rt, shell };
+  return {
+    execute: toolExecute<{ command: string; runtime?: string }, string>(
+      buildBuiltinTools({ rt: runtime }).run,
+    ),
+  };
 };
 
 describe('handRolledFileWrite', () => {

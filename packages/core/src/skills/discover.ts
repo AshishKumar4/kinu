@@ -26,6 +26,10 @@ export interface DiscoverOpts {
   onParseError?: (file: string, error: string) => void;
 }
 
+function errorMessage({ error }: { error: unknown }): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Discover every valid skill — built-ins + VFS, with VFS taking precedence. */
 export async function discoverSkills(
   vfs: SkillsVfs,
@@ -52,7 +56,7 @@ export async function discoverSkills(
     const stem = entry.replace(/\.md$/, '');
     try {
       const raw = await vfs.readFile(path, { encoding: 'utf8' });
-      const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      const text = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
       // Filename stem doubles as the fallback `name` so Claude-Code skills
       // authored without a `name:` line still parse (Anthropic spec lets
       // the directory name supply it). If frontmatter DOES specify name,
@@ -64,8 +68,8 @@ export async function discoverSkills(
         continue;
       }
       byName.set(parsed.skill.name, parsed.skill);
-    } catch (err) {
-      onErr(path, (err as Error).message);
+    } catch (error) {
+      onErr(path, errorMessage({ error }));
     }
   }
 

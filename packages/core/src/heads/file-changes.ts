@@ -10,24 +10,25 @@
  * it to whoever is asked.
  *
  * So attribution happens where a head's own write lands, not where the work
- * ends. Each head reaches its parent through its OWN `parent` executor, and this
- * observer wraps THAT head's file view of it (`observeWrites`) — which is what
+ * ends. This observer wraps THAT head's canonical workspace file view
+ * (`observeWrites`) — which is what
  * makes the attribution exact whatever a sibling is doing at the same moment.
  *
  * What it therefore covers, and what it does not: every write and delete a head
- * makes to the PARENT workspace — `parent.writeFile`, and the `file` tool when
- * pointed there. It does NOT cover files changed by a shell command the head ran
- * (`parent.exec 'sed -i …'`, `run laptop …`): that plane reports an exit code,
+ * makes through the workspace VFS — `workspace.writeFile` and the `file` tool.
+ * It does NOT cover files changed by a shell command the head ran
+ * (`workspace.exec 'sed -i …'`, `run laptop …`): that plane reports an exit code,
  * not a file list, and recovering one would mean diffing a directory siblings
  * are writing to at the same time — the smear this design exists to avoid. Those
  * changes are real, and they are left unattributed rather than attributed to a
  * guess; {@link HEAD_FILE_CHANGE_PROVENANCE} is the sentence that says so
  * wherever the set is rendered.
  *
- * The head's own workspace is not observed at all: it is private scratch that
- * dies with the head, so listing it would report noise as work.
+ * Actor-private control state is stored beneath `.proteus` and is not part of
+ * the head tool surface.
  */
 
+import * as v from 'valibot';
 import { diffLines, type FileStatus } from '../vfs/diff.js';
 import type { WriteEvent, WriteObserver } from '../vfs/observe.js';
 
@@ -46,7 +47,7 @@ export interface HeadFileChange {
 /** The one sentence that keeps a rendered change set from implying it is the
  *  whole story. See the module docstring for why the gap exists. */
 export const HEAD_FILE_CHANGE_PROVENANCE =
-  "Recorded at each head's file plane; files changed by shell commands a head ran are not attributed to a head.";
+  "Recorded at each head's workspace file plane; files changed by shell commands a head ran are not attributed to a head.";
 
 interface Touched {
   baseline: string | null;
@@ -55,8 +56,8 @@ interface Touched {
 }
 
 /**
- * One head's accumulated file changes. Wrapped around that head's view of the
- * parent workspace (`observeWrites`) and read once its report is assembled.
+ * One head's accumulated file changes. Wrapped around that head's canonical
+ * workspace view (`observeWrites`) and read once its report is assembled.
  *
  * Net, not per-write: a path is diffed against what it held when this head FIRST
  * touched it, so a head that rewrote a file five times reports the one change a
@@ -116,16 +117,17 @@ function withoutFinalNewline(content: string | null): string {
 /** Content as text, or the fact that it is not. A non-string payload is never
  *  decoded into lines: an image has no line count, and inventing one would put
  *  a number in a review that means nothing. */
-function asText(value: string | Uint8Array | null): { text: string | null; binary: boolean } {
+function asText(value: string | Uint8Array | null) {
   if (value === null) return { text: null, binary: false };
-  if (typeof value === 'string') return { text: value, binary: false };
+  const text = v.safeParse(v.string(), value);
+  if (text.success) return { text: text.output, binary: false };
   return { text: '', binary: true };
 }
 
 /** Render one head's change set the way a review states it. Empty in, empty
  *  out — a head that changed nothing contributes no lines. */
 export function formatHeadFileChanges(changes: readonly HeadFileChange[]): string[] {
-  const mark: Record<FileStatus, string> = { added: 'A', removed: 'D', changed: 'M' };
+  const mark = { added: 'A', removed: 'D', changed: 'M' } satisfies Record<FileStatus, string>;
   return changes.map((c) => c.binary
     ? `  ${mark[c.status]}  ${c.path}  (binary)`
     : `  ${mark[c.status]}  ${c.path}  +${c.added} −${c.removed}`);

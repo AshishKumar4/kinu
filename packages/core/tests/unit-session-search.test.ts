@@ -10,7 +10,7 @@ let nextRow = 0;
 function insert(sql: TestSql['sql'], sessionId: string, role: string, content: string, createdAt?: number): string {
   const id = `m-${++nextRow}-${sessionId}`;
   const ts = createdAt ?? 1_000_000 + nextRow * 1000;
-  sql`INSERT INTO messages (id, session_id, role, content, created_at)
+  void sql`INSERT INTO messages (id, session_id, role, content, created_at)
       VALUES (${id}, ${sessionId}, ${role}, ${content}, ${ts})`;
   return id;
 }
@@ -50,7 +50,7 @@ describe('SessionSearchStore.search', () => {
     expect(hits.length).toBe(2);
     expect(hits[0]!.messageId).toBe(dense);
     expect(hits[0]!.sessionId).toBe('b');
-    expect(typeof hits[0]!.createdAt).toBe('number');
+    expect(Number.isFinite(hits[0]!.createdAt)).toBe(true);
   });
 
   test('falls back to OR matching when the AND query has no joint hits', () => {

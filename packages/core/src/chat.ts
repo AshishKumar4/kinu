@@ -25,6 +25,8 @@ import type { ExtensionHost } from './extension.js';
 import { mergeProviderOptions } from './strategy/effort.js';
 import { describeProviderError } from './providers/util.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from './prompts/evidence-window.js';
+import * as v from 'valibot';
+import { JsonObjectSchema, type JsonObject } from './utils/json.js';
 
 export type ChatEvent =
   | { type: 'text-delta'; delta: string }
@@ -32,7 +34,7 @@ export type ChatEvent =
    *  this event with its 'tool-result'. Surfaces that report calls out of band
    *  (ACP's tool_call/tool_call_update) need it; name alone cannot pair
    *  concurrent calls to the same tool. */
-  | { type: 'tool-call'; toolName: string; toolCallId: string; args: Record<string, unknown> }
+  | { type: 'tool-call'; toolName: string; toolCallId: string; args: JsonObject }
   /** A tool call settled. `result` is the stringified output on success or the
    *  error text on failure; `success`/`error` carry the discriminator the
    *  evolution signal reads (hadError, outcome review) — matching the cf
@@ -137,7 +139,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
 
   // Channel step-finish events from the onStepFinish callback to the generator.
   // We use a simple array that the generator checks after each stream chunk.
-  const pendingStepEvents: Array<{ stepIndex: number; inputTokens?: number; outputTokens?: number; cachedInputTokens?: number }> = [];
+  interface PendingStepEvent {
+    stepIndex: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedInputTokens?: number;
+  }
+  const pendingStepEvents: PendingStepEvent[] = [];
   let stepCount = 0;
 
   // The shared turn-context assembly (orchestrator/turn-context.ts): attachment
@@ -149,14 +157,12 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   const turnMessages = await assembleTurnMessages({
     system: opts.system,
     history: opts.history,
-    ...(opts.attachments ? { attachments: opts.attachments } : {}),
-    ...(extensions ? { extensions } : {}),
-    ...(opts.turnLocal ? { turnLocal: opts.turnLocal } : {}),
+    attachments: opts.attachments,
+    extensions,
+    turnLocal: opts.turnLocal,
     sessionKey: opts.cache?.sessionKey ?? '',
     contextWindow,
-    ...(opts.providerReportedTokens !== undefined
-      ? { providerReportedTokens: opts.providerReportedTokens }
-      : {}),
+    providerReportedTokens: opts.providerReportedTokens,
     trigger: opts.transformTrigger ?? 'auto',
   });
 
@@ -170,7 +176,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     system: opts.system,
     messages: turnMessages,
     sessionKey: opts.cache?.sessionKey ?? '',
-    ...(opts.cache?.retention ? { retention: opts.cache.retention } : {}),
+    retention: opts.cache?.retention,
   });
   const rollTail = hasCacheMarkers(cache.strategy);
   const providerOptions = mergeProviderOptions(cache.providerOptions, opts.providerOptions);
@@ -222,19 +228,19 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
     // Capture instead: the error still reaches callers through the rethrow
     // below, so there is exactly one place that decides how a failure reads.
     onError: ({ error }) => { streamError = error; },
-    ...(providerOptions ? { providerOptions } : {}),
+    providerOptions,
     // The shared step pipeline (prompting/prepare-step.ts): extension rewrites
     // first, then step-boundary tool-output pruning against the window budget,
     // then the dynamic-context weave, cache tail markers LAST onto the final
     // array. The cf orchestrator's beforeStep runs the identical composition.
     prepareStep: ({ stepNumber, messages }: { stepNumber: number; messages: ModelMessage[] }) =>
       composePrepareStep({
-        ...(extensions ? { extensions } : {}),
+        extensions,
         cache: rollTail ? { strategy: cache.strategy } : null,
         prune: { contextWindow },
-        ...(opts.budget ? { budget: opts.budget } : {}),
-        ...(opts.dynamicContext ? { dynamic: opts.dynamicContext } : {}),
-        ...(opts.meter ? { meter: opts.meter } : {}),
+        budget: opts.budget,
+        dynamic: opts.dynamicContext,
+        meter: opts.meter,
       }, { stepNumber, messages }),
     onStepFinish: (step) => {
       stepCount++;
@@ -245,15 +251,15 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
       // into the one flat number the ChatEvent carries (the accumulator reads
       // both sources too, so a CLI consumer passing only cachedInputTokens is
       // faithful and never double-counts).
-      const anthropicCacheRead = step.providerMetadata?.anthropic?.cacheReadInputTokens;
+      const parsedCacheRead = v.safeParse(v.number(), step.providerMetadata?.anthropic?.cacheReadInputTokens);
+      const anthropicCacheRead = parsedCacheRead.success ? parsedCacheRead.output : 0;
       const cachedInputTokens = (step.usage?.cachedInputTokens ?? 0)
-        + (typeof anthropicCacheRead === 'number' ? anthropicCacheRead : 0);
-      pendingStepEvents.push({
-        stepIndex: stepCount,
-        ...(typeof inputTokens === 'number' && inputTokens > 0 ? { inputTokens } : {}),
-        ...(typeof outputTokens === 'number' && outputTokens > 0 ? { outputTokens } : {}),
-        ...(cachedInputTokens > 0 ? { cachedInputTokens } : {}),
-      });
+        + anthropicCacheRead;
+      const event: PendingStepEvent = { stepIndex: stepCount };
+      if (inputTokens !== undefined && inputTokens > 0) event.inputTokens = inputTokens;
+      if (outputTokens !== undefined && outputTokens > 0) event.outputTokens = outputTokens;
+      if (cachedInputTokens > 0) event.cachedInputTokens = cachedInputTokens;
+      pendingStepEvents.push(event);
     },
   });
 
@@ -285,7 +291,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
         }
         case 'tool-call': {
           stepHadOutput = true;
-          const args = (chunk.input ?? {}) as Record<string, unknown>;
+          const args = parseToolArgs(chunk.input);
           await extensions?.emitToolCall({ toolName: chunk.toolName, args });
           yield { type: 'tool-call', toolName: chunk.toolName, toolCallId: chunk.toolCallId, args };
           break;
@@ -299,7 +305,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // record different evolution evidence for the same call. Every
           // display path bounds it at render.
           const result = renderToolResult(raw);
-          const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
+          const input = parseToolArgs(chunk.input);
           await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result, success: true });
           yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result, success: true };
           break;
@@ -309,7 +315,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // reads. The extension seam sees the error text as the result (same as
           // the cf afterToolCall), and the discriminator rides success/error.
           const error = describeProviderError(chunk.error);
-          const input = ((chunk as any).input ?? {}) as Record<string, unknown>;
+          const input = parseToolArgs(chunk.input);
           await extensions?.emitToolResult({ toolName: chunk.toolName, args: input, result: error, success: false });
           yield { type: 'tool-result', toolName: chunk.toolName, toolCallId: chunk.toolCallId, result: error, success: false, error };
           break;
@@ -319,13 +325,13 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
           // provider stream that died (closed early, empty SSE, dropped route):
           // the model never chose to stop. Reasoning-only steps count as dead
           // too — a turn cannot proceed from thinking that never landed.
-          const reason = String((chunk as { finishReason?: unknown }).finishReason ?? '');
-          deadFinalStep = !stepHadOutput && (reason === 'other' || reason === 'unknown' || reason === '');
+          const reason = chunk.finishReason;
+          deadFinalStep = !stepHadOutput && reason === 'other';
           stepHadOutput = false;
           break;
         }
         case 'error': {
-          streamError = (chunk as { error: unknown }).error;
+          streamError = chunk.error;
           break;
         }
       }
@@ -359,7 +365,7 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
   // Await the full result to get response messages
   const response = await result.response;
   const steps = await result.steps;
-  const responseMessages = response.messages as ModelMessage[];
+  const responseMessages = response.messages;
 
   // If the model produced no text (ended on a tool call), gather from steps
   if (!allText.trim()) {
@@ -389,8 +395,14 @@ export async function* runChat(opts: ChatOptions): AsyncGenerator<ChatEvent> {
  *  SDK's message history; this is the trajectory/human-facing rendering, so a
  *  structured result must serialize to its content — never `String({...})`'s
  *  "[object Object]". */
-function renderToolResult(raw: unknown): string {
-  if (typeof raw === 'string') return raw;
+function parseToolArgs<T>(raw: T): JsonObject {
+  const parsed = v.safeParse(JsonObjectSchema, raw);
+  return parsed.success ? parsed.output : {};
+}
+
+function renderToolResult<T>(raw: T): string {
+  const text = v.safeParse(v.string(), raw);
+  if (text.success) return text.output;
   if (raw == null) return '';
-  try { return JSON.stringify(raw); } catch { return String(raw); }
+  try { return JSON.stringify(raw) ?? String(raw); } catch { return String(raw); }
 }

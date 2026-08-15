@@ -29,6 +29,7 @@ export function initSearchTables(execRaw: RawSqlExec): void {
       action           TEXT NOT NULL DEFAULT '',
       observation      TEXT NOT NULL DEFAULT '',
       code_used        TEXT,
+      code_language    TEXT,
       visits           INTEGER NOT NULL DEFAULT 0,
       value            REAL NOT NULL DEFAULT 0,
       depth            INTEGER NOT NULL DEFAULT 0,

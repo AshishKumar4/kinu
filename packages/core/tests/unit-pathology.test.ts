@@ -5,10 +5,11 @@
 // optional LLM pass can only change a title. No test calls a live model.
 import { describe, expect, test } from 'bun:test';
 import {
-  COMPLAINT_CLASSES, RESPONSE_SHAPES,
+  COMPLAINT_CLASSES, RESPONSE_MODES,
   clusterPathologies, complaintClass, describePathology, isPathologyId,
   labelPathologyClusters, parsePathologyTag, pathologyId, renderPathologyBlock,
-  responseShape, buildPathologyLabelPrompt,
+  classifyResponseMode, buildPathologyLabelPrompt,
+  type ComplaintClass,
   type PathologyInput,
 } from '../src/evolution/pathology.js';
 import type { LLM } from '../src/types/primitives.js';
@@ -24,16 +25,20 @@ function input(over: Partial<PathologyInput>): PathologyInput {
 /** A model that answers with a fixed string — no network, no live call. */
 function stubLLM(reply: string | Error): LLM {
   return {
+    async *stream() {
+      if (reply instanceof Error) throw reply;
+      yield reply;
+    },
     async complete() {
       if (reply instanceof Error) throw reply;
       return reply;
     },
-  } as unknown as LLM;
+  };
 }
 
 describe('complaint classification — closed vocabulary, first match wins', () => {
   test('each lexical class is recognised from the follow-up', () => {
-    const cases: ReadonlyArray<readonly [string, string]> = [
+    const cases: ReadonlyArray<readonly [string, ComplaintClass]> = [
       ['it throws a TypeError on line 4', 'error'],
       ["that's not what I asked for", 'wrong_target'],
       ['you forgot the retry backoff', 'incomplete'],
@@ -44,7 +49,7 @@ describe('complaint classification — closed vocabulary, first match wins', () 
       ["that's way more than I asked for, I didn't ask you to refactor", 'overreach'],
     ];
     for (const [followup, expected] of cases) {
-      expect(complaintClass('add retries to the uploader', followup)).toBe(expected as never);
+      expect(complaintClass('add retries to the uploader', followup)).toBe(expected);
     }
   });
 
@@ -71,16 +76,16 @@ describe('complaint classification — closed vocabulary, first match wins', () 
   });
 });
 
-describe('response shape', () => {
+describe('response mode', () => {
   test('fences win, then a trailing question, then length', () => {
-    expect(responseShape('here you go\n```js\nx\n```\n')).toBe('code');
-    expect(responseShape('which uploader did you mean?')).toBe('question');
-    expect(responseShape('a'.repeat(601))).toBe('prose');
-    expect(responseShape('Done.')).toBe('terse');
+    expect(classifyResponseMode('here you go\n```js\nx\n```\n')).toBe('code');
+    expect(classifyResponseMode('which uploader did you mean?')).toBe('question');
+    expect(classifyResponseMode('a'.repeat(601))).toBe('prose');
+    expect(classifyResponseMode('Done.')).toBe('terse');
   });
 
   test('a fenced answer that also asks a question is still a code answer', () => {
-    expect(responseShape('```js\nx\n```\nwant me to test it?')).toBe('code');
+    expect(classifyResponseMode('```js\nx\n```\nwant me to test it?')).toBe('code');
   });
 });
 
@@ -96,9 +101,9 @@ describe('pathology identity is deterministic and model-free', () => {
 
   test('every cell in the closed product describes itself from the id alone', () => {
     for (const complaint of COMPLAINT_CLASSES) {
-      for (const shape of RESPONSE_SHAPES) {
-        const described = describePathology(pathologyId(complaint, shape));
-        expect(described).not.toBe(pathologyId(complaint, shape));
+      for (const responseMode of RESPONSE_MODES) {
+        const described = describePathology(pathologyId(complaint, responseMode));
+        expect(described).not.toBe(pathologyId(complaint, responseMode));
         expect(described.length).toBeGreaterThan(20);
       }
     }
@@ -117,7 +122,7 @@ describe('clustering', () => {
     input({ turnId: null, followup: 'it crashed', assistantResponse: '```js\nz\n```', scaffoldVersion: 2 }),
   ];
 
-  test('cells are keyed by complaint × shape and ordered largest first', () => {
+  test('cells are keyed by complaint × responseMode and ordered largest first', () => {
     const clusters = clusterPathologies(rows);
     expect(clusters.map((c) => [c.id, c.size])).toEqual([
       ['error/code', 3],
@@ -173,8 +178,7 @@ describe('LLM labelling can only change a title', () => {
   });
 
   test('an empty cluster list makes no call at all', async () => {
-    const exploding: LLM = { async complete() { throw new Error('should not be called'); } } as unknown as LLM;
-    expect(await labelPathologyClusters(exploding, [])).toEqual([]);
+    expect(await labelPathologyClusters(stubLLM(new Error('should not be called')), [])).toEqual([]);
   });
 
   test('the label prompt shows the ids it wants back as keys', () => {

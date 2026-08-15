@@ -31,6 +31,9 @@
  *   re-executes, for a curve no decision reads. It runs on demand instead.
  */
 
+import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
+
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { LLM } from '../types/primitives.js';
 import type { SessionWriter } from '../mcts/record-node.js';
@@ -43,13 +46,14 @@ import type {
 } from './types.js';
 import { DEFAULT_EVOLUTION_CONFIG } from './types.js';
 import { isoDate } from '../utils/date.js';
-import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
+import { extractJsonObject, jsonObjectOnlyInstruction, stripMarkdownFences } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { upsertCraftedTool } from '../craft/conflict.js';
 import { periodicCraftConsolidation } from '../craft/consolidation.js';
 import { updateCraftScores } from '../craft/ema.js';
 import { initCraftScoreTables } from '../craft/schemas.js';
 import { createCraftLedger, type CraftLedger } from '../craft/in-episode.js';
+import { recordRecoveryFinding, recoveryFindingText, type RecoveryFinding } from './recovery.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
 import {
   type TurnOutcome, type TurnOutcomeSource, type OutcomeClassification,
@@ -89,6 +93,12 @@ import {
   type EvolutionBaseSelection, type ScaffoldArchiveEntry,
 } from '../scaffold/archive.js';
 import { readScaffoldVersion, getCurrentScaffoldVersion } from '../scaffold/shadow.js';
+
+const GeneralizedToolSchema = v.object({
+  name: v.optional(v.string()),
+  description: v.optional(v.string()),
+  code: v.optional(v.string()),
+});
 import { runMCTS } from '../mcts/engine.js';
 import { createAgentConfigStore, initAgentConfigTable, type AgentConfigStore } from '../config/store.js';
 
@@ -256,13 +266,42 @@ export class EvolutionEngine {
   private emit(event: EvolutionEvent): void {
     // Persist to SQL so UI can query it
     try {
-      this.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
+      void this.rt.storage.sql`INSERT INTO evolution_events (type, message, data, created_at)
         VALUES (${event.type}, ${event.message}, ${event.data ? JSON.stringify(event.data) : null}, ${Date.now()})`;
     } catch {
       // Table may not exist yet in test environments — that's fine
     }
     for (const listener of this.listeners) {
       listener(event);
+    }
+  }
+
+  // ── Timescale 0: In-episode (the step clock) ────────────────────
+
+  /**
+   * The step clock's knowledge observation: an execution recovery the
+   * orchestrator's failure ledger saw mid-episode (a failure streak broken by
+   * a changed call that ran clean — evolution/recovery.ts, where its worth
+   * and its ceiling are stated). Synchronous, no model call: one lessons row,
+   * so it rides neither evolution lane and ticks inside a single long
+   * autonomous turn, exactly like the craft ledger above. Provisional forever
+   * by construction (bound to no turn), which keeps machine-observed prose
+   * out of MEMORY.md; its one consumer is the dynamic-context injection that
+   * carries the newest findings for the rest of the episode.
+   */
+  recordRecovery(finding: RecoveryFinding): void {
+    if (!this.config.enabled) return;
+    let recorded = false;
+    try {
+      recorded = recordRecoveryFinding(this.rt.storage.sql, finding);
+    } catch {
+      return; // lessons ledger unavailable on a bare runtime — never fail the turn
+    }
+    if (recorded) {
+      this.emit({
+        type: 'reflection',
+        message: `[execution recovery] ${recoveryFindingText(finding)}`,
+      });
     }
   }
 
@@ -599,6 +638,50 @@ export class EvolutionEngine {
     this.emitChangelogDigest(session.startedAt);
   }
 
+  // ── The promotion gate's shadow rollout, both halves ────────────
+
+  /**
+   * The turn-bound half: record a completed turn as evidence the promotion
+   * gate may draw on. ONE row and no inference — the candidate rollout it pays
+   * for runs on the cadence lane below.
+   */
+  queueShadowTrial(turn: CompletedTurn, context: readonly ModelMessage[]): void {
+    if (!this.config.enabled) return;
+    this.config.shadowTrialQueue?.({
+      task: turn.userMessage,
+      currentOutput: turn.assistantResponse,
+      context,
+    });
+  }
+
+  /**
+   * The expensive half, on the lane that can afford it: run whatever trials
+   * the turns queued for the pending scaffold.
+   *
+   * Due whenever a capable host asks — NOT on the session-reflection window,
+   * which is a different clock. Gating it there would leave a candidate
+   * unresolved through every window that never closed, and `maybeEvolveScaffold`
+   * refuses to propose while one is pending, so the whole loop would stall on
+   * it. AgentOrchestrator calls this at the head of its cadence pass, before
+   * the window pass that may want to propose.
+   *
+   * Absorbs its own failures: a trial that cannot be scored must not stop the
+   * pass it rides on. Gated on `enabled` like every other entry point here,
+   * and with the queue above for the same reason: a `--no-auto-evolve` run
+   * records no evolution state and spends no evolution compute. Nothing stalls
+   * on that — such a run proposes nothing to stall over, and the queue is
+   * durable, so a candidate an earlier run left pending is resolved by the next
+   * evolution-enabled host.
+   */
+  async runDueShadowTrials(): Promise<void> {
+    if (!this.config.enabled || !this.config.shadowTrialRunner) return;
+    try {
+      await this.config.shadowTrialRunner();
+    } catch (err) {
+      console.warn('[proteus] shadow trial drain failed:', err instanceof Error ? err.message : err);
+    }
+  }
+
   /** Emit one "what I changed about myself" line for the closed window. */
   private emitChangelogDigest(since: number): void {
     let entries;
@@ -733,8 +816,7 @@ export class EvolutionEngine {
       // Only attempt mutation if the LLM produced something that looks like a scaffold
       if (!proposed.includes('async function* run')) return;
 
-      // Extract just the code from potential markdown fences
-      const code = proposed.replace(/```(?:js|javascript)?\n?/g, '').replace(/```\n?$/g, '').trim();
+      const code = stripMarkdownFences(proposed);
 
       const branchNote = base && baseCode
         ? `branched from v${base.version}${base.mode === 'explore' ? ' (archive stepping stone)' : ''}`
@@ -799,10 +881,10 @@ export class EvolutionEngine {
       const result = await runMCTS(this.rt, writer, task, {
         budget: this.config.lifetimeMCTSBudget,
         branches: overrides.branches ?? this.config.lifetimeMCTSBranches,
-        ...(overrides.maxDepth !== undefined ? { maxDepth: overrides.maxDepth } : {}),
-        ...(overrides.explorationWeight !== undefined ? { explorationWeight: overrides.explorationWeight } : {}),
-        ...(overrides.judgeSamples !== undefined ? { judgeSamples: overrides.judgeSamples } : {}),
-        ...(overrides.maxEvalLLMCalls !== undefined ? { maxEvalLLMCalls: overrides.maxEvalLLMCalls } : {}),
+        maxDepth: overrides.maxDepth,
+        explorationWeight: overrides.explorationWeight,
+        judgeSamples: overrides.judgeSamples,
+        maxEvalLLMCalls: overrides.maxEvalLLMCalls,
         onProgress: this.config.onMctsProgress,
       });
 
@@ -812,9 +894,10 @@ export class EvolutionEngine {
         data: result,
       });
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       this.emit({
         type: 'mcts_complete',
-        message: `Evolution failed: ${(err as Error).message}`,
+        message: `Evolution failed: ${message}`,
       });
     }
   }
@@ -853,7 +936,8 @@ export class EvolutionEngine {
       }
       return summary;
     } catch (err) {
-      this.emit({ type: 'replay_eval', message: `Replay eval failed: ${(err as Error).message}` });
+      const message = err instanceof Error ? err.message : String(err);
+      this.emit({ type: 'replay_eval', message: `Replay eval failed: ${message}` });
       return null;
     }
   }
@@ -927,8 +1011,10 @@ export class EvolutionEngine {
     );
 
     try {
-      const parsed = extractJsonObject(generalized) as { name?: string; description?: string; code?: string; params?: unknown };
-      if (!parsed.name || !parsed.code || parsed.code.startsWith('//')) return;
+      const parsed = v.parse(GeneralizedToolSchema, extractJsonObject(generalized));
+      // Shape only — whether the code is usable is decided by upsertCraftedTool,
+      // which compiles it the way the runtime will before storing anything.
+      if (!parsed.name || !parsed.code) return;
 
       const acceptance = await upsertCraftedTool(this.rt, {
         name: parsed.name,

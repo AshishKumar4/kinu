@@ -17,8 +17,9 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
-import { weakLabel } from '@proteus/core';
+import { weakLabel, type JsonObject, type JsonValue } from '@proteus/core';
 import { defaultTranscriptRoot, mineTranscripts, renderMineSkips } from '../src/cc-transcript.js';
+import * as v from 'valibot';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -34,7 +35,7 @@ let clock = 0;
 let uuidSeq = 0;
 const nextUuid = (): string => `u${++uuidSeq}`;
 
-interface Line { [key: string]: unknown }
+interface Line extends JsonObject {}
 
 /** A session file builder that keeps the parentUuid chain honest, because that
  *  chain is what the reader walks. */
@@ -57,12 +58,12 @@ class Session {
     return uuid;
   }
 
-  user(content: unknown, extra: Line = {}): this {
+  user(content: JsonValue, extra: Line = {}): this {
     this.push({ type: 'user', message: { role: 'user', content }, ...extra });
     return this;
   }
 
-  assistant(blocks: unknown[], extra: Line = {}): this {
+  assistant(blocks: JsonValue[], extra: Line = {}): this {
     this.push({ type: 'assistant', message: { role: 'assistant', content: blocks }, ...extra });
     return this;
   }
@@ -81,7 +82,7 @@ class Session {
   }
 
   at(index: number): string {
-    return this.lines[index].uuid as string;
+    return v.parse(v.string(), this.lines[index]?.uuid);
   }
 
   write(root: string, project: string, sessionId: string): void {
@@ -101,9 +102,9 @@ function newRoot(): string {
 }
 
 const text = (t: string) => [{ type: 'text', text: t }];
-const toolUse = (name: string, input: Record<string, unknown>) =>
+const toolUse = (name: string, input: JsonObject) =>
   ({ type: 'tool_use', name, input, id: `t${++uuidSeq}` });
-const toolResult = (content: unknown, extra: Record<string, unknown> = {}) =>
+const toolResult = (content: JsonValue, extra: JsonObject = {}) =>
   ({ type: 'tool_result', content, ...extra });
 
 // ── Reading the conversation ─────────────────────────────────────
@@ -452,11 +453,14 @@ describe('proteus label mine', () => {
       cwd: repoRoot,
       env: { ...process.env, NO_COLOR: '1' },
     });
-    const parsed = JSON.parse(result.stdout.toString()) as {
-      stats: { turns: number; labeled: number; byRule: Array<{ rule: string; fired: number }> };
-      classifier: unknown;
-      cost: unknown[];
-    };
+    const parsed = v.parse(v.object({
+      stats: v.object({
+        turns: v.number(), labeled: v.number(),
+        byRule: v.array(v.object({ rule: v.string(), fired: v.number() })),
+      }),
+      classifier: v.null(),
+      cost: v.array(v.object({})),
+    }), JSON.parse(result.stdout.toString()));
 
     expect(result.exitCode).toBe(0);
     expect(parsed.stats.turns).toBe(2);

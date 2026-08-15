@@ -136,6 +136,12 @@ export function formatMctsProgress(event: MCTSProgressEvent, totalBudget: number
         text: `  ${WARN('!')} ${iterationTag(event.iteration, totalBudget)} branch ${MUTED(event.branchId)} ` +
           `${DIM(`(${event.stage})`)} ${event.error}`,
       };
+    case 'grounding-unavailable':
+      return {
+        sink: 'log',
+        text: `  ${WARN('!')} ${iterationTag(event.iteration, totalBudget)} cannot run ${event.language}; ` +
+          `score is unverified ${DIM(`(runnable: ${event.canRun.join(', ')})`)}`,
+      };
     case 'iteration-complete':
       return {
         sink: 'log',
@@ -159,8 +165,8 @@ function createEvolveSession(rt: AgentRuntime): SessionWriter {
     async appendMessage(msg: SessionMessage, parentId?: string | null) {
       const content = msg.parts.map(p => p.text).join('');
       messages.push({ id: msg.id, parentId, role: msg.role, content });
-      rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
-        VALUES (${msg.id}, ${'evolve'}, ${parentId ?? null}, ${msg.role}, ${content})`;
+      void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content)
+                          VALUES (${msg.id}, ${'evolve'}, ${parentId ?? null}, ${msg.role}, ${content})`;
     },
     getHistory(leafId?: string | null) {
       if (!leafId) return messages.map(m => ({ role: m.role, content: m.content }));

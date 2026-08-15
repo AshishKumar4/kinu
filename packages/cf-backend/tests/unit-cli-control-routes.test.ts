@@ -1,21 +1,57 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
+import { JsonValueSchema, type JsonObject, type JsonValue } from '@proteus/core';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 
+const OkResponseSchema = v.object({ ok: v.boolean() });
+const TicketResponseSchema = v.object({ ticket: v.string(), expiresAt: v.number() });
+const ErrorResponseSchema = v.object({ error: v.string() });
+const RpcResponseSchema = v.object({ result: JsonValueSchema });
+
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface ControlRouteTestBindings<UserStub, AgentStub> {
+  UserDO: TestNamespace<UserStub>;
+  OrchestratorAgent: TestNamespace<AgentStub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<UserStub, AgentStub>(bindings: ControlRouteTestBindings<UserStub, AgentStub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: The control routes reach only the two constructed namespaces and
+  // credential key; every typed binding reachable in these tests is present.
+  return env as Env;
+}
+
+function handled(response: Response | null): Response {
+  if (!response) throw new Error('CLI control route did not handle the request');
+  return response;
+}
+
+async function errorBody(response: Response | null) {
+  return v.parse(ErrorResponseSchema, await handled(response).json());
+}
+
 function setupEnv(opts: { tokenMintedAt?: number } = {}) {
   const calls: string[] = [];
   const userDO = {
-    async verifyCliToken(_caller: unknown, token: string) {
+    async verifyCliToken(_caller: UserCaller, token: string) {
       return {
         ok: token === TOKEN,
         tokenHash: 'hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async listCliTokens(_caller: unknown) {
+    async listCliTokens(_caller: UserCaller) {
       return [{
         tokenHash: 'hash',
         label: 'terminal',
@@ -24,14 +60,14 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
         lastUsedAt: null,
       }];
     },
-    async hasWorkspace(_caller: unknown, name: string) {
+    async hasWorkspace(_caller: UserCaller, name: string) {
       return name === 'jarvis';
     },
     async ensureWorkspaceCapability() {},
-    async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
+    async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
       calls.push(`workspace:remove:${name}:${ownerUserId}`);
     },
-    async issueCliAgentConnectTicket(_caller: unknown, input: { userId: string; agentName: string; cliTokenHash: string }) {
+    async issueCliAgentConnectTicket(_caller: UserCaller, input: { userId: string; agentName: string; cliTokenHash: string }) {
       calls.push(`connect-ticket:${input.userId}:${input.agentName}:${input.cliTokenHash}`);
       return { ok: true, ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 };
     },
@@ -76,7 +112,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
       calls.push(`effort:set:${effort}`);
       return { ok: true, effort };
     },
-    async createTimerTrigger(opts: unknown) {
+    async createTimerTrigger(opts: JsonObject) {
       calls.push(`triggers:create:${JSON.stringify(opts)}`);
       return { id: 'trg_1', kind: 'timer_oneshot', nextFireAt: 123 };
     },
@@ -100,7 +136,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
       calls.push(`executors:exec:${id}:${command}`);
       return { stdout: 'ok', exitCode: 0 };
     },
-    async createDurableWebhook(opts: unknown) {
+    async createDurableWebhook(opts: JsonObject) {
       calls.push(`triggers:webhook:${JSON.stringify(opts)}`);
       return { trigger_id: 'trg_webhook', url: '/api/workspaces/jarvis/webhook/trg_webhook', secret: 'secret' };
     },
@@ -114,7 +150,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
       return null;
     },
   };
-  const env = {
+  const env = testEnv({
     UserDO: {
       idFromName(name: string) { return name; },
       get() { return userDO; },
@@ -122,7 +158,7 @@ function setupEnv(opts: { tokenMintedAt?: number } = {}) {
     OrchestratorAgent: {
       idFromName(name: string) { return name; },
       get() { return agent; },
-    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   return { env, calls };
 }
 
@@ -131,12 +167,12 @@ function cliRequest(path: string, init: RequestInit = {}) {
     ...init,
     headers: {
       authorization: `Bearer ${TOKEN}`,
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
 }
 
-function rpcRequest(method: string, args: unknown[] = [], agent = 'jarvis') {
+function rpcRequest(method: string, args: JsonValue[] = [], agent = 'jarvis') {
   return cliRequest(`/api/cli/workspaces/${agent}/rpc`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -144,10 +180,10 @@ function rpcRequest(method: string, args: unknown[] = [], agent = 'jarvis') {
   });
 }
 
-async function rpcResult(env: Env, method: string, args: unknown[] = []): Promise<unknown> {
+async function rpcResult(env: Env, method: string, args: JsonValue[] = []): Promise<JsonValue> {
   const res = await handleCliRequest(rpcRequest(method, args), env);
   expect(`${method}:${res?.status}`).toBe(`${method}:200`);
-  return ((await res?.json()) as { result: unknown }).result;
+  return v.parse(RpcResponseSchema, await handled(res).json()).result;
 }
 
 describe('CLI control routes', () => {
@@ -156,7 +192,7 @@ describe('CLI control routes', () => {
 
     const deleted = await handleCliRequest(cliRequest('/api/cli/workspaces/%6Aarvis', { method: 'DELETE' }), env);
     expect(deleted?.status).toBe(200);
-    expect(await deleted?.json<{ ok: boolean }>()).toEqual({ ok: true });
+    expect(v.parse(OkResponseSchema, await handled(deleted).json())).toEqual({ ok: true });
     expect(calls).toContain(`workspace:remove:jarvis:${USER_ID}`);
 
     const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown', { method: 'DELETE' }), env);
@@ -169,8 +205,9 @@ describe('CLI control routes', () => {
 
     const ticket = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/connect-ticket', { method: 'POST' }), env);
     expect(ticket?.status).toBe(200);
-    expect(ticket?.headers.get('cache-control')).toBe('no-store');
-    expect(await ticket?.json<{ ticket: string; expiresAt: number }>()).toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
+    expect(handled(ticket).headers.get('cache-control')).toBe('no-store');
+    expect(v.parse(TicketResponseSchema, await handled(ticket).json()))
+      .toEqual({ ticket: `pat_${USER_ID}_ticket`, expiresAt: 1234 });
     expect(calls).toContain(`connect-ticket:${USER_ID}:jarvis:hash`);
 
     const missing = await handleCliRequest(cliRequest('/api/cli/workspaces/unknown/connect-ticket', { method: 'POST' }), env);
@@ -223,7 +260,7 @@ describe('CLI control routes', () => {
     for (const method of ['deviceRpc', 'claimOwner', 'constructor', '__proto__', 'destroyAgent']) {
       const res = await handleCliRequest(rpcRequest(method, ['x']), env);
       expect(`${method}:${res?.status}`).toBe(`${method}:404`);
-      expect((await res?.json() as { error: string }).error).toContain('No such agent RPC method');
+      expect((await errorBody(res)).error).toContain('No such agent RPC method');
     }
     // Nothing was invoked on the DO — not even the ownership claim.
     expect(calls).toEqual([]);
@@ -250,14 +287,14 @@ describe('CLI control routes', () => {
   });
 
   test('a throwing method surfaces as a 400 with its message', async () => {
-    const env = {
+    const env = testEnv({
       UserDO: {
         idFromName: (n: string) => n,
         get: () => ({
-          async verifyCliToken(_caller: unknown, token: string) {
+          async verifyCliToken(_caller: UserCaller, token: string) {
             return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
           },
-          async hasWorkspace(_caller: unknown) { return true; },
+          async hasWorkspace(_caller: UserCaller) { return true; },
           async ensureWorkspaceCapability() {},
         }),
       },
@@ -267,30 +304,30 @@ describe('CLI control routes', () => {
           async claimOwner() { return { owner: USER_ID, capabilityHash: 'sha-existing' }; },
           async createTimerTrigger() { throw new Error('Timer trigger requires cron or atMs'); },
         }),
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     const thrown = await handleCliRequest(rpcRequest('createTimerTrigger', [{}]), env);
     expect(thrown?.status).toBe(400);
-    expect((await thrown?.json() as { error: string }).error).toContain('Timer trigger requires cron or atMs');
+    expect((await errorBody(thrown)).error).toContain('Timer trigger requires cron or atMs');
   });
 });
 
 describe('shared ownership claim status mapping', () => {
   function envWithClaimFailure(message: string) {
-    return {
+    return testEnv({
       UserDO: {
         idFromName: (n: string) => n,
         get: () => ({
-          async verifyCliToken(_caller: unknown, token: string) {
+          async verifyCliToken(_caller: UserCaller, token: string) {
             return { ok: token === TOKEN, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } };
           },
-          async hasWorkspace(_caller: unknown) { return true; },
+          async hasWorkspace(_caller: UserCaller) { return true; },
           async ensureWorkspaceCapability() {},
         }),
       },
       OrchestratorAgent: {
         idFromName: (n: string) => n,
         get: () => ({ async claimOwner() { throw new Error(message); } }),
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
   }
 
   test('cross-user collision → 403', async () => {
@@ -322,7 +359,7 @@ describe('CLI webhook creation step-up gate', () => {
     const { env, calls } = setupEnv({ tokenMintedAt: Date.now() - 24 * 60 * 60 * 1000 });
     const res = await handleCliRequest(cliRequest('/api/cli/workspaces/jarvis/triggers/webhook', webhookInit), env);
     expect(res?.status).toBe(401);
-    expect((await res?.json() as { error: string }).error).toContain('step-up auth required');
+    expect((await errorBody(res)).error).toContain('step-up auth required');
     expect(calls.some((c) => c.startsWith('triggers:webhook:'))).toBe(false);
   });
 

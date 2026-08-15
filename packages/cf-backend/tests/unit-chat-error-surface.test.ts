@@ -9,6 +9,7 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { between } from '@proteus/test-utils';
 
 const hook = readFileSync(join(import.meta.dir, '..', 'src', 'hooks', 'use-proteus.ts'), 'utf8');
 const page = readFileSync(join(import.meta.dir, '..', 'src', 'pages', 'WorkspacePage.tsx'), 'utf8');
@@ -26,9 +27,11 @@ describe('use-proteus chat-error wiring', () => {
   });
 
   test('clears the error on the next send and on workspace switch; exposes retry + clear + state', () => {
-    const send = hook.slice(hook.indexOf('const sendChat = useCallback'), hook.indexOf('const searchMemory'));
+    const send = between(hook, 'const sendChat = useCallback', 'const searchMemory', 'use-proteus.ts');
     expect(send).toContain('setChatError(null)');
-    const reset = hook.slice(hook.indexOf('setPinnedPorts([]);'), hook.indexOf('}, [agentId])'));
+    // The whole workspace-switch effect, bounded by its own dependency array —
+    // not a trailing marker that a rename can move out from under it.
+    const reset = between(hook, 'setLoadAttempt(0);', '}, [workspace, subordinate]);', 'use-proteus.ts');
     expect(reset).toContain('setChatError(null)');
     const returned = hook.slice(hook.indexOf('return {\n    messages'));
     expect(returned).toContain('chatError,');
@@ -39,7 +42,7 @@ describe('use-proteus chat-error wiring', () => {
   test('retry re-sends the last user message parts', () => {
     const retry = hook.slice(hook.indexOf('const retryLastMessage'), hook.indexOf('const searchMemory'));
     expect(retry).toContain('.find((m) => m.role === "user")');
-    expect(retry).toContain('sendMessage({ role: "user", parts: lastUser.parts })');
+    expect(retry).toContain('sendMessage({ role: "user", parts: lastUser.parts, metadata: lastUser.metadata })');
   });
 });
 

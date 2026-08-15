@@ -86,7 +86,7 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
       orphanedFibers.map(f => f.name).join(', '));
     // Clean up orphaned fibers
     for (const fiber of orphanedFibers) {
-      sql`DELETE FROM fibers WHERE id = ${fiber.id}`;
+      void sql`DELETE FROM fibers WHERE id = ${fiber.id}`;
     }
   }
 
@@ -108,7 +108,7 @@ export async function openWorkspace(db: AgentDatabase, config: WorkspaceResumeCo
     agentId: identity.id, agentName: identity.name,
     memory, craftStore, judgeModel,
     spawnBranch: async () => ({
-      explore: async () => ({ text: 'exploration', codeUsed: null }),
+      explore: async () => ({ text: 'exploration' }),
       generateReflection: async () => ({ text: 'reflection' }),
     }),
     abortBranch: async () => {},

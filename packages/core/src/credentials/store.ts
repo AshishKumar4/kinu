@@ -8,6 +8,8 @@
  * test fixtures in unit tests).
  */
 
+import type { JsonObject } from '../utils/json.js';
+
 /** A stored secret. Discriminated by `kind`. */
 export type Credential =
   | BearerCredential
@@ -29,7 +31,7 @@ export interface OAuthCredential {
   /** Unix-ms when the access token expires. May be null/undefined. */
   expiresAt?: number;
   /** Provider-specific metadata (account id, scope, etc.). */
-  metadata?: Record<string, unknown>;
+  metadata?: JsonObject;
 }
 
 /** OpenAI-compatible BYO config: base URL + bearer. Covers Groq, Together, … */

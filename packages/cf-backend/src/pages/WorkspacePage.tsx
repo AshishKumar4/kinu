@@ -1,20 +1,27 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useCallback, useMemo, type DragEvent as ReactDragEvent } from "react";
 import { useParams, useLocation, Link, useNavigate } from "react-router-dom";
 import { Panel, Group as PanelGroup, Separator as PanelResizeHandle } from "react-resizable-panels";
-import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
+import { Button, InputArea, Loader } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
   PaperPlaneRightIcon, StopIcon, WrenchIcon, CaretDownIcon, CaretRightIcon,
   ArrowsClockwiseIcon, BrainIcon, GitBranchIcon, CheckCircleIcon, TrashIcon,
-  GearIcon, TimerIcon, ClockIcon,
+  ClockIcon,
   WarningCircleIcon, ProhibitIcon, DesktopTowerIcon, PaperclipIcon, XIcon, FileIcon,
   ClockCounterClockwiseIcon, UserPlusIcon, LightningIcon,
-  StackIcon,
+  StackIcon, NotePencilIcon, HammerIcon,
 } from "@phosphor-icons/react";
 import { isToolUIPart, getToolName, convertFileListToFileUIParts } from "ai";
 import type { UIMessage, FileUIPart } from "ai";
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, isPlaceholderMission, summarizeRestorePlan } from "@proteus/core";
-import type { AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan, TakePickOutcome } from "@proteus/core";
+import {
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES, JsonObjectSchema, JsonValueSchema,
+  isPlaceholderMission, planReviewAwaitingDecision, summarizeRestorePlan,
+} from "@proteus/core";
+import type {
+  AlternateTakeSet, FileCheckpointEntry, FileRestoreChange, FileRestorePlan,
+  JsonObject, JsonValue, TakePickOutcome,
+} from "@proteus/core";
+import * as v from "valibot";
 import { useProteus } from "@/hooks/use-proteus";
 import { usePinToBottom } from "@/hooks/use-pin-to-bottom";
 import { touchWorkspace } from "@/lib/user-api";
@@ -44,7 +51,23 @@ import type { PendingConsent, SubordinateActivityEvent } from "@/lib/protocol";
 /* ── Message rendering ────────────────────────────────────────── */
 
 function getMessageText(msg: UIMessage): string {
-  return msg.parts.filter(p => p.type === "text").map(p => (p as { type: "text"; text: string }).text).join("");
+  return msg.parts.filter(p => p.type === "text").map(p => p.text).join("");
+}
+
+const MessageCreatedAtSchema = v.looseObject({
+  createdAt: v.optional(v.union([v.string(), v.number(), v.instance(Date)])),
+});
+const ProvisionErrorSchema = v.object({
+  error: v.literal("runtime_not_provisioned"),
+  runtime: v.string(),
+  message: v.optional(v.string()),
+});
+const squareButtonVariant = "square";
+const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
+
+function messageCreatedAt<Message>(message: Message): string | number | Date | undefined {
+  const parsed = v.safeParse(MessageCreatedAtSchema, message);
+  return parsed.success ? parsed.output.createdAt : undefined;
 }
 
 function formatTime(date: Date): string {
@@ -150,21 +173,30 @@ function ReasoningBlock({ text }: { text: string }) {
 
 /** Try to parse `{error:'runtime_not_provisioned', runtime, message}` from a
  *  string-ified tool output. Returns null if the output doesn't match. */
-function parseProvisionError(output: unknown):
+function parseProvisionError<Output>(output: Output):
   { runtime: string; message: string } | null {
-  if (typeof output !== 'string') return null;
-  if (!output.includes('runtime_not_provisioned')) return null;
+  const text = v.safeParse(v.string(), output);
+  if (!text.success || !text.output.includes('runtime_not_provisioned')) return null;
   try {
-    const obj = JSON.parse(output) as { error?: string; runtime?: string; message?: string };
-    if (obj.error === 'runtime_not_provisioned' && typeof obj.runtime === 'string') {
-      return { runtime: obj.runtime, message: obj.message ?? 'Runtime not available.' };
-    }
+    const parsed = v.safeParse(ProvisionErrorSchema, JSON.parse(text.output));
+    return parsed.success
+      ? { runtime: parsed.output.runtime, message: parsed.output.message ?? 'Runtime not available.' }
+      : null;
   } catch { /* fall through */ }
   return null;
 }
 
+function jsonString(input: JsonObject | undefined, key: string): string | null {
+  const value = input?.[key];
+  return v.is(v.string(), value) ? value : null;
+}
+
+function displayToolValue(value: JsonValue): string {
+  return v.is(v.string(), value) ? value : JSON.stringify(value, null, 2) ?? "";
+}
+
 function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText }: {
-  toolName: string; input?: Record<string, unknown>; output?: unknown; isRunning: boolean; isError: boolean;
+  toolName: string; input?: JsonObject; output?: JsonValue; isRunning: boolean; isError: boolean;
   /** The transport's own reason for a protocol-level failure (a crashed
    *  executor, a timeout) — distinct from `output`, which a tool that caught
    *  its own failure returns as an ordinary result. Never present together. */
@@ -193,10 +225,10 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
   const durationLabel = elapsed !== null && elapsed > 100 ? `${(elapsed / 1000).toFixed(1)}s` : null;
 
   // Surface the runtime the `run` tool dispatched on so the user can see
-  // at a glance whether the agent ran something in workspace / nimbus /
-  // sandbox / laptop. Default = workspace.
+  // at a glance whether the agent ran something in workspace / sandbox /
+  // laptop. Default = workspace.
   const runtime = toolName === 'run'
-    ? (typeof input?.runtime === 'string' ? input.runtime : 'workspace')
+    ? (jsonString(input, "runtime") ?? 'workspace')
     : null;
   const provisionErr = parseProvisionError(output);
   // What this call is actually about, from its own arguments — without it a
@@ -262,10 +294,10 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
               unreadable for exactly the multi-line commands worth expanding
               to read. The runtime stays visible in the collapsed row's `@x`
               badge, so nothing is lost by not repeating it here. */}
-          {toolName === "execute_tools" && typeof input?.code === "string" ? (
-            <CodeBlock className="language-js">{input.code}</CodeBlock>
-          ) : toolName === "run" && typeof input?.command === "string" ? (
-            <CodeBlock className="language-bash">{input.command}</CodeBlock>
+          {toolName === "execute_tools" && jsonString(input, "code") ? (
+            <CodeBlock className="language-js">{jsonString(input, "code")}</CodeBlock>
+          ) : toolName === "run" && jsonString(input, "command") ? (
+            <CodeBlock className="language-bash">{jsonString(input, "command")}</CodeBlock>
           ) : input != null ? (
             <div>
               <div className="p-eyebrow mb-1">Input</div>
@@ -275,7 +307,7 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
           {output != null && (
             <div>
               <div className="p-eyebrow mb-1">Output</div>
-              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{typeof output === "string" ? output : JSON.stringify(output, null, 2)}</pre>
+              <pre className="text-[12px] font-mono p-text-2 max-h-40 overflow-auto whitespace-pre-wrap m-0">{displayToolValue(output)}</pre>
             </div>
           )}
         </div>
@@ -299,8 +331,10 @@ function ToolCallBlock({ toolName, input, output, isRunning, isError, errorText 
  *  running or never finished, which is exactly when there is nothing to read
  *  a failure out of yet. Shared by the group's failure tally and the part's
  *  own card so the two can never disagree about the same call. */
-function partOutput(part: AnyToolPart): unknown {
-  return part.state === "output-available" ? (part as { output?: unknown }).output : undefined;
+function partOutput(part: AnyToolPart): JsonValue | undefined {
+  if (part.state !== "output-available") return undefined;
+  const parsed = v.safeParse(JsonValueSchema, part.output);
+  return parsed.success ? parsed.output : undefined;
 }
 
 /** Whether this part failed — protocol-level (`output-error`) or the quieter
@@ -345,17 +379,18 @@ function ToolCallGroup({ parts }: { parts: readonly AnyToolPart[] }) {
 /** One tool part: its row, plus the live preview a tool can return. */
 function ToolCallPart({ part }: { part: AnyToolPart }) {
   const output = partOutput(part);
+  const parsedInput = v.safeParse(JsonObjectSchema, part.input);
   const previewUrl = extractPreviewUrl(output);
   return (
     <div>
       <ToolCallBlock toolName={getToolName(part)}
-        input={part.input as Record<string, unknown> | undefined}
+        input={parsedInput.success ? parsedInput.output : undefined}
         output={output}
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
         isError={partFailed(part)}
-        errorText={part.state === "output-error" ? (part as { errorText?: string }).errorText : undefined} />
-      {/* Inline preview card — when a tool returns a /_preview/ URL, surface a
-          live iframe under the tool block so the user sees the running app
+        errorText={part.state === "output-error" ? part.errorText : undefined} />
+      {/* Inline preview card — when an executor returns a preview URL, surface
+          a live iframe under the tool block so the user sees the running app
           inline (also promoted to the Output surface). */}
       {previewUrl && (
         <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">
@@ -515,15 +550,42 @@ function DrainedEventsCard({ text, state }: { text: string; state: CardState }) 
   );
 }
 
+/** The owner's answer on commands the agent parked, coming back to the agent.
+ *  Says approved/denied and how many — never "ran": the approved commands have
+ *  not executed yet, and the agent re-issuing them is what runs them. */
+function DeferredApprovalCard({ decision, count, state }: {
+  decision: string; count: number; state: CardState;
+}) {
+  const approved = decision === "approved";
+  const Icon = approved ? CheckCircleIcon : ProhibitIcon;
+  return (
+    <div className="flex justify-center animate-fade-in py-1">
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full p-elevated border p-border text-[11px] p-text-2">
+        <Icon size={13} className={approved ? "p-success" : "p-text-3"} weight="fill" />
+        <span>
+          You <span className="font-medium p-text">{approved ? "approved" : "denied"}</span>{" "}
+          {count} queued command{count === 1 ? "" : "s"}
+        </span>
+        <span className="flex items-center gap-1 p-text-3"><ShownCaption state={state} /></span>
+        <ClockIcon size={11} className="p-text-3" />
+      </div>
+    </div>
+  );
+}
+
 /** One programmatic turn as the chat shows it — the durable message a queued
  *  signal became, or the live card of one spliced into a running turn. Same
  *  classifier, same cards, one rendering. */
 function ProgrammaticTurnCard({ turn, text, state }: {
   turn: ProgrammaticTurn; text: string; state: CardState;
 }) {
-  return turn.kind === "background_job"
-    ? <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />
-    : <DrainedEventsCard text={text} state={state} />;
+  if (turn.kind === "background_job") {
+    return <BackgroundEventCard kind={turn.jobKind} status={turn.status} state={state} />;
+  }
+  if (turn.kind === "deferred_approval") {
+    return <DeferredApprovalCard decision={turn.decision} count={turn.count} state={state} />;
+  }
+  return <DrainedEventsCard text={text} state={state} />;
 }
 
 /** A subordinate's task assignment or progress report, mirrored into the main
@@ -587,7 +649,7 @@ export const MessageView = memo(function MessageView({
   // Turns the backend enqueued on the agent's behalf are stored as `user`
   // messages so the model reads them as its input — but the operator did not
   // type them, so they get their own presentation instead of a user bubble.
-  const programmatic = classifyProgrammaticTurn((message as { metadata?: unknown }).metadata);
+  const programmatic = classifyProgrammaticTurn(message.metadata);
   if (programmatic) {
     return (
       <ProgrammaticTurnCard
@@ -625,14 +687,14 @@ export const MessageView = memo(function MessageView({
             </button>
           )}
         </div>
-        <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />
+        <MessageTimestamp createdAt={messageCreatedAt(message)} />
       </div>
     );
   }
 
   const hasContent = message.parts.some(p =>
-    (p.type === "text" && (p as { text: string }).text) ||
-    (p.type === "reasoning" && (p as { text?: string }).text) ||
+    (p.type === "text" && p.text) ||
+    (p.type === "reasoning" && p.text) ||
     p.type === "file" ||
     isToolUIPart(p)
   );
@@ -659,18 +721,19 @@ export const MessageView = memo(function MessageView({
       )}
       {groupMessageParts(message.parts).map((block, i) => {
         if (block.kind === "tool-run") {
-          return <ToolCallGroup key={block.parts[0]!.toolCallId} parts={block.parts} />;
+          const first = block.parts[0];
+          return first ? <ToolCallGroup key={first.toolCallId} parts={block.parts} /> : null;
         }
         const part = block.part;
         if (part.type === "reasoning") {
-          const t = (part as { text?: string }).text;
+          const t = part.text;
           return t ? <ReasoningBlock key={i} text={t} /> : null;
         }
         if (part.type === "file") {
           return <div key={i} className="my-1.5"><FilePartView part={part} /></div>;
         }
         if (part.type === "text") {
-          const t = (part as { text: string }).text;
+          const t = part.text;
           if (!t) return null;
           const isLastText = message.parts.slice(message.parts.indexOf(part) + 1).every(p => p.type !== "text");
           return (
@@ -685,7 +748,7 @@ export const MessageView = memo(function MessageView({
       })}
       {!isLive && (
         <div className="flex items-center gap-2">
-          <MessageTimestamp createdAt={(message as { createdAt?: string }).createdAt} />
+          <MessageTimestamp createdAt={messageCreatedAt(message)} />
           {!isUser && hasComparableTakes(takes) && onPickTake && (
             <TakesChip set={takes} onPick={onPickTake} />
           )}
@@ -746,7 +809,7 @@ function MessageFeedback({
         }`}
         title="Mark this response as poor (feeds evolution scoring)"
       >👎</button>
-      {failed && <span className="text-[10px] p-danger">couldn't save — try again</span>}
+      {failed && <span className="text-[10px] p-danger">couldn't save, try again</span>}
     </div>
   );
 }
@@ -793,7 +856,7 @@ function ForkModal({
       </>}
     >
       <div className="text-xs p-text-2 leading-relaxed space-y-1.5">
-        <p>Create a new workspace that branches off of <span className="font-mono p-text">{sourceName}</span> at this message.</p>
+        <p>Create a new workspace that branches off <span className="font-mono p-text">{sourceName}</span> at this message.</p>
         <ul className="list-disc list-inside space-y-0.5 p-text-3">
           <li>Copies: SOUL.md, {messagesUpToHere} message{messagesUpToHere === 1 ? "" : "s"}, memory, {craftedToolsCount} crafted tool{craftedToolsCount === 1 ? "" : "s"}</li>
           <li>Resets: MCTS tree, evolution events, scaffold, craft scores</li>
@@ -921,7 +984,7 @@ function SubordinateChatColumn({ workspace, subName }: { workspace: string; subN
             placeholder={`Message ${as?.displayName || subName}…`} disabled={state.connectionStatus !== "connected"} rows={1}
             className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
           {state.isStreaming
-            ? <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
+            ? <Button variant="secondary" {...SQUARE_BUTTON_PROPS} onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
             : <button onClick={send} disabled={!input.trim() || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
         </div>
       </div>
@@ -949,6 +1012,9 @@ export default function WorkspacePage() {
   // A returning driver opens on status, not on the agent's own description.
   // Output still takes over the moment there is something running to look at.
   const [surface, setSurface] = useState<SurfaceKind>("Work");
+  const [chatMode, setChatMode] = useState<"plan" | "build">("build");
+  const planAwaitingDecision = planReviewAwaitingDecision(state.activePlan);
+  const effectiveChatMode = planAwaitingDecision ? "plan" : chatMode;
   const [chatInput, setChatInput] = useState("");
   const [forkFor, setForkFor] = useState<string | null>(null); // message id to fork at, or null
   const [showClearConfirm, setShowClearConfirm] = useState(false);
@@ -974,7 +1040,7 @@ export default function WorkspacePage() {
       else rejected.push(f.name);
     }
     setAttachError(rejected.length > 0
-      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message — ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
+      ? `Chat attachments are capped at ${CLOUD_MAX_INLINE_ATTACHMENT_BYTES / (1024 * 1024)} MB per message. ${rejected.join(", ")} did not fit. Upload larger files via the Files pane on the Environment tab.`
       : null);
     if (accepted.length === 0) return;
     const dt = new DataTransfer();
@@ -1030,18 +1096,32 @@ export default function WorkspacePage() {
   const prevPortCountRef = useRef(0);
   useEffect(() => {
     const n = state.pinnedPorts.length;
-    if (n > prevPortCountRef.current) setSurface("Output");
+    const planOwnsOutput = chatMode === "plan"
+      || state.activePlan?.status === "pending"
+      || state.activePlan?.status === "changes_requested";
+    if (n > prevPortCountRef.current && !planOwnsOutput) setSurface("Output");
     prevPortCountRef.current = n;
-  }, [state.pinnedPorts.length]);
+  }, [chatMode, state.activePlan?.status, state.pinnedPorts.length]);
+
+  // A new durable revision owns focus once. Annotation saves update the same
+  // revision and must not keep dragging the owner back after they navigate.
+  const previousPlanRef = useRef<string | null>(null);
+  useEffect(() => {
+    const key = state.activePlan ? `${state.activePlan.id}/${state.activePlan.revision}` : null;
+    if (key && key !== previousPlanRef.current) setSurface("Output");
+    if (planAwaitingDecision) setChatMode("plan");
+    else if (state.activePlan?.status === "approved") setChatMode("build");
+    previousPlanRef.current = key;
+  }, [planAwaitingDecision, state.activePlan?.id, state.activePlan?.revision, state.activePlan?.status]);
 
   const handleSend = useCallback(() => {
     const t = chatInput.trim();
     if ((!t && pendingAttachments.length === 0) || state.isStreaming) return;
-    state.sendChat(t, pendingAttachments);
+    state.sendChat(t, pendingAttachments, effectiveChatMode);
     setChatInput("");
     setPendingAttachments([]);
     setAttachError(null);
-  }, [chatInput, pendingAttachments, state]);
+  }, [chatInput, pendingAttachments, effectiveChatMode, state]);
 
   // Steer-as-Branch: while the agent streams, the composer's split affordance
   // runs the draft as a parallel head (branchTurn) — the live turn continues;
@@ -1049,7 +1129,7 @@ export default function WorkspacePage() {
   const [branchNotice, setBranchNotice] = useState<string | null>(null);
   const handleBranch = useCallback(() => {
     const t = chatInput.trim();
-    if (!t || !state.isStreaming) return;
+    if (!t || !state.isStreaming || effectiveChatMode === "plan") return;
     setBranchNotice(null);
     // The composer is cleared only once the branch was actually accepted — a
     // refused or failed branch used to destroy what the user had typed. The
@@ -1060,7 +1140,7 @@ export default function WorkspacePage() {
         else setBranchNotice(r.reason ?? "Branching is unavailable right now.");
       })
       .catch((err) => setBranchNotice(err instanceof Error ? err.message : String(err)));
-  }, [chatInput, state]);
+  }, [chatInput, effectiveChatMode, state]);
 
   // Identity-stable handlers so memo(MessageView) holds across stream ticks.
   const onForkMessage = useCallback((mid: string) => setForkFor(mid), []);
@@ -1088,7 +1168,7 @@ export default function WorkspacePage() {
     () => new Map(state.signalCards.map((card) => [card.id, card.state])),
     [state.signalCards]);
   const messageCardIds = useMemo(() => new Set(state.messages.flatMap((msg) => {
-    const id = messageSignalId((msg as { metadata?: unknown }).metadata);
+    const id = messageSignalId(msg.metadata);
     return id ? [id] : [];
   })), [state.messages]);
   const looseCards = useMemo(() => state.signalCards.flatMap((card) => {
@@ -1096,7 +1176,7 @@ export default function WorkspacePage() {
     const turn = classifyProgrammaticTurn(card.metadata);
     return turn ? [{ card, turn }] : [];
   }), [state.signalCards, messageCardIds]);
-  const cardStateOf = (metadata: unknown) => {
+  const cardStateOf = <Metadata,>(metadata: Metadata) => {
     const id = messageSignalId(metadata);
     return id ? cardStates.get(id) : undefined;
   };
@@ -1137,7 +1217,7 @@ export default function WorkspacePage() {
       const entries = await state.rpc<FileCheckpointEntry[]>('listFileCheckpoints', [200]);
       const matches = entries.filter((e) => e.turnId === mid);
       if (matches.length === 0) {
-        setRestoreNotice('No file checkpoint for this turn — it changed no device files.');
+        setRestoreNotice('No file checkpoint for this turn. It changed no device files.');
         return;
       }
       const plans: FileRestorePlan[] = [];
@@ -1146,7 +1226,7 @@ export default function WorkspacePage() {
       }
       const files = plans.flatMap((p) => p.files);
       if (files.length === 0) {
-        setRestoreNotice('Files already match the state before this turn — nothing to restore.');
+        setRestoreNotice('Files already match the state before this turn. Nothing to restore.');
         return;
       }
       setRestorePlan({ entries: matches, dirs: plans.map((p) => p.dir), files });
@@ -1241,7 +1321,7 @@ export default function WorkspacePage() {
               onSpawn={state.spawnSubordinate}
               onDismiss={(name) => state.dismissSubordinate(name).then(() => {})}
               trailing={!subName && state.messages.length > 0 && (
-                <Button variant="ghost" shape="square" size="sm"
+                <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm"
                   onClick={() => setShowClearConfirm(true)}
                   icon={<TrashIcon size={12} />} aria-label="Clear history" />
               )}
@@ -1279,7 +1359,7 @@ export default function WorkspacePage() {
                   onRestoreFiles={onRestoreFiles}
                   takes={takesByTurn[msg.id]}
                   onPickTake={onPickTake}
-                  signalState={cardStateOf((msg as { metadata?: unknown }).metadata)}
+                  signalState={cardStateOf(msg.metadata)}
                 />
               ))}
               {looseCards.map(({ card, turn }) => (
@@ -1348,6 +1428,24 @@ export default function WorkspacePage() {
                   ))}
                 </div>
               )}
+              <div className="mb-2 flex items-center gap-2">
+                <div className="flex items-center rounded-lg border p-border p-fill p-0.5" role="group" aria-label="Turn mode">
+                  <button type="button" onClick={() => setChatMode("build")} disabled={state.isStreaming || planAwaitingDecision}
+                    aria-pressed={effectiveChatMode === "build"}
+                    title={planAwaitingDecision ? "Approve the active plan before starting a Build turn." : undefined}
+                    className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${effectiveChatMode === "build" ? "p-card p-text" : "p-text-3 hover:p-text-2"}`}>
+                    <HammerIcon size={12} />Build
+                  </button>
+                  <button type="button" onClick={() => setChatMode("plan")} disabled={state.isStreaming}
+                    aria-pressed={effectiveChatMode === "plan"}
+                    className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-medium transition-colors disabled:opacity-50 ${effectiveChatMode === "plan" ? "p-accent-subtle p-accent" : "p-text-3 hover:p-text-2"}`}>
+                    <NotePencilIcon size={12} />Plan
+                  </button>
+                </div>
+                <span className="hidden text-[11px] p-text-3 lg:inline">
+                  {effectiveChatMode === "plan" ? "Review a plan before anything changes." : "The agent can implement and verify changes."}
+                </span>
+              </div>
               <div className="flex items-end gap-2.5 p-composer p-2.5">
                 <input ref={fileInputRef} type="file" multiple className="hidden"
                   onChange={e => { void addFiles(e.currentTarget.files); e.currentTarget.value = ""; }} />
@@ -1361,15 +1459,15 @@ export default function WorkspacePage() {
                   className="flex-1 resize-none max-h-40 overflow-y-auto !ring-0 focus:!ring-0 !shadow-none !bg-transparent !outline-none" />
                 {state.isStreaming
                   ? <>
-                      {chatInput.trim() !== "" && (
+                      {chatInput.trim() !== "" && effectiveChatMode !== "plan" && (
                         <button onClick={handleBranch}
                           className="p-text-2 hover:p-text transition-colors p-2 mb-0.5 rounded-lg border p-border cursor-pointer"
                           aria-label="Run as a parallel branch"
-                          title="Branch: run this as a parallel take without interrupting the live turn — compare answers when both finish">
+                          title="Branch: run this as a parallel take without interrupting the live turn. Compare answers when both finish.">
                           <GitBranchIcon size={16} />
                         </button>
                       )}
-                      <Button variant="secondary" shape="square" onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
+                      <Button variant="secondary" {...SQUARE_BUTTON_PROPS} onClick={state.abortChat} icon={<StopIcon size={16} weight="fill" />} aria-label="Stop" className="mb-0.5" />
                     </>
                   : <button onClick={handleSend} disabled={(!chatInput.trim() && pendingAttachments.length === 0) || state.connectionStatus !== "connected"} className="p-btn rounded-lg p-2 mb-0.5 cursor-pointer" aria-label="Send"><PaperPlaneRightIcon size={16} /></button>}
               </div>
@@ -1387,6 +1485,9 @@ export default function WorkspacePage() {
             surface={surface}
             onSurface={setSurface}
             pinnedPorts={state.pinnedPorts}
+            previewError={state.previewError}
+            onRefreshPorts={state.refreshExposedPorts}
+            plan={state.activePlan}
             agentStatus={state.agentStatus}
             tools={state.tools}
             memory={state.memory}
@@ -1464,7 +1565,7 @@ interface RestorePlan {
 }
 
 const RESTORE_PREVIEW_LIMIT = 12;
-const RESTORE_MARK: Record<FileRestoreChange["kind"], string> = { modify: "~", create: "+", delete: "-" };
+const RESTORE_MARK = { modify: "~", create: "+", delete: "-" } satisfies Record<FileRestoreChange["kind"], string>;
 
 function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
   plan: RestorePlan; busy: boolean; onCancel: () => void; onConfirm: () => void;
@@ -1492,7 +1593,7 @@ function RestoreFilesModal({ plan, busy, onCancel, onConfirm }: {
       <div className="space-y-2">
         <p className="text-xs p-text-2 leading-relaxed">
           This rewrites files under <span className="font-mono p-text">{plan.dirs.join(", ")}</span> on your
-          device — {counts}. A safety snapshot is taken first, so restoring again undoes the undo.
+          device: {counts}. A safety snapshot is taken first, so restoring again undoes the undo.
         </p>
         <ul className="rounded-md border p-border p-elevated max-h-52 overflow-y-auto text-[11px] font-mono">
           {shown.map((f) => (

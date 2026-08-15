@@ -6,6 +6,7 @@
 // PUBLIC surfaces the model actually reads (the `run` tool, codemode
 // `workspace.exec`, an executor's `exec`), not just the renderer.
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { formatExecResult } from '../src/execution/exec-result.js';
 import { createInlineExecutor } from '../src/execution/inline.js';
 import { createNimbusExecutor } from '../src/execution/nimbus.js';
@@ -26,7 +27,12 @@ const PYTEST = {
 
 const runToolOver = (shell: Shell): RunTool => {
   const { rt } = createTestRuntime();
-  return buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime }).run as unknown as RunTool;
+  const runtime: AgentRuntime = { ...rt, shell };
+  return {
+    execute: toolExecute<{ command: string; runtime?: string }, string>(
+      buildBuiltinTools({ rt: runtime }).run,
+    ),
+  };
 };
 
 describe('formatExecResult', () => {

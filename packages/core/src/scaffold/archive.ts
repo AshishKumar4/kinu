@@ -11,6 +11,7 @@
  * proposal should branch from. No second table, no copied state.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives.js';
 import type { ScaffoldStatus } from './shadow.js';
 
@@ -33,6 +34,11 @@ export interface ScaffoldArchiveEntry {
   /** Win-rate over decisive (non-tie) trials; null when never decisively tried. */
   winRate: number | null;
 }
+
+const VetoDataSchema = v.object({
+  detail: v.optional(v.string()),
+  surface: v.optional(v.string()),
+});
 
 /**
  * Every scaffold version with its lineage + aggregated shadow-eval record,
@@ -145,9 +151,9 @@ export function listRejectedProposals(sql: SqlExecutor, limit = 50): RejectedPro
       let detail = '';
       let surface = 'scaffold';
       try {
-        const parsed = JSON.parse(veto.data ?? '{}') as { detail?: unknown; surface?: unknown };
-        if (typeof parsed.detail === 'string') detail = parsed.detail;
-        if (typeof parsed.surface === 'string') surface = parsed.surface;
+        const parsed = v.parse(VetoDataSchema, JSON.parse(veto.data ?? '{}'));
+        detail = parsed.detail ?? '';
+        surface = parsed.surface ?? 'scaffold';
       } catch { /* malformed payload — the message still carries the reason */ }
       if (surface !== 'scaffold') continue;
       rejected.push({

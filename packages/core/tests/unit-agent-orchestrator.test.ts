@@ -4,35 +4,30 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { createTestSql } from '@proteus/test-utils';
-import { AgentOrchestrator } from '../src/orchestrator/agent-orchestrator.js';
+import * as v from 'valibot';
+import { AgentOrchestrator, type AgentOrchestratorDeps } from '../src/orchestrator/agent-orchestrator.js';
 import { initSessionWindowTable, createSessionWindowStore } from '../src/evolution/session-window.js';
 import { initEventsHubTables, EventLog, type IngressDescriptor } from '../src/events/hub/index.js';
 import type { BackendHost, BroadcastEvent, ProgrammaticTurn } from '../src/types/backend-host.js';
 import type { AgentSignal } from '../src/types/signals.js';
-import type { EvolutionEngine } from '../src/evolution/engine.js';
 import type { CompletedTurn } from '../src/evolution/types.js';
-import type { SqlExec } from '../src/index.js';
+import type { JsonObject, SqlExec } from '../src/index.js';
+import { makeSqlExec } from './helpers.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query, ...bindings) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  return makeSqlExec(new Database(':memory:'));
 }
 function newEventLog(): EventLog {
   const sql = makeSql();
-  initEventsHubTables(sql as never);
-  return new EventLog(sql as never);
+  initEventsHubTables(sql);
+  return new EventLog(sql);
 }
-function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): IngressDescriptor {
+function webhook(deliveryId: string, body: JsonObject = { x: 1 }): IngressDescriptor {
   return {
     ingress: 'webhook_hmac', variant: 'webhook',
     payload: { webhook_id: 'w1', http_method: 'POST', http_headers: {}, body, delivery_id: deliveryId },
     auth_outcome: 'verified', webhook_id: 'w1',
-  } as IngressDescriptor;
+  };
 }
 
 /** A stand-in engine over a REAL in-memory session window — the store the
@@ -41,13 +36,15 @@ function webhook(deliveryId: string, body: Record<string, unknown> = { x: 1 }): 
 function fakeEngine(opts?: { enabled?: boolean }) {
   const reviews: Array<{ turn: CompletedTurn; followup: string | null }> = [];
   const sessions: number[] = [];
+  /** One entry per cadence pass that ran the promotion gate's queued trials. */
+  const trials: number[] = [];
   const { sql, execRaw } = createTestSql();
   initSessionWindowTable(execRaw);
   // The crafted-tool ledger the engine owns in production, over a real store,
   // so the in-episode clock is exercised through the same seam.
   const crafted: string[] = [];
   const observed: Array<{ names: string[]; quality: number }> = [];
-  const engine = {
+  const engine: AgentOrchestratorDeps['engine'] = {
     enabled: opts?.enabled ?? true,
     sessionWindow: createSessionWindowStore(sql),
     craftLedger: {
@@ -59,8 +56,10 @@ function fakeEngine(opts?: { enabled?: boolean }) {
     },
     reviewTurn: async (turn: CompletedTurn, followup: string | null) => { reviews.push({ turn, followup }); },
     onSessionComplete: async (s: { turns: CompletedTurn[] }) => { sessions.push(s.turns.length); },
-  } as unknown as EvolutionEngine;
-  return { engine, reviews, sessions, crafted, observed };
+    runDueShadowTrials: async () => { trials.push(Date.now()); },
+    recordRecovery: () => {},
+  };
+  return { engine, reviews, sessions, crafted, observed, trials };
 }
 function fakeHost(opts?: { activeTurn?: boolean }) {
   const enqueued: ProgrammaticTurn[] = [];
@@ -78,7 +77,9 @@ function fakeHost(opts?: { activeTurn?: boolean }) {
 /** What a live turn actually absorbed, read back through the seam the backend
  *  reads: one step boundary, then settle. */
 function absorb(orch: AgentOrchestrator): readonly AgentSignal[] {
-  orch.turnExtension.prepareStep!({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
+  const prepareStep = orch.turnExtension.prepareStep;
+  if (!prepareStep) throw new Error('Expected orchestrator prepareStep extension');
+  prepareStep({ stepNumber: 0, messages: [{ role: 'user', content: 'q' }] });
   return orch.signals.settle({ completed: true }).absorbed;
 }
 const aTurn = (i: number, origin: 'user' | 'programmatic' = 'user'): CompletedTurn => ({
@@ -121,12 +122,15 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     const { host } = fakeHost();
     let release = () => {};
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    (engine as unknown as { onSessionComplete: (s: { turns: CompletedTurn[] }) => Promise<void> })
-      .onSessionComplete = async (s) => { await gate; sessions.push(s.turns.length); };
+    engine.onSessionComplete = async (session) => {
+      await gate;
+      sessions.push(session.turns.length);
+    };
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
     orch.recordTurn(aTurn(0), 'conversation');
+    orch.recordTurn(aTurn(1), 'conversation');   // reaches the interval → dispatches the pass
+    // The pass recordTurn just started, not a second one.
     const pass = orch.runDueSessionEvolution();
-    orch.recordTurn(aTurn(1), 'conversation');
     expect(sessions).toEqual([]);            // still in flight
     // The turn lane settles without waiting for the cadence lane — that is the
     // whole point: one exec invocation must not own a lifetime cycle's clock.
@@ -163,7 +167,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
     });
     let release = () => {};
     const stuck = new Promise<void>((resolve) => { release = resolve; });
-    orch.track(stuck, 'Shadow eval');
+    orch.track(stuck, 'Turn review');
     const startedAt = Date.now();
     await orch.settleEvolution();                    // returns on the bound, not on `stuck`
     expect(Date.now() - startedAt).toBeLessThan(2000);
@@ -172,8 +176,7 @@ describe('AgentOrchestrator.recordTurn — session cadence', () => {
   });
 
   test('with auto-evolution off, a turn leaves no evolution state at all', () => {
-    const { engine, reviews, sessions } = fakeEngine();
-    (engine as unknown as { enabled: boolean }).enabled = false;
+    const { engine, reviews, sessions } = fakeEngine({ enabled: false });
     const { host } = fakeHost();
     const orch = new AgentOrchestrator({ host, engine, eventLog: newEventLog(), sessionReflectionInterval: 2 });
     orch.recordTurn(aTurn(0), 'conversation');
@@ -189,14 +192,18 @@ describe('AgentOrchestrator — the durable session window', () => {
   // `proteus exec` is one process per turn: a fresh orchestrator every time,
   // against the same workspace database. The window and the pending review
   // have to live in that database or headless usage never evolves at all.
-  test('the window accumulates across orchestrator instances and fires at the interval', () => {
+  test('the window accumulates across orchestrator instances and fires at the interval', async () => {
     const { engine, sessions } = fakeEngine();
     const eventLog = newEventLog();
+    let last: AgentOrchestrator | null = null;
     for (let i = 0; i < 5; i++) {
       const { host } = fakeHost();
-      new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 })
-        .recordTurn(aTurn(i), 'conversation');
+      last = new AgentOrchestrator({ host, engine, eventLog, sessionReflectionInterval: 5 });
+      last.recordTurn(aTurn(i), 'conversation');
     }
+    // recordTurn detaches the cadence pass; join the one it started.
+    if (!last) throw new Error('Expected the orchestrator loop to run');
+    await last.runDueSessionEvolution();
     expect(sessions).toEqual([5]);
   });
 
@@ -286,15 +293,16 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
 
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(1);                    // one batched turn
-    expect(enqueued[0].text).toContain('arrived');        // the turn-driving message
-    expect(enqueued[0].text).toContain('[webhook]');
+    const turn = enqueued[0];
+    if (!turn) throw new Error('Expected one event-drain turn');
+    expect(turn.text).toContain('arrived');        // the turn-driving message
+    expect(turn.text).toContain('[webhook]');
     // The injected turn is marked programmatic and carries the synthetic turn
     // id the consumed events were bound to — the backend's reply-dispatch key.
-    expect(enqueued[0].metadata?.proteusEvent).toBe('event_drain');
-    const drainTurnId = enqueued[0].metadata?.drainTurnId;
-    expect(typeof drainTurnId).toBe('string');
+    expect(turn.metadata?.proteusEvent).toBe('event_drain');
+    const drainTurnId = v.parse(v.string(), turn.metadata?.drainTurnId);
     // d1/d2 share a body → webhook dedupe admits one event; it is bound here.
-    const bound = log.query({ turn_id: drainTurnId as string });
+    const bound = log.query({ turn_id: drainTurnId });
     expect(bound).toHaveLength(1);
 
     // Events are now consumed → a second drain is a no-op (self-terminates).
@@ -359,8 +367,9 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     expect(enqueued[0]!.metadata?.proteusEvent).toBe('event_drain');
     // Same card, same moment: the queued path is not a silent one. The turn
     // this signal starts flips it, and it names that card on its own metadata.
+    const signalId = v.parse(v.string(), enqueued[0]?.metadata?.signalId);
     expect(broadcasts).toEqual([{
-      type: 'signal_card', id: enqueued[0]!.metadata!.signalId, state: 'pending',
+      type: 'signal_card', id: signalId, state: 'pending',
       metadata: { proteusEvent: 'event_drain', drainTurnId: expect.any(String) },
       text: enqueued[0]!.text,
     }]);
@@ -386,7 +395,8 @@ describe('AgentOrchestrator.drainPendingEvents — the reactor (drain-then-stop)
     await orch.drainPendingEvents();
     expect(enqueued).toHaveLength(2);
     expect(log.pending()).toHaveLength(0);
-    expect(log.query({ turn_id: enqueued[1]!.metadata?.drainTurnId as string }).map((event) => event.id))
+    const retriedTurnId = v.parse(v.string(), enqueued[1]?.metadata?.drainTurnId);
+    expect(log.query({ turn_id: retriedTurnId }).map((event) => event.id))
       .toEqual([admitted.id]);
   });
 
@@ -429,7 +439,8 @@ describe('AgentOrchestrator.scheduleDrain — debounced ingress coalescing', () 
 
     await timers[0]!.fn();                           // the window fires
     expect(enqueued).toHaveLength(1);                // ONE coalesced turn…
-    const bound = log.query({ turn_id: enqueued[0]!.metadata?.drainTurnId as string });
+    const drainTurnId = v.parse(v.string(), enqueued[0]?.metadata?.drainTurnId);
+    const bound = log.query({ turn_id: drainTurnId });
     expect(bound).toHaveLength(3);                   // …binding all three events
   });
 

@@ -67,8 +67,8 @@ describe('filterByEffectiveScore — the one injection policy', () => {
   test('drops below-threshold tools, keeps healthy + unscored ones', () => {
     const { sql } = setup();
     const now = Date.now();
-    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${now})`;
-    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale', 0.05, 5, ${now})`;
+    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${now})`;
+    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('stale', 0.05, 5, ${now})`;
     const kept = filterByEffectiveScore(sql, tools, 0.2, now);
     expect(kept.map((t) => t.name)).toEqual(['good', 'unscored']);
   });
@@ -77,7 +77,7 @@ describe('filterByEffectiveScore — the one injection policy', () => {
     const { sql } = setup();
     const now = Date.now();
     const ninetyDaysAgo = now - 90 * 86_400_000; // 3 half-lives → 0.8 → 0.1
-    sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${ninetyDaysAgo})`;
+    void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at) VALUES ('good', 0.8, 5, ${ninetyDaysAgo})`;
     const kept = filterByEffectiveScore(sql, [{ name: 'good' }], 0.2, now);
     expect(kept).toEqual([]);
   });

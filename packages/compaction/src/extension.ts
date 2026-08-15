@@ -415,12 +415,12 @@ function latestUserAsk(messages: readonly ModelMessage[]): string | undefined {
     const message = messages[i];
     if (message.role !== 'user') continue;
     const text =
-      typeof message.content === 'string'
+      Array.isArray(message.content)
         ? message.content
-        : message.content
             .filter((part): part is TextPart => part.type === 'text')
             .map((part) => part.text)
-            .join('\n');
+            .join('\n')
+        : message.content;
     if (text.trim()) return text;
   }
   return undefined;

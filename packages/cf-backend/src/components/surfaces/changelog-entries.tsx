@@ -31,7 +31,7 @@ import { DiffLines, timeAgo } from "./shared";
 export interface ChangelogView { entries: ChangelogEntry[]; unseenCount: number; seenAt: number }
 interface ScaffoldDiff { version: number; previousVersion: number | null; added: number; removed: number; lines: DiffLine[] }
 
-const KIND_ICON: Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>> = {
+const KIND_ICON = {
   scaffold: GitBranchIcon,
   tool: PackageIcon,
   view: SquaresFourIcon,
@@ -39,7 +39,7 @@ const KIND_ICON: Record<ChangelogEntryKind, ComponentType<{ size?: number; class
   gepa: SparkleIcon,
   replay: TimerIcon,
   outcomes: ChecksIcon,
-};
+} satisfies Record<ChangelogEntryKind, ComponentType<{ size?: number; className?: string }>>;
 
 /**
  * How often the digest re-reads while the surface showing it is open.
@@ -139,9 +139,9 @@ export function ChangelogEntryCard({ entry, seenAt, rpc, onReverted }: Changelog
 
   const actions = entry.revert && !kept ? (
     <>
-      <Button size="sm" variant="ghost" shape="square" aria-label={`Keep: ${entry.summary}`}
+      <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Keep: ${entry.summary}`}
         onClick={() => setKept(true)} icon={<CheckIcon size={12} />} />
-      <Button size="sm" variant="ghost" shape="square" aria-label={`Revert: ${entry.summary}`}
+      <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Revert: ${entry.summary}`}
         disabled={busy} onClick={() => { void revert(); }}
         icon={busy ? <Loader size="sm" /> : <XIcon size={12} />} />
     </>
@@ -178,7 +178,7 @@ export function ChangelogEntryCard({ entry, seenAt, rpc, onReverted }: Changelog
         ) : headline}
         <div className="flex items-center gap-1 shrink-0">
           {entry.scaffoldVersion != null && (
-            <Button size="sm" variant="ghost" shape="square" onClick={toggleDiff}
+            <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} onClick={toggleDiff}
               icon={<GitDiffIcon size={12} />} aria-label="Show diff" />
           )}
           {actions}
@@ -262,9 +262,9 @@ function SubEntry({ entry, rpc, onReverted }: { entry: ChangelogEntry; rpc: Rpc;
         <div className="flex items-center gap-1 shrink-0">
           {entry.revert && !kept && (
             <>
-              <Button size="sm" variant="ghost" shape="square" aria-label={`Keep: ${entry.summary}`}
+              <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Keep: ${entry.summary}`}
                 onClick={() => setKept(true)} icon={<CheckIcon size={12} />} />
-              <Button size="sm" variant="ghost" shape="square" aria-label={`Revert: ${entry.summary}`}
+              <Button size="sm" variant="ghost" {...{ 'shape': 'square' as const }} aria-label={`Revert: ${entry.summary}`}
                 disabled={busy} onClick={() => { void revert(); }}
                 icon={busy ? <Loader size="sm" /> : <XIcon size={12} />} />
             </>

@@ -2,7 +2,12 @@
  * Default ExecutionRouter — manages executor providers for codemode sandbox.
  */
 
-import type { ExecutionRouter, ExecutorProvider, ExecutorInfo } from './types.js';
+import type {
+  ExecutionRouter,
+  ExecutorProvider,
+  ExecutorInfo,
+  ExecutorProviderSurface,
+} from './types.js';
 import { gateProviderExec } from './approval.js';
 import { STRICT_NO_CHANNEL_POLICY, type ShellApprovalPolicy } from '../safety/approval-gate.js';
 
@@ -30,18 +35,8 @@ export class DefaultExecutionRouter implements ExecutionRouter {
     return this.providers.get(name);
   }
 
-  getProviders(): Array<{
-    name: string;
-    tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-    types?: string;
-    positionalArgs?: boolean;
-  }> {
-    const result: Array<{
-      name: string;
-      tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-      types?: string;
-      positionalArgs?: boolean;
-    }> = [];
+  getProviders(): ExecutorProviderSurface[] {
+    const result: ExecutorProviderSurface[] = [];
 
     for (const provider of this.providers.values()) {
       if (!provider.isAvailable()) continue;
@@ -65,7 +60,7 @@ export class DefaultExecutionRouter implements ExecutionRouter {
         active: fallback,
         status: fallback ? 'active' as const : 'not_configured' as const,
       };
-      return {
+      const info: ExecutorInfo = {
         name: p.name,
         kind: p.kind,
         capabilities: [...p.capabilities],
@@ -73,9 +68,10 @@ export class DefaultExecutionRouter implements ExecutionRouter {
         configured: status.configured,
         active: status.active,
         status: status.status,
-        ...(status.reason ? { reason: status.reason } : {}),
-        ...(p.resourceLimits ? { resourceLimits: p.resourceLimits } : {}),
       };
+      if (status.reason !== undefined) Object.assign(info, { reason: status.reason });
+      if (p.resourceLimits !== undefined) Object.assign(info, { resourceLimits: p.resourceLimits });
+      return info;
     });
   }
 }

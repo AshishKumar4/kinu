@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 import { createTestRenderer } from '@opentui/core/testing';
 import { createRoot } from '@opentui/react';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 
 import { SLASH_COMMANDS } from '../src/slash-commands.js';
 import { CommandHintOverlay, DeviceConnectOverlay, ModelPickerOverlay, WalkbackOverlay } from '../src/tui/overlays.js';
@@ -82,7 +83,10 @@ describe('CLI TUI layout', () => {
   });
 
   test('CLI version has package.json as its single source', () => {
-    const packageJson = JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')) as { version: string };
+    const packageJson = v.parse(
+      v.object({ version: v.string() }),
+      JSON.parse(readFileSync(resolve(repoRoot, 'packages/cli/package.json'), 'utf8')),
+    );
     const displaySource = readFileSync(resolve(repoRoot, 'packages/cli/src/display.ts'), 'utf8');
     const programSource = readFileSync(resolve(repoRoot, 'packages/cli/src/program.ts'), 'utf8');
     const homeSource = readFileSync(resolve(repoRoot, 'packages/cli/src/tui/home-app.tsx'), 'utf8');
@@ -491,7 +495,7 @@ describe('CLI TUI layout', () => {
         renderer.destroy();
         console.log(readFileSync(CONFIG_PATH, 'utf8'));
       `;
-      const env: Record<string, string | undefined> = { ...process.env, PROTEUS_HOME: proteusHome };
+      const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome };
       for (const name of ['ANTHROPIC_API_KEY', 'CLAUDE_CODE_OAUTH_TOKEN', 'CODEX_ACCESS_TOKEN', 'OPENAI_API_KEY', 'OPENROUTER_API_KEY', 'PROTEUS_TOKEN']) {
         delete env[name];
       }
@@ -504,7 +508,7 @@ describe('CLI TUI layout', () => {
       });
 
       expect({ exitCode: proc.exitCode, stderr: proc.stderr.toString() }).toEqual({ exitCode: 0, stderr: '' });
-      const config = JSON.parse(proc.stdout.toString()) as Record<string, unknown>;
+      const config = v.parse(v.object({ reasoningEffort: v.string(), model: v.string() }), JSON.parse(proc.stdout.toString()));
       expect(config).toMatchObject({ reasoningEffort: 'high' });
       expect(config.model).toStartWith('openai/');
       expect(config.model).not.toBe('openai/gpt-5.5');

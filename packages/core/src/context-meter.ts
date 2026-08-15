@@ -27,6 +27,7 @@
  */
 
 import type { ModelMessage, SystemModelMessage } from 'ai';
+import * as v from 'valibot';
 import { CHARS_PER_TOKEN } from './llm.js';
 import { DYNAMIC_CONTEXT_OPEN_TAG, splitPromptSections } from './prompting/sections.js';
 
@@ -70,15 +71,17 @@ export type SystemText = string | SystemModelMessage | undefined;
 
 function systemText(system: SystemText): string {
   if (system === undefined) return '';
-  return typeof system === 'string' ? system : system.content;
+  const text = v.safeParse(v.string(), system);
+  return text.success ? text.output : v.parse(v.object({ content: v.string() }), system).content;
 }
 
 /** Characters one message contributes. A string content is its own length;
  *  structured content is measured as the JSON it is serialised to on the way
  *  out, which is what the provider tokenizes. */
 function messageChars(message: ModelMessage): number {
-  const content: unknown = message.content;
-  if (typeof content === 'string') return content.length;
+  const content = message.content;
+  const text = v.safeParse(v.string(), content);
+  if (text.success) return text.output.length;
   try {
     return JSON.stringify(content)?.length ?? 0;
   } catch {
@@ -90,9 +93,10 @@ function messageChars(message: ModelMessage): number {
  *  ride as user messages but are not conversation, and an operator reading a
  *  context breakdown needs them separated from what the user actually said. */
 function isEphemeral(message: ModelMessage): boolean {
+  const content = v.safeParse(v.string(), message.content);
   return message.role === 'user'
-    && typeof message.content === 'string'
-    && message.content.startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
+    && content.success
+    && content.output.startsWith(DYNAMIC_CONTEXT_OPEN_TAG);
 }
 
 function toolChars(name: string, def: { description?: string; inputSchema?: unknown } | undefined): number {

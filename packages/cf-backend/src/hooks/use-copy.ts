@@ -11,7 +11,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 export type CopyStatus = "idle" | "copied" | "failed";
 
-export function useCopy(resetMs = 1500): { status: CopyStatus; copy: (text: string) => void } {
+export interface CopyControl {
+  status: CopyStatus;
+  copy: (text: string) => void;
+}
+
+export function useCopy(resetMs = 1500): CopyControl {
   const [status, setStatus] = useState<CopyStatus>("idle");
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 

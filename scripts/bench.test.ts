@@ -5,14 +5,21 @@ import { describe, test, expect, afterAll } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync, lstatSync, readdirSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import * as v from 'valibot';
 import {
   LONGHORIZON_ANSWER_FILE, buildLongHorizonQuestions, decodeLongHorizonSpec,
-  encodeLongHorizonSpec, renderLongHorizonAnswerFile, splitOf,
+  encodeLongHorizonSpec, renderLongHorizonAnswerFile, SealedSplit, splitOf,
+  type AttemptOutcome, type BenchTask, type JsonValue,
 } from '../packages/core/src/index.js';
-import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, parseArgv, parseCommon } from './bench.js';
+import { BENCH_FAMILIES, DEFAULT_VALIDATE_RETRIES, panelArm, panelProviders, parseArgv, parseCommon } from './bench.js';
 import { BENCH_SUITES, loadBenchCorpus } from './bench-corpus.js';
 import { loadLongHorizonCorpus, materializeLongHorizon } from './bench-longhorizon.js';
 import { applyPatch, assertScratchRoot, budgetSignal, createAttemptSandbox, restoreGuarded, sandboxEnv } from './bench-sandbox.js';
+import {
+  VALIDATION_DIAGNOSTICS_FILE, loadValidationDiagnostics, runValidation,
+} from './bench-validation.js';
+import { parseAgentWorkerInput, parseWorkerOutput } from './bench-worker-protocol.js';
+import { buildPilotReport, validatePilotReport } from './bench-pilot.js';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const scratch: string[] = [];
@@ -36,6 +43,206 @@ describe('parseArgv', () => {
 
   test('rejects a positional argument that is not the command', () => {
     expect(() => parseArgv(['compare', 'stray'])).toThrow(/unexpected argument/);
+  });
+});
+
+describe('bench worker protocol', () => {
+  test('accepts the measured worker result shape', () => {
+    expect(parseWorkerOutput(JSON.stringify({
+      tokens: 23,
+      steps: 2,
+      hadError: false,
+      budgetBreach: null,
+      peakPromptTokens: 17,
+      modelCalls: 0,
+    }))).toEqual({
+      tokens: 23,
+      steps: 2,
+      hadError: false,
+      budgetBreach: null,
+      peakPromptTokens: 17,
+      modelCalls: 0,
+    });
+  });
+
+  test('rejects valid JSON with an invalid result shape', () => {
+    expect(() => parseWorkerOutput(JSON.stringify({
+      tokens: '23',
+      steps: 2,
+      hadError: false,
+      budgetBreach: null,
+      peakPromptTokens: 17,
+    }))).toThrow(/invalid worker output/);
+  });
+
+  test('rejects non-finite usage instead of letting it disable the budget', () => {
+    expect(() => parseWorkerOutput(JSON.stringify({
+      tokens: Number.NaN,
+      steps: 0,
+      hadError: false,
+      budgetBreach: null,
+      peakPromptTokens: 0,
+    }))).toThrow(/invalid worker output/);
+  });
+
+  test('strictly validates worker input and the parallel ask sequence', () => {
+    const input = {
+      dbPath: '/tmp/agent.db',
+      workspaceName: 'bench',
+      purpose: 'fix the task',
+      asks: ['one'],
+      removeAfterAsk: [null],
+      maxTokens: 100,
+      autoEvolve: false,
+      llm: {
+        name: 'workers-ai', baseURL: 'https://example.test/v1',
+        headers: { Authorization: 'Bearer fake' }, model: '@cf/example/model',
+      },
+      sessionId: 'task',
+    };
+    expect(parseAgentWorkerInput(JSON.stringify(input)).sessionId).toBe('task');
+    expect(() => parseAgentWorkerInput(JSON.stringify({ ...input, extra: true })))
+      .toThrow(/invalid agent worker input/);
+    expect(() => parseAgentWorkerInput(JSON.stringify({ ...input, removeAfterAsk: [] })))
+      .toThrow(/equal length/);
+  });
+});
+
+describe('stability pilot gate', () => {
+  const taskIds = Array.from({ length: 40 }, (_, index) => `task-${index}`);
+  const taskResults = taskIds.map((taskId, index) => ({
+    taskId,
+    attempts: 3,
+    repeatIndices: [0, 1, 2],
+    passes: index === 0 ? 2 : index === 1 ? 1 : index <= 20 ? 3 : 0,
+    tokens: [12_000, 12_000, 12_000],
+    modelCalls: [4, 5, 6],
+    errors: 0,
+    budgetBreaches: 0,
+  }));
+  const report = {
+    schemaVersion: 2,
+    kind: 'bench-stability-pilot',
+    family: 'defect',
+    manifestHash: 'manifest',
+    variant: 'pi:vanilla',
+    model: '@cf/zai-org/glm-5.2',
+    providerHash: 'provider',
+    budget: { wallClockMs: 300_000, maxTokens: 600_000 },
+    seed: 7,
+    tasks: 40,
+    taskIds,
+    taskResults,
+    repeats: 3,
+    attempts: 120,
+    passed: 60,
+    unstableTaskIds: ['task-0', 'task-1'],
+    errors: 0,
+    budgetBreaches: 0,
+    meanTokens: 12_000,
+    maxObservedTokens: 12_000,
+    totalModelCalls: 600,
+    meanModelCalls: 5,
+    maxObservedModelCalls: 6,
+  };
+
+  test('accepts a completed one-arm 40 by 3 report for the same compute envelope', () => {
+    expect(validatePilotReport(report, {
+      family: 'defect',
+      manifestHash: 'manifest',
+      model: '@cf/zai-org/glm-5.2',
+      providerHash: 'provider',
+      budget: { wallClockMs: 300_000, maxTokens: 600_000 },
+      comparedVariants: ['pi:vanilla', 'agent'],
+    }).variant).toBe('pi:vanilla');
+  });
+
+  test('rejects an under-repeated or compute-mismatched pilot', () => {
+    expect(() => validatePilotReport({ ...report, repeats: 2, attempts: 80 }, {
+      family: 'defect', manifestHash: 'manifest', model: '@cf/zai-org/glm-5.2',
+      providerHash: 'provider', budget: report.budget,
+      comparedVariants: ['pi:vanilla', 'agent'],
+    })).toThrow(/at least 3 repeats/);
+    expect(() => validatePilotReport(report, {
+      family: 'defect', manifestHash: 'manifest', model: '@cf/zai-org/glm-5.2',
+      providerHash: 'provider', budget: { ...report.budget, maxTokens: 700_000 },
+      comparedVariants: ['pi:vanilla', 'agent'],
+    })).toThrow(/compute envelope/);
+  });
+
+  test('rejects pilot errors, budget breaches, and unrelated arms', () => {
+    const expected = {
+      family: 'defect' as const, manifestHash: 'manifest', model: '@cf/zai-org/glm-5.2',
+      providerHash: 'provider', budget: report.budget,
+      comparedVariants: ['pi:vanilla', 'agent'] as const,
+    };
+    const withError = report.taskResults.map((result, index) => index === 0 ? { ...result, errors: 1 } : result);
+    const withBreach = report.taskResults.map((result, index) => index === 0 ? { ...result, budgetBreaches: 1 } : result);
+    expect(() => validatePilotReport({ ...report, errors: 1, taskResults: withError }, expected)).toThrow(/worker error/);
+    expect(() => validatePilotReport({ ...report, budgetBreaches: 1, taskResults: withBreach }, expected)).toThrow(/budget breach/);
+    expect(() => validatePilotReport({ ...report, variant: 'agent-evolving' }, expected)).toThrow(/one of the compared arms/);
+  });
+
+  test('requires call-count evidence instead of treating absence as zero calls', () => {
+    const withoutCalls = report.taskResults.map((result, index) => {
+      if (index !== 0) return result;
+      const { modelCalls: _modelCalls, ...rest } = result;
+      return rest;
+    });
+    expect(() => validatePilotReport({ ...report, taskResults: withoutCalls }, {
+      family: 'defect', manifestHash: 'manifest', model: '@cf/zai-org/glm-5.2',
+      providerHash: 'provider', budget: report.budget,
+      comparedVariants: ['pi:vanilla', 'agent'],
+    })).toThrow(/invalid stability pilot report/);
+  });
+
+  test('builds exact call aggregates and rejects an uninstrumented attempt', () => {
+    const outcome = (repeat: number, modelCalls: number): AttemptOutcome => ({
+      taskId: 'task-0',
+      variantId: 'pi:vanilla',
+      slot: 'a',
+      repeat,
+      passed: true,
+      checks: [],
+      durationMs: 10,
+      tokens: 100 + repeat,
+      modelCalls,
+      peakPromptTokens: 50,
+      budgetBreach: null,
+    });
+    const input = {
+      family: 'defect' as const,
+      manifestHash: 'manifest',
+      variant: 'pi:vanilla',
+      llm: {
+        name: 'workers-ai',
+        baseURL: 'https://example.test/v1',
+        headers: { Authorization: 'Bearer fake' },
+        model: '@cf/zai-org/glm-5.2',
+      },
+      budget: report.budget,
+      seed: 7,
+      repeats: 2,
+    };
+    expect(buildPilotReport({ ...input, outcomes: [outcome(0, 0), outcome(1, 4)] }))
+      .toMatchObject({ totalModelCalls: 4, meanModelCalls: 2, maxObservedModelCalls: 4 });
+    const { modelCalls: _modelCalls, ...uninstrumented } = outcome(0, 0);
+    expect(() => buildPilotReport({ ...input, outcomes: [uninstrumented] }))
+      .toThrow(/no model-call evidence/);
+  });
+
+  test('covers both model-backed panel arms', () => {
+    for (const variant of ['panel:self', 'panel:mixed']) {
+      const result = Bun.spawnSync([
+        'bun', join(REPO_ROOT, 'scripts', 'bench.ts'), 'compare',
+        '--run-root', tempDir('bench-panel-pilot-'),
+        '--a', variant,
+        '--b', 'null',
+        '--repeats', '3',
+      ], { stdout: 'pipe', stderr: 'pipe' });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr.toString()).toContain('model-backed runs need --pilot-report');
+    }
   });
 });
 
@@ -66,6 +273,96 @@ describe('parseCommon — repeats and the validation retry budget', () => {
     expect(() => opts({ repeats: '0' })).toThrow(/--repeats must be an integer ≥ 1/);
     expect(() => opts({ repeats: '2.5' })).toThrow(/--repeats must be an integer ≥ 1/);
     expect(() => opts({ 'validate-retries': '-1' })).toThrow(/--validate-retries must be an integer ≥ 0/);
+  });
+});
+
+describe('validation diagnostics', () => {
+  const task = (id: string): BenchTask => ({
+    id,
+    title: id,
+    prompt: 'repair the defect',
+    editable: ['src/code.ts'],
+    guarded: ['tests'],
+    checks: [{ id: 'core-tests', command: ['false'] }],
+  });
+
+  const outcome = (
+    taskId: string,
+    side: 'broken' | 'oracle',
+    repeat: number,
+    passed: boolean,
+    output: string,
+  ): AttemptOutcome => ({
+    taskId,
+    variantId: side === 'broken' ? 'null' : 'oracle',
+    slot: side === 'broken' ? 'a' : 'b',
+    repeat,
+    passed,
+    checks: [{ id: 'core-tests', passed, exitCode: passed ? 0 : 1, durationMs: 654_321, output }],
+    durationMs: 987_654,
+    tokens: 765_432,
+    modelCalls: 4_321,
+    peakPromptTokens: 54_321,
+    budgetBreach: null,
+  });
+
+  test('retains fail-then-pass attempt outputs for dev and sealed without stdout leakage', async () => {
+    const runRoot = tempDir('bench-validation-diagnostics-');
+    const dev = task('dev-diagnostic');
+    const sealed = task('sealed-diagnostic');
+    const stdout: string[] = [];
+
+    const exitCode = await runValidation({
+      family: 'defect',
+      corpusPath: '/fixture/tasks.jsonl',
+      manifestHash: 'fixture-manifest',
+      validateRetries: 1,
+      runRoot,
+      devTasks: [dev],
+      sealed: new SealedSplit([sealed]),
+      runAttempt: async (current, repeat) => ({
+        broken: outcome(current.id, 'broken', repeat, false, `${current.id}-broken-${repeat}`),
+        oracle: outcome(current.id, 'oracle', repeat, repeat === 1, `${current.id}-oracle-${repeat}`),
+      }),
+      log: (line) => stdout.push(line),
+    });
+
+    expect(exitCode).toBe(0);
+    const diagnostics = loadValidationDiagnostics(join(runRoot, VALIDATION_DIAGNOSTICS_FILE));
+    expect(diagnostics.attempts.map(({ taskId, split, attempt }) => ({ taskId, split, attempt }))).toEqual([
+      { taskId: dev.id, split: 'dev', attempt: 1 },
+      { taskId: dev.id, split: 'dev', attempt: 2 },
+      { taskId: sealed.id, split: 'sealed', attempt: 1 },
+      { taskId: sealed.id, split: 'sealed', attempt: 2 },
+    ]);
+    expect(diagnostics.attempts.flatMap(({ broken, oracle }) => [broken.checks[0]!.output, oracle.checks[0]!.output])).toEqual([
+      'dev-diagnostic-broken-0', 'dev-diagnostic-oracle-0',
+      'dev-diagnostic-broken-1', 'dev-diagnostic-oracle-1',
+      'sealed-diagnostic-broken-0', 'sealed-diagnostic-oracle-0',
+      'sealed-diagnostic-broken-1', 'sealed-diagnostic-oracle-1',
+    ]);
+    expect(stdout.join('\n')).not.toContain('diagnostic-broken');
+    expect(stdout.join('\n')).not.toContain('diagnostic-oracle');
+    for (const diagnosticValue of ['654321', '987654', '765432', '4321', '54321']) {
+      expect(stdout.join('\n')).not.toContain(diagnosticValue);
+    }
+    expect(lstatSync(join(runRoot, VALIDATION_DIAGNOSTICS_FILE)).mode & 0o777).toBe(0o600);
+    expect(readdirSync(runRoot).some((name) => name.endsWith('.tmp'))).toBe(false);
+  });
+
+  test('rejects an unvalidated diagnostic document instead of laundering extra fields', () => {
+    const path = join(tempDir('bench-invalid-validation-diagnostics-'), VALIDATION_DIAGNOSTICS_FILE);
+    writeFileSync(path, JSON.stringify({
+      schemaVersion: 1,
+      kind: 'bench-validation-diagnostics',
+      family: 'defect',
+      corpusPath: '/fixture/tasks.jsonl',
+      manifestHash: 'fixture-manifest',
+      validateRetries: 1,
+      attempts: [],
+      unvalidated: true,
+    }));
+    expect(() => loadValidationDiagnostics(path)).toThrow(/invalid validation diagnostics/);
   });
 });
 
@@ -240,7 +537,7 @@ describe('budgetSignal — the compute envelope is enforced, not advertised', ()
 describe('loadBenchCorpus', () => {
   test('loads the shipped corpus with a patch for every task', () => {
     const { corpus, patches } = loadBenchCorpus(REPO_ROOT);
-    const all = [...corpus.dev.map((t) => t.id)];
+    const all = corpus.dev.map((t) => t.id);
     expect(corpus.dev.length + corpus.sealed.size).toBe(patches.size);
     expect(corpus.dev.length).toBeGreaterThan(0);
     expect(corpus.sealed.size).toBeGreaterThan(0);
@@ -329,11 +626,11 @@ describe('loadBenchCorpus', () => {
 describe('the long-horizon corpus', () => {
   const { corpus, specs, path } = loadLongHorizonCorpus(REPO_ROOT);
 
-  test('loads with a generator spec for every task, in both shapes', () => {
+  test('loads with a generator spec for every task, in both modes', () => {
     expect(corpus.dev.length + corpus.sealed.size).toBe(specs.size);
     expect(corpus.dev.length).toBeGreaterThan(0);
     expect(path.endsWith(join('tests', 'bench', 'longhorizon.jsonl'))).toBe(true);
-    expect(new Set([...specs.values()].map((s) => s.shape))).toEqual(new Set(['digest', 'continuation']));
+    expect(new Set([...specs.values()].map((spec) => spec.mode))).toEqual(new Set(['digest', 'continuation']));
     for (const task of corpus.dev) expect(splitOf(task.id)).toBe('dev');
   });
 
@@ -365,7 +662,7 @@ describe('the long-horizon corpus', () => {
       .not.toBe(encodeLongHorizonSpec(specs.get(id)!));
   });
 
-  function longHorizonFixture(line: unknown): string {
+  function longHorizonFixture(line: JsonValue): string {
     const root = tempDir('bench-lh-fixture-');
     mkdirSync(join(root, 'tests', 'bench'), { recursive: true });
     writeFileSync(join(root, 'tests', 'bench', 'longhorizon.jsonl'), `${JSON.stringify(line)}\n`);
@@ -373,11 +670,11 @@ describe('the long-horizon corpus', () => {
   }
 
   test('refuses a spec that cannot produce a task', () => {
-    const base = { id: 'demo', title: 'demo', shape: 'continuation', seed: 1, entries: 100, filler: 10 };
+    const base = { id: 'demo', title: 'demo', mode: 'continuation', seed: 1, entries: 100, filler: 10 };
     expect(() => loadLongHorizonCorpus(longHorizonFixture({ ...base, markers: 2, parts: 4 })))
       .toThrow(/every part must plant at least one/);
-    expect(() => loadLongHorizonCorpus(longHorizonFixture({ ...base, shape: 'digest', markers: 2, parts: 3 })))
-      .toThrow(/digest shape has exactly one part/);
+    expect(() => loadLongHorizonCorpus(longHorizonFixture({ ...base, mode: 'digest', markers: 2, parts: 3 })))
+      .toThrow(/digest mode has exactly one part/);
   });
 
   test('reports the line number for malformed JSON, and refuses an empty corpus', () => {
@@ -396,7 +693,7 @@ describe('the long-horizon corpus', () => {
 // would both mean the family measures nothing.
 describe('the long-horizon check scores what was actually materialized', () => {
   const { corpus, specs } = loadLongHorizonCorpus(REPO_ROOT);
-  const task = corpus.dev.find((t) => specs.get(t.id)!.shape === 'continuation')!;
+  const task = corpus.dev.find((task_) => specs.get(task_.id)!.mode === 'continuation')!;
   const spec = specs.get(task.id)!;
 
   function runCheck(dir: string): number {
@@ -450,5 +747,96 @@ describe('the task corpus stays applicable to HEAD', () => {
         { cwd: repo, stdout: 'pipe', stderr: 'pipe' },
       ).exitCode !== 0);
     expect(stale).toEqual([]);
+  });
+
+  // The only sanctioned answer to a patch that can never apply again: the code
+  // it was data about is gone. Recording it keeps that indistinguishable-by-
+  // inspection case apart from dropping a task the tree got worse at, and keeps
+  // the dev/sealed accounting reconstructable from the ledger alone.
+  const RetiredEntry = v.object({
+    id: v.pipe(v.string(), v.minLength(1)),
+    split: v.picklist(['dev', 'sealed']),
+    retiredAt: v.pipe(v.string(), v.regex(/^\d{4}-\d{2}-\d{2}$/)),
+    /** The code the task was data about, named precisely enough to check. */
+    subject: v.pipe(v.string(), v.minLength(1)),
+    /** The commit that removed that code — the claim, made checkable. */
+    removedBy: v.pipe(v.string(), v.regex(/^[0-9a-f]{7,40}$/)),
+    reason: v.pipe(v.string(), v.minLength(1)),
+  });
+
+  test('every retired task is recorded, gone, and honestly split', () => {
+    const dir = join(import.meta.dir, '..', 'tests', 'bench');
+    const entries = readFileSync(join(dir, 'retired.jsonl'), 'utf8')
+      .split('\n')
+      .filter((l) => l.trim() && !l.startsWith('#'))
+      .map((l) => v.parse(RetiredEntry, JSON.parse(l)));
+    expect(entries.length).toBeGreaterThan(0);
+    expect(new Set(entries.map((e) => e.id)).size).toBe(entries.length);
+
+    const live = new Set(loadBenchCorpus(join(import.meta.dir, '..')).patches.keys());
+    for (const e of entries) {
+      // A retired id must be absent from the corpus AND leave no orphan patch,
+      // or `loadBenchCorpus` would still be carrying it.
+      expect(live.has(e.id)).toBe(false);
+      expect(existsSync(join(dir, 'patches', `${e.id}.patch`))).toBe(false);
+      // Re-derived, never trusted: a misreported split would silently rewrite
+      // how much held-out evidence the corpus is claimed to have had.
+      expect(e.split).toBe(splitOf(e.id));
+    }
+  });
+});
+
+/**
+ * The panel arms. Both arms must take the same code path with the same panel
+ * size — if `self` and `mixed` differed in anything but the provider list, the
+ * comparison would measure that difference instead of panel composition.
+ */
+describe('panel arms — only the provider list may differ', () => {
+  const analyst = { name: 'openai-compat', baseURL: 'http://a', headers: { Authorization: 'x' }, model: 'parent' };
+  const withEnv = <T>(env: Record<string, string | undefined>, fn: () => T): T => {
+    const prior = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    try { return fn(); } finally { Object.assign(process.env, prior); }
+  };
+
+  test('a non-panel spec is not claimed, so it falls through to the other variants', () => {
+    expect(panelArm('agent', analyst)).toBeNull();
+    expect(panelArm('oracle', analyst)).toBeNull();
+  });
+
+  test('self runs the analyst model in every seat — today\'s inherit-the-parent default', () => {
+    const arm = withEnv({ BENCH_PANEL_SIZE: '3' }, () => panelArm('panel:self', analyst));
+    expect(arm!.panel).toHaveLength(3);
+    for (const member of arm!.panel) expect(member.model).toBe('parent');
+    // The analyst is held constant across arms, so it is the parent here too.
+    expect(arm!.analyst.model).toBe('parent');
+  });
+
+  test('mixed runs one distinct model per seat, and the analyst stays the parent', () => {
+    const arm = withEnv({
+      BENCH_PANEL_SIZE: '3',
+      BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b;http://c|k3|vendor-c',
+    }, () => panelArm('panel:mixed', analyst));
+    expect(arm!.panel.map((m) => m.model)).toEqual(['vendor-a', 'vendor-b', 'vendor-c']);
+    expect(arm!.analyst.model).toBe('parent');
+  });
+
+  test('both arms are the same size, so the comparison is not confounded by panel width', () => {
+    const env = { BENCH_PANEL_SIZE: '2', BENCH_PANEL: 'http://a|k1|vendor-a;http://b|k2|vendor-b' };
+    const self = withEnv(env, () => panelArm('panel:self', analyst));
+    const mixed = withEnv(env, () => panelArm('panel:mixed', analyst));
+    expect(self!.panel).toHaveLength(mixed!.panel.length);
+  });
+
+  test('a mixed panel that cannot be built refuses rather than quietly running one model N times', () => {
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '3', BENCH_PANEL: 'http://a|k1|only-one' },
+      () => panelArm('panel:mixed', analyst))).toThrow(/needs BENCH_PANEL with 3 entries/);
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '2', BENCH_PANEL: 'http://a|k1|a;malformed' },
+      () => panelProviders(2))).toThrow(/must be "<baseURL>\|<auth>\|<model>"/);
+  });
+
+  test('panel size is bounded by what a fork panel actually accepts', () => {
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '1' }, () => panelArm('panel:self', analyst))).toThrow(/\[2,6\]/);
+    expect(() => withEnv({ BENCH_PANEL_SIZE: '7' }, () => panelArm('panel:self', analyst))).toThrow(/\[2,6\]/);
   });
 });

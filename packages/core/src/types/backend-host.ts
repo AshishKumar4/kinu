@@ -25,12 +25,23 @@
 // A seam here would have no core caller to serve (deletion test).
 
 import type { HeadRuntime } from '../heads/controller.js';
+import type { JsonObject } from '../utils/json.js';
 
 /** A typed event fanned out to connected clients (mcts-progress, device_consent,
  *  workspace_renamed, background-event cards…). Fire-and-forget. */
 export interface BroadcastEvent {
   readonly type: string;
-  readonly [key: string]: unknown;
+  readonly id?: string;
+  readonly state?: string;
+  readonly text?: string;
+  readonly metadata?: JsonObject;
+  readonly status?: string;
+  readonly branchId?: string;
+  readonly task?: string;
+  readonly takeSetId?: string;
+  readonly turnId?: string;
+  readonly message?: string;
+  readonly jobId?: string;
 }
 
 /** A programmatic turn injected into the SAME serialized loop the user drives —
@@ -39,7 +50,10 @@ export interface BroadcastEvent {
  *  than a user bubble. */
 export interface ProgrammaticTurn {
   readonly text: string;
-  readonly metadata?: { proteusEvent?: string; [key: string]: unknown };
+  readonly metadata?: JsonObject;
+  /** Stable identity for a durable, retry-safe turn submission. Backends that
+   * support durable admission must return the existing turn on a retry. */
+  readonly idempotencyKey?: string;
 }
 
 /** A file attached to a user prompt — the ai-sdk FileUIPart payload (sans tag).
@@ -55,17 +69,25 @@ export interface EnqueueTurnResult {
   /** 'skipped' when a newer turn generation pre-empted this injection — the
    *  caller leaves a breadcrumb so a settled result isn't silently lost. */
   readonly status: 'queued' | 'skipped';
+  /** Durable-admission receipt when the backend has a submission ledger. */
+  readonly durable?: {
+    readonly submissionId: string;
+    readonly accepted: boolean;
+    readonly status: 'pending' | 'running' | 'completed' | 'aborted' | 'skipped' | 'error';
+  };
 }
 
 export interface BackendHost {
   /** Fan-out to connected clients. CF: DurableObject.broadcast(JSON). CLI: push
    *  to the TUI store / print to stdout. Never throws. */
-  broadcast(event: BroadcastEvent): void;
+  broadcast<Event extends BroadcastEvent>(event: Event): void;
 
   /** Inject a programmatic turn, serialized behind any live turn. CF:
    *  Think.saveMessages (TurnQueue). CLI: enqueue into the local loop's queue.
    *  The core SignalDelivery seam (orchestrator/signals.ts) is its only caller
-   *  — producers deliver a signal and never pick the mechanism. */
+   *  — producers deliver a signal and never pick the mechanism. An explicit
+   *  owner decision may also enqueue a new mode-boundary turn directly when
+   *  splicing into the live turn would preserve the wrong tool surface. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult>;
 
   /** Is a turn running right now — i.e. will there BE a next agentic step for

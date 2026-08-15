@@ -54,7 +54,7 @@ export function getUnseenChangelog(config: AgentConfigStore, sql: SqlExecutor): 
 }
 
 /** The operator viewed the changelog — zero the unseen badge. */
-export function markChangelogSeen(config: AgentConfigStore): { ok: true; seenAt: number } {
+export function markChangelogSeen(config: AgentConfigStore) {
   const seenAt = Date.now();
   config.setChangelogSeenAt(seenAt);
   return { ok: true, seenAt };
@@ -78,7 +78,7 @@ export async function pickAlternateTake(
   takeId: string,
   nodeId: string,
 ): Promise<TakePickOutcome> {
-  if (typeof takeId !== 'string' || !takeId || typeof nodeId !== 'string' || !nodeId) {
+  if (!takeId || !nodeId) {
     throw new Error('pickAlternateTake requires takeId and nodeId');
   }
   const record = recordTakePick(deps.sql, {
@@ -108,5 +108,5 @@ export async function pickAlternateTake(
  * self-enhancement bias every other scorer here routes around.
  */
 export function proposeCurriculumTasks(rt: AgentRuntime, count?: number): Promise<ProposedTask[]> {
-  return proposeNextTasks({ rt, judge: rt.judgeModel ?? rt.llm, ...(count === undefined ? {} : { count }) });
+  return proposeNextTasks({ rt, judge: rt.judgeModel ?? rt.llm, count });
 }

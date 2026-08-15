@@ -31,11 +31,11 @@ export interface OAuthProviderEnv {
   CLOUDFLARE_OAUTH_TOKEN_AUTH_METHOD?: string;
 }
 
-const providerLabels: Record<OAuthProviderId, string> = {
+const providerLabels = {
   google: 'Google',
   github: 'GitHub',
   cloudflare: 'Cloudflare',
-};
+} satisfies Record<OAuthProviderId, string>;
 
 const discoveryCache = new Map<string, { as: oauth.AuthorizationServer; expiresAt: number }>();
 const DISCOVERY_TTL_MS = 60 * 60 * 1000;
@@ -126,8 +126,8 @@ function providerFromEnv(
   return { id, label: providerLabels[id], clientId, clientSecret };
 }
 
-function cleanEnv(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+function cleanEnv(value: string | undefined): string | null {
+  return value?.trim() || null;
 }
 
 function cleanScopes(value: string | undefined, fallback: string): string {

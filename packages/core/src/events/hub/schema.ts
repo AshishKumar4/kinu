@@ -16,7 +16,11 @@
  * The DDL is idempotent. Safe to call on every DO boot.
  */
 
+import * as v from 'valibot';
 import type { SqlExec } from '../../types/primitives.js';
+
+const SqlDefinitionRowSchema = v.object({ sql: v.nullable(v.string()) });
+const TableColumnRowSchema = v.object({ name: v.string() });
 
 const AGENT_LOG_DDL = `
 CREATE TABLE IF NOT EXISTS agent_log (
@@ -202,7 +206,7 @@ const PEER_OUTBOX_INDEXES: ReadonlyArray<string> = [
 function rebuildIfCheckMissing(sql: SqlExec, table: string, marker: string, ddl: string): void {
   const rows = sql.exec(
     `SELECT sql FROM sqlite_master WHERE type = 'table' AND name = ?`, table,
-  ).toArray() as Array<{ sql: string | null }>;
+  ).toArray().map((row) => v.parse(SqlDefinitionRowSchema, row));
   if (rows.length === 0 || (rows[0].sql ?? '').includes(marker)) return;
   sql.exec(`ALTER TABLE ${table} RENAME TO ${table}_migrating`);
   sql.exec(ddl);
@@ -213,7 +217,8 @@ function rebuildIfCheckMissing(sql: SqlExec, table: string, marker: string, ddl:
 /** Initialize all hub tables, indexes, and views. Idempotent. */
 export function initEventsHubTables(sql: SqlExec): void {
   sql.exec(AGENT_LOG_DDL);
-  const agentLogColumns = sql.exec(`PRAGMA table_info(agent_log)`).toArray() as Array<{ name: string }>;
+  const agentLogColumns = sql.exec(`PRAGMA table_info(agent_log)`).toArray()
+    .map((row) => v.parse(TableColumnRowSchema, row));
   if (!agentLogColumns.some((column) => column.name === 'consumed_at')) {
     sql.exec(`ALTER TABLE agent_log ADD COLUMN consumed_at INTEGER`);
   }

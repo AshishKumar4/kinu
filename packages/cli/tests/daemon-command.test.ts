@@ -116,7 +116,7 @@ describe('proteus daemon logs', () => {
 
     expect(runDaemon(home, 'start').exitCode).toBe(0);
     // The daemon's first act is to log that it started, which is what rolls it.
-    await waitFor(() => existsSync(`${logPath}.1`));
+    await waitFor(() => existsSync(`${logPath}.1`) && statSync(logPath).size < 1024 * 1024);
 
     expect(statSync(logPath).size).toBeLessThan(1024 * 1024);
     expect(statSync(`${logPath}.1`).size).toBeGreaterThan(1024 * 1024);

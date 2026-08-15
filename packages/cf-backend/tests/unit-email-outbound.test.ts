@@ -5,27 +5,23 @@
 // send_email binding.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   initEventsHubTables, EventLog, ReplyChannelStore,
-  AgentOrchestrator, acceptInboundEmail,
-  type BackendHost, type EvolutionEngine,
+  AgentOrchestrator, EvolutionEngine, acceptInboundEmail,
+  type BackendHost,
   type SqlExec,
 } from '@proteus/core';
-import { createMemoryVfs } from '@proteus/test-utils';
+import { createMemoryVfs, createTestRuntime } from '@proteus/test-utils';
 import {
   createEmailThreadDispatcher, dispatchEmailRepliesForTurn, sendOwnerEmail,
   threadingHeaders,
 } from '../src/email/outbound.js';
 import { EmailOutbox } from '../src/email/outbox.js';
+import { sqlExec } from './helpers/user-do.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  return sqlExec(new Database(':memory:'));
 }
 
 function freshOutbox(): EmailOutbox {
@@ -34,24 +30,35 @@ function freshOutbox(): EmailOutbox {
   return outbox;
 }
 
-type SentEmail = {
-  from: string | { email: string; name: string };
-  to: unknown;
-  subject: string;
-  text?: string;
-  headers?: Record<string, string>;
-};
+const SentEmailSchema = v.object({
+  from: v.union([v.string(), v.object({ email: v.string(), name: v.string() })]),
+  to: v.union([
+    v.string(),
+    v.object({ email: v.string(), name: v.string() }),
+    v.array(v.union([v.string(), v.object({ email: v.string(), name: v.string() })])),
+  ]),
+  subject: v.string(),
+  text: v.optional(v.string()),
+  headers: v.optional(v.record(v.string(), v.string())),
+});
+type SentEmail = v.InferOutput<typeof SentEmailSchema>;
+type SendEmailBuilder = Parameters<SendEmail['send']>[0];
+const ReplyAttemptSchema = v.object({
+  kind: v.string(),
+  outcome: v.object({ outcome: v.string() }),
+});
 
 /** A capture fake for the send_email Workers binding. */
 function fakeSendBinding(opts: { fail?: boolean } = {}) {
   const sent: SentEmail[] = [];
-  const binding = {
-    async send(message: SentEmail) {
-      if (opts.fail) throw new Error('E_SENDER_NOT_VERIFIED');
-      sent.push(message);
-      return { messageId: `out-${sent.length}` };
-    },
-  } as unknown as SendEmail;
+  function send(message: EmailMessage): Promise<EmailSendResult>;
+  function send(message: SendEmailBuilder): Promise<EmailSendResult>;
+  async function send(message: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
+    if (opts.fail) throw new Error('E_SENDER_NOT_VERIFIED');
+    sent.push(v.parse(SentEmailSchema, message));
+    return { messageId: `out-${sent.length}` };
+  }
+  const binding: SendEmail = { send };
   return { binding, sent };
 }
 
@@ -138,7 +145,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       `SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`,
     ).toArray();
     expect(attempts).toHaveLength(1);
-    expect(JSON.parse(attempts[0].payload as string)).toMatchObject({
+    expect(v.parse(ReplyAttemptSchema, JSON.parse(String(attempts[0].payload)))).toMatchObject({
       kind: 'email_thread', outcome: { outcome: 'delivered' },
     });
 
@@ -161,23 +168,26 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
       turnInFlight: () => true,
       setTimer: () => {},
     };
+    const { rt } = createTestRuntime();
     const orch = new AgentOrchestrator({
-      host, eventLog: log,
-      engine: { reviewTurn: async () => {}, onSessionComplete: async () => {} } as unknown as EvolutionEngine,
+      host, eventLog: log, engine: new EvolutionEngine(rt, { enabled: false }),
     });
     await orch.drainPendingEvents();
 
     const step = orch.signals.prepareStep({ stepNumber: 1, messages: [{ role: 'user', content: 'q' }] });
-    expect(String(step![1]!.content)).toContain('Is staging green?');
+    if (!step?.[1]) throw new Error('expected injected signal step');
+    expect(String(step[1].content)).toContain('Is staging green?');
 
     // Turn end: the absorbed signal's reply turn id keys the SAME dispatch the
     // queued drain-turn path uses — the live turn's answer threads back.
     const { absorbed } = orch.signals.settle({ completed: true });
     expect(absorbed).toHaveLength(1);
-    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbed[0]!.replyTurnId!, 'Green.', 2_000))
+    const absorbedSignal = absorbed[0];
+    if (!absorbedSignal?.replyTurnId) throw new Error('expected absorbed reply turn');
+    expect(await dispatchEmailRepliesForTurn({ log, replies }, absorbedSignal.replyTurnId, 'Green.', 2_000))
       .toEqual({ delivered: 1, pending: false });
     expect(sent).toHaveLength(1);
-    expect(sent[0]!.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
+    expect(sent[0]?.headers?.['In-Reply-To']).toBe('<abc@mail.example.com>');
     expect(replies.findOpenByEvent(eventId)).toBeNull();
   });
 
@@ -208,7 +218,7 @@ describe('inbound email → turn → threaded reply (the full flow at the seams)
     expect(sent).toHaveLength(0);
     expect(replies.findOpenByEvent(eventId)?.attempt_count).toBe(1);
     const attempts = sql.exec(`SELECT payload FROM agent_log WHERE kind = 'reply_attempt'`).toArray();
-    expect(JSON.parse(attempts[0].payload as string).outcome.outcome).toBe('failed');
+    expect(v.parse(ReplyAttemptSchema, JSON.parse(String(attempts[0].payload))).outcome.outcome).toBe('failed');
   });
 
   test('a turn with no drain-bound email events sends nothing', async () => {

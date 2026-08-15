@@ -5,6 +5,7 @@
 
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   makeSql,
   makeExecRaw,
@@ -46,8 +47,9 @@ function createFullCLIRuntime() {
     id: agentId,
     name: 'cli-agent',
     scaffold: {
+      path: 'scaffold/agent.js',
       exists: () => vfs.exists('scaffold/agent.js'),
-      read: () => vfs.readFile('scaffold/agent.js', { encoding: 'utf8' }) as Promise<string>,
+      read: async () => v.parse(v.string(), await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' })),
       write: (code) => vfs.writeFile('scaffold/agent.js', code),
       version: async () => (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
     },
@@ -63,7 +65,7 @@ function createFullCLIRuntime() {
     craftStore,
     judgeModel: llm,
     spawnBranch: async () => ({
-      explore: async () => ({ text: 'cli branch explored', codeUsed: null }),
+      explore: async () => ({ text: 'cli branch explored' }),
       generateReflection: async () => ({ text: 'cli branch reflection' }),
     }),
     abortBranch: async () => {},
@@ -93,7 +95,7 @@ describe('CLI smoke test', () => {
 
     // 4. LLM: complete
     const completion = await rt.llm.complete('hello');
-    expect(typeof completion).toBe('string');
+    expect(completion.length).toBeGreaterThan(0);
 
     // 5. Schedule: fiber
     const fiberResult = await rt.schedule.fiber('test-fiber', async (ctx) => {
@@ -141,15 +143,22 @@ describe('CLI smoke test', () => {
     expect(result.converged).toBe(true);
 
     // Verify DB tables exist and have rows
-    const nodeCount = db.query('SELECT COUNT(*) as c FROM search_nodes').get() as { c: number };
+    const nodeCount = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM search_nodes').get();
+    if (!nodeCount) throw new Error('expected search node count');
     expect(nodeCount.c).toBe(5); // 1 root + 2 iterations × 2 branches
 
     // Verify scaffold_versions table exists
-    const svCount = db.query("SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='scaffold_versions'").get() as { c: number };
+    const svCount = db.query<{ c: number }, []>(
+      "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='scaffold_versions'",
+    ).get();
+    if (!svCount) throw new Error('expected scaffold table count');
     expect(svCount.c).toBe(1);
 
     // Verify craft_scores table exists
-    const csCount = db.query("SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='craft_scores'").get() as { c: number };
+    const csCount = db.query<{ c: number }, []>(
+      "SELECT COUNT(*) as c FROM sqlite_master WHERE type='table' AND name='craft_scores'",
+    ).get();
+    if (!csCount) throw new Error('expected craft table count');
     expect(csCount.c).toBe(1);
 
     // Verify memory has entries

@@ -2,8 +2,8 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus has roughly 34k lines of self-evolution machinery — three timescales,
-MCTS, a mutable scaffold, a Lean corpus — and until now no number attached to
+Proteus has roughly 34k lines of self-evolution machinery (three timescales,
+MCTS, a mutable scaffold, a Lean corpus) and until now no number attached to
 any of it. An independent review put it bluntly: ahead of the published frontier
 on safety engineering for self-modification, at parity on mechanism, **at zero on
 demonstrated effect**.
@@ -18,7 +18,9 @@ the harness will say so.
 ```
 bun scripts/bench.ts validate --run-root /tmp/bench
 bun scripts/bench.ts compare  --run-root /tmp/bench --a null --b oracle --sealed --repeats 3
-bun scripts/bench.ts gain     --run-root /tmp/bench --stateful agent-evolving --stateless agent
+bun scripts/bench.ts pilot    --run-root /tmp/bench --variant pi:vanilla --out /tmp/pi-pilot.json
+bun scripts/bench.ts compare  --run-root /tmp/bench --a pi:vanilla --b agent --pilot-report /tmp/pi-pilot.json --repeats 3
+bun scripts/bench.ts gain     --run-root /tmp/bench --stateful agent-evolving --stateless agent --pilot-report /tmp/agent-pilot.json --repeats 3
 bun scripts/bench.ts validate --run-root /tmp/bench --family longhorizon
 ```
 
@@ -41,7 +43,7 @@ corpus path, and two runs on different families are not comparable.
 ## The defect family
 
 A task is **a seeded defect in this repo**, and the score is **this repo's own
-checks**. `tests/bench/tasks.jsonl` holds 165 of them; `tests/bench/patches/<id>.patch`
+checks**. `tests/bench/tasks.jsonl` holds 159 of them; `tests/bench/patches/<id>.patch`
 is the diff that breaks the code.
 
 An attempt is scored by running, in the sandbox:
@@ -63,12 +65,13 @@ Every task was chosen by evidence. Each candidate mutation was applied, the
 suite was run, and only mutations that actually broke a check became tasks. One
 candidate (a `>=` → `>` change in `decidePromotion`) broke nothing — no test
 covered that boundary — so it was dropped rather than shipped as a task nobody
-could fail. `bench validate` re-proves the precondition for all 17: defect
+could fail. `bench validate` re-proves the precondition for all 159: defect
 fails, oracle passes.
 
 ### Validation is itself noisy — `--validate-retries n`
 
-A full 165-task validation once flagged `autojudge-slot-scores-swapped` **BAD**.
+A full validation of an earlier 165-task corpus once flagged
+`autojudge-slot-scores-swapped` **BAD**.
 It then validated 5/5 in isolation and passed the next complete run: the failure
 was never reproduced, and the cause was the sandbox, not the task. A single
 scored attempt can record a false fail.
@@ -104,18 +107,18 @@ The defect corpus scores a repo fix. It is blind to everything context-shaped:
 whether a turn drowned in tool bulk, whether a fact survived compaction, where
 peak prompt tokens went. `tests/bench/longhorizon.jsonl` is the corpus that
 isn't — 24 tasks over four length buckets (~35k / ~137k / ~549k / ~1.1M
-characters) crossed with the planted-fact count, in two shapes.
+characters) crossed with the planted-fact count, in two modes.
 
 The corpus file holds **generator parameters only**. The materials, the asks and
 the answer key are all derived from them by
 `packages/core/src/bench/longhorizon.ts`, so nothing in the corpus is a fact
 somebody wrote down and the answer key exists only as a pure function of a seed.
 
-**Shape (a) — single-query digestion.** The materials are materialized into the
+**Mode (a) — single-query digestion.** The materials are materialized into the
 sandbox, the agent gets one ask, and it writes `bench-answer.txt`. This is the
-shape every published RLM result uses.
+mode every published RLM result uses.
 
-**Shape (b) — multi-episode continuation.** The same corpus is delivered across
+**Mode (b) — multi-episode continuation.** The same corpus is delivered across
 K asks on one session. Each part is **deleted** once its ask is answered, and
 the compaction ladder is forced to fold at every episode boundary
 (`armForcedCompaction`), so the final ask is answerable only from what survived.
@@ -123,7 +126,7 @@ The RLM literature has no instrument of this kind — every one of its results i
 single-query over an inert corpus — and it is where a claim about navigation
 manifests, agent-invoked folding, or turn-cumulative budgets can get a number.
 
-Deleting the parts is what makes the shape honest. An agent that re-reads the
+Deleting the parts is what makes the mode honest. An agent that re-reads the
 corpus at the end is not demonstrating continuation, and "please don't re-read"
 is a rubric rather than a measurement. An agent that wrote its **own** notes to
 a file keeps them, and should: that is the lossless-archive discipline, done by
@@ -168,18 +171,33 @@ the `detectable at this n` line, not the headline.
 
 ## Cost, alongside the effect
 
-Every comparison reports two cost numbers per variant, because a variant that
-wins by spending twice as much has not won the same thing:
+The dev comparison and the stateful-gain report publish three cost numbers per
+variant, because a variant that wins by spending twice as much has not won the
+same thing:
 
 - **tokens/task** — mean over tasks of the per-attempt total. What an attempt costs.
+- **model calls/task** — mean observed inference requests per attempt. An
+  observed zero is reported as zero; missing evidence is reported as
+  `unreported`, never converted to zero.
 - **peak prompt tokens** — the largest per-turn prompt the provider actually
-  priced, over the whole ask sequence (read from `compaction_state.
-  last_prompt_tokens` after each ask). How big the working set got.
+  priced, over the whole ask sequence (read from provider wire usage by the
+  shared meter). How big the working set got.
 
-A context-discipline change is supposed to move the second without moving the
-first, which is why they are reported separately and why the peak is a **maximum**
-— averaging peaks would report a working set no attempt ever reached. Both read
-0 for the deterministic controls, which make no model calls.
+A context-discipline change should reduce the peak without increasing total
+tokens. The call count shows whether it traded a few large calls for many small
+ones. The peak is a **maximum** because averaging peaks would report a working
+set no attempt ever reached. All three values are 0 for the deterministic
+controls, which make no model calls.
+
+The token and call totals come from one attempt-local inference proxy, not from
+the root chat session. Every model config Proteus hands to a head, MCTS branch,
+judge, fast model, subagent, or subprocess points to that proxy. Pi uses the
+same proxy. A successful provider response without usage invalidates the
+attempt instead of being counted as free compute.
+
+The gain report also retains each arm's exact attempt count, total tokens, total
+model calls, budget breaches, and worker errors. If one attempt lacks call
+evidence, that arm's call total and mean are `null`/`unreported`, not zero.
 
 ## How the guarantees are enforced
 
@@ -207,11 +225,13 @@ environment cannot reach a scored run. Provider config for agent variants comes
 from `BENCH_BASE_URL` / `BENCH_AUTH` / `BENCH_MODEL` for the same reason.
 
 **The budget.** Each attempt runs under a fixed wall-clock and token envelope,
-enforced (abort signal; the token meter interrupts the session) and recorded. An
+enforced (abort signal; the shared token meter interrupts the session) and recorded. An
 unpinned envelope silently becomes the variable under test — provisioning alone
 can move outcomes several points — so the budget is hashed into `configHash`,
 and two runs with different budgets are not comparable. Scoring time is never
-charged to the solver: the variant is being measured, not the scorer.
+charged to the solver: the variant is being measured, not the scorer. The
+`pi:retry` arm's intermediate verifier is part of that solver and is charged to
+its wall-clock envelope; the canonical final score remains outside both arms.
 
 **Context isolation between variants.** In `compare`, both variants get fresh
 sandboxes and fresh homes per attempt, so memory, CraftStore, lessons, and
@@ -307,8 +327,8 @@ over-read it:
 
 | split | tasks | best achievable p | can it ever be significant? |
 |---|---|---|---|
-| dev | 98 | 1.6e-29 | yes |
-| sealed | 67 | 1.4e-20 | yes, with wide margin |
+| dev | 90 | 1.6e-27 | yes |
+| sealed | 69 | 3.4e-21 | yes, with wide margin |
 
 With `n` all-discordant pairs the smallest two-sided p is 2·0.5ⁿ, so **fewer
 than 6 held-out tasks can never reach p ≤ 0.05 whatever the effect**. That is
@@ -375,8 +395,12 @@ interval spans zero, and "the stateful arm did WORSE" when it is negative.
 | `null` | none | no-op control; must fail every task |
 | `oracle` | none | reverses the defect / writes the generated answers; must pass every task |
 | `noisy:<rate>` | none | seeded synthetic solver with a known success rate |
+| `pi:vanilla` | yes | official Pi SDK session with its native `read`, `bash`, `edit`, and `write` tools (V0) |
+| `pi:retry` | yes | the same Pi session plus one retry containing machine-verifier failures (V1) |
 | `agent` | yes | Proteus from a fresh v0 workspace per task |
 | `agent-evolving` | yes | Proteus with evolution live, state carried across the sequence |
+| `panel:self` | yes | a fork panel whose members all use the analyst model |
+| `panel:mixed` | yes | the same panel path with one configured model per vendor family |
 
 The three deterministic variants exist to validate the instrument for free: an
 oracle must score 1.0 and a null 0.0 or the harness is broken, and two noisy
@@ -392,23 +416,102 @@ home. The worker drives a whole **ask sequence** on one session: one ask for a
 defect task, one per episode plus a final ask for a continuation task, arming a
 forced compaction and removing the spent materials in between.
 
-## What is instrument, and what is demonstrated
+The Pi baseline is `@earendil-works/pi-coding-agent` 0.84.2, pinned as a
+bench-only development dependency. It uses `createAgentSession`, an in-memory
+`SessionManager`, an attempt-private agent directory, and only Pi's native coding
+tools. It does not call the CLI/TUI, import private TUI paths, or copy Pi's loop
+into this repository. Both Pi arms use the same model, wall-clock limit, token
+limit, sandbox, and final machine scorer as Proteus. V1 may spend its remaining
+budget on one verifier retry; it does not receive a larger budget.
 
-**Demonstrated:** the instrument measures. Validated end-to-end on all 165 tasks
-(defect fails, oracle passes), with the discrimination, false-positive, and
-acceptance behaviour checked against deterministic controls. The `agent` path
-was driven end-to-end against a mock provider — real v0 workspace, real turn,
-correct token accounting, budget breach honoured.
+## Mandatory stability pilot
 
-**Not demonstrated:** anything about Proteus itself. No `agent` vs
-`agent-evolving` run against a real model has been made, so **the gain is
-unmeasured**. The instrument exists; the experiment has not been run.
+A model-backed `compare` or `gain` refuses to start without `--pilot-report`.
+This includes both panel arms; they cannot bypass the pilot gate.
+The matched run also requires at least three repeats per task.
+Produce the report with one arm only:
 
-On power: the 67-task sealed split resolves roughly 15pp at a dispersion of
-0.20 — enough for a substantial effect, not for a subtle one. Reaching 10pp on
-the seal alone would need about 157 sealed tasks (~390 total); the whole corpus
-reaches it today. Repeats raise precision within a task but never add pairs, so
-they shrink dispersion rather than buying power outright.
+```bash
+bun scripts/bench.ts pilot \
+  --run-root /tmp/bench-pilot \
+  --variant pi:vanilla \
+  --out /tmp/pi-pilot.json
+```
+
+The defaults are 40 development tasks and 3 repeats (120 attempts). The report
+records task flips, failures, errors, token use, exact model-call counts, and
+budget breaches. Its schema requires call evidence for every attempt and checks
+the total, mean, and maximum against the per-task rows. The report unlocks
+a matched run only when all of these are true:
+
+- at least 40 distinct tasks and 3 repeats were completed;
+- the corpus manifest, model, provider-endpoint hash, wall-clock cap, and token
+  cap match the requested run;
+- the pilot arm is one of the arms being compared;
+- no worker error or budget breach occurred.
+
+Pass/fail disagreement is not grounds for rejection; estimating that instability
+is the pilot's purpose. Errors and budget breaches are grounds for rejection
+because they mean the full run would measure a broken harness or a binding cap.
+The long-horizon development split currently has only 10 tasks, so it cannot
+satisfy this gate. Grow that development corpus before claiming a matched live
+long-horizon result.
+
+## Evidence status
+
+The local tests prove that all 159 current defect patches apply to the current
+source. The two patches rebased most recently were also applied in isolated
+sandboxes and made their targeted checks fail; reversing each patch restored
+the source byte for byte. The deterministic controls, pairing, acceptance rule,
+budget gate, strict worker schemas, and model-call accounting have automated
+tests. The `agent` path has run end to end against a fake provider with a real
+v0 workspace and turn. The official Pi V0 and V1 workers have also run against
+a local fake provider: V0 exposes the four native coding tools, V1 makes one
+verifier-driven retry, both preserve explicit request auth, and both report
+wire usage through the shared meter.
+
+A fresh full `bench validate` against the exact final source is mandatory before
+each live experiment; the immutable run artifact, source manifest, and commit
+identify whether that prerequisite was met for a particular tree. Live-model
+evidence remains pending for the Pi-versus-Proteus stability pilot and matched
+comparison, and for the `agent`-versus-`agent-evolving` run. The Proteus gain and
+its difference from Pi therefore remain unmeasured.
+
+At a dispersion of 0.20, the current 69-task sealed split resolves roughly
+15pp. Reaching 10pp on the seal alone would need about 157 sealed tasks. The
+whole 159-task corpus reaches that resolution, but acceptance depends on the
+sealed split. Repeats can reduce within-task noise; they do not add independent
+pairs.
+
+## Requirements and maximum run envelope
+
+Before spending model tokens:
+
+1. Run the repository's strict tests, typechecks, Oxlint, anti-slop gate, and a
+   fresh `bun scripts/bench.ts validate --run-root <absolute-scratch-dir>` on
+   the final source.
+2. Install the exact lockfile without lifecycle scripts. The Pi baseline is
+   pinned to `@earendil-works/pi-coding-agent` 0.84.2, and `BENCH_MODEL` must
+   exist in Pi's `cloudflare-workers-ai` catalog.
+3. Set `BENCH_BASE_URL`, `BENCH_AUTH`, and `BENCH_MODEL` for one Workers AI
+   endpoint and model used by both arms.
+4. Use an absolute disposable run root outside the repository and `$HOME`, with
+   enough disk for repeated sandbox copies.
+5. Run the 40-task, three-repeat pilot. Use its report with the same corpus
+   manifest, model, provider hash, and exact token and wall-clock budget
+   in a matched run with `--repeats 3`. Add `--sealed` for the acceptance run.
+
+At the default 600,000-token and 300-second per-attempt limits, the pilot is 120
+attempts: at most 72 million tokens and 10 serial wall-clock hours. A complete
+159-task, two-arm, three-repeat run is 954 attempts: at most 572.4 million
+tokens and 79.5 serial wall-clock hours. Pilot plus full run is 1,074 attempts:
+at most 644.4 million tokens and 89.5 serial wall-clock hours. A dev-only
+comparison is 540 attempts: at most 324 million tokens and 45 serial hours.
+
+These figures are upper bounds. Dollar cost depends on the selected model's
+current provider pricing. The harness records exact tokens and calls,
+but it has no separate call-count cap; the token and wall-clock limits bound
+each attempt. No live-model calls have been made for this integration.
 
 ## External benchmarks — the Harbor adapter
 
@@ -421,14 +524,15 @@ verifier. DeepSWE and Terminal-Bench are the two corpora it has been pointed at.
 ```bash
 export PATH="$HOME/.local/bin:$PATH"          # harbor
 export PYTHONPATH="$PWD"                      # so harbor can import bench.harbor
-export OPENROUTER_API_KEY=$(python3 -c "import json;print(json.load(open('$HOME/.proteus/config.json'))['providers']['openrouter']['apiKey'])")
+# Mint once from a fresh interactive sign-in, then load it from your secret store.
+# proteus tokens create --name harbor --scopes ai.proxy
+export PROTEUS_TOKEN=pta_…
 
 harbor run \
   --agent bench.harbor.proteus_agent:ProteusAgent \
   --path ./deep-swe -i <task-name> \
-  -m deepseek/deepseek-v4-flash \
   --ak evolve=false \
-  --allow-agent-host openrouter.ai \
+  --allow-agent-host proteus.ashishkumarsingh.com \
   --jobs-dir /tmp/harbor-jobs -n 1 -y
 ```
 
@@ -440,16 +544,19 @@ flips internally.
 
 Other kwargs: `workspace` (workspace name, default `harbor`), `mission` (the
 workspace's opening mission), `proteus_repo` (which checkout to build from).
-Model access comes from `PROTEUS_BASE_URL` (default OpenRouter),
-`OPENROUTER_API_KEY`/`OPENAI_API_KEY` (or a complete `PROTEUS_AUTH` header), and
-`-m` for the model id as the endpoint's provider names it.
+The default model is native Workers AI
+`@cf/deepseek-ai/deepseek-v4-pro-0813`, reached through Proteus's signed-in
+`/api/user/ai/v1` proxy with `PROTEUS_TOKEN` (or the session from `proteus
+auth`). A long-lived access token needs the `ai.proxy` scope. A direct
+Cloudflare endpoint uses `CLOUDFLARE_API_TOKEN`; explicit BYO runs can still set
+`PROTEUS_BASE_URL`, `PROTEUS_AUTH`, and `-m` together.
 
 ### Isolation, and where the key goes
 
 Two properties the adapter enforces rather than assumes.
 
-**`PROTEUS_HOME` is set, always.** Everything durable a local run writes —
-config, the workspace database, sessions, shadow-git checkpoints — lands under
+**`PROTEUS_HOME` is set, always.** Everything durable a local run writes
+(config, the workspace database, sessions, shadow-git checkpoints) lands under
 `$PROTEUS_HOME`, and an unset one means `~/.proteus`. The adapter points it at
 `/installed-agent/proteus-home`, created per container and destroyed with it, and
 puts that path through `bench/isolation.py` — the Python counterpart of

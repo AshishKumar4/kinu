@@ -17,12 +17,12 @@ import { Badge } from "@cloudflare/kumo";
 import { CircleIcon, CircleDashedIcon, CheckCircleIcon, ProhibitIcon } from "@phosphor-icons/react";
 import type { AgentTask, AgentTaskTree, TaskStatus } from "@proteus/core";
 
-const STATUS_META: Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string }> = {
+const STATUS_META = {
   open: { icon: CircleDashedIcon, tone: "p-text-3", label: "Open" },
   active: { icon: CircleIcon, tone: "p-accent", label: "Active" },
   done: { icon: CheckCircleIcon, tone: "p-success", label: "Done" },
   dropped: { icon: ProhibitIcon, tone: "p-text-3", label: "Dropped" },
-};
+} satisfies Record<TaskStatus, { icon: typeof CircleIcon; tone: string; label: string }>;
 
 /** Settled items stay legible but stop competing with the work in hand. */
 export function isSettled(status: TaskStatus): boolean {

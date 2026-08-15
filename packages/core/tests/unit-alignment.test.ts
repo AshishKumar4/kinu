@@ -13,7 +13,7 @@ import {
 } from '../src/evolution/alignment.js';
 import type { SqlExecutor } from '../src/types/primitives.js';
 
-function setup(): { sql: SqlExecutor } {
+function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db), sql);

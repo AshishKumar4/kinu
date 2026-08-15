@@ -10,6 +10,7 @@
  * the ledger write is the point; the carousel is just the surface.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec } from '../types/primitives.js';
 import type { MergeResult } from '../heads/types.js';
 import type { SearchNode } from '../types/mcts.js';
@@ -42,6 +43,15 @@ export interface AlternateTakeCandidate {
    *  real node scores instead. */
   origin?: 'live' | 'branch';
 }
+
+const AlternateTakeCandidatesSchema: v.GenericSchema<AlternateTakeCandidate[]> = v.array(v.object({
+  nodeId: v.string(),
+  text: v.string(),
+  score: v.number(),
+  visits: v.number(),
+  depth: v.number(),
+  origin: v.optional(v.picklist(['live', 'branch'])),
+}));
 
 export interface AlternateTakeSet {
   id: string;
@@ -158,7 +168,7 @@ export function captureAlternateTakes(
     nodeId: n.id, text: n.observation, score: n.value, visits: n.visits, depth: n.depth,
   });
   const id = `take-${nanoid()}`;
-  sql`INSERT INTO alternate_takes
+  void sql`INSERT INTO alternate_takes
         (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
       VALUES
         (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'mcts'}, ${winner.id}, ${null},
@@ -192,7 +202,7 @@ export function recordBranchTakeSet(
     { nodeId: `${id}-branch`, text: branchText, score: 0.5, visits: 1, depth: 0, origin: 'branch' },
   ];
   const now = input.now ?? nowMs();
-  sql`INSERT INTO alternate_takes
+  void sql`INSERT INTO alternate_takes
         (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
       VALUES
         (${id}, ${input.turnId}, ${input.sessionId}, ${input.task.slice(0, 500)}, ${'branch'},
@@ -249,7 +259,7 @@ export function recordHeadsTakeSet(
       score: h.score, visits: 1, depth: 0,
     }));
   const now = input.now ?? nowMs();
-  sql`INSERT INTO alternate_takes
+  void sql`INSERT INTO alternate_takes
         (id, turn_id, session_id, task, source, winner_node_id, chosen_node_id, candidates, created_at, picked_at)
       VALUES
         (${id}, ${null}, ${null}, ${input.task.slice(0, 500)}, ${'heads'},
@@ -271,11 +281,11 @@ export function claimAlternateTakesForTurn(
   sql: SqlExecutor,
   input: { turnId: string; sessionId: string; startedAt: number },
 ): number {
-  sql`DELETE FROM alternate_takes WHERE turn_id IS NULL AND created_at < ${input.startedAt}`;
+  void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL AND created_at < ${input.startedAt}`;
   const unclaimed = sql<{ id: string }>`
     SELECT id FROM alternate_takes WHERE turn_id IS NULL`;
   for (const row of unclaimed) {
-    sql`UPDATE alternate_takes SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
+    void sql`UPDATE alternate_takes SET turn_id = ${input.turnId}, session_id = ${input.sessionId}
         WHERE id = ${row.id}`;
   }
   return unclaimed.length;
@@ -285,7 +295,7 @@ export function claimAlternateTakesForTurn(
  *  with (aborted, errored, or no assistant message) — they competed for an
  *  answer that no longer exists, so the next turn must not inherit them. */
 export function purgeUnclaimedAlternateTakes(sql: SqlExecutor): void {
-  sql`DELETE FROM alternate_takes WHERE turn_id IS NULL`;
+  void sql`DELETE FROM alternate_takes WHERE turn_id IS NULL`;
 }
 
 interface RawTakeRow {
@@ -298,8 +308,8 @@ interface RawTakeRow {
 function toTakeSet(r: RawTakeRow): AlternateTakeSet {
   let candidates: AlternateTakeCandidate[] = [];
   try {
-    const parsed = JSON.parse(r.candidates) as unknown;
-    if (Array.isArray(parsed)) candidates = parsed as AlternateTakeCandidate[];
+    const parsed = v.safeParse(AlternateTakeCandidatesSchema, JSON.parse(r.candidates));
+    if (parsed.success) candidates = parsed.output;
   } catch { /* malformed row — surface an empty set rather than crash reads */ }
   return {
     id: r.id, turnId: r.turn_id, sessionId: r.session_id, task: r.task,
@@ -350,10 +360,10 @@ export function recordTakePick(
   // Branch-sourced candidates are synthetic (live answer vs head answer) —
   // there is no convergence record in search_nodes to re-point.
   if (changedAnswer && set.source === 'mcts') {
-    sql`UPDATE search_nodes SET status = 'pruned' WHERE id = ${set.winnerNodeId}`;
-    sql`UPDATE search_nodes SET status = 'terminal' WHERE id = ${chosen.nodeId}`;
+    void sql`UPDATE search_nodes SET status = 'pruned' WHERE id = ${set.winnerNodeId}`;
+    void sql`UPDATE search_nodes SET status = 'terminal' WHERE id = ${chosen.nodeId}`;
   }
-  sql`UPDATE alternate_takes
+  void sql`UPDATE alternate_takes
       SET chosen_node_id = ${chosen.nodeId}, winner_node_id = ${chosen.nodeId}, picked_at = ${now}
       WHERE id = ${set.id}`;
 
@@ -425,7 +435,7 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
   );
 }
 
-/** Record the comparable heads of a completed think({strategy:'heads'}) run as
+/** Record the comparable heads of a completed fork with heads settlement as
  *  an unclaimed Alternate-Takes set — claimed against the turn at turn end,
  *  exactly like an MCTS capture. Only grounded scores are a real preference
  *  signal, so emit nothing when ungrounded. Shared by both backends. */

@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@proteus/core';
 import {
   createCompactionExtension,
@@ -58,7 +59,11 @@ interface Rig {
   transform: (messages: ModelMessage[], overrides?: Partial<TransformContext>) => Promise<ModelMessage[] | undefined>;
 }
 
-function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
+type RigOverrides = Omit<Partial<CompactionExtensionDeps>, 'ephemeral'> & {
+  ephemeral?: ReturnType<typeof fakeEphemeral>;
+};
+
+function rig(overrides: RigOverrides = {}): Rig {
   const ports = memoryPorts();
   const archive = memoryArchive();
   const prompts: string[] = [];
@@ -89,7 +94,7 @@ function rig(overrides: Partial<CompactionExtensionDeps> = {}): Rig {
   };
   return {
     ports, archive, prompts, outcomes, transform,
-    ephemeral: (overrides.ephemeral as ReturnType<typeof fakeEphemeral>) ?? ephemeral,
+    ephemeral: overrides.ephemeral ?? ephemeral,
   };
 }
 
@@ -224,7 +229,7 @@ describe('plan build', () => {
     const snapshot = ports.plans.snapshots.get(SESSION);
     if (!snapshot) throw new Error('expected a persisted plan snapshot');
     const reference = result.find(
-      (m) => m.role === 'user' && typeof m.content === 'string' && m.content.includes(snapshot.transcriptRelativePath),
+      (m) => m.role === 'user' && isString(m.content) && m.content.includes(snapshot.transcriptRelativePath),
     );
     expect(reference).toBeDefined();
 
@@ -413,7 +418,7 @@ describe('archive manifest', () => {
 
     // Same message as the checkpoint — the manifest is navigation FOR it.
     const checkpoint = result.find(
-      (m) => typeof m.content === 'string' && m.content.includes('[Context Summary]'),
+      (m) => isString(m.content) && m.content.includes('[Context Summary]'),
     );
     expect(checkpoint?.content).toInclude('## Compaction Archive');
     expect(checkpoint?.content).toInclude(
@@ -445,7 +450,7 @@ describe('archive manifest', () => {
     expect(ranges[1].firstUserAsk).toStartWith('requirement 6:');
     expect(ranges[1].path).not.toBe(ranges[0].path);
     const checkpoint = result.find(
-      (m) => typeof m.content === 'string' && m.content.includes('## Compaction Archive'),
+      (m) => isString(m.content) && m.content.includes('## Compaction Archive'),
     );
     expect(checkpoint?.content).toInclude('- turns 1-12 ');
     expect(checkpoint?.content).toInclude('- turns 13-18 ');
@@ -606,3 +611,7 @@ describe('summaries', () => {
     expect(JSON.stringify(result)).toContain('[Assistant turn summary]');
   });
 });
+
+function isString<Value>(value: Value): value is Value & string {
+  return v.is(v.string(), value);
+}

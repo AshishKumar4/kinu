@@ -1,13 +1,12 @@
-diff --git a/packages/core/src/evolution/gepa/text.ts b/packages/core/src/evolution/gepa/text.ts
-index e064593..df556a7 100644
---- a/packages/core/src/evolution/gepa/text.ts
-+++ b/packages/core/src/evolution/gepa/text.ts
-@@ -9,7 +9,7 @@
+diff --git a/packages/core/src/prompts/structured.ts b/packages/core/src/prompts/structured.ts
+--- a/packages/core/src/prompts/structured.ts
++++ b/packages/core/src/prompts/structured.ts
+@@ -19,7 +19,7 @@
+
+ /** Return the first fenced payload, or the trimmed response when there is no fence. */
  export function stripMarkdownFences(raw: string): string {
-   const trimmed = raw.trim();
-   const fenceMatch = trimmed.match(/^```(?:\w+)?\n([\s\S]*?)\n```$/);
--  if (fenceMatch) return fenceMatch[1].trim();
-+  if (fenceMatch) return fenceMatch[0].trim();
-   return trimmed;
+-  return markdownFencedBlocks(raw)[0]?.code ?? raw.trim();
++  return raw.trim();
  }
- 
+
+ export function jsonObjectOnlyInstruction(): string {

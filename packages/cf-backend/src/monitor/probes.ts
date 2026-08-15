@@ -24,6 +24,18 @@
  */
 
 import { sha256Hex } from '../lib/crypto.js';
+import * as v from 'valibot';
+
+const BuildStampSchema = v.looseObject({
+  sha: v.optional(v.string()),
+  buildSha: v.optional(v.string()),
+  version: v.optional(v.string()),
+  build: v.optional(v.looseObject({
+    sha: v.optional(v.string()),
+    version: v.optional(v.string()),
+  })),
+});
+const HealthBodySchema = v.looseObject({ ok: v.literal(true) });
 
 export interface ProbeOutcome {
   /** Stable id — the incident ledger's key. */
@@ -68,12 +80,12 @@ async function get(deps: ProbeDeps, path: string): Promise<Response> {
 /** The build a JSON body claims. Written tolerantly on purpose: the health
  *  endpoint's stamp is another module's shape, and a monitor that hard-codes
  *  one spelling turns a rename into a false alarm. */
-function buildStamp(body: unknown): string | null {
-  if (!body || typeof body !== 'object') return null;
-  const flat = body as Record<string, unknown>;
-  const nested = (typeof flat.build === 'object' && flat.build !== null ? flat.build : {}) as Record<string, unknown>;
-  for (const value of [flat.sha, flat.buildSha, nested.sha, flat.version, nested.version]) {
-    if (typeof value === 'string' && value.trim()) return value.trim();
+function buildStamp<Body>(body: Body): string | null {
+  const parsed = v.safeParse(BuildStampSchema, body);
+  if (!parsed.success) return null;
+  const stamp = parsed.output;
+  for (const value of [stamp.sha, stamp.buildSha, stamp.build?.sha, stamp.version, stamp.build?.version]) {
+    if (value?.trim()) return value.trim();
   }
   return null;
 }
@@ -88,13 +100,13 @@ async function probeHealth(deps: ProbeDeps): Promise<ProbeOutcome> {
   }
   if (response.status !== 200) return fail(`GET /api/health returned HTTP ${response.status}`);
 
-  let body: unknown;
+  let body: object;
   try {
-    body = await response.json();
+    body = v.parse(v.looseObject({}), await response.json());
   } catch {
     return fail('GET /api/health did not return JSON — the SPA fallback is answering an API route');
   }
-  if ((body as { ok?: unknown } | null)?.ok !== true) {
+  if (!v.is(HealthBodySchema, body)) {
     return fail('GET /api/health reports the worker as not ok');
   }
 
@@ -172,6 +184,6 @@ async function probeLogin(deps: ProbeDeps): Promise<ProbeOutcome> {
   return { probe: 'login', ok: true, detail: 'sign-in page renders' };
 }
 
-function errorText(err: unknown): string {
+function errorText<Thrown>(err: Thrown): string {
   return err instanceof Error ? err.message : String(err);
 }

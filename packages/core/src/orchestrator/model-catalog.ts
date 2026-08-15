@@ -62,8 +62,8 @@ export class ModelCatalogSession {
     let provider: string | undefined;
     try { provider = parseModelSpec(spec).provider; } catch { /* bare or pre-claim spec */ }
     return acceptedMediaForModel({
-      ...(provider !== undefined ? { provider } : {}),
-      ...(info?.inputModalities ? { catalogInputModalities: info.inputModalities } : {}),
+      provider,
+      catalogInputModalities: info?.inputModalities,
     });
   }
 

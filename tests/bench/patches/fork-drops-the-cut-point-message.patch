@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/identity/fork.ts b/packages/core/src/identity/fork.ts
-index 1214bdd..3c45c57 100644
+index 89d93884..3fd742df 100644
 --- a/packages/core/src/identity/fork.ts
 +++ b/packages/core/src/identity/fork.ts
-@@ -87,7 +87,7 @@ export function forkWorkspaceStorage(
-   }>`
+@@ -111,7 +111,7 @@ export async function snapshotWorkspaceForFork(
+   const messages = source<ForkSnapshot['messages'][number]>`
      SELECT id, session_id, parent_id, role, content, created_at
      FROM messages
 -    WHERE created_at <= ${forkPointMs} AND session_id = 'default'
 +    WHERE created_at < ${forkPointMs} AND session_id = 'default'
      ORDER BY created_at ASC
    `;
-   for (const m of msgs) {
+   const conversationHistory = source<ForkSnapshot['conversationHistory'][number]>`

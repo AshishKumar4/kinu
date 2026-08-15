@@ -3,7 +3,7 @@
 // disk, and a local key still wins.
 import { describe, expect, test } from 'bun:test';
 import { generateText } from 'ai';
-import type { LLMProviderConfig } from '@proteus/core';
+import { asFetchFunction, type LLMProviderConfig } from '@proteus/core';
 import { createLocalModelResolver } from '../src/model-resolver.js';
 
 const ORIGIN = 'https://proteus.example.com';
@@ -53,7 +53,7 @@ function networkFetch(opts: {
     return new Response(`unexpected ${url}`, { status: 500 });
   };
 
-  return (async (input: RequestInfo | URL, init?: RequestInit) => {
+  return asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     const headers = new Headers(init?.headers);
     opts.recorded?.push({ url, headers, body: String(init?.body ?? '') });
@@ -66,16 +66,17 @@ function networkFetch(opts: {
       return upstream(headers.get('x-proteus-proxy-target') ?? '', true);
     }
     return upstream(url, false);
-  }) as unknown as typeof fetch;
+  });
 }
 
 function resolverWith(fetchImpl: typeof fetch, credentials?: Parameters<typeof createLocalModelResolver>[0]['credentials']) {
-  return createLocalModelResolver({
+  const options: Parameters<typeof createLocalModelResolver>[0] = {
     llm: LLM,
-    ...(credentials ? { credentials } : {}),
     cloud: { origin: ORIGIN, token: 'ptc_test' },
     fetch: fetchImpl,
-  });
+  };
+  if (credentials) options.credentials = credentials;
+  return createLocalModelResolver(options);
 }
 
 describe('web-UI-connected providers reach local agents', () => {

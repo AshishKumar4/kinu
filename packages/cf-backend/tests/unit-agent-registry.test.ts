@@ -2,17 +2,23 @@ import { describe, test, expect } from 'bun:test';
 import { userCredentialSource } from './helpers/user-credentials.js';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildSystemPromptSync, parseModelSpec } from '@proteus/core';
+import {
+  buildSystemPromptSync,
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
+  parseModelSpec,
+} from '@proteus/core';
 import { createTestRuntime } from '@proteus/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import type { CredentialSummary } from '../src/user/user-do.js';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
 function fakeUserDOStub(
   creds: Record<string, Record<string, string>> = {},
   baseURLs: Record<string, string> = {},
 ) {
-  const list = Object.entries(creds).map(([key, headers]) => ({
-    key, kind: headers['x-api-key'] ? 'bearer' : 'oauth' as const,
+  const list: CredentialSummary[] = Object.entries(creds).map(([key, headers]) => ({
+    key, kind: headers['x-api-key'] ? 'bearer' : 'oauth',
     createdAt: 0, updatedAt: 0,
   }));
   return userCredentialSource({
@@ -50,8 +56,8 @@ describe('AgentProviderRegistry composition', () => {
 
   test('normalizeSpecSync — null returns workers-ai default without owner-billed env.AI', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
-    expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
-    expect(reg.normalizeSpecSync('')).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+    expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+    expect(reg.normalizeSpecSync('')).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('normalizeSpecSync — workers-ai remains the sync default even when env ai-gateway is configured', () => {
@@ -59,7 +65,7 @@ describe('AgentProviderRegistry composition', () => {
       env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
       userDO: fakeUserDOStub(),
     });
-    expect(reg.normalizeSpecSync(null)).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+    expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('normalizeSpecSync — catalog-shaped ids pass through, malformed ids throw', () => {
@@ -79,7 +85,7 @@ describe('AgentProviderRegistry composition', () => {
       ),
     });
     const spec = await reg.resolveSpec(null);
-    expect(spec).toBe('workers-ai/@cf/moonshotai/kimi-k2.6');
+    expect(spec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
   test('async resolveSpec — picks first available provider via cred-aware ordering', async () => {
@@ -117,7 +123,7 @@ describe('sync default provider with a null UserDO stub (inline-branch context)'
       userDO: null,
     });
     expect(reg.normalizeSpecSync(null))
-      .toBe('ai-gateway/workers-ai/@cf/moonshotai/kimi-k2.6');
+      .toBe(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
   });
 
   test('throws loudly when no sync-usable provider exists', () => {
@@ -132,20 +138,18 @@ describe('sync default provider with a null UserDO stub (inline-branch context)'
   });
 });
 
-describe('default-agent prompt model context (Kimi family gating)', () => {
+describe('default-agent prompt model context', () => {
   // Regression: the orchestrator used to build prompts from the RAW stored
   // model id — null on default-configured agents — so resolveFamily saw ''
   // and nothing family-gated rendered on the primary hosted path. The prompt
-  // context must come from the RESOLVED spec. (This used to observe the kimi
-  // bare tool-name index, which is gone: the tool index is one rendering for
-  // every family now. The family-gated operating guidance is the observable.)
-  test('an unset stored model resolves to a spec whose prompt renders kimi guidance', () => {
+  // context must come from the RESOLVED spec rather than an empty raw value.
+  test('an unset stored model resolves to DeepSeek V4 Pro before prompt construction', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
     const storedModelId: string | null = null; // default-configured agent
     const spec = reg.normalizeSpecSync(storedModelId);
     const { provider, modelId } = parseModelSpec(spec);
     expect(provider).toBe('workers-ai');
-    expect(modelId).toBe('@cf/moonshotai/kimi-k2.6');
+    expect(modelId).toBe(DEFAULT_WORKERS_AI_MODEL_ID);
 
     const { rt } = createTestRuntime();
     const prompt = buildSystemPromptSync(rt, {
@@ -153,7 +157,7 @@ describe('default-agent prompt model context (Kimi family gating)', () => {
       backend: 'cf',
       model: { id: modelId, provider },
     });
-    expect(prompt).toContain('Kimi K2.6 works best when tool use is concrete and continuous');
+    expect(prompt).not.toContain('Kimi K2.6 works best when tool use is concrete and continuous');
 
     // Wiring: both orchestrator prompt-build sites must derive the model
     // context from the resolved spec, never the raw stored id.

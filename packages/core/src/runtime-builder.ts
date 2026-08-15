@@ -17,11 +17,11 @@ import type {
   Executor,
   Schedule,
   Shell,
-  MemorySearchResult,
 } from './types/primitives.js';
 import type { AgentRuntime, CraftStore, SpawnBranch, AbortBranch, RequestShellApproval } from './types/agent-runtime.js';
 import type { ExecutionRouter } from './execution/types.js';
 import type { FileCheckpoints } from './checkpoints/types.js';
+import type { TurnFileLedger } from './tools/file-ledger.js';
 
 export interface RuntimeComponents {
   sql: SqlExecutor;
@@ -45,7 +45,7 @@ export interface RuntimeComponents {
   spawnBranch: SpawnBranch;
   abortBranch: AbortBranch;
   /**
-   * Optional multi-executor router (workspace/nimbus/sandbox/laptop). When
+   * Optional router for the runtime's registered execution environments. When
    * provided, the canonical `run` and `execute_tools` factories in core will
    * consume it for routing. Absent → tools degrade gracefully.
    */
@@ -61,6 +61,7 @@ export interface RuntimeComponents {
   /** See AgentRuntime.setShellApprovalChannel. Only a backend that owns a
    *  live interactive surface (the CLI's ACP channel) supplies this. */
   setShellApprovalChannel?: (fn: RequestShellApproval | null) => void;
+  setTurnFileLedgerProvider?: (provider: (() => TurnFileLedger | undefined) | null) => void;
 }
 
 /**
@@ -74,8 +75,12 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     id: components.agentId,
     name: components.agentName,
     scaffold: {
+      path: 'scaffold/agent.js',
       exists: () => vfs.exists('scaffold/agent.js'),
-      read: () => vfs.readFile('scaffold/agent.js', { encoding: 'utf8' }) as Promise<string>,
+      read: async () => {
+        const content = await vfs.readFile('scaffold/agent.js', { encoding: 'utf8' });
+        return content instanceof Uint8Array ? new TextDecoder().decode(content) : content;
+      },
       write: (code: string) => vfs.writeFile('scaffold/agent.js', code),
       version: async () =>
         (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
@@ -98,5 +103,6 @@ export function buildRuntime(components: RuntimeComponents): AgentRuntime {
     shell: components.shell,
     checkpoints: components.checkpoints,
     setShellApprovalChannel: components.setShellApprovalChannel,
+    setTurnFileLedgerProvider: components.setTurnFileLedgerProvider,
   };
 }

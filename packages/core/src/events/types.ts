@@ -10,6 +10,7 @@
  */
 
 import type { ContextBudgetSnapshot } from '../context-budget.js';
+import type { JsonObject, JsonValue } from '../utils/json.js';
 import type { ContextComposition } from '../context-meter.js';
 import type { FileEditSnapshot } from '../tools/file-ledger.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
@@ -47,6 +48,7 @@ export type RunEventType =
   | 'turn_steering'
   | 'completion_gate'
   | 'craft_cycle'
+  | 'execution_recovery'
   | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
@@ -73,8 +75,8 @@ export type RunEvent =
       trigger_id?: string })
   | (RunEventBase & { type: 'turn_start'; turnIndex: number })
   | (RunEventBase & { type: 'text_delta'; text: string })
-  | (RunEventBase & { type: 'tool_call_start'; name: string; args: Record<string, unknown>; toolCallId: string })
-  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: unknown; error?: string; durationMs?: number })
+  | (RunEventBase & { type: 'tool_call_start'; name: string; args: JsonObject; toolCallId: string })
+  | (RunEventBase & { type: 'tool_call_end'; name: string; toolCallId: string; result?: JsonValue; error?: string; durationMs?: number })
   /** One model request completed. `usage` is the provider's own report of that
    *  request — the authority on what it cost. `context` is what the request
    *  was locally measured to be made of; the two do not reconcile exactly and
@@ -99,7 +101,13 @@ export type RunEvent =
        *  so "what did that delegation actually do to the workspace" is a query
        *  over the ledger rather than a re-read of the narrative. Heads that
        *  changed nothing are absent. */
-      fileChanges: HeadFileChangeSet[] })
+      fileChanges: HeadFileChangeSet[];
+      /** Ground the merge says NO head covered. Recorded because the field's
+       *  own value is unmeasured: whether it reports real negative space or
+       *  degenerates into filler is settled by reading these rows across real
+       *  splits, not by argument. Empty on the deterministic empty-split and
+       *  merge-fallback paths, which never reach a model. */
+      blindSpots: string[] })
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })
@@ -125,7 +133,7 @@ export type RunEvent =
    *  other layer may reach. */
   | (RunEventBase & { type: 'turn_steering';
       /** Which mechanical trigger fired. */
-      trigger: 'repeated_call' | 'repeated_failure' | 'long_turn_no_delegation';
+      trigger: 'repeated_call' | 'repeated_failure' | 'no_progress' | 'long_turn_no_delegation';
       /** Step boundary the steer was spliced into. */
       step: number;
       /** The tool that kept repeating or failing (not the long-turn trigger). */
@@ -165,6 +173,23 @@ export type RunEvent =
       /** Crafted tools this turn's execution evidence pushed below the
        *  injection floor — retirement, in-episode. */
       dropped: string[] })
+  /** The step clock's knowledge channel fired: failure streaks the turn's own
+   *  ledger saw broken by a CHANGED call that ran clean, each recorded as a
+   *  durable finding and injected for the rest of the episode
+   *  (evolution/recovery.ts). Written once per turn by the settle spine like
+   *  `craft_cycle`, with `turn_end` as the denominator. Declared here rather
+   *  than imported from the producer for the same reason the other turn
+   *  records are. */
+  | (RunEventBase & { type: 'execution_recovery';
+      recoveries: Array<{
+        /** The tool whose streak broke. */
+        tool: string;
+        /** Consecutive failures before the changed call. */
+        failures: number;
+        /** Stable signature of the failing call — the SAME signature failing
+         *  again in a later turn is the direct falsifier that the finding
+         *  did not take. */
+        failedSignature: string }> })
   /** A mission budget ran out and a host seam declined the work. Written once
    *  per label by the governor (mission-budget.ts), so the durable trail says
    *  which cap stopped which run rather than leaving an unexplained short turn. */
@@ -197,6 +222,11 @@ export type CompletionGateRecord =
  *  declaration. */
 export type CraftCycleRecord =
   Omit<Extract<RunEvent, { type: 'craft_cycle' }>, keyof RunEventBase | 'type'>;
+
+/** One turn's execution recoveries — derived from the durable schema for the
+ *  same reason as the records above: one declaration, no drift. */
+export type ExecutionRecoveryRecord =
+  Omit<Extract<RunEvent, { type: 'execution_recovery' }>, keyof RunEventBase | 'type'>;
 
 /** A new event payload sans the base fields the recorder fills in. */
 export type RunEventInput = {

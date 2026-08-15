@@ -25,8 +25,13 @@
 
 import { generateText } from 'ai';
 import type { LanguageModel } from 'ai';
-import { isReasoningEffort, reasoningEffortOptions } from './strategy/effort.js';
+import * as v from 'valibot';
+import { REASONING_EFFORTS, reasoningEffortOptions } from './strategy/effort.js';
 import { parseModelSpec } from './providers/types.js';
+
+/** A provider's host-side result before the executor validates the VM boundary
+ *  as JSON. Domain objects are allowed here; functions and symbols are not. */
+export type CodemodeResult = object | string | number | boolean | null | undefined;
 
 /** A codemode sandbox provider: a named namespace of callable tools plus the
  *  TypeScript declaration the LLM sees. Both backends inject this same shape
@@ -34,7 +39,10 @@ import { parseModelSpec } from './providers/types.js';
  *  treats it as optional). */
 export interface CodemodeProvider {
   name: string;
-  tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
+  tools: Record<string, {
+    description: string;
+    execute: (...args: unknown[]) => Promise<CodemodeResult>;
+  }>;
   types?: string;
   positionalArgs?: boolean;
 }
@@ -60,6 +68,18 @@ export interface RLMOptions {
   maxOutputTokens?: number;
 }
 
+const QueryTextSchema = v.pipe(v.string(), v.minLength(1));
+const RLMOptionsSchema: v.GenericSchema<RLMOptions> = v.object({
+  model: v.optional(v.string()),
+  reasoning_effort: v.optional(v.picklist(REASONING_EFFORTS)),
+  system: v.optional(v.string()),
+  maxOutputTokens: v.optional(v.number()),
+});
+
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
+}
+
 /** Build the codemode provider that exposes `llm.query(...)` to the sandbox. */
 export function createRLMProvider(
   resolver: RLMModelResolver,
@@ -80,16 +100,16 @@ export function createRLMProvider(
       query: {
         description: 'Recursive language model call. Spawns a flat LLM call on the given text. ' +
                      'Useful for divide-and-conquer over large inputs: chunk, llm.query each, aggregate.',
-        execute: async (...args: unknown[]) => {
-          const text = args[0] as string;
-          const opts = (args[1] ?? {}) as RLMOptions;
-          if (typeof text !== 'string' || !text) {
+        execute: async (...args) => {
+          const text = v.safeParse(QueryTextSchema, args[0]);
+          if (!text.success) {
             return { error: 'llm.query: first arg must be a non-empty string' };
           }
-          if (opts.reasoning_effort !== undefined && !isReasoningEffort(opts.reasoning_effort)) {
+          const opts = v.safeParse(RLMOptionsSchema, args[1] ?? {});
+          if (!opts.success) {
             return { error: 'llm.query: reasoning_effort must be low, medium, or high' };
           }
-          const spec = opts.model ?? currentSpec();
+          const spec = opts.output.model ?? currentSpec();
           let normalizedSpec: string;
           let model: LanguageModel;
           try {
@@ -97,23 +117,23 @@ export function createRLMProvider(
             model = resolver.resolveModel(normalizedSpec);
           }
           catch (err) {
-            return { error: `llm.query: model ${spec} unresolvable: ${(err as Error).message}` };
+            return { error: `llm.query: model ${spec} unresolvable: ${errorMessage({ error: err })}` };
           }
           const providerOptions = reasoningEffortOptions(
-            opts.reasoning_effort ?? 'low',
+            opts.output.reasoning_effort ?? 'low',
             parseModelSpec(normalizedSpec).provider,
           );
           try {
             const { text: out } = await generateText({
               model,
-              system: opts.system ?? 'You are a helpful assistant. Answer concisely and directly.',
-              prompt: text,
-              ...(opts.maxOutputTokens !== undefined ? { maxOutputTokens: opts.maxOutputTokens } : {}),
-              ...(providerOptions ? { providerOptions } : {}),
+              system: opts.output.system ?? 'You are a helpful assistant. Answer concisely and directly.',
+              prompt: text.output,
+              maxOutputTokens: opts.output.maxOutputTokens,
+              providerOptions,
             });
             return out.trim();
           } catch (err) {
-            return { error: `llm.query: ${(err as Error).message}` };
+            return { error: `llm.query: ${errorMessage({ error: err })}` };
           }
         },
       },

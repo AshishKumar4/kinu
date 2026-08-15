@@ -241,7 +241,7 @@ export async function acceptWebhookDelivery(
         http_headers: opts.headers,
         body: parsedBody,
         delivery_id,
-        ...(bodyPath ? { body_path: bodyPath } : {}),
+        body_path: bodyPath || undefined,
       },
       auth_outcome: 'verified',
       webhook_id: opts.trigger_id,

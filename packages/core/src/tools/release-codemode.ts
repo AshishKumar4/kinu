@@ -27,6 +27,7 @@
  * yourself first.
  */
 
+import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
 import { RELEASE_STATUSES } from '../release/index.js';
 import { releaseToolActions, type ReleaseToolAction } from './registry.js';
@@ -40,7 +41,7 @@ import { runReleaseAction, type ReleaseActionInput, type ReleaseToolDeps } from 
 // member appears in the declaration at all (releaseToolActions(hasEngine)),
 // so restating it on every line would be pure repetition within any one
 // actor's actual rendering (it only ever sees one half).
-const MEMBER_TYPES: Record<ReleaseToolAction, string> = {
+const MEMBER_TYPES = {
   board: '  /** Every bound source and its changes. */\n  board(): Promise<unknown>;',
   bind_source: '  /** Bind a source repo (local checkout or GitHub) this workspace can change. */\n  bindSource(input: { kind: "local" | "github"; label: string; repoUrl?: string; defaultBranch?: string; localDeviceId?: string; localRoot?: string; deployTarget?: string }): Promise<unknown>;',
   create: '  /** Start a change against a bound source. */\n  create(input: { bindingId: string; userPrompt: string; plan?: string }): Promise<unknown>;',
@@ -54,9 +55,9 @@ const MEMBER_TYPES: Record<ReleaseToolAction, string> = {
   preview: '  /** Expose a live preview URL for the port your server listens on. */\n  preview(changeId: string, opts: { port: number; startCommand?: string }): Promise<unknown>;',
   deploy: '  /** Deploy for real; verified against actual command output. */\n  deploy(changeId: string, deployment: { environment: "local" | "staging" | "production"; command?: string }): Promise<unknown>;',
   rollback: '  /** Revert a bad deploy for real. */\n  rollback(changeId: string, opts?: { command?: string }): Promise<unknown>;',
-};
+} satisfies Record<ReleaseToolAction, string>;
 
-const MEMBER_DESCRIPTIONS: Record<ReleaseToolAction, string> = {
+const MEMBER_DESCRIPTIONS = {
   board: 'The board: every bound source and its changes.',
   bind_source: 'Bind a source repo (local checkout or GitHub) this workspace can change.',
   create: 'Start a change against a bound source.',
@@ -70,12 +71,12 @@ const MEMBER_DESCRIPTIONS: Record<ReleaseToolAction, string> = {
   preview: 'Engine backends only: expose a live preview URL.',
   deploy: 'Engine backends only: deploy for real, verified against command output.',
   rollback: 'Engine backends only: revert a bad deploy for real.',
-};
+} satisfies Record<ReleaseToolAction, string>;
 
 /** camelCase member name for each snake_case action — the codemode
  *  vocabulary matches every other namespace here (workspace.readFile,
  *  agents.staff), while the dispatcher keeps the original action strings. */
-const MEMBER_NAMES: Record<ReleaseToolAction, string> = {
+const MEMBER_NAMES = {
   board: 'board',
   bind_source: 'bindSource',
   create: 'create',
@@ -89,7 +90,7 @@ const MEMBER_NAMES: Record<ReleaseToolAction, string> = {
   preview: 'preview',
   deploy: 'deploy',
   rollback: 'rollback',
-};
+} satisfies Record<ReleaseToolAction, string>;
 
 function renderTypes(actions: readonly ReleaseToolAction[]): string {
   return [
@@ -100,9 +101,54 @@ function renderTypes(actions: readonly ReleaseToolAction[]): string {
   ].join('\n');
 }
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function parseInput<TSchema extends v.GenericSchema>(
+  schema: TSchema,
+  input: { value: unknown },
+): v.InferOutput<TSchema> | undefined {
+  const result = v.safeParse(schema, input.value);
+  return result.success ? result.output : undefined;
 }
+
+const StringSchema = v.string();
+const BindingSchema: v.GenericSchema<NonNullable<ReleaseActionInput['binding']>> = v.object({
+  kind: v.optional(v.picklist(['local', 'github'])),
+  label: v.optional(v.string()),
+  repoUrl: v.optional(v.nullable(v.string())),
+  defaultBranch: v.optional(v.nullable(v.string())),
+  localDeviceId: v.optional(v.nullable(v.string())),
+  localRoot: v.optional(v.nullable(v.string())),
+  deployTarget: v.optional(v.nullable(v.string())),
+});
+const UpdateSchema = v.object({
+  plan: v.optional(v.nullable(v.string())),
+  summary: v.optional(v.nullable(v.string())),
+  patch: v.optional(v.nullable(v.string())),
+  previewUrl: v.optional(v.nullable(v.string())),
+});
+const StatusSchema = v.picklist(RELEASE_STATUSES);
+const ApprovalTypeSchema = v.picklist(['apply', 'deploy_staging', 'deploy_production', 'rollback']);
+const CheckSchema: v.GenericSchema<NonNullable<ReleaseActionInput['check']>> = v.object({
+  name: v.optional(v.string()),
+  status: v.optional(v.picklist(['pending', 'running', 'passed', 'failed', 'skipped'])),
+  stdout: v.optional(v.nullable(v.string())),
+  stderr: v.optional(v.nullable(v.string())),
+  durationMs: v.optional(v.nullable(v.number())),
+});
+const DeploymentSchema: v.GenericSchema<NonNullable<ReleaseActionInput['deployment']>> = v.object({
+  environment: v.optional(v.picklist(['local', 'staging', 'production'])),
+  workerVersionId: v.optional(v.nullable(v.string())),
+  deploymentId: v.optional(v.nullable(v.string())),
+  rollbackTarget: v.optional(v.nullable(v.string())),
+  command: v.optional(v.string()),
+});
+const ChecksSchema: v.GenericSchema<NonNullable<ReleaseActionInput['checks']>> = v.array(
+  v.object({ name: v.optional(v.string()), command: v.optional(v.string()) }),
+);
+const PreviewSchema = v.object({
+  port: v.optional(v.number()),
+  startCommand: v.optional(v.string()),
+});
+const RollbackSchema = v.object({ command: v.optional(v.string()) });
 
 /** Marshal a member's positional call args into the ReleaseActionInput shape
  *  runReleaseAction reads a slice of. Each branch matches the member's own
@@ -112,40 +158,85 @@ function toActionInput(action: ReleaseToolAction, args: unknown[]): ReleaseActio
     case 'board':
       return { action };
     case 'bind_source':
-      return { action, binding: isPlainObject(args[0]) ? args[0] as ReleaseActionInput['binding'] : undefined };
+      return { action, binding: parseInput(BindingSchema, { value: args[0] }) };
     case 'create': {
-      const input = isPlainObject(args[0]) ? args[0] : {};
-      return { action, bindingId: input.bindingId as string, userPrompt: input.userPrompt as string, plan: input.plan as string | undefined };
+      const input = parseInput(v.object({
+        bindingId: v.optional(v.string()),
+        userPrompt: v.optional(v.string()),
+        plan: v.optional(v.nullable(v.string())),
+      }), { value: args[0] });
+      return {
+        action,
+        bindingId: input?.bindingId,
+        userPrompt: input?.userPrompt,
+        plan: input?.plan,
+      };
     }
     case 'update': {
-      const patch = isPlainObject(args[1]) ? args[1] : {};
+      const patch = parseInput(UpdateSchema, { value: args[1] });
       return {
-        action, changeId: args[0] as string,
-        plan: patch.plan as string | undefined, summary: patch.summary as string | undefined,
-        patch: patch.patch as string | undefined, previewUrl: patch.previewUrl as string | undefined,
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        plan: patch?.plan,
+        summary: patch?.summary,
+        patch: patch?.patch,
+        previewUrl: patch?.previewUrl,
       };
     }
     case 'transition':
-      return { action, changeId: args[0] as string, status: args[1] as ReleaseActionInput['status'] };
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        status: parseInput(StatusSchema, { value: args[1] }),
+      };
     case 'request_approval':
-      return { action, changeId: args[0] as string, approvalType: args[1] as ReleaseActionInput['approvalType'] };
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        approvalType: parseInput(ApprovalTypeSchema, { value: args[1] }),
+      };
     case 'record_check':
-      return { action, changeId: args[0] as string, check: isPlainObject(args[1]) ? args[1] as ReleaseActionInput['check'] : undefined };
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        check: parseInput(CheckSchema, { value: args[1] }),
+      };
     case 'record_deployment':
-      return { action, changeId: args[0] as string, deployment: isPlainObject(args[1]) ? args[1] as ReleaseActionInput['deployment'] : undefined };
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        deployment: parseInput(DeploymentSchema, { value: args[1] }),
+      };
     case 'apply':
-      return { action, changeId: args[0] as string };
+      return { action, changeId: parseInput(StringSchema, { value: args[0] }) };
     case 'run_checks':
-      return { action, changeId: args[0] as string, checks: args[1] as ReleaseActionInput['checks'] };
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        checks: parseInput(ChecksSchema, { value: args[1] }),
+      };
     case 'preview': {
-      const opts = isPlainObject(args[1]) ? args[1] : {};
-      return { action, changeId: args[0] as string, port: opts.port as number | undefined, startCommand: opts.startCommand as string | undefined };
+      const opts = parseInput(PreviewSchema, { value: args[1] });
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        port: opts?.port,
+        startCommand: opts?.startCommand,
+      };
     }
     case 'deploy':
-      return { action, changeId: args[0] as string, deployment: isPlainObject(args[1]) ? args[1] as ReleaseActionInput['deployment'] : undefined };
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        deployment: parseInput(DeploymentSchema, { value: args[1] }),
+      };
     case 'rollback': {
-      const opts = isPlainObject(args[1]) ? args[1] : {};
-      return { action, changeId: args[0] as string, deployment: opts.command ? { command: opts.command as string } : undefined };
+      const opts = parseInput(RollbackSchema, { value: args[1] });
+      return {
+        action,
+        changeId: parseInput(StringSchema, { value: args[0] }),
+        deployment: opts?.command ? { command: opts.command } : undefined,
+      };
     }
   }
 }

@@ -1,5 +1,6 @@
 /**
- * Safety subsystem — approval gating, device consent, and argument digests.
+ * Safety subsystem — approval gating, deferred approval, device consent, and
+ * argument digests.
  */
 
 export {
@@ -15,7 +16,24 @@ export {
   type ShellApprovalRequest,
   type ShellApprovalOutcome,
   type ShellApprovalPolicy,
+  type DeferredApprovalChannel,
 } from './approval-gate.js';
+
+export {
+  DeferredApprovalQueue,
+  DeferredApprovalStore,
+  initDeferredApprovalsTable,
+  queuedActionMessage,
+  deniedActionMessage,
+  decisionWakeMessage,
+  DEFERRED_APPROVAL_SIGNAL,
+  type DeferredApproval,
+  type DeferredApprovalStatus,
+  type DeferredApprovalAnswer,
+  type DeferredApprovalVerdict,
+  type DeferredApprovalNotice,
+  type DeferredApprovalQueueDeps,
+} from './deferred-approval.js';
 
 export {
   argumentDigest,

@@ -2,28 +2,28 @@
 # and the answer key are all derived from these by packages/core/src/bench/
 # longhorizon.ts, so nothing here is a fact anybody wrote down and nothing here
 # reaches the sandbox. Four length buckets (~35k / ~137k / ~549k / ~1.1M chars)
-# crossed with the planted-fact count, in both shapes.
-{"id":"lh-digest-32k-m4","title":"digest 32k corpus, 4 planted facts","shape":"digest","seed":1007,"entries":180,"filler":100,"markers":4,"parts":1}
-{"id":"lh-digest-32k-m8","title":"digest 32k corpus, 8 planted facts","shape":"digest","seed":1014,"entries":180,"filler":100,"markers":8,"parts":1}
-{"id":"lh-digest-32k-m12","title":"digest 32k corpus, 12 planted facts","shape":"digest","seed":1021,"entries":180,"filler":100,"markers":12,"parts":1}
-{"id":"lh-digest-128k-m4","title":"digest 128k corpus, 4 planted facts","shape":"digest","seed":1028,"entries":700,"filler":100,"markers":4,"parts":1}
-{"id":"lh-digest-128k-m8","title":"digest 128k corpus, 8 planted facts","shape":"digest","seed":1035,"entries":700,"filler":100,"markers":8,"parts":1}
-{"id":"lh-digest-128k-m12","title":"digest 128k corpus, 12 planted facts","shape":"digest","seed":1042,"entries":700,"filler":100,"markers":12,"parts":1}
-{"id":"lh-digest-512k-m4","title":"digest 512k corpus, 4 planted facts","shape":"digest","seed":1049,"entries":2800,"filler":100,"markers":4,"parts":1}
-{"id":"lh-digest-512k-m8","title":"digest 512k corpus, 8 planted facts","shape":"digest","seed":1056,"entries":2800,"filler":100,"markers":8,"parts":1}
-{"id":"lh-digest-512k-m12","title":"digest 512k corpus, 12 planted facts","shape":"digest","seed":1063,"entries":2800,"filler":100,"markers":12,"parts":1}
-{"id":"lh-digest-1m-m4","title":"digest 1m corpus, 4 planted facts","shape":"digest","seed":1070,"entries":5600,"filler":100,"markers":4,"parts":1}
-{"id":"lh-digest-1m-m8","title":"digest 1m corpus, 8 planted facts","shape":"digest","seed":1077,"entries":5600,"filler":100,"markers":8,"parts":1}
-{"id":"lh-digest-1m-m12","title":"digest 1m corpus, 12 planted facts","shape":"digest","seed":1084,"entries":5600,"filler":100,"markers":12,"parts":1}
-{"id":"lh-cont-32k-p4m4","title":"continuation 32k corpus over 4 episodes, 4 planted facts","shape":"continuation","seed":1091,"entries":180,"filler":100,"markers":4,"parts":4}
-{"id":"lh-cont-32k-p4m8","title":"continuation 32k corpus over 4 episodes, 8 planted facts","shape":"continuation","seed":1098,"entries":180,"filler":100,"markers":8,"parts":4}
-{"id":"lh-cont-32k-p6m12","title":"continuation 32k corpus over 6 episodes, 12 planted facts","shape":"continuation","seed":1105,"entries":180,"filler":100,"markers":12,"parts":6}
-{"id":"lh-cont-128k-p4m4","title":"continuation 128k corpus over 4 episodes, 4 planted facts","shape":"continuation","seed":1112,"entries":700,"filler":100,"markers":4,"parts":4}
-{"id":"lh-cont-128k-p4m8","title":"continuation 128k corpus over 4 episodes, 8 planted facts","shape":"continuation","seed":1119,"entries":700,"filler":100,"markers":8,"parts":4}
-{"id":"lh-cont-128k-p6m12","title":"continuation 128k corpus over 6 episodes, 12 planted facts","shape":"continuation","seed":1126,"entries":700,"filler":100,"markers":12,"parts":6}
-{"id":"lh-cont-512k-p4m4","title":"continuation 512k corpus over 4 episodes, 4 planted facts","shape":"continuation","seed":1133,"entries":2800,"filler":100,"markers":4,"parts":4}
-{"id":"lh-cont-512k-p4m8","title":"continuation 512k corpus over 4 episodes, 8 planted facts","shape":"continuation","seed":1140,"entries":2800,"filler":100,"markers":8,"parts":4}
-{"id":"lh-cont-512k-p6m12","title":"continuation 512k corpus over 6 episodes, 12 planted facts","shape":"continuation","seed":1147,"entries":2800,"filler":100,"markers":12,"parts":6}
-{"id":"lh-cont-1m-p4m4","title":"continuation 1m corpus over 4 episodes, 4 planted facts","shape":"continuation","seed":1154,"entries":5600,"filler":100,"markers":4,"parts":4}
-{"id":"lh-cont-1m-p4m8","title":"continuation 1m corpus over 4 episodes, 8 planted facts","shape":"continuation","seed":1161,"entries":5600,"filler":100,"markers":8,"parts":4}
-{"id":"lh-cont-1m-p6m12","title":"continuation 1m corpus over 6 episodes, 12 planted facts","shape":"continuation","seed":1168,"entries":5600,"filler":100,"markers":12,"parts":6}
+# crossed with the planted-fact count, in both modes.
+{"id":"lh-digest-32k-m4","title":"digest 32k corpus, 4 planted facts","mode":"digest","seed":1007,"entries":180,"filler":100,"markers":4,"parts":1}
+{"id":"lh-digest-32k-m8","title":"digest 32k corpus, 8 planted facts","mode":"digest","seed":1014,"entries":180,"filler":100,"markers":8,"parts":1}
+{"id":"lh-digest-32k-m12","title":"digest 32k corpus, 12 planted facts","mode":"digest","seed":1021,"entries":180,"filler":100,"markers":12,"parts":1}
+{"id":"lh-digest-128k-m4","title":"digest 128k corpus, 4 planted facts","mode":"digest","seed":1028,"entries":700,"filler":100,"markers":4,"parts":1}
+{"id":"lh-digest-128k-m8","title":"digest 128k corpus, 8 planted facts","mode":"digest","seed":1035,"entries":700,"filler":100,"markers":8,"parts":1}
+{"id":"lh-digest-128k-m12","title":"digest 128k corpus, 12 planted facts","mode":"digest","seed":1042,"entries":700,"filler":100,"markers":12,"parts":1}
+{"id":"lh-digest-512k-m4","title":"digest 512k corpus, 4 planted facts","mode":"digest","seed":1049,"entries":2800,"filler":100,"markers":4,"parts":1}
+{"id":"lh-digest-512k-m8","title":"digest 512k corpus, 8 planted facts","mode":"digest","seed":1056,"entries":2800,"filler":100,"markers":8,"parts":1}
+{"id":"lh-digest-512k-m12","title":"digest 512k corpus, 12 planted facts","mode":"digest","seed":1063,"entries":2800,"filler":100,"markers":12,"parts":1}
+{"id":"lh-digest-1m-m4","title":"digest 1m corpus, 4 planted facts","mode":"digest","seed":1070,"entries":5600,"filler":100,"markers":4,"parts":1}
+{"id":"lh-digest-1m-m8","title":"digest 1m corpus, 8 planted facts","mode":"digest","seed":1077,"entries":5600,"filler":100,"markers":8,"parts":1}
+{"id":"lh-digest-1m-m12","title":"digest 1m corpus, 12 planted facts","mode":"digest","seed":1084,"entries":5600,"filler":100,"markers":12,"parts":1}
+{"id":"lh-cont-32k-p4m4","title":"continuation 32k corpus over 4 episodes, 4 planted facts","mode":"continuation","seed":1091,"entries":180,"filler":100,"markers":4,"parts":4}
+{"id":"lh-cont-32k-p4m8","title":"continuation 32k corpus over 4 episodes, 8 planted facts","mode":"continuation","seed":1098,"entries":180,"filler":100,"markers":8,"parts":4}
+{"id":"lh-cont-32k-p6m12","title":"continuation 32k corpus over 6 episodes, 12 planted facts","mode":"continuation","seed":1105,"entries":180,"filler":100,"markers":12,"parts":6}
+{"id":"lh-cont-128k-p4m4","title":"continuation 128k corpus over 4 episodes, 4 planted facts","mode":"continuation","seed":1112,"entries":700,"filler":100,"markers":4,"parts":4}
+{"id":"lh-cont-128k-p4m8","title":"continuation 128k corpus over 4 episodes, 8 planted facts","mode":"continuation","seed":1119,"entries":700,"filler":100,"markers":8,"parts":4}
+{"id":"lh-cont-128k-p6m12","title":"continuation 128k corpus over 6 episodes, 12 planted facts","mode":"continuation","seed":1126,"entries":700,"filler":100,"markers":12,"parts":6}
+{"id":"lh-cont-512k-p4m4","title":"continuation 512k corpus over 4 episodes, 4 planted facts","mode":"continuation","seed":1133,"entries":2800,"filler":100,"markers":4,"parts":4}
+{"id":"lh-cont-512k-p4m8","title":"continuation 512k corpus over 4 episodes, 8 planted facts","mode":"continuation","seed":1140,"entries":2800,"filler":100,"markers":8,"parts":4}
+{"id":"lh-cont-512k-p6m12","title":"continuation 512k corpus over 6 episodes, 12 planted facts","mode":"continuation","seed":1147,"entries":2800,"filler":100,"markers":12,"parts":6}
+{"id":"lh-cont-1m-p4m4","title":"continuation 1m corpus over 4 episodes, 4 planted facts","mode":"continuation","seed":1154,"entries":5600,"filler":100,"markers":4,"parts":4}
+{"id":"lh-cont-1m-p4m8","title":"continuation 1m corpus over 4 episodes, 8 planted facts","mode":"continuation","seed":1161,"entries":5600,"filler":100,"markers":8,"parts":4}
+{"id":"lh-cont-1m-p6m12","title":"continuation 1m corpus over 6 episodes, 12 planted facts","mode":"continuation","seed":1168,"entries":5600,"filler":100,"markers":12,"parts":6}

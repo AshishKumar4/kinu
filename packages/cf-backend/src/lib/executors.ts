@@ -22,19 +22,11 @@ export interface ExecutorInfo {
  * has always read "Your PC" — because the namespace is the API and this is what
  * the environment IS.
  *
- * Two of these are load-bearing since Nimbus became the workspace itself
- * (core/src/vfs/nimbus-workspace.ts). `workspace` is no longer a state store to
- * inspect: it is the agent's filesystem AND its shell, the durable one, so
- * "Agent state" undersold it into looking like a debug pane. And `nimbus` had
- * to stop being called Nimbus, because Nimbus is what runs the workspace now —
- * the executor is a SEPARATE Nimbus session in its own NimbusSession Durable
- * Object (cf-backend/src/runtime.ts createAgentNimbusHandle), a different
- * machine with its own bytes, its own shell and real native binaries. Two rows
- * both reading "Nimbus" said they were one thing twice.
+ * `workspace` is the agent's filesystem and its Nimbus shell, the durable one,
+ * so "Agent state" would undersell it into looking like a debug pane.
  */
-export const EXECUTOR_LABELS: Record<string, string> = {
+export const EXECUTOR_LABELS = {
   laptop:    "Your PC",
-  nimbus:    "Linux session",
   sandbox:   "Sandbox",
   workspace: "Workspace",
   // Forks only: the workspace this one branched from, reached over DO RPC.
@@ -42,10 +34,10 @@ export const EXECUTOR_LABELS: Record<string, string> = {
 };
 
 export function executorLabel(name: string): string {
-  return EXECUTOR_LABELS[name] ?? name;
+  return Object.entries(EXECUTOR_LABELS).find(([key]) => key === name)?.[1] ?? name;
 }
 
-export const EXECUTOR_ORDER = ["laptop", "nimbus", "sandbox", "workspace", "parent"];
+export const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];
 
 export function executorSortKey(name: string): number {
   const idx = EXECUTOR_ORDER.indexOf(name);
@@ -86,7 +78,31 @@ export interface ExecutorAvailability {
   status?: "not_configured" | "idle" | "active" | "disconnected" | "error";
 }
 
-const STATIC_PRIORITY = ["laptop", "nimbus", "sandbox"];
+/**
+ * What the release lane can actually do here. The release engine executes in
+ * the agent's sandbox container (core/src/release/engine.ts adapts its raw
+ * handle), so the sandbox row IS the substrate verdict: absent or unavailable
+ * means changes can be drafted and approved and never applied, checked,
+ * previewed or deployed. `unknown` while the executor list has not loaded —
+ * the surface says nothing rather than guessing either way. An available
+ * sandbox may still carry a note (previews off until PREVIEW_HOST_SUFFIX is
+ * set); the note rides the executor's own status reason.
+ */
+export type ReleaseSubstrate =
+  | { state: "unknown" }
+  | { state: "unavailable"; reason: string }
+  | { state: "ready"; note: string | null };
+
+export function releaseSubstrate(executors: ExecutorInfo[]): ReleaseSubstrate {
+  if (executors.length === 0) return { state: "unknown" };
+  const sandbox = executors.find((e) => e.name === "sandbox");
+  if (!sandbox?.available) {
+    return { state: "unavailable", reason: sandbox?.reason ?? "the sandbox executor is unavailable on this deployment" };
+  }
+  return { state: "ready", note: sandbox.reason ?? null };
+}
+
+const STATIC_PRIORITY = ["laptop", "sandbox"];
 
 export function pickDefaultExecutor(executors: ExecutorAvailability[], lastActive?: string | null): string {
   const isActive = (name: string) => executors.some((e) =>

@@ -1,5 +1,5 @@
 // The long-horizon bench family: an OOLONG-style corpus the agent must digest,
-// in two shapes, scored by exact match with no LLM anywhere in the path.
+// in two modes, scored by exact match with no LLM anywhere in the path.
 //
 // Why a second family at all. The 176-task defect corpus scores a repo fix and
 // is blind to everything context-shaped: it cannot tell whether a turn drowned
@@ -8,7 +8,7 @@
 // deliberately the ONLY thing here that is new — the split, the seal, the
 // pairing, the statistics and the report are the existing ones.
 //
-// Two shapes, from the two things worth measuring:
+// Two modes, from the two things worth measuring:
 //
 //   digest        materials on disk, one ask, answers written to a file. What a
 //                 single heavy turn does with a corpus far larger than its
@@ -19,7 +19,7 @@
 //                 only from what survived. The published RLM results have no
 //                 instrument of this kind: every one of them is single-query
 //                 over an inert corpus. Deleting the parts is what makes the
-//                 shape honest — an agent that re-reads the corpus at the end
+//                 mode honest — an agent that re-reads the corpus at the end
 //                 is not demonstrating continuation, and "please don't re-read"
 //                 is a rubric, not a measurement. An agent that wrote its own
 //                 notes to a file DOES keep them, and should: that is the
@@ -31,6 +31,7 @@
 // enters the sandbox.
 
 import { fnv1a64 } from '../prompting/volatile-context.js';
+import { parseJsonValue } from '../utils/json.js';
 import { unitHash } from './stats.js';
 
 /** Sandbox-relative root the corpus is materialized under. */
@@ -41,13 +42,13 @@ export const LONGHORIZON_ANSWER_FILE = 'bench-answer.txt';
  *  read, large enough that a corpus is not thousands of files. */
 export const LONGHORIZON_ENTRIES_PER_FILE = 25;
 
-export type LongHorizonShape = 'digest' | 'continuation';
+export type LongHorizonMode = 'digest' | 'continuation';
 
 /** A corpus and its questions, in full. Every field moves the length bucket,
  *  the planted-fact count, or the aggregation arity — the three axes OOLONG
  *  parameterizes — and nothing else. */
 export interface LongHorizonSpec {
-  shape: LongHorizonShape;
+  mode: LongHorizonMode;
   seed: number;
   /** Log entries in the corpus. With `filler`, this sets the length bucket. */
   entries: number;
@@ -104,7 +105,7 @@ export function longHorizonEntryId(index: number): string {
  *  a quota spread as evenly as the count allows. Ranking per part rather than
  *  globally is what guarantees every part plants at least one fact — a part
  *  that plants none is an episode the final ask does not actually depend on,
- *  and the continuation shape would then be measuring nothing across it. */
+ *  and the continuation mode would then be measuring nothing across it. */
 function markerIndices(spec: LongHorizonSpec): Set<number> {
   const base = Math.floor(spec.markers / spec.parts);
   const remainder = spec.markers % spec.parts;
@@ -197,7 +198,7 @@ export interface LongHorizonFile {
 /** Sandbox-relative directory holding one part's files. `digest` keeps its
  *  single part flat, because a prompt that says "part 1 of 1" is noise. */
 export function longHorizonPartDir(spec: LongHorizonSpec, part: number): string {
-  return spec.shape === 'digest' ? LONGHORIZON_CORPUS_DIR : `${LONGHORIZON_CORPUS_DIR}/part-${part}`;
+  return spec.mode === 'digest' ? LONGHORIZON_CORPUS_DIR : `${LONGHORIZON_CORPUS_DIR}/part-${part}`;
 }
 
 export function generateLongHorizonFiles(spec: LongHorizonSpec): LongHorizonFile[] {
@@ -242,7 +243,7 @@ export interface LongHorizonQuestion {
 /**
  * The three aggregation arities OOLONG-Synthetic uses, over one corpus:
  * a whole-corpus count, an exact enumeration, and verbatim recall of one
- * planted fact. In `continuation` shape all three span every part, and the
+ * planted fact. In `continuation` mode all three span every part, and the
  * verbatim target is planted in part 1 — the part that has been through the
  * most compaction by the time the final ask lands.
  */
@@ -284,7 +285,7 @@ export interface LongHorizonAsks {
   /** Sent in order, on ONE session. */
   asks: string[];
   /** Parallel to `asks`: a sandbox-relative directory to delete once that ask
-   *  has been answered, or null. This is what makes the continuation shape
+   *  has been answered, or null. This is what makes the continuation mode
    *  measure continuation rather than re-reading. */
   removeAfterAsk: Array<string | null>;
 }
@@ -304,7 +305,7 @@ export function buildLongHorizonAsks(spec: LongHorizonSpec): LongHorizonAsks {
   const files = generateLongHorizonFiles(spec);
   const chars = files.reduce((sum, f) => sum + f.text.length, 0);
 
-  if (spec.shape === 'digest') {
+  if (spec.mode === 'digest') {
     return {
       asks: [[
         `\`${LONGHORIZON_CORPUS_DIR}/\` holds ${spec.entries} log entries across ${files.length} files`,
@@ -440,23 +441,24 @@ export function longHorizonAsksLeakAnswer(
  *  the task hash, so it must not depend on object-literal order. */
 export function encodeLongHorizonSpec(spec: LongHorizonSpec): string {
   assertLongHorizonSpec(spec);
-  return JSON.stringify([spec.shape, spec.seed, spec.entries, spec.filler, spec.markers, spec.parts]);
+  return JSON.stringify([spec.mode, spec.seed, spec.entries, spec.filler, spec.markers, spec.parts]);
 }
 
 export function decodeLongHorizonSpec(encoded: string): LongHorizonSpec {
-  let raw: unknown;
+  let raw;
   try {
-    raw = JSON.parse(encoded);
+    raw = parseJsonValue(encoded);
   } catch (err) {
-    throw new Error(`long-horizon spec is not valid JSON: ${(err as Error).message}`);
+    const detail = err instanceof Error ? err.message : String(err);
+    throw new Error(`long-horizon spec is not valid JSON: ${detail}`);
   }
   if (!Array.isArray(raw) || raw.length !== 6) {
-    throw new Error('long-horizon spec must be [shape, seed, entries, filler, markers, parts]');
+    throw new Error('long-horizon spec must be [mode, seed, entries, filler, markers, parts]');
   }
-  const [shape, seed, entries, filler, markers, parts] = raw as unknown[];
-  if (shape !== 'digest' && shape !== 'continuation') throw new Error(`unknown long-horizon shape: ${String(shape)}`);
+  const [mode, seed, entries, filler, markers, parts] = raw;
+  if (mode !== 'digest' && mode !== 'continuation') throw new Error(`unknown long-horizon mode: ${String(mode)}`);
   const spec: LongHorizonSpec = {
-    shape,
+    mode,
     seed: Number(seed), entries: Number(entries), filler: Number(filler),
     markers: Number(markers), parts: Number(parts),
   };
@@ -477,7 +479,7 @@ export function assertLongHorizonSpec(spec: LongHorizonSpec): void {
   positiveInt('parts', spec.parts, 1);
   if (spec.markers > spec.entries) throw new Error(`long-horizon spec plants ${spec.markers} markers in ${spec.entries} entries`);
   if (spec.parts > spec.entries) throw new Error(`long-horizon spec splits ${spec.entries} entries over ${spec.parts} parts`);
-  if (spec.shape === 'digest' && spec.parts !== 1) throw new Error('long-horizon digest shape has exactly one part');
+  if (spec.mode === 'digest' && spec.parts !== 1) throw new Error('long-horizon digest mode has exactly one part');
   if (spec.markers < spec.parts) {
     throw new Error(`long-horizon spec plants ${spec.markers} markers over ${spec.parts} parts — every part must plant at least one, or the final ask does not depend on it`);
   }

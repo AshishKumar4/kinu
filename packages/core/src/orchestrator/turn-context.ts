@@ -51,9 +51,7 @@ export async function assembleTurnMessages(input: TurnContextInput): Promise<Mod
     messages: history,
     system: input.system,
     contextWindow: input.contextWindow,
-    ...(input.providerReportedTokens !== undefined
-      ? { providerReportedTokens: input.providerReportedTokens }
-      : {}),
+    providerReportedTokens: input.providerReportedTokens,
     trigger: input.trigger,
   });
 

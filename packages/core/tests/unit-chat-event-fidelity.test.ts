@@ -4,63 +4,84 @@
 // telemetry read 0 on the CLI path). These tests pin both fidelities through
 // the public runChat interface.
 import { describe, test, expect } from 'bun:test';
-import { tool } from 'ai';
-import type { ModelStreamPart } from '@proteus/test-utils';
+import { tool, type LanguageModel, type ModelMessage, type ToolSet } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
 import { z } from 'zod';
 import { runChat, ExtensionHost, type ChatEvent, type ProteusExtension } from '../src/index.ts';
 
-const USAGE = { inputTokens: 3, outputTokens: 2, totalTokens: 5 };
+type FinishPart = Extract<LanguageModelV3StreamPart, { type: 'finish' }>;
+type FinishOverrides = Partial<Pick<FinishPart, 'usage' | 'providerMetadata'>>;
 
-/** A v2 model whose first step calls one tool, then answers with text. The
+const USAGE: FinishPart['usage'] = {
+  inputTokens: { total: 3, noCache: 3, cacheRead: undefined, cacheWrite: undefined },
+  outputTokens: { total: 2, text: 2, reasoning: undefined },
+};
+
+function finishPart(
+  reason: 'stop' | 'tool-calls',
+  overrides: FinishOverrides = {},
+): FinishPart {
+  const base: FinishPart = {
+    type: 'finish',
+    finishReason: { unified: reason, raw: undefined },
+    usage: overrides.usage ?? USAGE,
+  };
+  return overrides.providerMetadata === undefined
+    ? base
+    : { ...base, providerMetadata: overrides.providerMetadata };
+}
+
+/** A model whose first step calls one tool, then answers with text. The
  *  finish parts carry the caller-supplied usage/providerMetadata so a test can
  *  assert what the ChatEvent seam surfaces. */
 function toolThenTextModel(opts: {
   toolName: string;
-  firstFinish?: Partial<ModelStreamPart & { type: 'finish' }>;
-}) {
+  firstFinish?: FinishOverrides;
+}): LanguageModel {
   let step = 0;
-  const model = {
-    specificationVersion: 'v2' as const,
+  return new MockLanguageModelV3({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
     doStream: async () => {
       step += 1;
       const stream = step === 1
-        ? new ReadableStream<ModelStreamPart>({
+        ? new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: 'tc1', toolName: opts.toolName, input: '{}' });
-              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: USAGE, ...opts.firstFinish } as ModelStreamPart);
+              c.enqueue(finishPart('tool-calls', opts.firstFinish));
               c.close();
             },
           })
-        : new ReadableStream<ModelStreamPart>({
+        : new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'text-start', id: 't1' });
               c.enqueue({ type: 'text-delta', id: 't1', delta: 'recovered' });
               c.enqueue({ type: 'text-end', id: 't1' });
-              c.enqueue({ type: 'finish', finishReason: 'stop', usage: USAGE });
+              c.enqueue(finishPart('stop'));
               c.close();
             },
           });
       return { stream, response: { headers: {} } };
     },
-  };
-  return model;
+  });
 }
 
-async function collect(model: unknown, tools: Record<string, unknown>, extensions?: ExtensionHost): Promise<ChatEvent[]> {
+async function collect(model: LanguageModel, tools: ToolSet, extensions?: ExtensionHost): Promise<ChatEvent[]> {
   const events: ChatEvent[] = [];
-  for await (const ev of runChat({
-    model: model as never,
+  const request = {
+    model,
     system: 'sys',
-    history: [{ role: 'user', content: 'go' }],
-    tools: tools as never,
+    history: [{ role: 'user', content: 'go' }] satisfies ModelMessage[],
+    tools,
     maxSteps: 3,
-    ...(extensions ? { extensions } : {}),
-  })) {
+  };
+  const stream = extensions === undefined
+    ? runChat(request)
+    : runChat({ ...request, extensions });
+  for await (const ev of stream) {
     events.push(ev);
   }
   return events;
@@ -175,9 +196,12 @@ describe('ChatEvent cached-token fidelity', () => {
     const model = toolThenTextModel({
       toolName: 'ok',
       firstFinish: {
-        usage: { inputTokens: 20, outputTokens: 5, totalTokens: 25, cachedInputTokens: 12 },
+        usage: {
+          inputTokens: { total: 20, noCache: 8, cacheRead: 12, cacheWrite: undefined },
+          outputTokens: { total: 5, text: 5, reasoning: undefined },
+        },
         providerMetadata: { anthropic: { cacheReadInputTokens: 3 } },
-      } as Partial<ModelStreamPart & { type: 'finish' }>,
+      },
     });
     const tools = {
       ok: tool({ description: 'works', inputSchema: z.object({}), execute: async () => 'fine' }),

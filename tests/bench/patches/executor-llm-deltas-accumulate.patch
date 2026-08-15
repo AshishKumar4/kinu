@@ -1,10 +1,9 @@
 diff --git a/packages/core/src/scaffold/executor.ts b/packages/core/src/scaffold/executor.ts
-index 63b65f4..cbcc34b 100644
 --- a/packages/core/src/scaffold/executor.ts
 +++ b/packages/core/src/scaffold/executor.ts
-@@ -208,7 +208,7 @@ function buildHostProvider(opts: {
+@@ -331,7 +331,7 @@
        try {
-         for await (const chunk of llmStream(o)) {
+         for await (const chunk of llmStream(parsed.output)) {
            acc += chunk;
 -          await pushEvent({ type: 'text_delta', text: chunk });
 +          await pushEvent({ type: 'text_delta', text: acc });

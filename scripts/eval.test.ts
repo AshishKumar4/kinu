@@ -1,9 +1,11 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { parseArgs, runBenchmark } from './eval.ts';
+import { parseArgs, partitionRunnable, runBenchmark } from './eval.ts';
 import { parseCorpus } from '../packages/core/src/index.js';
 import type { EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn } from '../packages/core/src/index.js';
+import { createTestRuntime } from '@proteus/test-utils';
+import { MockLanguageModelV3 } from 'ai/test';
 
 function stubStrategy(id: string, output: string): ExplorationStrategy {
   return {
@@ -59,7 +61,16 @@ describe('parseArgs', () => {
 });
 
 describe('runBenchmark (stubbed model + judge — no real LLM)', () => {
-  const buildContext = (c: EvalCase): StrategyContext => ({ task: c.task, rt: null as never, model: null as never });
+  const runtime = createTestRuntime().rt;
+  const model = new MockLanguageModelV3({
+    doGenerate: async () => { throw new Error('stub strategy must not call the model'); },
+  });
+  const buildContext = (c: EvalCase): StrategyContext => ({
+    task: c.task,
+    mode: 'build',
+    rt: runtime,
+    model,
+  });
   const judge: JudgeFn = async (c) => ({
     winner: c.id === 'q1' ? 'b' : 'tie',
     scoreA: 0.6,
@@ -100,10 +111,31 @@ describe('runBenchmark (stubbed model + judge — no real LLM)', () => {
 });
 
 describe('seed corpus', () => {
+  const path = join(import.meta.dir, '..', 'tests/eval/corpus/seed.jsonl');
+
   test('the committed seed corpus parses', () => {
-    const path = join(import.meta.dir, '..', 'tests/eval/corpus/seed.jsonl');
     const cases = parseCorpus(readFileSync(path, 'utf8'));
     expect(cases.length).toBeGreaterThan(0);
     expect(cases.every((c) => c.id && c.task)).toBe(true);
+  });
+
+  // This strategy is one generateText call. Scoring it on "create a file" or
+  // "run it" measures how politely the model declines, which the judge then
+  // turns into a number — the corpus shipped four such cases and they were
+  // being scored.
+  test('cases needing tools or a second turn are excluded from a single-shot run', () => {
+    const { runnable, excluded } = partitionRunnable(parseCorpus(readFileSync(path, 'utf8')));
+    expect(excluded.map((c) => c.id).sort()).toEqual(['multi-001', 'multi-002', 'tool-001', 'tool-002']);
+    expect(runnable.length).toBeGreaterThan(0);
+    for (const c of runnable) {
+      expect(c.tags ?? []).not.toContain('tool-use');
+      expect(c.tags ?? []).not.toContain('multi-step');
+    }
+  });
+
+  test('an untagged case is runnable — exclusion is opt-in, not a default', () => {
+    const { runnable, excluded } = partitionRunnable([{ id: 'x', task: 't' }]);
+    expect(runnable.map((c) => c.id)).toEqual(['x']);
+    expect(excluded).toEqual([]);
   });
 });

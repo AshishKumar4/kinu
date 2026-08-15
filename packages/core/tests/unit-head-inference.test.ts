@@ -3,37 +3,46 @@
 // assembly that used to live inside the cf Facet is locked behind a test both
 // backends rely on.
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import type { LanguageModel } from 'ai';
+import { MockLanguageModelV3 } from 'ai/test';
 import {
   runHeadInference, HeadCapture, buildHeadAccumulatorTools,
   buildHeadSystemPrompt, buildHeadMessages, type HeadInferenceDeps,
 } from '../src/heads/head-inference.js';
 import { DEFAULT_MAX_STEPS } from '../src/config.js';
-import type { HeadInput } from '../src/heads/types.js';
+import type { Decision, Evidence, HeadInput } from '../src/heads/types.js';
 
-/** A v2 generateText-driving stub. Returns `answer` as one text step + usage;
+/** A generateText-driving stub. Returns `answer` as one text step + usage;
  *  finishReason 'stop' so the head ends in a single step (no tool calls). */
 function fakeHeadModel(answer: string, opts?: { throwError?: string; usage?: { inputTokens: number; outputTokens: number } }): LanguageModel {
   const usage = opts?.usage ?? { inputTokens: 10, outputTokens: 20 };
-  return {
-    specificationVersion: 'v2', provider: 'fake', modelId: 'fake-head', supportedUrls: {},
+  return new MockLanguageModelV3({
+    provider: 'fake',
+    modelId: 'fake-head',
     doGenerate: async () => {
       if (opts?.throwError) throw new Error(opts.throwError);
       return {
         content: answer ? [{ type: 'text', text: answer }] : [],
-        finishReason: 'stop' as const,
-        usage,
-        response: { id: 'r', modelId: 'fake-head', timestamp: new Date(0) },
+        finishReason: { unified: 'stop', raw: undefined },
+        usage: {
+          inputTokens: {
+            total: usage.inputTokens, noCache: usage.inputTokens,
+            cacheRead: undefined, cacheWrite: undefined,
+          },
+          outputTokens: { total: usage.outputTokens, text: usage.outputTokens, reasoning: undefined },
+        },
         warnings: [],
       };
     },
-  } as unknown as LanguageModel;
+  });
 }
 
 function headInput(overrides?: Partial<HeadInput>): HeadInput {
   return {
     id: 'h1', rootId: 'r1', parentId: null, depth: 0,
     task: 'analyze the parser', rationale: 'cover the lexer angle',
+    mode: 'build',
     inheritedContext: [{ id: 'm1', role: 'user', content: 'the prior user message', createdAt: 1 }],
     budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: 2_000_000_000_000 },
     mergeStrategy: 'synthesize',
@@ -47,6 +56,7 @@ const deps = (
 ): HeadInferenceDeps => ({
   model, tools: {}, capture: new HeadCapture(),
   maxSteps: DEFAULT_MAX_STEPS, isAborted: () => false, ...over,
+  workspaceLayout: over?.workspaceLayout ?? 'shared-workspace',
 });
 
 describe('runHeadInference — report assembly', () => {
@@ -96,10 +106,11 @@ describe('runHeadInference — report assembly', () => {
 describe('buildHeadAccumulatorTools', () => {
   test('record_evidence / record_decision push into the shared capture', async () => {
     const capture = new HeadCapture();
-    const tools = buildHeadAccumulatorTools(capture) as Record<string, { execute: (a: unknown, o: unknown) => Promise<unknown> }>;
-    const opt = { toolCallId: 't', messages: [] };
-    await tools.record_evidence!.execute({ kind: 'fact', body: 'X holds' }, opt);
-    await tools.record_decision!.execute({ question: 'q', choice: 'c', rationale: 'r' }, opt);
+    const tools = buildHeadAccumulatorTools(capture);
+    const recordEvidence = toolExecute<Omit<Evidence, 'id'>, string>(tools.record_evidence!);
+    const recordDecision = toolExecute<Decision, string>(tools.record_decision!);
+    await recordEvidence({ kind: 'fact', body: 'X holds' });
+    await recordDecision({ question: 'q', choice: 'c', rationale: 'r' });
     expect(capture.evidence[0]!.body).toBe('X holds');
     expect(capture.evidence[0]!.id).toMatch(/^ev-/);
     expect(capture.decisions[0]!.choice).toBe('c');
@@ -114,9 +125,21 @@ describe('head prompt + messages', () => {
     const sys = buildHeadSystemPrompt(input);
     expect(sys).toContain('analyze the parser');
     expect(sys).toContain('record_evidence');
+    expect(sys).toContain('canonical workspace you were forked from');
+    expect(sys).not.toContain('private Nimbus workspace');
+    expect(sys).not.toContain('nimbus.*');
     const msgs = buildHeadMessages(input);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]!.content).toContain('the prior user message');
     expect(msgs[0]!.content).toContain('analyze the parser');
+  });
+
+  test('Plan heads are read-only researchers without the top-level submit tool', () => {
+    const sys = buildHeadSystemPrompt(headInput({ mode: 'plan' }));
+
+    expect(sys).toContain('In Plan mode');
+    expect(sys).toContain('Do not edit, write, or delete files');
+    expect(sys).not.toContain('submit_plan');
+    expect(sys).not.toContain('release.');
   });
 });

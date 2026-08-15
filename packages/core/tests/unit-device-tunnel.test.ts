@@ -1,16 +1,27 @@
 // DeviceTunnel — JSON-RPC over the user-level device socket (P1 of the CLI work).
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import {
   DeviceTunnel, TUNNEL_DISCONNECTED, DEVICE_UNRESPONSIVE, type TunnelSocket,
 } from '../src/execution/device-tunnel.js';
+import { JsonValueSchema } from '../src/utils/json.js';
+
+const SentFrameSchema = v.object({
+  id: v.string(),
+  method: v.string(),
+  params: v.array(JsonValueSchema),
+  checkpoint: v.optional(JsonValueSchema),
+});
+
+type SentFrame = v.InferOutput<typeof SentFrameSchema>;
 
 /** A fake socket that records sent frames and lets the test inject responses. */
 function fakeSocket(open = true) {
-  const sent: Array<{ id: string; method: string; params: unknown[] }> = [];
+  const sent: SentFrame[] = [];
   const sock: TunnelSocket & { sent: typeof sent; readyState: number } = {
     readyState: open ? 1 : 3,
     sent,
-    send(data: string) { sent.push(JSON.parse(data)); },
+    send(data: string) { sent.push(v.parse(SentFrameSchema, JSON.parse(data))); },
   };
   return sock;
 }
@@ -32,7 +43,7 @@ describe('DeviceTunnel', () => {
     const t = new DeviceTunnel(sock);
     const hint = { agent: 'a1', turnId: 't1', sessionId: 'default', dir: '/home/u/proj' };
     const p = t.rpc('exec', ['make'], { extra: { checkpoint: hint } });
-    const frame = sock.sent[0] as { id: string; method: string; params: unknown[]; checkpoint?: unknown };
+    const frame = sock.sent[0];
     expect(frame.method).toBe('exec');
     expect(frame.checkpoint).toEqual(hint);
     t.handleMessage(JSON.stringify({ id: frame.id, result: 'ok' }));

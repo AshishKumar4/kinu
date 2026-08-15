@@ -1,14 +1,21 @@
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
 import {
-  parseCorpus, summarizeEval, createLLMJudge, runEvalPair, VerdictSchema,
+  parseCorpus, summarizeEval, createLLMJudge, runEvalPair,
 } from '../src/index.ts';
 import type { EvalCase, EvalResult, ExplorationStrategy, StrategyContext } from '../src/index.ts';
+import { createTestRuntime } from './helpers.js';
 
 const SEED_CORPUS = `# Comment line — ignored
 {"id":"a","task":"What is 2+2?","reference":"4","tags":["math","trivial"]}
 {"id":"b","task":"Reverse 'abc'.","reference":"cba","tags":["string"]}
 {"id":"c","task":"Sum 1..10.","reference":"55","tags":["math"]}
 `;
+
+function strategyContext(task: string): StrategyContext {
+  const { rt } = createTestRuntime();
+  return { task, mode: 'build', rt, model: new MockLanguageModelV3() };
+}
 
 describe('eval corpus parsing', () => {
   test('parses well-formed JSONL', () => {
@@ -61,8 +68,8 @@ describe('eval runner', () => {
       cases,
       strategyA: a,
       strategyB: b,
-      buildContext: (c) => ({ task: c.task, rt: {} as never, model: {} as never }),
-      judge: async (c, runA, runB) => ({
+      buildContext: (evalCase) => strategyContext(evalCase.task),
+      judge: async (c, _runA, _runB) => ({
         winner: c.id === 'q1' ? 'a' : 'b',
         scoreA: c.id === 'q1' ? 0.9 : 0.4,
         scoreB: c.id === 'q1' ? 0.4 : 0.9,
@@ -109,8 +116,8 @@ describe('eval runner', () => {
       cases: [{ id: 'x', task: 't' }],
       strategyA: broken,
       strategyB: ok,
-      buildContext: (c) => ({ task: c.task, rt: {} as never, model: {} as never }),
-      judge: async (_c, runA, runB) => ({
+      buildContext: (evalCase) => strategyContext(evalCase.task),
+      judge: async (_c, runA, _runB) => ({
         winner: 'b', scoreA: 0, scoreB: 1,
         rationale: runA.error ? `A errored: ${runA.error}` : '',
       }),

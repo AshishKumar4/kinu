@@ -58,23 +58,17 @@ describe('Sleep-time compute', () => {
     expect(facts.recall('decay.this')!.confidence).toBeLessThan(1.0);
   });
 
-  test('applySleepTimeUpdate skips non-serializable values atomically', () => {
+  test('rejects an update with a missing fact value before any write', async () => {
     const { facts } = createTestFactsStore();
-    const circular: { self?: unknown } = {};
-    circular.self = circular;
-    const summary = applySleepTimeUpdate(facts, {
-      upserts: [
-        { key: 'ok.1', value: 'fine', confidence: 1, rationale: '' },
-        { key: 'bad', value: circular, confidence: 1, rationale: '' },
-        { key: 'ok.2', value: 42, confidence: 1, rationale: '' },
-      ],
-      decay: [],
+    const judge = createScriptedLLM([
+      '{"upserts":[{"key":"ok.1","value":"fine","confidence":1,"rationale":""},{"key":"bad","confidence":1,"rationale":""}],"decay":[]}',
+    ]);
+    const update = await runSleepTimeCompute(judge, {
+      task: 't', output: 'o', toolCalls: [], currentFacts: [],
     });
-    // Both safe upserts wrote; the circular one was skipped (no partial state).
-    expect(summary.upserted).toBe(2);
-    expect(summary.skipped).toBe(1);
-    expect(facts.recall('ok.1')?.value).toBe('fine');
-    expect(facts.recall('ok.2')?.value).toBe(42);
+
+    expect(update).toBeNull();
+    expect(facts.recall('ok.1')).toBeNull();
     expect(facts.recall('bad')).toBeNull();
   });
 
@@ -95,7 +89,7 @@ describe('Sleep-time compute', () => {
   test('same-value re-observation is not counted as an upsert or refreshed', () => {
     const { facts, testSql } = createTestFactsStore();
     facts.upsert('sandbox.npm_version', 'npm v10');
-    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+    void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
                 WHERE key = 'sandbox.npm_version'`;
 
     const summary = applySleepTimeUpdate(facts, {
@@ -111,7 +105,7 @@ describe('Sleep-time compute', () => {
   test('changed value is counted and refreshes the fact', () => {
     const { facts, testSql } = createTestFactsStore();
     facts.upsert('sandbox.npm_version', 'npm v9');
-    testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
+    void testSql.sql`UPDATE agent_facts SET last_observed_at = 1000
                 WHERE key = 'sandbox.npm_version'`;
 
     const summary = applySleepTimeUpdate(facts, {

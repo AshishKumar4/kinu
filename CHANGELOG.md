@@ -16,6 +16,18 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- The step clock gained a knowledge channel: when a tool keeps failing (the
+  same streak the mechanical steer fires on) and a **changed** call of that
+  tool then runs clean, the runtime records the pairing as a durable
+  execution-recovery finding and injects the newest five into every later
+  step's dynamic-context block — so what a long autonomous episode proves
+  about its environment survives compaction, continuation turns and instance
+  death instead of dying with the context window. No model call is involved;
+  both halves are the runtime's own records; a lucky retry of the identical
+  call records nothing. Findings gate nothing and can never enter MEMORY.md
+  or the experience library; each broken streak is a queryable
+  `execution_recovery` run event.
+
 - `proteus exec --json` now carries the agent's durable run-event ledger: one
   `run_event` line per row, wrapping the row verbatim. That is where the
   delegation nudge (which trigger fired, and whether the model then reached for

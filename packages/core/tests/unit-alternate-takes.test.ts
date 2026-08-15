@@ -34,7 +34,7 @@ function insertNode(
   sql: ReturnType<typeof makeSql>,
   node: { id: string; parentId?: string | null; value: number; depth?: number; status?: string; text?: string; visits?: number },
 ) {
-  sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
+  void sql`INSERT INTO search_nodes (root_id, id, parent_id, task, action, observation, value, visits, depth, status)
       VALUES ('r', ${node.id}, ${node.parentId ?? null}, ${'the task'}, ${node.text ?? node.id},
               ${node.text ?? `proposal ${node.id}`}, ${node.value}, ${node.visits ?? 1},
               ${node.depth ?? 1}, ${node.status ?? 'open'})`;
@@ -136,8 +136,8 @@ function capturedSet(sql: ReturnType<typeof makeSql>) {
   insertNode(sql, { id: 'alt', value: 0.85, text: 'alternative approach' });
   captureAlternateTakes(sql, { rootId: 'r', task: 'the task', winnerId: 'win', epsilon: 0.1 });
   claimAlternateTakesForTurn(sql, { turnId: 'msg-9', sessionId: 'default', startedAt: 0 });
-  sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u-9', 'default', 'user', 'please solve it')`;
-  sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;
+  void sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u-9', 'default', 'user', 'please solve it')`;
+  void sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('msg-9', 'default', 'u-9', 'assistant', 'I used the winning approach')`;
   return latestAlternateTakeSet(sql)!;
 }
 
@@ -238,7 +238,7 @@ describe('turn_outcomes legacy CHECK migration', () => {
       scaffold_version INTEGER,
       created_at INTEGER NOT NULL
     )`);
-    sql`INSERT INTO turn_outcomes (id, turn_id, outcome, confidence, source, user_message, assistant_response, created_at)
+    void sql`INSERT INTO turn_outcomes (id, turn_id, outcome, confidence, source, user_message, assistant_response, created_at)
         VALUES ('old-1', 't-1', 'accepted', 0.9, 'classifier', 'q', 'a', 111)`;
     // The legacy CHECK rejects the new source…
     expect(() => sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
@@ -247,7 +247,7 @@ describe('turn_outcomes legacy CHECK migration', () => {
     initTurnOutcomeTables(execRaw, sql);
 
     // …the rebuilt table accepts it and kept the old rows.
-    sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
+    void sql`INSERT INTO turn_outcomes (id, outcome, confidence, source, user_message, assistant_response, created_at)
         VALUES ('new-1', 'accepted', 1, 'take_pick', 'q', 'a', 222)`;
     const rows = listTurnOutcomes(sql);
     expect(rows.map((r) => r.id).sort()).toEqual(['new-1', 'old-1']);

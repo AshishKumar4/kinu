@@ -121,7 +121,8 @@ describe('Scaffold modification (4-gate)', () => {
       `scaffold/agent.js.v${result.version}`,
       { encoding: 'utf8' },
     );
-    expect(typeof pending === 'string' ? pending : new TextDecoder().decode(pending)).toBe(pendingCode);
+    const pendingText = pending instanceof Uint8Array ? new TextDecoder().decode(pending) : pending;
+    expect(pendingText).toBe(pendingCode);
   });
 });
 

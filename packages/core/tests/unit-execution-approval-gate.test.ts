@@ -19,7 +19,7 @@ import { describe, test, expect } from 'bun:test';
 import { DefaultExecutionRouter } from '../src/execution/router.js';
 import { gateProviderExec } from '../src/execution/approval.js';
 import type { ExecutorProvider } from '../src/execution/types.js';
-import type { ShellApprovalPolicy, ShellApprovalRequest, ShellApprovalOutcome } from '../src/safety/approval-gate.js';
+import type { ShellApprovalPolicy, ShellApprovalRequest } from '../src/safety/approval-gate.js';
 
 const DENY = 'rm -rf /';
 const GATE = 'sudo rm -rf /var/lib/important';
@@ -27,10 +27,7 @@ const ALLOW = 'echo hi';
 
 /** A minimal ExecutorProvider shaped like nimbus/sandbox/laptop — a real
  *  shell reachable through codemode's `<name>.exec()` namespace. */
-function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus'): {
-  provider: ExecutorProvider;
-  executed: string[];
-} {
+function fakeShellProvider(name: string, kind: ExecutorProvider['kind'] = 'nimbus') {
   const executed: string[] = [];
   const provider: ExecutorProvider = {
     name,
@@ -116,11 +113,19 @@ describe('gateProviderExec — the executor-seam gate', () => {
     expect(gated.tools.readFile!.execute).toBe(provider.tools.readFile!.execute);
   });
 
-  test('the workspace provider is left unwrapped — its Shell is gated at the source instead (withApprovalGatedShell), so wrapping here would review the command twice', async () => {
+  test('workspace exec is left unwrapped because its Shell is gated at the source', async () => {
     const { provider } = fakeShellProvider('workspace', 'workspace');
     const gated = gateProviderExec(provider, strictNoChannelPolicy());
-    expect(gated).toBe(provider);
     expect(gated.tools.exec!.execute).toBe(provider.tools.exec!.execute);
+  });
+
+  test("the hosted workspace's background process door is gated even though exec is already gated at its Shell", async () => {
+    const { provider, executed } = fakeShellProvider('workspace', 'workspace');
+    const gated = gateProviderExec(provider, strictNoChannelPolicy());
+    expect(gated.tools.exec!.execute).toBe(provider.tools.exec!.execute);
+    const result = await gated.tools.startProcess!.execute(DENY);
+    expect(String(result)).toContain('Denied by approval gate');
+    expect(executed).toEqual([]);
   });
 
   test('re-gating an already-gated provider is a no-op — idempotent against the same object crossing two routers', async () => {
@@ -199,7 +204,7 @@ describe('DefaultExecutionRouter — closes the codemode bypass', () => {
     expect(executed).toEqual([]);
   });
 
-  test('the workspace provider passes through the router untouched (gated upstream via withApprovalGatedShell instead)', async () => {
+  test('the router preserves the workspace exec gate from its Shell', async () => {
     const router = new DefaultExecutionRouter(strictNoChannelPolicy());
     const { provider } = fakeShellProvider('workspace', 'workspace');
     router.register(provider);

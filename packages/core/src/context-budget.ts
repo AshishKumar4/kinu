@@ -151,10 +151,12 @@ export class TurnContextBudget {
   }
 
   snapshot(): ContextBudgetSnapshot {
+    const trips: Partial<Record<BulkProducer, number>> = {};
+    for (const [producer, count] of this.tripsByProducer) trips[producer] = count;
     return {
       admittedChars: this.admitted,
       omittedChars: this.omitted,
-      trips: Object.fromEntries(this.tripsByProducer) as Partial<Record<BulkProducer, number>>,
+      trips,
       referenced: this.referenced,
       tightened: this.tightened,
       followUps: this.followUps,
@@ -175,11 +177,10 @@ export class TurnContextBudget {
  * being followed", including the `llm.query`-over-slices and fork-cites-spill
  * shapes: both reach the payload through its path.
  */
-export function citesSpillAddress(args: unknown): boolean {
-  if (args == null) return false;
-  let text: string;
+export function citesSpillAddress<Args>(args: Args): boolean {
+  let text: string | undefined;
   try {
-    text = typeof args === 'string' ? args : JSON.stringify(args);
+    text = JSON.stringify(args);
   } catch {
     return false;
   }

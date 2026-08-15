@@ -47,7 +47,9 @@ const WINDOW = 64_000;
 
 function resultPart(message: ModelMessage): ToolResultPart {
   if (message.role !== 'tool') throw new Error('expected tool message');
-  return message.content[0] as ToolResultPart;
+  const part = message.content[0];
+  if (!part || part.type !== 'tool-result') throw new Error('expected tool result part');
+  return part;
 }
 
 function outputText(part: ToolResultPart): string {
@@ -117,7 +119,9 @@ describe('pruneStepToolOutputs', () => {
 
   test('error outputs keep error semantics through truncation', () => {
     const messages = bigTurn();
-    (messages[2] as { content: ToolResultPart[] }).content[0] = {
+    const message = messages[2];
+    if (!message || message.role !== 'tool') throw new Error('expected tool message');
+    message.content[0] = {
       type: 'tool-result', toolCallId: 'call_0', toolName: 'run',
       output: { type: 'error-text', value: `boom ${'e'.repeat(40_000)}` },
     };

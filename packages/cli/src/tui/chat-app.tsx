@@ -188,12 +188,13 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
     const prompt = await resolvePromptAttachments(input, { limitBytes: client.inlineAttachmentLimitBytes });
     for (const problem of prompt.errors) addMessage({ role: 'system', content: problem });
     const steering = machineRef.current.activeTurns > 0;
-    addMessage({
+    const message: Omit<DisplayMessage, 'id'> = {
       role: 'user',
       content: prompt.text,
-      ...(prompt.attached.length > 0 ? { attachments: prompt.attached.map(describePromptAttachment) } : {}),
-      ...(steering ? { steered: true } : {}),
-    });
+    };
+    if (prompt.attached.length > 0) message.attachments = prompt.attached.map(describePromptAttachment);
+    if (steering) message.steered = true;
+    addMessage(message);
     const payload = prompt.files.length > 0 ? { text: prompt.text, files: prompt.files } : prompt.text;
     if (steering && client.steer(payload, { cwd: process.cwd() })) return;
     try {
@@ -351,7 +352,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         addMessage({ role: 'system', content: STATUS_VIEW });
         return;
       case 'exit':
-        onExit ? onExit() : globalExit?.();
+        if (onExit) onExit();
+        else globalExit?.();
         return;
       case 'model-picker':
         await openModelPicker();
@@ -413,7 +415,8 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
           addMessage({ role: 'system', content: 'Interrupting the active turn… (Esc again to walk back)' });
           break;
         case 'exit':
-          onExit ? onExit() : globalExit?.();
+          if (onExit) onExit();
+          else globalExit?.();
           break;
         case 'clear-input':
           setInputText('');
@@ -684,7 +687,7 @@ export function ChatApp({ client: initialClient, hydrateHistory, onExit, onClien
         // Walk selected renderables and extract text.
         const parts: string[] = [];
         for (const r of selection.selectedRenderables ?? []) {
-          const text = (r as unknown as { getSelectedText?: () => string }).getSelectedText?.();
+          const text = r.getSelectedText();
           if (text) parts.push(text);
         }
         const text = parts.join('\n').trim();
@@ -928,7 +931,7 @@ function errorLine(message: string): string {
 
 /** Extract the last URL from assistant message content. */
 function lastUrlFromMessages(messages: DisplayMessage[]): string | null {
-  const urlRe = /https?:\/\/[^\s)\]\}>'"]+/g;
+  const urlRe = /https?:\/\/[^\s)\]}>'"]+/g;
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
     if (msg.role !== 'assistant' && msg.role !== 'system') continue;

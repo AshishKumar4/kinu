@@ -95,7 +95,7 @@ Within a single hook, every registered extension runs in **registration order**.
 Compaction is the default `transformContext` registrant on BOTH backends:
 `createCompactionExtension` (`@proteus/compaction`) runs the better-compact
 staged pruning ladder once per turn assembly, over shared stores — raw
-transcripts in the workspace CompositeVFS (`/local/.proteus/compaction/…`,
+transcripts in the canonical workspace VFS (`.proteus/compaction/…`,
 readable back through the agent's own file tools) and the replayable plan +
 the measured prompt-token trigger in one `compaction_state` row (DO SQLite /
 agent.db). Its `onOutcome` resets the dynamic-context ledger whenever the

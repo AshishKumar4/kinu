@@ -31,7 +31,7 @@ function workspace(name: string, stored: { displayName?: string; nameOrigin?: 'u
   const dir = mkdtempSync(join(tmpdir(), 'proteus-title-agent-'));
   tempDirs.push(dir);
   const db = new Database(':memory:');
-  const rt = createCLIRuntime(db as never, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
+  const rt = createCLIRuntime(db, { dbPath: join(dir, 'agent.db'), llm: DUMMY_LLM });
   initAgentConfigTable(rt.storage.execRaw);
   const config = createAgentConfigStore(rt.storage.sql);
   if (stored.displayName !== undefined) config.setDisplayName(stored.displayName);

@@ -8,11 +8,10 @@
 // These assertions run against buildHeadToolSet's real output rather than the
 // text of exploration.ts, so they keep holding when the surface is refactored
 // and they catch a tool that appears through a dependency instead of a literal.
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createTestRuntime } from '@proteus/test-utils';
+import { createTestRuntime, createTestSql, toolExecute } from '@proteus/test-utils';
 import {
   HeadCapture,
   HeadController,
@@ -23,20 +22,9 @@ import {
   type HeadReport,
   type HeadRuntime,
   type MergeOutput,
-  type SqlExecutor,
   type WebSearchProvider,
 } from '@proteus/core';
-import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest } from '@proteus/core';
-
-function makeSql(db: Database): SqlExecutor {
-  return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {
-    const query = strings.reduce((sql, part, index) => sql + part + (index < values.length ? '?' : ''), '');
-    const statement = db.prepare(query);
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...(values as SQLQueryBindings[])) as T[];
-    statement.run(...(values as SQLQueryBindings[]));
-    return [];
-  } as SqlExecutor;
-}
+import { HEAD_BUILTIN_TOOLS, buildHeadToolSet, type HeadSplitRequest, type HeadSplitResult } from '@proteus/core';
 
 function report(id: string): HeadReport {
   return {
@@ -60,12 +48,19 @@ const mergeOutput: MergeOutput = {
   selected_decisions: [],
   unresolved_questions: [],
   recommendations: [],
+  blind_spots: [],
 };
 
 const noopWebSearch: WebSearchProvider = {
-  search: async (query: string) => ({ query, results: [], source: 'test' }),
+  search: async (query: string) => ({ query, results: [], source: 'duckduckgo' }),
   fetch: async (url: string) => ({ url, markdown: '', retrievedAt: new Date(0).toISOString() }),
-} as unknown as WebSearchProvider;
+};
+
+interface SplitToolInput {
+  rationale: string;
+  heads: Array<{ task: string; rationale: string }>;
+  merge_strategy?: 'synthesize' | 'best_of' | 'consensus';
+}
 
 function headInput(overrides?: Partial<HeadInput>): HeadInput {
   return {
@@ -75,14 +70,13 @@ function headInput(overrides?: Partial<HeadInput>): HeadInput {
     budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
     ...overrides,
+    mode: overrides?.mode ?? 'build',
   };
 }
 
 function buildSurface(opts?: {
   input?: HeadInput;
-  split?: (request: HeadSplitRequest) => Promise<{
-    narrative: string; decisions: []; unresolvedQuestions: []; childHeadIds: string[]; headCount: number;
-  }>;
+  split?: (request: HeadSplitRequest) => Promise<HeadSplitResult>;
 }) {
   const { rt } = createTestRuntime();
   const capture = new HeadCapture();
@@ -94,7 +88,7 @@ function buildSurface(opts?: {
     executeTool,
     webSearch: noopWebSearch,
     split: opts?.split ?? (async () => ({
-      narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0,
+      narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0,
     })),
   });
   return { tools, capture };
@@ -134,40 +128,61 @@ describe('head tool surface — containment', () => {
     }
   });
 
-  test('split_subheads refuses once the depth budget is spent', async () => {
-    let splits = 0;
+  test('split_subheads is not on the surface at all once the depth budget is spent', async () => {
+    // Depth is fixed for the whole run, so the tool could only ever refuse.
+    // Offering it anyway spent a step to learn a limit the surface already knew.
     const { tools } = buildSurface({
       input: headInput({ budget: { maxDepth: 0, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
-      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
     });
-    const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
-      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
-    expect(result).toContain('budget exhausted (max-depth)');
-    expect(splits).toBe(0);
+    expect(tools.split_subheads).toBeUndefined();
+    // The work tools are untouched — this removes a dead option, not capability.
+    for (const name of HEAD_BUILTIN_TOOLS) expect(tools[name]).toBeDefined();
   });
 
-  test('split_subheads refuses once a caller-requested deadline has passed', async () => {
-    let splits = 0;
+  test('the surface states the depth that is actually left', async () => {
     const { tools } = buildSurface({
-      input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
-      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 0 }; },
+      input: headInput({ budget: { maxDepth: 2, maxWallClockMs: 60_000, spawnedAt: Date.now() } }),
     });
-    const result = await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
-      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
+    expect(tools.split_subheads?.description).toContain('2 more level(s)');
+  });
+
+  test('split_subheads refuses once a caller-requested deadline has passed, and records the refusal', async () => {
+    // Wall-clock stays a runtime check: unlike depth it can pass mid-run, so the
+    // tool is present and refuses when called.
+    let splits = 0;
+    const { tools, capture } = buildSurface({
+      input: headInput({ budget: { maxDepth: 3, maxWallClockMs: 50, spawnedAt: Date.now() - 5_000 } }),
+      split: async () => { splits++; return { narrative: '', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 0 }; },
+    });
+    const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
+    const result = await split({
+      rationale: 'go deeper',
+      heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }],
+    });
     expect(result).toContain('budget exhausted (wall-clock)');
     expect(splits).toBe(0);
+    // Unrecorded, this refusal left no trace in the journal — so how often a
+    // head is stopped mid-plan could not be asked of the ledger.
+    expect(capture.toolCalls).toHaveLength(1);
+    const refusal = capture.toolCalls.at(0);
+    if (!refusal) throw new Error('Expected split refusal to be recorded');
+    expect(refusal.name).toBe('split_subheads');
+    expect(refusal.result).toContain('wall-clock');
   });
 
   test('split_subheads is NOT refused for spend — a long-running head may still split', async () => {
     let splits = 0;
     const { tools, capture } = buildSurface({
       input: headInput({ budget: { maxDepth: 3, spawnedAt: Date.now() - 60 * 60_000 } }),
-      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], childHeadIds: [], headCount: 2 }; },
+      split: async () => { splits++; return { narrative: 'merged', decisions: [], unresolvedQuestions: [], blindSpots: [], childHeadIds: [], headCount: 2 }; },
     });
     // A head an hour in that has burned 2M tokens. Neither is a reason to refuse.
     capture.recordStepUsage(2_000_000, 500_000);
-    await (tools.split_subheads as { execute: (args: unknown, opts: unknown) => Promise<string> })
-      .execute({ rationale: 'go deeper', heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }] }, {});
+    const split = toolExecute<SplitToolInput, string>(tools.split_subheads);
+    await split({
+      rationale: 'go deeper',
+      heads: [{ task: 'a', rationale: 'a' }, { task: 'b', rationale: 'b' }],
+    });
     expect(splits).toBe(1);
   });
 
@@ -178,18 +193,17 @@ describe('head tool surface — containment', () => {
 
   test('builtin tool calls land in the HeadCapture so the report keeps them', async () => {
     const { tools, capture } = buildSurface();
-    await (tools.execute_tools as { execute: (args: unknown, opts: unknown) => Promise<unknown> })
-      .execute({ code: 'return 1' }, {});
+    const execute = toolExecute<{ code: string }, string>(tools.execute_tools);
+    await execute({ code: 'return 1' });
     expect(capture.toolCalls.map((c) => c.name)).toEqual(['execute_tools']);
   });
 
   test('the head prompt describes the real workspace it was given', () => {
     const { tools } = buildSurface();
     const prompt = buildHeadSystemPrompt(headInput(), Object.keys(tools));
-    // The parent workspace is an executor namespace, not a directory of this
-    // head's filesystem — and `parent.exec` is what makes searching it one call.
-    expect(prompt).toContain('`parent.*`');
-    expect(prompt).toContain('parent.exec');
+    expect(prompt).toContain('`workspace.*` is the canonical workspace');
+    expect(prompt).toContain('workspace.exec');
+    expect(prompt).not.toContain('`parent.*`');
     expect(prompt).toContain('');
     expect(prompt).not.toContain('sandbox_exec');
   });
@@ -230,7 +244,7 @@ describe('MCTS branch mode stays isolated', () => {
 
 describe('recursive split budget', () => {
   test('the controller decrements maxDepth for spawned subheads', async () => {
-    const db = new Database(':memory:');
+    const { db, sql } = createTestSql();
     initHeadsTables((ddl) => db.exec(ddl));
     const spawned: HeadInput[] = [];
     const runtime: HeadRuntime = {
@@ -244,12 +258,13 @@ describe('recursive split budget', () => {
       },
       async mergeLLM() { return mergeOutput; },
     };
-    const controller = new HeadController(runtime, new HeadJournal(makeSql(db)));
+    const controller = new HeadController(runtime, new HeadJournal(sql));
 
     await controller.run({
       parentHeadId: 'parent-head',
       rootId: 'root-head',
       inheritedContext: [],
+      mode: 'build',
       request: {
         rationale: 'split the investigation',
         heads: [
@@ -301,7 +316,7 @@ describe('the mission ledger crosses the facet boundary', () => {
 
   test('a subtree charges the mission its root does', () => {
     // Otherwise a head escapes its budget simply by splitting again.
-    expect(exploration).toContain('missionLabels: parentInput.missionLabels');
+    expect(exploration).toContain('controllerInput.missionLabels = parentInput.missionLabels');
   });
 
   test('the two ledger RPCs are cross-DO only, never public transport', () => {

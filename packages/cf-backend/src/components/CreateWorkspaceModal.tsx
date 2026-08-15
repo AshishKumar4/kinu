@@ -14,7 +14,13 @@ import { btnSmCls } from "@/components/ui/form";
 import { PlusIcon } from "@phosphor-icons/react";
 import { Modal } from "@/components/ui/Modal";
 import { CloudflareAIConnectNotice } from "@/components/CloudflareAIConnectNotice";
-import { useCreateWorkspace } from "@/hooks/use-create-workspace";
+import {
+  CONNECT_AI_MESSAGE,
+  MISSION_HELP,
+  MISSION_LABEL,
+  MISSION_PLACEHOLDER,
+  useCreateWorkspace,
+} from "@/hooks/use-create-workspace";
 
 export interface CreateWorkspaceModalProps {
   onClose: () => void;
@@ -46,24 +52,24 @@ export function CreateWorkspaceModal({ onClose }: CreateWorkspaceModalProps) {
       {hasModels === false && (
         <CloudflareAIConnectNotice
           returnTo={window.location.pathname}
-          message="Connect Cloudflare Workers AI before creating a workspace."
+          message={CONNECT_AI_MESSAGE}
         />
       )}
 
       <div className="space-y-1">
-        <label htmlFor="workspace-mission" className="text-xs font-medium p-text-2 block">Mission — what this workspace is for</label>
+        <label htmlFor="workspace-mission" className="text-xs font-medium p-text-2 block">{MISSION_LABEL}</label>
         <textarea
           id="workspace-mission"
           value={mission}
           onChange={(e) => setMission(e.currentTarget.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit(); } }}
-          placeholder={'A standing brief, not a task. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."'}
+          placeholder={MISSION_PLACEHOLDER}
           rows={7}
           autoFocus
           disabled={busy}
           className="w-full min-h-40 resize-y rounded-lg border p-border p-bg px-3 py-2.5 text-sm leading-relaxed p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)] disabled:opacity-60"
         />
-        <p className="text-[11px] p-text-3">This becomes the workspace's SOUL.md and its name. Nothing runs until you send the first message.</p>
+        <p className="text-[11px] p-text-3">{MISSION_HELP}</p>
       </div>
 
       {err && (

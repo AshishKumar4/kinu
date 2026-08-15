@@ -3,20 +3,22 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import type { Server, ServerWebSocket } from 'bun';
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
+import { JsonArraySchema, JsonObjectSchema, parseJsonObject, type JsonObject } from '@proteus/core';
 import { CloudAgentClient } from '../src/cloud-agent-client.js';
 import type { AgentClientEvent } from '../src/agent-client.js';
+import * as v from 'valibot';
 
 interface MockAgentServer {
   server: Server<unknown>;
   origin: string;
   /** Frames received over the websocket, parsed. */
-  frames: Array<Record<string, unknown>>;
+  frames: JsonObject[];
   ticketRequests: Array<{ name: string; auth: string | null }>;
   connectUrls: URL[];
   /** Rows served from /api/cli/workspaces/:name/messages (the DO chat projection). */
   chatMessages: Array<{ id: string; role: string; content: string; createdAt: number }>;
   socket(): ServerWebSocket<unknown>;
-  reply(frame: Record<string, unknown>): void;
+  reply(frame: JsonObject): void;
   close(): void;
 }
 
@@ -27,7 +29,7 @@ afterEach(() => {
 });
 
 function startMockAgentServer(): MockAgentServer {
-  const frames: Array<Record<string, unknown>> = [];
+  const frames: JsonObject[] = [];
   const ticketRequests: Array<{ name: string; auth: string | null }> = [];
   const connectUrls: URL[] = [];
   const chatMessages: MockAgentServer['chatMessages'] = [];
@@ -46,15 +48,18 @@ function startMockAgentServer(): MockAgentServer {
         return Response.json({ ticket: 'pat_test', expiresAt: Date.now() + 60_000 });
       }
       if (/^\/api\/cli\/workspaces\/[^/]+\/rpc$/.test(url.pathname) && req.method === 'POST') {
-        const { method, args = [] } = await req.json() as { method: string; args?: unknown[] };
+        const request = v.parse(JsonObjectSchema, await req.json());
+        const method = v.parse(v.string(), request.method);
+        const parsedArgs = v.safeParse(JsonArraySchema, request.args);
+        const args = parsedArgs.success ? parsedArgs.output : [];
         if (method === 'getChatHistory') return Response.json({ result: chatMessages });
         if (method === 'getReasoningEffort') return Response.json({ result: { effort: 'medium' } });
-        if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] } });
+        if (method === 'setReasoningEffort') return Response.json({ result: { ok: true, effort: args[0] ?? null } });
         return Response.json({ error: `No such agent RPC method: ${method}` }, { status: 404 });
       }
       if (url.pathname.startsWith('/agents/orchestrator-agent/')) {
         connectUrls.push(url);
-        if (srv.upgrade(req)) return undefined as unknown as Response;
+        if (srv.upgrade(req)) return;
         return new Response('upgrade failed', { status: 400 });
       }
       return new Response('not found', { status: 404 });
@@ -62,7 +67,7 @@ function startMockAgentServer(): MockAgentServer {
     websocket: {
       open(socket) { ws = socket; },
       message(_socket, message) {
-        frames.push(JSON.parse(String(message)) as Record<string, unknown>);
+        frames.push(parseJsonObject(String(message)));
       },
     },
   });
@@ -109,14 +114,25 @@ function newClient(mock: MockAgentServer): CloudAgentClient {
   });
 }
 
-function chatRequestFrame(mock: MockAgentServer): { id: string; body: Record<string, unknown> } {
-  const frame = mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
-  if (!frame) throw new Error('no chat request frame received');
-  const init = frame.init as { body: string };
-  return { id: frame.id as string, body: JSON.parse(init.body) as Record<string, unknown> };
+interface ChatRequestFrame {
+  id: string;
+  body: JsonObject;
 }
 
-function responseChunk(id: string, chunk: Record<string, unknown>, done = false): Record<string, unknown> {
+const ChatRequestEnvelopeSchema = v.object({
+  id: v.string(),
+  init: v.object({ body: v.string() }),
+});
+const ChatMessagesSchema = v.array(v.object({ role: v.string(), parts: v.array(JsonObjectSchema) }));
+
+function chatRequestFrame(mock: MockAgentServer): ChatRequestFrame {
+  const frame = mock.frames.find((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
+  if (!frame) throw new Error('no chat request frame received');
+  const envelope = v.parse(ChatRequestEnvelopeSchema, frame);
+  return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
+}
+
+function responseChunk(id: string, chunk: JsonObject, done = false) {
   return { type: CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE, id, body: JSON.stringify(chunk), done };
 }
 
@@ -144,7 +160,7 @@ describe('CloudAgentClient protocol', () => {
     // Outgoing contract: a single fresh user message, never a mirrored history.
     expect(request.body.trigger).toBe('submit-message');
     expect(request.body.cwd).toBe('/work/dir');
-    const messages = request.body.messages as Array<{ role: string; parts: Array<{ type: string; text: string }> }>;
+    const messages = v.parse(ChatMessagesSchema, request.body.messages);
     expect(messages).toHaveLength(1);
     expect(messages[0]!.role).toBe('user');
     expect(messages[0]!.parts).toEqual([{ type: 'text', text: 'hello agent' }]);
@@ -184,7 +200,7 @@ describe('CloudAgentClient protocol', () => {
       'chat request frame',
     );
 
-    const messages = request.body.messages as Array<{ role: string; parts: Array<Record<string, unknown>> }>;
+    const messages = v.parse(ChatMessagesSchema, request.body.messages);
     expect(messages).toHaveLength(1);
     expect(messages[0]!.role).toBe('user');
     expect(messages[0]!.parts).toEqual([
@@ -246,7 +262,7 @@ describe('CloudAgentClient protocol', () => {
       'chat request frame',
     );
     mock.reply(responseChunk(request.id, { type: 'text-delta', delta: 'partial ' }));
-    await waitFor(() => undefined as never, 'delta delivery', 50).catch(() => {});
+    await Bun.sleep(50);
 
     client.stop();
     const result = await turn;
@@ -300,15 +316,14 @@ describe('CloudAgentClient protocol', () => {
     const second = await waitFor(() => {
       const requests = mock.frames.filter((f) => f.type === CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST);
       if (requests.length < 2) return undefined;
-      const frame = requests[1]!;
-      const init = frame.init as { body: string };
-      return { id: frame.id as string, body: JSON.parse(init.body) as Record<string, unknown> };
+      const envelope = v.parse(ChatRequestEnvelopeSchema, requests[1]);
+      return { id: envelope.id, body: parseJsonObject(envelope.init.body) };
     }, 'steered chat request');
 
     // The steer rides the same protocol as send: one fresh user message,
     // delivered while the first turn is still streaming (the DO persists it
     // immediately and serializes it on its TurnQueue).
-    const messages = second.body.messages as Array<{ role: string; parts: Array<{ type: string; text: string }> }>;
+    const messages = v.parse(ChatMessagesSchema, second.body.messages);
     expect(messages[0]!.parts).toEqual([{ type: 'text', text: 'use the staging cluster instead' }]);
     expect(second.id).not.toBe(first.id);
 
@@ -357,7 +372,7 @@ describe('CloudAgentClient protocol', () => {
     // The fork point is the message BEFORE the picked user message.
     expect(rpc.method).toBe('forkAgent');
     expect(rpc.args).toEqual(['m2']);
-    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { id: 'do-2', name: 'helios-fork-ab12', url: '/agent/helios-fork-ab12', forkPointMs: 2 } });
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { id: 'do-2', name: 'helios-fork-ab12', url: '/workspace/helios-fork-ab12', forkPointMs: 2 } });
 
     const result = await forkPromise;
     expect(result.label).toBe('agent helios-fork-ab12');
@@ -393,6 +408,7 @@ describe('CloudAgentClient protocol', () => {
 
     const set = {
       id: 'take-1', turnId: 'm2', sessionId: 'default', task: 'choose a plan',
+      source: 'mcts',
       winnerNodeId: 'win', chosenNodeId: null, createdAt: 1, pickedAt: null,
       candidates: [
         { nodeId: 'win', text: 'plan A', score: 0.9, visits: 3, depth: 1 },

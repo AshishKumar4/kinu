@@ -1,8 +1,9 @@
-// The Activity surface's breakdown view model. What is under test is that the
-// rows stay an estimate and the disagreement with the provider stays visible.
+// The Activity surface's breakdown view model. Category attribution is exact
+// in the unit Proteus measures (composed-content characters); it must never be
+// presented as provider token attribution.
 import { describe, test, expect } from "bun:test";
 import type { ContextComposition, ContextSegment } from "@proteus/core";
-import { breakdownView, shareOfReported } from "../src/components/surfaces/activity-breakdown";
+import { breakdownView, shareOfMeasured } from "../src/components/surfaces/activity-breakdown";
 
 const seg = (plane: ContextSegment["plane"], label: string, chars: number, items = 1): ContextSegment =>
   ({ plane, label, chars, items });
@@ -17,7 +18,7 @@ describe("breakdownView", () => {
     const view = breakdownView(compose([
       seg("messages", "user", 400),
       seg("system", "Soul", 800),
-    ]), 1000);
+    ]));
     expect(view.planes.map((p) => p.plane)).toEqual(["system", "messages"]);
   });
 
@@ -26,54 +27,37 @@ describe("breakdownView", () => {
       seg("tools", "web", 400),
       seg("tools", "file", 1600),
       seg("tools", "run", 800),
-    ]), 1000);
+    ]));
     expect(view.planes[0]?.rows.map((r) => r.label)).toEqual(["file", "run", "web"]);
-    expect(view.planes[0]?.tokens).toBe(700);
+    expect(view.planes[0]?.chars).toBe(2800);
   });
 
-  test("the residual is signed: a shortfall is positive, an overshoot negative", () => {
-    const context = compose([seg("system", "Soul", 4000)]); // 1000 est tokens
-    expect(breakdownView(context, 1200).residual).toBe(200);
-    expect(breakdownView(context, 900).residual).toBe(-100);
-  });
-
-  test("the residual is never clamped — over-attribution stays visible", () => {
-    const view = breakdownView(compose([seg("system", "Soul", 4000)]), 100);
-    expect(view.residual).toBe(-900);
-    expect(view.estimated).toBe(1000);
-  });
-
-  test("the bar spans the larger of the two, so an overshoot is not clipped", () => {
-    const context = compose([seg("system", "Soul", 4000)]); // 1000 est
-    expect(breakdownView(context, 1200).span).toBe(1200);
-    expect(breakdownView(context, 900).span).toBe(1000);
-  });
-
-  test("rows are NOT normalised to the provider's total", () => {
-    // The whole point: shares are of what was billed, so they under-sum by
-    // exactly the residual rather than being scaled to fill it.
-    const view = breakdownView(compose([seg("system", "Soul", 4000)]), 1250);
-    const summed = view.planes.reduce((s, p) => s + p.tokens, 0);
-    expect(summed).toBe(1000);
-    expect(shareOfReported(summed, 1250)).toBeCloseTo(0.8, 10);
+  test("preserves exact character counts instead of estimating category tokens", () => {
+    const view = breakdownView(compose([
+      seg("system", "Soul", 1001),
+      seg("messages", "user", 502),
+    ]));
+    expect(view.measuredChars).toBe(1503);
+    expect(view.planes[0]?.rows[0]).toEqual({ label: "Soul", chars: 1001, items: 1 });
+    expect(view.planes[1]?.rows[0]).toEqual({ label: "user", chars: 502, items: 1 });
   });
 
   test("a span floor of 1 keeps an empty measurement from dividing by zero", () => {
-    expect(breakdownView(compose([]), 0).span).toBe(1);
+    expect(breakdownView(compose([])).span).toBe(1);
   });
 
   test("folded item counts survive into the rows", () => {
-    const view = breakdownView(compose([seg("messages", "tool", 4000, 18)]), 1000);
-    expect(view.planes[0]?.rows[0]).toEqual({ label: "tool", tokens: 1000, items: 18 });
+    const view = breakdownView(compose([seg("messages", "tool", 4000, 18)]));
+    expect(view.planes[0]?.rows[0]).toEqual({ label: "tool", chars: 4000, items: 18 });
   });
 });
 
-describe("shareOfReported", () => {
-  test("is null when nothing was reported — 0% would claim a measurement", () => {
-    expect(shareOfReported(500, 0)).toBeNull();
+describe("shareOfMeasured", () => {
+  test("is null when no content was measured — 0% would claim a measurement", () => {
+    expect(shareOfMeasured(500, 0)).toBeNull();
   });
 
-  test("is the share of the authoritative total", () => {
-    expect(shareOfReported(250, 1000)).toBe(0.25);
+  test("is the exact share of measured composed-content characters", () => {
+    expect(shareOfMeasured(250, 1000)).toBe(0.25);
   });
 });

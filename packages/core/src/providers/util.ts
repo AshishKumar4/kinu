@@ -4,6 +4,8 @@
 import type { AuthResolution, ModelInfo, ModelProvider, ProviderDeps } from './types.js';
 import { asFetchFunction } from './fetch-shim.js';
 import { withRateLimitRetry } from './rate-limit-retry.js';
+import * as v from 'valibot';
+import { JsonObjectSchema, type JsonObject } from '../utils/json.js';
 
 export interface AuthedFetchOptions {
   /** Credential key passed to the AuthResolver on every request. */
@@ -51,9 +53,7 @@ export function createAuthedFetch(deps: ProviderDeps, opts: AuthedFetchOptions):
     }
     const headers = new Headers(init?.headers);
     for (const [k, v] of Object.entries(auth.headers)) headers.set(k, v);
-    const url = typeof input === 'string' ? input
-              : input instanceof URL ? input.toString()
-              : input.url;
+    const url = input instanceof Request ? input.url : input.toString();
     const rewritten = opts.mutate?.({ url, headers, auth });
     return baseFetch(rewritten ?? input, { ...init, headers });
   });
@@ -69,8 +69,8 @@ export function cloneModelInfos(models: readonly ModelInfo[] | undefined): Model
   return (models ?? []).map((model) => ({
     ...model,
     capabilities: model.capabilities ? [...model.capabilities] : undefined,
-    ...(model.cost ? { cost: { ...model.cost } } : {}),
-    ...(model.inputModalities ? { inputModalities: [...model.inputModalities] } : {}),
+    cost: model.cost ? { ...model.cost } : undefined,
+    inputModalities: model.inputModalities ? [...model.inputModalities] : undefined,
   }));
 }
 
@@ -93,22 +93,31 @@ export async function catalogModelInfo(
   }
 }
 
-export function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+export function nonEmptyString<T>(value: T): string | undefined {
+  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
+  return parsed.success ? parsed.output : undefined;
 }
 
-export function positiveInteger(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+export function positiveInteger<T>(value: T): number | undefined {
+  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.gtValue(0)), value);
+  return parsed.success ? Math.floor(parsed.output) : undefined;
 }
 
-export function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
+export function isRecord<T>(value: T): value is T & JsonObject {
+  try {
+    return v.safeParse(JsonObjectSchema, value).success;
+  } catch {
+    return false;
+  }
 }
 
 /** How deep to follow nested `{ error: … }` envelopes. OpenAI-shaped bodies
  *  nest once; two spare levels cover the gateways that re-wrap them. */
 const PROVIDER_ERROR_MAX_DEPTH = 3;
 const PROVIDER_ERROR_MAX_CHARS = 800;
+const ErrorResponseSchema = v.object({
+  responseBody: v.optional(v.pipe(v.string(), v.trim(), v.nonEmpty())),
+});
 
 /**
  * Human-readable text for anything a provider can fail with.
@@ -120,9 +129,15 @@ const PROVIDER_ERROR_MAX_CHARS = 800;
  * users were shown. Dig the message out instead, and fall back to the JSON
  * rather than to a stringification that carries no information.
  */
-export function describeProviderError(error: unknown, depth = 0): string {
-  if (error instanceof Error) return error.message || error.name;
-  if (typeof error === 'string') return error.trim() || 'unknown provider error';
+export function describeProviderError<T>(error: T, depth = 0): string {
+  if (error instanceof Error) {
+    const summary = error.message || error.name;
+    const response = v.safeParse(ErrorResponseSchema, error);
+    const responseBody = response.success ? response.output.responseBody : undefined;
+    return responseBody ? `${summary}: ${responseBody}`.slice(0, PROVIDER_ERROR_MAX_CHARS) : summary;
+  }
+  const text = v.safeParse(v.string(), error);
+  if (text.success) return text.output.trim() || 'unknown provider error';
   if (isRecord(error)) {
     const message = nonEmptyString(error.message)
       ?? nonEmptyString(error.error_description)
@@ -138,12 +153,15 @@ export function describeProviderError(error: unknown, depth = 0): string {
   return jsonOrString(error).slice(0, PROVIDER_ERROR_MAX_CHARS);
 }
 
-function jsonOrString(value: unknown): string {
+function jsonOrString<T>(value: T): string {
   try {
     const json = JSON.stringify(value);
-    if (typeof json === 'string') return json;
+    if (json !== undefined) return json;
   } catch { /* circular — fall through */ }
-  if (isRecord(value)) return `unserializable provider error (${Object.keys(value).join(', ') || 'no fields'})`;
+  const record = v.safeParse(v.record(v.string(), v.unknown()), value);
+  if (record.success) {
+    return `unserializable provider error (${Object.keys(record.output).join(', ') || 'no fields'})`;
+  }
   return String(value);
 }
 

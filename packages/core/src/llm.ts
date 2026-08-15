@@ -10,6 +10,7 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { generateText, streamText } from 'ai';
 import type { LanguageModel, StepResult, ToolSet } from 'ai';
+import * as v from 'valibot';
 import type { LLM } from './types/primitives.js';
 import { parseModelSpec } from './providers/types.js';
 import { withRateLimitRetry } from './providers/rate-limit-retry.js';
@@ -24,7 +25,7 @@ export interface LLMProviderConfig {
   baseURL: string;
   /** Auth headers (e.g., { 'Authorization': 'Bearer ...' }) */
   headers: Record<string, string>;
-  /** Model identifier (e.g., '@cf/moonshotai/kimi-k2.6') */
+  /** Model identifier (e.g., '@cf/deepseek-ai/deepseek-v4-pro-0813') */
   model: string;
   /** Max tokens for completions (default: 2048) */
   maxTokens?: number;
@@ -52,7 +53,7 @@ export function createVercelAILLM(config: LLMProviderConfig): LLM {
         model,
         system: opts.system,
         messages: opts.messages.map(m => ({
-          role: m.role as 'user' | 'assistant',
+          role: m.role,
           content: m.content,
         })),
         ...cap,
@@ -94,14 +95,14 @@ export function createCompletionLLM(opts: {
     parseModelSpec(opts.spec).provider,
   );
   return {
-    async *stream() {
+    stream() {
       throw new Error(`createCompletionLLM(${opts.spec}) has no streaming path`);
     },
     async complete(prompt) {
       const { text } = await generateText({
         model: opts.model,
         prompt,
-        ...(providerOptions ? { providerOptions } : {}),
+        providerOptions,
       });
       return text.trim();
     },
@@ -117,6 +118,11 @@ export interface LLMUsage {
   calls: number;
   promptChars: number;
   responseChars: number;
+}
+
+export interface MeteredLLM {
+  llm: LLM;
+  usage: LLMUsage;
 }
 
 /** Characters per token, for sizing a run before paying for it. A blunt
@@ -152,7 +158,7 @@ export function estimateUsdCost(tokens: number): number {
  * the seam itself unchanged, which is what lets a test script an `LLM` and
  * still get telemetry out of the harness that used it.
  */
-export function meterLLM(llm: LLM): { llm: LLM; usage: LLMUsage } {
+export function meterLLM(llm: LLM): MeteredLLM {
   const usage: LLMUsage = { calls: 0, promptChars: 0, responseChars: 0 };
   return {
     usage,
@@ -193,8 +199,9 @@ export function collectStepText(result: { text: string; steps: StepResult<ToolSe
   const toolSummaries: string[] = [];
   for (const step of result.steps) {
     for (const tr of step.toolResults) {
-      const { output } = tr as { toolName: string; output?: unknown };
-      const text = typeof output === 'string' ? output : JSON.stringify(output ?? '');
+      const output = tr.output;
+      const parsedText = v.safeParse(v.string(), output);
+      const text = parsedText.success ? parsedText.output : JSON.stringify(output ?? '');
       toolSummaries.push(`[${tr.toolName}] ${text.slice(0, 500)}`);
     }
   }
@@ -275,8 +282,8 @@ function createAnthropicModel(
   const provider = createAnthropic({
     name: config.name,
     baseURL: config.baseURL,
-    ...(apiKey ? { apiKey } : {}),
-    ...(authToken ? { authToken } : {}),
+    apiKey: apiKey || undefined,
+    authToken: authToken || undefined,
     headers,
     fetch: withRateLimitRetry(config.fetch ?? fetch),
   });

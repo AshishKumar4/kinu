@@ -12,6 +12,7 @@
  */
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { handleCliRequest } from '../src/cli/routes.js';
 import { handleHealthRequest } from '../src/health-route.js';
 
@@ -20,56 +21,85 @@ const SPA_SHELL = '<!doctype html>\n<html lang="en"><head><title>Proteus</title>
 
 const STAMP = { version: '0.1.0+abc1234', sha: 'abc1234', builtAt: '2026-08-07T00:00:00.000Z' };
 
-/** An ASSETS binding that publishes `files` and answers everything else the
- *  way the real single-page-application fallback does. */
-function envWithAssets(files: Record<string, { body: string; contentType: string }>): Env {
-  return {
-    ASSETS: {
-      async fetch(request: Request): Promise<Response> {
-        const { pathname } = new URL(request.url);
-        const file = files[pathname];
-        if (file) {
-          return new Response(file.body, { status: 200, headers: { 'content-type': file.contentType } });
-        }
-        return new Response(SPA_SHELL, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
-      },
-    }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+interface PublishedAsset {
+  body: string;
+  contentType: string;
 }
 
-const PUBLISHED = {
-  '/downloads/proteus-source.tar.gz': { body: 'TARBALL-BYTES', contentType: 'application/gzip' },
-  '/downloads/proteus-source.tar.gz.sha256': { body: 'deadbeef  proteus-source.tar.gz\n', contentType: 'text/plain' },
-  '/downloads/proteus-version.json': { body: JSON.stringify(STAMP), contentType: 'application/json' },
-};
+const HealthResponseSchema = v.object({
+  ok: v.boolean(),
+  build: v.nullable(v.object({
+    version: v.string(),
+    sha: v.string(),
+    builtAt: v.string(),
+  })),
+});
 
-const DOWNLOAD_PATHS = Object.keys(PUBLISHED);
+function requiredResponse(response: Response | null): Response {
+  if (!response) throw new Error('expected route to return a response');
+  return response;
+}
+
+function testEnv(assets: Pick<Env['ASSETS'], 'fetch'>): Env {
+  const partialEnv: Partial<Env> = {
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+  // SAFETY: The CLI and health asset paths call only ASSETS.fetch, which this fixture constructs.
+  partialEnv.ASSETS = assets as Env['ASSETS'];
+  // SAFETY: These route tests provide every Env binding their exercised paths read.
+  return partialEnv as Env;
+}
+
+/** An ASSETS binding that publishes `files` and answers everything else the
+ *  way the real single-page-application fallback does. */
+function envWithAssets(files: ReadonlyMap<string, PublishedAsset>): Env {
+  return testEnv({
+    async fetch(request: Request): Promise<Response> {
+      const { pathname } = new URL(request.url);
+      const file = files.get(pathname);
+      if (file) {
+        return new Response(file.body, { status: 200, headers: { 'content-type': file.contentType } });
+      }
+      return new Response(SPA_SHELL, { status: 200, headers: { 'content-type': 'text/html; charset=utf-8' } });
+    },
+  });
+}
+
+const PUBLISHED = new Map<string, PublishedAsset>([
+  ['/downloads/proteus-source.tar.gz', { body: 'TARBALL-BYTES', contentType: 'application/gzip' }],
+  ['/downloads/proteus-source.tar.gz.sha256', { body: 'deadbeef  proteus-source.tar.gz\n', contentType: 'text/plain' }],
+  ['/downloads/proteus-version.json', { body: JSON.stringify(STAMP), contentType: 'application/json' }],
+]);
+
+const DOWNLOAD_PATHS = [...PUBLISHED.keys()];
 
 describe('CLI download assets', () => {
   test('serve the published asset with the declared content-type', async () => {
     const env = envWithAssets(PUBLISHED);
     for (const path of DOWNLOAD_PATHS) {
-      const res = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
-      expect(res?.status).toBe(200);
-      expect(await res!.text()).toBe(PUBLISHED[path as keyof typeof PUBLISHED].body);
-      expect(res!.headers.get('x-content-type-options')).toBe('nosniff');
+      const response = requiredResponse(await handleCliRequest(new Request(`${ORIGIN}${path}`), env));
+      const asset = PUBLISHED.get(path);
+      if (!asset) throw new Error(`missing published fixture for ${path}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe(asset.body);
+      expect(response.headers.get('x-content-type-options')).toBe('nosniff');
     }
   });
 
   test('404 instead of letting the SPA shell impersonate a download', async () => {
-    const env = envWithAssets({});
+    const env = envWithAssets(new Map());
     for (const path of DOWNLOAD_PATHS) {
-      const res = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
-      expect(res?.status).toBe(404);
-      const body = await res!.text();
+      const response = requiredResponse(await handleCliRequest(new Request(`${ORIGIN}${path}`), env));
+      expect(response.status).toBe(404);
+      const body = await response.text();
       expect(body).not.toContain('<!doctype html>');
       expect(body).toContain('Deployment incomplete');
-      expect(res!.headers.get('content-type')).toStartWith('text/plain');
+      expect(response.headers.get('content-type')).toStartWith('text/plain');
     }
   });
 
   test('404 when the asset worker itself errors', async () => {
-    const env = {
-      ASSETS: { async fetch() { return new Response('boom', { status: 500 }); } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    const env = testEnv({ async fetch() { return new Response('boom', { status: 500 }); } });
     for (const path of DOWNLOAD_PATHS) {
       const res = await handleCliRequest(new Request(`${ORIGIN}${path}`), env);
       expect(res?.status).toBe(404);
@@ -81,40 +111,45 @@ describe('CLI download assets', () => {
       new Request(`${ORIGIN}${DOWNLOAD_PATHS[0]}`, { method: 'HEAD' }),
       envWithAssets(PUBLISHED),
     );
-    expect(published?.status).toBe(200);
-    expect(published!.body).toBeNull();
+    const publishedResponse = requiredResponse(published);
+    expect(publishedResponse.status).toBe(200);
+    expect(publishedResponse.body).toBeNull();
 
     const missing = await handleCliRequest(
       new Request(`${ORIGIN}${DOWNLOAD_PATHS[0]}`, { method: 'HEAD' }),
-      envWithAssets({}),
+      envWithAssets(new Map()),
     );
-    expect(missing?.status).toBe(404);
-    expect(missing!.body).toBeNull();
+    const missingResponse = requiredResponse(missing);
+    expect(missingResponse.status).toBe(404);
+    expect(missingResponse.body).toBeNull();
   });
 });
 
 describe('GET /api/health build stamp', () => {
   test('reports the deployed build and is ok', async () => {
-    const res = await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED));
-    const body = await res!.json() as { ok: boolean; build: typeof STAMP | null };
+    const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets(PUBLISHED)));
+    const body = v.parse(HealthResponseSchema, await response.json());
     expect(body.ok).toBe(true);
     expect(body.build).toEqual(STAMP);
   });
 
   test('is not ok when the deploy shipped no build stamp', async () => {
-    const res = await handleHealthRequest(new Request(`${ORIGIN}/api/health`), envWithAssets({}));
-    const body = await res!.json() as { ok: boolean; build: unknown };
+    const response = requiredResponse(await handleHealthRequest(
+      new Request(`${ORIGIN}/api/health`),
+      envWithAssets(new Map()),
+    ));
+    const body = v.parse(HealthResponseSchema, await response.json());
     expect(body.ok).toBe(false);
     expect(body.build).toBeNull();
   });
 
   test('rejects a stamp that is not the expected shape', async () => {
     for (const malformed of ['not json at all', '[]', '{"version":"0.1.0"}', '{"version":"","sha":"a","builtAt":"b"}']) {
-      const env = envWithAssets({
-        '/downloads/proteus-version.json': { body: malformed, contentType: 'application/json' },
-      });
-      const res = await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env);
-      const body = await res!.json() as { ok: boolean; build: unknown };
+      const env = envWithAssets(new Map([
+        ['/downloads/proteus-version.json', { body: malformed, contentType: 'application/json' }],
+      ]));
+      const response = requiredResponse(await handleHealthRequest(new Request(`${ORIGIN}/api/health`), env));
+      const body = v.parse(HealthResponseSchema, await response.json());
       expect(body.ok).toBe(false);
       expect(body.build).toBeNull();
     }

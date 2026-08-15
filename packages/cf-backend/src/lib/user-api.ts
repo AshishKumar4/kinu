@@ -3,6 +3,8 @@
  * attached automatically by the HttpOnly cookie (or local dev's DEV_USER_EMAIL
  * is synthesized server-side), so these fetches are bare.
  */
+import { JsonObjectSchema, type Credential } from '@proteus/core';
+import * as v from 'valibot';
 
 export interface UserProfile {
   email: string;
@@ -55,6 +57,35 @@ export interface ModelMenu {
   failures: ProviderFailure[];
 }
 
+const ErrorBodySchema = v.object({ error: v.optional(v.string()) });
+const OkSchema = v.object({ ok: v.boolean() });
+const UserProfileSchema = v.nullable(v.object({
+  email: v.string(), displayName: v.nullable(v.string()), createdAt: v.number(), lastSeenAt: v.number(),
+}));
+const WorkspaceEntrySchema = v.object({
+  name: v.string(), displayName: v.string(), createdAt: v.number(), lastVisited: v.number(),
+  archivedAt: v.nullable(v.number()),
+});
+const CliSetupSchema = v.object({
+  publicOrigin: v.string(), installCommand: v.string(), setupCommand: v.optional(v.string()), authCommand: v.string(),
+});
+const CredentialSummarySchema = v.object({
+  key: v.string(), kind: v.picklist(['bearer', 'oauth', 'openai-compat']),
+  createdAt: v.number(), updatedAt: v.number(),
+});
+const ModelMenuEntrySchema = v.object({
+  spec: v.string(), label: v.string(), provider: v.string(),
+  capabilities: v.optional(v.array(v.string())), contextWindow: v.optional(v.number()),
+});
+const ProviderFailureSchema = v.object({
+  provider: v.string(), label: v.optional(v.string()), reason: v.string(),
+});
+const ModelMenuSchema = v.object({
+  models: v.array(ModelMenuEntrySchema), failures: v.array(ProviderFailureSchema),
+});
+const StringConfigSchema = v.record(v.string(), v.string());
+const ConfigEntrySchema = v.object({ key: v.string(), value: v.nullable(v.string()) });
+
 export interface DeviceFlowStart {
   userCode: string;
   deviceAuthId: string;
@@ -75,7 +106,9 @@ export interface PollResult {
   error?: string;
 }
 
-async function api<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function api<Schema extends v.GenericSchema, Body>(
+  schema: Schema, method: string, path: string, body?: Body,
+): Promise<v.InferOutput<Schema>> {
   const res = await fetch(`/api/user${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -83,26 +116,26 @@ async function api<T>(method: string, path: string, body?: unknown): Promise<T> 
   });
   if (!res.ok) {
     let detail = '';
-    try { const j = await res.json() as { error?: string }; detail = j?.error ?? ''; } catch { /* nop */ }
+    try { detail = v.parse(ErrorBodySchema, await res.json()).error ?? ''; } catch { /* nop */ }
     throw new Error(`${method} /api/user${path} → ${res.status} ${detail}`);
   }
-  return await res.json() as T;
+  return v.parse(schema, await res.json());
 }
 
 // ── Profile ────────────────────────────────────────────────────────
-export const getProfile = () => api<UserProfile | null>('GET', '/profile');
-export const getCliSetup = () => api<CliSetup>('GET', '/cli');
+export const getProfile = () => api(UserProfileSchema, 'GET', '/profile');
+export const getCliSetup = () => api(CliSetupSchema, 'GET', '/cli');
 
 // ── Agents ─────────────────────────────────────────────────────────
-export const listWorkspaces     = () => api<WorkspaceEntry[]>('GET', '/workspaces');
+export const listWorkspaces     = () => api(v.array(WorkspaceEntrySchema), 'GET', '/workspaces');
 // `purpose` is the initial mission. When `name` is omitted the server creates
 // the agent identity using the user's connected model.
 export const registerWorkspace  = (name?: string, purpose?: string, displayName?: string) =>
-  api<WorkspaceEntry>('POST', '/workspaces', { name, displayName, purpose });
+  api(WorkspaceEntrySchema, 'POST', '/workspaces', { name, displayName, purpose });
 export const touchWorkspace     = (name: string) =>
-  api<{ ok: boolean }>('POST', `/workspaces/${encodeURIComponent(name)}/touch`);
+  api(OkSchema, 'POST', `/workspaces/${encodeURIComponent(name)}/touch`);
 export const removeWorkspace    = (name: string) =>
-  api<{ ok: boolean }>('DELETE', `/workspaces/${encodeURIComponent(name)}`);
+  api(OkSchema, 'DELETE', `/workspaces/${encodeURIComponent(name)}`);
 
 // ── Devices (user-level laptop/PC tunnel) ──────────────────────────
 export interface UserDevice {
@@ -122,11 +155,16 @@ export interface RegisteredDevice {
   origin: string;
   installCommand: string;
 }
-export const listDevices    = () => api<UserDevice[]>('GET', '/devices');
+const UserDeviceSchema = v.object({
+  id: v.string(), label: v.string(), os: v.nullable(v.string()), hostname: v.nullable(v.string()),
+  connected: v.boolean(), createdAt: v.number(), lastSeenAt: v.nullable(v.number()), expiresAt: v.nullable(v.number()),
+});
+const RegisteredDeviceSchema = v.object({ origin: v.string(), installCommand: v.string() });
+export const listDevices    = () => api(v.array(UserDeviceSchema), 'GET', '/devices');
 export const registerDevice = (label?: string) =>
-  api<RegisteredDevice>('POST', '/devices', { label });
+  api(RegisteredDeviceSchema, 'POST', '/devices', { label });
 export const revokeDevice   = (id: string) =>
-  api<{ ok: boolean }>('DELETE', `/devices/${encodeURIComponent(id)}`);
+  api(OkSchema, 'DELETE', `/devices/${encodeURIComponent(id)}`);
 
 /** Per-(agent, device) remembered consent: base local-action grant, or the
  *  stronger full-filesystem tier that lifts the /pc subtree scope. */
@@ -139,32 +177,46 @@ export interface DeviceConsent {
   lastMethod: string | null;
   lastSummary: string | null;
 }
-export const listDeviceConsents = () => api<DeviceConsent[]>('GET', '/devices/consents');
+const DeviceConsentSchema = v.object({
+  agentName: v.string(), deviceId: v.string(), policy: v.string(), scope: v.string(),
+  lastMethod: v.nullable(v.string()), lastSummary: v.nullable(v.string()),
+});
+export const listDeviceConsents = () => api(v.array(DeviceConsentSchema), 'GET', '/devices/consents');
 export const setDeviceConsentScope = (deviceId: string, agentName: string, scope: DeviceConsentScope) =>
-  api<{ ok: boolean }>('PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
+  api(OkSchema, 'PUT', `/devices/${encodeURIComponent(deviceId)}/consent`, { agentName, scope });
 
 // ── Credentials ────────────────────────────────────────────────────
-export const listCredentials  = () => api<CredentialSummary[]>('GET', '/credentials');
-export const setCredential    = (key: string, value: unknown) =>
-  api<{ ok: boolean }>('POST', `/credentials/${encodeURIComponent(key)}`, value)
+export const listCredentials  = () => api(v.array(CredentialSummarySchema), 'GET', '/credentials');
+export const setCredential    = (key: string, value: Credential) =>
+  api(OkSchema, 'POST', `/credentials/${encodeURIComponent(key)}`, value)
     .then((r) => { invalidateModelsCache(); return r; });
 export const deleteCredential = (key: string) =>
-  api<{ ok: boolean }>('DELETE', `/credentials/${encodeURIComponent(key)}`)
+  api(OkSchema, 'DELETE', `/credentials/${encodeURIComponent(key)}`)
     .then((r) => { invalidateModelsCache(); return r; });
 
 // ── Codex device flow ──────────────────────────────────────────────
-export const codexStatus      = () => api<CodexStatus>('GET', '/codex');
-export const startCodexFlow   = () => api<DeviceFlowStart>('POST', '/codex/start');
-export const pollCodexFlow    = () => api<PollResult>('POST', '/codex/poll')
+const DeviceFlowStartSchema = v.object({
+  userCode: v.string(), deviceAuthId: v.string(), pollIntervalSec: v.number(), portalURL: v.string(),
+});
+const CodexStatusSchema = v.object({
+  connected: v.boolean(), accountId: v.nullable(v.string()), expiresAt: v.nullable(v.number()),
+  startedFlow: v.nullable(v.object({ userCode: v.string(), portalURL: v.string(), pollIntervalSec: v.number() })),
+});
+const PollResultSchema = v.object({
+  connected: v.boolean(), accountId: v.optional(v.string()), error: v.optional(v.string()),
+});
+export const codexStatus      = () => api(CodexStatusSchema, 'GET', '/codex');
+export const startCodexFlow   = () => api(DeviceFlowStartSchema, 'POST', '/codex/start');
+export const pollCodexFlow    = () => api(PollResultSchema, 'POST', '/codex/poll')
   .then((r) => { if (r.connected) invalidateModelsCache(); return r; });
-export const disconnectCodex  = () => api<{ ok: boolean }>('DELETE', '/codex')
+export const disconnectCodex  = () => api(OkSchema, 'DELETE', '/codex')
   .then((r) => { invalidateModelsCache(); return r; });
 
 // ── Config / defaults ──────────────────────────────────────────────
-export const listConfig       = () => api<Record<string, string>>('GET', '/config');
-export const getConfig        = (key: string) => api<{ key: string; value: string | null }>('GET', `/config/${encodeURIComponent(key)}`);
+export const listConfig       = () => api(StringConfigSchema, 'GET', '/config');
+export const getConfig        = (key: string) => api(ConfigEntrySchema, 'GET', `/config/${encodeURIComponent(key)}`);
 export const setConfig        = (key: string, value: string) =>
-  api<{ ok: boolean }>('PUT', `/config/${encodeURIComponent(key)}`, { value });
+  api(OkSchema, 'PUT', `/config/${encodeURIComponent(key)}`, { value });
 
 // ── Models + providers ─────────────────────────────────────────────
 // The model menu only changes when a provider is connected/disconnected, so it
@@ -172,13 +224,13 @@ export const setConfig        = (key: string, value: string) =>
 let _modelsCache: Promise<ModelMenu> | null = null;
 export function listAvailableModels(): Promise<ModelMenu> {
   if (!_modelsCache) {
-    _modelsCache = api<ModelMenu>('GET', '/models').catch((e) => { _modelsCache = null; throw e; });
+    _modelsCache = api(ModelMenuSchema, 'GET', '/models').catch((e) => { _modelsCache = null; throw e; });
   }
   return _modelsCache;
 }
 export function invalidateModelsCache(): void { _modelsCache = null; }
 export const listConnectedProviders = () =>
-  api<Array<{ id: string; label: string; credentialKeys: string[] }>>('GET', '/providers');
+  api(v.array(v.object({ id: v.string(), label: v.string(), credentialKeys: v.array(v.string()) })), 'GET', '/providers');
 
 /** One connectable provider (BYO API key) from the models.dev catalog. */
 export interface ProviderCatalogEntry {
@@ -190,7 +242,10 @@ export interface ProviderCatalogEntry {
   connected: boolean;
 }
 export const listProviderCatalog = () =>
-  api<ProviderCatalogEntry[]>('GET', '/providers/catalog');
+  api(v.array(v.object({
+    id: v.string(), credKey: v.string(), name: v.string(), doc: v.optional(v.string()),
+    envVar: v.optional(v.string()), connected: v.boolean(),
+  })), 'GET', '/providers/catalog');
 
 // ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
 export interface CloudflareGatewaySummary {
@@ -205,9 +260,13 @@ export interface CloudflareGatewayStatus {
   error: string | null;
 }
 export const listCloudflareGateways = () =>
-  api<CloudflareGatewayStatus>('GET', '/cloudflare/gateways');
+  api(v.object({
+    connected: v.boolean(), selectedId: v.nullable(v.string()),
+    gateways: v.array(v.object({ id: v.string(), authenticated: v.boolean(), createdAt: v.nullable(v.string()) })),
+    error: v.nullable(v.string()),
+  }), 'GET', '/cloudflare/gateways');
 export const selectCloudflareGateway = (id: string | null) =>
-  api<{ ok: boolean }>('PUT', '/cloudflare/gateway', { id })
+  api(OkSchema, 'PUT', '/cloudflare/gateway', { id })
     .then((r) => { invalidateModelsCache(); return r; });
 
 export function cloudflareReconnectPath(returnTo: string): string {
@@ -247,13 +306,21 @@ export interface McpServerInput {
   allowedTools?: string[];
 }
 
-export const listMcpServers = () => api<McpServerSummary[]>('GET', '/mcp/servers');
+const McpServerSummarySchema = v.object({
+  id: v.string(), name: v.string(), serverUrl: v.string(),
+  transport: v.picklist(['auto', 'sse', 'streamable-http']),
+  status: v.picklist(['connecting', 'authenticating', 'connected', 'ready', 'discovering', 'failed', 'unknown']),
+  error: v.nullable(v.string()), toolsCount: v.number(), authUrl: v.nullable(v.string()),
+  allowedTools: v.nullable(v.array(v.string())), createdAt: v.number(), updatedAt: v.number(),
+});
+
+export const listMcpServers = () => api(v.array(McpServerSummarySchema), 'GET', '/mcp/servers');
 export const addMcpServer   = (input: McpServerInput) =>
-  api<{ id: string; authUrl: string | null }>('POST', '/mcp/servers', input);
+  api(v.object({ id: v.string(), authUrl: v.nullable(v.string()) }), 'POST', '/mcp/servers', input);
 export const removeMcpServer = (id: string) =>
-  api<{ ok: boolean }>('DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
+  api(OkSchema, 'DELETE', `/mcp/servers/${encodeURIComponent(id)}`);
 export const updateMcpServer = (id: string, patch: Partial<Pick<McpServerInput, 'name' | 'headers' | 'allowedTools'>>) =>
-  api<{ ok: boolean }>('PATCH', `/mcp/servers/${encodeURIComponent(id)}`, patch);
+  api(OkSchema, 'PATCH', `/mcp/servers/${encodeURIComponent(id)}`, patch);
 
 // ── EventsHub: triggers + events (per-agent endpoints) ─────────────
 
@@ -261,7 +328,7 @@ export interface TriggerSummary {
   id: string;
   kind: 'webhook_durable' | 'webhook_ephemeral' | 'timer_oneshot' | 'timer_cron'
       | 'process_watch' | 'file_watch' | 'peer_inbox' | 'mcp_route';
-  spec: Record<string, unknown>;
+  spec: import('@proteus/core').JsonObject;
   creator_trust: 'external' | 'authenticated' | 'owner' | 'self';
   state: 'active' | 'paused' | 'revoked';
   created_at: number;
@@ -286,7 +353,9 @@ export interface CreateWebhookResult {
 }
 
 /** Agent-scoped HTTP fetch; same auth as the user routes. */
-async function agentApi<T>(method: string, agentName: string, path: string, body?: unknown): Promise<T> {
+async function agentApi<Schema extends v.GenericSchema, Body>(
+  schema: Schema, method: string, agentName: string, path: string, body?: Body,
+): Promise<v.InferOutput<Schema>> {
   const res = await fetch(`/api/workspaces/${encodeURIComponent(agentName)}${path}`, {
     method,
     headers: { 'content-type': 'application/json' },
@@ -294,17 +363,31 @@ async function agentApi<T>(method: string, agentName: string, path: string, body
   });
   if (!res.ok) {
     let detail = '';
-    try { const j = await res.json() as { error?: string }; detail = j?.error ?? ''; } catch { /* nop */ }
+    try { detail = v.parse(ErrorBodySchema, await res.json()).error ?? ''; } catch { /* nop */ }
     throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${detail}`);
   }
-  return await res.json() as T;
+  return v.parse(schema, await res.json());
 }
 
+const TriggerSummarySchema = v.object({
+  id: v.string(),
+  kind: v.picklist(['webhook_durable', 'webhook_ephemeral', 'timer_oneshot', 'timer_cron',
+    'process_watch', 'file_watch', 'peer_inbox', 'mcp_route']),
+  spec: JsonObjectSchema,
+  creator_trust: v.picklist(['external', 'authenticated', 'owner', 'self']),
+  state: v.picklist(['active', 'paused', 'revoked']), created_at: v.number(),
+  paused_at: v.nullable(v.number()), revoked_at: v.nullable(v.number()), rate_limit_per_min: v.number(),
+});
+const CreateWebhookResultSchema = v.object({
+  trigger_id: v.string(), url: v.string(), auth_mode: v.picklist(['hmac', 'bearer', 'mtls']),
+  secret: v.nullable(v.string()),
+});
+
 export const listTriggers = (agentName: string) =>
-  agentApi<{ triggers: TriggerSummary[] }>('GET', agentName, '/triggers');
+  agentApi(v.object({ triggers: v.array(TriggerSummarySchema) }), 'GET', agentName, '/triggers');
 
 export const createDurableWebhook = (agentName: string, opts: CreateWebhookOpts) =>
-  agentApi<CreateWebhookResult>('POST', agentName, '/triggers', opts);
+  agentApi(CreateWebhookResultSchema, 'POST', agentName, '/triggers', opts);
 
 export const cancelTrigger = (agentName: string, trigger_id: string) =>
-  agentApi<{ ok: boolean; changed: boolean }>('DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);
+  agentApi(v.object({ ok: v.boolean(), changed: v.boolean() }), 'DELETE', agentName, `/triggers/${encodeURIComponent(trigger_id)}`);

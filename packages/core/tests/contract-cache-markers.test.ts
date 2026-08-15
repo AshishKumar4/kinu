@@ -12,12 +12,15 @@
 // ratio these markers exist to raise.
 import { describe, test, expect } from 'bun:test';
 import { tool, type ToolSet } from 'ai';
+import * as v from 'valibot';
 import { z } from 'zod';
 import {
   runChat,
   createAnthropicProvider, createOpenAIProvider, createOpenRouterProvider, createOpenAICompatProvider,
   markLastToolForAnthropicCache,
   ANTHROPIC_CRED_KEY, OPENAI_CRED_KEY, OPENROUTER_CRED_KEY,
+  JsonObjectSchema, JsonValueSchema, parseJsonObject,
+  type JsonObject, type JsonValue,
   type ProviderDeps, type AuthResolution, type CacheRetention,
 } from '../src/index.ts';
 import { createMockFetch, type MockFetchHandle } from '@proteus/test-utils';
@@ -58,16 +61,38 @@ async function drive(opts: Parameters<typeof runChat>[0]): Promise<void> {
   } catch { /* invalid mock response shapes are fine — we assert on requests */ }
 }
 
-function bodyOf(handle: MockFetchHandle, i: number): Record<string, unknown> {
+function bodyOf(handle: MockFetchHandle, i: number): JsonObject {
   const req = handle.requests[i];
   expect(req?.body).toBeDefined();
-  return JSON.parse(req.body as string) as Record<string, unknown>;
+  return parseJsonObject(v.parse(v.string(), req?.body));
 }
 
-function countCacheControl(value: unknown): number {
+function countCacheControl(value: JsonValue): number {
   const json = JSON.stringify(value);
   return (json.match(/"cache_control"/g) ?? []).length;
 }
+
+function field<Output>(body: JsonObject, key: string, schema: v.GenericSchema<Output>): Output {
+  return v.parse(schema, body[key]);
+}
+
+const CacheControlSchema = JsonObjectSchema;
+const SystemBlocksSchema = v.array(v.object({
+  text: v.optional(v.string()), cache_control: v.optional(CacheControlSchema),
+}));
+const ToolBlocksSchema = v.array(v.object({
+  name: v.optional(v.string()), cache_control: v.optional(CacheControlSchema),
+}));
+const AnthropicMessagesSchema = v.array(v.object({
+  role: v.optional(v.string()),
+  content: v.array(v.object({
+    type: v.optional(v.string()), cache_control: v.optional(CacheControlSchema),
+  })),
+}));
+const OpenAiMessagesSchema = v.array(v.object({
+  role: v.string(), content: v.optional(JsonValueSchema),
+  cache_control: v.optional(CacheControlSchema),
+}));
 
 // ── Anthropic: full breakpoint layout, rolled across steps ────────────────
 
@@ -137,7 +162,7 @@ describe('Anthropic cache breakpoints on the wire', () => {
       maxSteps: 3,
       cache: {
         providerId: 'anthropic', modelId: 'claude-opus-4-7', sessionKey: 'proteus-test',
-        ...(retention ? { retention } : {}),
+        retention,
       },
     });
     return mock;
@@ -149,20 +174,20 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const body = bodyOf(mock, 0);
 
     // System prompt is a cache-eligible block with the end-of-system breakpoint.
-    const system = body.system as Array<{ text: string; cache_control?: { type: string } }>;
-    expect(system[system.length - 1].cache_control).toEqual({ type: 'ephemeral' });
-    expect(system.map((b) => b.text).join('')).toBe('You are Proteus.');
+    const system = field(body, 'system', SystemBlocksSchema);
+    expect(system[system.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(system.map((block) => block.text).join('')).toBe('You are Proteus.');
 
     // The tool-surface breakpoint (fold of the old cf-backend anthropic-cache.ts).
-    const tools = body.tools as Array<{ name: string; cache_control?: { type: string } }>;
-    expect(tools[tools.length - 1].cache_control).toEqual({ type: 'ephemeral' });
+    const tools = field(body, 'tools', ToolBlocksSchema);
+    expect(tools[tools.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
 
     // Rolling tail: the last 2 messages end with a cache_control block.
-    const messages = body.messages as Array<{ content: Array<{ cache_control?: { type: string } }> }>;
-    const last = messages[messages.length - 1].content;
-    const prev = messages[messages.length - 2].content;
-    expect(last[last.length - 1].cache_control).toEqual({ type: 'ephemeral' });
-    expect(prev[prev.length - 1].cache_control).toEqual({ type: 'ephemeral' });
+    const messages = field(body, 'messages', AnthropicMessagesSchema);
+    const last = messages[messages.length - 1]?.content ?? [];
+    const prev = messages[messages.length - 2]?.content ?? [];
+    expect(last[last.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(prev[prev.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
 
     // Anthropic hard limit: at most 4 cache_control blocks per request.
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
@@ -173,14 +198,14 @@ describe('Anthropic cache breakpoints on the wire', () => {
     expect(mock.requests.length).toBe(2);
     const step2 = bodyOf(mock, 1);
 
-    const messages = step2.messages as Array<{ role: string; content: Array<{ type: string; cache_control?: { type: string } }> }>;
+    const messages = field(step2, 'messages', AnthropicMessagesSchema);
     // Step 2 appends the assistant tool_use + the tool_result — the tail
     // markers must now sit on those newest messages, not the old tail.
     const last = messages[messages.length - 1];
-    expect(last.content.some((p) => p.type === 'tool_result')).toBe(true);
-    expect(last.content[last.content.length - 1].cache_control).toEqual({ type: 'ephemeral' });
+    expect(last?.content.some((part) => part.type === 'tool_result')).toBe(true);
+    expect(last?.content[last.content.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
 
-    const markedMessages = messages.filter((m) => m.content.some((p) => p.cache_control)).length;
+    const markedMessages = messages.filter((message) => message.content.some((part) => part.cache_control)).length;
     expect(markedMessages).toBe(2);
     expect(countCacheControl(step2)).toBeLessThanOrEqual(4);
   });
@@ -190,13 +215,13 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const body = bodyOf(mock, 0);
     const long = { type: 'ephemeral', ttl: '1h' };
 
-    const system = body.system as Array<{ cache_control?: unknown }>;
-    expect(system[system.length - 1].cache_control).toEqual(long);
-    const tools = body.tools as Array<{ cache_control?: unknown }>;
-    expect(tools[tools.length - 1].cache_control).toEqual(long);
-    const messages = body.messages as Array<{ content: Array<{ cache_control?: unknown }> }>;
-    const last = messages[messages.length - 1].content;
-    expect(last[last.length - 1].cache_control).toEqual(long);
+    const system = field(body, 'system', SystemBlocksSchema);
+    expect(system[system.length - 1]?.cache_control).toEqual(long);
+    const tools = field(body, 'tools', ToolBlocksSchema);
+    expect(tools[tools.length - 1]?.cache_control).toEqual(long);
+    const messages = field(body, 'messages', AnthropicMessagesSchema);
+    const last = messages[messages.length - 1]?.content ?? [];
+    expect(last[last.length - 1]?.cache_control).toEqual(long);
     // A longer TTL must not buy more breakpoints.
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
   });
@@ -206,8 +231,8 @@ describe('Anthropic cache breakpoints on the wire', () => {
     const body = bodyOf(mock, 0);
     expect(countCacheControl(body)).toBe(0);
     // The system prompt falls back to the plain (uncached) block.
-    const system = body.system as Array<{ text: string; cache_control?: unknown }>;
-    expect(system.every((b) => b.cache_control === undefined)).toBe(true);
+    const system = field(body, 'system', SystemBlocksSchema);
+    expect(system.every((block) => block.cache_control === undefined)).toBe(true);
   });
 });
 
@@ -260,7 +285,7 @@ describe('OpenAI prompt_cache_key on the wire', () => {
 });
 
 describe('OpenRouter cache addressing on the wire', () => {
-  async function runOpenRouterTurn(modelId: string): Promise<Record<string, unknown>> {
+  async function runOpenRouterTurn(modelId: string): Promise<JsonObject> {
     const mock = createMockFetch([
       { match: 'openrouter.ai', respond: { status: 400, body: {} } },
     ]);
@@ -277,12 +302,12 @@ describe('OpenRouter cache addressing on the wire', () => {
     const body = await runOpenRouterTurn('anthropic/claude-sonnet-4.6');
     expect(body.prompt_cache_key).toBe('proteus-or');
 
-    const messages = body.messages as Array<{ role: string; cache_control?: { type: string } }>;
+    const messages = field(body, 'messages', OpenAiMessagesSchema);
     const system = messages.find((m) => m.role === 'system');
     expect(system?.cache_control).toEqual({ type: 'ephemeral' });
     const nonSystem = messages.filter((m) => m.role !== 'system');
-    expect(nonSystem[nonSystem.length - 1].cache_control).toEqual({ type: 'ephemeral' });
-    expect(nonSystem[nonSystem.length - 2].cache_control).toEqual({ type: 'ephemeral' });
+    expect(nonSystem[nonSystem.length - 1]?.cache_control).toEqual({ type: 'ephemeral' });
+    expect(nonSystem[nonSystem.length - 2]?.cache_control).toEqual({ type: 'ephemeral' });
     expect(countCacheControl(body)).toBeLessThanOrEqual(4);
   });
 
@@ -291,7 +316,7 @@ describe('OpenRouter cache addressing on the wire', () => {
     expect(body.prompt_cache_key).toBe('proteus-or');
     expect(countCacheControl(body)).toBe(0);
     // System stays a plain string message.
-    const messages = body.messages as Array<{ role: string; content: unknown }>;
+    const messages = field(body, 'messages', OpenAiMessagesSchema);
     expect(messages[0]).toEqual({ role: 'system', content: 'sys' });
   });
 });
@@ -330,6 +355,6 @@ describe('openai-compat + no-op providers', () => {
     const body = bodyOf(mock, 0);
     expect(body.prompt_cache_key).toBeUndefined();
     expect(countCacheControl(body)).toBe(0);
-    expect((body.messages as Array<{ role: string; content: unknown }>)[0]).toEqual({ role: 'system', content: 'sys' });
+    expect(field(body, 'messages', OpenAiMessagesSchema)[0]).toEqual({ role: 'system', content: 'sys' });
   });
 });

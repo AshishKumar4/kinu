@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { createCloudWorkspaceForUser } from '../src/user/workspace-create.js';
 import { claimOwnedWorkspace } from '../src/user/workspace-access.js';
-import type { UserDO } from '../src/user/user-do.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const ROOT = join(import.meta.dir, '..');
@@ -15,33 +15,56 @@ function source(path: string): string {
   return readFileSync(join(ROOT, path), 'utf8');
 }
 
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface OwnershipTestBindings<UserStub, AgentStub> {
+  UserDO: TestNamespace<UserStub>;
+  OrchestratorAgent: TestNamespace<AgentStub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<UserStub, AgentStub>(bindings: OwnershipTestBindings<UserStub, AgentStub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: The ownership paths reach only the two constructed namespaces and
+  // credential key; each typed binding required by those paths is present above.
+  return env as Env;
+}
+
+function userStub(env: Env) {
+  return env.UserDO.get(env.UserDO.idFromName(USER_ID));
+}
+
 describe('cloud agent ownership safety', () => {
   test('mission-only create does not block on generated cloud naming', async () => {
     const calls: string[] = [];
     const background: Promise<unknown>[] = [];
     const userDO = {
-      async getConfig(_caller: unknown, key: string) {
+      async getConfig(_caller: UserCaller, key: string) {
         calls.push(`config:${key}`);
         return null;
       },
-      async getAuthHeaders(_caller: unknown) {
+      async getAuthHeaders(_caller: UserCaller) {
         return { authorization: 'Bearer token' };
       },
-      async getCredentialBaseURL(_caller: unknown) {
+      async getCredentialBaseURL(_caller: UserCaller) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
-      async listCredentials(_caller: unknown) {
+      async listCredentials(_caller: UserCaller) {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
+      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: false,
         };
       },
-      async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
+      async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -59,11 +82,15 @@ describe('cloud agent ownership safety', () => {
       async setModel(model: string) {
         calls.push(`model:${model}`);
       },
+      async resetWorkspaceBaseline() {
+        calls.push('baseline');
+        return { ok: true as const };
+      },
       async setAutoDisplayName(displayName: string) {
         calls.push(`auto-title:${displayName}`);
       },
     };
-    const env = {
+    const env = testEnv({
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
@@ -71,11 +98,11 @@ describe('cloud agent ownership safety', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() { return orchestrator; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
-      const entry = await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
+      const entry = await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
         purpose: 'Build a hello world app in react',
       }, {
         waitUntil: (promise) => background.push(promise),
@@ -99,7 +126,7 @@ describe('cloud agent ownership safety', () => {
       const purposeless = await createCloudWorkspaceForUser(
         env,
         USER_ID,
-        userDO as unknown as DurableObjectStub<UserDO>,
+        userStub(env),
         await testOwner(),
         {},
         { waitUntil: (promise) => background.push(promise) },
@@ -116,28 +143,28 @@ describe('cloud agent ownership safety', () => {
   test('rolls back the local roster row when orchestrator owner claim fails', async () => {
     const calls: string[] = [];
     const userDO = {
-      async getConfig(_caller: unknown, key: string) {
+      async getConfig(_caller: UserCaller, key: string) {
         calls.push(`config:${key}`);
         return null;
       },
-      async getAuthHeaders(_caller: unknown) {
+      async getAuthHeaders(_caller: UserCaller) {
         return { authorization: 'Bearer token' };
       },
-      async getCredentialBaseURL(_caller: unknown) {
+      async getCredentialBaseURL(_caller: UserCaller) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
-      async listCredentials(_caller: unknown) {
+      async listCredentials(_caller: UserCaller) {
         return [];
       },
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
+      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
         calls.push(`register:${name}:${displayName ?? ''}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: false,
         };
       },
-      async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
+      async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -153,7 +180,7 @@ describe('cloud agent ownership safety', () => {
         calls.push(`model:${model}`);
       },
     };
-    const env = {
+    const env = testEnv({
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
@@ -161,11 +188,11 @@ describe('cloud agent ownership safety', () => {
       OrchestratorAgent: {
         idFromName(name: string) { return name; },
         get() { return orchestrator; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
         name: 'jarvis',
         displayName: 'Jarvis',
         purpose: 'Help with software projects',
@@ -183,23 +210,23 @@ describe('cloud agent ownership safety', () => {
   test('a failed create never destroys a pre-existing (archived) same-name agent', async () => {
     const calls: string[] = [];
     const userDO = {
-      async getConfig(_caller: unknown) { return null; },
-      async getAuthHeaders(_caller: unknown) { return { authorization: 'Bearer token' }; },
-      async getCredentialBaseURL(_caller: unknown) {
+      async getConfig(_caller: UserCaller) { return null; },
+      async getAuthHeaders(_caller: UserCaller) { return { authorization: 'Bearer token' }; },
+      async getCredentialBaseURL(_caller: UserCaller) {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
-      async listCredentials(_caller: unknown) { return []; },
+      async listCredentials(_caller: UserCaller) { return []; },
       // The roster row exists but is ARCHIVED — registerWorkspace resurrects it
       // on name conflict and reports existed: true.
       async ensureWorkspaceCapability() {},
-      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
+      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
         calls.push(`register:${name}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
           existed: true,
         };
       },
-      async removeWorkspace(_caller: unknown, name: string, ownerUserId: string) {
+      async removeWorkspace(_caller: UserCaller, name: string, ownerUserId: string) {
         calls.push(`remove:${name}:${ownerUserId}`);
       },
     };
@@ -209,13 +236,15 @@ describe('cloud agent ownership safety', () => {
         throw new Error('boot failure');
       },
     };
-    const env = {
+    const env = testEnv({
       UserDO: { idFromName(name: string) { return name; }, get() { return userDO; } },
-      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      OrchestratorAgent: { idFromName(name: string) { return name; }, get() { return orchestrator; } },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
-      await expect(createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
+      await expect(createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
         name: 'jarvis',
       })).rejects.toThrow('boot failure');
     } finally {
@@ -237,7 +266,7 @@ describe('cloud agent ownership safety', () => {
         return 'https://api.cloudflare.com/client/v4/accounts/account/ai/v1';
       },
       async listCredentials() { return []; },
-      async registerWorkspace(_caller: unknown, name: string, displayName?: string) {
+      async registerWorkspace(_caller: UserCaller, name: string, displayName?: string) {
         calls.push(`register:${name}`);
         return {
           entry: { name, displayName: displayName ?? name, createdAt: 1, lastVisited: 1, archivedAt: null },
@@ -255,15 +284,18 @@ describe('cloud agent ownership safety', () => {
       async setProvisionalDisplayName() { calls.push('provisional-title'); },
       async setSoul() { calls.push('soul'); },
       async setModel() { calls.push('model'); },
+      async resetWorkspaceBaseline() { calls.push('baseline'); return { ok: true as const }; },
     };
-    const env = {
+    const env = testEnv({
       UserDO: { idFromName: (n: string) => n, get: () => userDO },
-      OrchestratorAgent: { idFromName: (n: string) => n, get: () => orchestrator }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      OrchestratorAgent: { idFromName: (n: string) => n, get: () => orchestrator },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
 
     const originalFetch = globalThis.fetch;
     globalThis.fetch = asFetchFunction(async () => new Response('{}', { status: 503 }));
     try {
-      await createCloudWorkspaceForUser(env, USER_ID, userDO as unknown as DurableObjectStub<UserDO>, await testOwner(), {
+      await createCloudWorkspaceForUser(env, USER_ID, userStub(env), await testOwner(), {
         name: 'jarvis',
         displayName: 'Jarvis',
       });
@@ -276,7 +308,7 @@ describe('cloud agent ownership safety', () => {
     // before any of that, not on first visit.
     expect(calls).toEqual([
       'register:jarvis', `claim:${USER_ID}`, 'ensure:jarvis:none',
-      'provisional-title', 'soul', 'model',
+      'provisional-title', 'soul', 'baseline', 'model',
     ]);
   });
 
@@ -296,9 +328,11 @@ describe('cloud agent ownership safety', () => {
           if (options.ensureThrows) throw new Error(options.ensureThrows);
         },
       };
-      const env = {
+      const env = testEnv({
         UserDO: { idFromName: (n: string) => n, get: () => userDO },
-        OrchestratorAgent: { idFromName: (n: string) => n, get: () => workspace }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+        OrchestratorAgent: { idFromName: (n: string) => n, get: () => workspace },
+        CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+      });
       return { env, calls };
     }
 

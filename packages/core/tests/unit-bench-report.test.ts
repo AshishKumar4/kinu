@@ -22,7 +22,7 @@ function attempt(taskId: string, variantId: string, passed: boolean, extra: Part
   return {
     taskId, variantId, slot: variantId === CONFIG.variantA ? 'a' : 'b', repeat: 0,
     passed, checks: [{ id: 'c', passed, exitCode: passed ? 0 : 1, durationMs: 5, output: '' }],
-    durationMs: 10, tokens: 100, peakPromptTokens: 1000, budgetBreach: null, ...extra,
+    durationMs: 10, tokens: 100, peakPromptTokens: 1000, modelCalls: 2, budgetBreach: null, ...extra,
   };
 }
 
@@ -98,9 +98,9 @@ describe('buildBenchReport', () => {
         ...repeats('t1', 'candidate', [true, true, true]),
         // Emitted out of repeat order on purpose: the report must not depend
         // on the order the runner happened to produce.
-        attempt('t2', 'baseline', false, { repeat: 1, tokens: 400, durationMs: 30, peakPromptTokens: 9000 }),
-        attempt('t2', 'baseline', false, { repeat: 0, tokens: 200, durationMs: 10, peakPromptTokens: 3000 }),
-        attempt('t2', 'baseline', false, { repeat: 2, tokens: 300, durationMs: 20, budgetBreach: 'tokens', peakPromptTokens: 6000 }),
+        attempt('t2', 'baseline', false, { repeat: 1, tokens: 400, durationMs: 30, peakPromptTokens: 9000, modelCalls: 6 }),
+        attempt('t2', 'baseline', false, { repeat: 0, tokens: 200, durationMs: 10, peakPromptTokens: 3000, modelCalls: 4 }),
+        attempt('t2', 'baseline', false, { repeat: 2, tokens: 300, durationMs: 20, budgetBreach: 'tokens', peakPromptTokens: 6000, modelCalls: 8 }),
         ...repeats('t2', 'candidate', [false, false, false]),
       ],
     });
@@ -109,6 +109,7 @@ describe('buildBenchReport', () => {
     expect(t2).toMatchObject({ taskId: 't2', attempts: 3, passesA: 0, passesB: 0 });
     // Mean per attempt, so a k=3 row reads against the same per-attempt budget.
     expect(t2!.tokensA).toBe(300);
+    expect(t2!.modelCallsA).toBe(6);
     // Cost fields are means so a k=3 row reads against the same per-attempt
     // budget a k=1 row does — except the PEAK, which is a maximum: averaging
     // peaks would report a working set no attempt ever reached.
@@ -129,6 +130,18 @@ describe('buildBenchReport', () => {
       runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
       devAttempts: [attempt('t1', 'someone-else', true)],
     })).toThrow(/unknown variant/);
+  });
+
+  test('keeps an observed zero model-call count distinct from absent evidence', () => {
+    const report = buildBenchReport({
+      runId: 'r1', config: CONFIG, sealed: null, sealAccessOrdinal: null,
+      devAttempts: [
+        attempt('t1', 'baseline', false, { modelCalls: undefined }),
+        attempt('t1', 'candidate', true, { modelCalls: 0 }),
+      ],
+    });
+    expect(report.dev.cases[0]).toMatchObject({ modelCallsA: null, modelCallsB: 0 });
+    expect(renderBenchSummary(report)).toContain('model calls/task A=unreported  B=0.0');
   });
 });
 
@@ -237,6 +250,11 @@ describe('renderBenchSummary', () => {
 });
 
 describe('gain report', () => {
+  const outcomes = (taskIds: readonly string[]): AttemptOutcome[] => taskIds.flatMap((taskId) => [
+    attempt(taskId, CONFIG.variantA, false),
+    attempt(taskId, CONFIG.variantB, true),
+  ]);
+
   test('reports a zero gain as a real result, with the calibration attached', () => {
     const report = buildGainReport({
       runId: 'g1', config: CONFIG,
@@ -245,6 +263,7 @@ describe('gain report', () => {
         { taskId: 't2', index: 1, stateful: 0, stateless: 0 },
         { taskId: 't3', index: 2, stateful: 1, stateless: 1 },
       ],
+      attempts: outcomes(['t1', 't2', 't3']),
     });
     expect(report.stats.gain).toBe(0);
     expect(report.calibration).toBe(GAIN_CALIBRATION);
@@ -261,9 +280,39 @@ describe('gain report', () => {
         { taskId: 'a', index: 0, stateful: 0, stateless: 0 },
         { taskId: 'b', index: 1, stateful: 1, stateless: 0 },
       ],
+      attempts: outcomes(['a', 'b', 'c']),
     });
     expect(report.sequence).toEqual(['a', 'b', 'c']);
     expect(report.stats.normalizedGain).toBeCloseTo(2 / 3, 10);
+  });
+
+  test('reports exact cost and model-call accounting for both gain arms', () => {
+    const report = buildGainReport({
+      runId: 'g1', config: CONFIG,
+      perTask: [{ taskId: 't1', index: 0, stateful: 1, stateless: 0 }],
+      attempts: [
+        attempt('t1', CONFIG.variantA, false, { tokens: 120, modelCalls: undefined }),
+        attempt('t1', CONFIG.variantB, true, { tokens: 80, modelCalls: 0, peakPromptTokens: 500 }),
+      ],
+    });
+    expect(report.cost.stateless).toMatchObject({
+      attempts: 1, totalTokens: 120, meanTokens: 120,
+      totalModelCalls: null, meanModelCalls: null, peakPromptTokens: 1000,
+    });
+    expect(report.cost.stateful).toMatchObject({
+      attempts: 1, totalTokens: 80, meanTokens: 80,
+      totalModelCalls: 0, meanModelCalls: 0, peakPromptTokens: 500,
+    });
+    expect(renderGainSummary(report))
+      .toContain('model calls/attempt stateless=unreported  stateful=0.0');
+  });
+
+  test('refuses a gain report with missing accounting attempts', () => {
+    expect(() => buildGainReport({
+      runId: 'g1', config: CONFIG,
+      perTask: [{ taskId: 't1', index: 0, stateful: 1, stateless: 0 }],
+      attempts: [attempt('t1', CONFIG.variantA, false)],
+    })).toThrow(/expected 1 attempt per arm/);
   });
 });
 
@@ -292,7 +341,6 @@ describe('run mechanics', () => {
   test('usageTokens never returns a non-number, whatever a provider sends', () => {
     for (const bad of [undefined, null, 'nonsense', 42, {}, { inputTokens: {} }, { inputTokens: NaN, outputTokens: 3 }]) {
       const result = usageTokens(bad);
-      expect(typeof result).toBe('number');
       expect(Number.isFinite(result)).toBe(true);
     }
     expect(usageTokens({ inputTokens: NaN, outputTokens: 3 })).toBe(3);

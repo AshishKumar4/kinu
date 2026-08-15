@@ -12,7 +12,7 @@ export function nextAlarmTime(
   triggerFireTimes: ReadonlyArray<number | null | undefined>,
   ...retryAts: Array<number | null>
 ): number | null {
-  const candidates = triggerFireTimes.filter((t): t is number => typeof t === 'number' && t > now);
+  const candidates = triggerFireTimes.filter((t): t is number => t != null && t > now);
   for (const retryAt of retryAts) {
     if (retryAt != null) candidates.push(Math.max(retryAt, now));
   }

@@ -8,8 +8,14 @@
  * mutate the identical list, never a shadow copy.
  */
 import type { CodemodeProvider } from '../rlm.js';
-import type { TaskListStore } from '../tasks/store.js';
+import * as v from 'valibot';
+import { TASK_STATUSES, type TaskListStore } from '../tasks/store.js';
+import { decodeJsonValue } from '../utils/json.js';
 import { createTasksDispatcher } from './tasks-tool.js';
+
+const TitlesSchema = v.array(v.string());
+const ParentSchema = v.optional(v.string());
+const TaskStatusSchema = v.picklist(TASK_STATUSES);
 
 const TYPES = `export declare const tasks: {
   /** Write down the whole plan in one call — one title per task, in the
@@ -37,21 +43,32 @@ export function createTasksCodemodeProvider(taskList: TaskListStore): CodemodePr
       add: {
         description: 'Write down the whole plan in one call: one title per task.',
         execute: async (...args: unknown[]) => {
-          const titles = Array.isArray(args[0]) ? args[0].map(String) : [];
-          const parent = typeof args[1] === 'string' ? args[1] : undefined;
-          return run({ action: 'add', titles, parent });
+          const titles = v.safeParse(TitlesSchema, args[0]);
+          const parent = v.safeParse(ParentSchema, args[1]);
+          if (!titles.success || !parent.success) {
+            return { error: 'tasks.add requires string titles and an optional string parent' };
+          }
+          return decodeJsonValue({
+            value: run({ action: 'add', titles: titles.output, parent: parent.output }),
+          });
         },
       },
       update: {
         description: 'Move one task to active/done/dropped by id.',
-        execute: async (...args: unknown[]) => run({
-          action: 'update', id: String(args[0] ?? ''),
-          status: args[1] as 'open' | 'active' | 'done' | 'dropped',
-        }),
+        execute: async (...args: unknown[]) => {
+          const status = v.safeParse(TaskStatusSchema, args[1]);
+          return decodeJsonValue({
+            value: run({
+              action: 'update',
+              id: String(args[0] ?? ''),
+              status: status.success ? status.output : undefined,
+            }),
+          });
+        },
       },
       list: {
         description: 'Read the whole task list back, closed items included.',
-        execute: async () => run({ action: 'list' }),
+        execute: async () => decodeJsonValue({ value: run({ action: 'list' }) }),
       },
     },
   };

@@ -22,7 +22,7 @@ import {
 } from './prompting/surface.js';
 import { DEFAULT_SOUL_MD } from './identity/soul.js';
 import { renderAgentsMdSection, type AgentsMdFile } from './prompting/agents-md.js';
-import { WORKSPACE_ROOT } from './vfs/nimbus-workspace.js';
+import { WORKSPACE_ROOT } from './vfs/workspace-path.js';
 
 export type {
   PromptBackend,
@@ -98,7 +98,18 @@ function renderOperatingGuidance(surface: PromptSurface): string {
   }
 
   if (mode === 'plan') {
-    lines.push('- Planning mode: leave state as you found it and produce a concrete plan with affected files and verification.');
+    lines.push(
+      surface.planSubmissionAvailable
+        ? '- Plan mode: investigate deeply, then submit a concrete Markdown plan with affected files, risks, and verification through `submit_plan`.'
+        : '- Plan mode: investigate deeply and report concrete findings to the parent Plan turn; the parent owns the reviewed plan.',
+      '- Do not change files, system state, releases, or deployments. Ordinary tools remain available for inspection; use mutating operations only after approval starts a Build turn.',
+      surface.planSubmissionAvailable
+        ? '- Do not expose ports or produce preview or output links. The submitted plan is the only plan-mode output surface.'
+        : '- Do not expose ports or produce preview or output links. Your report is research input for the parent plan, not a separate user-facing output.',
+      surface.planSubmissionAvailable
+        ? '- Do not begin implementation until the plan is approved. End by calling `submit_plan`, or ask a question only when the missing answer must come from the user.'
+        : '- Do not begin implementation. Return your research and recommendations to the parent without calling or inventing `submit_plan`.',
+    );
   } else if (mode === 'release') {
     lines.push('- Release mode: use `release.*` inside execute_tools to track plan, checks, preview, owner approval, deployment, and rollback metadata.');
     lines.push('- Never deploy Proteus release changes without an explicit approval record.');
@@ -163,21 +174,13 @@ function renderToolsSection(surface: PromptSurface): string {
  *  prefix, so a sandbox waking up doesn't re-prefill the whole conversation. */
 function renderExecutorLine(exec: PromptExecutorInfo, backend?: PromptBackend): string {
   switch (exec.name) {
-      // What the `workspace` SHELL is differs by backend, and the difference
-      // is the one an agent gets wrong. Hosted, it is a real POSIX shell over
-      // the agent's durable filesystem — but one with no NATIVE binaries, so
-      // the line has to say both halves: what it can now do, and the exact
-      // boundary (an interpreter or a toolchain) that still needs an executor.
+      // What the `workspace` shell is differs by backend. Hosted, it is the
+      // authoritative Nimbus session: files, runtimes and resident processes
+      // are one environment rather than a second executor beside storage.
       case 'workspace':
         return backend === 'cli-local'
           ? '- **workspace.*** / `runtime: "workspace"`: your own durable workspace filesystem and a real shell over it. The machine the CLI is running on is `laptop.*`, in the machine\'s own paths.'
-          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable filesystem, with a real POSIX shell over it — pipes, redirection, variables, loops, `cd`, and the usual coreutils (grep/sed/awk/sort/find/tar/diff/xargs/curl...). No NATIVE binaries live here: node, python, git, package managers and builds have no executable to run and belong in the runtimes above.';
-      // "machine", not "workspace": Nimbus runs the workspace itself now, and
-      // this executor is a SEPARATE Nimbus session. Calling both a workspace
-      // invited the agent to look for a file it wrote on the wrong filesystem.
-      // The separateness itself is stated once, below, for all of them.
-      case 'nimbus':
-        return '- **nimbus.*** / `runtime: "nimbus"`: lightweight cloud Linux machine for quick commands, scripts, package installs, and file work.';
+          : '- **workspace.*** / `runtime: "workspace"`: the agent\'s own durable Nimbus workspace — one filesystem and real POSIX shell with node, npm, git, resident background processes, logs, and exposable ports. Additional interpreter/toolchain support is listed in its live capabilities.';
       case 'sandbox':
         return '- **sandbox.*** / `runtime: "sandbox"`: full Linux sandbox for heavier installs, longer-running processes, and user-visible port-listening apps.';
       case 'laptop':
@@ -246,14 +249,13 @@ function renderExecutorSection(surface: PromptSurface): string {
       + `(${devices.map((exec) => `\`${exec.name}.*\``).join(', ')}) in THEIR native paths. To move a file between two of them, read it from one and write it to the other.`,
     );
   }
-  if (devices.length > 1) {
-    parts.push('When more than one execution device is available, decide explicitly: laptop for the user machine, Nimbus for quick cloud execution, Sandbox for heavyweight/server work.');
-  }
-  if (devices.some((exec) => exec.name === 'sandbox')) {
+  const previewExecutors = executors.filter((exec) => exec.capabilities?.includes('net_inbound'));
+  if (previewExecutors.length > 0) {
+    const exposeCalls = previewExecutors.map((exec) => `${exec.name}.exposePort(port)`).join(' or ');
     parts.push(
       '',
       '### Showing a running app',
-      'For a user-visible web app, write files in the sandbox, start a server bound to 0.0.0.0 in the background, wait for it to bind, then call sandbox.exposePort(port). If exposePort fails, inspect the server log and retry after the server is actually listening.',
+      `For a user-visible web app, keep its files and server in one preview-capable environment, start the server bound to 0.0.0.0 in the background, wait for it to bind, then call ${exposeCalls} for the environment you chose. If exposePort fails, inspect that environment's server log and retry after the server is actually listening.`,
     );
   }
   return parts.join('\n');

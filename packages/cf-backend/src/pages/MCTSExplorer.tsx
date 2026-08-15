@@ -7,28 +7,18 @@
  * row anyway. Drill-down, not a second rendering: the tree, its loader and the
  * adapters are the surface's own, imported rather than re-implemented.
  */
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useRef, useEffect } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
 import { ForkTree } from "@/components/fork-tree";
-import { cleanNodeLabel, isCompeted, treeStats } from "@/components/fork-tree-model";
+import { cleanNodeLabel, findForkNode, terminalForkNode, treeStats } from "@/components/fork-tree-model";
 import { EmptyState, EMPTY_HINTS, formatScore } from "@/components/surfaces/shared";
 import { describeSettle, useForkRunTree } from "@/components/surfaces/ExplorationSurface";
-import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
+import { selectForkRun, useExactForkRun, useLiveForkRuns } from "@/components/surfaces/fork-runs";
+import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useProteus } from "@/hooks/use-proteus";
 import type { ForkRunSummary } from "@proteus/core";
-import type { ForkNode } from "@/lib/protocol";
-
-/** The best-scoring branch, or null when the fork ranked none of them. */
-function findWinner(root: ForkNode): ForkNode | null {
-  if (!isCompeted(root)) return null;
-  const walk = (node: ForkNode, best: ForkNode | null): ForkNode | null => {
-    const next = node.value !== null && (!best || node.value > (best.value ?? 0)) ? node : best;
-    return node.children.reduce((carry, child) => walk(child, carry), next);
-  };
-  return walk(root, null);
-}
 
 export default function MCTSExplorer() {
   const { agentId } = useParams();
@@ -37,7 +27,6 @@ export default function MCTSExplorer() {
   const state = useProteus(agentId);
   const containerRef = useRef<HTMLDivElement>(null);
   const [dims, setDims] = useState({ w: 1200, h: 700 });
-  const [selected, setSelected] = useState<ForkNode | null>(null);
 
   useEffect(() => {
     const el = containerRef.current; if (!el) return;
@@ -46,11 +35,18 @@ export default function MCTSExplorer() {
     return () => ro.disconnect();
   }, []);
 
-  const { rpc } = state;
-  const loadRuns = useCallback(() => rpc<ForkRunSummary[]>("listForkRuns", [30]), [rpc]);
-  const { resource } = useAsyncResource(loadRuns);
-  const runs = lastValue(resource);
-  const run = runs?.find((candidate) => candidate.id === runId) ?? runs?.[0] ?? null;
+  const { resource, reload, runs, hasActiveWork } = useLiveForkRuns(
+    state.rpc,
+    state.isStreaming,
+    state.backgroundJobs,
+  );
+  const exact = useExactForkRun(state.rpc, runId, hasActiveWork);
+  const run = runId === null ? selectForkRun(runs, null) : exact.run;
+  const selectionResource = runId === null ? resource : exact.resource;
+  const reloadSelection = runId === null ? reload : exact.reload;
+  const requestedRunMissing = runId !== null
+    && exact.resource.status === "ready"
+    && exact.run === null;
 
   return (
     <div className="h-full flex flex-col p-bg">
@@ -59,16 +55,26 @@ export default function MCTSExplorer() {
         <div className="h-4 w-px bg-[var(--c-border)]" />
         <GitForkIcon size={16} className="p-accent" />
         <span className="font-semibold text-sm p-text">Fork explorer</span>
-        {run && <span className="text-xs p-text-2 truncate" title={run.task}>— {run.task}</span>}
+        {run && <span className="text-xs p-text-2 truncate" title={run.task}>{run.task}</span>}
       </div>
+      {run && selectionResource.status === "error" && (
+        <LoadFailure what="fresh fork runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
+      )}
       {run ? (
-        <ExplorerBody run={run} state={state} containerRef={containerRef} dims={dims}
-          selected={selected} onSelect={setSelected} />
+        <ExplorerBody key={run.id} run={run} state={state} containerRef={containerRef} dims={dims}
+          hasActiveWork={hasActiveWork} />
       ) : (
         <div ref={containerRef} className="flex-1 relative overflow-hidden p-surface">
-          {runs === null ? (
+          {selectionResource.status === "error" ? (
+            <LoadFailure what="the fork runs" message={selectionResource.message} onRetry={reloadSelection} />
+          ) : selectionResource.status === "loading" ? (
             <div className="flex items-center justify-center h-full">
               <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading forks…</div>
+            </div>
+          ) : requestedRunMissing ? (
+            <div className="h-full flex items-center justify-center">
+              <EmptyState icon={<GitForkIcon size={28} />} title="Fork not found"
+                hint="This run is not in the workspace's fork history." />
             </div>
           ) : (
             <div className="h-full flex items-center justify-center">
@@ -82,33 +88,48 @@ export default function MCTSExplorer() {
 }
 
 function ExplorerBody({
-  run, state, containerRef, dims, selected, onSelect,
+  run, state, containerRef, dims, hasActiveWork,
 }: {
   run: ForkRunSummary;
   state: ReturnType<typeof useProteus>;
   containerRef: React.RefObject<HTMLDivElement | null>;
   dims: { w: number; h: number };
-  selected: ForkNode | null;
-  onSelect: (node: ForkNode | null) => void;
+  hasActiveWork: boolean;
 }) {
-  const { tree } = useForkRunTree(
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const { tree, resource, reload } = useForkRunTree(
     run,
     state.rpc,
     state.mctsTree?.id === run.id ? state.mctsTree : null,
-    state.isStreaming,
+    hasActiveWork,
   );
   const stats = tree ? treeStats(tree) : null;
-  const winner = tree ? findWinner(tree) : null;
+  const winner = tree ? terminalForkNode(tree) : null;
+  const selected = tree && selectedId ? findForkNode(tree, selectedId) : null;
 
   return (
     <>
       <div ref={containerRef} className="flex-1 relative overflow-hidden p-surface">
+        {tree && resource.status === "error" && (
+          <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
+            className="absolute z-10 left-4 right-4 top-4 p-surface border p-border rounded-md px-3 py-2" />
+        )}
         {!tree ? (
-          <div className="flex items-center justify-center h-full">
-            <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree…</div>
-          </div>
+          resource.status === "error" ? (
+            <LoadFailure what="this fork" message={resource.message} onRetry={reload} />
+          ) : resource.status === "loading" ? (
+            <div className="flex items-center justify-center h-full">
+              <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Loading tree…</div>
+            </div>
+          ) : (
+            <div className="h-full flex items-center justify-center">
+              <EmptyState icon={<GitForkIcon size={28} />} title="Nothing recorded for this fork"
+                hint="The run stopped before its first branch was recorded." />
+            </div>
+          )
         ) : dims.w > 0 && (
-          <ForkTree root={tree} width={dims.w} height={dims.h} onNodeClick={onSelect} selectedNode={selected} />
+          <ForkTree root={tree} width={dims.w} height={dims.h}
+            onNodeClick={(node) => setSelectedId(node.id)} selectedNode={selected} />
         )}
       </div>
       <div className="flex items-center justify-between px-5 py-2.5 border-t p-border">

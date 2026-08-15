@@ -14,6 +14,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
+import * as v from 'valibot';
 
 const python = Bun.which("python3");
 const promptModule = resolve(__dirname, "../src/prompt.ts");
@@ -123,6 +124,12 @@ interface HarnessResult {
   exitcode: number | null;
 }
 
+const TerminalFlagsSchema = v.object({ icanon: v.boolean(), echo: v.boolean(), isig: v.boolean() });
+const HarnessResultSchema: v.GenericSchema<HarnessResult> = v.object({
+  output: v.string(), pending: TerminalFlagsSchema, post: TerminalFlagsSchema,
+  exited: v.boolean(), signaled: v.boolean(), termsig: v.nullable(v.number()), exitcode: v.nullable(v.number()),
+});
+
 /** `expectPending` is the settle target only — it decides when the harness
  *  stops waiting for the terminal to reach a steady state, never what is
  *  asserted. The test still asserts the observed flags itself, so a CLI that
@@ -141,7 +148,7 @@ function runInPty(
     timeout: 40_000,
   });
   expect(run.status).toBe(0);
-  return JSON.parse(run.stdout.trim().split("\n").at(-1)!) as HarnessResult;
+  return v.parse(HarnessResultSchema, JSON.parse(run.stdout.trim().split("\n").at(-1)!));
 }
 
 const CONFIRM_DRIVER = `

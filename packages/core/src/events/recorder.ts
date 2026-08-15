@@ -11,8 +11,104 @@
  * recorder fans out synchronously after persisting to SQLite.
  */
 
+import * as v from 'valibot';
 import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { RunEvent, RunEventInput, RunEventType } from './types.js';
+import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
+
+const BaseFields = {
+  eventIndex: v.number(),
+  runId: v.string(),
+  timestamp: v.string(),
+};
+const StepUsageSchema = v.object({
+  input: v.number(), cached: v.number(), output: v.number(), reasoning: v.number(),
+  usd: v.optional(v.number()), modelId: v.optional(v.string()),
+});
+const ContextCompositionSchema = v.object({
+  segments: v.array(v.object({
+    plane: v.picklist(['system', 'tools', 'messages', 'ephemeral']),
+    label: v.string(), chars: v.number(), items: v.number(),
+  })),
+  measuredChars: v.number(),
+  charsPerToken: v.number(),
+  estimatedTokens: v.number(),
+});
+const HeadFileChangeSetSchema = v.object({
+  id: v.string(),
+  changes: v.array(v.object({
+    path: v.string(),
+    status: v.picklist(['added', 'removed', 'changed']),
+    added: v.number(),
+    removed: v.number(),
+    binary: v.optional(v.boolean()),
+  })),
+});
+const RunEventSchema = v.variant('type', [
+  v.object({ ...BaseFields, type: v.literal('run_start'), agentId: v.string(),
+    userMessage: v.optional(v.string()), caused_by: v.optional(v.string()),
+    ingress_kind: v.optional(v.string()), trigger_id: v.optional(v.string()) }),
+  v.object({ ...BaseFields, type: v.literal('turn_start'), turnIndex: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('text_delta'), text: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('tool_call_start'), name: v.string(),
+    args: JsonObjectSchema, toolCallId: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('tool_call_end'), name: v.string(),
+    toolCallId: v.string(), result: v.optional(JsonValueSchema), error: v.optional(v.string()),
+    durationMs: v.optional(v.number()) }),
+  v.object({ ...BaseFields, type: v.literal('step_finish'), stepIndex: v.number(),
+    reason: v.optional(v.string()), usage: v.optional(StepUsageSchema),
+    context: v.optional(ContextCompositionSchema) }),
+  v.object({ ...BaseFields, type: v.literal('head_split'), rootId: v.string(),
+    headIds: v.array(v.string()), rationale: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('head_merge'), rootId: v.string(),
+    headCount: v.number(), headsWithFindings: v.number(), totalTokens: v.number(),
+    mergedNarrative: v.string(), fileChanges: v.array(HeadFileChangeSetSchema),
+    blindSpots: v.array(v.string()) }),
+  v.object({ ...BaseFields, type: v.literal('scaffold_promotion'), fromVersion: v.number(), toVersion: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('scaffold_rollback'), fromVersion: v.number(), toVersion: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('memory_write'), path: v.string(), bytes: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('context_budget'), admittedChars: v.number(),
+    omittedChars: v.number(), trips: v.object({
+      run: v.optional(v.number()), file_read: v.optional(v.number()), web_fetch: v.optional(v.number()),
+      execute_tools: v.optional(v.number()), external_tool: v.optional(v.number()),
+      attachment: v.optional(v.number()), pasted_text: v.optional(v.number()),
+    }), referenced: v.number(), tightened: v.number(), followUps: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('file_edit'), attempts: v.number(), applied: v.number(),
+    failures: v.object({
+      empty_anchor: v.optional(v.number()), not_found: v.optional(v.number()),
+      ambiguous: v.optional(v.number()), overlap: v.optional(v.number()),
+      no_change: v.optional(v.number()), unread: v.optional(v.number()),
+      stale: v.optional(v.number()), missing: v.optional(v.number()), io: v.optional(v.number()),
+    }), recoveredPaths: v.number(), abandonedPaths: v.number() }),
+  v.object({ ...BaseFields, type: v.literal('turn_steering'),
+    trigger: v.picklist(['repeated_call', 'repeated_failure', 'no_progress', 'long_turn_no_delegation']),
+    step: v.number(), tool: v.optional(v.string()), converted: v.boolean() }),
+  v.object({ ...BaseFields, type: v.literal('completion_gate'), converted: v.boolean() }),
+  v.object({ ...BaseFields, type: v.literal('craft_cycle'), crafted: v.array(v.string()),
+    invoked: v.array(v.string()), reused: v.array(v.string()), returned: v.number(),
+    raised: v.number(), dropped: v.array(v.string()) }),
+  v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.array(v.object({
+    tool: v.string(), failures: v.number(), failedSignature: v.string(),
+  })) }),
+  v.object({ ...BaseFields, type: v.literal('budget_exhausted'),
+    seam: v.picklist(['model_call', 'spawn']), label: v.string(), scope: v.string(),
+    limit: v.object({ usd: v.optional(v.number()), tokens: v.optional(v.number()) }),
+    spent: v.object({ tokens: v.number(), usd: v.number() }), note: v.string() }),
+  v.object({ ...BaseFields, type: v.literal('fiber_recovered'), fiberName: v.string(),
+    fiberId: v.string(), snapshot: v.optional(v.unknown()) }),
+  v.object({ ...BaseFields, type: v.literal('error'), message: v.string(), details: v.optional(v.unknown()) }),
+  v.object({ ...BaseFields, type: v.literal('turn_end'), turnIndex: v.number(),
+    tokenUsage: v.optional(v.object({ input: v.number(), output: v.number(), cached: v.optional(v.number()) })) }),
+  v.object({ ...BaseFields, type: v.literal('run_end'), reason: v.optional(v.string()), error: v.optional(v.string()) }),
+]);
+
+function stampRunEvent<Input extends RunEventInput>(input: Input, eventIndex: number, runId: string) {
+  return { ...input, eventIndex, runId, timestamp: new Date().toISOString() };
+}
+
+function parseStoredRunEvent(payload: string): RunEvent {
+  return v.parse(RunEventSchema, JSON.parse(payload));
+}
 
 export interface RunEventQuery {
   /** Inclusive lower bound on eventIndex. */
@@ -50,12 +146,7 @@ export class RunEventRecorder {
   /** Record an event for runId. Returns the assigned monotonic event. */
   emit(runId: string, input: RunEventInput): RunEvent {
     const idx = this.allocateIndex(runId);
-    const ev = {
-      ...input,
-      eventIndex: idx,
-      runId,
-      timestamp: new Date().toISOString(),
-    } as RunEvent;
+    const ev = stampRunEvent(input, idx, runId);
     this.persist(ev);
     for (const l of this.listeners) {
       try { l(ev); } catch (err) { console.warn('[run-events] listener threw:', err); }
@@ -79,7 +170,7 @@ export class RunEventRecorder {
   }
 
   private persist(ev: RunEvent): void {
-    this.sql`INSERT OR REPLACE INTO run_events (run_id, event_index, type, payload, ts)
+    void this.sql`INSERT OR REPLACE INTO run_events (run_id, event_index, type, payload, ts)
       VALUES (${ev.runId}, ${ev.eventIndex}, ${ev.type}, ${JSON.stringify(ev)}, ${ev.timestamp})`;
   }
 
@@ -97,7 +188,7 @@ export class RunEventRecorder {
       WHERE run_id = ${runId} AND event_index >= ${since}
       ORDER BY event_index ASC
       LIMIT ${fetchLimit}`;
-    const events = rows.map((r) => JSON.parse(r.payload) as RunEvent);
+    const events = rows.map((r) => parseStoredRunEvent(r.payload));
     if (!types) return events;
     return events.filter((e) => types.has(e.type)).slice(0, limit);
   }
@@ -109,7 +200,7 @@ export class RunEventRecorder {
       WHERE run_id = ${runId} AND event_index > ${afterIndex}
       ORDER BY event_index ASC
       LIMIT ${limit}`;
-    return rows.map((r) => JSON.parse(r.payload) as RunEvent);
+    return rows.map((r) => parseStoredRunEvent(r.payload));
   }
 
   /**
@@ -133,7 +224,7 @@ export class RunEventRecorder {
       WHERE type = ${type}
       ORDER BY ts DESC, rowid DESC
       LIMIT ${limit}`;
-    return rows.map((r) => JSON.parse(r.payload) as RunEvent).reverse();
+    return rows.map((r) => parseStoredRunEvent(r.payload)).reverse();
   }
 
   /** Subscribe to future events; returns an unsubscribe function. */

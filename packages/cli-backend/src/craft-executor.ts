@@ -4,8 +4,8 @@
  * V8 on Node/Bun permits `new Function()` codegen, so the CLI adapter compiles
  * stored crafted-tool code directly in-process. The code convention is an
  * expression that evaluates to an async function (arrow or function
- * expression) — the same convention the CF LOADER path uses, and the same
- * convention the store-time normalizer enforces.
+ * expression) — the same convention the CF LOADER path uses, and the one the
+ * craft admission gate (core craft/conflict.ts) enforces at the write.
  *
  * The factory is idempotent: each call to craftedToolExecute(tool) returns a
  * fresh closure. The crafted set is resolved once per `execute_tools` call, so
@@ -18,11 +18,13 @@
  * user code. That is the same path the CF LOADER executor produces.
  */
 
-import type { CraftedToolExecute, CraftedToolExecuteFn } from '@proteus/core';
+import { decodeJsonValue } from '@proteus/core';
+import type { CraftedToolExecute, CraftedToolExecuteFn, JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 
 export function createNodeCraftedExecute(): CraftedToolExecute {
   return (tool) => {
-    let compiled: ((arg: unknown) => Promise<unknown>) | null = null;
+    let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
     let compiledFor = '';
 
     const ensure = () => {
@@ -30,16 +32,14 @@ export function createNodeCraftedExecute(): CraftedToolExecute {
       // `tool.code` is expected to be an expression form like
       //   async (x) => x * 2
       //   async function(x) { return x * 2 }
-      // The store-time normalizer guarantees one of these forms.
-      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      // upsertCraftedTool runs this exact compilation before storing, so a tool
+      // that reaches here has already produced a callable once.
       const factory = new Function('return (' + tool.code + ')');
-      const fn = factory();
-      if (typeof fn !== 'function') {
-        throw new Error(
-          `Crafted tool "${tool.name}" did not evaluate to a function (got ${typeof fn}).`,
-        );
-      }
-      compiled = fn as (arg: unknown) => Promise<unknown>;
+      const fn = v.parse(v.function_(), factory());
+      compiled = async (arg) => {
+        const result = await fn(arg);
+        return result === undefined ? undefined : decodeJsonValue({ value: result });
+      };
       compiledFor = tool.code;
       return compiled;
     };

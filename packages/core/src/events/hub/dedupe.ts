@@ -8,15 +8,33 @@
  */
 
 import { sha256Hex, stableStringify } from '../../safety/argument-digest.js';
-import type { ProteusEvent } from './types.js';
+import type { IngressDescriptor, ProteusEvent, ReadableProteusEvent } from './types.js';
+import { decodeJsonValue } from '../../utils/json.js';
 
 /** Map an event to its dedupe key, or null if the variant is not deduped. */
 export function dedupeKeyFor(event: ProteusEvent): string | null {
+  if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
+    return event.dedupe_key;
+  }
+  return dedupeReadableEvent(event);
+}
+
+/** Admission-time dedupe runs before visibility replaces the payload. */
+export function dedupeKeyForDescriptor(
+  descriptor: IngressDescriptor,
+  receivedAt: number,
+): string | null {
+  return dedupeReadableEvent({ ...descriptor, received_at: receivedAt });
+}
+
+function dedupeReadableEvent(
+  event: ReadableProteusEvent | (IngressDescriptor & { received_at: number }),
+): string | null {
   switch (event.variant) {
     case 'webhook': {
       const p = event.payload;
       const bucket = Math.floor(event.received_at / (5 * 60 * 1000));
-      const bodyHash = sha256Hex(stableStringify(p.body), 24);
+      const bodyHash = sha256Hex(stableStringify(decodeJsonValue({ value: p.body })), 24);
       return `webhook:${p.webhook_id}:${bodyHash}:${bucket}`;
     }
 

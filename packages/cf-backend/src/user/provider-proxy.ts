@@ -135,7 +135,7 @@ async function forwardUpstream(
 
   const auth = await userDO.getAuthHeaders(owner, credKey);
   if (!auth) {
-    return errorResponse(401, `No usable credential is connected for "${credKey}" — connect it in your Proteus user settings.`);
+    return errorResponse(401, `No usable credential is connected for "${credKey}". Connect it in your Proteus user settings.`);
   }
 
   const headers = new Headers(request.headers);
@@ -147,10 +147,11 @@ async function forwardUpstream(
   // re-send the attached credential to whatever origin the provider named,
   // which is the one way a target that passed the allowlist could still end up
   // somewhere else. The 3xx is handed back to the caller instead.
-  return fetch(target, {
+  const init: RequestInit = {
     method: request.method,
     headers,
     redirect: 'manual',
-    ...(hasBody ? { body: await request.arrayBuffer() } : {}),
-  });
+  };
+  if (hasBody) init.body = await request.arrayBuffer();
+  return fetch(target, init);
 }

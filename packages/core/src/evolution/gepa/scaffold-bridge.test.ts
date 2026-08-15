@@ -12,6 +12,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { runScaffoldGepa } from './scaffold-bridge.js';
 import { initScaffoldTables } from '../../scaffold/schemas.js';
 import { createTestRuntime } from '../../../tests/helpers.js';
@@ -67,12 +68,12 @@ describe('runScaffoldGepa', () => {
     expect(result.skipReason).toBeUndefined();
 
     // The pending version's code should be in scaffold/agent.js.v{pendingVersion}.
+    if (result.pendingVersion === null) throw new Error('expected a pending scaffold version');
     const pending = await rt.storage.vfs.readFile(
-      `scaffold/agent.js.v${result.pendingVersion!}`,
+      `scaffold/agent.js.v${result.pendingVersion}`,
       { encoding: 'utf8' },
     );
-    expect(typeof pending === 'string' ? pending : new TextDecoder().decode(pending))
-      .toContain('improved');
+    expect(v.parse(v.string(), pending)).toContain('improved');
 
     // The LIVE scaffold/agent.js MUST still hold the seed (Phase 0 invariant).
     expect(await rt.identity.scaffold.read()).toBe(VALID_SEED);

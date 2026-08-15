@@ -15,15 +15,18 @@
  * See docs/ARCHITECTURE.md — "Events and ingress" for the authoritative spec.
  */
 
+import type { WorkMode } from '../../prompting/surface.js';
+import type { JsonObject, JsonValue } from '../../utils/json.js';
+
 // ── Trust ────────────────────────────────────────────────────────
 
 /** Meet-semilattice: `external < authenticated < owner < self`. Merge never
  *  grants, only restricts. */
 export type TrustLevel = 'external' | 'authenticated' | 'owner' | 'self';
 
-export const TRUST_ORDER: Record<TrustLevel, number> = {
+export const TRUST_ORDER = {
   external: 0, authenticated: 1, owner: 2, self: 3,
-};
+} satisfies Record<TrustLevel, number>;
 
 // ── Priority ─────────────────────────────────────────────────────
 
@@ -120,7 +123,7 @@ export interface ReplyChannelRow {
   ttl_expires_at: number;
   payload_policy: PayloadPolicy;
   state: ReplyChannelState;
-  reply_payload: unknown | null;
+  reply_payload: JsonValue | null;
   attempt_count: number;
   created_at: number;
   updated_at: number;
@@ -171,7 +174,7 @@ export interface PeerAgentPayload {
   from_agent_name: string;
   from_user_id: string;
   topic: string;
-  body: unknown;
+  body: JsonValue;
   /** Sender-side outbox row id — the receiver-side dedupe key, so redelivery
    *  after a crash is a no-op and repeated topics are NOT collapsed. */
   sender_event_id: string;
@@ -182,6 +185,7 @@ export interface PeerAgentPayload {
    *  the body outgrows the brief budget. The brief's slice plus this path is
    *  the reference-plus-digest pair the receiving turn reads back. */
   body_path?: string;
+  proteus_mode: WorkMode;
 }
 
 export interface FileChangedPayload {
@@ -199,6 +203,7 @@ export interface SubordinateTaskPayload {
   deliverable?: string;
   deadline_hint?: string;
   inherited_context?: string;
+  proteus_mode: WorkMode;
 }
 
 export type SubordinateReportStatus = 'progress' | 'completed' | 'blocked';
@@ -215,6 +220,7 @@ export interface SubordinateReportPayload {
    *  report outgrows the brief budget — without it the parent's turn would
    *  see only the brief's slice and the rest would be unreachable. */
   content_path?: string;
+  proteus_mode: WorkMode;
 }
 
 export interface EmailAttachmentMeta {
@@ -289,20 +295,32 @@ export interface BaseEvent {
   dedupe_key: string | null;
 }
 
-export type ProteusEvent =
-  | (BaseEvent & { variant: 'chat'; payload: ChatPayload })
-  | (BaseEvent & { variant: 'webhook'; payload: WebhookPayload })
-  | (BaseEvent & { variant: 'process_done'; payload: ProcessDonePayload })
-  | (BaseEvent & { variant: 'timer'; payload: TimerPayload })
-  | (BaseEvent & { variant: 'peer_agent'; payload: PeerAgentPayload })
-  | (BaseEvent & { variant: 'subordinate_task'; payload: SubordinateTaskPayload })
-  | (BaseEvent & { variant: 'subordinate_report'; payload: SubordinateReportPayload })
-  | (BaseEvent & { variant: 'file_changed'; payload: FileChangedPayload })
-  | (BaseEvent & { variant: 'email'; payload: EmailPayload })
-  | (BaseEvent & { variant: 'internal'; payload: InternalPayload })
-  | (BaseEvent & { variant: 'reply_request'; payload: ReplyRequestPayload })
-  | (BaseEvent & { variant: 'mcp_chat'; payload: McpChatPayload })
-  | (BaseEvent & { variant: 'mcp_third_party'; payload: McpThirdPartyPayload });
+type ReadableEventBase = BaseEvent & { payload_visibility: 'full' | 'redact' };
+
+export type ReadableProteusEvent =
+  | (ReadableEventBase & { variant: 'chat'; payload: ChatPayload })
+  | (ReadableEventBase & { variant: 'webhook'; payload: WebhookPayload })
+  | (ReadableEventBase & { variant: 'process_done'; payload: ProcessDonePayload })
+  | (ReadableEventBase & { variant: 'timer'; payload: TimerPayload })
+  | (ReadableEventBase & { variant: 'peer_agent'; payload: PeerAgentPayload })
+  | (ReadableEventBase & { variant: 'subordinate_task'; payload: SubordinateTaskPayload })
+  | (ReadableEventBase & { variant: 'subordinate_report'; payload: SubordinateReportPayload })
+  | (ReadableEventBase & { variant: 'file_changed'; payload: FileChangedPayload })
+  | (ReadableEventBase & { variant: 'email'; payload: EmailPayload })
+  | (ReadableEventBase & { variant: 'internal'; payload: InternalPayload })
+  | (ReadableEventBase & { variant: 'reply_request'; payload: ReplyRequestPayload })
+  | (ReadableEventBase & { variant: 'mcp_chat'; payload: McpChatPayload })
+  | (ReadableEventBase & { variant: 'mcp_third_party'; payload: McpThirdPartyPayload });
+
+/** Hash/HMAC/opaque policies intentionally replace the domain payload. Keeping
+ * that fact in the type prevents routing code from treating an envelope or a
+ * digest as the original event body. */
+export type ProtectedProteusEvent = BaseEvent & {
+  payload_visibility: 'hash' | 'hmac' | 'opaque_handle';
+  payload: JsonValue;
+};
+
+export type ProteusEvent = ReadableProteusEvent | ProtectedProteusEvent;
 
 // ── Ingress descriptor (the only way to construct events) ────────
 
@@ -332,8 +350,14 @@ export type IngressDescriptor =
     }
   | {
       ingress: 'sandbox_cb';
-      variant: 'process_done' | 'file_changed';
-      payload: ProcessDonePayload | FileChangedPayload;
+      variant: 'process_done';
+      payload: ProcessDonePayload;
+      launching_head_trust: TrustLevel;  // captured at sandbox.exec time
+    }
+  | {
+      ingress: 'sandbox_cb';
+      variant: 'file_changed';
+      payload: FileChangedPayload;
       launching_head_trust: TrustLevel;  // captured at sandbox.exec time
     }
   | {
@@ -360,13 +384,23 @@ export type IngressDescriptor =
       // are one trust domain (one owner, one storage shard), so no grant
       // machinery: possession of the worker-side stub IS the authorization.
       ingress: 'subordinate';
-      variant: 'subordinate_task' | 'subordinate_report';
-      payload: SubordinateTaskPayload | SubordinateReportPayload;
+      variant: 'subordinate_task';
+      payload: SubordinateTaskPayload;
+    }
+  | {
+      ingress: 'subordinate';
+      variant: 'subordinate_report';
+      payload: SubordinateReportPayload;
     }
   | {
       ingress: 'mcp_streamable';
-      variant: 'mcp_chat' | 'mcp_third_party';
-      payload: McpChatPayload | McpThirdPartyPayload;
+      variant: 'mcp_chat';
+      payload: McpChatPayload;
+    }
+  | {
+      ingress: 'mcp_streamable';
+      variant: 'mcp_third_party';
+      payload: McpThirdPartyPayload;
     }
   | {
       ingress: 'email_inbound';
@@ -496,7 +530,7 @@ export interface TriggerRow {
   id: TriggerId;
   kind: TriggerKind;
   /** Defining configuration; shape depends on kind. */
-  spec: Record<string, unknown>;
+  spec: JsonObject;
   /** Trust at creation time. Inherited by timer/scheduled events. */
   creator_trust: TrustLevel;
   /** Fork policy override; null → use default per kind. */
@@ -535,7 +569,7 @@ export class TrustViolationError extends Error {
 }
 
 export class IngressRejectedError extends Error {
-  constructor(public readonly ingress: IngressKind, public readonly reason: string) {
+  constructor(public readonly ingress: IngressKind | 'invalid_combination', public readonly reason: string) {
     super(`Ingress ${ingress} rejected: ${reason}`);
     this.name = 'IngressRejectedError';
   }

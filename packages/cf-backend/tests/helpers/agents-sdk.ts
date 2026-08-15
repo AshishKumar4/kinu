@@ -1,4 +1,6 @@
 import { mock } from 'bun:test';
+import type { AgentContext } from 'agents';
+import type { SqlValue } from '@proteus/core';
 
 /**
  * Stub the Agent SDK so bun can import the DO-layer src modules that depend on
@@ -15,21 +17,40 @@ export function mockAgentsSdk(): void {
      *  for DO classes a test instantiates directly (UserDO) — hence the ctx/env
      *  assignment the real Agent constructor also performs. */
     Agent: class {
-      readonly ctx: unknown;
-      readonly env: unknown;
-      constructor(ctx?: unknown, env?: unknown) {
+      readonly ctx: AgentContext | undefined;
+      readonly env: Env | undefined;
+      constructor(ctx?: AgentContext, env?: Env) {
         this.ctx = ctx;
         this.env = env;
+        if (ctx) {
+          Object.defineProperty(this, 'name', {
+            configurable: true,
+            value: ctx.id.name ?? ctx.id.toString(),
+          });
+          Object.defineProperty(this, 'sql', {
+            configurable: true,
+            value: (strings: TemplateStringsArray, ...values: SqlValue[]) => {
+              const query = strings.reduce(
+                (text, part, index) => text + part + (index < values.length ? '?' : ''),
+                '',
+              );
+              return ctx.storage.sql.exec(query, ...values).toArray();
+            },
+          });
+        }
       }
     },
     /** The real decorator only attaches RPC metadata. */
-    callable: () => (method: unknown) => method,
+    callable: () => <Method>(method: Method): Method => method,
     // Named imports @cloudflare/think binds at module load. bun resolves the
     // whole import list eagerly, so a missing name is a load-time SyntaxError
     // for any test that reaches an ActorAgent subclass.
     getCurrentAgent: () => ({ agent: undefined, connection: undefined, request: undefined }),
-    __DO_NOT_USE_WILL_BREAK__agentContext: { getStore: () => undefined, run: (_store: unknown, fn: () => unknown) => fn() },
-    __DO_NOT_USE_WILL_BREAK__withInvocationScope: (_scope: unknown, fn: () => unknown) => fn(),
+    __DO_NOT_USE_WILL_BREAK__agentContext: {
+      getStore: <Store>(): Store | undefined => undefined,
+      run: <Store, Result>(_store: Store, fn: () => Result): Result => fn(),
+    },
+    __DO_NOT_USE_WILL_BREAK__withInvocationScope: <Scope, Result>(_scope: Scope, fn: () => Result): Result => fn(),
     isDurableObjectMemoryLimitReset: () => false,
     isPlatformTransientError: () => false,
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>

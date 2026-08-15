@@ -15,16 +15,10 @@ import {
   type SqlExec,
 } from '../src/index.js';
 import { createMemoryVfs } from '@proteus/test-utils';
+import { makeSqlExec } from './helpers.js';
 
 function makeSql(): SqlExec {
-  const db = new Database(':memory:');
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.query(query);
-      const rows = stmt.all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  return makeSqlExec(new Database(':memory:'));
 }
 
 function emailPayload(overrides: Partial<EmailPayload> = {}): EmailPayload {
@@ -96,20 +90,24 @@ describe('email dedupe', () => {
 
   test('missing Message-ID falls back to a content hash bucket', () => {
     const base = emailPayload({ message_id: null });
-    const mk = (received_at: number, body?: string): ProteusEvent => ({
-      id: 'e', trace_id: 't', caused_by: null,
-      ingress: 'email_inbound', variant: 'email',
-      trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
-      received_at, schema_version: 1, reply_channel: null, dedupe_key: null,
-      payload: { ...base, ...(body ? { body_text: body } : {}) },
-    } as ProteusEvent);
+    const mk = (received_at: number, body?: string): ProteusEvent => {
+      const payload: EmailPayload = { ...base };
+      if (body) payload.body_text = body;
+      return {
+        id: 'e', trace_id: 't', caused_by: null,
+        ingress: 'email_inbound', variant: 'email',
+        trust: 'authenticated', priority: 'normal', payload_visibility: 'redact',
+        received_at, schema_version: 1, reply_channel: null, dedupe_key: null,
+        payload,
+      };
+    };
     const k1 = dedupeKeyFor(mk(1000));
     const k2 = dedupeKeyFor(mk(2000));                    // same 5-min bucket
     const k3 = dedupeKeyFor(mk(6 * 60 * 1000));           // next bucket
     const k4 = dedupeKeyFor(mk(1000, 'different body'));
-    expect(k1).toBe(k2!);
-    expect(k1).not.toBe(k3!);
-    expect(k1).not.toBe(k4!);
+    expect(k1).toBe(k2);
+    expect(k1).not.toBe(k3);
+    expect(k1).not.toBe(k4);
   });
 });
 

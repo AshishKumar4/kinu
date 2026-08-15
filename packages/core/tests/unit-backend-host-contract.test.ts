@@ -22,8 +22,9 @@ function sourceFiles(dir: string, out: string[] = []): string[] {
 }
 
 function declaredMembers(interfaceBody: string): string[] {
-  return [...interfaceBody.matchAll(/^\s{2}(?:readonly\s+)?([a-zA-Z][a-zA-Z0-9]*)\??[(:]/gm)]
-    .map((m) => m[1]!);
+  return [...interfaceBody.matchAll(
+    /^\s{2}(?:readonly\s+)?([a-zA-Z][a-zA-Z0-9]*)\??(?:<[^>]+>)?[(:]/gm,
+  )].flatMap((match) => match[1] ? [match[1]] : []);
 }
 
 describe('BackendHost contract', () => {

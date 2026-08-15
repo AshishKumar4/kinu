@@ -7,10 +7,10 @@
  * across turns. Everything that legitimately changes rides in the messages
  * array instead, split by nature:
  *
- * DYNAMIC CONTEXT (facts world model, MEMORY.md tail, live executor
- * availability, the agent's own open task list, running background work, the
- * open delegate roster, decisions parked on the user) — the
- * DynamicContextLedger. At EVERY model step the
+ * DYNAMIC CONTEXT (facts world model, MEMORY.md tail, execution-recovery
+ * findings, live executor availability, the agent's own open task list,
+ * running background work, the open delegate roster, decisions parked on the
+ * user) — the DynamicContextLedger. At EVERY model step the
  * current state is rendered into one `<dynamic_context fingerprint="…">`
  * block; a new block is appended at the tail ONLY when that render differs
  * from the newest block's. Every block freezes at the position where it was
@@ -97,6 +97,12 @@ export interface DynamicContext {
   factsBlock?: string;
   /** Bounded MEMORY.md tail (newest lessons/reflections). */
   memoryTail?: string;
+  /** Execution-recovery findings, newest first (evolution/recovery.ts) — what
+   *  the episode has PROVEN by execution so far. Re-read per step from the
+   *  lessons ledger, which is what makes this the one knowledge plane that
+   *  moves DURING a long turn: facts and the memory tail are frozen at turn
+   *  assembly, a finding recorded at step 40 rides every step after it. */
+  recoveries?: readonly string[];
   /** Live executor lifecycle — rendered as status labels only; the executor
    *  doctrine itself lives in the stable prefix. */
   executors?: readonly PromptExecutorInfo[];
@@ -168,6 +174,10 @@ export interface DynamicContextSources {
   /** The turn's MEMORY.md tail — read once per turn, behind the only await in
    *  this plane, so the caller closes over it rather than re-reading per step. */
   readonly memoryTail: string | undefined;
+  /** The injectable execution-recovery findings — listRecoveryFindings over
+   *  the lessons ledger, synchronous like every other per-step SQL read here,
+   *  so a finding recorded mid-turn is visible on the very next step. */
+  readonly recoveryFindings: readonly string[];
   readonly executors: readonly PromptExecutorInfo[];
   readonly runningJobs: ReadonlyArray<{ id: string; kind: string; label: string | null }>;
   /** The open half of the agent's task list — TaskListStore.listOpen(). */
@@ -191,19 +201,21 @@ export interface DynamicContextSources {
  * request and append one per step.
  */
 export function agentDynamicContext(sources: DynamicContextSources): DynamicContext {
-  return {
-    ...(sources.factsBlock ? { factsBlock: sources.factsBlock } : {}),
-    ...(sources.memoryTail ? { memoryTail: sources.memoryTail } : {}),
+  const context: DynamicContext = {
     // Re-listed per step: a sandbox provisioned or a device connected mid-turn
     // flips availability, and the whole point of the block is to say so.
     executors: sources.executors,
     jobs: sources.runningJobs.map((job) => ({ id: job.id, kind: job.kind, label: job.label })),
     tasks: flattenTaskList(sources.openTasks),
     delegates: forkDelegates(sources.liveHeadRuns),
-    ...(sources.missingCapabilities.length > 0
-      ? { missingCapabilities: sources.missingCapabilities }
-      : {}),
   };
+  if (sources.factsBlock) context.factsBlock = sources.factsBlock;
+  if (sources.memoryTail) context.memoryTail = sources.memoryTail;
+  if (sources.recoveryFindings.length > 0) context.recoveries = sources.recoveryFindings;
+  if (sources.missingCapabilities.length > 0) {
+    context.missingCapabilities = sources.missingCapabilities;
+  }
+  return context;
 }
 
 /** State that only makes sense for THIS turn's user message. */
@@ -286,6 +298,14 @@ const MAX_TASK_ROWS = 15;
 const MAX_DELEGATES = 8;
 const MAX_APPROVALS = 5;
 const MAX_MISSING_CAPABILITIES = 8;
+/** Render cap for recovery findings — the reader (listRecoveryFindings)
+ *  already bounds what arrives to the same window; this is display policy
+ *  like every other roster cap here. */
+const MAX_RECOVERIES = 5;
+/** A finding carries two bounded arg echoes (the failing call and the one
+ *  that ran clean), so the one-line recognition budget above would cut the
+ *  half that makes it usable. */
+const RECOVERY_ENTRY_CHARS = 480;
 /** Free text from a store (job labels, delegate tasks, gated commands) is one
  *  line at most — the model needs to recognize the item, not re-read it. */
 const ENTRY_CHARS = 120;
@@ -325,6 +345,12 @@ export function renderDynamicContextBlock(ctx: DynamicContext): string | null {
 
   const memoryTail = ctx.memoryTail?.trim();
   if (memoryTail) sections.push(`## Memory (newest MEMORY.md lessons and reflections)\n${memoryTail}`);
+
+  sections.push(rosterSection(
+    '## Proven by execution (the runtime watched each of these calls keep failing until a CHANGED call ran clean — evidence about this environment, not a verdict on correctness)',
+    ctx.recoveries ?? [], MAX_RECOVERIES,
+    (finding) => `- ${clip(finding, RECOVERY_ENTRY_CHARS)}`,
+  ));
 
   const executors = (ctx.executors ?? []).filter(executorIsSelectable);
   if (executors.length > 0) {

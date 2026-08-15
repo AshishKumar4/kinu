@@ -1,5 +1,7 @@
 import { nanoid } from '../utils/nanoid.js';
+import * as v from 'valibot';
 import {
+  RELEASE_STATUSES,
   type ReleaseApproval,
   type ReleaseCheck,
   type ReleaseDetail,
@@ -12,11 +14,11 @@ import {
 import { assertReleaseTransition } from './lifecycle.js';
 import { deployApprovalDigest, deployTargetAsCommand } from './approval-digest.js';
 import { redactReleaseDiff } from './path-safety.js';
-import type { SqlExec } from '../types/primitives.js';
+import type { SqlExec, SqlValue } from '../types/primitives.js';
 
 export interface ReleaseSqlStore {
-  all<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): T[];
-  run(query: string, ...bindings: unknown[]): void;
+  all<Output>(schema: v.GenericSchema<Output>, query: string, ...bindings: SqlValue[]): Output[];
+  run(query: string, ...bindings: SqlValue[]): void;
 }
 
 export interface ReleaseStoreOptions {
@@ -45,10 +47,10 @@ export interface ReleaseBoard {
 
 export function releaseSqlFromExec(sql: SqlExec): ReleaseSqlStore {
   return {
-    all<T = Record<string, unknown>>(query: string, ...bindings: unknown[]): T[] {
-      return sql.exec(query, ...bindings).toArray() as T[];
+    all<Output>(schema: v.GenericSchema<Output>, query: string, ...bindings: SqlValue[]): Output[] {
+      return sql.exec(query, ...bindings).toArray().map((row) => v.parse(schema, row));
     },
-    run(query: string, ...bindings: unknown[]): void {
+    run(query: string, ...bindings: SqlValue[]): void {
       sql.exec(query, ...bindings);
     },
   };
@@ -127,7 +129,8 @@ export function initReleaseTables(sql: SqlExec): void {
   // Live-table migration: bind the argument digest (SPEC §7.3) on stores that
   // predate the column. Existing rows get '' — an empty digest never matches a
   // recomputed one, so a stale approval fails closed and is re-requested.
-  const approvalColumns = sql.exec(`PRAGMA table_info(release_approvals)`).toArray() as Array<{ name: string }>;
+  const approvalColumns = sql.exec(`PRAGMA table_info(release_approvals)`).toArray()
+    .map((row) => v.parse(v.object({ name: v.string() }), row));
   if (!approvalColumns.some((c) => c.name === 'argument_digest')) {
     sql.exec(`ALTER TABLE release_approvals ADD COLUMN argument_digest TEXT NOT NULL DEFAULT ''`);
   }
@@ -147,31 +150,93 @@ export function initReleaseTables(sql: SqlExec): void {
   sql.exec(`CREATE INDEX IF NOT EXISTS idx_release_deployments_change ON release_deployments (change_id, deployed_at DESC)`);
 }
 
-function cleanOptional(value: unknown, max = 512): string | null {
+function cleanOptional<Value>(value: Value, max = 512): string | null {
   if (value == null) return null;
   const text = String(value).trim();
   return text ? text.slice(0, max) : null;
 }
 
-function cleanRequired(value: unknown, label: string, max: number): string {
+function cleanRequired<Value>(value: Value, label: string, max: number): string {
   const text = cleanOptional(value, max);
   if (!text) throw new Error(`${label} is required`);
   return text;
 }
 
-function cleanLabel(value: unknown, fallback: string): string {
+function cleanLabel<Value>(value: Value, fallback: string): string {
   return cleanOptional(value, 120) ?? fallback;
 }
 
-function mapReleaseSource(r: {
-  id: string; kind: string; label: string; repo_url: string | null;
-  default_branch: string | null; local_device_id: string | null;
-  local_root: string | null; deploy_target: string | null;
-  created_at: number; updated_at: number;
-}): ReleaseSource {
+const NullableString = v.nullable(v.string());
+const NullableNumber = v.nullable(v.number());
+const SourceRowSchema = v.object({
+  id: v.string(),
+  kind: v.picklist(['local', 'github']),
+  label: v.string(),
+  repo_url: NullableString,
+  default_branch: NullableString,
+  local_device_id: NullableString,
+  local_root: NullableString,
+  deploy_target: NullableString,
+  created_at: v.number(),
+  updated_at: v.number(),
+});
+const ChangeRowSchema = v.object({
+  id: v.string(),
+  agent_name: v.string(),
+  binding_id: v.string(),
+  status: v.picklist(RELEASE_STATUSES),
+  user_prompt: v.string(),
+  plan: NullableString,
+  summary: NullableString,
+  patch: NullableString,
+  preview_url: NullableString,
+  created_at: v.number(),
+  updated_at: v.number(),
+});
+const CheckRowSchema = v.object({
+  id: v.string(),
+  change_id: v.string(),
+  name: v.string(),
+  status: v.picklist(['pending', 'running', 'passed', 'failed', 'skipped']),
+  stdout: NullableString,
+  stderr: NullableString,
+  duration_ms: NullableNumber,
+  created_at: v.number(),
+  updated_at: v.number(),
+});
+const ApprovalRowSchema = v.object({
+  id: v.string(),
+  change_id: v.string(),
+  approval_type: v.picklist(['apply', 'deploy_staging', 'deploy_production', 'rollback']),
+  decision: v.picklist(['pending', 'approved', 'rejected']),
+  approved_by: NullableString,
+  note: NullableString,
+  argument_digest: v.string(),
+  created_at: v.number(),
+  decided_at: NullableNumber,
+});
+const DeploymentRowSchema = v.object({
+  id: v.string(),
+  change_id: v.string(),
+  environment: v.picklist(['local', 'staging', 'production']),
+  worker_version_id: NullableString,
+  deployment_id: NullableString,
+  rollback_target: NullableString,
+  deployed_at: v.number(),
+});
+const IdRowSchema = v.object({ id: v.string() });
+const DeployTargetRowSchema = v.object({ deploy_target: NullableString });
+
+type SourceRow = v.InferOutput<typeof SourceRowSchema>;
+type ChangeRow = v.InferOutput<typeof ChangeRowSchema>;
+type CheckRow = v.InferOutput<typeof CheckRowSchema>;
+type ApprovalRow = v.InferOutput<typeof ApprovalRowSchema>;
+type DeploymentRow = v.InferOutput<typeof DeploymentRowSchema>;
+
+function mapReleaseSource(r: SourceRow): ReleaseSource {
   return {
     id: r.id,
-    kind: r.kind as ReleaseSourceKind,
+    kind: r.kind,
     label: r.label,
     repoUrl: r.repo_url,
     defaultBranch: r.default_branch,
@@ -183,16 +248,12 @@ function mapReleaseSource(r: {
   };
 }
 
-function mapReleaseChange(r: {
-  id: string; agent_name: string; binding_id: string; status: string; user_prompt: string;
-  plan: string | null; summary: string | null; patch: string | null; preview_url: string | null;
-  created_at: number; updated_at: number;
-}): ReleaseChange {
+function mapReleaseChange(r: ChangeRow): ReleaseChange {
   return {
     id: r.id,
     agentName: r.agent_name,
     bindingId: r.binding_id,
-    status: r.status as ReleaseStatus,
+    status: r.status,
     userPrompt: r.user_prompt,
     plan: r.plan,
     summary: r.summary,
@@ -203,10 +264,7 @@ function mapReleaseChange(r: {
   };
 }
 
-function mapReleaseCheck(r: {
-  id: string; change_id: string; name: string; status: ReleaseCheck['status'];
-  stdout: string | null; stderr: string | null; duration_ms: number | null; created_at: number; updated_at: number;
-}): ReleaseCheck {
+function mapReleaseCheck(r: CheckRow): ReleaseCheck {
   return {
     id: r.id,
     changeId: r.change_id,
@@ -218,12 +276,6 @@ function mapReleaseCheck(r: {
     createdAt: r.created_at,
     updatedAt: r.updated_at,
   };
-}
-
-interface ApprovalRow {
-  id: string; change_id: string; approval_type: ReleaseApproval['approvalType'];
-  decision: ReleaseApproval['decision']; approved_by: string | null; note: string | null;
-  argument_digest: string; created_at: number; decided_at: number | null;
 }
 
 const APPROVAL_COLUMNS =
@@ -243,10 +295,7 @@ function mapReleaseApproval(r: ApprovalRow): ReleaseApproval {
   };
 }
 
-function mapReleaseDeployment(r: {
-  id: string; change_id: string; environment: ReleaseDeployment['environment'];
-  worker_version_id: string | null; deployment_id: string | null; rollback_target: string | null; deployed_at: number;
-}): ReleaseDeployment {
+function mapReleaseDeployment(r: DeploymentRow): ReleaseDeployment {
   return {
     id: r.id,
     changeId: r.change_id,
@@ -270,11 +319,8 @@ export class ReleaseStore {
   }
 
   listSourceBindings(): ReleaseSource[] {
-    return this.sql.all<{
-      id: string; kind: string; label: string; repo_url: string | null; default_branch: string | null;
-      local_device_id: string | null; local_root: string | null; deploy_target: string | null;
-      created_at: number; updated_at: number;
-    }>(
+    return this.sql.all(
+      SourceRowSchema,
       `SELECT id, kind, label, repo_url, default_branch, local_device_id, local_root, deploy_target, created_at, updated_at
        FROM release_sources ORDER BY updated_at DESC`,
     ).map(mapReleaseSource);
@@ -308,11 +354,8 @@ export class ReleaseStore {
          updated_at = excluded.updated_at`,
       id, kind, label, repoUrl, defaultBranch, localDeviceId, localRoot, deployTarget, now, now,
     );
-    const row = this.sql.all<{
-      id: string; kind: string; label: string; repo_url: string | null; default_branch: string | null;
-      local_device_id: string | null; local_root: string | null; deploy_target: string | null;
-      created_at: number; updated_at: number;
-    }>(
+    const row = this.sql.all(
+      SourceRowSchema,
       `SELECT id, kind, label, repo_url, default_branch, local_device_id, local_root, deploy_target, created_at, updated_at
        FROM release_sources WHERE id = ?`,
       id,
@@ -323,7 +366,7 @@ export class ReleaseStore {
 
   createChange(agentName: string, input: { bindingId: string; userPrompt: string; plan?: string | null }): ReleaseChange {
     this.validateAgentName?.(agentName);
-    const binding = this.sql.all<{ id: string }>(`SELECT id FROM release_sources WHERE id = ?`, input.bindingId)[0];
+    const binding = this.sql.all(IdRowSchema, `SELECT id FROM release_sources WHERE id = ?`, input.bindingId)[0];
     if (!binding) throw new Error(`unknown release source: ${input.bindingId}`);
     const prompt = cleanRequired(input.userPrompt, 'userPrompt', 4000);
     const plan = cleanOptional(input.plan, 12000);
@@ -344,20 +387,14 @@ export class ReleaseStore {
     if (agentName) this.validateAgentName?.(agentName);
     const n = Math.max(1, Math.min(limit, 100));
     const rows = agentName
-      ? this.sql.all<{
-          id: string; agent_name: string; binding_id: string; status: string; user_prompt: string;
-          plan: string | null; summary: string | null; patch: string | null; preview_url: string | null;
-          created_at: number; updated_at: number;
-        }>(
+      ? this.sql.all(
+          ChangeRowSchema,
           `SELECT id, agent_name, binding_id, status, user_prompt, plan, summary, patch, preview_url, created_at, updated_at
            FROM release_changes WHERE agent_name = ? ORDER BY updated_at DESC LIMIT ?`,
           agentName, n,
         )
-      : this.sql.all<{
-          id: string; agent_name: string; binding_id: string; status: string; user_prompt: string;
-          plan: string | null; summary: string | null; patch: string | null; preview_url: string | null;
-          created_at: number; updated_at: number;
-        }>(
+      : this.sql.all(
+          ChangeRowSchema,
           `SELECT id, agent_name, binding_id, status, user_prompt, plan, summary, patch, preview_url, created_at, updated_at
            FROM release_changes ORDER BY updated_at DESC LIMIT ?`,
           n,
@@ -366,11 +403,8 @@ export class ReleaseStore {
   }
 
   getChange(changeId: string): ReleaseChange | null {
-    const row = this.sql.all<{
-      id: string; agent_name: string; binding_id: string; status: string; user_prompt: string;
-      plan: string | null; summary: string | null; patch: string | null; preview_url: string | null;
-      created_at: number; updated_at: number;
-    }>(
+    const row = this.sql.all(
+      ChangeRowSchema,
       `SELECT id, agent_name, binding_id, status, user_prompt, plan, summary, patch, preview_url, created_at, updated_at
        FROM release_changes WHERE id = ?`,
       changeId,
@@ -436,10 +470,11 @@ export class ReleaseStore {
       now,
       now,
     );
-    return this.sql.all<{
-      id: string; change_id: string; name: string; status: ReleaseCheck['status'];
-      stdout: string | null; stderr: string | null; duration_ms: number | null; created_at: number; updated_at: number;
-    }>(`SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at FROM release_checks WHERE id = ?`, id)
+    return this.sql.all(
+      CheckRowSchema,
+      `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at FROM release_checks WHERE id = ?`,
+      id,
+    )
       .map(mapReleaseCheck)[0]!;
   }
 
@@ -447,7 +482,8 @@ export class ReleaseStore {
    *  carries a bare environment label or no target) — the reviewable command a
    *  deploy approval binds (SPEC §7.3). */
   private deployCommandForChange(change: ReleaseChange): string | null {
-    const row = this.sql.all<{ deploy_target: string | null }>(
+    const row = this.sql.all(
+      DeployTargetRowSchema,
       `SELECT deploy_target FROM release_sources WHERE id = ?`, change.bindingId,
     )[0];
     return deployTargetAsCommand(row?.deploy_target ?? null);
@@ -477,7 +513,8 @@ export class ReleaseStore {
        VALUES (?, ?, ?, 'pending', NULL, NULL, ?, ?, NULL)`,
       id, changeId, approvalType, digest, now,
     );
-    return this.sql.all<ApprovalRow>(
+    return this.sql.all(
+      ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE id = ?`, id,
     ).map(mapReleaseApproval)[0]!;
   }
@@ -495,7 +532,8 @@ export class ReleaseStore {
        WHERE id = ? AND decision = 'pending'`,
       decision, cleanRequired(approvedBy, 'approvedBy', 200), cleanOptional(note, 2000), this.now(), approvalId,
     );
-    const row = this.sql.all<ApprovalRow>(
+    const row = this.sql.all(
+      ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE id = ?`, approvalId,
     ).map(mapReleaseApproval)[0];
     if (!row) throw new Error(`unknown release change approval: ${approvalId}`);
@@ -522,10 +560,8 @@ export class ReleaseStore {
       cleanOptional(input.rollbackTarget, 200),
       deployedAt,
     );
-    return this.sql.all<{
-      id: string; change_id: string; environment: ReleaseDeployment['environment'];
-      worker_version_id: string | null; deployment_id: string | null; rollback_target: string | null; deployed_at: number;
-    }>(
+    return this.sql.all(
+      DeploymentRowSchema,
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
        FROM release_deployments WHERE id = ?`,
       id,
@@ -536,31 +572,25 @@ export class ReleaseStore {
   detail(changeId: string): ReleaseDetail {
     const change = this.getChange(changeId);
     if (!change) throw new Error(`unknown release change: ${changeId}`);
-    const bindingRow = this.sql.all<{
-      id: string; kind: string; label: string; repo_url: string | null; default_branch: string | null;
-      local_device_id: string | null; local_root: string | null; deploy_target: string | null;
-      created_at: number; updated_at: number;
-    }>(
+    const bindingRow = this.sql.all(
+      SourceRowSchema,
       `SELECT id, kind, label, repo_url, default_branch, local_device_id, local_root, deploy_target, created_at, updated_at
        FROM release_sources WHERE id = ?`,
       change.bindingId,
     )[0];
-    const checks = this.sql.all<{
-      id: string; change_id: string; name: string; status: ReleaseCheck['status'];
-      stdout: string | null; stderr: string | null; duration_ms: number | null; created_at: number; updated_at: number;
-    }>(
+    const checks = this.sql.all(
+      CheckRowSchema,
       `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at
        FROM release_checks WHERE change_id = ? ORDER BY updated_at DESC`,
       changeId,
     ).map(mapReleaseCheck);
-    const approvals = this.sql.all<ApprovalRow>(
+    const approvals = this.sql.all(
+      ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE change_id = ? ORDER BY created_at DESC`,
       changeId,
     ).map(mapReleaseApproval);
-    const deployments = this.sql.all<{
-      id: string; change_id: string; environment: ReleaseDeployment['environment'];
-      worker_version_id: string | null; deployment_id: string | null; rollback_target: string | null; deployed_at: number;
-    }>(
+    const deployments = this.sql.all(
+      DeploymentRowSchema,
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
        FROM release_deployments WHERE change_id = ? ORDER BY deployed_at DESC, id DESC`,
       changeId,
@@ -581,22 +611,19 @@ export class ReleaseStore {
       return { bindings: this.listSourceBindings(), changes, checks: [], approvals: [], deployments: [] };
     }
     const marks = ids.map(() => '?').join(',');
-    const checks = this.sql.all<{
-      id: string; change_id: string; name: string; status: ReleaseCheck['status'];
-      stdout: string | null; stderr: string | null; duration_ms: number | null; created_at: number; updated_at: number;
-    }>(
+    const checks = this.sql.all(
+      CheckRowSchema,
       `SELECT id, change_id, name, status, stdout, stderr, duration_ms, created_at, updated_at
        FROM release_checks WHERE change_id IN (${marks}) ORDER BY updated_at DESC`,
       ...ids,
     ).map(mapReleaseCheck);
-    const approvals = this.sql.all<ApprovalRow>(
+    const approvals = this.sql.all(
+      ApprovalRowSchema,
       `SELECT ${APPROVAL_COLUMNS} FROM release_approvals WHERE change_id IN (${marks}) ORDER BY created_at DESC`,
       ...ids,
     ).map(mapReleaseApproval);
-    const deployments = this.sql.all<{
-      id: string; change_id: string; environment: ReleaseDeployment['environment'];
-      worker_version_id: string | null; deployment_id: string | null; rollback_target: string | null; deployed_at: number;
-    }>(
+    const deployments = this.sql.all(
+      DeploymentRowSchema,
       `SELECT id, change_id, environment, worker_version_id, deployment_id, rollback_target, deployed_at
        FROM release_deployments WHERE change_id IN (${marks}) ORDER BY deployed_at DESC`,
       ...ids,

@@ -31,13 +31,15 @@
  */
 
 import { readExecSignal } from '../execution/signal.js';
+import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
 import type { AgentsToolAction } from './registry.js';
+import { isJsonObject, JsonValueSchema, type JsonObject } from '../utils/json.js';
 import {
   agentsActionsFor,
   dispatchAgentsAction,
+  parseAgentsToolInput,
   type AgentsToolDeps,
-  type AgentsToolInput,
 } from './agents-tool.js';
 
 /**
@@ -53,7 +55,7 @@ import {
  * renders byte-identically on every backend — the sandbox contract does not
  * change shape depending on where the agent happens to be running.
  */
-const AGENTS_CODEMODE_MEMBERS: Record<AgentsToolAction, string> = {
+const AGENTS_CODEMODE_MEMBERS = {
   fork: `  /** Spawn 2-6 ephemeral forks of yourself on this same workspace. Each runs its
    *  own multi-step tool loop, then they settle into one answer: merged by
    *  default, or scored against each other by execution with settle:"mcts".
@@ -119,10 +121,10 @@ const AGENTS_CODEMODE_MEMBERS: Record<AgentsToolAction, string> = {
   dismiss: `  /** Retire a subordinate. Archived by default (its context is kept); pass
    *  keep_history:false ONLY to permanently wipe its storage. */
   dismiss(input: { agent: string; keep_history?: boolean }): Promise<unknown>;`,
-};
+} satisfies Record<AgentsToolAction, string>;
 
 /** One-line member descriptions for the provider record. */
-const AGENTS_CODEMODE_DESCRIPTIONS: Record<AgentsToolAction, string> = {
+const AGENTS_CODEMODE_DESCRIPTIONS = {
   fork: 'Spawn 2-6 ephemeral forks of yourself that settle into one answer (merge, or settle:"mcts"). Not resumable from inside the sandbox.',
   staff: 'Create a persistent named helper: a subordinate here, or scope:"workspace" for a specialist workspace of its own.',
   ask: 'Hand an agent work and expect the answer back (a subordinate reports later as an event; a peer reply is awaited).',
@@ -130,7 +132,7 @@ const AGENTS_CODEMODE_DESCRIPTIONS: Record<AgentsToolAction, string> = {
   reply: 'Answer an incoming agent message event by its event_id.',
   list: 'The unified roster of subordinates and peer workspace agents.',
   dismiss: 'Retire a subordinate (archived by default — its context is kept).',
-};
+} satisfies Record<AgentsToolAction, string>;
 
 /** The `agents` namespace declaration for one actor's actions. Ordering comes
  *  from `agentsActionsFor`, which walks the canonical ladder. */
@@ -141,10 +143,6 @@ function renderTypes(actions: readonly AgentsToolAction[]): string {
     '};',
     '',
   ].join('\n');
-}
-
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 /**
@@ -160,7 +158,12 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * they do for `createAgentsTool`.
  */
 export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): CodemodeProvider {
-  const actions = agentsActionsFor(deps());
+  const initialDeps = deps();
+  const actions = agentsActionsFor(initialDeps);
+  // A provider belongs to one Plan/Build tool surface. Other dependencies may
+  // refresh between calls, but the trusted mode must not: execute_tools may
+  // keep running after its originating turn has detached.
+  const mode = initialDeps.mode;
   const tools: CodemodeProvider['tools'] = {};
 
   for (const action of actions) {
@@ -168,16 +171,25 @@ export function createAgentsCodemodeProvider(deps: () => AgentsToolDeps): Codemo
       description: AGENTS_CODEMODE_DESCRIPTIONS[action],
       execute: async (...args: unknown[]) => {
         const raw = args[0];
-        if (raw !== undefined && !isPlainObject(raw)) {
+        const parsedRaw = raw === undefined ? undefined : v.safeParse(JsonValueSchema, raw);
+        if (parsedRaw && (!parsedRaw.success || !isJsonObject(parsedRaw.output))) {
           return { error: `agents.${action}: expects a single options object` };
         }
         // `action` is written last: the member the script called decides it,
         // never a field in the object the script passed.
-        const input = { ...raw, action } as unknown as AgentsToolInput;
+        const candidate: JsonObject = {};
+        if (parsedRaw?.success) Object.assign(candidate, parsedRaw.output);
+        Object.assign(candidate, { action });
+        let input;
+        try {
+          input = parseAgentsToolInput(candidate);
+        } catch (error) {
+          return { error: `agents.${action}: ${error instanceof Error ? error.message : String(error)}` };
+        }
         // Cancellation rides the trailing exec-context arg the node sandbox
         // appends; the cf loader passes only the model's own arguments.
-        const signal = readExecSignal(args[1]);
-        return dispatchAgentsAction(deps(), input, signal ? { abortSignal: signal } : undefined);
+        const signal = readExecSignal({ context: args[1] });
+        return dispatchAgentsAction({ ...deps(), mode }, input, signal ? { abortSignal: signal } : undefined);
       },
     };
   }

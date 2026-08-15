@@ -192,8 +192,9 @@ The strategy returns a `StrategyResult` — `strategy`, `best`, `all`, an option
 `trace`, and `cost`. Strategies should always respect `ctx.signal` and
 `ctx.budget` for cancellation and budget enforcement.
 
-Strategies plug into a `StrategyRegistry`. The orchestrator's `think(strategy,
-task, budget)` tool dispatches to the registered strategy by id.
+Strategies plug into a `StrategyRegistry`. The `agents` tool's `fork` action
+selects the registered strategy through its `settle` policy; `mcts` is one
+settlement policy inside that rung rather than another top-level tool.
 
 ## Replacing the inference loop
 
@@ -364,9 +365,10 @@ tests under `packages/core/tests/`.
   existing `runMCTS` engine behind the strategy interface.
 - **Heads ExplorationStrategy adapter** — `core/strategy/heads.ts`. Wraps
   `HeadController` behind the strategy interface.
-- **Unified `think` tool** — `core/strategy/think-tool.ts`. Dispatches by
-  strategy id (`single-shot` / `mcts` / `heads` / …) so the LLM has one
-  stable agent surface; adding strategies = registry entries.
+- **Unified `agents` fork seam** — `core/tools/agents-tool.ts` dispatches the
+  fork rung through the strategy registry. `settle: 'mcts'` selects MCTS;
+  ordinary merging heads are the default. Adding strategies does not add a
+  competing top-level delegation tool.
 - **Eval harness** — `core/eval/{types,runner,judge,corpus,report}.ts`. JSONL
   corpus loader, A/B runner against any two `ExplorationStrategy`s, structured
   judge verdicts via Valibot. Seed corpus at the repo root's

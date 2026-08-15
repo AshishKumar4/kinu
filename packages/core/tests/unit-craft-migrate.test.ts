@@ -29,9 +29,9 @@ describe('Phase F — crafted_tools duplicate migration', () => {
     });
 
     // Scores — the legacy row has been used more but the new one scores higher
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
       VALUES ('multiplynumbers', 0.3, 20, ${Date.now() - 100000}, ${Date.now() - 200000})`;
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
       VALUES ('multiplyNumbers', 0.9, 5, ${Date.now()}, ${Date.now() - 50000})`;
 
     const r = migrateCraftedToolDuplicates(rt.storage.sql, rt.storage.execRaw);

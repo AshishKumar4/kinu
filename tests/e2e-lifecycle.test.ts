@@ -9,9 +9,9 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, stepCountIs, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import * as v from 'valibot';
 
 import {
-  createWorkspace,
   collectStepText,
   EvolutionEngine,
   buildBuiltinTools,
@@ -28,7 +28,10 @@ import {
   type SessionMessage,
   runMCTS,
   readSoul,
+  JsonObjectSchema,
+  projectJsonValue,
 } from '../packages/core/src/index.js';
+import { createWorkspace, openWorkspace } from '../packages/core/src/identity/index.js';
 import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
 
 // These suites prove behaviour against a real model. Without a token they
@@ -41,7 +44,7 @@ const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
   headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.6',
+  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-e2e-' + Date.now());
@@ -54,7 +57,7 @@ async function chatTurn(
   userMessage: string,
 ): Promise<CompletedTurn> {
   const start = Date.now();
-  const soul = readSoul(rt.storage.sql) ?? '';
+  const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const tcRecords: ToolCallRecord[] = [];
@@ -70,15 +73,19 @@ async function chatTurn(
       steps++;
       if (step.toolCalls) {
         for (const tc of step.toolCalls) {
-          const args = (tc as any).input ?? (tc as any).args ?? {};
-          tcRecords.push({ name: tc.toolName, args: args as Record<string, unknown>, result: null });
+          tcRecords.push({
+            name: tc.toolName,
+            args: v.parse(JsonObjectSchema, tc.input),
+            result: null,
+          });
         }
       }
       if (step.toolResults) {
         for (let i = 0; i < step.toolResults.length; i++) {
-          const tr = step.toolResults[i] as any;
+          const toolResult = step.toolResults[i];
           const idx = tcRecords.length - step.toolResults.length + i;
-          if (tcRecords[idx]) tcRecords[idx]!.result = tr?.output ?? tr?.result ?? null;
+          const record = tcRecords[idx];
+          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
         }
       }
     },
@@ -86,8 +93,8 @@ async function chatTurn(
 
   const responseText = collectStepText(result);
   const id = crypto.randomUUID();
-  rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
-  rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'e2e'}, ${'user'}, ${userMessage})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'e2e'}, ${id}, ${'assistant'}, ${responseText})`;
 
   return {
     userMessage, assistantResponse: responseText, toolCalls: tcRecords,
@@ -105,7 +112,11 @@ function makeSessionWriter(): SessionWriter {
       if (!leafId) return msgs.map(m => ({ role: m.role, content: m.content }));
       const result: Array<{ role: string; content: string }> = [];
       let cur = msgs.find(m => m.id === leafId);
-      while (cur) { result.unshift({ role: cur.role, content: cur.content }); cur = cur.parentId ? msgs.find(m => m.id === cur!.parentId) : undefined; }
+      while (cur) {
+        result.unshift({ role: cur.role, content: cur.content });
+        const parentId = cur.parentId;
+        cur = parentId ? msgs.find(m => m.id === parentId) : undefined;
+      }
       return result;
     },
     async compact() {},
@@ -121,11 +132,11 @@ describe('E2E Lifecycle', () => {
   let turns: CompletedTurn[];
   let model: ReturnType<ReturnType<typeof createOpenAICompatible>['chatModel']>;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
-    rt = createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
+    rt = await createWorkspace(db, { name: 'e2e-test', purpose: 'A coding assistant that helps write TypeScript.', llm: LLM_CONFIG });
     initSearchTables(rt.storage.execRaw);
     initScaffoldTables(rt.storage.execRaw);
     initCraftScoreTables(rt.storage.execRaw);
@@ -141,12 +152,14 @@ describe('E2E Lifecycle', () => {
 
   afterAll(() => { try { db.close(); } catch {} rmSync(TEST_DIR, { recursive: true, force: true }); });
 
-  test('agent created with correct tables', () => {
-    const tables = (db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[]).map(t => t.name);
-    expect(tables).toContain('vfs_files');
+  test('agent created with correct tables', async () => {
+    const tables = db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    ).all().map(t => t.name);
+    expect(tables).toContain('inodes');
     expect(tables).toContain('messages');
     expect(tables).toContain('search_nodes');
-    const soul = readSoul(rt.storage.sql) ?? '';
+    const soul = await readSoul(rt.storage.vfs) ?? '';
     expect(soul).toContain('TypeScript');
   });
 
@@ -158,16 +171,16 @@ describe('E2E Lifecycle', () => {
       'Search your memory for notes about validation.',
       'Summarize what we discussed.',
     ];
-    for (let i = 0; i < messages.length; i++) {
-      console.log(`  Turn ${i + 1}: ${messages[i]!.slice(0, 50)}...`);
-      const turn = await chatTurn(model, rt, tools, messages[i]!);
+    for (const [i, message] of messages.entries()) {
+      console.log(`  Turn ${i + 1}: ${message.slice(0, 50)}...`);
+      const turn = await chatTurn(model, rt, tools, message);
       turns.push(turn);
       await engine.onTurnComplete(turn);
       expect(turn.assistantResponse.length).toBeGreaterThan(0);
       console.log(`    Response: ${turn.assistantResponse.slice(0, 80)}...`);
       if (turn.toolCalls.length > 0) console.log(`    Tools: ${turn.toolCalls.map(t => t.name).join(', ')}`);
     }
-    const count = (db.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
+    const count = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
     console.log(`  Messages in DB: ${count}`);
     expect(count).toBeGreaterThanOrEqual(10);
   }, 600_000);
@@ -180,8 +193,8 @@ describe('E2E Lifecycle', () => {
 
   liveTest('memory has content', async () => {
     const mem = await rt.memory.read('memory/MEMORY.md');
-    expect(mem).toBeTruthy();
-    console.log(`  Memory: ${mem!.length} chars`);
+    if (!mem) throw new Error('evolution did not write memory content');
+    console.log(`  Memory: ${mem.length} chars`);
   });
 
   liveTest('MCTS evolution', async () => {
@@ -190,16 +203,16 @@ describe('E2E Lifecycle', () => {
     const nodes = rt.storage.sql<SearchNode>`SELECT * FROM search_nodes ORDER BY depth, created_at`;
     console.log(`  Nodes: ${nodes.length}`);
     expect(nodes.length).toBe(3);
-    expect(result.converged || !result.converged).toBe(true);
+    expect(nodes.some((node) => node.id === result.winnerId)).toBe(true);
   }, 300_000);
 
-  liveTest('persistence', () => {
-    const msgsBefore = (db.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
+  liveTest('persistence', async () => {
+    const msgsBefore = db.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
     db.close();
-    const db2 = new Database(DB_PATH, { readonly: true });
-    const msgsAfter = (db2.query('SELECT COUNT(*) as c FROM messages').get() as { c: number }).c;
-    const soulRow = db2.query("SELECT data FROM vfs_files WHERE path = 'SOUL.md' LIMIT 1").get() as { data: string | Uint8Array } | null;
-    const soul = typeof soulRow?.data === 'string' ? soulRow.data : soulRow?.data ? new TextDecoder().decode(soulRow.data) : '';
+    const db2 = new Database(DB_PATH);
+    const msgsAfter = db2.query<{ c: number }, []>('SELECT COUNT(*) as c FROM messages').get()?.c ?? 0;
+    const reopened = await openWorkspace(db2, { llm: LLM_CONFIG });
+    const soul = reopened.info.soul;
     db2.close();
     expect(msgsAfter).toBe(msgsBefore);
     expect(soul).toContain('TypeScript');

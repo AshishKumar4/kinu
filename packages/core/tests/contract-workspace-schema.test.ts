@@ -21,6 +21,7 @@ import { readFileSync } from 'node:fs';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
 import { wrapDatabase } from '../src/identity/create.js';
 import { resolve } from 'node:path';
+import { makeSqlExec } from './helpers.js';
 
 const REPO = resolve(import.meta.dir, '../../..');
 const read = (path: string): string => readFileSync(resolve(REPO, path), 'utf8');
@@ -42,10 +43,16 @@ function ownedInitializers(): string[] {
   const source = read(SCHEMA_MODULE);
   const body = source.slice(source.indexOf('export function initWorkspaceSchema'));
   const names = new Set<string>();
-  for (const m of body.matchAll(/\b(init[A-Z][A-Za-z]*)\(/g)) names.add(m[1]!);
+  for (const match of body.matchAll(/\b(init[A-Z][A-Za-z]*)\(/g)) {
+    const name = match[1];
+    if (name) names.add(name);
+  }
   // Itself, and the private helper whose DDL is inline here.
   for (const own of ['initWorkspaceSchema', 'initCompactionStateTables']) names.delete(own);
-  for (const m of read(SCHEMA_MODULE).matchAll(/^import \{ (init[A-Za-z]+) \}/gm)) names.add(m[1]!);
+  for (const match of read(SCHEMA_MODULE).matchAll(/^import \{ (init[A-Za-z]+) \}/gm)) {
+    const name = match[1];
+    if (name) names.add(name);
+  }
   return [...names].sort();
 }
 
@@ -102,13 +109,8 @@ function schemaSql(db: InstanceType<typeof Database>) {
   return {
     execRaw: wrapped.execRaw,
     sql: wrapped.sql,
-    exec: {
-      exec(query: string, ...bindings: unknown[]) {
-        const rows = db.query(query).all(...(bindings as never[])) as Array<Record<string, unknown>>;
-        return { toArray: () => rows };
-      },
-    },
-  } as Parameters<typeof initWorkspaceSchema>[0];
+    exec: makeSqlExec(db),
+  } satisfies Parameters<typeof initWorkspaceSchema>[0];
 }
 
 describe('release table migration', () => {
@@ -128,11 +130,13 @@ describe('release table migration', () => {
     }
     initWorkspaceSchema(schemaSql(db));
     for (const [from, to] of LEGACY) {
-      const row = db.query(`SELECT payload FROM ${to} WHERE id = 'keep-me'`).get() as { payload: string } | null;
+      const row = db.query<{ payload: string }, []>(
+        `SELECT payload FROM ${to} WHERE id = 'keep-me'`,
+      ).get();
       expect(row?.payload).toBe('audit trail');
       const orphan = db.query(
         `SELECT name FROM sqlite_master WHERE type='table' AND name = ?`,
-      ).get(from) as { name: string } | null;
+      ).get(from);
       expect(orphan).toBeNull();
     }
     db.close();

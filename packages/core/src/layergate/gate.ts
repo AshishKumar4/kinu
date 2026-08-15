@@ -15,7 +15,8 @@
 
 import { fnv1a64 } from '../prompting/volatile-context.js';
 import { stableStringify } from '../safety/argument-digest.js';
-import { LAYERS, type Layer } from './layers.js';
+import { parseJsonValue } from '../utils/json.js';
+import { LAYERS, type Layer, type LayerObservation } from './layers.js';
 import type { PipelineSubjects } from './subjects.js';
 
 /** Probe id → observation digest. */
@@ -42,23 +43,26 @@ export interface LayerGateReport {
   readonly unmeasured: readonly string[];
 }
 
-function digest(value: unknown): string {
-  return fnv1a64(stableStringify(value));
+function digest(value: LayerObservation): string {
+  if (value === undefined) return fnv1a64('undefined');
+  const serialized = JSON.stringify(value);
+  if (serialized === undefined) {
+    throw new Error('layer observation must be JSON-serializable');
+  }
+  return fnv1a64(stableStringify(parseJsonValue(serialized)));
 }
 
 /** Run every probe once. A probe that throws is recorded as an observation,
  *  not a crashed run — otherwise one broken subject would take the whole
  *  matrix down instead of scoring the layer that owns it. */
-export async function observePipeline<S = PipelineSubjects>(
+async function observeLayers<S>(
   subjects: S,
-  // The default serves the core pipeline; a custom subjects record must pass
-  // its own layers, so the cast is never observable to such callers.
-  layers: readonly Layer<S>[] = LAYERS as unknown as readonly Layer<S>[],
+  layers: readonly Layer<S>[],
 ): Promise<Map<string, string>> {
   const observations = new Map<string, string>();
   for (const layer of layers) {
     for (const probe of layer.probes) {
-      let value: unknown;
+      let value: LayerObservation;
       try {
         value = await probe.observe(subjects);
       } catch (err) {
@@ -70,10 +74,27 @@ export async function observePipeline<S = PipelineSubjects>(
   return observations;
 }
 
-export function scoreAgainstBaseline<S = PipelineSubjects>(
+export function observePipeline(subjects: PipelineSubjects): Promise<Map<string, string>>;
+export function observePipeline<S>(
+  subjects: S,
+  layers: readonly Layer<S>[],
+): Promise<Map<string, string>>;
+export function observePipeline<S>(
+  ...input: [subjects: PipelineSubjects] | [subjects: S, layers: readonly Layer<S>[]]
+): Promise<Map<string, string>> {
+  if (input.length === 1) return observeLayers(input[0], LAYERS);
+  return observeLayers(input[0], input[1]);
+}
+
+interface ScoringLayer {
+  readonly id: string;
+  readonly probes: readonly { readonly id: string }[];
+}
+
+export function scoreAgainstBaseline(
   observations: ReadonlyMap<string, string>,
   baseline: Baseline,
-  layers: readonly Layer<S>[] = LAYERS as unknown as readonly Layer<S>[],
+  layers: readonly ScoringLayer[] = LAYERS,
 ): LayerGateReport {
   const scores: LayerScore[] = [];
   for (const layer of layers) {
@@ -106,21 +127,41 @@ export function scoreAgainstBaseline<S = PipelineSubjects>(
   };
 }
 
-export async function runLayerGate<S = PipelineSubjects>(opts: {
+type DefaultGateOptions = {
+  subjects: PipelineSubjects;
+  baseline: Baseline;
+  layers?: undefined;
+};
+
+type CustomGateOptions<S> = {
   subjects: S;
   baseline: Baseline;
-  layers?: readonly Layer<S>[];
-}): Promise<LayerGateReport> {
-  const layers = opts.layers ?? (LAYERS as unknown as readonly Layer<S>[]);
-  return scoreAgainstBaseline(await observePipeline(opts.subjects, layers), opts.baseline, layers);
+  layers: readonly Layer<S>[];
+};
+
+export async function runLayerGate<S>(
+  opts: DefaultGateOptions | CustomGateOptions<S>,
+): Promise<LayerGateReport> {
+  if (opts.layers === undefined) {
+    return scoreAgainstBaseline(await observePipeline(opts.subjects), opts.baseline);
+  }
+  return scoreAgainstBaseline(
+    await observePipeline(opts.subjects, opts.layers),
+    opts.baseline,
+    opts.layers,
+  );
 }
 
 /** Re-lock: the observation digests as they stand now. */
-export async function lockBaseline<S = PipelineSubjects>(
-  subjects: S,
-  layers: readonly Layer<S>[] = LAYERS as unknown as readonly Layer<S>[],
+export function lockBaseline(subjects: PipelineSubjects): Promise<Baseline>;
+export function lockBaseline<S>(subjects: S, layers: readonly Layer<S>[]): Promise<Baseline>;
+export async function lockBaseline<S>(
+  ...input: [subjects: PipelineSubjects] | [subjects: S, layers: readonly Layer<S>[]]
 ): Promise<Baseline> {
-  return Object.fromEntries([...await observePipeline(subjects, layers)].sort(([a], [b]) => (a < b ? -1 : 1)));
+  const observations = input.length === 1
+    ? await observePipeline(input[0])
+    : await observePipeline(input[0], input[1]);
+  return Object.fromEntries([...observations].sort(([a], [b]) => (a < b ? -1 : 1)));
 }
 
 function pct(value: number | null): string {

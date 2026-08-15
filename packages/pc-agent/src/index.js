@@ -242,7 +242,7 @@ function createCheckpoints(opts = {}) {
      *  throws — a snapshot failure must not block the operation it precedes. */
     ensure(hint, fallbackDir) {
       try {
-        if (!hint || typeof hint !== 'object' || !probe()) return null;
+        if (!hint || !probe()) return null;
         const dir = hint.dir || fallbackDir;
         if (!dir) return null;
         const abs = path.resolve(dir);
@@ -496,7 +496,12 @@ function main() {
       ws.send(JSON.stringify({ type: 'HELLO', user: USER, os: os.platform(), hostname: os.hostname(), pid: process.pid }));
     });
     ws.addEventListener('message', (ev) => {
-      try { handle(JSON.parse(typeof ev.data === 'string' ? ev.data : new TextDecoder().decode(ev.data)), ws, ctx); }
+      try {
+        const payload = ev.data instanceof ArrayBuffer
+          ? new TextDecoder().decode(ev.data)
+          : String(ev.data);
+        handle(JSON.parse(payload), ws, ctx);
+      }
       catch (err) { log('parse error:', err); }
     });
     ws.addEventListener('close', () => {

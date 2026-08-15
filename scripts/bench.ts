@@ -10,38 +10,54 @@
 //       Paired comparison. Same tasks, both variants, order randomized per task
 //       from the seed, every attempt in its own throwaway sandbox and home.
 //
+//   bun scripts/bench.ts compare --a panel:self --b panel:mixed
+//       The panel-composition experiment: a fork panel of copies of one model
+//       against one member per vendor family, scored by the repo's own checks.
+//       Pre-registered decision rule at panelArm() below. Needs BENCH_PANEL.
+//
 //   bun scripts/bench.ts gain --stateful <variant> --stateless <variant>
 //       CL-Bench's stateful-vs-stateless primitive: one identical sequence run
 //       twice, once with evolution state live and once from a fresh v0.
+//
+//   bun scripts/bench.ts pilot --variant pi:vanilla --out <report.json>
+//       Mandatory one-arm stability run before a model-backed comparison:
+//       at least 40 development tasks, repeated at least three times.
 //
 // Two corpora, selected by --family and never mixed: `defect` (a seeded defect
 // in this repo) and `longhorizon` (a generated corpus, digested in one ask or
 // carried across episodes through forced compaction).
 //
-// Variants: null | oracle | noisy:<rate> | agent | agent-evolving
+// Variants: null | oracle | noisy:<rate> | pi:vanilla | pi:retry | agent | agent-evolving | panel:self | panel:mixed
 // The first three make no model calls and exist to validate the instrument.
 import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   DEFAULT_ATTEMPT_BUDGET, buildBenchReport, buildGainReport, renderBenchSummary,
-  renderGainSummary, runOrder, validateWithRetries, fnv1a64,
+  renderGainSummary, runOrder, fnv1a64,
 } from '../packages/core/src/index.js';
 import type {
   AttemptBudget, AttemptOutcome, BenchCorpus, BenchRunConfig, BenchTask, GainTaskScore,
-  LLMProviderConfig, SealedScorecard, Solver, TaskValidation,
+  JsonObject, LLMProviderConfig, SealedScorecard, Solver,
 } from '../packages/core/src/index.js';
 import { loadBenchCorpus } from './bench-corpus.js';
 import {
   applyPatch, budgetSignal, createAttemptSandbox, ensureRunRoot, scoreSandbox,
 } from './bench-sandbox.js';
 import {
-  createAgentSolver, createNoisyOracleSolver, createOracleSolver, nullSolver,
-  type PatchLookup,
+  createAgentSolver, createNoisyOracleSolver, createOracleSolver, createPanelSolver, createPiSolver,
+  nullSolver, type AgentSolverOptions, type PatchLookup, type PanelSolverOptions,
 } from './bench-solvers.js';
 import {
   createLongHorizonAgentSolver, createLongHorizonNoisySolver, createLongHorizonOracleSolver,
+  createLongHorizonPiSolver,
   loadLongHorizonCorpus, materializeLongHorizon, specFor,
+  type LongHorizonAgentSolverOptions,
 } from './bench-longhorizon.js';
+import {
+  MIN_PILOT_REPEATS, MIN_PILOT_TASKS, benchProviderHash, buildPilotReport,
+  loadAndValidatePilotReport, type PilotReport,
+} from './bench-pilot.js';
+import { runValidation, type WellFormedAttempt } from './bench-validation.js';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const SEAL_LEDGER = join(REPO_ROOT, 'tests', 'bench', 'seal-ledger.jsonl');
@@ -66,11 +82,15 @@ export interface CommonOptions {
 
 /** Two corpora, never mixed. `defect` scores a seeded repo defect by running
  *  this repo's own checks; `longhorizon` scores exact answers over a generated
- *  corpus, in the digestion and continuation shapes. They measure different
+ *  corpus, in the digestion and continuation modes. They measure different
  *  things, so averaging them would produce a number about nothing — the family
  *  is part of the run configuration and therefore part of the config hash. */
 export const BENCH_FAMILIES = ['defect', 'longhorizon'] as const;
 export type BenchFamilyId = (typeof BENCH_FAMILIES)[number];
+
+function isBenchFamilyId(value: string): value is BenchFamilyId {
+  return BENCH_FAMILIES.some((family) => family === value);
+}
 
 export function parseCommon(args: Map<string, string>): CommonOptions {
   const runRoot = args.get('run-root') ?? process.env.BENCH_RUN_ROOT ?? null;
@@ -91,11 +111,11 @@ export function parseCommon(args: Map<string, string>): CommonOptions {
   };
   const limitRaw = args.get('limit');
   const family = args.get('family') ?? 'defect';
-  if (!(BENCH_FAMILIES as readonly string[]).includes(family)) {
+  if (!isBenchFamilyId(family)) {
     throw new Error(`--family must be one of ${BENCH_FAMILIES.join(' | ')}, got "${family}"`);
   }
   return {
-    family: family as BenchFamilyId,
+    family,
     runRoot: ensureRunRoot(runRoot, REPO_ROOT),
     seed: num('seed', 1),
     budget: {
@@ -143,7 +163,14 @@ interface BenchFamily {
 
 /** Shared by both families: the agent variants differ only in which solver
  *  factory builds them. */
-function agentVariant(spec: string): { id: string; description: string; state: 'fresh' | 'shared'; autoEvolve: boolean } {
+interface AgentVariant {
+  id: string;
+  description: string;
+  state: 'fresh' | 'shared';
+  autoEvolve: boolean;
+}
+
+function agentVariant(spec: string): AgentVariant {
   const evolving = spec === 'agent-evolving';
   return {
     id: spec,
@@ -155,8 +182,109 @@ function agentVariant(spec: string): { id: string; description: string; state: '
   };
 }
 
+function piVariant(spec: string): {
+  id: 'pi:vanilla' | 'pi:retry'; description: string; verifierRetry: boolean;
+} | null {
+  if (spec === 'pi:vanilla') {
+    return {
+      id: spec,
+      description: 'official Pi coding agent with native read/bash/edit/write tools',
+      verifierRetry: false,
+    };
+  }
+  if (spec === 'pi:retry') {
+    return {
+      id: spec,
+      description: 'official Pi coding agent plus one machine-verifier feedback retry',
+      verifierRetry: true,
+    };
+  }
+  return null;
+}
+
+const PILOTED_VARIANTS = new Set([
+  'pi:vanilla', 'pi:retry', 'agent', 'agent-evolving', 'panel:self', 'panel:mixed',
+]);
+const PILOT_ARM_VARIANTS = new Set([
+  'pi:vanilla', 'pi:retry', 'agent', 'panel:self', 'panel:mixed',
+]);
+
 function unknownVariant(spec: string): never {
-  throw new Error(`unknown variant "${spec}" (expected null | oracle | noisy:<rate> | agent | agent-evolving)`);
+  throw new Error(`unknown variant "${spec}" (expected null | oracle | noisy:<rate> | pi:vanilla | pi:retry | agent | agent-evolving | panel:self | panel:mixed)`);
+}
+
+/**
+ * The panel arms — a mixed-model fork panel against copies of one model.
+ *
+ * PRE-REGISTERED, and written down before any run so the reading of the result
+ * cannot move afterwards:
+ *
+ *   H0  panel composition does not change how often a defect is actually fixed.
+ *   Primary outcome: pass rate on the repo's own checks (tests + typecheck),
+ *   paired per task, dev split first, sealed split for the reported number.
+ *   Decision:
+ *     • mixed beats self, CI excludes 0  → per-fork model diversity is real for
+ *       agentic coding, and the implementation is to reuse selectEnsembleJudges
+ *       (judge-model.ts), NOT a second family selector.
+ *     • self beats mixed, CI excludes 0  → Self-MoA replicates WITH execution
+ *       ground truth. The current inherit-the-parent default is correct on
+ *       evidence rather than by accident, and the question is closed.
+ *     • CI includes 0 → underpowered or no effect; report the interval and
+ *       change NOTHING. A null result is a result and it is the likely one.
+ *   Either way the default does not change on this script's say-so alone: it
+ *   changes when the sealed split says so.
+ *
+ * Cost per full run, at n tasks × r repeats × p panel members:
+ *   n·r·(p+1) agent trajectories per arm, both arms → 2·n·r·(p+1). The 12-task
+ *   dev split at r=1, p=3 is 96 trajectories plus 2·n·r merges and the grounded
+ *   judge calls the heads path makes per fork. Budget it as ~100–150 full
+ *   agentic attempts per arm pair, and note the mixed arm pays whatever its
+ *   most expensive vendor charges. This is why the run needs the owner's
+ *   approval and why this script ships unrun.
+ */
+export function panelArm(spec: string, analyst: LLMProviderConfig): PanelSolverOptions | null {
+  const mixed = spec === 'panel:mixed';
+  if (!mixed && spec !== 'panel:self') return null;
+  const size = Number(process.env.BENCH_PANEL_SIZE ?? 3);
+  if (!Number.isInteger(size) || size < 2 || size > 6) {
+    throw new Error(`BENCH_PANEL_SIZE must be an integer in [2,6], got ${process.env.BENCH_PANEL_SIZE}`);
+  }
+  // The mixed arm needs real cross-vendor configs; there is no way to synthesize
+  // them from one credential, and quietly running one model under N names would
+  // make the whole comparison a lie.
+  const panel = mixed ? panelProviders(size) : Array.from({ length: size }, () => analyst);
+  return {
+    id: spec,
+    description: mixed
+      ? `fork panel of ${size}, one model per vendor family`
+      : `fork panel of ${size}, every member the same model (today's default)`,
+    panel,
+    analyst,
+    repoRoot: REPO_ROOT,
+  };
+}
+
+/** `BENCH_PANEL` — `<baseURL>|<auth>|<model>` per member, separated by `;`. */
+export function panelProviders(size: number): LLMProviderConfig[] {
+  const raw = (process.env.BENCH_PANEL ?? '').split(';').map((s) => s.trim()).filter(Boolean);
+  if (raw.length !== size) {
+    throw new Error(
+      `panel:mixed needs BENCH_PANEL with ${size} entries (got ${raw.length}). `
+      + 'Format: "<baseURL>|<auth>|<model>;<baseURL>|<auth>|<model>;…", one per vendor family.',
+    );
+  }
+  return raw.map((entry, i) => {
+    const [baseURL, auth, model] = entry.split('|').map((s) => s.trim());
+    if (!baseURL || !auth || !model) {
+      throw new Error(`BENCH_PANEL entry ${i + 1} must be "<baseURL>|<auth>|<model>", got "${entry}"`);
+    }
+    return {
+      name: model.startsWith('@cf/') ? 'workers-ai' : 'openai-compat',
+      baseURL,
+      headers: { Authorization: auth },
+      model,
+    };
+  });
 }
 
 function noisyRate(spec: string): number | null {
@@ -174,12 +302,17 @@ function loadFamily(id: BenchFamilyId): BenchFamily {
         if (spec === 'oracle') return createOracleSolver(patches);
         const rate = noisyRate(spec);
         if (rate !== null) return createNoisyOracleSolver(patches, rate, spec);
+        const pi = piVariant(spec);
+        if (pi) return createPiSolver({ ...pi, llm: benchLLM(), repoRoot: REPO_ROOT });
         if (spec === 'agent' || spec === 'agent-evolving') {
-          return createAgentSolver({
+          const solverOptions: AgentSolverOptions = {
             ...agentVariant(spec), llm: benchLLM(), repoRoot: REPO_ROOT,
-            ...(opts.sharedHome ? { sharedHome: opts.sharedHome } : {}),
-          });
+          };
+          if (opts.sharedHome) solverOptions.sharedHome = opts.sharedHome;
+          return createAgentSolver(solverOptions);
         }
+        const panel = panelArm(spec, benchLLM());
+        if (panel) return createPanelSolver(panel);
         return unknownVariant(spec);
       },
     };
@@ -193,11 +326,14 @@ function loadFamily(id: BenchFamilyId): BenchFamily {
       if (spec === 'oracle') return createLongHorizonOracleSolver(specs);
       const rate = noisyRate(spec);
       if (rate !== null) return createLongHorizonNoisySolver(specs, rate, spec);
+      const pi = piVariant(spec);
+      if (pi) return createLongHorizonPiSolver({ ...pi, llm: benchLLM(), repoRoot: REPO_ROOT, specs });
       if (spec === 'agent' || spec === 'agent-evolving') {
-        return createLongHorizonAgentSolver({
+        const solverOptions: LongHorizonAgentSolverOptions = {
           ...agentVariant(spec), llm: benchLLM(), repoRoot: REPO_ROOT, specs,
-          ...(opts.sharedHome ? { sharedHome: opts.sharedHome } : {}),
-        });
+        };
+        if (opts.sharedHome) solverOptions.sharedHome = opts.sharedHome;
+        return createLongHorizonAgentSolver(solverOptions);
       }
       return unknownVariant(spec);
     },
@@ -233,6 +369,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   const started = Date.now();
   const budget = budgetSignal(common.budget);
   let tokens = 0;
+  let modelCalls: number | undefined;
   let peakPromptTokens = 0;
   let error: string | undefined;
   try {
@@ -246,6 +383,7 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
       repeat: req.repeat,
     });
     tokens = result.tokens ?? 0;
+    modelCalls = result.modelCalls;
     peakPromptTokens = result.peakPromptTokens ?? 0;
     error = result.error;
   } catch (err) {
@@ -261,19 +399,21 @@ async function runAttempt(req: AttemptRequest): Promise<AttemptOutcome> {
   if (!common.keepSandboxes) sandbox.dispose();
 
   const budgetBreach = budget.timedOut() ? 'wall-clock' : (tokens > common.budget.maxTokens ? 'tokens' : null);
-  return {
+  const outcome: AttemptOutcome = {
     taskId: task.id,
     variantId: solver.id,
     slot: req.slot,
     repeat: req.repeat,
-    passed: passed && !budgetBreach,
+    passed: passed && !budgetBreach && !error,
     checks,
     durationMs: solveMs,
     tokens,
     peakPromptTokens,
     budgetBreach,
-    ...(error ? { error } : {}),
   };
+  if (modelCalls !== undefined) outcome.modelCalls = modelCalls;
+  if (error) outcome.error = error;
+  return outcome;
 }
 
 /** Both variants on one task, order randomized from the seed, each in its own
@@ -332,7 +472,7 @@ function corpusLabel(path: string, limit: number | null): string {
   return limit === null ? path : `${path} (limit ${limit})`;
 }
 
-function appendSealLedger(entry: Record<string, unknown>): number {
+function appendSealLedger(entry: JsonObject): number {
   mkdirSync(join(REPO_ROOT, 'tests', 'bench'), { recursive: true });
   const prior = existsSync(SEAL_LEDGER)
     ? readFileSync(SEAL_LEDGER, 'utf8').split('\n').filter((l) => l.trim() && !l.startsWith('#')).length
@@ -345,13 +485,13 @@ function appendSealLedger(entry: Record<string, unknown>): number {
 /** One well-formedness check: the task must fail with nothing done and pass
  *  under the oracle. Both directions are machine-run; neither involves a
  *  variant, so this says nothing about anyone's performance. */
-async function checkWellFormed(
+async function runWellFormedAttempt(
   task: BenchTask,
   repeat: number,
   family: BenchFamily,
   common: CommonOptions,
   oracle: Solver,
-): Promise<{ ok: boolean; detail: string }> {
+): Promise<WellFormedAttempt> {
   const broken = await runAttempt({
     task, solver: nullSolver, slot: 'a', repeat, family, common,
     attemptId: `validate-broken-${task.id}-${repeat}`,
@@ -360,29 +500,7 @@ async function checkWellFormed(
     task, solver: oracle, slot: 'b', repeat, family, common,
     attemptId: `validate-fixed-${task.id}-${repeat}`,
   });
-  const ok = !broken.passed && fixed.passed;
-  const failing = broken.checks.find((c) => !c.passed)?.id ?? 'none';
-  return {
-    ok,
-    detail: ok
-      ? `unsolved trips ${failing}, oracle restores it`
-      : `unsolved→${broken.passed ? 'PASS (nothing to solve)' : 'fail'}, oracle→${fixed.passed ? 'pass' : `FAIL${fixed.error ? ` ${fixed.error}` : ''}`}`,
-  };
-}
-
-/** Well-formedness with a bounded retry, because validation is itself noisy: a
- *  full 165-task run once flagged `autojudge-slot-scores-swapped` BAD, and it
- *  then validated 5/5 in isolation and passed the next complete run. One scored
- *  attempt can record a false fail, so a failure is re-checked before the task
- *  is condemned — see validateWithRetries for why the budget is bounded. */
-function isWellFormed(
-  task: BenchTask,
-  family: BenchFamily,
-  common: CommonOptions,
-  oracle: Solver,
-): Promise<TaskValidation> {
-  return validateWithRetries(common.validateRetries, (attempt) =>
-    checkWellFormed(task, attempt - 1, family, common, oracle));
+  return { broken, oracle: fixed };
 }
 
 async function cmdValidate(common: CommonOptions): Promise<number> {
@@ -391,42 +509,16 @@ async function cmdValidate(common: CommonOptions): Promise<number> {
   const devTasks = limitTasks(corpus.dev, common.limit);
   const oracle = family.resolveSolver('oracle', {});
 
-  console.log(`Validating ${family.path}`);
-  console.log('Each task must FAIL with nothing done and PASS under the oracle.');
-  console.log(`A failing task is re-checked up to ${common.validateRetries} more time(s) before it is called BAD.\n`);
-
-  let bad = 0;
-  const flakyDev: string[] = [];
-  console.log(`dev split (${devTasks.length} tasks):`);
-  for (const task of devTasks) {
-    const result = await isWellFormed(task, family, common, oracle);
-    const onlyOnRetry = result.ok && (result.passedOnAttempt ?? 1) > 1;
-    if (!result.ok) bad++;
-    else if (onlyOnRetry) flakyDev.push(task.id);
-    console.log(`  ${!result.ok ? 'BAD ' : onlyOnRetry ? 'FLKY' : 'ok  '} ${task.id.padEnd(28)} ${result.detail}`);
-  }
-
-  // The seal returns which held-out tasks are BROKEN or UNSTABLE and nothing
-  // else — a corpus bug report, never a scoreboard.
-  const sealedResult = await corpus.sealed.validate((task) => isWellFormed(task, family, common, oracle));
-  bad += sealedResult.invalid.length;
-  console.log(`\nsealed split (${sealedResult.checked} tasks): ${sealedResult.checked - sealedResult.invalid.length} valid`);
-  for (const id of sealedResult.invalid) console.log(`  BAD  ${id}`);
-  for (const id of sealedResult.flaky) console.log(`  FLKY ${id}`);
-
-  const total = devTasks.length + sealedResult.checked;
-  const flaky = flakyDev.length + sealedResult.flaky.length;
-  console.log(`\n${total - bad}/${total} tasks valid.`);
-  if (flaky > 0) {
-    // Valid, but not trustworthy as a single scored attempt: the same
-    // non-determinism that made these pass on a retry can make a compare run
-    // record a false fail.
-    console.log(`${flaky} task(s) only passed on a retry — non-deterministic, and a single scored attempt on them can record a false fail:`);
-    for (const id of [...flakyDev, ...sealedResult.flaky]) console.log(`  ${id}`);
-    console.log('Run compare with --repeats > 1 so these show up as unstable rather than as a score.');
-  }
-  if (bad > 0) console.log('A task that passes with nothing done, or that the oracle cannot pass, is not a task.');
-  return bad === 0 ? 0 : 1;
+  return runValidation({
+    family: common.family,
+    corpusPath: family.path,
+    manifestHash: corpus.manifestHash,
+    validateRetries: common.validateRetries,
+    runRoot: common.runRoot,
+    devTasks,
+    sealed: corpus.sealed,
+    runAttempt: (task, repeat) => runWellFormedAttempt(task, repeat, family, common, oracle),
+  });
 }
 
 async function cmdCompare(args: Map<string, string>, common: CommonOptions): Promise<number> {
@@ -435,6 +527,7 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
   if (!specA || !specB) throw new Error('compare needs --a <variant> and --b <variant>');
   const family = loadFamily(common.family);
   const corpus = family.corpus;
+  const pilot = requireStabilityPilot(args, common, family, [specA, specB]);
 
   const sharedHomeA = join(common.runRoot, 'shared-a');
   const sharedHomeB = join(common.runRoot, 'shared-b');
@@ -480,7 +573,10 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
     });
   }
 
-  const report = buildBenchReport({ runId, config, devAttempts, sealed, sealAccessOrdinal: ordinal });
+  const report = {
+    ...buildBenchReport({ runId, config, devAttempts, sealed, sealAccessOrdinal: ordinal }),
+    modelEvidence: pilotEvidence(pilot),
+  };
   if (common.out) {
     writeFileSync(common.out, JSON.stringify(report, null, 2));
     console.error(`Wrote ${common.out}`);
@@ -489,10 +585,110 @@ async function cmdCompare(args: Map<string, string>, common: CommonOptions): Pro
   return args.has('require-accept') && !report.decision.accept ? 1 : 0;
 }
 
+function requireStabilityPilot(
+  args: Map<string, string>,
+  common: CommonOptions,
+  family: BenchFamily,
+  variants: readonly string[],
+): PilotReport | null {
+  if (!variants.some((variant) => PILOTED_VARIANTS.has(variant))) return null;
+  if (common.repeats < MIN_PILOT_REPEATS) {
+    throw new Error(`model-backed runs need at least ${MIN_PILOT_REPEATS} repeats per task; got ${common.repeats}`);
+  }
+  const path = args.get('pilot-report');
+  if (!path) {
+    throw new Error(
+      `model-backed runs need --pilot-report from a one-arm ${MIN_PILOT_TASKS}-task × ${MIN_PILOT_REPEATS}-repeat stability pilot`,
+    );
+  }
+  const llm = benchLLM();
+  return loadAndValidatePilotReport(path, {
+    family: family.id,
+    manifestHash: family.corpus.manifestHash,
+    model: llm.model,
+    providerHash: benchProviderHash(llm),
+    budget: common.budget,
+    comparedVariants: variants,
+  });
+}
+
+function pilotEvidence(pilot: PilotReport | null): null | {
+  variant: string; model: string; providerHash: string; tasks: number; repeats: number; seed: number;
+  totalModelCalls: number; meanModelCalls: number; maxObservedModelCalls: number;
+} {
+  return pilot ? {
+    variant: pilot.variant,
+    model: pilot.model,
+    providerHash: pilot.providerHash,
+    tasks: pilot.tasks,
+    repeats: pilot.repeats,
+    seed: pilot.seed,
+    totalModelCalls: pilot.totalModelCalls,
+    meanModelCalls: pilot.meanModelCalls,
+    maxObservedModelCalls: pilot.maxObservedModelCalls,
+  } : null;
+}
+
+async function cmdPilot(args: Map<string, string>, common: CommonOptions): Promise<number> {
+  const spec = args.get('variant');
+  if (!spec || !PILOT_ARM_VARIANTS.has(spec)) {
+    throw new Error(`pilot needs --variant <${[...PILOT_ARM_VARIANTS].join(' | ')}> — exactly one fresh model-backed arm`);
+  }
+  if (!common.out) throw new Error('pilot needs --out <report.json>');
+  const family = loadFamily(common.family);
+  const tasks = limitTasks(family.corpus.dev, common.limit);
+  if (tasks.length < MIN_PILOT_TASKS) {
+    throw new Error(`stability pilot needs at least ${MIN_PILOT_TASKS} development tasks; ${family.id} selected ${tasks.length}`);
+  }
+  if (common.repeats < MIN_PILOT_REPEATS) {
+    throw new Error(`stability pilot needs at least ${MIN_PILOT_REPEATS} repeats; got ${common.repeats}`);
+  }
+  const llm = benchLLM();
+  const solver = family.resolveSolver(spec, { sharedHome: join(common.runRoot, 'pilot-shared') });
+  const outcomes: AttemptOutcome[] = [];
+  console.error(`stability pilot: ${tasks.length} tasks × 1 variant × ${common.repeats} repeats`);
+  for (const task of tasks) {
+    const repeated: AttemptOutcome[] = [];
+    for (let repeat = 0; repeat < common.repeats; repeat++) {
+      const outcome = await runAttempt({
+        task,
+        solver,
+        slot: 'a',
+        repeat,
+        family,
+        common,
+        attemptId: `pilot-${task.id}-r${repeat}`,
+      });
+      repeated.push(outcome);
+      outcomes.push(outcome);
+    }
+    console.error(`  ${task.id.padEnd(28)} ${solver.id}=${tally(repeated)}`);
+  }
+  const report = buildPilotReport({
+    family: family.id,
+    manifestHash: family.corpus.manifestHash,
+    variant: solver.id,
+    llm,
+    budget: common.budget,
+    seed: common.seed,
+    repeats: common.repeats,
+    outcomes,
+  });
+  writeFileSync(common.out, JSON.stringify(report, null, 2));
+  console.log(
+    `Pilot ${report.variant}: ${report.passed}/${report.attempts} attempts passed; `
+    + `${report.unstableTaskIds.length}/${report.tasks} tasks unstable; `
+    + `${report.totalModelCalls} model calls; ${report.errors} errors; `
+    + `${report.budgetBreaches} budget breaches.`,
+  );
+  return report.errors === 0 && report.budgetBreaches === 0 ? 0 : 1;
+}
+
 async function cmdGain(args: Map<string, string>, common: CommonOptions): Promise<number> {
   const statefulSpec = args.get('stateful') ?? 'agent-evolving';
   const statelessSpec = args.get('stateless') ?? 'agent';
   const family = loadFamily(common.family);
+  const pilot = requireStabilityPilot(args, common, family, [statefulSpec, statelessSpec]);
   const sequence = limitTasks(family.corpus.dev, common.limit);
   if (sequence.length === 0) throw new Error('no tasks in the sequence');
 
@@ -519,6 +715,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
   const runId = fnv1a64(`gain:${Date.now()}:${config.seed}`).slice(0, 12);
 
   const scores = new Map<string, { stateful: number; stateless: number }>();
+  const attempts: AttemptOutcome[] = [];
   for (let pass = 0; pass < common.repeats; pass++) {
     const stateful = statefulPasses[pass]!;
 
@@ -537,6 +734,7 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
           task, solver: arm.solver, slot: arm.key === 'stateful' ? 'b' : 'a', repeat: pass, family, common,
           attemptId: `gain-${arm.key}-p${pass}-${index}-${task.id}`,
         });
+        attempts.push(outcome);
         const entry = scores.get(task.id) ?? { stateful: 0, stateless: 0 };
         entry[arm.key] += (outcome.passed ? 1 : 0) / common.repeats;
         scores.set(task.id, entry);
@@ -552,7 +750,10 @@ async function cmdGain(args: Map<string, string>, common: CommonOptions): Promis
     stateless: scores.get(task.id)!.stateless,
   }));
 
-  const report = buildGainReport({ runId, config, perTask });
+  const report = {
+    ...buildGainReport({ runId, config, perTask, attempts }),
+    modelEvidence: pilotEvidence(pilot),
+  };
   if (common.out) {
     writeFileSync(common.out, JSON.stringify(report, null, 2));
     console.error(`Wrote ${common.out}`);
@@ -565,12 +766,13 @@ const USAGE = `Proteus bench harness — machine-scored, sealed-split, rejection
 
 Usage:
   bun scripts/bench.ts validate  --run-root <dir> [--limit n] [--validate-retries n]
-  bun scripts/bench.ts compare   --run-root <dir> --a <variant> --b <variant> [--repeats n] [--sealed] [--require-accept]
-  bun scripts/bench.ts gain      --run-root <dir> [--stateful <variant>] [--stateless <variant>] [--repeats n]
+  bun scripts/bench.ts pilot     --run-root <dir> --variant <variant> --out <report.json> [--limit n] [--repeats n]
+  bun scripts/bench.ts compare   --run-root <dir> --a <variant> --b <variant> [--pilot-report <path>] [--repeats n] [--sealed] [--require-accept]
+  bun scripts/bench.ts gain      --run-root <dir> [--stateful <variant>] [--stateless <variant>] --pilot-report <path> [--repeats n]
 
 Families (--family, default defect):
   defect            a seeded defect in this repo, scored by this repo's own checks
-  longhorizon       a generated corpus, scored by exact answers, in two shapes:
+  longhorizon       a generated corpus, scored by exact answers, in two modes:
                     single-query digestion and multi-episode continuation across
                     forced compaction. Never mixed with defect — they measure
                     different things, so --family is part of the config hash.
@@ -579,8 +781,12 @@ Variants:
   null              no-op control (must fail everything)
   oracle            reverses the defect (must pass everything)
   noisy:<rate>      synthetic solver with a known success rate, seeded
+  pi:vanilla        official Pi coding agent, native read/bash/edit/write (V0)
+  pi:retry          Pi V0 plus one machine-verifier feedback retry (V1)
   agent             Proteus from a fresh v0 workspace per task
   agent-evolving    Proteus with evolution live, state carried across the sequence
+  panel:self        fork panel whose members all use the analyst model
+  panel:mixed       fork panel with one configured model per vendor family
 
 Options:
   --run-root <dir>     REQUIRED. Throwaway directory outside your home.
@@ -597,16 +803,24 @@ Options:
                        only passes on a retry is reported as FLKY, not ok.
   --limit <n>          Use only the first n tasks (recorded in the report)
   --out <path>         Write the JSON report here
+  --pilot-report <path>  Required for model-backed compare/gain. Must match the
+                       corpus, model, endpoint hash, and exact compute envelope.
   --keep-sandboxes     Do not delete attempt sandboxes (debugging)
 
-Agent variants read BENCH_BASE_URL / BENCH_AUTH / BENCH_MODEL. Deterministic
+Model-backed variants read BENCH_BASE_URL / BENCH_AUTH / BENCH_MODEL. Deterministic
 variants need no credentials and make no model calls.`;
 
-export function parseArgv(argv: string[]): { command: string; args: Map<string, string> } {
+export interface ParsedBenchArgv {
+  command: string;
+  args: Map<string, string>;
+}
+
+export function parseArgv(argv: string[]): ParsedBenchArgv {
   const args = new Map<string, string>();
   const command = argv[0] ?? '';
   for (let i = 1; i < argv.length; i++) {
-    const arg = argv[i]!;
+    const arg = argv[i];
+    if (arg === undefined) throw new Error(`argument ${i} is missing`);
     if (!arg.startsWith('--')) throw new Error(`unexpected argument: ${arg}`);
     const key = arg.slice(2);
     const next = argv[i + 1];
@@ -622,8 +836,13 @@ async function main(): Promise<void> {
     console.log(USAGE);
     return;
   }
+  if (command === 'pilot') {
+    if (!args.has('limit')) args.set('limit', String(MIN_PILOT_TASKS));
+    if (!args.has('repeats')) args.set('repeats', String(MIN_PILOT_REPEATS));
+  }
   const common = parseCommon(args);
   const code = command === 'validate' ? await cmdValidate(common)
+    : command === 'pilot' ? await cmdPilot(args, common)
     : command === 'compare' ? await cmdCompare(args, common)
     : command === 'gain' ? await cmdGain(args, common)
     : (() => { throw new Error(`unknown command "${command}"`); })();

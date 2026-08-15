@@ -1,21 +1,24 @@
 // Behavior tests for the `memory` tool's `sessions` action — the LLM-facing
 // surface over SessionSearchStore (one implementation, both backends).
 import { describe, test, expect } from 'bun:test';
-import type { ToolSet } from 'ai';
-import { createTestRuntime } from '@proteus/test-utils';
-import { buildBuiltinTools, initAllTables } from '../src/index.ts';
-
-type Exec = (args: Record<string, unknown>) => Promise<unknown>;
+import { createTestRuntime, toolExecute } from '@proteus/test-utils';
+import * as v from 'valibot';
+import {
+  buildBuiltinTools,
+  initAllTables,
+  type MemoryToolInput,
+  type JsonValue,
+} from '../src/index.ts';
 
 function setup() {
   const { rt, testSql } = createTestRuntime();
   initAllTables(testSql.execRaw);
-  const tools: ToolSet = buildBuiltinTools({ rt });
-  const memoryExec = tools.memory!.execute as unknown as Exec;
+  const tools = buildBuiltinTools({ rt });
+  const memoryExec = toolExecute<MemoryToolInput, JsonValue>(tools.memory);
   let row = 0;
   const insert = (sessionId: string, role: string, content: string): string => {
     const id = `m-${++row}`;
-    testSql.sql`INSERT INTO messages (id, session_id, role, content, created_at)
+    void testSql.sql`INSERT INTO messages (id, session_id, role, content, created_at)
                 VALUES (${id}, ${sessionId}, ${role}, ${content}, ${1_000_000 + row * 1000})`;
     return id;
   };
@@ -23,13 +26,34 @@ function setup() {
 }
 
 describe('memory tool — sessions action', () => {
+  const SearchResultSchema = v.object({
+    mode: v.string(),
+    hits: v.array(v.object({
+      messageId: v.string(),
+      sessionId: v.string(),
+      snippet: v.string(),
+    })),
+  });
+  const ScrollResultSchema = v.object({
+    mode: v.string(),
+    messages: v.array(v.object({
+      content: v.string(),
+      anchor: v.optional(v.literal(true)),
+    })),
+  });
+  const BrowseResultSchema = v.object({
+    mode: v.string(),
+    sessions: v.array(v.object({ sessionId: v.string(), preview: v.string() })),
+  });
+
   test('searches past transcripts and returns ranked hits with refs', async () => {
     const { memoryExec, insert } = setup();
     const id = insert('proj', 'assistant', 'we shipped the cloudflare tunnel fix yesterday');
     insert('proj', 'user', 'unrelated chatter');
-    const res = await memoryExec({ action: 'sessions', query: 'cloudflare tunnel' }) as {
-      mode: string; hits: Array<{ messageId: string; sessionId: string; snippet: string }>;
-    };
+    const res = v.parse(
+      SearchResultSchema,
+      await memoryExec({ action: 'sessions', query: 'cloudflare tunnel' }),
+    );
     expect(res.mode).toBe('search');
     expect(res.hits.length).toBe(1);
     expect(res.hits[0]!.messageId).toBe(id);
@@ -41,9 +65,10 @@ describe('memory tool — sessions action', () => {
     insert('proj', 'user', 'before');
     const anchor = insert('proj', 'assistant', 'anchor message');
     insert('proj', 'user', 'after');
-    const res = await memoryExec({ action: 'sessions', around_message_id: anchor, window: 1 }) as {
-      mode: string; messages: Array<{ content: string; anchor?: true }>;
-    };
+    const res = v.parse(
+      ScrollResultSchema,
+      await memoryExec({ action: 'sessions', around_message_id: anchor, window: 1 }),
+    );
     expect(res.mode).toBe('scroll');
     expect(res.messages.map((m) => m.content)).toEqual(['before', 'anchor message', 'after']);
     expect(res.messages[1]!.anchor).toBe(true);
@@ -53,9 +78,7 @@ describe('memory tool — sessions action', () => {
     const { memoryExec, insert } = setup();
     insert('a', 'user', 'first session kickoff');
     insert('b', 'user', 'second session kickoff');
-    const res = await memoryExec({ action: 'sessions' }) as {
-      mode: string; sessions: Array<{ sessionId: string; preview: string }>;
-    };
+    const res = v.parse(BrowseResultSchema, await memoryExec({ action: 'sessions' }));
     expect(res.mode).toBe('browse');
     expect(res.sessions.map((s) => s.sessionId)).toEqual(['b', 'a']);
     expect(res.sessions[1]!.preview).toBe('first session kickoff');
@@ -63,7 +86,10 @@ describe('memory tool — sessions action', () => {
 
   test('returns a clean error for an unknown anchor id', async () => {
     const { memoryExec } = setup();
-    const res = await memoryExec({ action: 'sessions', around_message_id: 'missing' }) as { error: string };
+    const res = v.parse(
+      v.object({ error: v.string() }),
+      await memoryExec({ action: 'sessions', around_message_id: 'missing' }),
+    );
     expect(res.error).toContain('missing');
   });
 

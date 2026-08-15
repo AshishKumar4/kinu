@@ -2,8 +2,8 @@
 // action. The cf backend runs heads as ExplorationAgent Facets; locally each
 // head runs IN-PROCESS over a FORK of the parent runtime (buildCLIHeadRuntime):
 // the parent's real host executor (`run laptop` / codemode `laptop.*`), the
-// parent's files at /workspace + /pc, and a PRIVATE durable scratch (its own
-// own workspace filesystem, Memory, CraftStore and shell) so
+// parent's canonical workspace through `parent.*`, and a PRIVATE durable
+// scratch (its own workspace filesystem, Memory, CraftStore and shell) so
 // siblings can't corrupt each other. Heads are LLM-bound, so the
 // HeadController's Promise.all gives real concurrency without subprocesses; the
 // merge LLM runs in this process.
@@ -20,7 +20,7 @@ import {
   type HeadSplitRequest, type HeadSplitResult,
   type MissionGovernor,
   HeadCapture, runHeadInference, buildHeadToolSet, HeadController, HeadJournal, initHeadsTables,
-  extractJsonObject, reasoningEffortOptions, resolveMaxSteps, localMissionScope,
+  extractJsonObject, MergeOutputSchema, reasoningEffortOptions, resolveMaxSteps, localMissionScope,
 } from '@proteus/core';
 import { Database } from 'bun:sqlite';
 import { mkdirSync, rmSync } from 'node:fs';
@@ -28,11 +28,20 @@ import { join } from 'node:path';
 import { makeSql, makeExecRaw, buildCLIHeadRuntime } from './runtime.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { proteusHome } from './home.js';
+import * as v from 'valibot';
 
 export interface CLIHeadRuntimeDeps {
   model: LanguageModel;
   /** Provider prefix from the normalized model spec. */
   providerFamily?: string;
+  /** Resolve a per-fork model spec (`HeadInput.model`) to a model. Without it
+   *  every head runs `model` above, which made the per-fork `model` field —
+   *  advertised on the `agents` fork schema and honoured by the cf backend —
+   *  a silent no-op here: a panel asked for three vendors got three copies of
+   *  one. Absent (no resolver on the session) the fallback is still `model`,
+   *  and so is an unresolvable spec, because a fork that cannot honour its
+   *  model should still run rather than fail the whole split. */
+  resolveModel?: (spec: string) => LanguageModel;
   /** The parent session's runtime — the real execution surface every head forks
    *  (host executor, files, llm/executor/schedule, checkpoints). */
   parentRuntime: AgentRuntime;
@@ -63,7 +72,7 @@ export interface CLIHeadRuntimeDeps {
 interface AbortFlag { aborted: boolean; reason: string | null; }
 
 export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
-  return {
+  const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       const flag: AbortFlag = { aborted: false, reason: null };
       return {
@@ -73,8 +82,8 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
       };
     },
     mergeLLM: (prompt) => mergeViaLLM(deps.model, prompt, deps.providerFamily),
-    ...(deps.grounding ? { grounding: deps.grounding } : {}),
   };
+  return deps.grounding ? { ...runtime, grounding: deps.grounding } : runtime;
 }
 
 /**
@@ -95,7 +104,12 @@ export function createCLIHeadRuntime(deps: CLIHeadRuntimeDeps): HeadRuntime {
  * the controller today, but a path built from an identifier must not be the
  * place that assumes so.
  */
-function openHeadScratch(headId: string): { db: Database; dispose(): void } {
+interface HeadScratch {
+  db: Database;
+  dispose(): void;
+}
+
+function openHeadScratch(headId: string): HeadScratch {
   const dir = join(proteusHome(), 'heads');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${headId.replace(/[^A-Za-z0-9_-]/g, '_')}.db`);
@@ -111,6 +125,21 @@ function openHeadScratch(headId: string): { db: Database; dispose(): void } {
 }
 
 /** Run one head in-process over a fork of the parent runtime. */
+/** The model THIS head runs — its own spec when it named one and the session can
+ *  resolve it, else the session's. A bad spec degrades to the session model
+ *  rather than failing the head: one fork's unresolvable model must not take
+ *  down a split the other forks are already running. */
+function headModel(input: HeadInput, deps: CLIHeadRuntimeDeps): LanguageModel {
+  if (!input.model || !deps.resolveModel) return deps.model;
+  try {
+    return deps.resolveModel(input.model);
+  } catch (err) {
+    console.warn(`[proteus] head ${input.id} could not resolve model "${input.model}": `
+      + `${err instanceof Error ? err.message : String(err)} — running the session's model instead.`);
+    return deps.model;
+  }
+}
+
 async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: AbortFlag): Promise<HeadReport> {
   const scratch = openHeadScratch(input.id);
   const db = scratch.db;
@@ -140,15 +169,17 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       split: (request) => runLocalSplit(db, request, input, deps),
     });
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
-    return await runHeadInference(input, {
-      model: deps.model, tools, capture,
+    const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
+      model: headModel(input, deps), tools, capture,
+      workspaceLayout: 'private-scratch',
       // The same envelope the parent session's turn runs to — local-session
       // reads this identical shell variable. A fork of a turn gets the turn's room.
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
-      ...(mission ? { mission } : {}),
-    });
+    };
+    if (mission) inferenceOptions.mission = mission;
+    return await runHeadInference(input, inferenceOptions);
   } finally {
     scratch.dispose();
   }
@@ -168,21 +199,24 @@ async function runLocalSplit(
 ): Promise<HeadSplitResult> {
   initHeadsTables(makeExecRaw(db));
   const controller = new HeadController(createCLIHeadRuntime(deps), new HeadJournal(makeSql(db)));
-  const result = await controller.run({
+  const controllerInput: Parameters<HeadController['run']>[0] = {
     parentHeadId: input.id,
     rootId: input.rootId,
     inheritedContext: input.inheritedContext,
     request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
     parentBudget: input.budget,
     model: input.model,
+    mode: input.mode,
     // A subtree charges the same mission its root does — otherwise a head
     // escapes its budget simply by splitting again.
-    ...(input.missionLabels?.length ? { missionLabels: input.missionLabels } : {}),
-  });
+  };
+  if (input.missionLabels?.length) controllerInput.missionLabels = input.missionLabels;
+  const result = await controller.run(controllerInput);
   return {
     narrative: result.mergedNarrative,
     decisions: result.selectedDecisions,
     unresolvedQuestions: result.unresolvedQuestions,
+    blindSpots: result.blindSpots,
     childHeadIds: result.headIds,
     headCount: result.costSummary.headCount,
   };
@@ -192,10 +226,11 @@ async function runLocalSplit(
  *  against MergeOutputSchema and falls back on a bad/throwing response. */
 async function mergeViaLLM(model: LanguageModel, prompt: string, providerFamily?: string): Promise<MergeOutput> {
   const providerOptions = reasoningEffortOptions('low', providerFamily ?? '');
-  const { text } = await generateText({
+  const request: Parameters<typeof generateText>[0] = {
     model,
     prompt,
-    ...(providerOptions ? { providerOptions } : {}),
-  });
-  return extractJsonObject(text) as MergeOutput;
+  };
+  if (providerOptions) request.providerOptions = providerOptions;
+  const { text } = await generateText(request);
+  return v.parse(MergeOutputSchema, extractJsonObject(text));
 }

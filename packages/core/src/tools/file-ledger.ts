@@ -93,8 +93,8 @@ interface SeenContent {
 export class TurnFileLedger {
   /** Digest of every file content the model has been shown this turn, with how
    *  far into it the reads reached. Keyed on CONTENT, not on the path spelling,
-   *  so reading `/src/a.ts` and then editing `src/a.ts` — the same file through
-   *  the same mount table — is not a spurious refusal. */
+   *  so reading `/src/a.ts` and then editing `src/a.ts` — two spellings of the
+   *  same canonical file — is not a spurious refusal. */
   private readonly seen = new Map<string, SeenContent>();
   /** Paths observed at all, kept only to tell a file that moved on ("read it
    *  again") from one never read ("read it first"). */
@@ -176,10 +176,12 @@ export class TurnFileLedger {
   snapshot(): FileEditSnapshot {
     let abandoned = 0;
     for (const path of this.failedPaths) if (!this.recoveredPaths.has(path)) abandoned++;
+    const failures: Partial<Record<FileEditOutcomeReason, number>> = {};
+    for (const [reason, count] of this.failures) failures[reason] = count;
     return {
       attempts: this.attempts,
       applied: this.applied,
-      failures: Object.fromEntries(this.failures) as Partial<Record<FileEditOutcomeReason, number>>,
+      failures,
       recoveredPaths: this.recoveredPaths.size,
       abandonedPaths: abandoned,
     };
@@ -189,6 +191,20 @@ export class TurnFileLedger {
    *  durable row otherwise, so `turn_end` stays the denominator. */
   get active(): boolean {
     return this.attempts > 0;
+  }
+
+  /**
+   * How far the turn's file work has actually got: distinct paths it has
+   * touched at all, and edits that changed something.
+   *
+   * Both are monotone within a turn, which is the whole point — the progress
+   * trigger (orchestrator/turn-steering.ts) reads them once per step and an
+   * INCREASE is literally "the turn moved". Exposed as a pair rather than
+   * folded into `snapshot()` because that snapshot is the durable `file_edit`
+   * row's shape and must not grow fields nothing writes.
+   */
+  get progress() {
+    return { filesTouched: this.seenPaths.size, editsApplied: this.applied };
   }
 }
 

@@ -3,6 +3,7 @@
 // SqlExec seam the UserDO provides.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { sqlExec } from './helpers/user-do.js';
 import {
   ACCESS_TOKEN_SCOPES,
   getActiveAccessTokenScopes,
@@ -14,22 +15,8 @@ import {
   revokeAccessToken,
   verifyAccessToken,
 } from '../src/cli/access-token-store.js';
-import type { SqlExec } from '@proteus/core';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
-
-function sqlExec(db: Database) {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const statement = db.prepare(query);
-      const trimmed = query.trim().toUpperCase();
-      const reads = trimmed.startsWith('SELECT') || trimmed.startsWith('PRAGMA');
-      if (reads) return { toArray: () => statement.all(...(bindings as never[])) as Array<Record<string, unknown>> };
-      statement.run(...(bindings as never[]));
-      return { toArray: () => [] as Array<Record<string, unknown>> };
-    },
-  };
-}
 
 function setup() {
   const db = new Database(':memory:');
@@ -54,10 +41,10 @@ describe('mint', () => {
     const { db, sql } = setup();
     const minted = await mintAccessToken(sql, USER_ID, 'ci', ['workspace.exec', 'workspace.read']);
     if (!minted.ok) throw new Error(minted.error);
-    const rows = db.prepare('SELECT * FROM user_access_tokens').all() as Array<Record<string, unknown>>;
+    const rows = db.prepare<{ token_hash: string }, []>('SELECT token_hash FROM user_access_tokens').all();
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows[0])).not.toContain(minted.token);
-    expect(rows[0]!.token_hash).toBe(minted.record.tokenHash);
+    expect(rows[0]?.token_hash).toBe(minted.record.tokenHash);
   });
 
   test('rejects unknown or empty scopes', async () => {
@@ -103,8 +90,8 @@ describe('verify', () => {
       tokenHash: minted.record.tokenHash,
       scopes: ['workspace.read', 'workspace.exec'],
     });
-    const row = db.prepare('SELECT last_used_at FROM user_access_tokens').get() as { last_used_at: number | null };
-    expect(row.last_used_at).toBeNumber();
+    const row = db.prepare<{ last_used_at: number | null }, []>('SELECT last_used_at FROM user_access_tokens').get();
+    expect(row?.last_used_at).toBeNumber();
   });
 
   test('rejects unknown, tampered, and revoked tokens', async () => {

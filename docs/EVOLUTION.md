@@ -2,13 +2,13 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus evolves across four timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`; the shortest timescale — the only one that ticks INSIDE a single long autonomous turn — is `core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`.
+Proteus evolves across four timescales. Each operates independently, with shorter timescales feeding data to longer ones. The engine is `core/src/evolution/engine.ts`; the shortest timescale (the only one that ticks INSIDE a single long autonomous turn) has two channels: crafted-tool fitness (`core/src/orchestrator/craft-cycle.ts` over `core/src/craft/in-episode.ts`) and execution-recovery findings (`core/src/evolution/recovery.ts`, detected by the failure ledger in `core/src/orchestrator/turn-steering.ts`).
 
 ## In-Episode Evolution (the step clock)
 
 The other three timescales are conversational: the next user message grades a
 turn, five turns close a window, twenty-five close a lifetime. One long agentic
-episode — one prompt, hours of steps, nobody watching — is ONE turn, so none of
+episode (one prompt, hours of steps, nobody watching) is ONE turn, so none of
 them fire inside it. The in-episode loop is the one that does.
 
 | | |
@@ -40,6 +40,35 @@ blast radius: no scaffold, prompt or gate is ever promoted on it.
 
 Gated with the rest of evolution — a `--no-auto-evolve` run observes nothing,
 so a benchmark's arms still mean what they say.
+
+### The knowledge channel (execution recoveries)
+
+The step clock's second observation, beside the artifact channel above
+(`core/src/evolution/recovery.ts`, detected by the failure ledger in
+`orchestrator/turn-steering.ts`): when a tool's failure streak reaches the
+steer threshold and is then broken by a **changed** call of the same tool that
+ran clean, the runtime records the pairing — both arg echoes verbatim — as a
+durable lesson (`source = 'execution_recovery'`) and injects the newest
+`MAX_RECOVERY_FINDINGS` findings into every subsequent step's dynamic-context
+block. That makes it the one knowledge plane that moves DURING a long turn:
+facts and the MEMORY.md tail are frozen at turn assembly, a finding recorded
+at step 40 rides step 41 — and it survives compaction, continuation turns and
+instance death, which is where in-context learning dies.
+
+Same fitness discipline: both halves are the runtime's own records (the same
+failing-result predicate the steer trusts), no model is asked, and a streak
+broken by the SAME call finally working records nothing — a lucky retry is
+not a changed approach, and durable "keep grinding" advice is the exact
+misevolution the steer exists to prevent. Same ceiling plus one more: the
+pairing is temporal, not causal, and the rendered line claims neither. A
+finding therefore gates NOTHING — it is a bounded hint plane, provisional
+forever (bound to no turn, so lesson corroboration can never admit it to
+MEMORY.md and the experience library can never export it).
+
+Each turn with a broken streak writes one `execution_recovery` run event
+(`tool`, `failures`, `failedSignature`). The falsifier is a query: the same
+`failedSignature` failing again in a later turn is a finding that did not
+take.
 
 ## Three Conversational Timescales
 

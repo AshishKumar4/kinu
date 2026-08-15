@@ -12,28 +12,33 @@
 //
 // Evolution never blocks a turn mid-flight: every dispatch is detached. But a
 // process that exits kills whatever it detached, so `end()` has to decide what
-// to wait for. Two lanes, with different answers — plus the IN-EPISODE loop
-// (`craft`, orchestrator/craft-cycle.ts), which is in neither because it makes
-// no model call: it writes one synchronous row as an execute block settles, so
-// there is nothing to detach and nothing to join, and it is the only evolution
-// clock that ticks inside a single long autonomous turn.
+// to wait for. Two lanes, with different answers — plus the IN-EPISODE clock,
+// which is in neither because it makes no model call: the craft loop (`craft`,
+// orchestrator/craft-cycle.ts) and the recovery findings (`recordRecovery`,
+// evolution/recovery.ts) each write one synchronous row as a tool call
+// settles, so there is nothing to detach and nothing to join. That clock is
+// the only evolution that ticks inside a single long autonomous turn.
 //
-//   TURN LANE — the outcome review (classifier → reflection/extraction/lesson)
-//     and the sampled scaffold shadow eval. Seconds to ~a minute, and the
-//     shadow eval is what resolves a pending scaffold, so it must not be
-//     killed. `settleEvolution()` JOINS this lane, bounded by
+//   TURN LANE — the outcome review (classifier → reflection/extraction/lesson).
+//     Seconds to ~a minute. `settleEvolution()` JOINS this lane, bounded by
 //     `settleTimeoutMs` (default DEFAULT_SETTLE_TIMEOUT_MS); whatever is still
 //     running when the bound expires is LOGGED by label and abandoned, never
 //     silently waited on forever.
 //
-//   CADENCE LANE — the whole session/lifetime chain (session reflection →
-//     scaffold proposal → replay eval → craft consolidation → lifetime MCTS).
-//     Minutes to tens of minutes. `settleEvolution()` does NOT join it. It is
-//     only ever STARTED by a host that can afford to finish it: a long-lived
-//     CLI session, the Durable Object (which holds itself open with keepAlive),
-//     or the local scheduler daemon. A `oneShot` host — one `proteus exec`
-//     process per task — never starts it at all, so it can never land on that
-//     process's wall clock.
+//   CADENCE LANE — the whole session/lifetime chain (queued scaffold trials →
+//     session reflection → scaffold proposal → replay eval → craft
+//     consolidation → lifetime MCTS). Minutes to tens of minutes.
+//     `settleEvolution()` does NOT join it. It is only ever STARTED by a host
+//     that can afford to finish it: a long-lived CLI session, the Durable
+//     Object (which holds itself open with keepAlive), or the local scheduler
+//     daemon. A `oneShot` host — one `proteus exec` process per task — never
+//     starts it at all, so it can never land on that process's wall clock.
+//     The scaffold shadow trial is here, not on the turn lane: a candidate
+//     rollout is a whole extra turn plus two judge calls, and charging that to
+//     the process that just answered the user is what "resolving the promotion
+//     gate inline" meant. The turn writes one queue row (scaffold/shadow.ts)
+//     and is done; the queue is durable, so a host that exits first loses
+//     nothing but time.
 //
 // What makes deferral safe is that the session window is DURABLE and is now
 // closed only AFTER the pass it fed settles (`SessionWindowStore.claim`). A
@@ -49,14 +54,24 @@ import { DrainScheduler } from './drain-scheduler.js';
 import { SignalDelivery, readSignalId } from './signals.js';
 import { buildDrainBatch } from '../events/hub/drain.js';
 import type { EventLog } from '../events/hub/log.js';
+import type { ExecutionRecoveryRecord } from '../events/types.js';
 import type { PrepareStepContext, ProteusExtension } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
+import type { AgentSignal } from '../types/signals.js';
 import type { EvolutionEngine } from '../evolution/engine.js';
+import type { ClaimedWindow } from '../evolution/session-window.js';
+import type { RecoveryFinding } from '../evolution/recovery.js';
 import type { CompletedTurn } from '../evolution/types.js';
 import {
   MISSION_LABELS_METADATA_KEY, readMissionLabels, type MissionGovernor,
 } from '../mission-budget.js';
 import { nanoid } from '../utils/nanoid.js';
+import { promptModeForTurnMetadata, workModeForPromptMode, type WorkMode } from '../prompting/surface.js';
+import type { JsonObject } from '../utils/json.js';
+
+function errorMessage<Failure>(failure: Failure): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}
 
 /**
  * Whether an arriving user message is a genuine conversational follow-up —
@@ -82,13 +97,22 @@ export type TurnContinuity = 'conversation' | 'independent_task';
 export const DEFAULT_SESSION_REFLECTION_INTERVAL = 5;
 
 /** How long `settleEvolution` waits for the turn lane before it gives up and
- *  says what it dropped. Sized for the worst honest turn-level case: one
- *  sampled shadow rollout (its own ≤60s cap) plus its two judge calls. */
+ *  says what it dropped. Sized for the worst honest turn-level case: the
+ *  outcome classifier plus the reflection/extraction calls it opens. */
 export const DEFAULT_SETTLE_TIMEOUT_MS = 120_000;
 
 export interface AgentOrchestratorDeps {
   host: BackendHost;
-  engine: EvolutionEngine;
+  engine: Pick<
+    EvolutionEngine,
+    | 'enabled'
+    | 'sessionWindow'
+    | 'craftLedger'
+    | 'recordRecovery'
+    | 'reviewTurn'
+    | 'onSessionComplete'
+    | 'runDueShadowTrials'
+  >;
   eventLog: EventLog;
   /** Per-turn accounting side-effects (activity log, durable run-event recorder). */
   sinks?: TurnSinks;
@@ -116,7 +140,8 @@ export class AgentOrchestrator {
    *  background-job wakes, overflow retries, take picks, MCP tasks — at the ONE
    *  time anything reaches it: its next step. Producers state intent only. */
   readonly signals: SignalDelivery;
-  /** Per-turn mechanical steering — repeat, repeated failure, long turn.
+  /** Per-turn mechanical steering — repeat, repeated failure, no progress,
+   *  long turn.
    *  Observed through {@link turnExtension} and handed to closeTurnRun for the
    *  durable `turn_steering` row. */
   readonly steering = new TurnSteering();
@@ -134,12 +159,32 @@ export class AgentOrchestrator {
   readonly turnExtension: ProteusExtension = {
     name: 'proteus.signals',
     onToolCall: (ctx) => this.steering.onToolCall(ctx),
-    onToolResult: (ctx) => { this.steering.onToolResult(ctx); this.craft.onToolResult(ctx); },
+    onToolResult: (ctx) => {
+      const recovery = this.steering.onToolResult(ctx);
+      this.craft.onToolResult(ctx);
+      if (recovery && this.observeRecoveries) this.recordRecovery(recovery);
+    },
     prepareStep: (ctx: PrepareStepContext): ModelMessage[] | undefined => {
-      const steer = this.steering.steerFor(ctx.stepNumber);
+      // The turn's file ledger is the other half of the progress trigger's
+      // evidence — what a codemode program actually changed, which no
+      // tool-call signature can show. Both live on this object, per turn.
+      const steer = this.steering.steerFor(ctx.stepNumber, this.acc.files.progress);
       return this.signals.prepareStep(ctx, steer ? [steer] : []);
     },
   };
+  /** The turn's execution recoveries — failure streaks the steering ledger saw
+   *  broken by a changed call that ran clean (evolution/recovery.ts). Recorded
+   *  through the engine at the MOMENT of observation, because an episode can
+   *  outlive this instance (DO eviction, continuation turns) and a finding
+   *  held for turn end dies with the process that held it; collected here only
+   *  for the turn's `execution_recovery` run event. */
+  private turnRecoveries: RecoveryFinding[] = [];
+  /** Decided once per turn, exactly like the craft cycle's reset: a
+   *  `--no-auto-evolve` run records no evolution state, and a recovery finding
+   *  is evolution state. */
+  private observeRecoveries = false;
+  private turnEvolutionEnabled = false;
+  private activeWorkMode: WorkMode = 'build';
   private readonly reflectionInterval: number;
   /** Debounces ingress-triggered drains so an event burst → ONE turn. */
   private readonly drains: DrainScheduler;
@@ -148,14 +193,26 @@ export class AgentOrchestrator {
    *  process about to exit can wait for it under a bound (settleEvolution). */
   private readonly inFlight = new Map<Promise<void>, string>();
   /** CADENCE LANE: the session-evolution pass this instance is running, or
-   *  null. At most one at a time — a second would re-run the same window. */
+   *  null. At most one at a time — a second would re-run the same window,
+   *  because `claim()` retires nothing until the pass settles. */
   private sessionEvolution: Promise<void> | null = null;
+  /** CADENCE LANE: the promotion gate's trial drain, or null. Its own latch,
+   *  separate from the window pass: two drains would run the same queued
+   *  trials twice and record each verdict twice, and folding it into the
+   *  window's latch would let a no-op drain hide a window that had just
+   *  filled. */
+  private shadowTrials: Promise<void> | null = null;
   private readonly settleTimeoutMs: number;
 
   constructor(private readonly deps: AgentOrchestratorDeps) {
     this.acc = new TurnAccumulator(deps.sinks, deps.budget);
     this.craft = new CraftCycle(deps.engine.craftLedger, this.acc);
-    this.signals = new SignalDelivery(deps.host, (e, d) => deps.sinks?.logActivity?.(e, d));
+    this.turnEvolutionEnabled = deps.engine.enabled;
+    this.signals = new SignalDelivery(
+      deps.host,
+      (e, d) => deps.sinks?.logActivity?.(e, d),
+      () => this.activeWorkMode,
+    );
     this.reflectionInterval = deps.sessionReflectionInterval ?? DEFAULT_SESSION_REFLECTION_INTERVAL;
     this.settleTimeoutMs = deps.settleTimeoutMs ?? DEFAULT_SETTLE_TIMEOUT_MS;
     this.drains = new DrainScheduler(
@@ -185,16 +242,40 @@ export class AgentOrchestrator {
    *  is exactly here. `continuation` marks a turn that continues the previous
    *  one (Think auto-continue / recovery): its signals ride in again rather
    *  than being dropped as answered. */
-  beginTurn(now: number, metadata?: unknown, continuation = false): void {
+  beginTurn<Metadata>(now: number, metadata?: Metadata, continuation = false): void {
     this.acc.reset(now);
     this.steering.reset();
     // Decided once, here, for the whole turn: a `--no-auto-evolve` run records
     // no evolution state at all, and a crafted tool's execution score is
     // evolution state — so a bench arm with evolution off measures the
     // in-episode loop's absence along with the rest of it.
-    this.craft.reset(this.deps.engine.enabled);
+    const promptMode = promptModeForTurnMetadata(metadata);
+    this.activeWorkMode = workModeForPromptMode(promptMode);
+    const evolutionEnabled = this.deps.engine.enabled && promptMode !== 'plan';
+    this.turnEvolutionEnabled = evolutionEnabled;
+    this.craft.reset(evolutionEnabled);
+    this.turnRecoveries = [];
+    this.observeRecoveries = evolutionEnabled;
     this.signals.beginTurn(continuation, readSignalId(metadata));
     this.deps.budget?.activate(readMissionLabels(metadata));
+  }
+
+  /** One recovery observed: hand it to the engine's ledger now (durable
+   *  mid-episode) and keep it for the turn's run event. */
+  private recordRecovery(finding: RecoveryFinding): void {
+    this.turnRecoveries.push(finding);
+    this.deps.engine.recordRecovery(finding);
+  }
+
+  /** The turn's in-episode recovery record, or null when no streak broke — no
+   *  row, `turn_end` being the denominator, exactly as the steering and craft
+   *  records read. */
+  recoverySnapshot(): ExecutionRecoveryRecord | null {
+    if (this.turnRecoveries.length === 0) return null;
+    return {
+      recoveries: this.turnRecoveries.map(({ tool, failures, failedSignature }) =>
+        ({ tool, failures, failedSignature })),
+    };
   }
 
   /**
@@ -216,7 +297,7 @@ export class AgentOrchestrator {
    * the whole point of the durable window.
    */
   observeUserTurn(userText: string, continuity: TurnContinuity): void {
-    if (!this.deps.engine.enabled) return;
+    if (!this.turnEvolutionEnabled) return;
     const previous = this.window.takePendingReview();
     if (!previous) return;
     const followup = continuity === 'conversation' ? userText : null;
@@ -247,7 +328,7 @@ export class AgentOrchestrator {
    * host (the scheduler daemon, a chat session) to evolve on its behalf.
    */
   recordTurn(turn: CompletedTurn, continuity: TurnContinuity): void {
-    if (!this.deps.engine.enabled) return;
+    if (!this.turnEvolutionEnabled) return;
     const awaitsFollowup = turn.origin !== 'programmatic' && continuity === 'conversation';
     this.window.append(turn, { awaitsFollowup });
     if (!awaitsFollowup) {
@@ -259,38 +340,68 @@ export class AgentOrchestrator {
   }
 
   /**
-   * The CADENCE LANE: run the session/lifetime evolution chain when the
-   * durable window has reached the interval, and close the window only once
-   * that chain has settled — so a host that dies mid-pass carries the same
-   * turns forward instead of consuming them for nothing.
+   * The CADENCE LANE: the promotion gate's queued shadow trials, then the
+   * session/lifetime evolution chain when the durable window has reached the
+   * interval — closing the window only once that chain has settled, so a host
+   * that dies mid-pass carries the same turns forward instead of consuming
+   * them for nothing.
    *
-   * Returns the running pass (resolved when nothing is due), so the hosts that
-   * OWN this work — the Durable Object under keepAlive and the local scheduler
+   * Returns the running pass, so the hosts that OWN this work — the Durable
+   * Object under keepAlive, a long-lived CLI session, and the local scheduler
    * daemon — can await it. `recordTurn` ignores the result: the pass runs
    * alongside the live conversation, never in front of it. Never rejects.
+   *
+   * The window is claimed BEFORE any await. `claim()` does not mark its rows —
+   * they are retired only by `settle()`, once the pass has actually run — so
+   * the one thing keeping a second pass off the same window is taking it in a
+   * single event-loop tick, exactly as the event drain takes its batch.
    */
   runDueSessionEvolution(): Promise<void> {
-    if (!this.deps.engine.enabled) return Promise.resolve();
     if (this.sessionEvolution) return this.sessionEvolution;
-    if (this.window.size() < this.reflectionInterval) return Promise.resolve();
-    const claimed = this.window.claim();
-    if (!claimed) return Promise.resolve();
-    const pass = this.deps.engine
-      .onSessionComplete({
+    const claimed = this.deps.engine.enabled && this.window.size() >= this.reflectionInterval
+      ? this.window.claim()
+      : null;
+    const pass = this.runCadencePass(claimed);
+    // Only a pass that CLAIMED a window latches. A drain-only pass must not,
+    // or it would hide a window that filled while it ran.
+    if (claimed) {
+      this.sessionEvolution = pass;
+      void pass.finally(() => { this.sessionEvolution = null; });
+    }
+    return pass;
+  }
+
+  /**
+   * The pass itself. Trials first, because the window pass may want to propose
+   * a new scaffold and the engine refuses to while one is still pending.
+   */
+  private async runCadencePass(claimed: ClaimedWindow | null): Promise<void> {
+    await this.drainDueShadowTrials();
+    if (!claimed) return;
+    try {
+      await this.deps.engine.onSessionComplete({
         sessionId: `sess-${nanoid()}`,
         turns: claimed.turns,
         startedAt: claimed.startedAt,
         endedAt: Date.now(),
-      })
-      .catch((err) => { console.error('[proteus] Session evolution failed:', err); })
-      // Settled either way: retrying the same window forever on a persistent
-      // failure would be a livelock, and every step of the chain already
-      // absorbs its own errors. Carry-forward is for a host that DIED, which
-      // never reaches here at all.
-      .then(() => { claimed.settle(); })
-      .finally(() => { this.sessionEvolution = null; });
-    this.sessionEvolution = pass;
-    return pass;
+      });
+    } catch (err) {
+      console.error('[proteus] Session evolution failed:', err);
+    }
+    // Settled either way: retrying the same window forever on a persistent
+    // failure would be a livelock, and every step of the chain already absorbs
+    // its own errors. Carry-forward is for a host that DIED, which never
+    // reaches here at all.
+    claimed.settle();
+  }
+
+  /** The promotion gate's queued trials, at most one drain at a time. */
+  private drainDueShadowTrials(): Promise<void> {
+    if (this.shadowTrials) return this.shadowTrials;
+    const drain = this.deps.engine.runDueShadowTrials()
+      .finally(() => { this.shadowTrials = null; });
+    this.shadowTrials = drain;
+    return drain;
   }
 
   /**
@@ -328,7 +439,7 @@ export class AgentOrchestrator {
     let timer: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([
-        Promise.all([...this.inFlight.keys()]),
+        Promise.all(this.inFlight.keys()),
         new Promise<void>((resolve) => { timer = setTimeout(resolve, ms); }),
       ]);
     } finally {
@@ -400,22 +511,26 @@ export class AgentOrchestrator {
       if (!batch) return;
       for (const id of batch.ids) this.deps.eventLog.markConsumed(id, turnId, 0);
     } catch (err) {
-      console.warn('[proteus] drainPendingEvents (select) failed:', (err as Error).message);
+      console.warn('[proteus] drainPendingEvents (select) failed:', errorMessage(err));
       return;
     }
     const ids = batch.ids;
-    await this.signals.deliver({
+    let metadata: JsonObject | undefined;
+    if (batch.mode !== null || batch.missions.length > 0) {
+      metadata = {};
+      if (batch.mode !== null) metadata.proteusMode = batch.mode;
+      if (batch.missions.length > 0) metadata[MISSION_LABELS_METADATA_KEY] = batch.missions;
+    }
+    const signal: AgentSignal = {
       kind: 'event_drain',
       text: batch.text,
       stepText: batch.midTurnText,
       replyTurnId: turnId,
-      // The mission scope the woken turn spends under — the link between a
-      // schedule that declared a budget and the ledger its turn debits.
-      ...(batch.missions.length > 0
-        ? { metadata: { [MISSION_LABELS_METADATA_KEY]: batch.missions } }
-        : {}),
       compensate: () => this.returnEventsToPending(ids),
-    });
+      metadata,
+      requiresOwnTurn: batch.mode !== null,
+    };
+    await this.signals.deliver(signal);
   }
 
   /** Convenience for backends that don't need to interleave: cadence + drain. */

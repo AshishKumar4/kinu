@@ -25,19 +25,38 @@ import { createDurableWebhook, cancelTrigger, type CreateWebhookResult } from "@
 import type { Rpc } from "@/lib/protocol";
 import { fmtTokens, fmtPct } from "@/lib/format";
 import { cacheHitRate } from "@proteus/core";
+import * as v from "valibot";
 
-interface ProposedTask { id: string; task: string; rationale: string; predictedSuccess: number; targetsSkills: string[]; proposedAt: number; status: "pending" | "accepted" | "rejected" | "completed" }
-interface RunSummary { runId: string; startedAt: number; causedBy: string | null; userMessage: string | null; status: string | null; tokensIn: number; tokensOut: number; tokensCached: number; eventCount: number }
-interface TriggerRow {
-  id: string;
-  kind: string;
-  spec?: Record<string, unknown>;
-  state: string;
-  created_at: number;
-  rate_limit_per_min?: number;
-  next_fire_at?: number | null;
-  last_fire_at?: number | null;
-  fire_count?: number;
+const ProposedTaskSchema = v.object({
+  id: v.string(), task: v.string(), rationale: v.string(), predictedSuccess: v.number(),
+  targetsSkills: v.array(v.string()), proposedAt: v.number(),
+  status: v.picklist(["pending", "accepted", "rejected", "completed"]),
+});
+type ProposedTask = v.InferOutput<typeof ProposedTaskSchema>;
+
+const RunSummarySchema = v.object({
+  runId: v.string(), startedAt: v.number(), causedBy: v.nullable(v.string()),
+  userMessage: v.nullable(v.string()), status: v.nullable(v.string()),
+  tokensIn: v.number(), tokensOut: v.number(), tokensCached: v.number(), eventCount: v.number(),
+});
+
+const TriggerRowSchema = v.object({
+  id: v.string(),
+  kind: v.string(),
+  spec: v.optional(v.object({ label: v.optional(v.string()), cron: v.optional(v.string()) })),
+  state: v.string(),
+  created_at: v.number(),
+  rate_limit_per_min: v.optional(v.number()),
+  next_fire_at: v.optional(v.nullable(v.number())),
+  last_fire_at: v.optional(v.nullable(v.number())),
+  fire_count: v.optional(v.number()),
+});
+type TriggerRow = v.InferOutput<typeof TriggerRowSchema>;
+
+const AuthModeSchema = v.picklist(["hmac", "bearer", "mtls"]);
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }
 
 export interface SupervisePageProps {
@@ -70,7 +89,10 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
   const [busy, setBusy] = useState(false);
   const [actionErr, setActionErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => (await rpc<{ tasks: ProposedTask[] }>("listCurriculumTasks", [])).tasks, [rpc]);
+  const load = useCallback(async () => {
+    const result = await rpc("listCurriculumTasks", []);
+    return v.parse(v.object({ tasks: v.array(ProposedTaskSchema) }), result).tasks;
+  }, [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const tasks = lastValue(resource);
 
@@ -102,7 +124,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
         <Button size="sm" variant="secondary" className="ml-auto" disabled={busy} onClick={propose}
           icon={busy ? <Loader size="sm" /> : undefined}>Propose tasks</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style) — predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
+      <p className="text-xs p-text-3 mb-3">Tasks the agent proposed for itself (Voyager-style). Predicted-success ≈ 0.5 is the ideal "barely succeeds" frontier. Accept &amp; run to grow its skills.</p>
       {actionErr && <div className="p-meta p-danger mb-2">{actionErr}</div>}
       {tasks === null ? (
         resource.status === "error"
@@ -148,7 +170,7 @@ function CurriculumBlock({ rpc, onRunTask }: { rpc: Rpc; onRunTask: (t: string) 
 /* ── Run history ───────────────────────────────────────────────── */
 
 function RunHistoryBlock({ rpc }: { rpc: Rpc }) {
-  const load = useCallback(() => rpc<RunSummary[]>("getRunSummaries", [30]), [rpc]);
+  const load = useCallback(async () => v.parse(v.array(RunSummarySchema), await rpc("getRunSummaries", [30])), [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const runs = lastValue(resource);
   const totalTokens = (runs ?? []).reduce((s, r) => s + r.tokensIn + r.tokensOut, 0);
@@ -198,7 +220,10 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
   const [created, setCreated] = useState<CreateWebhookResult | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const load = useCallback(async () => (await rpc<{ triggers: TriggerRow[] }>("listTriggers", [])).triggers ?? [], [rpc]);
+  const load = useCallback(async () => {
+    const result = await rpc("listTriggers", []);
+    return v.parse(v.object({ triggers: v.array(TriggerRowSchema) }), result).triggers;
+  }, [rpc]);
   const { resource, reload } = useAsyncResource(load);
   const triggers = lastValue(resource);
 
@@ -206,14 +231,14 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
     if (!agentId) return;
     if (!confirm("Revoke this trigger? The URL stops working immediately.")) return;
     setErr(null);
-    try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr((e as Error).message); }
+    try { await cancelTrigger(agentId, triggerId); } catch (e) { setErr(errorMessage(e)); }
     reload();
   }, [agentId, reload]);
 
   const active = (triggers ?? []).filter((t) => t.state === "active").length;
   const nextFire = (triggers ?? [])
     .map((t) => t.next_fire_at)
-    .filter((ts): ts is number => typeof ts === "number" && ts > Date.now())
+    .filter((ts): ts is number => ts !== undefined && ts !== null && ts > Date.now())
     .sort((a, b) => a - b)[0];
   return (
     <section className="min-w-0">
@@ -225,7 +250,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
         <Button size="sm" variant="secondary" className="ml-auto" icon={<PlusIcon size={12} />}
           onClick={() => { setShowCreate(true); setCreated(null); }}>New webhook</Button>
       </div>
-      <p className="text-xs p-text-3 mb-3">External systems that can wake this agent — webhooks (GitHub, Stripe, your CI) and timers.</p>
+      <p className="text-xs p-text-3 mb-3">External systems that can wake this agent: webhooks (GitHub, Stripe, your CI) and timers.</p>
       {err && <div className="text-xs p-danger mb-2">{err}</div>}
       {created && <NewWebhookCard result={created} onDismiss={() => setCreated(null)} />}
       {triggers === null ? (
@@ -233,7 +258,7 @@ function AutomationsBlock({ rpc }: { rpc: Rpc }) {
           ? <LoadFailure what="automations" message={resource.message} onRetry={reload} />
           : <div className="flex justify-center py-6"><Loader size="sm" /></div>
         )
-        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered — create a webhook to let external systems wake this agent.</p>
+        : triggers.length === 0 ? <p className="text-xs p-text-3">No triggers registered. Create a webhook to let external systems wake this agent.</p>
         : (
           <div className="rounded-md border p-border overflow-hidden text-xs">
             {triggers.map((t) => (
@@ -259,7 +284,7 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
   const url = isWebhook && agentName
     ? `${window.location.origin}/api/workspaces/${encodeURIComponent(agentName)}/webhook/${encodeURIComponent(trigger.id)}`
     : null;
-  const spec = (trigger.spec ?? {}) as { label?: string; cron?: string };
+  const spec = trigger.spec ?? {};
   return (
     <div className="flex items-center gap-2 px-3 py-1.5 border-b p-border last:border-0">
       <span className={`size-1.5 rounded-full shrink-0 ${trigger.state === "active" ? "p-dot-success" : trigger.state === "paused" ? "p-dot-warning" : "p-dot-neutral"}`} />
@@ -267,7 +292,7 @@ function TriggerLine({ trigger, agentName, onRevoke }: {
       <span className="font-mono p-text-3 shrink-0">{trigger.kind}</span>
       {spec.cron && <code className="p-fill px-1 rounded p-text-3 shrink-0">{spec.cron}</code>}
       <span className="flex-1" />
-      {typeof trigger.fire_count === "number" && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
+      {trigger.fire_count !== undefined && trigger.fire_count > 0 && <span className="p-text-3 shrink-0 tabular-nums">{trigger.fire_count} fires</span>}
       <span className="p-text-3 shrink-0">{trigger.state}</span>
       {url && (
         <CopyButton value={url} what="the webhook URL" size={11}
@@ -315,7 +340,7 @@ curl -X POST '${url}' --cert client.pem --key client.key \\
         <button className="ml-auto text-xs p-text-3 hover:p-text" onClick={onDismiss}>Dismiss</button>
       </div>
       <p className="text-xs p-text-2">
-        Save the secret now — it's shown only once. The URL is permanent until you revoke the trigger.
+        Save the secret now: it's shown only once. The URL is permanent until you revoke the trigger.
       </p>
       <div className="space-y-2">
         <div>
@@ -371,7 +396,7 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
       });
       onCreated(r);
     } catch (e) {
-      const msg = (e as Error).message;
+      const msg = errorMessage(e);
       if (msg.includes("step-up")) {
         if (confirm("A fresh login is required to create webhook URLs. Redirect to sign in?")) {
           const login = new URL("/login", window.location.origin);
@@ -408,7 +433,7 @@ function CreateWebhookModal({ agentName, onClose, onCreated }: {
         </label>
         <label className="block">
           <div className="text-xs p-text-2 mb-1">Auth mode</div>
-          <select value={authMode} onChange={(e) => setAuthMode(e.target.value as "hmac" | "bearer" | "mtls")} className={inputCls}>
+          <select value={authMode} onChange={(e) => setAuthMode(v.parse(AuthModeSchema, e.target.value))} className={inputCls}>
             <option value="hmac">HMAC (signed body)</option>
             <option value="bearer">Bearer token (Authorization header)</option>
             <option value="mtls">mTLS (client certificate)</option>

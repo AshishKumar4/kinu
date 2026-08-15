@@ -14,8 +14,9 @@ import {
   OPENAI_BASE_URL,
   OPENAI_DEFAULT_MODEL,
   OPENROUTER_BASE_URL,
+  JsonObjectSchema,
   type LLMProviderConfig,
-  isReasoningEffort,
+  type JsonObject,
   type ReasoningEffort,
 } from '@proteus/core';
 import {
@@ -27,6 +28,7 @@ import {
   type LocalProviderCredentials,
   type McpServerConfig,
 } from '@proteus/cli-backend';
+import * as v from 'valibot';
 
 export const AGENT_HOME = proteusHome();
 export const CONFIG_PATH = join(AGENT_HOME, 'config.json');
@@ -101,7 +103,7 @@ export interface ProteusConfig {
       accessToken?: string;
       refreshToken?: string;
       expiresAt?: number;
-      metadata?: Record<string, unknown>;
+      metadata?: JsonObject;
     };
     openaiCompat?: Record<string, {
       baseURL: string;
@@ -117,6 +119,68 @@ export interface ProteusConfig {
   /** Shadow-git file checkpoints kept per working directory (default 50). */
   checkpointKeep?: number;
 }
+
+export interface CloudAuthConfig {
+  origin: string;
+  token: string;
+  user?: ProteusConfig['user'];
+}
+
+const StringMapSchema = v.record(v.string(), v.string());
+const ProteusAgentConfigSchema = v.object({
+  name: v.string(),
+  mode: v.picklist(['local', 'cloud']),
+  displayName: v.optional(v.string()),
+  alias: v.optional(v.string()),
+  localName: v.optional(v.string()),
+  cloudName: v.optional(v.string()),
+  createdAt: v.string(),
+  updatedAt: v.string(),
+});
+const McpServerConfigSchema = v.object({
+  command: v.string(),
+  args: v.optional(v.array(v.string())),
+  env: v.optional(StringMapSchema),
+  timeoutMs: v.optional(v.number()),
+});
+const OpenAiCompatConfigSchema = v.object({
+  baseURL: v.string(),
+  apiKey: v.optional(v.string()),
+  headers: v.optional(StringMapSchema),
+  extraHeaders: v.optional(StringMapSchema),
+});
+const ProteusConfigSchema: v.GenericSchema<ProteusConfig> = v.object({
+  origin: v.optional(v.string()),
+  accessToken: v.optional(v.string()),
+  tokenExpiresAt: v.optional(v.string()),
+  user: v.optional(v.object({
+    id: v.string(),
+    email: v.string(),
+    displayName: v.optional(v.nullable(v.string())),
+  })),
+  agents: v.optional(v.record(v.string(), ProteusAgentConfigSchema)),
+  aliases: v.optional(StringMapSchema),
+  model: v.optional(v.string()),
+  reasoningEffort: v.optional(v.picklist(['low', 'medium', 'high'])),
+  updateCheck: v.optional(v.boolean()),
+  updateCheckedAt: v.optional(v.number()),
+  updateLatestSeen: v.optional(v.string()),
+  providers: v.optional(v.object({
+    openai: v.optional(v.object({ apiKey: v.optional(v.string()) })),
+    anthropic: v.optional(v.object({ apiKey: v.optional(v.string()) })),
+    openrouter: v.optional(v.object({ apiKey: v.optional(v.string()) })),
+    codex: v.optional(v.object({
+      accessToken: v.optional(v.string()),
+      refreshToken: v.optional(v.string()),
+      expiresAt: v.optional(v.number()),
+      metadata: v.optional(JsonObjectSchema),
+    })),
+    openaiCompat: v.optional(v.record(v.string(), OpenAiCompatConfigSchema)),
+  })),
+  mcpServers: v.optional(v.record(v.string(), McpServerConfigSchema)),
+  deviceConnectPromptDismissed: v.optional(v.boolean()),
+  checkpointKeep: v.optional(v.number()),
+});
 
 export function ensureAgentHome(): void {
   mkdirSync(AGENT_HOME, { recursive: true });
@@ -150,11 +214,7 @@ export function listAgentDirs(): string[] {
 export function loadConfigFile(): ProteusConfig {
   if (!existsSync(CONFIG_PATH)) return {};
   try {
-    const config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) as ProteusConfig;
-    if (config.reasoningEffort !== undefined && !isReasoningEffort(config.reasoningEffort)) {
-      delete config.reasoningEffort;
-    }
-    return config;
+    return v.parse(ProteusConfigSchema, JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')));
   } catch {
     return {};
   }
@@ -166,8 +226,7 @@ export function setDefaultModel(spec: string): void {
   updateConfigFile((config) => { config.model = normalized; });
 }
 
-export function setDefaultReasoningEffort(effort: unknown): ReasoningEffort {
-  if (!isReasoningEffort(effort)) throw new Error(`Invalid reasoning effort: ${String(effort)}`);
+export function setDefaultReasoningEffort(effort: ReasoningEffort): ReasoningEffort {
   updateConfigFile((config) => { config.reasoningEffort = effort; });
   return effort;
 }
@@ -189,7 +248,7 @@ export function resolveCloudOrigin(opts?: { origin?: string }): string {
   return (opts?.origin ?? process.env.PROTEUS_ORIGIN ?? loadConfigFile().origin ?? DEFAULT_ORIGIN).replace(/\/+$/, '');
 }
 
-export function requireAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
+export function requireAuthConfig(): CloudAuthConfig {
   // CI path: a token from the environment (typically a scoped `pta_…` access
   // token from `proteus tokens create`) wins over the stored interactive
   // session. Long-lived by design — the server is the validity authority.
@@ -198,11 +257,11 @@ export function requireAuthConfig(): { origin: string; token: string; user?: Pro
   return storedAuthConfig('Not authenticated. Run: proteus auth (or set PROTEUS_TOKEN)');
 }
 
-export function requireStoredAuthConfig(): { origin: string; token: string; user?: ProteusConfig['user'] } {
+export function requireStoredAuthConfig(): CloudAuthConfig {
   return storedAuthConfig('No interactive CLI session found. Run: proteus auth');
 }
 
-function storedAuthConfig(missingTokenMessage: string): { origin: string; token: string; user?: ProteusConfig['user'] } {
+function storedAuthConfig(missingTokenMessage: string): CloudAuthConfig {
   const config = loadConfigFile();
   const origin = resolveCloudOrigin();
   const token = config.accessToken;
@@ -256,7 +315,7 @@ export function upsertAgentConfig(agent: Omit<ProteusAgentConfig, 'createdAt' | 
       createdAt: agent.createdAt ?? existing?.createdAt ?? now,
       updatedAt: now,
     };
-    config.agents = { ...(config.agents ?? {}), [agent.name]: saved };
+    config.agents = { ...config.agents, [agent.name]: saved };
   });
   return saved;
 }
@@ -286,11 +345,11 @@ export function setAliasConfig(agentName: string, alias: string): void {
   validateAgentName(agentName);
   validateAliasName(alias);
   updateConfigFile((config) => {
-    config.aliases = { ...(config.aliases ?? {}), [alias]: agentName };
+    config.aliases = { ...config.aliases, [alias]: agentName };
     const existing = config.agents?.[agentName];
     if (existing) {
       config.agents = {
-        ...(config.agents ?? {}),
+        ...config.agents,
         [agentName]: { ...existing, alias, updatedAt: new Date().toISOString() },
       };
     }
@@ -388,12 +447,22 @@ export function resolveLLMConfig(opts?: {
     };
   }
 
+  const cloud = resolveCloudSession();
+  // A signed-in account is the default inference path. Stored BYO credentials
+  // remain available when the user selects their model explicitly; merely
+  // having an unrelated key on disk must not replace the platform default.
+  if (cloud && !model) {
+    return {
+      name: 'workers-ai',
+      baseURL: cloudProxyBaseURL(cloud.origin),
+      headers: { Authorization: `Bearer ${cloud.token}` },
+      model: workersAIModelId(model),
+    };
+  }
+
   const derived = deriveLLMConfigFromProviderCredentials(file, model);
   if (derived) return derived;
 
-  // Signed in with no BYO keys: local agents run on the user's Cloudflare AI
-  // through the worker's /api/user/ai/v1 proxy — signed in equals working.
-  const cloud = resolveCloudSession();
   if (cloud) {
     return {
       name: 'workers-ai',
@@ -492,14 +561,13 @@ function deriveLLMConfigFromProviderCredentials(file: ProteusConfig, model: stri
 
   const compat = file.providers?.openaiCompat?.default;
   if (compat) {
+    const headers = { ...compat.headers };
+    if (compat.apiKey) headers.Authorization = `Bearer ${compat.apiKey}`;
+    Object.assign(headers, compat.extraHeaders);
     return {
       name: 'openai-compat',
       baseURL: compat.baseURL,
-      headers: {
-        ...(compat.headers ?? {}),
-        ...(compat.apiKey ? { Authorization: `Bearer ${compat.apiKey}` } : {}),
-        ...(compat.extraHeaders ?? {}),
-      },
+      headers,
       model: stripProvider(providerModel ?? 'gpt-4o-mini', 'openai-compat'),
     };
   }
@@ -537,8 +605,10 @@ function stripProvider(model: string, provider: string): string {
  *  workers-ai model is honored; anything else falls to the platform default
  *  (non-workers-ai specs still resolve per-spec through the registry). */
 function workersAIModelId(model: string | undefined): string {
-  const id = model?.startsWith('workers-ai/') ? model.slice('workers-ai/'.length) : model;
-  return id?.startsWith('@cf/') ? id : DEFAULT_WORKERS_AI_MODEL_ID;
+  if (model?.startsWith('workers-ai/')) {
+    return model.slice('workers-ai/'.length) || DEFAULT_WORKERS_AI_MODEL_ID;
+  }
+  return model?.startsWith('@cf/') ? model : DEFAULT_WORKERS_AI_MODEL_ID;
 }
 
 function directEndpointModelId(model: string): string {

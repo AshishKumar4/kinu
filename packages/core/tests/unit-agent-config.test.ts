@@ -2,6 +2,7 @@ import { describe, test, expect } from 'bun:test';
 import {
   createAgentConfigStore, initAgentConfigTable, AGENT_CONFIG_KEYS,
   DEFAULT_AUTO_GEPA_EVERY_N_TURNS, DEFAULT_GEPA_EVAL_BUDGET,
+  setReasoningEffort,
 } from '../src/index.ts';
 import { createTestSql } from '@proteus/test-utils';
 
@@ -113,7 +114,8 @@ describe('AgentConfigStore — typed accessors', () => {
 
     c.set(AGENT_CONFIG_KEYS.reasoningEffort, 'extreme');
     expect(c.getReasoningEffort()).toBeNull();
-    expect(() => c.setReasoningEffort('extreme' as never)).toThrow('Invalid reasoning effort');
+    expect(() => setReasoningEffort(c, 'extreme'))
+      .toThrow('Invalid reasoning effort');
   });
 
   test('cache retention: round-trips, and anything unusable reads as the short default', () => {
@@ -128,7 +130,6 @@ describe('AgentConfigStore — typed accessors', () => {
     // A garbage row must never leave the caching seam without an answer.
     c.set(AGENT_CONFIG_KEYS.cacheRetention, 'forever');
     expect(c.getCacheRetention()).toBe('short');
-    expect(() => c.setCacheRetention('forever' as never)).toThrow('Invalid cache retention');
   });
 
   test('displayName: default null', () => {

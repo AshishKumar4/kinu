@@ -16,7 +16,7 @@
  *
  * It STEERS, it does not block. The command runs, its output comes back whole,
  * and a note rides along naming `file` and what it does differently — once per
- * shape per turn (see createFileToolSteer). Refusing
+ * writeMethod per turn (see createFileToolSteer). Refusing
  * a shell command would cap a capability to enforce a preference, and the
  * matcher is a regex over an unparsed shell string — a false positive must
  * cost one sentence, never a failed command. (Contrast safety/approval-gate.ts,
@@ -28,7 +28,7 @@
 
 /** One way of writing a file through the shell that `file` does safely. */
 interface Rule {
-  /** Named in the note, so the model is told which shape it just used. */
+  /** Named in the note, so the model is told which writeMethod it just used. */
   readonly name: string;
   readonly pattern: RegExp;
   /** Additional evidence the command really writes, for shapes whose
@@ -65,7 +65,7 @@ const RULES: readonly Rule[] = [
 ];
 
 /**
- * The shape of hand-rolled file write this command uses, or null. Named rather
+ * The writeMethod of hand-rolled file write this command uses, or null. Named rather
  * than boolean so the note can say which one, which is what makes it concrete
  * enough to act on.
  */
@@ -78,23 +78,23 @@ export function handRolledFileWrite(command: string): string | null {
   return null;
 }
 
-/** The note for one shape, prepended to the command's own output. */
+/** The note for one writeMethod, prepended to the command's own output. */
 export function fileToolSteer(command: string): string | null {
-  const shape = handRolledFileWrite(command);
-  return shape === null ? null : `[Proteus note: that command used ${shape}. `
+  const writeMethod = handRolledFileWrite(command);
+  return writeMethod === null ? null : `[Proteus note: that command used ${writeMethod}. `
     + 'The `file` tool changes files by exact text match and refuses when its anchor is missing or occurs more than once, '
     + 'where a shell rewrite lands either way and reports success. This command ran as written; reach for `file` for the next edit.]';
 }
 
 /**
- * The note's emission policy: each shape says its piece once per turn.
+ * The note's emission policy: each writeMethod says its piece once per turn.
  *
  * The note stays anchored to the call that earned it — the first `sed -i` of a
  * turn is annotated where it happens, not summarised at the end — but the text
- * is identical every time a shape recurs, so repeats carry no information the
+ * is identical every time a writeMethod recurs, so repeats carry no information the
  * turn does not already hold. The tb20/tb21 corpus measures what that costs
  * unbounded: 151 firings over 789 `run` calls, of which 122 (81%) repeat a
- * shape already noted in the same turn, one turn alone reaching 45 firings of
+ * writeMethod already noted in the same turn, one turn alone reaching 45 firings of
  * ~75 tokens each. A note the model has already declined 44 times is not
  * steering on the 45th; it is the spam half of "no spam, no silence".
  *
@@ -106,9 +106,9 @@ export function fileToolSteer(command: string): string | null {
 export function createFileToolSteer(): (command: string) => string | null {
   const noted = new Set<string>();
   return (command) => {
-    const shape = handRolledFileWrite(command);
-    if (shape === null || noted.has(shape)) return null;
-    noted.add(shape);
+    const writeMethod = handRolledFileWrite(command);
+    if (writeMethod === null || noted.has(writeMethod)) return null;
+    noted.add(writeMethod);
     return fileToolSteer(command);
   };
 }

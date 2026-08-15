@@ -167,7 +167,7 @@ const ESTIMATED_MEDIA_CHARS = 4_800;
 
 function estimateMessageTokens(message: ModelMessage): number {
   let chars = 0;
-  if (typeof message.content === 'string') {
+  if (!Array.isArray(message.content)) {
     chars = message.content.length;
   } else {
     for (const part of message.content) {
@@ -180,7 +180,7 @@ function estimateMessageTokens(message: ModelMessage): number {
           chars += part.toolName.length + jsonLength(part.input);
           break;
         case 'tool-result':
-          chars += serializedOutputLength(part as ToolResultPart);
+          chars += serializedOutputLength(part);
           break;
         case 'image':
         case 'file':
@@ -194,7 +194,7 @@ function estimateMessageTokens(message: ModelMessage): number {
   return Math.max(0, Math.round(chars / 4));
 }
 
-function safeStringify(value: unknown): string {
+function safeStringify<Value>(value: Value): string {
   try {
     return JSON.stringify(value, binaryReplacer) ?? '';
   } catch {
@@ -202,13 +202,13 @@ function safeStringify(value: unknown): string {
   }
 }
 
-function jsonLength(value: unknown): number {
+function jsonLength<Value>(value: Value): number {
   return safeStringify(value).length;
 }
 
 /** Binary payloads flatten to a size placeholder — never serialize megabytes
  *  of bytes just to measure them. */
-function binaryReplacer(_key: string, value: unknown): unknown {
+function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   if (value instanceof Uint8Array) return `[binary ${value.byteLength} bytes]`;
   if (value instanceof ArrayBuffer) return `[binary ${value.byteLength} bytes]`;
   return value;

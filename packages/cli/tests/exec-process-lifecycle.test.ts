@@ -28,6 +28,8 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
+import { JsonObjectSchema, decodeJsonValue, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 
 const repoRoot = resolve(import.meta.dir, "../../..");
 const cliBin = join(repoRoot, "packages/cli/bin/cli.ts");
@@ -47,7 +49,7 @@ afterEach(() => {
  * An OpenAI-compatible endpoint that calls `run` once with `command`, then
  * answers with text. Non-streaming and streaming both, because the CLI picks.
  */
-function modelThatRuns(command: string): { port: number; stop(): void } {
+function modelThatRuns(command: string) {
   let calls = 0;
   const usage = { prompt_tokens: 5, completion_tokens: 7, total_tokens: 12 };
   const toolCall = {
@@ -63,7 +65,7 @@ function modelThatRuns(command: string): { port: number; stop(): void } {
       if (!new URL(request.url).pathname.endsWith("/chat/completions")) {
         return new Response("not found", { status: 404 });
       }
-      const body = (await request.json().catch(() => ({}))) as { stream?: boolean };
+      const body = v.parse(JsonObjectSchema, await request.json().catch(() => ({})));
       const first = calls++ === 0;
       const delta = first
         ? { role: "assistant", tool_calls: [{ index: 0, ...toolCall }] }
@@ -83,12 +85,12 @@ function modelThatRuns(command: string): { port: number; stop(): void } {
           usage,
         });
       }
-      const chunk = (data: unknown) => `data: ${JSON.stringify(data)}\n\n`;
+      const chunk = (data: JsonValue) => `data: ${JSON.stringify(data)}\n\n`;
       return new Response([
-        chunk({
+        chunk(decodeJsonValue({ value: {
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
           choices: [{ index: 0, delta, finish_reason: null }],
-        }),
+        } })),
         chunk({
           id: "chatcmpl-mock", object: "chat.completion.chunk", created: 1, model: "mock-model",
           choices: [{ index: 0, delta: {}, finish_reason: finish }], usage,
@@ -198,8 +200,8 @@ describe("proteus exec — a one-shot run terminates", () => {
       );
       expect(run.timedOut).toBe(false);
 
-      const events = run.stdout.trim().split("\n")
-        .flatMap((line) => { try { return [JSON.parse(line) as Record<string, unknown>]; } catch { return []; } });
+      const events: JsonObject[] = run.stdout.trim().split("\n")
+        .flatMap((line) => { try { return [parseJsonObject(line)]; } catch { return []; } });
 
       expect(events.some((e) => e.type === "tool_call" || e.type === "tool_result")).toBe(true);
       expect(JSON.stringify(events)).toContain("server-started");

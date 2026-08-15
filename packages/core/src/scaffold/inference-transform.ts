@@ -28,7 +28,12 @@
  *   completion unconsumed.
  */
 
-import { runScaffold, type ScaffoldRunOptions } from './executor.js';
+import {
+  runScaffold,
+  type ScaffoldDefaultInferenceChunk,
+  type ScaffoldRunOptions,
+} from './executor.js';
+import { projectJsonValue } from '../utils/json.js';
 import { scaffoldEventsToUIStream } from './ui-stream.js';
 
 /** Structural mirror of Think's StreamableResult — core cannot import the
@@ -70,7 +75,7 @@ export function scaffoldInferenceTransform(opts: {
           emit,
           defaultInference: () => {
             delegated = true;
-            return result.toUIMessageStream();
+            return wrapDefaultStream(result.toUIMessageStream());
           },
         }).finally(() => {
           if (!delegated) void cancelStream(result.toUIMessageStream());
@@ -78,6 +83,12 @@ export function scaffoldInferenceTransform(opts: {
       ),
     // Structured output (workflow turns) resolves only if the scaffold
     // delegated (the promise belongs to the default stream).
-    ...(result.output ? { output: result.output } : {}),
+    output: result.output,
   };
+}
+
+async function* wrapDefaultStream(
+  stream: AsyncIterable<unknown>,
+): AsyncGenerator<ScaffoldDefaultInferenceChunk> {
+  for await (const chunk of stream) yield { value: projectJsonValue({ value: chunk }) };
 }

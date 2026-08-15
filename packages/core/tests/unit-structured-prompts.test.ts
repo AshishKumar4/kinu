@@ -1,5 +1,8 @@
 import { describe, expect, test } from 'bun:test';
-import { extractJsonArray, extractJsonObject, jsonArrayOnlyInstruction, jsonObjectOnlyInstruction } from '../src/index.ts';
+import {
+  extractJsonArray, extractJsonObject, jsonArrayOnlyInstruction, jsonObjectOnlyInstruction,
+  stripMarkdownFences,
+} from '../src/index.ts';
 
 describe('structured prompt helpers', () => {
   test('extracts balanced JSON objects with nested braces and strings', () => {
@@ -24,5 +27,18 @@ describe('structured prompt helpers', () => {
   test('instructions are strict and format-specific', () => {
     expect(jsonObjectOnlyInstruction()).toContain('JSON object');
     expect(jsonArrayOnlyInstruction()).toContain('JSON array');
+  });
+});
+
+describe('stripMarkdownFences', () => {
+  test('unwraps the first fenced block regardless of its tag or surrounding prose', () => {
+    expect(stripMarkdownFences('before\n```typescript\nconst value = 1;\n```\nafter'))
+      .toBe('const value = 1;');
+    expect(stripMarkdownFences('```python\nprint(1)\n```')).toBe('print(1)');
+    expect(stripMarkdownFences('```\nplain\n```')).toBe('plain');
+  });
+
+  test('leaves an unfenced response intact', () => {
+    expect(stripMarkdownFences('plain text')).toBe('plain text');
   });
 });

@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 /**
- * Latency baseline test — measures time-to-first-chunk for Kimi K2.5
+ * Latency baseline test — measures time-to-first-chunk for the platform default
  * via the AI Gateway directly, bypassing all Proteus/Think/DO overhead.
  *
  * Usage: bun scripts/latency-test.ts
@@ -9,6 +9,7 @@
  */
 
 import { readFileSync } from "fs";
+import * as v from "valibot";
 
 // Load credentials from .dev.vars
 const devVars = readFileSync("packages/cf-backend/.dev.vars", "utf8");
@@ -20,7 +21,7 @@ for (const line of devVars.split("\n")) {
 
 const GATEWAY_URL = vars.AI_GATEWAY_URL;
 const GATEWAY_AUTH = vars.AI_GATEWAY_AUTH;
-const MODEL = "@cf/moonshotai/kimi-k2.6";
+const MODEL = "@cf/deepseek-ai/deepseek-v4-pro-0813";
 const FAST_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 if (!GATEWAY_URL || !GATEWAY_AUTH) {
@@ -181,6 +182,32 @@ interface TestResult {
   error?: string;
 }
 
+interface GatewayMessage {
+  role: "system" | "user";
+  content: string;
+}
+
+interface GatewayRequest {
+  model: string;
+  messages: GatewayMessage[];
+  stream: true;
+  max_tokens: number;
+  tools?: typeof TOOL_SCHEMAS;
+}
+
+const streamChunkSchema = v.object({
+  choices: v.array(v.object({
+    delta: v.object({
+      content: v.optional(v.string()),
+      reasoning_content: v.optional(v.string()),
+    }),
+  })),
+});
+
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function measureStreaming(opts: {
   name: string;
   model: string;
@@ -188,12 +215,12 @@ async function measureStreaming(opts: {
   userMessage: string;
   tools?: typeof TOOL_SCHEMAS;
 }): Promise<TestResult> {
-  const body: Record<string, unknown> = {
+  const messages: GatewayMessage[] = [];
+  if (opts.systemPrompt) messages.push({ role: "system", content: opts.systemPrompt });
+  messages.push({ role: "user", content: opts.userMessage });
+  const body: GatewayRequest = {
     model: opts.model,
-    messages: [
-      ...(opts.systemPrompt ? [{ role: "system", content: opts.systemPrompt }] : []),
-      { role: "user", content: opts.userMessage },
-    ],
+    messages,
     stream: true,
     max_tokens: 128,
   };
@@ -218,7 +245,16 @@ async function measureStreaming(opts: {
       return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: `HTTP ${resp.status}: ${errText.slice(0, 200)}` };
     }
 
-    const reader = resp.body!.getReader();
+    if (!resp.body) {
+      return {
+        name: opts.name,
+        ttfc: -1,
+        total: performance.now() - t0,
+        firstChunk: "",
+        error: "Gateway response had no body",
+      };
+    }
+    const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let totalText = "";
 
@@ -235,8 +271,10 @@ async function measureStreaming(opts: {
         for (const line of text.split("\n")) {
           if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
           try {
-            const parsed = JSON.parse(line.slice(6));
-            const delta = parsed.choices?.[0]?.delta;
+            const decoded = JSON.parse(line.slice(6));
+            const parsed = v.safeParse(streamChunkSchema, decoded);
+            if (!parsed.success) continue;
+            const delta = parsed.output.choices[0]?.delta;
             if (delta?.content) { firstChunk = delta.content.slice(0, 60); break; }
             if (delta?.reasoning_content) { firstChunk = `[reasoning] ${delta.reasoning_content.slice(0, 50)}`; break; }
           } catch {}
@@ -246,8 +284,8 @@ async function measureStreaming(opts: {
 
     const total = performance.now() - t0;
     return { name: opts.name, ttfc, total, firstChunk };
-  } catch (e) {
-    return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: (e as Error).message };
+  } catch (error) {
+    return { name: opts.name, ttfc: -1, total: performance.now() - t0, firstChunk: "", error: errorMessage(error) };
   }
 }
 

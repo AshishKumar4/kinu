@@ -1,13 +1,14 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { generateText } from 'ai';
 import { writeFileSync, mkdirSync } from 'node:fs';
+import { asFetchFunction, JsonObjectSchema, type JsonObject } from '@proteus/core';
+import * as v from 'valibot';
 import {
   createOpenCodeProvider,
   OPENCODE_PROVIDER_ID,
   rewriteOpenCodeResponsesBody,
 } from '../src/opencode-provider';
 import type { OpenCodeSpawn, SpawnedOpenCode, OpenCodeProviderOptions } from '../src/opencode-provider';
-import type { LanguageModel } from 'ai';
 
 // ─── Helpers: fake spawn + fake fetch ────────────────────────────────────────
 
@@ -82,8 +83,8 @@ const FAKE_MODELS_OUTPUT = [
 ].join('\n');
 
 function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): typeof fetch {
-  return mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  return asFetchFunction(mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const url = new Request(input).url;
     if (url.endsWith('/.well-known/opencode')) {
       return new Response(wellKnown, { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
@@ -91,7 +92,7 @@ function makeFakeFetch(configJson = FAKE_CONFIG, wellKnown = FAKE_WELLKNOWN): ty
       return new Response(configJson, { status: 200, headers: { 'Content-Type': 'application/json' } });
     }
     return new Response('Not Found', { status: 404 });
-  }) as unknown as typeof fetch;
+  }));
 }
 
 function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): OpenCodeProviderOptions {
@@ -108,8 +109,8 @@ function makeProviderOpts(overrides: Partial<OpenCodeProviderOptions> = {}): Ope
 function makeRoutingFetch() {
   const requests: string[] = [];
   const requestBodies: string[] = [];
-  const fetchImpl = mock(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+  const fetchImpl = asFetchFunction(mock(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = new Request(input).url;
     if (url.endsWith('/.well-known/opencode')) {
       return new Response(FAKE_WELLKNOWN, { status: 200 });
     }
@@ -117,9 +118,10 @@ function makeRoutingFetch() {
       return new Response(FAKE_CONFIG, { status: 200 });
     }
     requests.push(url);
-    if (typeof init?.body === 'string') requestBodies.push(init.body);
+    const body = v.safeParse(v.string(), init?.body);
+    if (body.success) requestBodies.push(body.output);
     return new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } });
-  }) as unknown as typeof fetch;
+  }));
   return { fetchImpl, requests, requestBodies };
 }
 
@@ -254,8 +256,8 @@ describe('OpenCode provider', () => {
       hasCredential: async () => false,
     });
     expect(model).toBeDefined();
-    expect(typeof model).not.toBe('string');
-    expect((model as Exclude<LanguageModel, string>).modelId).toBe('openai/gpt-5.6-sol');
+    const resolved = v.parse(v.object({ modelId: v.string() }), model);
+    expect(resolved.modelId).toBe('openai/gpt-5.6-sol');
   });
 
   test('reasoning models use the Responses API route', async () => {
@@ -273,15 +275,15 @@ describe('OpenCode provider', () => {
 
   test('routes model requests through the patient rate-limit fetch', async () => {
     let modelCalls = 0;
-    const fetchImpl = mock(async (input: RequestInfo | URL) => {
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const fetchImpl = asFetchFunction(mock(async (input: RequestInfo | URL) => {
+      const url = new Request(input).url;
       if (url.endsWith('/.well-known/opencode')) return new Response(FAKE_WELLKNOWN);
       if (url.includes('/config/opencode.json')) return new Response(FAKE_CONFIG);
       modelCalls++;
       return modelCalls === 1
         ? new Response('limited', { status: 429, headers: { 'Retry-After': '0' } })
         : Response.json({ id: 'r', output: [] });
-    }) as unknown as typeof fetch;
+    }));
     const provider = createOpenCodeProvider(makeProviderOpts({ fetch: fetchImpl }));
     await provider.listModels({ env: {}, getAuth: async () => null, hasCredential: async () => false });
     const model = provider.createModel('openai/gpt-5.6-sol', {
@@ -313,7 +315,7 @@ describe('OpenCode provider', () => {
       },
     });
 
-    const body = JSON.parse(requestBodies[0]) as Record<string, unknown>;
+    const body = v.parse(JsonObjectSchema, JSON.parse(requestBodies[0]));
     expect(body.store).toBe(false);
     expect(body.include).toEqual([
       'file_search_call.results',
@@ -341,7 +343,7 @@ describe('OpenCode provider', () => {
     };
     const nonPersistedReference = { type: 'item_reference', id: 'call_local' };
 
-    const body: Record<string, unknown> = {
+    const body: JsonObject = {
       model: 'openai/gpt-5.6-sol',
       input: [
         reasoningWithoutEncryptedContent,
@@ -378,7 +380,7 @@ describe('OpenCode provider', () => {
   });
 
   test('Responses requests strip tool-call server ids but keep call_id', () => {
-    const body: Record<string, unknown> = {
+    const body: JsonObject = {
       model: 'openai/gpt-5.6-sol',
       input: [
         { type: 'function_call', id: 'fc_server', call_id: 'call_abc', name: 'run', arguments: '{}' },
@@ -404,7 +406,7 @@ describe('OpenCode provider', () => {
     await tryCall(model);
 
     expect(requests).toEqual(['https://opencode.example.com/openai/v1/chat/completions']);
-    const body = JSON.parse(requestBodies[0]) as Record<string, unknown>;
+    const body = v.parse(JsonObjectSchema, JSON.parse(requestBodies[0]));
     expect(body.model).toBe('gpt-5.4-nano');
     expect(body.max_completion_tokens).toBe(16);
     expect(Object.hasOwn(body, 'max_tokens')).toBe(false);
@@ -472,14 +474,14 @@ describe('OpenCode provider', () => {
 
   test('config is cached and not re-fetched within TTL', async () => {
     let fetchCount = 0;
-    const countingFetch = mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
+    const countingFetch = asFetchFunction(mock(async (input: RequestInfo | URL, _init?: RequestInit) => {
       fetchCount++;
-      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const url = new Request(input).url;
       if (url.endsWith('/.well-known/opencode')) {
         return new Response(FAKE_WELLKNOWN, { status: 200 });
       }
       return new Response(FAKE_CONFIG, { status: 200 });
-    }) as unknown as typeof fetch;
+    }));
 
     const provider = createOpenCodeProvider(makeProviderOpts({
       fetch: countingFetch,

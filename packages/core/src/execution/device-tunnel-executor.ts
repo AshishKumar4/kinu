@@ -16,6 +16,7 @@
  *   laptop.exists("/Users/me/.config")
  */
 
+import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { VFS } from '../types/primitives.js';
 import { makeVfsError } from '../vfs/errno.js';
@@ -27,6 +28,11 @@ import type { DeviceStatus } from './device-status.js';
 import { isDeviceNotConnectedError } from './device-tunnel.js';
 import { readExecSignal } from './signal.js';
 import { formatExecResult } from './exec-result.js';
+import {
+  isJsonObject,
+  JsonValueSchema,
+  type JsonValue,
+} from '../utils/json.js';
 
 const NOT_CONNECTED =
   'No device connected. Connect your machine once at the user level ' +
@@ -46,11 +52,32 @@ const NOT_CONNECTED =
 export interface DeviceTransport {
   /** `timeoutMs: 0` means the call carries no work deadline — it ends when the
    *  device answers, the caller aborts, or the device goes away. */
-  rpc(method: string, params: unknown[], opts?: { timeoutMs?: number }): Promise<unknown>;
+  rpc(method: string, params: JsonValue[], opts?: { timeoutMs?: number }): Promise<JsonValue | undefined>;
   /** Cached snapshot — sync and cheap; may lag the hub by the cache TTL. */
   status(): DeviceStatus;
   /** Authoritative hub check; resolves with the fresh snapshot. */
   refreshStatus(): Promise<DeviceStatus>;
+}
+
+const StringSchema = v.string();
+const OptionalStringSchema = v.optional(v.string());
+const DeviceExecResultSchema = v.object({
+  stdout: v.string(),
+  stderr: v.string(),
+  exitCode: v.number(),
+});
+const DeviceListResultSchema = v.array(JsonValueSchema);
+
+function parseInput<TSchema extends v.GenericSchema>(
+  schema: TSchema,
+  input: { value: unknown },
+): v.InferOutput<TSchema> | undefined {
+  const result = v.safeParse(schema, input.value);
+  return result.success ? result.output : undefined;
+}
+
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
 }
 
 /**
@@ -63,7 +90,7 @@ export function createDeviceTunnelExecutor(
    *  correct only where the caller has already scoped the transport. */
   consent: DeviceFileConsent = ALWAYS_CONSENTED,
 ): ExecutorProvider {
-  const rpc = (method: string, params: unknown[], opts?: { timeoutMs?: number }): Promise<unknown> =>
+  const rpc = (method: string, params: JsonValue[], opts?: { timeoutMs?: number }): Promise<JsonValue | undefined> =>
     transport.rpc(method, params, opts);
 
   // Three-state lifecycle from the hub snapshot: connected, registered-but-
@@ -83,8 +110,10 @@ export function createDeviceTunnelExecutor(
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Execute a command on the user\'s local machine via the device tunnel.',
-      execute: async (command: unknown, options?: unknown): Promise<string> => {
-        const signal = readExecSignal(options);
+      execute: async (...args: unknown[]): Promise<string> => {
+        const command = parseInput(StringSchema, { value: args[0] });
+        if (command === undefined) return 'exec error: command must be a string';
+        const signal = readExecSignal({ context: args[1] });
         try {
           // The device protocol has no kill RPC — abort stops the wait; the
           // command may still finish on the user's machine.
@@ -94,70 +123,86 @@ export function createDeviceTunnelExecutor(
             // knows how long it should take. The bounds that DO apply stay:
             // the caller's abort signal below, the turn's own cancellation,
             // and the tunnel's liveness probe if the device disappears.
-            () => rpc('exec', [String(command)], { timeoutMs: 0 }),
+            () => rpc('exec', [command], { timeoutMs: 0 }),
             signal,
             'laptop exec aborted — the command may still finish on the device',
-          ) as { stdout: string; stderr: string; exitCode: number };
-          return formatExecResult(result);
+          );
+          const parsed = v.parse(DeviceExecResultSchema, result);
+          return formatExecResult(parsed);
         } catch (err) {
           if (isAbortError(err)) throw err;
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `exec error: ${err instanceof Error ? err.message : String(err)}`;
+          return `exec error: ${errorMessage({ error: err })}`;
         }
       },
     },
 
     readFile: {
       description: 'Read a file from the user\'s local filesystem via the desktop daemon.',
-      execute: async (path: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
+        const path = parseInput(StringSchema, { value: args[0] });
+        if (path === undefined) return 'readFile error: path must be a string';
         try {
-          return String(await rpc('readFile', [String(path)]));
+          return v.parse(v.string(), await rpc('readFile', [path]));
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `readFile error: ${err instanceof Error ? err.message : String(err)}`;
+          return `readFile error: ${errorMessage({ error: err })}`;
         }
       },
     },
 
     writeFile: {
       description: 'Write content to a file on the user\'s local filesystem via the device tunnel.',
-      execute: async (path: unknown, content: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
+        const path = parseInput(StringSchema, { value: args[0] });
+        const content = parseInput(StringSchema, { value: args[1] });
+        if (path === undefined) return 'writeFile error: path must be a string';
+        if (content === undefined) return 'writeFile error: content must be a string';
         try {
-          const result = await rpc('writeFile', [String(path), String(content)]);
-          if (result !== 'ok' && !(isRecord(result) && result.success === true)) {
-            const error = isRecord(result) && typeof result.error === 'string' ? result.error : 'unknown error';
+          const result = await rpc('writeFile', [path, content]);
+          if (result !== 'ok' && !(result !== undefined && isJsonObject(result) && result.success === true)) {
+            const parsedError = result !== undefined && isJsonObject(result)
+              ? v.safeParse(v.string(), result.error)
+              : undefined;
+            const error = parsedError?.success ? parsedError.output : 'unknown error';
             return `writeFile failed: ${error}`;
           }
-          return `Written ${String(content).length} bytes to ${String(path)}`;
+          return `Written ${content.length} bytes to ${path}`;
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `writeFile error: ${err instanceof Error ? err.message : String(err)}`;
+          return `writeFile error: ${errorMessage({ error: err })}`;
         }
       },
     },
 
     readdir: {
       description: 'List directory contents on the user\'s local machine.',
-      execute: async (path: unknown): Promise<unknown> => {
+      execute: async (...args: unknown[]): Promise<string[] | string> => {
+        const path = parseInput(OptionalStringSchema, { value: args[0] });
+        if (args[0] !== undefined && path === undefined) return 'readdir error: path must be a string';
         try {
-          const result = await rpc('listFiles', [String(path || '/')]);
-          if (!Array.isArray(result)) return result;
+          const result = v.parse(DeviceListResultSchema, await rpc('listFiles', [path || '/']));
           return result.map((entry) => {
-            if (isRecord(entry) && typeof entry.name === 'string') return entry.name;
-            return String(entry);
+            if (isJsonObject(entry)) {
+              const name = v.safeParse(v.string(), entry.name);
+              if (name.success) return name.output;
+            }
+            return JSON.stringify(entry);
           });
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
-          return `readdir error: ${err instanceof Error ? err.message : String(err)}`;
+          return `readdir error: ${errorMessage({ error: err })}`;
         }
       },
     },
 
     exists: {
       description: 'Check if a path exists on the user\'s local machine.',
-      execute: async (path: unknown): Promise<unknown> => {
+      execute: async (...args: unknown[]): Promise<boolean | string> => {
+        const path = parseInput(StringSchema, { value: args[0] });
+        if (path === undefined) return false;
         try {
-          return Boolean(await rpc('exists', [String(path)]));
+          return v.parse(v.boolean(), await rpc('exists', [path]));
         } catch (err) {
           if (isDeviceNotConnectedError(err)) return NOT_CONNECTED;
           return false;
@@ -221,10 +266,6 @@ export function createDeviceTunnelExecutor(
   return provider;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null;
-}
-
 /**
  * Consent boundary of the device file view. The view exposes the device's REAL
  * root — a faithful window, not a lossy rewrite — but by default only the
@@ -253,7 +294,7 @@ const ALWAYS_CONSENTED: DeviceFileConsent = {
  */
 export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConsent): VFS {
   const exec = async (command: string): Promise<{ stdout: string; stderr: string; exitCode: number }> =>
-    await transport.rpc('exec', [command]) as { stdout: string; stderr: string; exitCode: number };
+    v.parse(DeviceExecResultSchema, await transport.rpc('exec', [command]));
 
   let cachedHome: string | null = null;
   const effectiveRoot = async (): Promise<string> => {
@@ -293,33 +334,41 @@ export function deviceFiles(transport: DeviceTransport, consent: DeviceFileConse
     async readFile(path, opts) {
       await guard(path, 'open');
       const raw = await transport.rpc('readFile', [path, { encoding: 'base64' }]);
-      if (typeof raw === 'object' && raw !== null && (raw as { encoding?: unknown }).encoding === 'base64') {
-        const bytes = base64ToBytes(String((raw as { content?: unknown }).content ?? ''));
+      if (raw !== undefined && isJsonObject(raw) && raw.encoding === 'base64') {
+        const content = v.safeParse(v.string(), raw.content);
+        const bytes = base64ToBytes(content.success ? content.output : '');
         return opts?.encoding === 'utf8' ? new TextDecoder().decode(bytes) : bytes;
       }
-      const text = String(raw);
+      const text = v.parse(v.string(), raw);
       return opts?.encoding === 'utf8' ? text : new TextEncoder().encode(text);
     },
 
     async writeFile(path, data) {
       await guard(path, 'open');
-      const text = typeof data === 'string' ? data : asLosslessText(data);
-      const result = text !== null
-        ? await transport.rpc('writeFile', [path, text])
-        : await transport.rpc('writeFile', [path, bytesToBase64(data as Uint8Array), { encoding: 'base64' }]);
+      let result: JsonValue | undefined;
+      if (v.is(v.string(), data)) {
+        result = await transport.rpc('writeFile', [path, data]);
+      } else {
+        const text = asLosslessText(data);
+        result = text !== null
+          ? await transport.rpc('writeFile', [path, text])
+          : await transport.rpc('writeFile', [path, bytesToBase64(data), { encoding: 'base64' }]);
+      }
       const ok = result === 'ok'
-        || (typeof result === 'object' && result !== null && (result as { success?: unknown }).success === true);
+        || (result !== undefined && isJsonObject(result) && result.success === true);
       if (!ok) throw new Error(`writeFile failed on the device: ${JSON.stringify(result)}`);
     },
 
     async readdir(path) {
       await guard(path, 'scandir');
-      const entries = await transport.rpc('listFiles', [path]);
-      if (!Array.isArray(entries)) throw new Error(`unexpected device listFiles result: ${JSON.stringify(entries)}`);
-      return entries.map((e) =>
-        typeof e === 'object' && e !== null && typeof (e as { name?: unknown }).name === 'string'
-          ? (e as { name: string }).name
-          : String(e));
+      const entries = v.parse(DeviceListResultSchema, await transport.rpc('listFiles', [path]));
+      return entries.map((entry) => {
+        if (isJsonObject(entry)) {
+          const name = v.safeParse(v.string(), entry.name);
+          if (name.success) return name.output;
+        }
+        return JSON.stringify(entry);
+      });
     },
 
     async stat(path) {

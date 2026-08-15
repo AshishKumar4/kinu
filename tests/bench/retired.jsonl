@@ -1,0 +1,21 @@
+# Retirement ledger — one line per task removed from tasks.jsonl, ever.
+#
+# A defect task is data ABOUT source. When that source is deleted the task
+# cannot be re-authored against anything, and leaving it in the corpus makes
+# every run fail to apply it. Removing it is therefore legitimate — but only
+# when it is RECORDED, because the alternative is indistinguishable from
+# deleting a task the tree merely got worse at.
+#
+# `split` is the split the task occupied when it was retired, so the dev/sealed
+# accounting stays reconstructable from this file alone; unit tests re-derive it
+# from the id and the committed SEAL_SALT and refuse a line that misreports it.
+# Retiring never re-rolls anyone else's split: membership is a pure function of
+# the id, so the remaining tasks keep the assignment they always had.
+#
+# Retirement is a last resort. A defect class that still exists in relocated or
+# renamed code is RE-AUTHORED against it instead — see the same-dated commit
+# that moved stat-line-size-and-mtime-swapped onto execution/exec-result.ts and
+# device-mount-consent-prefix-escape onto execution/device-tunnel-executor.ts,
+# both of which looked equally dead from the patch alone.
+{"id":"composite-mount-root-unguarded","split":"dev","retiredAt":"2026-08-13","subject":"packages/core/src/vfs/composite.ts — CompositeVFS.resolve/isMountRoot","removedBy":"4d5e4e3e","reason":"The mount plane was deleted in favour of one Nimbus filesystem. There is no mount table, so no path can be a mount root, and the guard this task seeded a defect into has no successor to re-author against."}
+{"id":"composite-root-lists-dead-mounts","split":"dev","retiredAt":"2026-08-13","subject":"packages/core/src/vfs/composite.ts — CompositeVFS.readdir over the mount table","removedBy":"4d5e4e3e","reason":"Same deletion. Listing the synthetic root that enumerated live mounts no longer exists; readdir now reaches one filesystem, where liveness is not a property any entry has."}

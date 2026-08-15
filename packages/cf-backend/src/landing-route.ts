@@ -295,7 +295,7 @@ function landingResponse(origin: string): Response {
       <section class="hero" aria-labelledby="hero-title">
         <p class="eyebrow">Persistent agents for serious work</p>
         <h1 id="hero-title">Proteus</h1>
-        <p class="lede">Create AI agents that keep state across sessions, work from the dashboard or terminal, and use your computer as the execution surface when local access matters.</p>
+        <p class="lede">Create AI agents that keep state across sessions, work from the dashboard or terminal, and run on your own computer when local access matters.</p>
         <div class="actions">
           <a class="button primary" href="/login">Sign in</a>
           <a class="button" href="#install" data-install-toggle aria-expanded="false">Install CLI</a>
@@ -309,8 +309,8 @@ function landingResponse(origin: string): Response {
         </div>
         <div class="capabilities" aria-label="Proteus capabilities">
           <div class="cell"><strong>Cloud persistence</strong><span>Agents live beyond a browser tab with durable memory, background work, and event-driven triggers.</span></div>
-          <div class="cell"><strong>Local backend</strong><span>Run fully local agents from the CLI with the same core runtime contracts as cloud agents.</span></div>
-          <div class="cell"><strong>Desktop execution</strong><span>Connect your machine so agents can operate on real files, commands, and local development workflows.</span></div>
+          <div class="cell"><strong>Local backend</strong><span>Run fully local agents from the CLI, on the same core runtime as cloud agents.</span></div>
+          <div class="cell"><strong>Desktop execution</strong><span>Connect your machine so agents can run commands, read files, and serve previews on it.</span></div>
         </div>
         <div class="workflow" aria-label="Ways to work with Proteus">
           <article>

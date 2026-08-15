@@ -15,13 +15,33 @@
  */
 
 import { appendFileSync, writeFileSync } from 'node:fs';
+import * as v from 'valibot';
+import { parseJsonValue, type JsonValue } from '../packages/core/src/index.js';
 
 const BASE_URL = process.env.PROTEUS_BASE_URL ?? 'http://localhost:5173';
 const AGENT_NAME = 'repro-' + Date.now();
 const TRANSCRIPT = process.env.PROTEUS_TRANSCRIPT ?? '/tmp/repro-transcript.txt';
 const TIMEOUT_MS = 180_000;
 
-const allFrames: unknown[] = [];
+const allFrames: JsonValue[] = [];
+
+const chatResponseSchema = v.looseObject({
+  type: v.string(),
+  id: v.optional(v.string()),
+  body: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+});
+
+const toolEventSchema = v.looseObject({
+  type: v.string(),
+  input: v.optional(v.looseObject({ code: v.optional(v.string()) })),
+  output: v.optional(v.looseObject({
+    code: v.optional(v.string()),
+    result: v.optional(v.unknown()),
+    error: v.optional(v.unknown()),
+  })),
+});
 
 function log(msg: string) {
   console.log(msg);
@@ -41,7 +61,7 @@ async function connect(): Promise<WebSocket> {
     ws.onopen = () => { clearTimeout(t); resolve(ws); };
     ws.onerror = (e) => { clearTimeout(t); reject(new Error('WS error: ' + JSON.stringify(e))); };
     ws.onmessage = (e) => {
-      try { allFrames.push(JSON.parse(String(e.data))); } catch { allFrames.push(String(e.data)); }
+      try { allFrames.push(parseJsonValue(String(e.data))); } catch { allFrames.push(String(e.data)); }
     };
   });
 }
@@ -55,7 +75,9 @@ async function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promis
     const finish = () => { clearTimeout(timer); ws.removeEventListener('message', handler); resolve({ bodies }); };
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const parsed = v.safeParse(chatResponseSchema, parseJsonValue(String(ev.data)));
+        if (!parsed.success) return;
+        const msg = parsed.output;
         if (msg.type === 'cf_agent_use_chat_response' && msg.id === reqId) {
           if (msg.body) bodies.push(msg.body);
           if (msg.done && !msg.error) { done = true; setTimeout(() => { if (done) finish(); }, 2500); }
@@ -104,24 +126,26 @@ async function main() {
   // We parse body directly — it's plain JSON.
   const toolOutputs: Array<{ input?: string; result?: unknown; error?: unknown; raw: string }> = [];
   const toolInputs: Array<{ input?: string; raw: string }> = [];
-  for (const f of allFrames) {
-    if (typeof f !== 'object' || f === null) continue;
-    const outer = f as { body?: string };
-    if (typeof outer.body !== 'string') continue;
+  for (const frame of allFrames) {
+    const outerFrame = v.safeParse(chatResponseSchema, frame);
+    if (!outerFrame.success || outerFrame.output.body === undefined) continue;
+    const body = outerFrame.output.body;
     try {
-      const inner = JSON.parse(outer.body);
-      if (inner?.type === 'tool-output-available') {
-        const output = inner.output ?? {};
+      const toolEvent = v.safeParse(toolEventSchema, parseJsonValue(body));
+      if (!toolEvent.success) continue;
+      const inner = toolEvent.output;
+      if (inner.type === 'tool-output-available') {
+        const output = inner.output;
         toolOutputs.push({
-          input: typeof output.code === 'string' ? output.code : undefined,
-          result: output.result,
-          error: output.error,
-          raw: outer.body,
+          input: output?.code,
+          result: output?.result,
+          error: output?.error,
+          raw: body,
         });
-      } else if (inner?.type === 'tool-input-available') {
+      } else if (inner.type === 'tool-input-available') {
         toolInputs.push({
-          input: typeof inner.input?.code === 'string' ? inner.input.code : undefined,
-          raw: outer.body,
+          input: inner.input?.code,
+          raw: body,
         });
       }
     } catch {}
@@ -169,8 +193,8 @@ async function main() {
   process.exit(0);
 }
 
-main().catch(e => {
-  log(`FATAL: ${e instanceof Error ? e.message : String(e)}`);
-  log((e as Error).stack ?? '');
+main().catch(error => {
+  log(`FATAL: ${error instanceof Error ? error.message : String(error)}`);
+  log(error instanceof Error ? error.stack ?? '' : '');
   process.exit(99);
 });

@@ -35,6 +35,25 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 import { copyLabel, useCopy } from "@/hooks/use-copy";
 import { CopyButton } from "@/components/ui/CopyButton";
+import * as v from "valibot";
+
+const ProviderCatalogEntrySchema = v.object({
+  id: v.string(),
+  credKey: v.string(),
+  name: v.string(),
+  doc: v.optional(v.string()),
+  envVar: v.optional(v.string()),
+  connected: v.boolean(),
+});
+
+function providerCatalogEntry<Input>(input: Input): ProviderCatalogEntry | null {
+  const parsed = v.safeParse(ProviderCatalogEntrySchema, input);
+  return parsed.success ? parsed.output : null;
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
+}
 
 interface Account {
   profile: UserProfile | null;
@@ -194,7 +213,7 @@ export default function UserSettingsPage() {
               onChange={async (spec) => {
                 setDefaultModel(spec);
                 try { await setConfig('default_model', spec); }
-                catch (err) { setDefaultModel(null); alert((err as Error).message); }
+                catch (err) { setDefaultModel(null); alert(errorMessage(err)); }
               }}
               clearable
               placeholder="(use system default)"
@@ -256,7 +275,7 @@ function DevicesCard() {
     setIssuing(true);
     setErr(null);
     try { const r = await registerDevice(); setInstall(r.installCommand); refreshDevices(); }
-    catch (e) { setErr(`Could not register device: ${(e as Error).message}`); }
+    catch (e) { setErr(`Could not register device: ${errorMessage(e)}`); }
     finally { setIssuing(false); }
   }, [refreshDevices]);
 
@@ -264,7 +283,7 @@ function DevicesCard() {
     if (!confirm(`Revoke "${label}"? Agents lose access to this device immediately.`)) return;
     setErr(null);
     try { await revokeDevice(id); }
-    catch (e) { setErr(`Could not revoke device: ${(e as Error).message}`); }
+    catch (e) { setErr(`Could not revoke device: ${errorMessage(e)}`); }
     refreshDevices();
   }, [refreshDevices]);
 
@@ -272,7 +291,7 @@ function DevicesCard() {
     <div ref={anchorRef} id="devices">
       <Card title="Devices" icon={DesktopTowerIcon}>
         <p className="text-xs p-text-2">
-          Link a laptop or PC to your account — once connected, every one of your agents can use it
+          Link a laptop or PC to your account. Once connected, every one of your agents can use it
           (with your consent). The daemon opens one outbound WebSocket; no inbound ports, runs as
           your user, never root.
         </p>
@@ -297,8 +316,8 @@ function DevicesCard() {
         )}
         {lapsingDevices(devices).length > 0 && (
           <p className="p-meta p-text-3">
-            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon
-            — connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
+            {lapsingDevices(devices).map((d) => d.label).join(", ")} {lapsingDevices(devices).length > 1 ? "links lapse" : "link lapses"} soon.
+            Connecting from {lapsingDevices(devices).length > 1 ? "those machines" : "that machine"} renews it automatically.
           </p>
         )}
 
@@ -368,7 +387,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
     setSaving(true);
     setError(null);
     try { await selectCloudflareGateway(id || null); onChanged(); }
-    catch (e) { setError((e as Error).message); }
+    catch (e) { setError(errorMessage(e)); }
     finally { setSaving(false); }
   };
 
@@ -403,7 +422,7 @@ function CloudflareGatewaySection({ status, onChanged }: {
           disabled={saving}
           className={inputCls}
         >
-          <option value="">(none — pick a gateway)</option>
+          <option value="">(no gateway selected)</option>
           {status.gateways.map((gw) => (
             <option key={gw.id} value={gw.id}>{gw.id}</option>
           ))}
@@ -458,17 +477,17 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
         } catch (e) {
           // Thrown = the poll request itself failed (network blip) — show it
           // but keep polling; the flow may still complete.
-          setError((e as Error).message);
+          setError(errorMessage(e));
         }
       }, Math.max(3, f.pollIntervalSec) * 1000);
     } catch (e) {
-      setError((e as Error).message);
+      setError(errorMessage(e));
     }
   }, [onChanged]);
 
   const disconnect = useCallback(async () => {
     if (!confirm('Disconnect ChatGPT? All your agents will lose access to Codex models.')) return;
-    try { await disconnectCodex(); onChanged(); } catch (e) { setError((e as Error).message); }
+    try { await disconnectCodex(); onChanged(); } catch (e) { setError(errorMessage(e)); }
   }, [onChanged]);
 
   if (status?.connected) {
@@ -513,7 +532,7 @@ function CodexConnect({ status, onChanged }: { status: CodexStatus | null; onCha
     <div className="space-y-3">
       <p className="text-xs p-text-2">
         Use your ChatGPT subscription as Proteus's chat backend.
-        Authorize a device once — every agent you create can pick a Codex model afterward.
+        Authorize a device once. Every agent you create can pick a Codex model afterward.
       </p>
       <button
         onClick={start}
@@ -535,7 +554,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
 
   const remove = useCallback(async (key: string, name: string) => {
     if (!confirm(`Remove the saved API key for "${name}"?`)) return;
-    try { await deleteCredential(key); onChanged(); } catch (e) { alert((e as Error).message); }
+    try { await deleteCredential(key); onChanged(); } catch (e) { alert(errorMessage(e)); }
   }, [onChanged]);
 
   // Connect-a-provider form — any models.dev catalog provider, searchable.
@@ -554,7 +573,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       setApiKey('');
       onChanged();
     } catch (e) {
-      alert((e as Error).message);
+      alert(errorMessage(e));
     } finally {
       setSavingKey(null);
     }
@@ -577,7 +596,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       setCompatName(''); setCompatBaseURL(''); setCompatApiKey('');
       onChanged();
     } catch (e) {
-      alert((e as Error).message);
+      alert(errorMessage(e));
     } finally {
       setSavingKey(null);
     }
@@ -611,18 +630,18 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
       <div className="space-y-2">
         <div className="text-xs font-medium">Connect a provider</div>
         <p className="p-meta p-text-3">
-          Paste an API key for any of the {catalog.length} supported providers — every agent you own can use its models.
+          Paste an API key for any of the {catalog.length} supported providers. Every agent you own can use its models.
         </p>
         <Combobox
           items={catalog}
           value={selected}
-          onValueChange={(next: unknown) => setSelected(next as ProviderCatalogEntry | null)}
-          itemToStringLabel={(p: unknown) => (p as ProviderCatalogEntry).name}
-          itemToStringValue={(p: unknown) => (p as ProviderCatalogEntry).id}
+          onValueChange={<Next,>(next: Next) => setSelected(providerCatalogEntry(next))}
+          itemToStringLabel={<Item,>(item: Item) => providerCatalogEntry(item)?.name ?? ''}
+          itemToStringValue={<Item,>(item: Item) => providerCatalogEntry(item)?.id ?? ''}
         >
           <Combobox.TriggerInput placeholder="Search providers (Groq, DeepSeek, Fireworks, …)" />
           <Combobox.Content>
-            <Combobox.Empty>No matching provider — add it below as an OpenAI-compatible endpoint.</Combobox.Empty>
+            <Combobox.Empty>No matching provider. Add it below as an OpenAI-compatible endpoint.</Combobox.Empty>
             <Combobox.List>
               {(item: ProviderCatalogEntry) => (
                 <Combobox.Item key={item.id} value={item}>
@@ -650,7 +669,7 @@ function ApiKeyManager({ creds, catalog, onChanged }: {
                 type="password"
                 value={apiKey}
                 onChange={(e) => setApiKey(e.target.value)}
-                placeholder={selected.connected ? '••••••• (stored — paste to replace)' : `${selected.name} API key`}
+                placeholder={selected.connected ? '••••••• (stored, paste to replace)' : `${selected.name} API key`}
                 className={inputCls}
               />
               <button

@@ -1,14 +1,13 @@
 /**
- * Signal delivery — the ONE way anything asynchronous reaches a running agent,
- * at the ONE time anything reaches it: its next step.
+ * Signal delivery — the ONE way anything asynchronous reaches an agent.
  *
  * A producer states intent and nothing else ({@link SignalDelivery.deliver}).
- * There is no timing to pick, because there is only one: the signal is spliced
- * into the live turn's next step boundary. When no turn is running there is no
- * next step, so delivery starts one (BackendHost.enqueueTurn) — that is what
- * "next step" means to an idle agent, not a second timing. The routing read is
- * synchronous, before any await, because the select→bind→deliver decision a
- * producer makes against durable state must be one event-loop tick.
+ * Delivery splices a compatible signal into the live turn's next step boundary.
+ * A signal that requires its own turn, targets a different work mode, or reaches
+ * an idle agent is queued through BackendHost.enqueueTurn instead, preserving a
+ * homogeneous turn surface. The routing read is synchronous, before any await,
+ * because the select→bind→deliver decision a producer makes against durable
+ * state must be one event-loop tick.
  *
  * Everything buffered for a step boundary drains as ONE synthetic user message
  * at the step tail (after the latest tool results, so role alternation stays
@@ -47,6 +46,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import type { PrepareStepContext } from '../extension.js';
 import type { BackendHost } from '../types/backend-host.js';
 import type {
@@ -56,6 +56,12 @@ import type {
 import { SIGNAL_ID_METADATA_KEY } from '../types/signals.js';
 import { StepInjections } from '../prompting/step-injections.js';
 import { nanoid } from '../utils/nanoid.js';
+import { isWorkMode, type WorkMode } from '../prompting/surface.js';
+import type { JsonObject } from '../utils/json.js';
+
+const SignalIdMetadataSchema = v.object({
+  [SIGNAL_ID_METADATA_KEY]: v.optional(v.string()),
+});
 
 /** A signal once the seam owns it: the producer's statement plus the card
  *  identity delivery gives it. Producers never see or set it. */
@@ -65,10 +71,10 @@ interface DeliveredSignal extends AgentSignal {
 
 /** The card id a turn carries, when a signal started it — the other half of
  *  the round trip {@link SignalDelivery.queue} stamps. */
-export function readSignalId(metadata: unknown): string | undefined {
-  if (typeof metadata !== 'object' || metadata === null) return undefined;
-  const id = (metadata as Record<string, unknown>)[SIGNAL_ID_METADATA_KEY];
-  return typeof id === 'string' && id ? id : undefined;
+export function readSignalId<Metadata>(metadata: Metadata): string | undefined {
+  const parsed = v.safeParse(SignalIdMetadataSchema, metadata);
+  const id = parsed.success ? parsed.output[SIGNAL_ID_METADATA_KEY] : undefined;
+  return id || undefined;
 }
 
 export class SignalDelivery implements SignalDeliverer {
@@ -88,6 +94,7 @@ export class SignalDelivery implements SignalDeliverer {
     /** Human-readable activity line for a wake that steered the live turn
      *  instead of queueing behind it. */
     private readonly logActivity?: (event: string, detail?: string) => void,
+    private readonly activeWorkMode?: () => WorkMode | null,
   ) {}
 
   /**
@@ -98,7 +105,10 @@ export class SignalDelivery implements SignalDeliverer {
    */
   deliver(signal: AgentSignal): Promise<SignalOutcome> {
     const delivered: DeliveredSignal = { ...signal, cardId: `sig-${nanoid()}` };
-    if (!this.host.turnInFlight()) return this.queue(delivered);
+    const signalMode = signal.metadata?.proteusMode;
+    const modeMismatch = isWorkMode(signalMode)
+      && this.activeWorkMode?.() !== signalMode;
+    if (!this.host.turnInFlight() || signal.requiresOwnTurn || modeMismatch) return this.queue(delivered);
     this.pending.push(delivered);
     this.openCard(delivered, stepBody(delivered));
     this.logActivity?.('signal_injected', `${signal.kind} → live turn`);
@@ -143,8 +153,7 @@ export class SignalDelivery implements SignalDeliverer {
     this.absorbed = [];
     this.injections.reset();
     for (const signal of requeue) {
-      void this.queue(signal).catch((err: unknown) =>
-        console.warn(`[proteus] signal "${signal.kind}" re-delivery failed:`, err));
+      void this.queue(signal).catch(reportRedeliveryFailure(signal.kind));
     }
     return { absorbed };
   }
@@ -184,7 +193,7 @@ export class SignalDelivery implements SignalDeliverer {
       console.warn(`[proteus] signal "${signal.kind}" pre-empted; compensating`);
     } catch (err) {
       reason = 'failed';
-      console.warn(`[proteus] signal "${signal.kind}" enqueue failed:`, (err as Error).message);
+      console.warn(`[proteus] signal "${signal.kind}" enqueue failed:`, errorMessage(err));
     }
     this.moveCard(signal.cardId, 'undelivered');
     signal.compensate?.(reason);
@@ -211,8 +220,19 @@ const stepBody = (signal: AgentSignal): string => signal.stepText ?? signal.text
 
 /** The turn metadata a signal carries: its `proteusEvent` provenance, the
  *  reply binding its source rows are bound to, and the producer's own. */
-const turnMetadata = (signal: AgentSignal): Record<string, unknown> => ({
-  proteusEvent: signal.kind,
-  ...(signal.replyTurnId ? { drainTurnId: signal.replyTurnId } : {}),
-  ...signal.metadata,
-});
+const turnMetadata = (signal: AgentSignal): JsonObject => {
+  const metadata: JsonObject = { proteusEvent: signal.kind };
+  if (signal.replyTurnId) metadata.drainTurnId = signal.replyTurnId;
+  Object.assign(metadata, signal.metadata);
+  return metadata;
+};
+
+function reportRedeliveryFailure(kind: string) {
+  return <Failure>(failure: Failure): void => {
+    console.warn(`[proteus] signal "${kind}" re-delivery failed:`, failure);
+  };
+}
+
+function errorMessage<Failure>(failure: Failure): string {
+  return failure instanceof Error ? failure.message : String(failure);
+}

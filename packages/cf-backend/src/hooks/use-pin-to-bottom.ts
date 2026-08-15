@@ -15,7 +15,7 @@ const PIN_THRESHOLD = 40;
  *   grows (e.g. the messages array)
  * @returns callback ref to attach to the scroll container
  */
-export function usePinToBottom<T extends HTMLElement>(content: unknown) {
+export function usePinToBottom<T extends HTMLElement, Content = object>(content: Content) {
   const el = useRef<T | null>(null);
   const pinned = useRef(true);
 

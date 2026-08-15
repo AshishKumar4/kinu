@@ -13,10 +13,11 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { EmailOutbox, type OutboundEmailMessage } from '../src/email/outbox.js';
 import { recordProbeRun, listIncidents, type MonitorDeps } from '../src/monitor/incidents.js';
-import { runSyntheticProbes, type ProbeOutcome } from '../src/monitor/probes.js';
-import type { SqlExec } from '@proteus/core';
+import { runSyntheticProbes, type ProbeDeps, type ProbeOutcome } from '../src/monitor/probes.js';
+import { sqlExec } from './helpers/user-do.js';
 
 // ── A site to probe ──────────────────────────────────────────────
 
@@ -30,9 +31,9 @@ async function tarballSha(): Promise<string> {
 }
 
 /** A healthy origin, with `broken` naming the routes to sabotage. */
-function site(broken: Partial<Record<string, () => Response>> = {}): typeof fetch {
-  return (async (input: RequestInfo | URL) => {
-    const path = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url).pathname;
+function site(broken: Partial<Record<string, () => Response>> = {}): ProbeDeps['fetch'] {
+  const fetchSite: ProbeDeps['fetch'] = async (input) => {
+    const path = new URL(new Request(input).url).pathname;
     const override = broken[path];
     if (override) return override();
     switch (path) {
@@ -52,7 +53,8 @@ function site(broken: Partial<Record<string, () => Response>> = {}): typeof fetc
       default:
         return new Response('not found', { status: 404 });
     }
-  }) as unknown as typeof fetch;
+  };
+  return fetchSite;
 }
 
 /** The SPA fallback answering for a missing asset — the actual outage. */
@@ -118,9 +120,12 @@ describe('synthetic probes', () => {
   });
 
   test('an origin that does not answer is a failure, not an exception', async () => {
+    const unavailableFetch: ProbeDeps['fetch'] = async () => {
+      throw new Error('connection refused');
+    };
     const outcomes = await runSyntheticProbes({
       origin: 'https://proteus.test',
-      fetch: (async () => { throw new Error('connection refused'); }) as unknown as typeof fetch,
+      fetch: unavailableFetch,
     });
     expect(outcomes.every((o) => !o.ok)).toBe(true);
     expect(outcome(outcomes, 'health').detail).toContain('connection refused');
@@ -131,20 +136,29 @@ describe('synthetic probes', () => {
 
 function ledger(alertEmail: string | null = 'owner@example.com') {
   const db = new Database(':memory:');
-  const sql: SqlExec = {
-    exec(query: string, ...bindings: unknown[]) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  const sql = sqlExec(db);
   const sent: OutboundEmailMessage[] = [];
   let failSends = false;
-  const binding = {
-    async send(message: OutboundEmailMessage) {
-      if (failSends) throw new Error('mail transport down');
-      sent.push(message);
-    },
-  } as unknown as SendEmail;
+  const OutboundMessageSchema = v.object({
+    from: v.union([v.string(), v.object({ email: v.string(), name: v.string() })]),
+    to: v.union([
+      v.string(),
+      v.object({ email: v.string(), name: v.string() }),
+      v.array(v.union([v.string(), v.object({ email: v.string(), name: v.string() })])),
+    ]),
+    subject: v.string(),
+    text: v.string(),
+    headers: v.optional(v.record(v.string(), v.string())),
+  });
+  type SendEmailBuilder = Parameters<SendEmail['send']>[0];
+  function send(message: EmailMessage): Promise<EmailSendResult>;
+  function send(message: SendEmailBuilder): Promise<EmailSendResult>;
+  async function send(message: EmailMessage | SendEmailBuilder): Promise<EmailSendResult> {
+    if (failSends) throw new Error('mail transport down');
+    sent.push(v.parse(OutboundMessageSchema, message));
+    return { messageId: `monitor-${sent.length}` };
+  }
+  const binding: SendEmail = { send };
   const outbox = new EmailOutbox(sql);
   outbox.ensureSchema();
   const deps = (now: number): MonitorDeps => ({

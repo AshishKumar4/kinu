@@ -96,6 +96,11 @@ export function initHeadsTables(execRaw: RawSqlExec): void {
     cost_total_wall_ms INTEGER NOT NULL,
     cost_max_depth INTEGER NOT NULL,
     merged_at INTEGER NOT NULL,
-    merge_strategy TEXT NOT NULL
+    merge_strategy TEXT NOT NULL,
+    blind_spots_json TEXT
   )`);
+
+  // Same idempotent-by-catch ADD COLUMN as head_journal above: merges cached
+  // before the blind-spot field existed predate the column.
+  try { execRaw(`ALTER TABLE head_merge_results ADD COLUMN blind_spots_json TEXT`); } catch { /* exists */ }
 }

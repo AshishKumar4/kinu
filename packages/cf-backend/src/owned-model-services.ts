@@ -44,6 +44,7 @@ export class OwnedModelServices {
     if (!userId && this.options.ownerRequired) {
       throw new Error('Agent has no owner_user_id yet — Worker must call claimOwner before any model use.');
     }
+    // SAFETY: The UserDO namespace binding declares UserDO as its stub contract.
     const userDOStub = userId
       ? this.options.env.UserDO.get(this.options.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>
       : null;

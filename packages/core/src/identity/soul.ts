@@ -2,9 +2,10 @@
  * SOUL.md — the agent's identity document, a real file in the workspace
  * filesystem.
  *
- * It is deliberately a FILE and not a row: the user edits it through the setSoul
- * RPC, and the agent evolves it with its own file tools, so it has to live where
- * `file`, `workspace.readFile` and `grep` can all reach it by one path.
+ * It is deliberately a FILE and not a row: the owner edits it through the
+ * setSoul RPC, while `file`, `workspace.readFile` and `grep` all read that one
+ * path. Hosted backends may supply an owner-only writer so the agent's shared
+ * workspace tools cannot mutate its own governing identity.
  *
  * Its MISSION, separately, is a column on `workspace_identity`. That is not a
  * second copy of the document — it is the one line a listing needs, maintained
@@ -14,6 +15,7 @@
  * counter advances on every open). A listing must not do either.
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor, VFS } from '../types/primitives.js';
 
 export const SOUL_PATH = 'SOUL.md';
@@ -103,8 +105,8 @@ export function summarizeSoul(markdown: string | null | undefined, maxLength = 2
  */
 export async function readSoul(vfs: VFS): Promise<string | null> {
   try {
-    const text = await vfs.readFile(SOUL_PATH, { encoding: 'utf8' });
-    return typeof text === 'string' && text.trim() ? text : null;
+    const text = v.parse(v.string(), await vfs.readFile(SOUL_PATH, { encoding: 'utf8' }));
+    return text.trim() ? text : null;
   } catch {
     return null;
   }
@@ -130,9 +132,15 @@ export function readMission(sql: SqlExecutor): string | null {
  * site is what stops the row from drifting away from the document: there is no
  * path that changes one without the other.
  */
-export async function writeSoul(vfs: VFS, sql: SqlExecutor, markdown: string): Promise<void> {
-  await vfs.writeFile(SOUL_PATH, markdown);
-  sql`UPDATE workspace_identity SET mission = ${summarizeSoul(markdown)}`;
+export async function writeSoul(
+  vfs: VFS,
+  sql: SqlExecutor,
+  markdown: string,
+  writeFile?: (path: string, content: string) => Promise<void>,
+): Promise<void> {
+  if (writeFile) await writeFile(SOUL_PATH, markdown);
+  else await vfs.writeFile(SOUL_PATH, markdown);
+  void sql`UPDATE workspace_identity SET mission = ${summarizeSoul(markdown)}`;
 }
 
 export async function seedSoul(

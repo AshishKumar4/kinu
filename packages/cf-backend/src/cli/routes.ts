@@ -1,4 +1,4 @@
-import { ORCHESTRATOR_AGENT_SLUG, timingSafeEqual } from '@proteus/core';
+import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, timingSafeEqual, type JsonValue } from '@proteus/core';
 import type { AuthIdentity } from '../auth/session.js';
 import { AuthError, authenticateRequest, isFreshAuthTime } from '../auth/session.js';
 import { publicHtmlHeaders } from '../lib/security-headers.js';
@@ -13,13 +13,23 @@ import {
   inspectCliAuth, pollCliAuth, startCliAuth, tokenAllows, type CliTokenIdentity,
 } from './auth-store.js';
 import { ACCESS_TOKEN_SCOPES, type AccessTokenScope } from './access-token-store.js';
-import { requiredRpcAccess, rpcAccessScope, type AgentRpcMethod } from './rpc-gate.js';
+import { isAgentRpcMethod, requiredRpcAccess, rpcAccessScope } from './rpc-gate.js';
 import { buildCliInstallCommand } from './install-command.js';
 import { listAvailableModels } from '../user/available-models.js';
 import { claimOwnedWorkspace, handleCreateWorkspaceRequest } from '../user/workspace-access.js';
 import { USER_AI_PROXY_PREFIX, handleUserAIProxyRequest } from '../user/ai-proxy.js';
 import { USER_AI_PROXY_FORWARD_PREFIX, handleUserProviderProxyRequest } from '../user/provider-proxy.js';
 import { OwnerCapabilityUnavailableError, ownerCaller } from '../user/workspace-capability.js';
+import * as v from 'valibot';
+
+const OptionalLabelSchema = v.object({ label: v.optional(v.string()) });
+const WebhookRequestSchema = v.object({
+  label: v.optional(v.string()),
+  auth_mode: v.optional(v.picklist(['hmac', 'bearer', 'mtls'])),
+  secret: v.optional(v.string()),
+  accepted_content_type: v.optional(v.string()),
+  rate_limit_per_min: v.optional(v.number()),
+});
 
 export async function handleCliRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -73,32 +83,32 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   const path = url.pathname.slice('/api/cli'.length) || '/';
 
   if (path === '/auth/start' && method === 'POST') {
-    const body = await safeJson<{ deviceName?: string }>(request);
+    const body = await safeJson(request, v.object({ deviceName: v.optional(v.string()) }));
     try {
       return json(await startCliAuth(env, url.origin, approvalOrigin(env, url), body?.deviceName, clientKey(request)));
     } catch (e) {
-      return cliAuthError(e);
+      return cliAuthError(toError(e));
     }
   }
 
   if (path === '/auth/poll' && method === 'POST') {
-    const body = await safeJson<{ deviceToken?: string }>(request);
+    const body = await safeJson(request, v.object({ deviceToken: v.optional(v.string()) }));
     if (!body?.deviceToken) return err(400, 'deviceToken required');
     try {
       return json(await pollCliAuth(env, body.deviceToken, clientKey(request)));
     } catch (e) {
-      return cliAuthError(e);
+      return cliAuthError(toError(e));
     }
   }
 
   if (path === '/auth/approve' && method === 'POST') {
     let identity: AuthIdentity;
     try { identity = await authenticateRequest(request, env); }
-    catch (e) { return accessError(e, request); }
-    const body = await safeJson<{ userCode?: string }>(request);
+    catch (e) { return accessError(toError(e), request); }
+    const body = await safeJson(request, v.object({ userCode: v.optional(v.string()) }));
     if (!body?.userCode) return err(400, 'userCode required');
     try { return json(await approveCliAuth(env, body.userCode, identity, clientKey(request))); }
-    catch (e) { return cliAuthError(e); }
+    catch (e) { return cliAuthError(toError(e)); }
   }
 
   const cli = await authenticateCli(request, env);
@@ -137,9 +147,12 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     // Minting a long-lived credential is step-up gated exactly like webhook
     // creation: the session token itself must come from a fresh `proteus auth`.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `proteus auth` again — minting access tokens needs a sign-in within the last 5 minutes');
+      return err(401, 'step-up auth required: run `proteus auth` again. Minting access tokens needs a sign-in within the last 5 minutes.');
     }
-    const body = await safeJson<{ name?: string; scopes?: string[] }>(request);
+    const body = await safeJson(request, v.object({
+      name: v.optional(v.string()),
+      scopes: v.optional(v.array(v.string())),
+    }));
     if (!body?.name?.trim() || !Array.isArray(body.scopes)) {
       return err(400, `name and scopes required (valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')})`);
     }
@@ -210,15 +223,9 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     // interactive-auth timestamp is its token mint time (minting requires
     // a live browser approval), so a fresh `proteus auth` satisfies it.
     if (!isFreshAuthTime(await sessionTokenMintedAt(env, cli))) {
-      return err(401, 'step-up auth required: run `proteus auth` again — webhook creation needs a sign-in within the last 5 minutes');
+      return err(401, 'step-up auth required: run `proteus auth` again. Webhook creation needs a sign-in within the last 5 minutes.');
     }
-    const body = await safeJson<{
-      label?: string;
-      auth_mode?: 'hmac' | 'bearer' | 'mtls';
-      secret?: string;
-      accepted_content_type?: string;
-      rate_limit_per_min?: number;
-    }>(request);
+    const body = await safeJson(request, WebhookRequestSchema);
     if (!body?.label || !body.auth_mode) return err(400, 'label and auth_mode required');
     try {
       return json(await agent.createDurableWebhook({
@@ -229,7 +236,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
         rate_limit_per_min: body.rate_limit_per_min,
       }), { status: 201 });
     } catch (e) {
-      return err(400, (e as Error).message);
+      return err(400, e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -237,7 +244,7 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
     return json(await cli.userDO.listDevices(await ownerCaller(env)));
   }
   if (path === '/devices' && method === 'POST') {
-    const body = await safeJson<{ label?: string }>(request);
+    const body = await safeJson(request, OptionalLabelSchema);
     const { deviceId, token } = await cli.userDO.registerDevice(await ownerCaller(env), body?.label);
     return json({ deviceId, token, userId: cli.userId, origin: url.origin }, { status: 201 });
   }
@@ -254,14 +261,14 @@ export async function handleCliRequest(request: Request, env: Env, ctx?: Executi
   if (cliCredMatch) {
     const key = decodeURIComponent(cliCredMatch[1]);
     if (method === 'POST') {
-      const body = await safeJson<unknown>(request);
+      const body = await safeJson(request, JsonValueSchema);
       try { await cli.userDO.setCredential(await ownerCaller(env), key, body); }
-      catch (e) { return err(400, (e as Error).message); }
+      catch (e) { return err(400, e instanceof Error ? e.message : String(e)); }
       return json({ ok: true }, { status: 201 });
     }
     if (method === 'DELETE') {
       try { await cli.userDO.deleteCredential(await ownerCaller(env), key); }
-      catch (e) { return err(400, (e as Error).message); }
+      catch (e) { return err(400, e instanceof Error ? e.message : String(e)); }
       return json({ ok: true });
     }
   }
@@ -283,12 +290,17 @@ async function cliAgent(env: Env, cli: CliTokenIdentity, name: string): Promise<
  * method name is never invoked.
  */
 async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity, name: string): Promise<Response> {
-  const body = await safeJson<{ method?: unknown; args?: unknown }>(request);
-  const rpcMethod = typeof body?.method === 'string' ? body.method : '';
+  const body = await safeJson(request, v.object({
+    method: v.string(),
+    args: v.optional(v.array(JsonValueSchema)),
+  }));
+  const rpcMethod = body?.method ?? '';
   if (!rpcMethod) return err(400, 'method required');
-  const args = body?.args === undefined ? [] : body.args;
-  if (!Array.isArray(args)) return err(400, 'args must be an array');
+  const args = body?.args ?? [];
 
+  if (!isAgentRpcMethod(rpcMethod)) {
+    return err(404, `No such agent RPC method: ${rpcMethod}`);
+  }
   const access = requiredRpcAccess(rpcMethod);
   if (access === null || access === 'never') {
     return err(404, `No such agent RPC method: ${rpcMethod}`);
@@ -305,9 +317,10 @@ async function handleAgentRpc(request: Request, env: Env, cli: CliTokenIdentity,
   // names are ever reached, so the string-indexed dispatch cannot touch
   // anything else on the DO. Args are the method's own responsibility to
   // validate — the same contract as the websocket rpc dispatcher.
-  const dispatch = agent as unknown as Record<AgentRpcMethod, (...args: unknown[]) => Promise<unknown>>;
   try {
-    const result = await dispatch[rpcMethod as AgentRpcMethod](...args);
+    // SAFETY: The allowlist proves the method exists, and the request schema established JSON arguments.
+    const invoke = agent[rpcMethod] as (...values: JsonValue[]) => Promise<JsonValue | undefined>;
+    const result = await invoke(...args);
     return json({ result: result === undefined ? null : result });
   } catch (e) {
     // Same contract as a websocket rpc-error frame: the thrown message goes
@@ -376,7 +389,7 @@ async function authenticateCli(request: Request, env: Env): Promise<CliTokenIden
 async function renderBrowserApproval(request: Request, env: Env): Promise<Response> {
   let identity: AuthIdentity;
   try { identity = await authenticateRequest(request, env); }
-  catch (e) { return accessError(e, request); }
+  catch (e) { return accessError(toError(e), request); }
   const url = new URL(request.url);
   const code = url.searchParams.get('code');
   if (!code) return html('Proteus CLI Auth', '<p>Missing CLI auth code.</p>', 400);
@@ -418,7 +431,7 @@ async function renderBrowserApproval(request: Request, env: Env): Promise<Respon
 async function approveFromBrowser(request: Request, env: Env): Promise<Response> {
   let identity: AuthIdentity;
   try { identity = await authenticateRequest(request, env); }
-  catch (e) { return accessError(e, request); }
+  catch (e) { return accessError(toError(e), request); }
   if (!isSameOriginPost(request)) {
     return html('Proteus CLI Auth', '<p>Invalid approval origin.</p>', 403);
   }
@@ -441,7 +454,7 @@ async function approveFromBrowser(request: Request, env: Env): Promise<Response>
       },
     });
   } catch (e) {
-    return html('Proteus CLI Auth', `<p>${escapeHtml((e as Error).message)}</p>`, 400);
+    return html('Proteus CLI Auth', `<p>${escapeHtml(toError(e).message)}</p>`, 400);
   }
 }
 
@@ -666,7 +679,7 @@ function installPageResponse(origin: string): Response {
       <section class="grid" aria-label="What the installer sets up">
         <div class="cell"><strong>Account connection</strong><span>The setup flow opens browser approval and stores the CLI session under your local Proteus home directory.</span></div>
         <div class="cell"><strong>Cloud or local agents</strong><span>Create persistent cloud agents or fully local agents from the same command line, then add aliases for the agents you use often.</span></div>
-        <div class="cell"><strong>Your computer as execution</strong><span>Connect this machine as the desktop execution engine so agents can operate on local files and processes with your approval model.</span></div>
+        <div class="cell"><strong>Desktop execution</strong><span>Connect this machine so agents can run commands, read files, and serve previews on it, with your approval.</span></div>
       </section>
 
       <div class="notes">
@@ -1016,13 +1029,13 @@ exec bun run packages/cli/bin/cli.ts "$@"
 
 /** Rate limits are 429, caller-correctable code failures are 400, and
  *  everything else (D1 outage, UserDO failure, …) is a real 500. */
-function cliAuthError(e: unknown): Response {
+function cliAuthError(e: Error): Response {
   if (e instanceof RateLimitError) return err(429, e.message);
   if (e instanceof CliAuthCodeError) return err(400, e.message);
   return err(500, e instanceof Error ? e.message : String(e));
 }
 
-function accessError(e: unknown, request?: Request): Response {
+function accessError(e: Error, request?: Request): Response {
   if (e instanceof AuthError) {
     if (e.status === 401 && request?.method === 'GET') {
       const url = new URL(request.url);
@@ -1039,6 +1052,8 @@ function accessError(e: unknown, request?: Request): Response {
 }
 
 function html(title: string, body: string, status = 200, init: ResponseInit = {}): Response {
+  const headers = new Headers(publicHtmlHeaders());
+  new Headers(init.headers).forEach((value, name) => headers.set(name, value));
   return new Response(`<!doctype html>
 <html lang="en">
 <head>
@@ -1077,11 +1092,12 @@ function html(title: string, body: string, status = 200, init: ResponseInit = {}
 </html>`, {
     ...init,
     status,
-    headers: {
-      ...publicHtmlHeaders(),
-      ...(init.headers as Record<string, string> | undefined),
-    },
+    headers,
   });
+}
+
+function toError<Thrown>(thrown: Thrown): Error {
+  return thrown instanceof Error ? thrown : new Error(String(thrown));
 }
 
 function csrfCookie(value: string): string {

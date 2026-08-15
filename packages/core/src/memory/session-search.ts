@@ -164,12 +164,12 @@ export class SessionSearchStore {
     const totalAfter = this.count(anchor.session_id, anchor.created_at, anchor.rid, 'after');
 
     const perMessage = maxChars !== undefined ? Math.max(50, Math.trunc(maxChars)) : MAX_MESSAGE_CHARS;
-    const shape = (m: MsgRow): SessionScrollMessage => ({
+    const toMessage = (m: MsgRow): SessionScrollMessage => ({
       id: m.id, role: m.role, content: truncate(m.content, perMessage), createdAt: m.created_at,
     });
     return {
       sessionId: anchor.session_id,
-      messages: [...before.map(shape), { ...shape(anchor), anchor: true }, ...after.map(shape)],
+      messages: [...before.map(toMessage), { ...toMessage(anchor), anchor: true }, ...after.map(toMessage)],
       messagesBefore: totalBefore - before.length,
       messagesAfter: totalAfter - after.length,
     };

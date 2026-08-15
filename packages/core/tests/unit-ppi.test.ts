@@ -95,7 +95,7 @@ function trueRate(rows: ReadonlyArray<SyntheticRow>): number {
 
 /** What the classifier reports about a slice — the input a corrected surface
  *  starts from. */
-function observedRate(rows: ReadonlyArray<SyntheticRow>): { events: number; population: number } {
+function observedRate(rows: ReadonlyArray<SyntheticRow>) {
   return { events: rows.filter((r) => EVENT_KEYS.has(r.predicted)).length, population: rows.length };
 }
 

@@ -25,11 +25,14 @@
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel, ModelMessage } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
+import type { LanguageModelV2CallOptions } from '@ai-sdk/provider';
 import {
   DynamicContextLedger,
   ExtensionHost,
   initWorkspaceSchema,
   runChat,
+  type ChatOptions,
 } from '@proteus/core';
 import {
   createCompactionExtension,
@@ -71,17 +74,20 @@ function history(exchanges: number, outputChars: number): ModelMessage[] {
   return messages;
 }
 
-type PromptMessage = { role: string; content: Array<{ type: string; text?: string }> | string };
+type PromptMessage = LanguageModelV2CallOptions['prompt'][number];
+
+interface CapturingModel {
+  model: LanguageModel;
+  prompts: PromptMessage[][];
+}
 
 /** One-step text model that records the exact prompt of every call. */
-function capturingModel(): { model: LanguageModel; prompts: PromptMessage[][] } {
+function capturingModel(): CapturingModel {
   const prompts: PromptMessage[][] = [];
-  const model = {
-    specificationVersion: 'v2',
+  const model = new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (options: { prompt: PromptMessage[] }) => {
+    doStream: async (options) => {
       prompts.push(options.prompt);
       return {
         stream: new ReadableStream({
@@ -97,13 +103,13 @@ function capturingModel(): { model: LanguageModel; prompts: PromptMessage[][] } 
         response: { headers: {} },
       };
     },
-  } as unknown as LanguageModel;
+  });
   return { model, prompts };
 }
 
 function messageText(m: PromptMessage): string {
-  if (typeof m.content === 'string') return m.content;
-  return m.content.filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
+  if (m.role === 'system') return m.content;
+  return m.content.flatMap((part) => part.type === 'text' ? [part.text] : []).join('');
 }
 
 function ephemeralBlocks(prompt: PromptMessage[]): number[] {
@@ -117,7 +123,7 @@ function ephemeralBlocks(prompt: PromptMessage[]): number[] {
 describe('default compaction over the real storage plane', () => {
   test('rewrite → VFS transcript read-back → durable replay → ledger reset on non-replay', async () => {
     const db = new Database(':memory:');
-    const rt = createCLIRuntime(db as never, {
+    const rt = createCLIRuntime(db, {
       dbPath: `/tmp/proteus-compaction-itest-${Math.floor(performance.now())}.db`,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
@@ -162,7 +168,7 @@ describe('default compaction over the real storage plane', () => {
 
     const { model, prompts } = capturingModel();
     const drive = async (messages: ModelMessage[], transformTrigger?: 'force') => {
-      for await (const _ of runChat({
+      const options: ChatOptions = {
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
         system: 'system prompt',
@@ -172,8 +178,9 @@ describe('default compaction over the real storage plane', () => {
         maxSteps: 1,
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
-        ...(transformTrigger ? { transformTrigger } : {}),
-      })) { /* drain */ }
+      };
+      if (transformTrigger) options.transformTrigger = transformTrigger;
+      for await (const _ of runChat(options)) { /* drain */ }
     };
     // What a turn assembly does with the armed one-shot flag.
     const driveForced = (messages: ModelMessage[]) =>
@@ -287,7 +294,7 @@ describe('default compaction over the real storage plane', () => {
 
   test('the first rung: superseded ephemeral blocks survive every unpressured turn and go first under pressure', async () => {
     const db = new Database(':memory:');
-    const rt = createCLIRuntime(db as never, {
+    const rt = createCLIRuntime(db, {
       dbPath: `/tmp/proteus-rung-itest-${Math.floor(performance.now())}.db`,
       llm: { name: 'fake', baseURL: 'http://localhost:0', headers: {}, model: 'fake-model' },
     });
@@ -315,7 +322,7 @@ describe('default compaction over the real storage plane', () => {
     let facts = '';
     const messages: ModelMessage[] = [];
     const drive = (providerReportedTokens?: number) => (async () => {
-      for await (const _ of runChat({
+      const options: ChatOptions = {
         model,
         modelContext: { id: 'fake/fake-model', contextWindow: 10_000 },
         system: 'system prompt',
@@ -325,8 +332,9 @@ describe('default compaction over the real storage plane', () => {
         maxSteps: 1,
         extensions: new ExtensionHost().register(extension),
         cache: { sessionKey: SESSION },
-        ...(providerReportedTokens !== undefined ? { providerReportedTokens } : {}),
-      })) { /* drain */ }
+      };
+      if (providerReportedTokens !== undefined) options.providerReportedTokens = providerReportedTokens;
+      for await (const _ of runChat(options)) { /* drain */ }
     })();
 
     /** Everything the provider is charged for, minus the rolling cache markers

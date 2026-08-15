@@ -44,6 +44,7 @@ export interface HostCheckpointsOpts {
 }
 
 interface GitResult { code: number; stdout: string; stderr: string }
+interface GitEnvironment { [name: string]: string }
 
 export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoints {
   const agent = opts.agent.replace(/[^A-Za-z0-9_-]/g, '_');
@@ -57,8 +58,8 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
   const turnDone = new Set<string>();
   let refSeq = 0;
 
-  function isolatedEnv(): Record<string, string> {
-    const env: Record<string, string> = {};
+  function isolatedEnv(): GitEnvironment {
+    const env: GitEnvironment = {};
     for (const [k, v] of Object.entries(process.env)) {
       if (v !== undefined && !k.startsWith('GIT_')) env[k] = v;
     }
@@ -72,11 +73,11 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     return env;
   }
 
-  function storeEnv(gitDir: string, workdir: string): Record<string, string> {
+  function storeEnv(gitDir: string, workdir: string): GitEnvironment {
     return { ...isolatedEnv(), GIT_DIR: gitDir, GIT_WORK_TREE: workdir };
   }
 
-  function runGit(args: string[], cwd: string, env: Record<string, string>): Promise<GitResult> {
+  function runGit(args: string[], cwd: string, env: GitEnvironment): Promise<GitResult> {
     // A missing cwd makes spawn fail with the same ENOENT a missing binary
     // produces — check it here so a vanished workdir can never flip the
     // engine into the sticky "git not found" degraded mode.
@@ -85,14 +86,15 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     }
     return new Promise((resolveRun, rejectRun) => {
       execFile(gitBin, args, { cwd, env, timeout: GIT_TIMEOUT_MS, maxBuffer: 32 * 1024 * 1024 }, (err, stdout, stderr) => {
-        if (err && (err as NodeJS.ErrnoException).code === 'ENOENT') {
+        if (err?.code === 'ENOENT') {
           gitAvailable = false;
           rejectRun(new Error(CHECKPOINTS_UNAVAILABLE_NO_GIT));
           return;
         }
         gitAvailable = true;
-        const code = err ? ((err as { code?: unknown }).code as number | undefined ?? 1) : 0;
-        resolveRun({ code: typeof code === 'number' ? code : 1, stdout: String(stdout), stderr: String(stderr) });
+        const reportedCode = Number(err?.code);
+        const code = err && Number.isFinite(reportedCode) ? reportedCode : err ? 1 : 0;
+        resolveRun({ code, stdout: String(stdout), stderr: String(stderr) });
       });
     });
   }
@@ -200,7 +202,7 @@ export function createHostCheckpoints(opts: HostCheckpointsOpts): FileCheckpoint
     await runGit(['prune', '--expire=now'], workdir, env);
   }
 
-  async function requireCheckpoint(dir: string, id: string): Promise<{ gitDir: string; abs: string; env: Record<string, string> }> {
+  async function requireCheckpoint(dir: string, id: string): Promise<{ gitDir: string; abs: string; env: GitEnvironment }> {
     if (!SHA_RE.test(id)) throw new Error(`invalid checkpoint id: ${id}`);
     const abs = resolve(dir);
     const gitDir = storeDirFor(abs);

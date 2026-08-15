@@ -162,7 +162,8 @@ export function indexScaffoldSites(source: string): ScaffoldSite[] {
 function layerSites(subjects: readonly string[]): string {
   const byModule = new Map<string, string[]>();
   for (const subject of subjects) {
-    const module = SUBJECT_SOURCE[subject as keyof typeof SUBJECT_SOURCE];
+    const module = SUBJECT_MODULES.get(subject);
+    if (module === undefined) throw new Error(`No source module registered for Layergate subject ${subject}`);
     const symbols = byModule.get(module);
     if (symbols) symbols.push(subject);
     else byModule.set(module, [subject]);
@@ -219,3 +220,4 @@ export function renderScaffoldHandbook(scaffoldSource: string): string {
     `${scaffold}\n`
   );
 }
+const SUBJECT_MODULES = new Map<string, string>(Object.entries(SUBJECT_SOURCE));

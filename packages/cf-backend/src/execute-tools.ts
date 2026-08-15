@@ -7,7 +7,7 @@
  * PreambleCraftedExecutor so mid-turn saves are callable on the next step),
  * `llm.*` (recursive LM calls), `agents.*` (delegation), `web.*`, plus one
  * namespace per registered ExecutionRouter provider (`workspace`, `sandbox`,
- * `nimbus`, `laptop`).
+ * `laptop`).
  *
  * Actors differ only in the fields of `ExecuteToolsOptions`: an orchestrator
  * adds its MCP providers, its delegation deps, and records the last-active
@@ -27,10 +27,10 @@ import type { CFRuntime } from "./runtime.js";
 
 export interface ExecuteToolsOptions {
   /** env.LOADER — the WorkerLoader every sandboxed execute runs inside. */
-  loader: unknown;
+  loader: WorkerLoader;
   /** The actor's runtime: craftStore (preamble source) + executionRouter
-   *  (the `workspace` / `sandbox` / `nimbus` / `laptop` namespaces). */
-  rt: CFRuntime;
+   *  (the `workspace` / `sandbox` / `laptop` namespaces). */
+  rt: Pick<CFRuntime, 'craftStore' | 'executionRouter'>;
   /** The actor's bound SQL — craft-score lookups for injectable-tool selection. */
   sql: SqlExecutor;
   registry: AgentProviderRegistry;
@@ -54,7 +54,7 @@ export interface ExecuteToolsOptions {
 
 export interface CraftedDispatcherEntry {
   description: string;
-  execute: (arg?: unknown) => Promise<never>;
+  execute: () => Promise<never>;
 }
 
 /**
@@ -80,7 +80,7 @@ export function craftedDispatcherEntry(name: string, description?: string): Craf
   };
 }
 
-export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
+export function createExecuteToolsTool(options: ExecuteToolsOptions) {
   const { loader, rt, sql, registry, modelSpec, webSearch } = options;
   if (!loader) throw new Error("CF runtime missing LOADER binding");
 
@@ -107,9 +107,8 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
   // `web.*` — same web search/fetch provider that backs the web_* tools.
   const webProvider = createWebCodemodeProvider(webSearch);
   const executorProviders = (rt.executionRouter?.getProviders() ?? []).map((p) => {
-    const tools = p.tools as Record<string, { description?: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-    const wrapped: typeof tools = {};
-    for (const [name, entry] of Object.entries(tools)) {
+    const wrapped: typeof p.tools = {};
+    for (const [name, entry] of Object.entries(p.tools)) {
       wrapped[name] = {
         ...entry,
         execute: async (...args) => {
@@ -122,15 +121,9 @@ export function createExecuteToolsTool(options: ExecuteToolsOptions): unknown {
     return { name: p.name, tools: wrapped, types: p.types, positionalArgs: p.positionalArgs };
   });
 
-  return createCodeTool({
-    tools: [
-      craftedProvider,
-      rlmProvider,
-      ...(agentsProvider ? [agentsProvider] : []),
-      ...(options.extraProviders?.() ?? []),
-      webProvider,
-      ...executorProviders,
-    ] as Parameters<typeof createCodeTool>[0]["tools"],
-    executor: executor as unknown as Parameters<typeof createCodeTool>[0]["executor"],
-  });
+  const providers: Parameters<typeof createCodeTool>[0]["tools"] = [craftedProvider, rlmProvider];
+  if (agentsProvider) providers.push(agentsProvider);
+  if (options.extraProviders) providers.push(...options.extraProviders());
+  providers.push(webProvider, ...executorProviders);
+  return createCodeTool({ tools: providers, executor });
 }

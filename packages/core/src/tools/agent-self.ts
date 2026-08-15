@@ -22,33 +22,41 @@
  * actor's own deps (core tools/agents-codemode.ts), so there is still exactly
  * one spawn/join implementation, with one more caller.
  */
+import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
 import { readMissionLimits, type MissionGovernor } from '../mission-budget.js';
 import { nextCronFire } from '../events/hub/cron.js';
 import { BACKGROUND_POLICY } from '../jobs/index.js';
+import type { BackgroundJob } from '../jobs/store.js';
+import type { ProposedTask } from '../curriculum/proposer.js';
+import type { ModifyResult } from '../scaffold/modify.js';
+import type { ScaffoldVersionView } from '../evolution/control.js';
+import type { ReplayEvalSummary } from '../evolution/replay.js';
+import type { TimerTrigger } from '../events/ingress/triggers.js';
 import { nanoid } from '../utils/nanoid.js';
+import { decodeJsonValue, JsonObjectSchema, type JsonObject, type JsonValue } from '../utils/json.js';
 
 type CurriculumStatus = 'pending' | 'accepted' | 'rejected' | 'completed';
 
 /** The narrow slice of the agent the `agent.*` tools call through to — all
  *  existing methods on both backends, so there's no duplicated logic. */
 export interface AgentSelfHost {
-  proposeCurriculumTasks(count?: number): Promise<unknown>;
-  listCurriculumTasks(status?: CurriculumStatus): Promise<unknown>;
-  setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<unknown>;
-  proposeScaffold(rationale: string, code: string, baseVersion?: number): Promise<unknown>;
-  listScaffoldVersions(limit?: number): Promise<unknown> | unknown;
+  proposeCurriculumTasks(count?: number): Promise<ProposedTask[] | { proposals: ProposedTask[] }>;
+  listCurriculumTasks(status?: CurriculumStatus): Promise<ProposedTask[] | { tasks: ProposedTask[] }>;
+  setCurriculumTaskStatus(id: string, status: CurriculumStatus): Promise<{ ok: boolean }>;
+  proposeScaffold(rationale: string, code: string, baseVersion?: number): Promise<ModifyResult>;
+  listScaffoldVersions(limit?: number): Promise<ScaffoldVersionView[]> | ScaffoldVersionView[];
   createTimerTrigger(opts: {
-    cron?: string; atMs?: number; label?: string; payload?: Record<string, unknown>;
+    cron?: string; atMs?: number; label?: string; payload?: JsonObject;
     missionLabel?: string;
-  }): { id: string; kind: string; nextFireAt: number | null };
+  }): TimerTrigger;
   /** The cumulative spend governor — a schedule declares its mission budget
    *  here, and `agent.budget` reads it back. */
   readonly budget: MissionGovernor;
-  cancelTrigger(id: string): Promise<unknown> | unknown;
-  jobResult(jobId: string): Promise<unknown>;
-  listBackgroundJobs(limit?: number): Promise<unknown>;
-  getReplayEvals(limit?: number): Promise<unknown>;
+  cancelTrigger(id: string): Promise<{ ok: boolean; changed: boolean }> | { ok: boolean; changed: boolean };
+  jobResult(jobId: string): Promise<BackgroundJob | null>;
+  listBackgroundJobs(limit?: number): Promise<BackgroundJob[]>;
+  getReplayEvals(limit?: number): Promise<ReplayEvalSummary[]>;
   /** Arm the compaction ladder's forced rebuild for this session's NEXT turn
    *  assembly — the same one-shot flag overflow recovery uses. */
   armCompactNow(): void;
@@ -143,20 +151,48 @@ const BACKGROUND_DESCRIPTION =
  *  re-poll: the read states the wake contract instead, so a poll loop has
  *  nothing to spin on. (The measured lesson behind the shape: prose alone
  *  converts at 0%, mechanisms do — this return value is the mechanism.) */
-function shapeJobRead(job: unknown): unknown {
-  if (typeof job !== 'object' || job === null) return job;
-  const row = job as { id?: unknown; kind?: unknown; label?: unknown; status?: unknown };
-  if (row.status !== 'running') return job;
+interface RunningJobRead {
+  id: string;
+  kind: string;
+  label?: string;
+  status: 'running';
+  note: string;
+}
+
+function formatJobRead(job: BackgroundJob | null): BackgroundJob | RunningJobRead | null {
+  if (job?.status !== 'running') return job;
   return {
-    id: row.id,
-    kind: row.kind,
-    ...(row.label != null ? { label: row.label } : {}),
+    id: job.id,
+    kind: job.kind,
+    label: job.label ?? undefined,
     status: 'running',
     note:
       'Not settled yet — there is no result to read, and reading again will not make it finish. '
       + 'You are woken automatically with the full result the moment this job settles. '
       + 'Do other work if you have any; otherwise end your turn and let the wake bring the result.',
   };
+}
+
+const OptionalNumberSchema = v.optional(v.number());
+const OptionalCurriculumStatusSchema = v.optional(
+  v.picklist(['pending', 'accepted', 'rejected', 'completed']),
+);
+const NonEmptyStringSchema = v.pipe(v.string(), v.minLength(1));
+const OptionalBaseVersionSchema = v.optional(
+  v.pipe(v.number(), v.integer(), v.minValue(0)),
+);
+const ScheduleOptionsSchema = v.object({
+  cron: v.optional(v.pipe(v.string(), v.minLength(1))),
+  atMs: v.optional(v.pipe(v.number(), v.finite())),
+  label: v.optional(v.string()),
+  payload: v.optional(JsonObjectSchema),
+  budget_usd: v.optional(v.number()),
+  budget_tokens: v.optional(v.number()),
+  budget_label: v.optional(v.string()),
+});
+
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
 }
 
 export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
@@ -168,113 +204,118 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
       proposeCurriculum: {
         description: 'Propose N self-curriculum tasks (Voyager-style) for your own improvement; returns the proposals.',
         execute: async (...args: unknown[]) => {
-          const count = typeof args[0] === 'number' ? args[0] : undefined;
+          const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.proposeCurriculum: count must be a number when given' };
+          const count = parsed.output;
           try { return await host.proposeCurriculumTasks(count); }
-          catch (err) { return { error: `agent.proposeCurriculum: ${(err as Error).message}` }; }
+          catch (err) { return { error: `agent.proposeCurriculum: ${errorMessage({ error: err })}` }; }
         },
       },
       listCurriculum: {
         description: 'List your proposed curriculum tasks, optionally filtered by status (pending/accepted/rejected/completed).',
         execute: async (...args: unknown[]) => {
-          const status = args[0] as CurriculumStatus | undefined;
+          const parsed = v.safeParse(OptionalCurriculumStatusSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.listCurriculum: invalid status' };
+          const status = parsed.output;
           try { return await host.listCurriculumTasks(status); }
-          catch (err) { return { error: `agent.listCurriculum: ${(err as Error).message}` }; }
+          catch (err) { return { error: `agent.listCurriculum: ${errorMessage({ error: err })}` }; }
         },
       },
       acceptCurriculumTask: {
         description: 'Accept a proposed curriculum task by id so it becomes runnable.',
         execute: async (...args: unknown[]) => {
-          const id = args[0];
-          if (typeof id !== 'string' || !id) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
-          try { return await host.setCurriculumTaskStatus(id, 'accepted'); }
-          catch (err) { return { error: `agent.acceptCurriculumTask: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.acceptCurriculumTask: id must be a non-empty string' };
+          try { return await host.setCurriculumTaskStatus(parsed.output, 'accepted'); }
+          catch (err) { return { error: `agent.acceptCurriculumTask: ${errorMessage({ error: err })}` }; }
         },
       },
       proposeScaffold: {
         description: 'Propose a new version of your own agentic-loop scaffold. Routed through the 4-gate validation + misevolution gate + shadow evaluation; only goes live after winning the promotion gate. rationale ≥ 50 chars; code must export async function* run(rt, task) and use the host.* bridge. Optional baseVersion branches from an archived variant.',
         execute: async (...args: unknown[]) => {
           const [rationale, code, baseVersion] = args;
-          if (typeof rationale !== 'string' || !rationale) return { error: 'agent.proposeScaffold: rationale must be a non-empty string' };
-          if (typeof code !== 'string' || !code) return { error: 'agent.proposeScaffold: code must be a non-empty string' };
-          if (baseVersion !== undefined && (typeof baseVersion !== 'number' || !Number.isInteger(baseVersion) || baseVersion < 0)) {
-            return { error: 'agent.proposeScaffold: baseVersion must be a non-negative integer when given' };
-          }
-          try { return await host.proposeScaffold(rationale, code, baseVersion); }
-          catch (err) { return { error: `agent.proposeScaffold: ${(err as Error).message}` }; }
+          const parsedRationale = v.safeParse(NonEmptyStringSchema, rationale);
+          if (!parsedRationale.success) return { error: 'agent.proposeScaffold: rationale must be a non-empty string' };
+          const parsedCode = v.safeParse(NonEmptyStringSchema, code);
+          if (!parsedCode.success) return { error: 'agent.proposeScaffold: code must be a non-empty string' };
+          const parsedBase = v.safeParse(OptionalBaseVersionSchema, baseVersion);
+          if (!parsedBase.success) return { error: 'agent.proposeScaffold: baseVersion must be a non-negative integer when given' };
+          try { return await host.proposeScaffold(parsedRationale.output, parsedCode.output, parsedBase.output); }
+          catch (err) { return { error: `agent.proposeScaffold: ${errorMessage({ error: err })}` }; }
         },
       },
       scaffoldVersions: {
         description: 'Read-only scaffold archive: versions with status, lineage (parent_version) and shadow-eval record — the stepping stones proposeScaffold can branch from.',
         execute: async (...args: unknown[]) => {
-          const limit = typeof args[0] === 'number' ? args[0] : undefined;
-          try { return await host.listScaffoldVersions(limit); }
-          catch (err) { return { error: `agent.scaffoldVersions: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.scaffoldVersions: limit must be a number when given' };
+          try { return await host.listScaffoldVersions(parsed.output); }
+          catch (err) { return { error: `agent.scaffoldVersions: ${errorMessage({ error: err })}` }; }
         },
       },
       schedule: {
         description: 'Schedule a future autonomous turn: { cron } recurring OR { atMs } one-shot (epoch ms), with optional label/payload. The reactor wakes you when it fires. Optional budget_usd / budget_tokens give the whole schedule a cumulative host-enforced spend cap covering every turn it wakes and everything those turns spawn.',
         execute: async (...args: unknown[]) => {
-          const opts = (args[0] ?? {}) as {
-            cron?: unknown; atMs?: unknown; label?: unknown; payload?: unknown; budget_label?: unknown;
-          };
-          const cron = typeof opts.cron === 'string' && opts.cron ? opts.cron : undefined;
-          const atMs = typeof opts.atMs === 'number' && Number.isFinite(opts.atMs) ? opts.atMs : undefined;
+          const parsed = v.safeParse(ScheduleOptionsSchema, args[0] ?? {});
+          if (!parsed.success) return { error: 'agent.schedule: invalid schedule options' };
+          const opts = parsed.output;
+          const { cron, atMs } = opts;
           if (!cron && atMs === undefined) return { error: 'agent.schedule: provide { cron } or { atMs }' };
           if (cron && nextCronFire(cron, Date.now()) === null) return { error: `agent.schedule: unsupported cron expression: ${cron}` };
           if (atMs !== undefined && atMs <= Date.now()) return { error: 'agent.schedule: atMs must be in the future' };
           // The ledger is declared BEFORE the trigger so the schedule can carry
           // its label from the first fire; a named label re-enters the existing
           // cumulative row rather than starting a fresh one.
-          const limits = readMissionLimits(opts as { budget_usd?: unknown; budget_tokens?: unknown });
+          const limits = readMissionLimits(opts);
           const missionLabel = limits
-            ? (typeof opts.budget_label === 'string' && opts.budget_label.trim() ? opts.budget_label.trim() : `schedule-${nanoid()}`)
+            ? (opts.budget_label?.trim() || `schedule-${nanoid()}`)
             : undefined;
           try {
             const budget = limits && missionLabel ? host.budget.declare(missionLabel, limits) : undefined;
-            return {
-              ...host.createTimerTrigger({
+            const result: TimerTrigger & { budget?: JsonValue } = host.createTimerTrigger({
                 cron, atMs, missionLabel,
-                label: typeof opts.label === 'string' ? opts.label : undefined,
-                payload: opts.payload && typeof opts.payload === 'object' ? opts.payload as Record<string, unknown> : undefined,
-              }),
-              ...(budget ? { budget } : {}),
-            };
-          } catch (err) { return { error: `agent.schedule: ${(err as Error).message}` }; }
+                label: opts.label,
+                payload: opts.payload,
+              });
+            if (budget) result.budget = decodeJsonValue({ value: budget });
+            return result;
+          } catch (err) { return { error: `agent.schedule: ${errorMessage({ error: err })}` }; }
         },
       },
       budget: {
         description: 'Read a mission budget: pass a label, or omit to read whatever the current turn spends against. Returns [] when this run is uncapped (the default).',
         execute: async (...args: unknown[]) => {
-          const label = args[0];
-          if (label !== undefined && typeof label !== 'string') return { error: 'agent.budget: label must be a string when given' };
-          try { return host.budget.snapshot(label); }
-          catch (err) { return { error: `agent.budget: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(v.optional(v.string()), args[0]);
+          if (!parsed.success) return { error: 'agent.budget: label must be a string when given' };
+          try { return host.budget.snapshot(parsed.output); }
+          catch (err) { return { error: `agent.budget: ${errorMessage({ error: err })}` }; }
         },
       },
       cancelSchedule: {
         description: 'Cancel a previously-scheduled trigger by id (idempotent).',
         execute: async (...args: unknown[]) => {
-          const id = args[0];
-          if (typeof id !== 'string' || !id) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
-          try { return await host.cancelTrigger(id); }
-          catch (err) { return { error: `agent.cancelSchedule: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.cancelSchedule: id must be a non-empty string' };
+          try { return await host.cancelTrigger(parsed.output); }
+          catch (err) { return { error: `agent.cancelSchedule: ${errorMessage({ error: err })}` }; }
         },
       },
       jobResult: {
         description: BACKGROUND_DESCRIPTION,
         execute: async (...args: unknown[]) => {
-          const id = args[0];
-          if (typeof id !== 'string' || !id) return { error: 'agent.jobResult: jobId must be a non-empty string' };
-          try { return shapeJobRead(await host.jobResult(id)); }
-          catch (err) { return { error: `agent.jobResult: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(NonEmptyStringSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.jobResult: jobId must be a non-empty string' };
+          try { return formatJobRead(await host.jobResult(parsed.output)); }
+          catch (err) { return { error: `agent.jobResult: ${errorMessage({ error: err })}` }; }
         },
       },
       backgroundJobs: {
         description: 'List your recent background jobs (newest first) with their status.',
         execute: async (...args: unknown[]) => {
-          const limit = typeof args[0] === 'number' ? args[0] : undefined;
-          try { return await host.listBackgroundJobs(limit); }
-          catch (err) { return { error: `agent.backgroundJobs: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.backgroundJobs: limit must be a number when given' };
+          try { return await host.listBackgroundJobs(parsed.output); }
+          catch (err) { return { error: `agent.backgroundJobs: ${errorMessage({ error: err })}` }; }
         },
       },
       compactNow: {
@@ -283,15 +324,16 @@ export function createAgentSelfProvider(host: AgentSelfHost): CodemodeProvider {
           try {
             host.armCompactNow();
             return { armed: true, appliesAt: 'next-turn-assembly' };
-          } catch (err) { return { error: `agent.compactNow: ${(err as Error).message}` }; }
+          } catch (err) { return { error: `agent.compactNow: ${errorMessage({ error: err })}` }; }
         },
       },
       replayEvals: {
         description: 'Read your replay-eval loss curve (newest first): past outcome-labeled turns re-run against the current config, scored against how they originally landed. Each entry carries the 95% confidence interval on its mean score — a move inside the interval is noise, not progress.',
         execute: async (...args: unknown[]) => {
-          const limit = typeof args[0] === 'number' ? args[0] : undefined;
-          try { return await host.getReplayEvals(limit); }
-          catch (err) { return { error: `agent.replayEvals: ${(err as Error).message}` }; }
+          const parsed = v.safeParse(OptionalNumberSchema, args[0]);
+          if (!parsed.success) return { error: 'agent.replayEvals: limit must be a number when given' };
+          try { return await host.getReplayEvals(parsed.output); }
+          catch (err) { return { error: `agent.replayEvals: ${errorMessage({ error: err })}` }; }
         },
       },
     },

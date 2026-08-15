@@ -18,15 +18,36 @@ import { Database } from 'bun:sqlite';
 import {
   WORKSPACE_ARCHIVE_EXTENSION,
   archiveSqlFromDatabase,
+  decodeJsonValue,
   readWorkspaceArchivePage,
   restoreWorkspaceArchive,
   type ArchiveCursor,
   type ArchivePage,
 } from '@proteus/core';
+import { createInlineWorkspace } from '@proteus/core/identity';
 import { agentDbPath, agentDir, ensureAgentHome, requireStoredAuthConfig } from '../config.js';
 import { resolveAgentTarget } from '../agent-target.js';
 import { callAgentRpc } from '../cloud-api.js';
 import { formatBytes, printError, OK, ACCENT, DIM } from '../display.js';
+import * as v from 'valibot';
+
+interface RestoredArchiveCounts {
+  rows: number;
+  tables: number;
+}
+
+const ArchiveHeaderSchema = v.object({
+  t: v.optional(v.string()),
+  workspace: v.optional(v.string()),
+});
+const ArchiveCursorSchema: v.GenericSchema<ArchiveCursor> = v.variant('phase', [
+  v.object({ phase: v.literal('sql'), table: v.string(), after: v.nullable(v.number()), rows: v.number() }),
+  v.object({ phase: v.literal('files'), after: v.string(), rows: v.number(), files: v.number() }),
+]);
+const ArchivePageSchema: v.GenericSchema<ArchivePage> = v.object({
+  lines: v.array(v.string()),
+  next: v.nullable(ArchiveCursorSchema),
+});
 
 export async function exportCommand(name: string, opts: { output?: string }): Promise<void> {
   const target = resolveAgentTarget(name);
@@ -71,7 +92,7 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
   // never leaves a half-populated workspace behind under a real name.
   const partial = `${dbPath}.partial`;
   rmSync(partial, { force: true });
-  let restored: { rows: number; tables: number };
+  let restored: RestoredArchiveCounts;
   try {
     if (legacy) {
       // A database file from a pre-archive `proteus export`. Copying it is
@@ -82,7 +103,10 @@ export async function importCommand(file: string, opts: { name?: string }): Prom
     } else {
       const db = new Database(partial, { create: true });
       try {
-        const result = restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file));
+        let files: ReturnType<typeof createInlineWorkspace>['vfs'] | null = null;
+        const result = await restoreWorkspaceArchive(archiveSqlFromDatabase(db), readLines(file), {
+          files: () => (files ??= createInlineWorkspace(db).vfs),
+        });
         restored = { rows: result.rows, tables: result.tables };
       } finally {
         db.close();
@@ -104,14 +128,15 @@ async function* cloudArchivePages(name: string): AsyncGenerator<ArchivePage> {
   let cursor: ArchiveCursor | null = null;
   do {
     const page: ArchivePage = await callAgentRpc(
-      auth.origin, auth.token, name, 'exportWorkspaceArchive', [cursor],
+      auth.origin, auth.token, name, 'exportWorkspaceArchive', ArchivePageSchema,
+      [cursor === null ? null : decodeJsonValue({ value: cursor })],
     );
     yield page;
     cursor = page.next;
   } while (cursor);
 }
 
-function* localArchivePages(name: string): Generator<ArchivePage> {
+async function* localArchivePages(name: string): AsyncGenerator<ArchivePage> {
   const dbPath = agentDbPath(name);
   if (!existsSync(dbPath)) {
     throw new Error(`Workspace "${name}" not found.`);
@@ -121,7 +146,7 @@ function* localArchivePages(name: string): Generator<ArchivePage> {
     const sql = archiveSqlFromDatabase(db);
     let cursor: ArchiveCursor | null = null;
     do {
-      const page = readWorkspaceArchivePage(sql, { workspace: name, source: 'local', cursor });
+      const page = await readWorkspaceArchivePage(sql, { workspace: name, source: 'local', cursor });
       yield page;
       cursor = page.next;
     } while (cursor);
@@ -179,8 +204,8 @@ function isSqliteDatabaseFile(path: string): boolean {
 function archiveWorkspaceName(path: string): string | null {
   for (const line of readLines(path)) {
     try {
-      const header = JSON.parse(line) as { t?: string; workspace?: unknown };
-      return header.t === 'header' && typeof header.workspace === 'string' ? header.workspace : null;
+      const header = v.parse(ArchiveHeaderSchema, JSON.parse(line));
+      return header.t === 'header' ? header.workspace ?? null : null;
     } catch {
       return null;
     }
@@ -195,15 +220,16 @@ function nameFromFilename(file: string): string {
     .replace(/\.db$/, '');
 }
 
-function countRestored(dbPath: string): { rows: number; tables: number } {
+function countRestored(dbPath: string): RestoredArchiveCounts {
   const db = new Database(dbPath, { readonly: true });
   try {
-    const tables = db.query(
+    const tables = db.query<{ name: string }, []>(
       `SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'`,
-    ).all() as Array<{ name: string }>;
+    ).all();
     let rows = 0;
     for (const table of tables) {
-      const row = db.query(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get() as { n: number };
+      const row = db.query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM "${table.name.replace(/"/g, '""')}"`).get();
+      if (!row) throw new Error(`Could not count restored table ${table.name}`);
       rows += row.n;
     }
     return { rows, tables: tables.length };

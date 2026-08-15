@@ -16,29 +16,39 @@
  *      search is still running — with the tree already grown when they do.
  */
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
 import { buildStrategyForkDeps, type ForkDepsWiring } from '../src/orchestrator/fork-deps.js';
 import { createMCTSStrategy } from '../src/strategy/mcts.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initScaffoldTables } from '../src/scaffold/schemas.js';
 import { initCraftScoreTables } from '../src/craft/schemas.js';
 import type { MCTSProgressEvent } from '../src/types/mcts.js';
+import { HeadController } from '../src/heads/controller.js';
+import { HeadJournal } from '../src/heads/journal.js';
+import { MctsSearchStore } from '../src/mcts/search-store.js';
+import type { AgentsForkDeps } from '../src/tools/agents-tool.js';
 import { createTestRuntime, createMockSession } from './helpers.js';
 
 function forkWiring(
   rt: ForkDepsWiring['rt'],
   onProgress?: ForkDepsWiring['mcts']['onProgress'],
 ): ForkDepsWiring {
+  const controller = new HeadController({
+    spawnHead: async () => { throw new Error('not exercised by MCTS progress tests'); },
+    mergeLLM: async () => { throw new Error('not exercised by MCTS progress tests'); },
+  }, new HeadJournal(rt.storage.sql));
   return {
     rt,
-    model: rt.llm as never,
+    model: new MockLanguageModelV3(),
     mcts: {
       session: () => createMockSession(),
-      search: {} as never,
+      search: new MctsSearchStore(rt.storage.sql),
       overrides: () => ({}),
-      ...(onProgress ? { onProgress } : {}),
+      onProgress,
     },
     heads: {
-      controller: () => ({}) as never,
+      controller: () => controller,
       inheritedContext: () => [],
       onPhase: () => () => {},
       onComplete: () => {},
@@ -46,7 +56,18 @@ function forkWiring(
   };
 }
 
-type MctsOptions = { mcts: { onProgress?: (event: MCTSProgressEvent) => void } };
+function progressSink(deps: AgentsForkDeps): ((event: MCTSProgressEvent) => void) | undefined {
+  const mcts = deps.defaultOptions?.().mcts;
+  const parsed = v.parse(v.object({ onProgress: v.optional(v.function()) }), mcts);
+  const { onProgress } = parsed;
+  if (!onProgress) return undefined;
+  return (event) => { onProgress(event); };
+}
+
+function defaultMctsOptions(deps: AgentsForkDeps): object {
+  const mcts = deps.defaultOptions?.().mcts;
+  return v.parse(v.looseObject({ onProgress: v.optional(v.function()) }), mcts);
+}
 
 describe('the fork substrate carries the MCTS progress sink', () => {
   test('defaultOptions() resolves the onProgress factory once per fork call', () => {
@@ -57,22 +78,23 @@ describe('the fork substrate carries the MCTS progress sink', () => {
       return () => {};
     }));
 
-    const first = deps.defaultOptions!() as MctsOptions;
+    const first = progressSink(deps);
     expect(factoryCalls).toBe(1);
     // Firing events does not re-invoke the factory — the closure resolved at
     // dispatch serves the whole search, however long it detaches for.
-    first.mcts.onProgress!({ type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 3, branches: 2 });
-    first.mcts.onProgress!({ type: 'iteration-complete', iteration: 1, remainingBudget: 2, scores: [0.5] });
+    if (!first) throw new Error('expected progress sink');
+    first({ type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 3, branches: 2 });
+    first({ type: 'iteration-complete', iteration: 1, remainingBudget: 2, scores: [0.5] });
     expect(factoryCalls).toBe(1);
 
-    deps.defaultOptions!();
+    defaultMctsOptions(deps);
     expect(factoryCalls).toBe(2);
   });
 
   test('a backend that wires no sink leaves onProgress absent rather than undefined-valued', () => {
     const { rt } = createTestRuntime();
-    const options = buildStrategyForkDeps(forkWiring(rt)).defaultOptions!() as MctsOptions;
-    expect('onProgress' in options.mcts).toBe(false);
+    const options = defaultMctsOptions(buildStrategyForkDeps(forkWiring(rt)));
+    expect('onProgress' in options).toBe(false);
   });
 
   test('the value a factory captures at dispatch survives a later change to the live source', () => {
@@ -83,11 +105,12 @@ describe('the fork substrate carries the MCTS progress sink', () => {
       const captured = liveRun;
       return () => seen.push(captured);
     }));
-    const options = deps.defaultOptions!() as MctsOptions;
+    const onProgress = progressSink(deps);
+    if (!onProgress) throw new Error('expected progress sink');
 
-    options.mcts.onProgress!({ type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 2, branches: 1 });
+    onProgress({ type: 'phase', phase: 'explore', iteration: 1, remainingBudget: 2, branches: 1 });
     liveRun = null; // the calling turn closed while the detached search ran on
-    options.mcts.onProgress!({ type: 'iteration-complete', iteration: 1, remainingBudget: 1, scores: [0.5] });
+    onProgress({ type: 'iteration-complete', iteration: 1, remainingBudget: 1, scores: [0.5] });
 
     expect(seen).toEqual(['run-A', 'run-A']);
   });
@@ -97,7 +120,7 @@ describe('the MCTS strategy reports progress while the search runs', () => {
   test('events arrive per iteration, and the tree has already grown when they do', async () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'a candidate approach', codeUsed: null }),
+      explore: async () => ({ text: 'a candidate approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
     initSearchTables(rt.storage.execRaw);
@@ -113,8 +136,9 @@ describe('the MCTS strategy reports progress while the search runs', () => {
     const strategy = createMCTSStrategy();
     await strategy.explore({
       task: 'pick an approach',
+      mode: 'build',
       rt,
-      model: rt.llm as never,
+      model: new MockLanguageModelV3(),
       budget: { maxIterations: 2 },
       options: {
         mcts: {
@@ -124,7 +148,7 @@ describe('the MCTS strategy reports progress while the search runs', () => {
             events.push(event);
             if (event.type === 'phase' && event.phase === 'evaluate') {
               nodesAtEvaluate.push(
-                rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]!.n,
+                rt.storage.sql<{ n: number }>`SELECT COUNT(*) AS n FROM search_nodes`[0]?.n ?? 0,
               );
             }
           },
@@ -138,13 +162,13 @@ describe('the MCTS strategy reports progress while the search runs', () => {
     // The first evaluate already sees the root plus its two fresh branches.
     expect(nodesAtEvaluate[0]).toBeGreaterThanOrEqual(3);
     // And the tree keeps growing across iterations rather than arriving whole.
-    expect(nodesAtEvaluate[nodesAtEvaluate.length - 1]).toBeGreaterThan(nodesAtEvaluate[0]!);
+    expect(nodesAtEvaluate.at(-1)).toBeGreaterThan(nodesAtEvaluate[0] ?? 0);
   });
 
   test('a strategy call with no sink runs identically — the option is optional', async () => {
     const { rt } = createTestRuntime();
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'a candidate approach', codeUsed: null }),
+      explore: async () => ({ text: 'a candidate approach' }),
       generateReflection: async () => ({ text: 'n/a' }),
     });
     initSearchTables(rt.storage.execRaw);
@@ -159,8 +183,9 @@ describe('the MCTS strategy reports progress while the search runs', () => {
 function strategyWithoutSink(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return createMCTSStrategy().explore({
     task: 'pick an approach',
+    mode: 'build',
     rt,
-    model: rt.llm as never,
+    model: new MockLanguageModelV3(),
     budget: { maxIterations: 1 },
     options: { mcts: { session: createMockSession(), branches: 1 } },
   });

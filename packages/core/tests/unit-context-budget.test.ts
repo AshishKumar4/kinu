@@ -13,6 +13,10 @@ import {
   TIGHTENED_RESULT_MAX_CHARS,
 } from '../src/context-budget.js';
 
+interface CyclicValue {
+  self?: CyclicValue;
+}
+
 describe('TurnContextBudget', () => {
   test('the per-result cap is the configured one until the turn spends its admit budget', () => {
     const budget = new TurnContextBudget(1_000, 100);
@@ -98,7 +102,7 @@ describe('citesSpillAddress', () => {
   });
 
   test('an unserializable argument is not a follow-up rather than a throw', () => {
-    const cyclic: Record<string, unknown> = {};
+    const cyclic: CyclicValue = {};
     cyclic.self = cyclic;
     expect(citesSpillAddress(cyclic)).toBe(false);
   });

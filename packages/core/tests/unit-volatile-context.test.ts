@@ -12,7 +12,9 @@
 //  - fnv1a64 (the telemetry + fingerprint hash) changes only on real events.
 import { describe, test, expect } from 'bun:test';
 import { tool, type ModelMessage } from 'ai';
-import type { ModelStreamPart } from '@proteus/test-utils';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
+import * as v from 'valibot';
 import { z } from 'zod';
 import {
   buildSystemPromptSync,
@@ -54,11 +56,21 @@ function isDynamicBlock(text: string): boolean {
   return BLOCK_OPEN.test(text) && text.endsWith('\n</dynamic_context>');
 }
 
+const ContentPartsSchema = v.array(v.object({
+  type: v.string(),
+  text: v.optional(v.string()),
+}));
+
+function textFromContent(input: { value: unknown }): string {
+  const text = v.safeParse(v.string(), input.value);
+  return text.success
+    ? text.output
+    : v.parse(ContentPartsSchema, input.value)
+      .filter((part) => part.type === 'text').map((part) => part.text ?? '').join('');
+}
+
 function messageText(m: ModelMessage): string {
-  return typeof m.content === 'string'
-    ? m.content
-    : (m.content as Array<{ type: string; text?: string }>)
-        .filter((p) => p.type === 'text').map((p) => p.text ?? '').join('');
+  return textFromContent({ value: m.content });
 }
 
 describe('byte-stable system prefix', () => {
@@ -297,17 +309,16 @@ describe('the dynamic block carries every genuinely-live plane', () => {
 });
 
 describe('agentDynamicContext (the one plane set both backends assemble)', () => {
-  const sources = {
+  type DynamicContextSources = Parameters<typeof agentDynamicContext>[0];
+  const sources: DynamicContextSources = {
     factsBlock: undefined,
     memoryTail: undefined,
-    executors: [] as PromptExecutorInfo[],
-    runningJobs: [] as Array<{ id: string; kind: string; label: string | null }>,
-    openTasks: [] as Array<{
-      id: string; title: string; status: string;
-      subtasks: Array<{ id: string; title: string; status: string }>;
-    }>,
-    liveHeadRuns: [] as Array<{ rootId: string; rationale: string; running: number; total: number }>,
-    missingCapabilities: [] as Array<{ source: string; reason: string }>,
+    recoveryFindings: [],
+    executors: [],
+    runningJobs: [],
+    openTasks: [],
+    liveHeadRuns: [],
+    missingCapabilities: [],
   };
 
   test('every live plane the backends read reaches the block', () => {
@@ -336,6 +347,18 @@ describe('agentDynamicContext (the one plane set both backends assemble)', () =>
       { kind: 'fork', name: 'run-7', phase: '2 of 3 heads running', task: 'two ways in' },
     ]);
     expect(ctx.missingCapabilities).toEqual([{ source: 'linear', reason: 'startup timeout' }]);
+  });
+
+  test('execution-recovery findings reach the block, and an empty list is omitted', () => {
+    const finding = '`run` failed 3x in a row with {"command":"npm test"}; the first `run` call that then ran clean was {"command":"bun test"}';
+    const ctx = agentDynamicContext({ ...sources, recoveryFindings: [finding] });
+    expect(ctx.recoveries).toEqual([finding]);
+    const block = renderDynamicContextBlock(ctx)!;
+    expect(block).toContain('## Proven by execution');
+    expect(block).toContain('bun test');
+    // The header states the ceiling: evidence, not a verdict on correctness.
+    expect(block).toContain('not a verdict');
+    expect('recoveries' in agentDynamicContext(sources)).toBe(false);
   });
 
   test('an absent plane is omitted, not rendered empty', () => {
@@ -623,38 +646,49 @@ describe('dropSuperseded (the compaction ladder\'s first rung)', () => {
 
 /** A one-step text model that captures every prompt it was handed. */
 function promptCapturingModel() {
-  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
-  const prompts: Array<Array<{ role: string; content: unknown }>> = [];
-  const model = {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (options: { prompt: Array<{ role: string; content: unknown }> }) => {
-      prompts.push(options.prompt);
+  const prompts: PromptMessage[][] = [];
+  const model = new MockLanguageModelV3({
+    doStream: async (options) => {
+      prompts.push(parsePrompt({ value: options.prompt }));
       return {
-        stream: new ReadableStream({
+        stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             c.enqueue({ type: 'text-start', id: 't1' });
             c.enqueue({ type: 'text-delta', id: 't1', delta: 'ok' });
             c.enqueue({ type: 'text-end', id: 't1' });
-            c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+            c.enqueue({
+              type: 'finish',
+              finishReason: { unified: 'stop', raw: undefined },
+              usage: {
+                inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                outputTokens: { total: 1, text: 1, reasoning: undefined },
+              },
+            });
             c.close();
           },
         }),
         response: { headers: {} },
       };
     },
-  };
+  });
   return { model, prompts };
 }
 
-function promptTexts(prompt: Array<{ role: string; content: unknown }>): string[] {
+const PromptSchema = v.array(v.object({
+  role: v.string(),
+  content: v.union([v.string(), ContentPartsSchema]),
+}));
+type PromptMessage = v.InferOutput<typeof PromptSchema>[number];
+
+function parsePrompt(input: { value: unknown }): PromptMessage[] {
+  return v.parse(PromptSchema, input.value);
+}
+
+function promptTexts(prompt: PromptMessage[]): string[] {
   return prompt
     .filter((m) => m.role !== 'system')
-    .map((m) => (m.content as Array<{ type: string; text?: string }>)
-      .filter((p) => p.type === 'text').map((p) => p.text ?? '').join(''));
+    .map((m) => textFromContent({ value: m.content }));
 }
 
 describe('the ledger + turn-local split through real runChat turns', () => {
@@ -668,7 +702,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
       history.push({ role: 'user', content: userText });
       const tail = turnLocalContextMessage({ deviceNotice });
       for await (const ev of runChat({
-        model: model as never,
+        model,
         system: 'sys',
         history,
         dynamicContext: { ledger, snapshot: () => state },
@@ -711,7 +745,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
     const turn = async (userText: string, factsBlock: string) => {
       history.push({ role: 'user', content: userText });
       for await (const ev of runChat({
-        model: model as never,
+        model,
         system: 'sys',
         history,
         dynamicContext: { ledger, snapshot: () => ({ factsBlock }) },
@@ -742,7 +776,7 @@ describe('the ledger + turn-local split through real runChat turns', () => {
       { role: 'user', content: 'wake up' },
     ];
     for await (const _ of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history,
       dynamicContext: {
@@ -763,39 +797,48 @@ describe('the ledger + turn-local split through real runChat turns', () => {
  *  prompt of every request so a test can compare request N and N+1 byte for
  *  byte. */
 function threeStepToolModel() {
-  const usage = { inputTokens: 1, outputTokens: 1, totalTokens: 2 };
-  const prompts: Array<Array<{ role: string; content: unknown }>> = [];
+  const prompts: PromptMessage[][] = [];
   let step = 0;
-  const model = {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (options: { prompt: Array<{ role: string; content: unknown }> }) => {
-      prompts.push(options.prompt);
+  const model = new MockLanguageModelV3({
+    doStream: async (options) => {
+      prompts.push(parsePrompt({ value: options.prompt }));
       const n = step++;
       const stream = n < 2
-        ? new ReadableStream<ModelStreamPart>({
+        ? new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'tool-call', toolCallId: `tc${n}`, toolName: 'ping', input: '{}' });
-              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+              c.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'tool-calls', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
               c.close();
             },
           })
-        : new ReadableStream<ModelStreamPart>({
+        : new ReadableStream<LanguageModelV3StreamPart>({
             start(c) {
               c.enqueue({ type: 'stream-start', warnings: [] });
               c.enqueue({ type: 'text-start', id: 't1' });
               c.enqueue({ type: 'text-delta', id: 't1', delta: 'done' });
               c.enqueue({ type: 'text-end', id: 't1' });
-              c.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              c.enqueue({
+                type: 'finish',
+                finishReason: { unified: 'stop', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
               c.close();
             },
           });
       return { stream, response: { headers: {} } };
     },
-  };
+  });
   return { model, prompts };
 }
 
@@ -812,7 +855,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     const { model, prompts } = threeStepToolModel();
     const ledger = new DynamicContextLedger();
     for await (const _ of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: '- k = v' }) },
@@ -837,7 +880,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     const ledger = new DynamicContextLedger();
     let step = 0;
     for await (const _ of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       // A background job appears while step 1 is being prepared.
@@ -881,7 +924,7 @@ describe('the per-step weave (the cache-coherence proof)', () => {
     const ledger = new DynamicContextLedger();
     let step = 0;
     for await (const _ of runChat({
-      model: model as never,
+      model,
       system: 'sys',
       history: [{ role: 'user', content: 'go' }],
       dynamicContext: { ledger, snapshot: () => ({ factsBlock: `- step = ${step++}` }) },

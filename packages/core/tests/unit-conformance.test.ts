@@ -40,7 +40,7 @@ describe('compareSurface can fail (canaries)', () => {
   });
 
   test('observed but declared absent → contradicted, citing the stale reason', () => {
-    const report = compareSurface(observing({ tool: new Set([...BUILTIN_TOOLS]) }));
+    const report = compareSurface(observing({ tool: new Set(BUILTIN_TOOLS) }));
     const contradiction = report.findings.find((f) => f.kind === 'contradicted' && f.name === 'report');
     expect(contradiction).toBeDefined();
     expect(contradiction?.staleReason).toContain('report sink');
@@ -76,9 +76,10 @@ describe('compareSurface can fail (canaries)', () => {
 describe('manifest hygiene', () => {
   test('every deliberate absence names a reason', () => {
     for (const plane of CONFORMANCE_PLANES) {
-      for (const [name, statuses] of Object.entries(BACKEND_CONFORMANCE[plane])) {
+      const statusesByName: Readonly<Record<string, RootStatuses>> = BACKEND_CONFORMANCE[plane];
+      for (const [name, statuses] of Object.entries(statusesByName)) {
         for (const root of CONFORMANCE_ROOTS) {
-          const status = (statuses as RootStatuses)[root];
+          const status = statuses[root];
           if ('absent' in status) {
             expect({ plane, name, root, reason: status.absent.length > 10 })
               .toEqual({ plane, name, root, reason: true });
@@ -98,8 +99,9 @@ describe('manifest hygiene', () => {
 
   test('no capability is declared absent everywhere (dead declaration)', () => {
     for (const plane of CONFORMANCE_PLANES) {
-      for (const [name, statuses] of Object.entries(BACKEND_CONFORMANCE[plane])) {
-        const anyWired = CONFORMANCE_ROOTS.some((root) => 'wired' in (statuses as RootStatuses)[root]);
+      const statusesByName: Readonly<Record<string, RootStatuses>> = BACKEND_CONFORMANCE[plane];
+      for (const [name, statuses] of Object.entries(statusesByName)) {
+        const anyWired = CONFORMANCE_ROOTS.some((root) => 'wired' in statuses[root]);
         expect({ plane, name, anyWired }).toEqual({ plane, name, anyWired: true });
       }
     }
@@ -153,29 +155,49 @@ describe('event briefs name only real callables', () => {
   // then require each call-shaped instruction to resolve.
   const CALLABLES = new Set<string>([...BUILTIN_TOOLS, ...AGENTS_TOOL_ACTIONS.map((a) => `agents.${a}`)]);
 
-  function eventFor(variant: ProteusEvent['variant'], payload: unknown,
-    vis: ProteusEvent['payload_visibility'] = 'full'): ProteusEvent {
-    return {
-      id: 'eid', trace_id: 'tid', caused_by: null,
-      ingress: 'webhook_hmac', variant, trust: 'authenticated',
-      priority: 'normal', payload_visibility: vis,
-      received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
-      payload,
-    } as ProteusEvent;
-  }
+  const EVENT_BASE = {
+    id: 'eid', trace_id: 'tid', caused_by: null,
+    ingress: 'webhook_hmac', trust: 'authenticated', priority: 'normal',
+    received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+  } satisfies Pick<ProteusEvent,
+    'id' | 'trace_id' | 'caused_by' | 'ingress' | 'trust' | 'priority'
+    | 'received_at' | 'schema_version' | 'reply_channel' | 'dedupe_key'>;
 
   const BRIEF_SOURCES: ProteusEvent[] = [
-    eventFor('chat', { text: 'hello' }),
-    eventFor('webhook', { http_method: 'POST', body: { ok: true }, webhook_id: 'w', http_headers: {}, delivery_id: 'd' }),
-    eventFor('webhook', { _visibility: 'hash', sha256: 'ab'.repeat(32), size: 9 }, 'hash'),
-    eventFor('webhook', { _visibility: 'hmac', size: 9 }, 'hmac'),
-    eventFor('webhook', { _visibility: 'opaque_handle', handle: 'opaque:abcd' }, 'opaque_handle'),
-    eventFor('process_done', { command: 'ls', exit_code: 1, stderr_excerpt: 'boom' }),
-    eventFor('timer', { label: 'nightly' }),
-    eventFor('peer_agent', { topic: 'sync', body: 'text', from_agent_name: 'peer' }),
-    eventFor('subordinate_task', { kind: 'assignment', body: 'do the thing', from_workspace: 'ws' }),
-    eventFor('subordinate_report', { status: 'completed', content: 'done', from_subordinate: 'sub' }),
-    eventFor('email', { from: 'a@b.c', subject: 's', body_text: 'hi' }),
+    { ...EVENT_BASE, variant: 'chat', payload_visibility: 'full', payload: { text: 'hello' } },
+    { ...EVENT_BASE, variant: 'webhook', payload_visibility: 'full', payload: {
+      http_method: 'POST', body: { ok: true }, webhook_id: 'w', http_headers: {}, delivery_id: 'd',
+    } },
+    { ...EVENT_BASE, variant: 'webhook', payload_visibility: 'hash', payload: {
+      _visibility: 'hash', sha256: 'ab'.repeat(32), size: 9,
+    } },
+    { ...EVENT_BASE, variant: 'webhook', payload_visibility: 'hmac', payload: {
+      _visibility: 'hmac', size: 9,
+    } },
+    { ...EVENT_BASE, variant: 'webhook', payload_visibility: 'opaque_handle', payload: {
+      _visibility: 'opaque_handle', handle: 'opaque:abcd',
+    } },
+    { ...EVENT_BASE, variant: 'process_done', payload_visibility: 'full', payload: {
+      process_id: 'proc-1', command: 'ls', exit_code: 1, stdout_excerpt: '',
+      stderr_excerpt: 'boom', duration_ms: 1,
+    } },
+    { ...EVENT_BASE, variant: 'timer', payload_visibility: 'full', payload: {
+      trigger_id: 'timer-1', scheduled_fire_at: 0, label: 'nightly',
+    } },
+    { ...EVENT_BASE, variant: 'peer_agent', payload_visibility: 'full', payload: {
+      topic: 'sync', body: 'text', from_agent_name: 'peer', from_user_id: 'user-1',
+      sender_event_id: 'sender-1', proteus_mode: 'build',
+    } },
+    { ...EVENT_BASE, variant: 'subordinate_task', payload_visibility: 'full', payload: {
+      kind: 'task', body: 'do the thing', from_workspace: 'ws', proteus_mode: 'build',
+    } },
+    { ...EVENT_BASE, variant: 'subordinate_report', payload_visibility: 'full', payload: {
+      status: 'completed', content: 'done', from_subordinate: 'sub', proteus_mode: 'build',
+    } },
+    { ...EVENT_BASE, variant: 'email', payload_visibility: 'full', payload: {
+      from: 'a@b.c', to: 'agent@b.c', subject: 's', body_text: 'hi', message_id: null,
+      in_reply_to: null, references: null, attachments: [],
+    } },
   ];
 
   test('every rendered brief is free of phantom callables', () => {

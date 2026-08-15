@@ -1,8 +1,28 @@
+/**
+ * Releases — the decision surface over the release lane.
+ *
+ * The agent drives the lane end to end through `release.*`: it binds sources,
+ * opens changes, writes the patch, applies and checks it in its sandbox,
+ * exposes the preview, requests approval, deploys. What only the owner can do
+ * is DECIDE — `decideReleaseApproval` is deliberately absent from the agent's
+ * tool surface, so the approve/reject controls here are that decision's one
+ * home. Everything else on this surface is the evidence a decision needs:
+ * the diff, the checks with their real output, the exact command an approval
+ * lets run, the preview, the deploy history.
+ *
+ * There are no forms. The manual source-binding and change-creation forms
+ * duplicated `release.bind_source` / `release.create` — work the agent
+ * already does when asked in chat — and led the surface with data entry
+ * instead of decisions.
+ *
+ * The substrate banner is the other honesty rule: the engine runs in the
+ * sandbox container, and when that is unavailable this surface says so up
+ * front instead of presenting a pipeline that cannot run.
+ */
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Badge, Button, Loader } from "@cloudflare/kumo";
-import { btnSmCls } from "@/components/ui/form";
 import {
-  ArrowClockwiseIcon, CheckIcon, GitBranchIcon, GitDiffIcon, PlusIcon,
+  ArrowClockwiseIcon, CheckIcon, GitBranchIcon, GitDiffIcon,
   ShieldCheckIcon, WarningIcon, XIcon,
 } from "@phosphor-icons/react";
 import type {
@@ -17,9 +37,10 @@ import type {
 } from "@/lib/protocol";
 import { deployTargetAsCommand } from "@proteus/core";
 import { isPreviewUrl } from "@/lib/preview-origin";
+import { releaseSubstrate, type ExecutorInfo } from "@/lib/executors";
 import { EmptyState } from "./shared";
 
-const STATUS_META: Record<ReleaseStatus, { label: string; tone: string }> = {
+const STATUS_META = {
   draft: { label: "Draft", tone: "p-card p-text-2" },
   planning: { label: "Planning", tone: "p-badge-info" },
   patching: { label: "Patching", tone: "p-badge-danger" },
@@ -31,15 +52,15 @@ const STATUS_META: Record<ReleaseStatus, { label: string; tone: string }> = {
   rejected: { label: "Rejected", tone: "p-badge-danger" },
   rolled_back: { label: "Rolled back", tone: "p-badge-warning" },
   failed: { label: "Failed", tone: "p-badge-danger" },
-};
+} satisfies Record<ReleaseStatus, { label: string; tone: string }>;
 
-const CHECK_TONE: Record<ReleaseCheck["status"], string> = {
+const CHECK_TONE = {
   pending: "p-card p-text-3",
   running: "p-badge-warning",
   passed: "p-badge-success",
   failed: "p-badge-danger",
   skipped: "p-card p-text-3",
-};
+} satisfies Record<ReleaseCheck["status"], string>;
 
 function timeShort(ts: number): string {
   if (!ts) return "";
@@ -63,141 +84,36 @@ function SectionTitle({ icon, title, count }: { icon: React.ReactNode; title: st
     <div className="flex items-center gap-2 mb-2.5">
       <span className="p-text-2">{icon}</span>
       <span className="text-sm font-medium p-text">{title}</span>
-      {typeof count === "number" && <Badge variant="secondary">{count}</Badge>}
+      {count !== undefined && <Badge variant="secondary">{count}</Badge>}
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <label className="block space-y-1">
-      <span className="text-[11px] p-text-3">{label}</span>
-      {children}
-    </label>
-  );
-}
-
-function TextInput(props: React.InputHTMLAttributes<HTMLInputElement>) {
-  return (
-    <input
-      {...props}
-      className={`w-full rounded-md border p-border p-elevated px-2.5 py-1.5 text-xs p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)] placeholder:p-text-3 ${props.className ?? ""}`}
-    />
-  );
-}
-
-function TextArea(props: React.TextareaHTMLAttributes<HTMLTextAreaElement>) {
-  return (
-    <textarea
-      {...props}
-      className={`w-full rounded-md border p-border p-elevated px-2.5 py-1.5 text-xs p-text focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)] placeholder:p-text-3 resize-y ${props.className ?? ""}`}
-    />
-  );
-}
-
-function SourceBindingForm({ rpc, onSaved }: { rpc: Rpc; onSaved: () => void }) {
-  const [kind, setKind] = useState<ReleaseSource["kind"]>("local");
-  const [label, setLabel] = useState("Proteus checkout");
-  const [repoUrl, setRepoUrl] = useState("");
-  const [defaultBranch, setDefaultBranch] = useState("main");
-  const [localRoot, setLocalRoot] = useState("");
-  const [deployTarget, setDeployTarget] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-  const ready = label.trim() && (kind === "github" ? repoUrl.trim() : localRoot.trim());
-
-  const save = useCallback(async () => {
-    setBusy(true); setErr(null);
-    try {
-      await rpc("upsertReleaseSource", [{
-        kind, label,
-        repoUrl: kind === "github" ? repoUrl : null,
-        defaultBranch: kind === "github" ? defaultBranch : null,
-        localRoot: kind === "local" ? localRoot : null,
-        deployTarget: deployTarget || null,
-      }]);
-      onSaved();
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [defaultBranch, deployTarget, kind, label, localRoot, onSaved, repoUrl, rpc]);
-
-  return (
-    <div className="p-card rounded-lg p-3 space-y-3">
-      <div className="flex items-center gap-1 p-fill rounded-md p-0.5 w-fit">
-        {(["local", "github"] as const).map((k) => (
-          <button key={k} onClick={() => setKind(k)}
-            className={`px-2.5 py-1 rounded text-[11px] capitalize ${kind === k ? "p-card p-text" : "p-text-3 hover:p-text-2"}`}>
-            {k}
-          </button>
-        ))}
+/** The substrate's honest word, before any change is selected: a pipeline
+ *  whose engine cannot run must say so here rather than render as if it
+ *  could. Ready-with-note is the milder case (previews off). */
+function SubstrateNotice({ executors }: { executors: ExecutorInfo[] }) {
+  const substrate = releaseSubstrate(executors);
+  if (substrate.state === "unknown") return null;
+  if (substrate.state === "unavailable") {
+    return (
+      <div className="p-card rounded-lg p-3 flex items-start gap-2.5">
+        <WarningIcon size={15} className="p-danger shrink-0 mt-0.5" />
+        <div className="min-w-0 space-y-1">
+          <div className="text-xs font-medium p-text">The release pipeline cannot run here</div>
+          <div className="text-[11px] p-text-3 leading-relaxed">{substrate.reason}</div>
+          <div className="text-[11px] p-text-3 leading-relaxed">
+            The agent can still draft changes and you can still decide approvals; apply, checks, previews and
+            deploys will fail until the sandbox is configured.
+          </div>
+        </div>
       </div>
-      <div className="grid gap-2">
-        <Field label="Label"><TextInput value={label} onChange={(e) => setLabel(e.target.value)} /></Field>
-        {kind === "github" ? (
-          <>
-            <Field label="Repository URL"><TextInput value={repoUrl} onChange={(e) => setRepoUrl(e.target.value)} placeholder="https://github.com/owner/repo" /></Field>
-            <Field label="Default branch"><TextInput value={defaultBranch} onChange={(e) => setDefaultBranch(e.target.value)} /></Field>
-          </>
-        ) : (
-          <Field label="Local root"><TextInput value={localRoot} onChange={(e) => setLocalRoot(e.target.value)} placeholder="~/path/to/proteus" /></Field>
-        )}
-        <Field label="Deploy target"><TextInput value={deployTarget} onChange={(e) => setDeployTarget(e.target.value)} placeholder="production / staging / custom" /></Field>
-      </div>
-      {err && <div className="text-[11px] p-danger">{err}</div>}
-      <Button size="sm" variant="secondary" disabled={busy || !ready} onClick={save} icon={busy ? <Loader size="sm" /> : <PlusIcon size={12} />}>
-        Save source
-      </Button>
-    </div>
-  );
-}
-
-function CreateChangeForm({
-  bindings, rpc, onCreated,
-}: { bindings: ReleaseSource[]; rpc: Rpc; onCreated: (id: string) => void }) {
-  const [bindingId, setBindingId] = useState("");
-  const [prompt, setPrompt] = useState("");
-  const [plan, setPlan] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!bindingId && bindings[0]) setBindingId(bindings[0].id);
-  }, [bindingId, bindings]);
-
-  const create = useCallback(async () => {
-    if (!bindingId || !prompt.trim()) return;
-    setBusy(true); setErr(null);
-    try {
-      const change = await rpc<ReleaseChange>("createReleaseChange", [{ bindingId, userPrompt: prompt, plan: plan || null }]);
-      setPrompt(""); setPlan("");
-      onCreated(change.id);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }, [bindingId, onCreated, plan, prompt, rpc]);
-
+    );
+  }
+  if (substrate.note === null) return null;
   return (
-    <div className="p-card rounded-lg p-3 space-y-3">
-      <div className="grid gap-2">
-        <Field label="Source">
-          <select value={bindingId} onChange={(e) => setBindingId(e.target.value)}
-            className="w-full rounded-md border p-border p-elevated px-2.5 py-1.5 text-xs p-text focus:outline-none">
-            {bindings.map((b) => <option key={b.id} value={b.id}>{sourceLabel(b)}</option>)}
-          </select>
-        </Field>
-        <Field label="Request"><TextArea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} /></Field>
-        <Field label="Plan"><TextArea value={plan} onChange={(e) => setPlan(e.target.value)} rows={2} /></Field>
-      </div>
-      {err && <div className="text-[11px] p-danger">{err}</div>}
-      <button className={`p-btn ${btnSmCls}`} disabled={busy || !bindingId || !prompt.trim()} onClick={create}>
-        {busy ? <Loader size="sm" /> : <PlusIcon size={12} />}
-        Create change
-      </button>
+    <div className="text-[11px] p-text-3 rounded-lg border p-border px-3 py-2 leading-relaxed">
+      {substrate.note}
     </div>
   );
 }
@@ -205,9 +121,6 @@ function CreateChangeForm({
 function ChangeList({
   changes, selectedId, onSelect, bindings,
 }: { changes: ReleaseChange[]; selectedId: string | null; onSelect: (id: string) => void; bindings: Map<string, ReleaseSource> }) {
-  if (changes.length === 0) {
-    return <EmptyState icon={<GitDiffIcon size={28} />} title="No release changes" />;
-  }
   return (
     <div className="space-y-2">
       {changes.map((change) => (
@@ -227,6 +140,33 @@ function ChangeList({
         </button>
       ))}
     </div>
+  );
+}
+
+/** The sources the agent has bound (`release.bind_source`), read-only. Shown
+ *  because the deploy target is the command an approval authorizes — worth a
+ *  glance before the pipeline asks for one. */
+function SourceList({ bindings }: { bindings: ReleaseSource[] }) {
+  return (
+    <section>
+      <SectionTitle icon={<GitBranchIcon size={14} />} title="Sources" count={bindings.length} />
+      <div className="space-y-1.5">
+        {bindings.map((binding) => (
+          <div key={binding.id} className="rounded-md border p-border px-2.5 py-2">
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium p-text truncate">{binding.label}</span>
+              <span className="rounded px-1.5 py-0.5 text-[10px] p-card p-text-3">{binding.kind}</span>
+            </div>
+            <div className="text-[10px] p-text-3 truncate mt-0.5">{binding.repoUrl ?? binding.localRoot}</div>
+            {binding.deployTarget && (
+              <div className="text-[10px] p-text-3 truncate mt-0.5">
+                deploys via <span className="font-mono p-text-2">{binding.deployTarget}</span>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -328,18 +268,13 @@ function ChangeDetail({
   rpc: Rpc;
   onRefresh: () => void;
 }) {
-  const [busyApproval, setBusyApproval] = useState(false);
-  const [approvalErr, setApprovalErr] = useState<string | null>(null);
   if (!change) return <EmptyState icon={<GitDiffIcon size={28} />} title="Select a change" />;
 
-  const pendingApproval = approvals.some((a) => a.decision === "pending");
-  const requestApproval = async () => {
-    setBusyApproval(true);
-    setApprovalErr(null);
-    try { await rpc("requestReleaseApproval", [change.id, "apply"]); onRefresh(); }
-    catch (e) { setApprovalErr(e instanceof Error ? e.message : String(e)); }
-    finally { setBusyApproval(false); }
-  };
+  // The one thing on this surface only the owner can do comes first; the
+  // decided history reads below with the rest of the record. A section with
+  // nothing in it does not render — the record grows as the pipeline earns it.
+  const pending = approvals.filter((a) => a.decision === "pending");
+  const decided = approvals.filter((a) => a.decision !== "pending");
 
   return (
     <div className="space-y-5">
@@ -355,15 +290,17 @@ function ChangeDetail({
             </div>
             <div className="text-[11px] p-text-3 mt-1">{sourceLabel(binding)}</div>
           </div>
-          {(change.status === "preview_ready" || change.status === "awaiting_approval") && !pendingApproval && (
-            <Button size="sm" variant="secondary" disabled={busyApproval} onClick={requestApproval}
-              icon={busyApproval ? <Loader size="sm" /> : <ShieldCheckIcon size={12} />}>
-              Request approval
-            </Button>
-          )}
         </div>
-        {approvalErr && <div className="text-[11px] p-danger mt-2">Approval request failed: {approvalErr}</div>}
       </section>
+
+      {pending.length > 0 && (
+        <section className="rounded-lg border p-border p-3">
+          <SectionTitle icon={<ShieldCheckIcon size={14} className="p-accent" />} title="Needs you" count={pending.length} />
+          {pending.map((approval) => (
+            <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />
+          ))}
+        </section>
+      )}
 
       {change.previewUrl && (
         <section>
@@ -399,29 +336,35 @@ function ChangeDetail({
         )}
       </section>
 
-      <section>
-        <SectionTitle icon={<ShieldCheckIcon size={14} />} title="Approvals" count={approvals.length} />
-        {approvals.length === 0 ? <div className="text-xs p-text-3">None</div> : approvals.map((approval) => (
-          <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />
-        ))}
-      </section>
+      {checks.length > 0 && (
+        <section>
+          <SectionTitle icon={<WarningIcon size={14} />} title="Checks" count={checks.length} />
+          {checks.map((check) => <CheckRow key={check.id} check={check} />)}
+        </section>
+      )}
 
-      <section>
-        <SectionTitle icon={<WarningIcon size={14} />} title="Checks" count={checks.length} />
-        {checks.length === 0 ? <div className="text-xs p-text-3">None</div> : checks.map((check) => <CheckRow key={check.id} check={check} />)}
-      </section>
+      {decided.length > 0 && (
+        <section>
+          <SectionTitle icon={<ShieldCheckIcon size={14} />} title="Approvals" count={decided.length} />
+          {decided.map((approval) => (
+            <ApprovalRow key={approval.id} approval={approval} binding={binding} rpc={rpc} onRefresh={onRefresh} />
+          ))}
+        </section>
+      )}
 
-      <section>
-        <SectionTitle icon={<GitBranchIcon size={14} />} title="Deployments" count={deployments.length} />
-        {deployments.length === 0 ? <div className="text-xs p-text-3">None</div> : deployments.map((deployment) => (
-          <DeploymentRow key={deployment.id} deployment={deployment} />
-        ))}
-      </section>
+      {deployments.length > 0 && (
+        <section>
+          <SectionTitle icon={<GitBranchIcon size={14} />} title="Deployments" count={deployments.length} />
+          {deployments.map((deployment) => (
+            <DeploymentRow key={deployment.id} deployment={deployment} />
+          ))}
+        </section>
+      )}
     </div>
   );
 }
 
-export function ReleasesSurface({ rpc }: { rpc: Rpc }) {
+export function ReleasesSurface({ rpc, executors }: { rpc: Rpc; executors: ExecutorInfo[] }) {
   const [board, setBoard] = useState<ReleaseBoard | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -442,8 +385,10 @@ export function ReleasesSurface({ rpc }: { rpc: Rpc }) {
 
   useEffect(() => { void load(); }, [load]);
 
+  const bindings = board?.bindings ?? [];
+  const changes = board?.changes ?? [];
   const bindingMap = useMemo(() => new Map((board?.bindings ?? []).map((b) => [b.id, b])), [board?.bindings]);
-  const selected = board?.changes.find((c) => c.id === selectedId) ?? null;
+  const selected = changes.find((c) => c.id === selectedId) ?? null;
   const checks = (board?.checks ?? []).filter((c) => c.changeId === selectedId);
   const approvals = (board?.approvals ?? []).filter((a) => a.changeId === selectedId);
   const deployments = (board?.deployments ?? []).filter((d) => d.changeId === selectedId);
@@ -462,42 +407,24 @@ export function ReleasesSurface({ rpc }: { rpc: Rpc }) {
 
       {err && <div className="text-xs p-danger p-card rounded-lg p-3">{err}</div>}
 
-      <div className="grid gap-5 xl:grid-cols-[280px_minmax(0,1fr)]">
-        <div className="space-y-5">
-          <section>
-            <SectionTitle icon={<GitBranchIcon size={14} />} title="Sources" count={board?.bindings.length ?? 0} />
-            <SourceBindingForm rpc={rpc} onSaved={load} />
-            {(board?.bindings.length ?? 0) > 0 && (
-              <div className="mt-2 space-y-1.5">
-                {board!.bindings.map((binding) => (
-                  <div key={binding.id} className="rounded-md border p-border px-2.5 py-2">
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs font-medium p-text truncate">{binding.label}</span>
-                      <span className="rounded px-1.5 py-0.5 text-[10px] p-card p-text-3">{binding.kind}</span>
-                    </div>
-                    <div className="text-[10px] p-text-3 truncate mt-0.5">{binding.repoUrl ?? binding.localRoot}</div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </section>
+      <SubstrateNotice executors={executors} />
 
-          <section>
-            <SectionTitle icon={<PlusIcon size={14} />} title="New Change" />
-            {(board?.bindings.length ?? 0) === 0 ? (
-              <div className="text-xs p-text-3 rounded-lg border p-border p-3">No source saved</div>
-            ) : (
-              <CreateChangeForm bindings={board!.bindings} rpc={rpc} onCreated={(id) => { setSelectedId(id); void load(); }} />
-            )}
+      {changes.length === 0 ? (
+        <>
+          <EmptyState icon={<GitDiffIcon size={28} />} title="No release changes"
+            hint="The agent drives this lane: it binds a source, drafts the change, applies and checks the patch in its sandbox, then brings the approval here. Ask it in chat to ship something." />
+          {bindings.length > 0 && <SourceList bindings={bindings} />}
+        </>
+      ) : (
+        // DOM order is the single-column (mobile) order: the selected change's
+        // decision content reads before the sources footnote. On xl the
+        // detail spans the right column and sources tuck under the list.
+        <div className="grid gap-5 xl:grid-cols-[minmax(260px,0.8fr)_minmax(0,1.5fr)] xl:grid-rows-[auto_1fr]">
+          <section className="xl:col-start-1 xl:row-start-1">
+            <SectionTitle icon={<GitDiffIcon size={14} />} title="Changes" count={changes.length} />
+            <ChangeList changes={changes} selectedId={selectedId} onSelect={setSelectedId} bindings={bindingMap} />
           </section>
-        </div>
-
-        <div className="grid gap-5 min-[1400px]:grid-cols-[minmax(260px,0.85fr)_minmax(0,1.4fr)]">
-          <section>
-            <SectionTitle icon={<GitDiffIcon size={14} />} title="Requests" count={board?.changes.length ?? 0} />
-            <ChangeList changes={board?.changes ?? []} selectedId={selectedId} onSelect={setSelectedId} bindings={bindingMap} />
-          </section>
-          <section className="min-w-0">
+          <section className="min-w-0 xl:col-start-2 xl:row-start-1 xl:row-span-2">
             <ChangeDetail
               change={selected}
               binding={selected ? bindingMap.get(selected.bindingId) : undefined}
@@ -508,8 +435,13 @@ export function ReleasesSurface({ rpc }: { rpc: Rpc }) {
               onRefresh={load}
             />
           </section>
+          {bindings.length > 0 && (
+            <div className="xl:col-start-1 xl:row-start-2 self-start">
+              <SourceList bindings={bindings} />
+            </div>
+          )}
         </div>
-      </div>
+      )}
     </div>
   );
 }

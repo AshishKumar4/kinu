@@ -6,6 +6,8 @@
 // and a generative head almost always ends on a tool-call / reasoning turn —
 // so reading `result.text` alone yielded an empty per-head merge summary.
 
+import * as v from 'valibot';
+import { projectJsonValue, type JsonValue } from '../utils/json.js';
 import type { HeadReport, HeadStep } from "./types.js";
 
 /**
@@ -42,12 +44,17 @@ interface TraceStepLike {
 const DIGEST_LIMIT = 800;
 
 /** Truncate a digested value so a single step can't bloat the trace store. */
-function digest(value: unknown): unknown {
-  if (value == null) return value;
-  if (typeof value === "string") return value.length > DIGEST_LIMIT ? value.slice(0, DIGEST_LIMIT) + "…" : value;
+function digest<Value>(value: Value): JsonValue | undefined {
+  const absent = v.safeParse(v.union([v.null(), v.undefined()]), value);
+  if (absent.success) return absent.output;
+  const text = v.safeParse(v.string(), value);
+  if (text.success) {
+    return text.output.length > DIGEST_LIMIT ? text.output.slice(0, DIGEST_LIMIT) + "…" : text.output;
+  }
   try {
-    const s = JSON.stringify(value);
-    if (s.length <= DIGEST_LIMIT) return value;
+    const projected = projectJsonValue({ value });
+    const s = JSON.stringify(projected);
+    if (s.length <= DIGEST_LIMIT) return projected;
     return s.slice(0, DIGEST_LIMIT) + "…";
   } catch { return String(value).slice(0, DIGEST_LIMIT); }
 }

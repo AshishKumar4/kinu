@@ -27,7 +27,7 @@ import type { LLM } from '../src/types/primitives.js';
 
 type Sql = ReturnType<typeof makeSql>;
 
-function setup(): { db: Database; sql: Sql } {
+function setup() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   initTurnOutcomeTables(makeExecRaw(db), sql);
@@ -57,6 +57,7 @@ function seedLedger(sql: Sql, spec: { accepted?: number; corrected?: number; fru
 }
 
 interface LedgerRow { id: string; outcome: TurnOutcome; user_message: string }
+interface PromptTurn { verdict: TurnOutcome; index: number }
 
 function rows(sql: Sql): LedgerRow[] {
   return sql<LedgerRow>`SELECT id, outcome, user_message FROM turn_outcomes ORDER BY created_at, id`;
@@ -87,10 +88,16 @@ function judge(spec: string, answer: (prompt: string) => OutcomeLabel | null): E
 
 /** Read a judge's prompt back to the seeded turn it is about — the test's own
  *  key into its fixture, never something a real judge would be shown. */
-function turnOfPrompt(prompt: string): { verdict: TurnOutcome; index: number } {
+function turnOfPrompt(prompt: string): PromptTurn {
   const match = /request (accepted|corrected|frustrated) (\d+)/.exec(prompt);
   if (!match) throw new Error(`no seeded turn in prompt: ${prompt.slice(0, 120)}`);
-  return { verdict: match[1] as TurnOutcome, index: Number(match[2]) };
+  const verdict = match[1];
+  const index = match[2];
+  if (!verdict || !index) throw new Error('seeded turn match omitted a capture');
+  if (verdict !== 'accepted' && verdict !== 'corrected' && verdict !== 'frustrated') {
+    throw new Error(`invalid seeded verdict: ${verdict}`);
+  }
+  return { verdict, index: Number(index) };
 }
 
 // ── Blindness ────────────────────────────────────────────────────
@@ -438,9 +445,12 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
     // The classifier is the one the sample is stratified on: 60% sensitive,
     // 95% specific — roughly what the real one measures at.
     const classifierFlags = negative ? random() < 0.6 : random() >= 0.95;
+    const predicted: TurnOutcome = classifierFlags
+      ? (random() < 0.7 ? 'corrected' : 'frustrated')
+      : 'accepted';
     return {
       negative,
-      predicted: (classifierFlags ? (random() < 0.7 ? 'corrected' : 'frustrated') : 'accepted') as TurnOutcome,
+      predicted,
       panelFlags: negative ? random() < spec.panelSensitivity : random() >= spec.panelSpecificity,
     };
   });
@@ -472,9 +482,13 @@ function syntheticDraw(spec: { panelSensitivity: number; panelSpecificity: numbe
 }
 
 function profiles(spec: { panelSensitivity: number; panelSpecificity: number; budget: number; reps: number }) {
-  return Array.from({ length: spec.reps }, (_, i) =>
-    resampledAccuracy(syntheticDraw({ ...spec, seed: 4000 + i }), { iterations: 300 }).accuracy)
-    .filter((accuracy) => accuracy !== null);
+  return Array.from({ length: spec.reps }, (_, i) => {
+    const accuracy = resampledAccuracy(
+      syntheticDraw({ ...spec, seed: 4000 + i }),
+      { iterations: 300 },
+    ).accuracy;
+    return accuracy === null ? [] : [accuracy];
+  }).flat();
 }
 
 describe('the panel’s error profile, against a known truth', () => {

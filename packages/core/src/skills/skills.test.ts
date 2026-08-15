@@ -42,7 +42,7 @@ function memoryVfs(initial: Record<string, string> = {}): SkillsVfs {
       return v;
     },
     async writeFile(p, data) {
-      files.set(p, typeof data === 'string' ? data : new TextDecoder().decode(data));
+      files.set(p, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
     },
     async readdir(p) {
       const prefix = p.replace(/\/$/, '') + '/';
@@ -637,4 +637,3 @@ ${overrideBody}`;
     expect(errors.some(e => e.includes('does not match'))).toBe(true);
   });
 });
-

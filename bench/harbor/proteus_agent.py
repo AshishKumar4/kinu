@@ -3,9 +3,13 @@
     PYTHONPATH=<proteus-repo> harbor run \
         --agent bench.harbor.proteus_agent:ProteusAgent \
         --path ./terminal-bench-2.1 \
-        -m deepseek/deepseek-v4-flash \
         --ak evolve=false \
-        --allow-agent-host openrouter.ai
+        --allow-agent-host proteus.ashishkumarsingh.com
+
+The adapter defaults to native Workers AI DeepSeek V4 Pro 0813 through
+Proteus's signed-in inference proxy. Export ``PROTEUS_TOKEN`` before launching
+Harbor; a long-lived token needs the ``ai.proxy`` scope. ``-m`` and
+``PROTEUS_BASE_URL`` remain explicit override surfaces for comparison runs.
 
 ``./terminal-bench-2.1`` is the corpus of record: 2.0 is kept alongside as
 ``./terminal-bench-2.0`` so older scores stay interpretable, but it is not what
@@ -44,6 +48,12 @@ from bench.harbor.build import REPO_ROOT, build_proteus_binary
 from bench.harbor.corpus import CorpusIdentity, resolve_for_trial
 from bench.harbor.trajectory import build_trajectory, read_events
 from bench.isolation import assert_throwaway_home
+from bench.model_endpoint import (
+    DEFAULT_PROTEUS_AI_BASE_URL,
+    DEFAULT_WORKERS_AI_MODEL_ID,
+    provider_for_base_url,
+    resolve_bearer_token,
+)
 
 INSTALL_ROOT = PurePosixPath("/installed-agent")
 INSTALL_PATH = INSTALL_ROOT / "proteus"
@@ -56,7 +66,7 @@ LOG_NAME = "proteus.jsonl"
 STDERR_LOG_NAME = "proteus-stderr.txt"
 CREATE_LOG_NAME = "proteus-create.txt"
 
-DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+DEFAULT_BASE_URL = DEFAULT_PROTEUS_AI_BASE_URL
 DEFAULT_WORKSPACE = "harbor"
 DEFAULT_MISSION = (
     "Complete software engineering tasks in this container's working directory."
@@ -87,6 +97,9 @@ class ProteusAgent(BaseInstalledAgent):
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
+        if not self.model_name:
+            self.model_name = DEFAULT_WORKERS_AI_MODEL_ID
+            self._init_model_info()
         self._evolve = parse_bool_env_value(evolve, name="evolve", default=True)
         self._workspace = workspace
         self._mission = mission
@@ -126,21 +139,25 @@ class ProteusAgent(BaseInstalledAgent):
 
         auth = self._get_env("PROTEUS_AUTH")
         if not auth:
-            api_key = self._get_env("OPENROUTER_API_KEY") or self._get_env("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "No model credentials. Set OPENROUTER_API_KEY (or OPENAI_API_KEY), "
-                    "or pass a complete header with PROTEUS_AUTH. "
-                    "Use --ae KEY=VALUE to forward one into the agent."
+            credential_env = {
+                name: value
+                for name in (
+                    "PROTEUS_TOKEN",
+                    "PROTEUS_HOME",
+                    "CLOUDFLARE_API_TOKEN",
+                    "OPENROUTER_API_KEY",
+                    "OPENAI_API_KEY",
+                    "ANTHROPIC_API_KEY",
                 )
-            auth = f"Bearer {api_key}"
-        env["PROTEUS_AUTH"] = auth
-
-        if not self.model_name:
-            raise ValueError(
-                "A model is required: pass -m <model-id> as the provider serving "
-                f"{env['PROTEUS_BASE_URL']} names it (e.g. deepseek/deepseek-v4-flash)."
+                if (value := self._get_env(name)) is not None
+            }
+            token = resolve_bearer_token(
+                env["PROTEUS_BASE_URL"],
+                provider_for_base_url(env["PROTEUS_BASE_URL"]),
+                environ=credential_env,
             )
+            auth = f"Bearer {token}"
+        env["PROTEUS_AUTH"] = auth
         env["PROTEUS_MODEL"] = self.model_name
         env["PROTEUS_HOME"] = assert_throwaway_home(str(HOME_PATH))
         return env

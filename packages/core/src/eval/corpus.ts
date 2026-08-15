@@ -20,7 +20,10 @@ export function parseCorpus(jsonl: string): EvalCase[] {
   for (let i = 0; i < lines.length; i++) {
     let parsed: unknown;
     try { parsed = JSON.parse(lines[i]); }
-    catch (err) { throw new Error(`Eval corpus line ${i + 1}: invalid JSON: ${(err as Error).message}`); }
+    catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Eval corpus line ${i + 1}: invalid JSON: ${message}`);
+    }
     const result = v.safeParse(CaseSchema, parsed);
     if (!result.success) {
       throw new Error(`Eval corpus line ${i + 1}: ${result.issues.map(x => x.message).join('; ')}`);

@@ -1,10 +1,13 @@
 import { describe, test, expect } from 'bun:test';
+import { MockLanguageModelV3 } from 'ai/test';
 import { asFetchFunction } from '../src/providers/fetch-shim.js';
 import {
   parseModelSpec,
   createProviderRegistry,
   createOpenAICompatProvider,
   createCodexProvider,
+  DEFAULT_WORKERS_AI_MODEL_ID,
+  DEFAULT_WORKERS_AI_MODEL_SPEC,
   CODEX_CRED_KEY,
   type ModelProvider, type ProviderDeps, type AuthResolution,
 } from '../src/index.ts';
@@ -18,6 +21,11 @@ function createTestAuth(store: Map<string, AuthResolution> = new Map()): Pick<Pr
 }
 
 describe('parseModelSpec', () => {
+  test('uses DeepSeek V4 Pro as the one canonical Workers AI default', () => {
+    expect(DEFAULT_WORKERS_AI_MODEL_ID).toBe('@cf/deepseek-ai/deepseek-v4-pro-0813');
+    expect(DEFAULT_WORKERS_AI_MODEL_SPEC).toBe('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813');
+  });
+
   test('splits on first slash so workers-ai/@cf/... survives', () => {
     const s = parseModelSpec('workers-ai/@cf/moonshotai/kimi-k2.6');
     expect(s.provider).toBe('workers-ai');
@@ -37,12 +45,13 @@ describe('parseModelSpec', () => {
 
 describe('ProviderRegistry', () => {
   function fakeProvider(id: string, modelId: string, available: boolean): ModelProvider {
+    const model = new MockLanguageModelV3({ provider: id, modelId });
     return {
       id,
       defaultModel: modelId,
       isAvailable: () => available,
       listModels: () => [{ id: modelId }],
-      createModel: () => ({ specificationVersion: 'v2', provider: id, modelId } as never),
+      createModel: () => model,
     };
   }
 
@@ -52,7 +61,8 @@ describe('ProviderRegistry', () => {
     const r = createProviderRegistry();
     r.register(fakeProvider('alpha', 'm1', true));
     const model = r.resolve('alpha/m1', baseDeps());
-    expect((model as { provider?: string }).provider).toBe('alpha');
+    expect(model).toBeInstanceOf(MockLanguageModelV3);
+    expect(model).toHaveProperty('provider', 'alpha');
   });
 
   test('resolve throws on unknown provider', () => {
@@ -92,6 +102,7 @@ describe('ProviderRegistry', () => {
       where: 'isAvailable' | 'listModels',
       defaultModel?: string,
     ): ModelProvider {
+      const model = new MockLanguageModelV3({ provider: id });
       return {
         id,
         label: `${id} label`,
@@ -101,7 +112,7 @@ describe('ProviderRegistry', () => {
           return true;
         },
         listModels: () => { throw new Error(`${id} credential is revoked`); },
-        createModel: () => ({ specificationVersion: 'v2', provider: id } as never),
+        createModel: () => model,
       };
     }
 

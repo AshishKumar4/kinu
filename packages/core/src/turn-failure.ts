@@ -64,8 +64,8 @@ export function classifyTurnFailure(error: string, signals: TurnFailureSignals =
   if (RATE_LIMIT_PATTERNS.some((re) => re.test(error))) {
     const { lastPromptTokens, contextWindow } = signals;
     const oversized =
-      typeof lastPromptTokens === 'number' && lastPromptTokens > 0 &&
-      typeof contextWindow === 'number' && contextWindow > 0 &&
+      lastPromptTokens !== undefined && lastPromptTokens > 0 &&
+      contextWindow !== undefined && contextWindow > 0 &&
       lastPromptTokens > contextWindow * 0.5;
     return oversized ? 'context_length' : 'rate_limit';
   }

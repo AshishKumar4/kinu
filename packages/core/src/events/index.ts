@@ -11,6 +11,7 @@ export type {
   TurnSteeringRecord,
   TurnSteeringTrigger,
   CraftCycleRecord,
+  ExecutionRecoveryRecord,
   StepUsage,
 } from './types.js';
 

@@ -43,7 +43,7 @@ export async function pruneLowValueBranches(
 
   for (const node of doomed) {
     // Soft prune: mark status so UCT stops selecting it, drop the agent key.
-    rt.storage.sql`
+    void rt.storage.sql`
       UPDATE search_nodes SET status = 'pruned', branch_agent_key = NULL
       WHERE id = ${node.id}
     `;

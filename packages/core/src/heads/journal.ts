@@ -11,12 +11,15 @@
  *   head_merge_results  — cached merge synthesis per root_id
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor } from '../types/primitives.js';
 import type {
   HeadId, HeadInput, HeadReport, HeadStep, HeadStepToolCall, Evidence, Decision, ArtifactRef,
   HeadFileChange, HeadFileChangeSet, MergeResult, MergeStrategy, HeadRunView, HeadRunHeadView,
 } from './types.js';
 import { headProducedFindings } from './head-summary.js';
+
+const EvidenceKindSchema = v.picklist(['tool_output', 'fact', 'citation', 'artifact']);
 
 /** Defensive JSON parse → array (head_journal/head_steps JSON columns). */
 function parseArray<T>(json: string | null): T[] {
@@ -57,13 +60,13 @@ export class HeadJournal {
   /** Record the run identity for a split so its heads group under one root —
    *  the rationale is the "why split", shown as the run's header label. */
   recordSplit(rootId: HeadId, rationale: string, spawnedAt: number): void {
-    this.sql`INSERT INTO head_runs (root_id, rationale, spawned_at)
+    void this.sql`INSERT INTO head_runs (root_id, rationale, spawned_at)
       VALUES (${rootId}, ${rationale}, ${spawnedAt})
       ON CONFLICT(root_id) DO UPDATE SET rationale = excluded.rationale`;
   }
 
   insertSpawn(input: HeadInput): void {
-    this.sql`INSERT INTO head_journal
+    void this.sql`INSERT INTO head_journal
       (id, parent_id, root_id, depth, task, rationale, status, spawned_at, merge_strategy)
       VALUES (${input.id}, ${input.parentId}, ${input.rootId}, ${input.depth},
               ${input.task}, ${input.rationale}, 'running', ${input.budget.spawnedAt},
@@ -71,7 +74,7 @@ export class HeadJournal {
   }
 
   recordReport(report: HeadReport): void {
-    this.sql`UPDATE head_journal SET
+    void this.sql`UPDATE head_journal SET
       status = ${report.status},
       completed_at = ${Date.now()},
       token_input = ${report.tokenUsage.input},
@@ -95,9 +98,9 @@ export class HeadJournal {
    *  `${headId}-s${seq}` so re-recording a report replaces in place. The
    *  report arrives over a DO RPC boundary, so tolerate a missing array. */
   recordSteps(headId: HeadId, steps: readonly HeadStep[] | undefined): void {
-    this.sql`DELETE FROM head_steps WHERE head_id = ${headId}`;
+    void this.sql`DELETE FROM head_steps WHERE head_id = ${headId}`;
     (steps ?? []).forEach((s, seq) => {
-      this.sql`INSERT INTO head_steps (id, head_id, seq, text, reasoning, tool_calls_json, created_at)
+      void this.sql`INSERT INTO head_steps (id, head_id, seq, text, reasoning, tool_calls_json, created_at)
         VALUES (${`${headId}-s${seq}`}, ${headId}, ${seq}, ${s.text}, ${s.reasoning ?? null},
                 ${JSON.stringify(s.toolCalls)}, ${Date.now()})`;
     });
@@ -115,7 +118,7 @@ export class HeadJournal {
   }
 
   insertEvidence(headId: HeadId, ev: Evidence): void {
-    this.sql`INSERT OR REPLACE INTO head_evidence
+    void this.sql`INSERT OR REPLACE INTO head_evidence
       (id, head_id, kind, body, ref, confidence, created_at)
       VALUES (${ev.id}, ${headId}, ${ev.kind}, ${ev.body},
               ${ev.ref ?? null}, ${ev.confidence ?? null}, ${Date.now()})`;
@@ -146,7 +149,7 @@ export class HeadJournal {
       FROM head_evidence WHERE head_id = ${headId}`;
     return rows.map((r) => ({
       id: r.id,
-      kind: r.kind as Evidence['kind'],
+      kind: v.parse(EvidenceKindSchema, r.kind),
       body: r.body,
       ref: r.ref ?? undefined,
       confidence: r.confidence ?? undefined,
@@ -154,14 +157,15 @@ export class HeadJournal {
   }
 
   cacheMerge(rootId: HeadId, result: MergeResult, strategy: MergeStrategy): void {
-    this.sql`INSERT OR REPLACE INTO head_merge_results
+    void this.sql`INSERT OR REPLACE INTO head_merge_results
       (root_id, merged_narrative, selected_decisions_json, unresolved_questions_json,
-       recommendations_json, cost_head_count, cost_total_tokens, cost_total_wall_ms,
-       cost_max_depth, merged_at, merge_strategy)
+       recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
+       cost_total_wall_ms, cost_max_depth, merged_at, merge_strategy)
       VALUES (${rootId}, ${result.mergedNarrative},
               ${JSON.stringify(result.selectedDecisions)},
               ${JSON.stringify(result.unresolvedQuestions)},
               ${JSON.stringify(result.recommendations)},
+              ${JSON.stringify(result.blindSpots)},
               ${result.costSummary.headCount},
               ${result.costSummary.totalTokens},
               ${result.costSummary.totalWallClockMs},
@@ -206,6 +210,14 @@ export class HeadJournal {
       SELECT root_id, MIN(spawned_at) AS spawned_at FROM head_journal
       GROUP BY root_id ORDER BY spawned_at DESC LIMIT ${limit}`;
     return roots.map((r) => this.assembleRun(r.root_id, r.spawned_at));
+  }
+
+  /** One named run, independent of the recent-list window used by summaries. */
+  readRun(rootId: HeadId): HeadRunView | null {
+    const row = this.sql<{ spawned_at: number | null }>`
+      SELECT MIN(spawned_at) AS spawned_at
+      FROM head_journal WHERE root_id = ${rootId}`[0];
+    return row?.spawned_at == null ? null : this.assembleRun(rootId, row.spawned_at);
   }
 
   private assembleRun(rootId: HeadId, spawnedAt: number): HeadRunView {
@@ -276,6 +288,7 @@ export class HeadJournal {
       selected_decisions_json: string | null;
       unresolved_questions_json: string | null;
       recommendations_json: string | null;
+      blind_spots_json: string | null;
       cost_head_count: number;
       cost_total_tokens: number;
       cost_total_wall_ms: number;
@@ -283,7 +296,7 @@ export class HeadJournal {
     };
     const rows = this.sql<Row>`
       SELECT merged_narrative, selected_decisions_json, unresolved_questions_json,
-             recommendations_json, cost_head_count, cost_total_tokens,
+             recommendations_json, blind_spots_json, cost_head_count, cost_total_tokens,
              cost_total_wall_ms, cost_max_depth
       FROM head_merge_results WHERE root_id = ${rootId}`;
     const r = rows[0];
@@ -299,6 +312,7 @@ export class HeadJournal {
       selectedDecisions: r.selected_decisions_json ? JSON.parse(r.selected_decisions_json) : [],
       unresolvedQuestions: r.unresolved_questions_json ? JSON.parse(r.unresolved_questions_json) : [],
       recommendations: r.recommendations_json ? JSON.parse(r.recommendations_json) : [],
+      blindSpots: r.blind_spots_json ? JSON.parse(r.blind_spots_json) : [],
       evidenceAggregate: evidence,
       headIds: ids,
       // Per-head grounded scores are a live-run signal, not persisted as columns;

@@ -1,0 +1,574 @@
+diff --git a/dist/runtime/os-contracts.d.ts b/dist/runtime/os-contracts.d.ts
+index 31f269a9cf22af4522e31eb0f51b4681a56af1dc..8074ff81ed3280a80abc834eb5c5e0bb540d8864 100644
+--- a/dist/runtime/os-contracts.d.ts
++++ b/dist/runtime/os-contracts.d.ts
+@@ -272,11 +272,10 @@ export interface RuntimeTtyOptions {
+ /**
+  * Where a registered port's traffic goes: one process, reached by HTTP.
+  *
+- * The whole of what a listening process exposes, deliberately. A resident
+- * process never receives a WebSocket — every inbound socket Nimbus serves
+- * terminates on the session and reaches the process, if at all, as events on a
+- * poll — so a target that could return a 101 would describe a case no runner
+- * produces.
++ * Ordinary HTTP may cross Workers RPC as Request/Response values. WebSocket
++ * upgrades may not: their Response owns a live socket, so route targets expose
++ * a separate fetch-semantic entrypoint that keeps every hop on the HTTP
++ * service-binding path.
+  *
+  * Lives here rather than beside the registry because both ends need it and
+  * neither owns it: the port registry stores these, and the process fabric
+@@ -285,6 +284,7 @@ export interface RuntimeTtyOptions {
+  */
+ export interface RouteableFacetTarget {
+     handleHttpRequest(request: Request): Promise<Response>;
++    handleWebSocketRequest?(request: Request): Promise<Response>;
+ }
+ export interface RuntimePortBridge {
+     register(port: number, processId: number, handler: (request: Request) => Promise<Response>): Promise<void>;
+diff --git a/dist/runtime/port-registry.d.ts b/dist/runtime/port-registry.d.ts
+index 0503eaa6d9d199d11e30347a0b512654268d8df1..582336152f6b5707a2ecd0e6ccbaf705e563bbdd 100644
+--- a/dist/runtime/port-registry.d.ts
++++ b/dist/runtime/port-registry.d.ts
+@@ -37,6 +37,8 @@ export interface PortEntry {
+      */
+     facetStub: RouteableFacetTarget | null;
+     registeredAt: number;
++    /** Random capability for the lifetime of this port registration. */
++    capability: string;
+ }
+ export declare class PortRegistry {
+     private ports;
+@@ -65,6 +67,10 @@ export declare class PortRegistry {
+     has(port: number): boolean;
+     /** Get all registered ports. */
+     getAll(): PortEntry[];
++    /** Check the per-registration capability without revealing port state. */
++    hasCapability(port: number, capability: string): boolean;
++    /** Restore a previously exposed capability after supervisor reconstruction. */
++    restoreCapability(port: number, capability: string): boolean;
+     /**
+      * Forward an HTTP request to the facet owning a port.
+      *
+@@ -87,6 +93,13 @@ export declare class PortRegistry {
+      * client receives.
+      */
+     routeRequest(port: number, request: Request, pathname: string): Promise<Response | null>;
++    /**
++     * Route after a trusted embedder has authenticated a preview capability and
++     * removed its own credentials. Unlike the generic route, this preserves the
++     * guest application's Authorization header.
++     */
++    routeCapabilityRequest(port: number, capability: string, request: Request, pathname: string): Promise<Response | null>;
++    private routeRequestInternal;
+     get stats(): {
+         activePorts: number;
+         ports: {
+diff --git a/dist/runtime/port-registry.js b/dist/runtime/port-registry.js
+index d2a00d132619e8b6f7af38202902fb6f53d154aa..aa075638e9f681687cc0fc77c5970145b48c965c 100644
+--- a/dist/runtime/port-registry.js
++++ b/dist/runtime/port-registry.js
+@@ -27,6 +27,10 @@
+  *   to the outer fetch as-is; its body is streamed directly.
+  */
+ import { sanitizeUntrustedHeaders } from '../_shared/untrusted-request.js';
++function createPortCapability() {
++    const bytes = crypto.getRandomValues(new Uint8Array(12));
++    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
++}
+ export class PortRegistry {
+     ports = new Map();
+     facetStubsByPid = new Map();
+@@ -48,7 +52,13 @@ export class PortRegistry {
+      */
+     register(port, pid) {
+         const target = this.facetStubsByPid.get(pid) ?? null;
+-        this.ports.set(port, { port, pid, facetStub: target, registeredAt: Date.now() });
++        this.ports.set(port, {
++            port,
++            pid,
++            facetStub: target,
++            registeredAt: Date.now(),
++            capability: createPortCapability(),
++        });
+         this.notifyPortWaiters(pid);
+     }
+     /** Unregister a port. */
+@@ -104,6 +114,18 @@ export class PortRegistry {
+     getAll() {
+         return [...this.ports.values()];
+     }
++    /** Check the per-registration capability without revealing port state. */
++    hasCapability(port, capability) {
++        return this.ports.get(port)?.capability === capability;
++    }
++    /** Restore a previously exposed capability after supervisor reconstruction. */
++    restoreCapability(port, capability) {
++        const entry = this.ports.get(port);
++        if (!entry || !/^[a-f0-9]{24}$/.test(capability))
++            return false;
++        entry.capability = capability;
++        return true;
++    }
+     /**
+      * Forward an HTTP request to the facet owning a port.
+      *
+@@ -126,6 +148,19 @@ export class PortRegistry {
+      * client receives.
+      */
+     async routeRequest(port, request, pathname) {
++        return this.routeRequestInternal(port, request, pathname, false);
++    }
++    /**
++     * Route after a trusted embedder has authenticated a preview capability and
++     * removed its own credentials. Unlike the generic route, this preserves the
++     * guest application's Authorization header.
++     */
++    async routeCapabilityRequest(port, capability, request, pathname) {
++        if (!this.hasCapability(port, capability))
++            return null;
++        return this.routeRequestInternal(port, request, pathname, true);
++    }
++    async routeRequestInternal(port, request, pathname, preserveAuthorization) {
+         const entry = this.ports.get(port);
+         // Honour the documented contract: no entry at all → null, so callers
+         // report "no process listening". (Pre-fix this fell into the 501 below,
+@@ -163,7 +198,10 @@ export class PortRegistry {
+             // if a body is supplied on those methods.
+             const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+             const headers = new Headers(request.headers);
++            const authorization = preserveAuthorization ? headers.get('authorization') : null;
+             sanitizeUntrustedHeaders(headers);
++            if (authorization)
++                headers.set('authorization', authorization);
+             headers.set('X-Nimbus-Port', String(port));
+             // `duplex: 'half'` is required by workerd when body is a
+             // ReadableStream — otherwise `new Request(…)` throws. It's not
+@@ -178,11 +216,17 @@ export class PortRegistry {
+             if (hasBody)
+                 init.duplex = 'half';
+             const forwarded = new Request(innerUrl.toString(), init);
+-            // RPC: the facet receives the Request and returns a Response.
+-            // Both cross the isolate boundary via Workers RPC's native
+-            // Request/Response transport — bytes are streamed with
+-            // flow-control, never materialised.
+-            const response = await entry.facetStub.handleHttpRequest(forwarded);
++            const isWebSocket = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
++            const handler = isWebSocket
++                ? entry.facetStub.handleWebSocketRequest
++                : entry.facetStub.handleHttpRequest;
++            if (!handler) {
++                return new Response('Port target does not expose a WebSocket fetch route', { status: 501 });
++            }
++            // HTTP Request/Response values may cross Workers RPC. A 101 Response may
++            // not: its socket stays live only when every hop uses fetch semantics,
++            // which handleWebSocketRequest deliberately represents.
++            const response = await handler(forwarded);
+             if (!(response instanceof Response)) {
+                 // Defensive: if a facet ever returns something else (JSON
+                 // envelope, string, etc.), treat it as a 502 so the client
+@@ -253,11 +297,20 @@ export class PortRegistry {
+ function routeableFacetTarget(value) {
+     if ((typeof value !== 'object' && typeof value !== 'function') || value === null)
+         return null;
+-    const method = Reflect.get(value, 'fetch') || Reflect.get(value, 'handleHttpRequest');
+-    if (typeof method !== 'function')
++    const fetchMethod = Reflect.get(value, 'fetch');
++    if (typeof fetchMethod === 'function') {
++        const fetch = fetchMethod.bind(value);
++        return { handleHttpRequest: fetch, handleWebSocketRequest: fetch };
++    }
++    const httpMethod = Reflect.get(value, 'handleHttpRequest');
++    if (typeof httpMethod !== 'function')
+         return null;
++    const webSocketMethod = Reflect.get(value, 'handleWebSocketRequest');
+     return {
+-        handleHttpRequest: method.bind(value),
++        handleHttpRequest: httpMethod.bind(value),
++        ...(typeof webSocketMethod === 'function'
++            ? { handleWebSocketRequest: webSocketMethod.bind(value) }
++            : {}),
+     };
+ }
+ function errorMessage(error) {
+diff --git a/dist/shell/unix-commands.js b/dist/shell/unix-commands.js
+index 4efc18fee5319000b3a871466b3a54632dc98c95..4ea0a843880e2545fbfdd456b67bf17b7ceeca23 100644
+--- a/dist/shell/unix-commands.js
++++ b/dist/shell/unix-commands.js
+@@ -2753,7 +2753,7 @@ function mkAwk(vfs) {
+  */
+ function mkXargs(vfs, registry) {
+     return async (ctx) => {
+-        const input = (ctx.stdin || '').trim();
++        const input = ctx.stdin || '';
+         if (!input)
+             return 0;
+         // Parse flags first
+diff --git a/dist/substrate/lifo/shell/Shell.d.ts b/dist/substrate/lifo/shell/Shell.d.ts
+index f35942070581f6b1373d9d7929bae8d92667368c..714ac52f95fcb2135e1d0d5628ec591ea7d6e2ac 100644
+--- a/dist/substrate/lifo/shell/Shell.d.ts
++++ b/dist/substrate/lifo/shell/Shell.d.ts
+@@ -87,6 +87,7 @@ export declare class Shell {
+     getEnv(): Record<string, string>;
+     getVfs(): VFS;
+     getRegistry(): CommandRegistry;
++    getRunAsHost(): CommandRunAsHost | undefined;
+     /**
+      * Programmatic command execution with captured stdout/stderr.
+      * Used by Sandbox.commands.run() for headless mode.
+diff --git a/dist/substrate/lifo/shell/Shell.js b/dist/substrate/lifo/shell/Shell.js
+index 605824ed4da87be0f20039fc31878985123002a4..62f7fb49d335901fe3ddeee11d20c7eaa73ebd3a 100644
+--- a/dist/substrate/lifo/shell/Shell.js
++++ b/dist/substrate/lifo/shell/Shell.js
+@@ -184,6 +184,9 @@ export class Shell {
+     getRegistry() {
+         return this.registry;
+     }
++    getRunAsHost() {
++        return this.commandIdentity.runAs;
++    }
+     /**
+      * Programmatic command execution with captured stdout/stderr.
+      * Used by Sandbox.commands.run() for headless mode.
+diff --git a/dist/vfs/sqlite-vfs.js b/dist/vfs/sqlite-vfs.js
+index c35a0b8fc90ee7e93607eab3f84d9f1a8929ce9c..7bd9e0d664b7020a94c26a819ce610ce108e1eed 100644
+--- a/dist/vfs/sqlite-vfs.js
++++ b/dist/vfs/sqlite-vfs.js
+@@ -1068,6 +1068,19 @@ export class SqliteVFS {
+         if (resolved.inode?.kind !== 'directory')
+             throw vfsError('ENOTDIR', parent);
+     }
++    checkStickyParentMutation(path, inode, cred) {
++        if (cred.uid === 0)
++            return;
++        const parent = this.parentPath(normalizeVfsPath(path));
++        if (parent === '')
++            return;
++        const parentInode = this.inodes.get(parent);
++        if (!parentInode || (parentInode.mode & 0o1000) === 0)
++            return;
++        if (cred.uid !== parentInode.uid && cred.uid !== inode.uid) {
++            throw vfsError('EPERM', normalizeVfsPath(path));
++        }
++    }
+     /**
+      * Shared resolver for the boolean probes (exists/isDirectory/isFile/
+      * isSymlink). Resolution-structure failures — a missing or non-directory
+@@ -2273,6 +2286,7 @@ export class SqliteVFS {
+         if (!inode)
+             throw vfsError('ENOENT', path);
+         this.checkParentAccess(resolved.path, cred);
++        this.checkStickyParentMutation(resolved.path, inode, cred);
+         if (inode.isDir)
+             throw vfsError('EISDIR', resolved.path);
+         this.writeBatch({ inodes: [], chunks: [], deletePaths: [resolved.path] }, cred);
+@@ -2282,14 +2296,15 @@ export class SqliteVFS {
+         const np = path.replace(/^\/+/, '').replace(/\/+$/, '');
+         const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
+         this.checkParentAccess(resolved.path, cred);
++        const inode = this.inodes.get(np);
++        if (!inode)
++            throw vfsError('ENOENT', path);
++        this.checkStickyParentMutation(resolved.path, inode, cred);
+         // Check if empty using children index (O(1) instead of O(N))
+         const kids = this.children.get(np);
+         if (kids && kids.size > 0) {
+             throw vfsError('ENOTEMPTY', path);
+         }
+-        const inode = this.inodes.get(np);
+-        if (!inode)
+-            throw vfsError('ENOENT', path);
+         if (!inode.isDir)
+             throw vfsError('ENOTDIR', path);
+         this.writeBatch({ inodes: [], chunks: [], deletePaths: [np] }, cred);
+@@ -2316,6 +2331,7 @@ export class SqliteVFS {
+         if (!resolved.inode)
+             throw vfsError('ENOENT', normalizeVfsPath(path));
+         this.checkParentAccess(resolved.path, cred);
++        this.checkStickyParentMutation(resolved.path, resolved.inode, cred);
+         const removable = this.collectSubtreeInodes([resolved.path]);
+         // The directories the recursive walk used to enumerate are exactly the
+         // directory inodes of the subtree, and enumerating one needed read
+@@ -2367,6 +2383,7 @@ export class SqliteVFS {
+         const inode = this.inodes.get(oldPath);
+         if (!inode)
+             throw new Error("ENOENT: " + oldPath);
++        this.checkStickyParentMutation(oldPath, inode, cred);
+         // W-3 (WASI filesystem WASI): if newPath already exists, unlink it first so the
+         // SQL UPDATE doesn't conflict on inodes.path uniqueness. POSIX rename(2)
+         // overwrites the destination atomically; clang's atomic-write pattern
+@@ -2376,6 +2393,7 @@ export class SqliteVFS {
+         // (the latter is rare but POSIX permits it for empty dirs).
+         const destInode = this.inodes.get(newPath);
+         if (destInode) {
++            this.checkStickyParentMutation(newPath, destInode, cred);
+             if (destInode.isDir) {
+                 // POSIX semantics: rename onto a non-empty dir is an error
+                 // (ENOTEMPTY); rename onto an empty dir is allowed. We surface
+diff --git a/src/runtime/os-contracts.ts b/src/runtime/os-contracts.ts
+index f45716b902a0981410c4ac0d108612e625cc18c7..3f0b0bb200ecd8b93cdf61145ce0e9164ab66a92 100644
+--- a/src/runtime/os-contracts.ts
++++ b/src/runtime/os-contracts.ts
+@@ -312,11 +312,10 @@ export interface RuntimeTtyOptions {
+ /**
+  * Where a registered port's traffic goes: one process, reached by HTTP.
+  *
+- * The whole of what a listening process exposes, deliberately. A resident
+- * process never receives a WebSocket — every inbound socket Nimbus serves
+- * terminates on the session and reaches the process, if at all, as events on a
+- * poll — so a target that could return a 101 would describe a case no runner
+- * produces.
++ * Ordinary HTTP may cross Workers RPC as Request/Response values. WebSocket
++ * upgrades may not: their Response owns a live socket, so route targets expose
++ * a separate fetch-semantic entrypoint that keeps every hop on the HTTP
++ * service-binding path.
+  *
+  * Lives here rather than beside the registry because both ends need it and
+  * neither owns it: the port registry stores these, and the process fabric
+@@ -325,6 +324,7 @@ export interface RuntimeTtyOptions {
+  */
+ export interface RouteableFacetTarget {
+   handleHttpRequest(request: Request): Promise<Response>;
++  handleWebSocketRequest?(request: Request): Promise<Response>;
+ }
+ 
+ export interface RuntimePortBridge {
+diff --git a/src/runtime/port-registry.ts b/src/runtime/port-registry.ts
+index 8d096cdfb6e2baa7c112563b7f71a31172a94f93..75b1676e299a46f968eaef1aa88278ed47cf16d4 100644
+--- a/src/runtime/port-registry.ts
++++ b/src/runtime/port-registry.ts
+@@ -40,6 +40,13 @@ export interface PortEntry {
+    */
+   facetStub: RouteableFacetTarget | null;
+   registeredAt: number;
++  /** Random capability for the lifetime of this port registration. */
++  capability: string;
++}
++
++function createPortCapability(): string {
++  const bytes = crypto.getRandomValues(new Uint8Array(12));
++  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+ }
+ 
+ export class PortRegistry {
+@@ -64,7 +71,13 @@ export class PortRegistry {
+    */
+   register(port: number, pid: number): void {
+     const target = this.facetStubsByPid.get(pid) ?? null;
+-    this.ports.set(port, { port, pid, facetStub: target, registeredAt: Date.now() });
++    this.ports.set(port, {
++      port,
++      pid,
++      facetStub: target,
++      registeredAt: Date.now(),
++      capability: createPortCapability(),
++    });
+     this.notifyPortWaiters(pid);
+   }
+ 
+@@ -126,6 +139,19 @@ export class PortRegistry {
+     return [...this.ports.values()];
+   }
+ 
++  /** Check the per-registration capability without revealing port state. */
++  hasCapability(port: number, capability: string): boolean {
++    return this.ports.get(port)?.capability === capability;
++  }
++
++  /** Restore a previously exposed capability after supervisor reconstruction. */
++  restoreCapability(port: number, capability: string): boolean {
++    const entry = this.ports.get(port);
++    if (!entry || !/^[a-f0-9]{24}$/.test(capability)) return false;
++    entry.capability = capability;
++    return true;
++  }
++
+   /**
+    * Forward an HTTP request to the facet owning a port.
+    *
+@@ -148,6 +174,30 @@ export class PortRegistry {
+    * client receives.
+    */
+   async routeRequest(port: number, request: Request, pathname: string): Promise<Response | null> {
++    return this.routeRequestInternal(port, request, pathname, false);
++  }
++
++  /**
++   * Route after a trusted embedder has authenticated a preview capability and
++   * removed its own credentials. Unlike the generic route, this preserves the
++   * guest application's Authorization header.
++   */
++  async routeCapabilityRequest(
++    port: number,
++    capability: string,
++    request: Request,
++    pathname: string,
++  ): Promise<Response | null> {
++    if (!this.hasCapability(port, capability)) return null;
++    return this.routeRequestInternal(port, request, pathname, true);
++  }
++
++  private async routeRequestInternal(
++    port: number,
++    request: Request,
++    pathname: string,
++    preserveAuthorization: boolean,
++  ): Promise<Response | null> {
+     const entry = this.ports.get(port);
+     // Honour the documented contract: no entry at all → null, so callers
+     // report "no process listening". (Pre-fix this fell into the 501 below,
+@@ -189,7 +239,9 @@ export class PortRegistry {
+       // if a body is supplied on those methods.
+       const hasBody = request.method !== 'GET' && request.method !== 'HEAD';
+       const headers = new Headers(request.headers);
++      const authorization = preserveAuthorization ? headers.get('authorization') : null;
+       sanitizeUntrustedHeaders(headers);
++      if (authorization) headers.set('authorization', authorization);
+ 
+       headers.set('X-Nimbus-Port', String(port));
+       // `duplex: 'half'` is required by workerd when body is a
+@@ -205,11 +257,17 @@ export class PortRegistry {
+       if (hasBody) init.duplex = 'half';
+       const forwarded = new Request(innerUrl.toString(), init);
+ 
+-      // RPC: the facet receives the Request and returns a Response.
+-      // Both cross the isolate boundary via Workers RPC's native
+-      // Request/Response transport — bytes are streamed with
+-      // flow-control, never materialised.
+-      const response: Response = await entry.facetStub.handleHttpRequest(forwarded);
++      const isWebSocket = request.headers.get('upgrade')?.toLowerCase() === 'websocket';
++      const handler = isWebSocket
++        ? entry.facetStub.handleWebSocketRequest
++        : entry.facetStub.handleHttpRequest;
++      if (!handler) {
++        return new Response('Port target does not expose a WebSocket fetch route', { status: 501 });
++      }
++      // HTTP Request/Response values may cross Workers RPC. A 101 Response may
++      // not: its socket stays live only when every hop uses fetch semantics,
++      // which handleWebSocketRequest deliberately represents.
++      const response: Response = await handler(forwarded);
+ 
+       if (!(response instanceof Response)) {
+         // Defensive: if a facet ever returns something else (JSON
+@@ -286,10 +344,19 @@ export class PortRegistry {
+ 
+ function routeableFacetTarget(value: unknown): RouteableFacetTarget | null {
+   if ((typeof value !== 'object' && typeof value !== 'function') || value === null) return null;
+-  const method = Reflect.get(value, 'fetch') || Reflect.get(value, 'handleHttpRequest');
+-  if (typeof method !== 'function') return null;
++  const fetchMethod = Reflect.get(value, 'fetch');
++  if (typeof fetchMethod === 'function') {
++    const fetch = fetchMethod.bind(value);
++    return { handleHttpRequest: fetch, handleWebSocketRequest: fetch };
++  }
++  const httpMethod = Reflect.get(value, 'handleHttpRequest');
++  if (typeof httpMethod !== 'function') return null;
++  const webSocketMethod = Reflect.get(value, 'handleWebSocketRequest');
+   return {
+-    handleHttpRequest: method.bind(value),
++    handleHttpRequest: httpMethod.bind(value),
++    ...(typeof webSocketMethod === 'function'
++      ? { handleWebSocketRequest: webSocketMethod.bind(value) }
++      : {}),
+   };
+ }
+ 
+diff --git a/src/shell/unix-commands.ts b/src/shell/unix-commands.ts
+index 0f3eecbb6429fd4f3145aa1e2be42a93c990ef90..bc6d67e8e6e94c745951a98e1c085ea0f7baec06 100644
+--- a/src/shell/unix-commands.ts
++++ b/src/shell/unix-commands.ts
+@@ -2500,7 +2500,7 @@ function mkAwk(vfs: UnixVfs): CmdFn {
+  */
+ function mkXargs(vfs: UnixVfs, registry: any): CmdFn {
+   return async (ctx) => {
+-    const input = (ctx.stdin || '').trim();
++    const input = ctx.stdin || '';
+     if (!input) return 0;
+ 
+     // Parse flags first
+diff --git a/src/substrate/lifo/shell/Shell.ts b/src/substrate/lifo/shell/Shell.ts
+index 61046502eac21101c0e60677f99b1a438210753a..667eadfb485a12d3c989b7337a888a6d9e481647 100644
+--- a/src/substrate/lifo/shell/Shell.ts
++++ b/src/substrate/lifo/shell/Shell.ts
+@@ -271,6 +271,10 @@ export class Shell {
+     return this.registry;
+   }
+ 
++  getRunAsHost(): CommandRunAsHost | undefined {
++    return this.commandIdentity.runAs;
++  }
++
+   /**
+    * Programmatic command execution with captured stdout/stderr.
+    * Used by Sandbox.commands.run() for headless mode.
+diff --git a/src/vfs/sqlite-vfs.ts b/src/vfs/sqlite-vfs.ts
+index 6998c7a97f0236a48e4d0863506fdfcb8969d11a..f9387dfa3c94014c674217ce16d0ff3363fe9f34 100644
+--- a/src/vfs/sqlite-vfs.ts
++++ b/src/vfs/sqlite-vfs.ts
+@@ -1496,6 +1496,17 @@ export class SqliteVFS {
+     if (resolved.inode?.kind !== 'directory') throw vfsError('ENOTDIR', parent);
+   }
+ 
++  private checkStickyParentMutation(path: string, inode: INode, cred: VfsCred): void {
++    if (cred.uid === 0) return;
++    const parent = this.parentPath(normalizeVfsPath(path));
++    if (parent === '') return;
++    const parentInode = this.inodes.get(parent);
++    if (!parentInode || (parentInode.mode & 0o1000) === 0) return;
++    if (cred.uid !== parentInode.uid && cred.uid !== inode.uid) {
++      throw vfsError('EPERM', normalizeVfsPath(path));
++    }
++  }
++
+   /**
+    * Shared resolver for the boolean probes (exists/isDirectory/isFile/
+    * isSymlink). Resolution-structure failures — a missing or non-directory
+@@ -2977,6 +2988,7 @@ export class SqliteVFS {
+     const inode = resolved.inode;
+     if (!inode) throw vfsError('ENOENT', path);
+     this.checkParentAccess(resolved.path, cred);
++    this.checkStickyParentMutation(resolved.path, inode, cred);
+     if (inode.isDir) throw vfsError('EISDIR', resolved.path);
+     this.writeBatch({ inodes: [], chunks: [], deletePaths: [resolved.path] }, cred);
+   }
+@@ -2986,13 +2998,14 @@ export class SqliteVFS {
+     const np = path.replace(/^\/+/, '').replace(/\/+$/, '');
+     const resolved = this.checkAccess(np, 0, cred, { followLeaf: false });
+     this.checkParentAccess(resolved.path, cred);
++    const inode = this.inodes.get(np);
++    if (!inode) throw vfsError('ENOENT', path);
++    this.checkStickyParentMutation(resolved.path, inode, cred);
+     // Check if empty using children index (O(1) instead of O(N))
+     const kids = this.children.get(np);
+     if (kids && kids.size > 0) {
+       throw vfsError('ENOTEMPTY', path);
+     }
+-    const inode = this.inodes.get(np);
+-    if (!inode) throw vfsError('ENOENT', path);
+     if (!inode.isDir) throw vfsError('ENOTDIR', path);
+     this.writeBatch({ inodes: [], chunks: [], deletePaths: [np] }, cred);
+   }
+@@ -3018,6 +3031,7 @@ export class SqliteVFS {
+     const resolved = this.checkAccess(path, 0, cred, { followLeaf: false });
+     if (!resolved.inode) throw vfsError('ENOENT', normalizeVfsPath(path));
+     this.checkParentAccess(resolved.path, cred);
++    this.checkStickyParentMutation(resolved.path, resolved.inode, cred);
+ 
+     const removable = this.collectSubtreeInodes([resolved.path]);
+     // The directories the recursive walk used to enumerate are exactly the
+@@ -3067,6 +3081,7 @@ export class SqliteVFS {
+     }
+     const inode = this.inodes.get(oldPath);
+     if (!inode) throw new Error("ENOENT: " + oldPath);
++    this.checkStickyParentMutation(oldPath, inode, cred);
+ 
+     // W-3 (WASI filesystem WASI): if newPath already exists, unlink it first so the
+     // SQL UPDATE doesn't conflict on inodes.path uniqueness. POSIX rename(2)
+@@ -3077,6 +3092,7 @@ export class SqliteVFS {
+     // (the latter is rare but POSIX permits it for empty dirs).
+     const destInode = this.inodes.get(newPath);
+     if (destInode) {
++      this.checkStickyParentMutation(newPath, destInode, cred);
+       if (destInode.isDir) {
+         // POSIX semantics: rename onto a non-empty dir is an error
+         // (ENOTEMPTY); rename onto an empty dir is allowed. We surface

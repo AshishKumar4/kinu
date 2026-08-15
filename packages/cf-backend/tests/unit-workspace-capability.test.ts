@@ -3,6 +3,7 @@
 // Run against real SQLite through the same SqlExec seam the UserDO provides.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import {
   CapabilityDeniedError,
   WORKSPACE_CAPABILITY_TIERS,
@@ -17,7 +18,6 @@ import {
 } from '../src/user/workspace-capability.js';
 import { isModelInferenceCredentialKey } from '../src/user/credential-headers.js';
 import { TEST_USER_ENV, sqlExec, testOwner } from './helpers/user-do.js';
-import type { SqlExec } from '@proteus/core';
 
 function setup() {
   const db = new Database(':memory:');
@@ -26,17 +26,29 @@ function setup() {
   return { db, sql };
 }
 
-const CAPABILITIES = Object.keys(WORKSPACE_CAPABILITY_TIERS) as WorkspaceCapability[];
+function isWorkspaceCapability(value: string): value is WorkspaceCapability {
+  return Object.hasOwn(WORKSPACE_CAPABILITY_TIERS, value);
+}
+
+const CAPABILITIES = Object.keys(WORKSPACE_CAPABILITY_TIERS).filter(isWorkspaceCapability);
 
 describe('capability token mint', () => {
   test('stores only the hash — the raw token never lands in SQLite', async () => {
     const { db, sql } = setup();
     const minted = await mintWorkspaceCapability(sql, 'workspace-a');
 
-    const rows = db.prepare('SELECT * FROM workspace_capability_tokens').all() as Array<Record<string, unknown>>;
+    const CapabilityTokenRowSchema = v.object({
+      workspace_name: v.string(),
+      token_hash: v.string(),
+      created_at: v.number(),
+    });
+    const rows = v.parse(
+      v.array(CapabilityTokenRowSchema),
+      db.prepare('SELECT workspace_name, token_hash, created_at FROM workspace_capability_tokens').all(),
+    );
     expect(rows).toHaveLength(1);
     expect(JSON.stringify(rows[0])).not.toContain(minted.token);
-    expect(rows[0]!.token_hash).toBe(minted.tokenHash);
+    expect(rows[0]?.token_hash).toBe(minted.tokenHash);
     db.close();
   });
 
@@ -58,7 +70,11 @@ describe('capability token mint', () => {
 
     // The superseded token is dead; only one identity row per workspace exists.
     await expect(requireTier(sql, TEST_USER_ENV, { workspaceToken: first.token }, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
-    expect((db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get() as { n: number } | null)!.n).toBe(1);
+    const count = v.parse(
+      v.object({ n: v.number() }),
+      db.prepare('SELECT COUNT(*) AS n FROM workspace_capability_tokens').get(),
+    );
+    expect(count.n).toBe(1);
     db.close();
   });
 
@@ -77,7 +93,7 @@ describe('requireTier fails closed', () => {
   test('denies a caller that presents nothing', async () => {
     const { db, sql } = setup();
     for (const bogus of [undefined, null, '', 'owner', {}, { workspaceToken: '' }, { workspaceToken: 7 }]) {
-      await expect(requireTier(sql, TEST_USER_ENV, bogus as never, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
+      await expect(requireTier(sql, TEST_USER_ENV, bogus, 'credentials.model')).rejects.toThrow(CapabilityDeniedError);
     }
     db.close();
   });
@@ -89,7 +105,7 @@ describe('requireTier fails closed', () => {
 
     // The sentinel this replaced, and a guess at the token itself.
     for (const bogus of ['owner_session', { ownerToken: 'owner_session' }, { ownerToken: 'a'.repeat(64) }]) {
-      await expect(requireTier(sql, TEST_USER_ENV, bogus as never, 'credentials.other'))
+      await expect(requireTier(sql, TEST_USER_ENV, bogus, 'credentials.other'))
         .rejects.toThrow(CapabilityDeniedError);
     }
 

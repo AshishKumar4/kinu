@@ -8,7 +8,8 @@
 // until this workspace's own outcome says it should.
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { createTestRuntime } from './helpers.js';
+import * as v from 'valibot';
+import { createTestRuntime, makeSqlExec } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
 import type { FactsStore } from '../src/memory/facts.js';
 import {
@@ -25,7 +26,6 @@ import {
   listImportedExperience,
   listPublishable,
   recordLesson,
-  type ExperienceActionInput,
   type ExperienceEntry,
   type ExperienceLibraryStore,
   type ExperienceSearchOptions,
@@ -36,17 +36,7 @@ import {
 // ── fixtures ────────────────────────────────────────────────────────────────
 
 function sqlExec(db: Database): SqlExec {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const statement = db.prepare(query);
-      const reads = /^\s*SELECT/i.test(query);
-      if (reads) {
-        return { toArray: () => statement.all(...(bindings as never[])) as Array<Record<string, unknown>> };
-      }
-      statement.run(...(bindings as never[]));
-      return { toArray: () => [] as Array<Record<string, unknown>> };
-    },
-  };
+  return makeSqlExec(db);
 }
 
 /** The owner's library — one store shared by every workspace below. */
@@ -62,9 +52,30 @@ interface Workspace {
   db: Database;
   facts: FactsStore;
   /** One library action, as this workspace drives it. */
-  call(input: Record<string, unknown>): Promise<Record<string, unknown>>;
+  call(input: ExperienceTestInput): ReturnType<typeof runExperienceAction>;
   engine: EvolutionEngine;
 }
+
+interface ExperienceTestInput {
+  action: string;
+  kind?: 'craft' | 'lesson' | 'fact';
+  key?: string;
+  query?: string;
+  limit?: number;
+  id?: string;
+}
+
+const ErrorSchema = v.object({ error: v.string() });
+const PublishedSchema = v.object({ published: v.object({
+  id: v.string(), source_workspace: v.string(),
+}) });
+const HitsSchema = v.object({ hits: v.array(v.object({
+  id: v.string(), preview: v.string(), kind: v.string(), key: v.string(),
+  source_workspace: v.string(), evidence: v.string(),
+})) });
+const ImportSchema = v.object({
+  status: v.string(), payload: v.unknown(), error: v.optional(v.string()),
+});
 
 function workspace(name: string, library: ExperienceLibraryStore, llmResponses?: Record<string, string>): Workspace {
   const { rt, db } = createTestRuntime(llmResponses ? { llmResponses } : undefined);
@@ -92,8 +103,7 @@ function workspace(name: string, library: ExperienceLibraryStore, llmResponses?:
     },
   };
 
-  const call = (input: Record<string, unknown>): Promise<Record<string, unknown>> =>
-    runExperienceAction(deps, input as unknown as ExperienceActionInput);
+  const call = (input: ExperienceTestInput) => runExperienceAction(deps, input);
 
   return { rt, db, facts, call, engine: new EvolutionEngine(rt) };
 }
@@ -104,13 +114,13 @@ function proveCraft(ws: Workspace, input: { name: string; description: string; c
     name: input.name, description: input.description, params: { url: 'string' },
     code: input.code, scope: 'local',
   });
-  ws.rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
+  void ws.rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
     VALUES (${input.name}, ${input.score}, ${input.uses}, ${Date.now()})`;
 }
 
 /** Grade a turn the way an explicit thumbs does — no LLM in the loop. */
 async function gradeTurn(ws: Workspace, turnId: string, feedback: 'positive' | 'negative'): Promise<void> {
-  ws.rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
+  void ws.rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at)
     VALUES (${turnId}, ${feedback}, ${Date.now()})`;
   await ws.engine.reviewTurn({
     turnId,
@@ -134,14 +144,15 @@ async function importedRows(ws: Workspace) {
 describe('publishing is gated on local evidence', () => {
   test('an unused crafted tool is refused, a proven one qualifies with its record', () => {
     const ws = workspace('alpha', ownerLibrary());
-    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.rt.craftStore.create({ name: 'untried', description: 'never run', params: null, code: 'return 2;', scope: 'local' });
 
     const proven = findPublishable(
       { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts }, 'craft', 'fetch_changelog',
     );
     expect('refused' in proven).toBe(false);
-    expect((proven as { evidence: string }).evidence).toBe('effective score 0.90 after 4 real uses');
+    if ('refused' in proven) throw new Error(proven.refused);
+    expect(proven.evidence).toBe('effective score 0.90 after 4 real uses');
 
     const untried = findPublishable(
       { sql: ws.rt.storage.sql, craftStore: ws.rt.craftStore, facts: ws.facts }, 'craft', 'untried',
@@ -165,7 +176,8 @@ describe('publishing is gated on local evidence', () => {
     });
     const candidate = findPublishable(sources, 'lesson', corroborated);
     expect('refused' in candidate).toBe(false);
-    expect((candidate as { title: string }).title).toBe('Wrangler needs the account id in CI.');
+    if ('refused' in candidate) throw new Error(candidate.refused);
+    expect(candidate.title).toBe('Wrangler needs the account id in CI.');
   });
 
   test('a low-confidence fact is refused; a settled one qualifies', () => {
@@ -182,7 +194,7 @@ describe('publishing is gated on local evidence', () => {
 
   test('the publish action with no target answers with exactly what qualifies', async () => {
     const ws = workspace('alpha', ownerLibrary());
-    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(ws, { name: 'fetch_changelog', description: 'fetch a changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     ws.facts.upsert('deploy.guess', 'maybe-here', { confidence: 0.4 });
     ws.facts.upsert('deploy.target', 'proteus.workers.dev', { confidence: 1 });
     recordLesson(ws.rt.storage.sql, {
@@ -190,7 +202,10 @@ describe('publishing is gated on local evidence', () => {
     });
 
     const result = await ws.call({ action: 'publish' });
-    expect((result.publishable as Array<{ key: string }>).map((c) => c.key).sort())
+    const parsed = v.parse(v.object({
+      publishable: v.array(v.object({ key: v.string() })),
+    }), result);
+    expect(parsed.publishable.map((candidate) => candidate.key).sort())
       .toEqual(['deploy.target', 'fetch_changelog']);
   });
 });
@@ -202,13 +217,17 @@ describe('the owner library moves experience between workspaces', () => {
     const library = ownerLibrary();
     const alpha = workspace('alpha', library);
     const beta = workspace('beta', library);
-    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
 
-    const published = await alpha.call({ action: 'publish', kind: 'craft', key: 'fetch_changelog' });
-    expect((published.published as { source_workspace: string }).source_workspace).toBe('alpha');
+    const published = v.parse(
+      PublishedSchema,
+      await alpha.call({ action: 'publish', kind: 'craft', key: 'fetch_changelog' }),
+    );
+    expect(published.published.source_workspace).toBe('alpha');
 
-    expect((await alpha.call({ action: 'search', query: 'changelog' })).hits).toEqual([]);
-    const hits = (await beta.call({ action: 'search', query: 'changelog' })).hits as Array<Record<string, unknown>>;
+    const ownHits = v.parse(HitsSchema, await alpha.call({ action: 'search', query: 'changelog' }));
+    expect(ownHits.hits).toEqual([]);
+    const hits = v.parse(HitsSchema, await beta.call({ action: 'search', query: 'changelog' })).hits;
     expect(hits).toHaveLength(1);
     expect(hits[0]).toMatchObject({
       kind: 'craft', key: 'fetch_changelog', source_workspace: 'alpha',
@@ -221,15 +240,21 @@ describe('the owner library moves experience between workspaces', () => {
     const alpha = workspace('alpha', library);
     const beta = workspace('beta', library);
     alpha.facts.upsert('deploy.target', 'first.workers.dev', { confidence: 1 });
-    const first = (await alpha.call({ action: 'publish', kind: 'fact', key: 'deploy.target' })).published as { id: string };
+    const first = v.parse(
+      PublishedSchema,
+      await alpha.call({ action: 'publish', kind: 'fact', key: 'deploy.target' }),
+    ).published;
 
     alpha.facts.upsert('deploy.target', 'second.workers.dev', { confidence: 1 });
-    const second = (await alpha.call({ action: 'publish', kind: 'fact', key: 'deploy.target' })).published as { id: string };
+    const second = v.parse(
+      PublishedSchema,
+      await alpha.call({ action: 'publish', kind: 'fact', key: 'deploy.target' }),
+    ).published;
 
     expect(second.id).toBe(first.id);
-    const hits = (await beta.call({ action: 'search' })).hits as Array<{ preview: string }>;
+    const hits = v.parse(HitsSchema, await beta.call({ action: 'search' })).hits;
     expect(hits).toHaveLength(1);
-    expect(hits[0].preview).toContain('second.workers.dev');
+    expect(hits[0]?.preview).toContain('second.workers.dev');
   });
 });
 
@@ -269,14 +294,14 @@ describe('every import passes the misevolution gate', () => {
       const beta = workspace('beta', library);
       const published = library.publish(entry(), 'alpha');
 
-      const result = await beta.call({ action: 'import', id: published.id });
+      const result = v.parse(ErrorSchema, await beta.call({ action: 'import', id: published.id }));
 
       expect(result.error).toContain(`Misevolution veto (${criterion})`);
       expect(await importedRows(beta)).toEqual([]);
       const vetoes = beta.rt.storage.sql<{ type: string; message: string }>`
         SELECT type, message FROM evolution_events WHERE type = 'misevolution_veto'`;
       expect(vetoes).toHaveLength(1);
-      expect(vetoes[0].message).toContain(criterion);
+      expect(vetoes[0]?.message).toContain(criterion);
     });
   }
 
@@ -284,14 +309,14 @@ describe('every import passes the misevolution gate', () => {
     const library = ownerLibrary();
     const alpha = workspace('alpha', library);
     const beta = workspace('beta', library);
-    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'return 1;', score: 0.9, uses: 4 });
+    proveCraft(alpha, { name: 'fetch_changelog', description: 'fetch a project changelog', code: 'async (args) => args.url', score: 0.9, uses: 4 });
     await alpha.call({ action: 'publish', kind: 'craft', key: 'fetch_changelog' });
-    const hit = ((await beta.call({ action: 'search', query: 'changelog' })).hits as Array<{ id: string }>)[0];
+    const hit = v.parse(HitsSchema, await beta.call({ action: 'search', query: 'changelog' })).hits[0];
 
-    const result = await beta.call({ action: 'import', id: hit.id });
+    const result = v.parse(ImportSchema, await beta.call({ action: 'import', id: hit?.id ?? '' }));
 
     expect(result.status).toBe('provisional');
-    expect(result.payload).toMatchObject({ kind: 'craft', name: 'fetch_changelog', code: 'return 1;' });
+    expect(result.payload).toMatchObject({ kind: 'craft', name: 'fetch_changelog', code: 'async (args) => args.url' });
     expect((await importedRows(beta)).map((r) => [r.kind, r.key, r.status]))
       .toEqual([['craft', 'fetch_changelog', 'provisional']]);
   });
@@ -304,8 +329,8 @@ describe('every import passes the misevolution gate', () => {
       payload: { kind: 'lesson', text: 'Read the error before rerunning.' },
     }, 'alpha');
 
-    expect((await beta.call({ action: 'import', id: published.id })).status).toBe('provisional');
-    expect((await beta.call({ action: 'import', id: published.id })).error).toContain('already imported');
+    expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: published.id })).status).toBe('provisional');
+    expect(v.parse(ErrorSchema, await beta.call({ action: 'import', id: published.id })).error).toContain('already imported');
     expect(await importedRows(beta)).toHaveLength(1);
   });
 });
@@ -318,7 +343,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
       library.publish({
         kind: 'craft', key: 'fetch_changelog', title: 'fetch a project changelog',
         evidence: 'effective score 0.90 after 4 real uses',
-        payload: { kind: 'craft', name: 'fetch_changelog', description: 'fetch a project changelog', params: { url: 'string' }, code: 'return 1;', score: 0.9 },
+        payload: { kind: 'craft', name: 'fetch_changelog', description: 'fetch a project changelog', params: { url: 'string' }, code: 'async (args) => args.url', score: 0.9 },
       }, 'alpha'),
       library.publish({
         kind: 'lesson', key: 'lsn-1', title: 'Read the error before rerunning.',
@@ -331,7 +356,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
       }, 'alpha'),
     ];
     for (const entry of entries) {
-      expect((await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
+      expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
     }
   }
 
@@ -354,7 +379,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     await gradeTurn(beta, 'turn-1', 'positive');
 
     const craft = beta.rt.craftStore.get('fetch_changelog');
-    expect(craft).toMatchObject({ name: 'fetch_changelog', code: 'return 1;', params: { url: 'string' } });
+    expect(craft).toMatchObject({ name: 'fetch_changelog', code: 'async (args) => args.url', params: { url: 'string' } });
     expect(beta.facts.recall('deploy.target')).toMatchObject({
       value: 'proteus.workers.dev', source: 'experience:alpha',
     });
@@ -392,7 +417,7 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     await gradeTurn(beta, 'turn-1', 'negative');
     expect(await importedRows(beta)).toEqual([]);
 
-    expect((await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
+    expect(v.parse(ImportSchema, await beta.call({ action: 'import', id: entry.id })).status).toBe('provisional');
     await gradeTurn(beta, 'turn-2', 'positive');
     expect(beta.facts.recall('deploy.target')?.value).toBe('proteus.workers.dev');
   });
@@ -428,8 +453,8 @@ describe('an import is provisional until this workspace\'s own outcome corrobora
     const events = beta.rt.storage.sql<{ message: string }>`
       SELECT message FROM evolution_events WHERE type = 'experience_import'`;
     expect(events).toHaveLength(1);
-    expect(events[0].message).toContain('Adopted imported experience after an accepted turn');
-    expect(events[0].message).toContain('from alpha');
+    expect(events[0]?.message).toContain('Adopted imported experience after an accepted turn');
+    expect(events[0]?.message).toContain('from alpha');
   });
 });
 
@@ -487,15 +512,16 @@ describe('the library answers from an untouched workspace', () => {
 describe('the dispatcher answers honestly at its edges', () => {
   test('an action outside the surface names what is available', async () => {
     const beta = workspace('beta', ownerLibrary());
-    expect((await beta.call({ action: 'promote' })).error)
+    expect(v.parse(ErrorSchema, await beta.call({ action: 'promote' })).error)
       .toBe('action "promote" is not available. Available: publish, search, import');
   });
 
   test('importing an unknown id fails without staging anything', async () => {
     const beta = workspace('beta', ownerLibrary());
-    expect((await beta.call({ action: 'import', id: 'exp-nope' })).error)
+    expect(v.parse(ErrorSchema, await beta.call({ action: 'import', id: 'exp-nope' })).error)
       .toBe('no library entry with id "exp-nope"');
-    expect((await beta.call({ action: 'import' })).error).toBe('import requires the library entry id');
+    expect(v.parse(ErrorSchema, await beta.call({ action: 'import' })).error)
+      .toBe('import requires the library entry id');
     expect(await importedRows(beta)).toEqual([]);
   });
 });

@@ -10,6 +10,9 @@ export interface ConvergenceResult {
   trajectory: Array<{ role: string; content: string }>;
 }
 
+/** Whether a candidate ran, contained no code, or used an unsupported language. */
+export type EvaluationGrounding = 'execution' | 'judge' | 'unrunnable';
+
 export interface CostEstimate {
   totalCalls: number;
   estimatedUSD: number;

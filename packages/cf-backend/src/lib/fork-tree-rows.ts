@@ -11,7 +11,7 @@ import type { ForkNode } from "./protocol";
 /** One `search_nodes` row, as every transport serves it. */
 export interface MctsRow {
   id: string; parent_id: string | null; depth: number;
-  visits: number; value: number; status: string; action: string;
+  visits: number; value: number; status: ForkNode["status"]; action: string;
   task?: string; observation?: string; code_used?: string | null;
   branch_agent_key?: string | null; msg_id?: string | null; created_at?: number;
 }
@@ -31,7 +31,7 @@ export function buildTree(nodes: MctsRow[]): ForkNode {
   for (const n of nodes) {
     map.set(n.id, {
       id: n.id, parentId: n.parent_id, depth: n.depth, visits: n.visits,
-      value: n.value, status: n.status as ForkNode["status"], action: n.action,
+      value: n.value, status: n.status, action: n.action,
       task: n.task, observation: n.observation, codeUsed: n.code_used,
       branchAgentKey: n.branch_agent_key, msgId: n.msg_id, createdAt: n.created_at,
       children: [],

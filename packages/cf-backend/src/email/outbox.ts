@@ -19,6 +19,16 @@
  */
 
 import { argumentDigest, type SqlExec } from '@proteus/core';
+import * as v from 'valibot';
+
+const EmailAddressSchema = v.object({ email: v.string(), name: v.string() });
+const OutboundEmailMessageSchema = v.object({
+  from: v.union([v.string(), EmailAddressSchema]),
+  to: v.union([v.string(), EmailAddressSchema, v.array(v.union([v.string(), EmailAddressSchema]))]),
+  subject: v.string(),
+  text: v.string(),
+  headers: v.optional(v.record(v.string(), v.string())),
+});
 
 /** A rendered outbound message — exactly the `send_email` binding's payload. */
 export interface OutboundEmailMessage {
@@ -66,6 +76,13 @@ interface OutboxDbRow {
   state: 'pending' | 'sent' | 'dlq';
   attempt_count: number;
 }
+const OutboxDbRowSchema = v.object({
+  idempotency_key: v.string(),
+  message: v.string(),
+  message_id: v.string(),
+  state: v.picklist(['pending', 'sent', 'dlq']),
+  attempt_count: v.number(),
+});
 
 export class EmailOutbox {
   /** `scheduleRetry` arms the host's timer for a backed-off re-drive. Without
@@ -111,15 +128,15 @@ export class EmailOutbox {
    *  re-drive carries the original Message-ID, so a duplicate is deduped
    *  downstream rather than delivered twice. Returns the count re-driven. */
   async reconcile(binding: SendEmail, now: number): Promise<number> {
-    const due = this.sql.exec(
+    const due = v.parse(v.array(OutboxDbRowSchema), this.sql.exec(
       `SELECT idempotency_key, message, message_id, state, attempt_count
          FROM email_outbox
         WHERE state = 'pending' AND next_attempt_at <= ?
         ORDER BY next_attempt_at`,
       now,
-    ).toArray() as unknown as OutboxDbRow[];
+    ).toArray());
     for (const row of due) {
-      const message = JSON.parse(row.message) as OutboundEmailMessage;
+      const message = v.parse(OutboundEmailMessageSchema, JSON.parse(row.message));
       await this.deliver(binding, row.idempotency_key, message, row.message_id, now);
     }
     return due.length;
@@ -127,9 +144,9 @@ export class EmailOutbox {
 
   /** Soonest pending retry — folded into the DO alarm reschedule. */
   nextRetryAt(): number | null {
-    const rows = this.sql.exec(
+    const rows = v.parse(v.array(v.object({ next: v.nullable(v.number()) })), this.sql.exec(
       `SELECT MIN(next_attempt_at) AS next FROM email_outbox WHERE state = 'pending'`,
-    ).toArray() as Array<{ next: number | null }>;
+    ).toArray());
     return rows[0]?.next ?? null;
   }
 
@@ -178,10 +195,10 @@ export class EmailOutbox {
   }
 
   private row(key: string): OutboxDbRow | null {
-    const rows = this.sql.exec(
+    const rows = v.parse(v.array(OutboxDbRowSchema), this.sql.exec(
       `SELECT idempotency_key, message, message_id, state, attempt_count
          FROM email_outbox WHERE idempotency_key = ?`, key,
-    ).toArray() as unknown as OutboxDbRow[];
+    ).toArray());
     return rows[0] ?? null;
   }
 
@@ -194,11 +211,16 @@ export class EmailOutbox {
 }
 
 function payloadDigest(message: OutboundEmailMessage): string {
-  return argumentDigest({ to: message.to, subject: message.subject, text: message.text });
+  const recipients = Array.isArray(message.to) ? message.to.map(emailAddressText) : emailAddressText(message.to);
+  return argumentDigest({ to: recipients, subject: message.subject, text: message.text });
 }
 
 function emailDomainOf(from: OutboundEmailMessage['from']): string {
-  const address = typeof from === 'string' ? from : from.email;
+  const address = emailAddressText(from);
   const at = address.lastIndexOf('@');
   return at >= 0 ? address.slice(at + 1) : 'proteus.local';
+}
+
+function emailAddressText(address: string | EmailAddress): string {
+  return v.is(v.string(), address) ? address : address.email;
 }

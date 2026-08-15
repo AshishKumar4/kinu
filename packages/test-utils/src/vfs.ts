@@ -19,7 +19,7 @@ export function createMemoryVfs(): MemoryVfs {
       return content;
     },
     writeFile: async (path, data) => {
-      files.set(path, typeof data === 'string' ? data : new TextDecoder().decode(data));
+      files.set(path, data instanceof Uint8Array ? new TextDecoder().decode(data) : data);
     },
     readdir: async (path) => [...files.keys()]
       .filter((f) => f.startsWith(`${path}/`))

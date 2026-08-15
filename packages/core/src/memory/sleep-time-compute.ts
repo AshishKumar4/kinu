@@ -16,10 +16,12 @@
 //
 // Output: updated agent_facts (upsert new observations, decay stale facts).
 
+import * as v from 'valibot';
 import type { LLM } from '../types/primitives.js';
 import type { FactsStore } from './facts.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import { JsonValueSchema, type JsonValue } from '../utils/json.js';
 
 export interface SleepTimeInput {
   /** Last completed turn's task. */
@@ -29,12 +31,12 @@ export interface SleepTimeInput {
   /** Tool calls that ran during the turn (names only — full args/results elided). */
   toolCalls: string[];
   /** Current facts to consider for update/decay. */
-  currentFacts: ReadonlyArray<{ key: string; value: unknown; confidence: number }>;
+  currentFacts: ReadonlyArray<{ key: string; value: JsonValue; confidence: number }>;
 }
 
 export interface SleepTimeUpdate {
   /** Facts to upsert or update. */
-  upserts: Array<{ key: string; value: unknown; confidence: number; rationale: string }>;
+  upserts: Array<{ key: string; value: JsonValue; confidence: number; rationale: string }>;
   /** Fact keys to decay confidence on (stale / not re-observed). */
   decay: string[];
 }
@@ -48,7 +50,10 @@ Recent turn:
 - Tools used: ${i.toolCalls.join(', ') || '(none)'}
 
 Current facts in agent's world model:
-${i.currentFacts.slice(0, 30).map(f => `  ${f.key} = ${typeof f.value === 'string' ? f.value : JSON.stringify(f.value)} (conf ${f.confidence.toFixed(2)})`).join('\n') || '  (none)'}
+${i.currentFacts.slice(0, 30).map((fact) => {
+  const text = v.safeParse(v.string(), fact.value);
+  return `  ${fact.key} = ${text.success ? text.output : JSON.stringify(fact.value)} (conf ${fact.confidence.toFixed(2)})`;
+}).join('\n') || '  (none)'}
 
 Existing fact keys (reuse these exact keys when updating the same subject; do not mint variants):
 ${i.currentFacts.map(f => `  ${f.key}`).join('\n') || '  (none)'}
@@ -67,6 +72,16 @@ JSON shape:
 }
 ${jsonObjectOnlyInstruction()}`;
 
+const SleepTimeUpdateSchema: v.GenericSchema<SleepTimeUpdate> = v.object({
+  upserts: v.array(v.object({
+    key: v.pipe(v.string(), v.minLength(1)),
+    value: JsonValueSchema,
+    confidence: v.number(),
+    rationale: v.string(),
+  })),
+  decay: v.array(v.pipe(v.string(), v.minLength(1))),
+});
+
 function normalizeFactKey(key: string): string {
   return key.trim().toLowerCase().replace(/\s+/g, '_');
 }
@@ -77,15 +92,7 @@ export async function runSleepTimeCompute(
 ): Promise<SleepTimeUpdate | null> {
   try {
     const text = await judge.complete(PROMPT(input));
-    const parsed = extractJsonObject(text) as Partial<SleepTimeUpdate>;
-    return {
-      upserts: Array.isArray(parsed.upserts) ? parsed.upserts.filter(u =>
-        u && typeof u.key === 'string' && u.key.length > 0 && typeof u.confidence === 'number'
-      ) : [],
-      decay: Array.isArray(parsed.decay)
-        ? parsed.decay.filter((k): k is string => typeof k === 'string' && k.length > 0)
-        : [],
-    };
+    return v.parse(SleepTimeUpdateSchema, extractJsonObject(text));
   } catch {
     return null;
   }
@@ -95,20 +102,12 @@ export async function runSleepTimeCompute(
 export function applySleepTimeUpdate(
   facts: FactsStore,
   update: SleepTimeUpdate,
-): { upserted: number; decayed: number; skipped: number } {
-  // Pre-flight: drop any upserts whose value can't be serialized. Without
-  // this, the first bad value crashes the loop and leaves the store in a
-  // partial state (some upserted, the rest unprocessed).
+) {
+  // Whitespace-only keys can pass the textual schema but normalize to no key.
   const safeUpserts = update.upserts.flatMap((u) => {
-    if (typeof u.key !== 'string') return [];
     const key = normalizeFactKey(u.key);
     if (key.length === 0) return [];
-    try {
-      if (JSON.stringify(u.value) === undefined) return [];
-      return [{ ...u, key }];
-    } catch {
-      return [];
-    }
+    return [{ ...u, key }];
   });
   const skipped = update.upserts.length - safeUpserts.length;
   let upserted = 0;

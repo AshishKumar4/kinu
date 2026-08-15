@@ -23,9 +23,10 @@ import {
   type StopReason,
   type ToolKind,
 } from '@agentclientprotocol/sdk';
-import type { ShellApprovalOutcome, ShellApprovalRequest } from '@proteus/core';
+import type { JsonObject, ShellApprovalOutcome, ShellApprovalRequest } from '@proteus/core';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
 import { toAgentPrompt } from './prompt.js';
+import * as v from 'valibot';
 
 /** Opens the AgentClient backing one ACP session. The command supplies the
  *  real factory; tests supply a stub. */
@@ -48,33 +49,34 @@ export interface AcpAgentDeps {
  *  "old transcript" justification, since ACP maps calls as they happen
  *  rather than rendering stored history. Same reasoning retired `experience`
  *  when it left the tool surface for an owner-only RPC. */
-const TOOL_KINDS: Readonly<Record<string, ToolKind>> = {
-  run: 'execute',
-  execute_tools: 'execute',
-  memory: 'think',
-  tasks: 'think',
-  report: 'think',
-  agents: 'think',
-  web: 'fetch',
-};
+const TOOL_KINDS = new Map<string, ToolKind>([
+  ['run', 'execute'],
+  ['execute_tools', 'execute'],
+  ['memory', 'think'],
+  ['tasks', 'think'],
+  ['report', 'think'],
+  ['agents', 'think'],
+  ['web', 'fetch'],
+]);
 
 /** `file` is the one builtin whose kind depends on the call rather than the
  *  name: a read and a write present differently in an ACP client. */
-function toolKind(name: string, args: unknown): ToolKind {
+function toolKind(name: string, args: JsonObject): ToolKind {
   if (name === 'file') {
-    const action = args && typeof args === 'object' ? (args as { action?: unknown }).action : undefined;
-    return action === 'read' ? 'read' : 'edit';
+    return args.action === 'read' ? 'read' : 'edit';
   }
-  return TOOL_KINDS[name] ?? 'other';
+  return TOOL_KINDS.get(name) ?? 'other';
 }
 
 /** A one-line summary of what a call is doing — the tool call's ACP title.
  *  `run` gets its command because that is the thing a user is deciding about. */
-function toolTitle(name: string, args: Record<string, unknown>): string {
+function toolTitle(name: string, args: JsonObject): string {
   const command = args.command;
-  if (name === 'run' && typeof command === 'string') return command;
+  const parsedCommand = v.safeParse(v.string(), command);
+  if (name === 'run' && parsedCommand.success) return parsedCommand.output;
   const action = args.action;
-  if (typeof action === 'string') return `${name}: ${action}`;
+  const parsedAction = v.safeParse(v.string(), action);
+  if (parsedAction.success) return `${name}: ${parsedAction.output}`;
   return name;
 }
 
@@ -87,12 +89,12 @@ const PERMISSION_OPTIONS: readonly PermissionOption[] = [
   { optionId: 'deny_always', name: 'Reject and don\'t ask again', kind: 'reject_always' },
 ];
 
-const OUTCOME_BY_OPTION: Readonly<Record<string, ShellApprovalOutcome>> = {
-  allow: 'allow',
-  allow_always: 'allow_always',
-  deny: 'deny',
-  deny_always: 'deny_always',
-};
+const OUTCOME_BY_OPTION = new Map<string, ShellApprovalOutcome>([
+  ['allow', 'allow'],
+  ['allow_always', 'allow_always'],
+  ['deny', 'deny'],
+  ['deny_always', 'deny_always'],
+]);
 
 /** One live ACP session: the Proteus client plus the per-turn state the
  *  translation needs. */
@@ -200,7 +202,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
       const cwd = ctx.params.cwd;
       const client = await deps.openClient({ cwd });
       await client.connect();
-      const session = new AcpSession(client.cliSession.id as SessionId, client, cwd);
+      const session = new AcpSession(client.cliSession.id, client, cwd);
       sessions.set(session.id, session);
 
       session.installApprovalChannel(async (req) => {
@@ -220,7 +222,7 @@ export function createAcpAgent(deps: AcpAgentDeps): AgentApp {
         });
         // 'cancelled' — the turn is going away; deny so the tool stops here.
         if (outcome.outcome.outcome !== 'selected') return 'deny';
-        return OUTCOME_BY_OPTION[outcome.outcome.optionId] ?? 'deny';
+        return OUTCOME_BY_OPTION.get(outcome.outcome.optionId) ?? 'deny';
       });
 
       return { sessionId: session.id };

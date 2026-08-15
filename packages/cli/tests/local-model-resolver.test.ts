@@ -8,7 +8,9 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from "@proteus/core";
+import { DEFAULT_WORKERS_AI_MODEL_ID, DEFAULT_WORKERS_AI_MODEL_SPEC } from "@proteus/core";
+import { JsonObjectSchema } from '@proteus/core';
+import * as v from 'valibot';
 
 const CLOUD_TOKEN = "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz";
 
@@ -20,7 +22,7 @@ afterEach(() => {
 
 describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => {
   test("lists the worker menu and runs a turn through the AI proxy with bearer + affinity", async () => {
-    const requests: Array<{ path: string; auth: string | null; affinity: string | null; model?: unknown }> = [];
+    const requests: Array<{ path: string; auth: string | null; affinity: string | null; model?: string }> = [];
     const server = Bun.serve({
       port: 0,
       hostname: "127.0.0.1",
@@ -36,8 +38,8 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
           return Response.json({
             models: [
               {
-                spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: "Kimi K2.6", provider: "workers-ai",
-                capabilities: ["tools", "streaming"], contextWindow: 262144,
+                spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: "DeepSeek V4 Pro 0813", provider: "workers-ai",
+                capabilities: ["tools", "streaming", "reasoning"], contextWindow: 1048576,
               },
               { spec: "my-gateway/openai/gpt-4.1", label: "GPT-4.1", provider: "my-gateway", contextWindow: 1047576 },
             ],
@@ -45,10 +47,11 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
           });
         }
         if (path === "/api/user/ai/v1/chat/completions") {
-          const body = await request.json() as { model?: unknown };
-          requests.push({ ...entry, model: body.model });
+          const body = v.parse(JsonObjectSchema, await request.json());
+          const model = v.parse(v.string(), body.model);
+          requests.push({ ...entry, model });
           return Response.json({
-            id: "chatcmpl-1", object: "chat.completion", created: 0, model: String(body.model),
+            id: "chatcmpl-1", object: "chat.completion", created: 0, model,
             choices: [{ index: 0, message: { role: "assistant", content: "ok" }, finish_reason: "stop" }],
             usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
           });
@@ -79,23 +82,28 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
           text: turn.text,
         }));
       `;
-      const env: Record<string, string | undefined> = { ...process.env, PROTEUS_HOME: proteusHome };
+      const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome };
       for (const name of [
         "PROTEUS_TOKEN", "PROTEUS_ORIGIN", "PROTEUS_MODEL", "PROTEUS_BASE_URL", "PROTEUS_AUTH",
         "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
         "OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENROUTER_API_KEY", "CODEX_ACCESS_TOKEN",
       ]) delete env[name];
-      const proc = Bun.spawnSync({
+      const proc = Bun.spawn({
         cmd: [process.execPath, "-e", script],
         cwd: resolve(__dirname, "../../.."),
         env,
         stdout: "pipe",
         stderr: "pipe",
       });
+      const [stdout, stderr, exitCode] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+        proc.exited,
+      ]);
 
-      expect(proc.stderr.toString()).toBe("");
-      expect(proc.exitCode).toBe(0);
-      expect(JSON.parse(proc.stdout.toString())).toEqual({
+      expect(stderr).toBe("");
+      expect(exitCode).toBe(0);
+      expect(JSON.parse(stdout)).toEqual({
         llmName: "workers-ai",
         defaultSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
         providers: [
@@ -110,7 +118,7 @@ describe("createConfiguredLocalModelResolver — signed in, no BYO keys", () => 
       expect(completion).toMatchObject({
         auth: `Bearer ${CLOUD_TOKEN}`,
         affinity: "proteus-jarvis",
-        model: "@cf/moonshotai/kimi-k2.6",
+        model: DEFAULT_WORKERS_AI_MODEL_ID,
       });
       for (const request of requests) expect(request.auth).toBe(`Bearer ${CLOUD_TOKEN}`);
     } finally {

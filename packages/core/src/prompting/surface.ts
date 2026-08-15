@@ -12,9 +12,33 @@ import {
   type PromptModelContext,
   type PromptModelProfile,
 } from './model-profile.js';
+import * as v from 'valibot';
 
 export type PromptBackend = 'cf' | 'cli-local' | 'cli-cloud';
-export type PromptMode = 'chat' | 'plan' | 'build' | 'background_resume' | 'release' | 'cron';
+export type WorkMode = 'plan' | 'build';
+export type PromptMode = 'chat' | WorkMode | 'background_resume' | 'release' | 'cron';
+
+const WorkModeSchema = v.picklist(['plan', 'build']);
+const TurnMetadataSchema = v.object({
+  proteusMode: v.optional(v.unknown()),
+  proteusEvent: v.optional(v.unknown()),
+});
+const ExternalToolSchema = v.object({
+  name: v.string(),
+  source: v.optional(v.picklist(['mcp', 'crafted', 'external'])),
+  description: v.optional(v.string()),
+});
+
+export function isWorkMode<Value>(value: Value): value is Value & WorkMode {
+  return v.is(WorkModeSchema, value);
+}
+
+/** Delegated work is either part of a read-only Plan turn or ordinary Build
+ * work. Autonomous/chat overlays do not weaken the child: only an explicit
+ * Plan parent propagates the mutation bar. */
+export function workModeForPromptMode(mode: PromptMode): WorkMode {
+  return mode === 'plan' ? 'plan' : 'build';
+}
 
 /**
  * The turn's prompt mode from the `proteusEvent` metadata a programmatic turn
@@ -30,6 +54,17 @@ export function promptModeForTurnEvent(proteusEvent: string | null | undefined):
   if (event === 'background_job') return 'background_resume';
   if (event.includes('timer') || event.includes('cron')) return 'cron';
   return 'chat';
+}
+
+/** Explicit user-selected Plan/Build mode wins over event provenance. Unknown
+ * values are ignored so old or foreign clients cannot suppress the established
+ * background/cron overlays. */
+export function promptModeForTurnMetadata<Metadata>(metadata: Metadata): PromptMode {
+  const parsed = v.safeParse(TurnMetadataSchema, metadata);
+  if (!parsed.success) return 'chat';
+  if (isWorkMode(parsed.output.proteusMode)) return parsed.output.proteusMode;
+  const event = v.safeParse(v.string(), parsed.output.proteusEvent);
+  return promptModeForTurnEvent(event.success ? event.output : null);
 }
 
 export interface PromptExecutorInfo {
@@ -67,6 +102,9 @@ export interface PromptSurfaceOptions {
   externalTools?: readonly (PromptExternalToolInfo | string)[];
   backend?: PromptBackend;
   mode?: PromptMode;
+  /** Whether this Plan actor owns the submit_plan completion boundary. Heads
+   * and subordinates report research back to their parent instead. */
+  planSubmissionAvailable?: boolean;
   model?: PromptModelContext;
 }
 
@@ -80,9 +118,10 @@ export interface PromptSurface {
   model: PromptModelProfile;
   backend?: PromptBackend;
   mode: PromptMode;
+  planSubmissionAvailable: boolean;
 }
 
-const EXECUTOR_PROMPT_ORDER = ['laptop', 'nimbus', 'sandbox', 'workspace'];
+const EXECUTOR_PROMPT_ORDER = ['laptop', 'sandbox', 'workspace'];
 
 function executorSortKey(name: string): number {
   const idx = EXECUTOR_PROMPT_ORDER.indexOf(name);
@@ -141,14 +180,16 @@ export function uniqueBuiltinTools(tools: readonly BuiltinToolName[] | undefined
 }
 
 function normalizeExternalTool(tool: PromptExternalToolInfo | string): PromptExternalToolInfo | null {
-  const raw = typeof tool === 'string' ? { name: tool } : tool;
+  const toolName = v.safeParse(v.string(), tool);
+  const raw = toolName.success ? { name: toolName.output } : v.parse(ExternalToolSchema, tool);
   const name = raw.name.trim();
   if (!name || BUILTIN_TOOL_NAMES.has(name)) return null;
-  return {
+  const normalized: PromptExternalToolInfo = {
     name,
     source: raw.source ?? (isMcpToolKey(name) ? 'mcp' : 'external'),
-    ...(raw.description ? { description: raw.description.trim() } : {}),
   };
+  if (raw.description) normalized.description = raw.description.trim();
+  return normalized;
 }
 
 export function uniqueExternalTools(tools: readonly (PromptExternalToolInfo | string)[] | undefined): PromptExternalToolInfo[] {
@@ -182,5 +223,6 @@ export function compilePromptSurface(opts: PromptSurfaceOptions): PromptSurface 
     model: resolvePromptModelProfile(opts.model),
     backend: opts.backend,
     mode: opts.mode ?? 'chat',
+    planSubmissionAvailable: opts.planSubmissionAvailable ?? false,
   };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import { Database } from 'bun:sqlite';
 import {
   assertReleaseTransition,
   createReleaseStore,
@@ -10,18 +10,10 @@ import {
   redactReleaseDiff,
   validateReleasePatchPath,
 } from '../src/release/index.js';
+import { makeSqlExec } from './helpers.js';
 
 function makeExec(db: Database) {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...(bindings as SQLQueryBindings[])) as Array<Record<string, unknown>> };
-      }
-      stmt.run(...(bindings as SQLQueryBindings[]));
-      return { toArray: () => [] };
-    },
-  };
+  return makeSqlExec(db);
 }
 
 describe('release lifecycle', () => {

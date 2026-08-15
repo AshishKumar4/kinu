@@ -19,22 +19,24 @@
   // limit, not ours) — `wrangler tail` is live-only and sees nothing older.
   "observability": { "enabled": true, "head_sampling_rate": 1 },
   "worker_loaders": [{ "binding": "LOADER" }],
-  // Main site served by the custom domain. Sandbox previews get a hostname
-  // each, under PREVIEW_HOST_SUFFIX below — see the note there.
+  // Main site served by the custom domain. Workspace and Sandbox previews get an
+  // isolated capability hostname each under PREVIEW_HOST_SUFFIX below.
   // custom_domain: true tells wrangler to auto-create the DNS record on
   // deploy. Without it, the `pattern + zone_id` form requires a pre-existing
   // proxied DNS record on the zone (manual setup via the dashboard).
   "routes": [
-    { "pattern": "proteus.ashishkumarsingh.com", "custom_domain": true }
+    { "pattern": "proteus.ashishkumarsingh.com", "custom_domain": true },
+    { "pattern": "*.proteus.ashishkumarsingh.com/*", "zone_name": "ashishkumarsingh.com" }
   ],
-  // Worker runs first for every non-hashed-asset request. That lets the
-  // preview host be recognised before the SPA fallback serves index.html.
-  // Static assets under /assets/* (hashed bundles) bypass the Worker.
+  // The Worker runs first for every request. Asset routing is path-only, so an
+  // `/assets/*` bypass would also intercept preview apps' own asset paths
+  // before the preview hostname can be recognized. App assets still flow
+  // through serveApp → this binding after the host-aware route table.
   "assets": {
     "directory": "dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/*", "!/assets/*"]
+    "run_worker_first": true
   },
   "durable_objects": {
     "bindings": [
@@ -108,43 +110,48 @@
   //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
   // For local dev, add to .dev.vars:
   //   AI_GATEWAY_AUTH=Bearer <your-token>
-  // PREVIEW_HOST_SUFFIX is the zone sandbox previews are served under. Each
-  // exposed port gets its own hostname, `<port>-<sandbox>-<token>.<suffix>`:
-  // the @cloudflare/sandbox SDK mints those URLs and routes them back, and
-  // every host under the suffix except this Worker's own serves previews and
-  // NOTHING else — no SPA, no login — so no session ever exists on them.
+  // PREVIEW_HOST_SUFFIX is the zone Workspace and Sandbox previews are served
+  // under. Each exposed port gets its own capability hostname: the Sandbox SDK
+  // mints its host shape and Proteus binds Nimbus ports to their session
+  // capabilities. Every host under the suffix except this Worker's own serves
+  // previews and NOTHING else — no SPA, no login — so no Proteus session ever
+  // exists on them.
   //
-  // A hostname per port is what lets a previewed app keep its own origin
-  // (cookies, localStorage, same-origin fetch) without being able to touch
-  // the app or another preview. See lib/preview-origin.ts.
+  // A hostname per port isolates origin-scoped storage and same-origin fetch
+  // while letting the preview keep normal browser origin semantics. See
+  // lib/preview-origin.ts.
   //
-  // TURNING PREVIEWS ON — two steps, because a wildcard host needs a wildcard
-  // DNS record and `custom_domain: true` cannot be one:
-  //   1. (dashboard; our Workers token has no dns_records:write) On the zone
-  //      that will host previews, add a proxied wildcard record — Type AAAA,
-  //      Name `*`, Content `100::`, Proxied. Universal SSL already covers a
-  //      first-level wildcard, so no certificate step. It must be first-level:
-  //      `*.previews.<zone>` is two levels and needs Advanced Certificate
-  //      Manager.
-  //   2. Add the matching route and set the suffix here:
-  //        "routes": [ …, { "pattern": "*.<zone>/*", "zone_name": "<zone>" } ]
-  //        "PREVIEW_HOST_SUFFIX": "<zone>"
+  // SECURITY PREREQUISITE: sibling origins are not sibling cookie sites unless
+  // this suffix is itself on the Public Suffix List. The current
+  // `proteus.ashishkumarsingh.com` suffix is not, so JavaScript can still set a
+  // Domain cookie across previews. A dedicated PSL-backed suffix is required
+  // before this can be claimed as hostile-preview cookie isolation.
   //
-  // WHICH ZONE: a zone that is not `ashishkumarsingh.com` is the stronger
-  // choice — a different registrable domain from the app means preview script
-  // is not even same-site with it (this is what nimbus-os.dev is to Nimbus,
-  // whose `*.nimbus-os.dev/*` route is already taken by the `nimbus` Worker).
-  // `ashishkumarsingh.com` itself works — the session cookie is `__Host-`
-  // prefixed, so it is host-only and cannot be read or overwritten from a
-  // sibling subdomain — but `*.ashishkumarsingh.com/*` is a claim on every
-  // subdomain of that zone, so check what else is served there before using
-  // it: anything not separately routed would start hitting this Worker.
+  // Previews are ON, served under `proteus.ashishkumarsingh.com` via the
+  // proxied wildcard `*.proteus` CNAME on the zone plus the matching route
+  // above. `custom_domain: true` cannot express a wildcard host, which is why
+  // the preview route uses the `pattern + zone_name` form against a DNS record
+  // created by hand.
   //
-  // Unset (below) means sandbox previews are unavailable: `sandbox.exposePort`
-  // tells the agent so instead of handing back a URL that cannot resolve.
+  // A second-level wildcard works here, contrary to the usual Universal SSL
+  // limit: the certificate Cloudflare serves for this zone lists
+  // `*.proteus.ashishkumarsingh.com` in its SANs, verified against the live
+  // endpoint. So no Advanced Certificate Manager and no `AAAA * 100::` record
+  // were needed. Re-check the SAN list before moving previews to another zone,
+  // because a deeper wildcard is not covered by default.
+  //
+  // Scoping previews to the `proteus` subtree rather than `*.<zone>/*` is
+  // deliberate: a route on the bare zone wildcard would claim every subdomain
+  // of `ashishkumarsingh.com`, so anything not separately routed would start
+  // hitting this Worker. The session cookie is `__Host-` prefixed and so is
+  // host-only regardless, but the narrower claim is the one to keep.
+  //
+    // Setting this empty means previews are unavailable: exposePort tells the
+    // agent so instead of handing back a URL that cannot resolve. It does NOT
+    // disable either executor.
   "vars": {
     "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
-    "PREVIEW_HOST_SUFFIX": "",
+    "PREVIEW_HOST_SUFFIX": "proteus.ashishkumarsingh.com",
     "CLI_PUBLIC_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLI_APPROVAL_ORIGIN": "https://proteus.ashishkumarsingh.com",
     "CLOUDFLARE_OAUTH_CLIENT_ID": "457ce8fea9fb4e89d4a6df3a71cdf875",
@@ -229,7 +236,7 @@
         "directory": "dist/client",
         "binding": "ASSETS",
         "not_found_handling": "single-page-application",
-        "run_worker_first": ["/*", "!/assets/*"]
+        "run_worker_first": true
       },
       "durable_objects": {
         "bindings": [
@@ -279,7 +286,7 @@
         "AI_GATEWAY_URL": "https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1",
         // Staging is workers.dev only, and workers.dev has no wildcard
         // subdomains, so it cannot host previews at all — the SDK rejects
-        // `.workers.dev` outright. Sandbox previews are off here until staging
+        // `.workers.dev` outright. Previews are off here until staging
         // gets a zone of its own.
         "PREVIEW_HOST_SUFFIX": "",
         "CLI_PUBLIC_ORIGIN": "https://proteus-staging.ashishkmr472.workers.dev",

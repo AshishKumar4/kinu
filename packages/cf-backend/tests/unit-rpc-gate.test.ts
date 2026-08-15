@@ -7,6 +7,7 @@
 // pre-unification drift where the REST router and the websocket gate kept two
 // mirrored copies of the scope policy.
 import { describe, expect, test } from 'bun:test';
+import * as v from 'valibot';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
@@ -29,8 +30,15 @@ function rpcFrame(method: string, id = 'req-1'): string {
   return JSON.stringify({ type: 'rpc', id, method, args: [] });
 }
 
-const EXEC_ONLY = [cliScopesConnectionTag('workspace.exec')!];
-const READ_EXEC = [cliScopesConnectionTag('workspace.read,workspace.exec')!];
+function scopeTag(scopes: string): string {
+  const tag = cliScopesConnectionTag(scopes);
+  if (!tag) throw new Error(`Expected a connection tag for scopes: ${scopes}`);
+  return tag;
+}
+
+const RpcErrorFrameSchema = v.object({ error: v.string() });
+const EXEC_ONLY = [scopeTag('workspace.exec')];
+const READ_EXEC = [scopeTag('workspace.read,workspace.exec')];
 
 describe('connect-ticket scope tags', () => {
   test('interactive sessions carry no tag and stay unrestricted', () => {
@@ -45,7 +53,7 @@ describe('connect-ticket scope tags', () => {
   });
 
   test('an unparseable scope header fails closed, never open', () => {
-    const tag = cliScopesConnectionTag('totally-bogus')!;
+    const tag = scopeTag('totally-bogus');
     expect(cliScopesFromTags([tag])).toEqual([]);
     expect(rejectOutOfScopeRpc([tag], rpcFrame('getAgentStatus'))).not.toBeNull();
   });
@@ -69,7 +77,7 @@ describe('the scope table', () => {
     expect(requiredRpcAccess('destroyAgent')).toBe('never');
     expect(rpcAccessScope('never')).toBeNull();
     const rejection = rejectOutOfScopeRpc(READ_EXEC, rpcFrame('destroyAgent', 'rpc-3'));
-    expect(JSON.parse(rejection!).error).toContain('not remotely invokable');
+    expect(v.parse(RpcErrorFrameSchema, JSON.parse(rejection ?? '')).error).toContain('not remotely invokable');
   });
 
   test('access classes narrow to scopes only for scope-carrying rows', () => {
@@ -107,8 +115,8 @@ describe('rpc gate on scoped connections', () => {
   });
 
   test('workspace.exec rows are allowed with workspace.exec (same grant REST gave POST /stop and executor exec)', () => {
-    for (const method of ['cancelCurrentWork', 'executeInExecutor']) {
-      expect(AGENT_RPC_ACCESS[method as keyof typeof AGENT_RPC_ACCESS]).toBe('workspace.exec');
+    for (const method of ['cancelCurrentWork', 'executeInExecutor'] as const) {
+      expect(AGENT_RPC_ACCESS[method]).toBe('workspace.exec');
       expect(rejectOutOfScopeRpc(EXEC_ONLY, rpcFrame(method))).toBeNull();
       expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method))).toBeNull();
     }
@@ -126,12 +134,12 @@ describe('rpc gate on scoped connections', () => {
     for (const method of [
       'checkpointStatus', 'getEvolutionChangelog', 'getWorkspaceAgents', 'listSubordinates',
       'latestAlternateTakes', 'listFileCheckpoints', 'listMounts', 'planFileRestore',
-    ]) {
-      expect(AGENT_RPC_ACCESS[method as keyof typeof AGENT_RPC_ACCESS]).toBe('interactive');
+    ] as const) {
+      expect(AGENT_RPC_ACCESS[method]).toBe('interactive');
       // Denied to a read-only token (the regression this guards) AND to a
       // read+exec token (the strict, non-widening approximation of the old
       // "needs read allowlist + exec to open the socket" requirement).
-      expect(rejectOutOfScopeRpc([cliScopesConnectionTag('workspace.read')!], rpcFrame(method))).not.toBeNull();
+      expect(rejectOutOfScopeRpc([scopeTag('workspace.read')], rpcFrame(method))).not.toBeNull();
       expect(rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method))).not.toBeNull();
     }
   });
@@ -142,6 +150,7 @@ describe('rpc gate on scoped connections', () => {
       'forkAgent', 'revertChangelogEntry', 'restoreFileCheckpoint',
       'pickAlternateTake', 'branchTurn', 'setModel', 'setDisplayName',
       'markChangelogSeen', 'createTimerTrigger', 'spawnSubordinate', 'dismissSubordinate',
+      'savePlanReviewAnnotations', 'decidePlanReview',
     ]) {
       const rejection = rejectOutOfScopeRpc(READ_EXEC, rpcFrame(method, 'rpc-9'));
       expect(rejection).not.toBeNull();
@@ -149,6 +158,12 @@ describe('rpc gate on scoped connections', () => {
       expect(frame).toMatchObject({ type: 'rpc', id: 'rpc-9', success: false });
       expect(frame.error).toContain('proteus auth');
     }
+  });
+
+  test('plan review RPCs use the owner boundary appropriate to their effect', () => {
+    expect(AGENT_RPC_ACCESS.getActivePlanReview).toBe('workspace.read');
+    expect(AGENT_RPC_ACCESS.savePlanReviewAnnotations).toBe('interactive');
+    expect(AGENT_RPC_ACCESS.decidePlanReview).toBe('interactive');
   });
 
   test('every interactive row is denied to scoped tokens', () => {
@@ -164,7 +179,7 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     const server = source('src/server.ts');
     expect(server).toContain('next.delete(CLI_SCOPES_HEADER)');
     expect(server).toContain('next.set(CLI_SCOPES_HEADER, identity.cliScopes');
-    expect(server).toContain('cliScopes: verified.scopes');
+    expect(server).toContain('if (verified.scopes) identity.cliScopes = verified.scopes');
     // Tickets only authenticate the agent's root websocket path — sub-paths
     // would expose child-agent callables to scoped sockets. The anchored path
     // regex lives in the agent-routing policy module server.ts routes through.
@@ -175,7 +190,7 @@ describe('wiring invariants (edge → ticket → DO, one policy table)', () => {
     const userDO = source('src/user/user-do.ts');
     expect(userDO).toContain('cliBearerScopes');
     expect(userDO).toContain('getActiveAccessTokenScopes');
-    expect(userDO).toContain('scopes: bearerScopes');
+    expect(userDO).toContain("if (bearerScopes !== 'all') verification.scopes = bearerScopes");
   });
 
   test('the actor substrate gates rpc frames and pins scoped sockets readonly', () => {

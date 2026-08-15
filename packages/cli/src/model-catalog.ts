@@ -1,6 +1,25 @@
 /** Model catalog entries as both backends expose them through AgentClient. */
 
 import { DEFAULT_WORKERS_AI_MODEL_SPEC, type ProviderFailure } from '@proteus/core';
+import * as v from 'valibot';
+
+const ModelMenuPayloadSchema = v.object({
+  models: v.optional(v.array(v.unknown()), []),
+  failures: v.optional(v.array(v.unknown()), []),
+});
+const ProviderFailureSchema = v.object({
+  provider: v.string(),
+  reason: v.string(),
+  label: v.optional(v.string()),
+});
+const ModelEntryPayloadSchema = v.object({
+  provider: v.optional(v.unknown()),
+  id: v.optional(v.unknown()),
+  spec: v.optional(v.unknown()),
+  label: v.optional(v.unknown()),
+  capabilities: v.optional(v.unknown()),
+  contextWindow: v.optional(v.unknown()),
+});
 
 export interface AgentModelEntry {
   spec: string;
@@ -57,47 +76,54 @@ export function validateModelSpec(models: readonly AgentModelEntry[], spec: stri
 
 /** Narrow an untrusted model menu (HTTP body, RPC result) into the CLI's
  *  shape: entries normalized and deduped, failures kept verbatim. */
-export function normalizeModelMenu(payload: unknown): AgentModelMenu {
-  const source = payload && typeof payload === 'object' ? payload as Record<string, unknown> : {};
-  const rows = Array.isArray(source.models) ? source.models : [];
+export function normalizeModelMenu(input: { payload: unknown }): AgentModelMenu {
+  const parsed = v.safeParse(ModelMenuPayloadSchema, input.payload);
+  const source = parsed.success ? parsed.output : { models: [], failures: [] };
   return {
-    models: dedupeModelEntries(normalizeModelEntries(rows)),
-    failures: normalizeProviderFailures(source.failures),
+    models: dedupeModelEntries(normalizeModelEntries({ rows: source.models })),
+    failures: normalizeProviderFailures({ rows: source.failures }),
   };
 }
 
-function normalizeProviderFailures(rows: unknown): ProviderFailure[] {
-  if (!Array.isArray(rows)) return [];
-  return rows.flatMap((row): ProviderFailure[] => {
-    if (!row || typeof row !== 'object') return [];
-    const item = row as Record<string, unknown>;
-    const provider = stringValue(item.provider);
-    const reason = stringValue(item.reason);
-    if (!provider || !reason) return [];
-    const label = stringValue(item.label);
-    return [{ provider, reason, ...(label ? { label } : {}) }];
+function normalizeProviderFailures(input: { rows: unknown[] }): ProviderFailure[] {
+  return input.rows.flatMap((row): ProviderFailure[] => {
+    const parsed = v.safeParse(ProviderFailureSchema, row);
+    if (!parsed.success || !parsed.output.provider.trim() || !parsed.output.reason.trim()) return [];
+    const failure: ProviderFailure = {
+      provider: parsed.output.provider.trim(),
+      reason: parsed.output.reason.trim(),
+    };
+    if (parsed.output.label?.trim()) failure.label = parsed.output.label.trim();
+    return [failure];
   });
 }
 
-export function normalizeModelEntries(rows: unknown[]): AgentModelEntry[] {
-  return rows.flatMap((row) => {
-    if (!row || typeof row !== 'object') return [];
-    const item = row as Record<string, unknown>;
-    const provider = stringValue(item.provider) ?? '';
-    const id = stringValue(item.id);
-    const spec = stringValue(item.spec) ?? (provider && id ? `${provider}/${id}` : null);
+export function normalizeModelEntries(input: { rows: unknown[] }): AgentModelEntry[] {
+  return input.rows.flatMap((row) => {
+    const parsed = v.safeParse(ModelEntryPayloadSchema, row);
+    if (!parsed.success) return [];
+    const item = parsed.output;
+    const provider = stringValue({ value: item.provider }) ?? '';
+    const id = stringValue({ value: item.id });
+    const spec = stringValue({ value: item.spec }) ?? (provider && id ? `${provider}/${id}` : null);
     if (!spec) return [];
-    const label = stringValue(item.label) ?? id ?? spec;
-    const capabilities = Array.isArray(item.capabilities)
-      ? item.capabilities.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
-      : undefined;
-    return [{
+    const label = stringValue({ value: item.label }) ?? id ?? spec;
+    const capabilities = v.safeParse(v.array(v.unknown()), item.capabilities);
+    const entry: AgentModelEntry = {
       spec,
       label,
       provider: provider || spec.split('/', 1)[0] || 'model',
-      capabilities,
-      contextWindow: numberValue(item.contextWindow),
-    }];
+    };
+    const filteredCapabilities = capabilities.success
+      ? capabilities.output.flatMap((value): string[] => {
+          const parsedCapability = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
+          return parsedCapability.success ? [parsedCapability.output] : [];
+        })
+      : [];
+    if (filteredCapabilities.length > 0) entry.capabilities = filteredCapabilities;
+    const contextWindow = numberValue({ value: item.contextWindow });
+    if (contextWindow !== undefined) entry.contextWindow = contextWindow;
+    return [entry];
   });
 }
 
@@ -145,10 +171,12 @@ function sharedPrefixLength(left: string, right: string): number {
   return index;
 }
 
-function stringValue(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+function stringValue(input: { value: unknown }): string | null {
+  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), input.value);
+  return parsed.success ? parsed.output : null;
 }
 
-function numberValue(value: unknown): number | undefined {
-  return typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
+function numberValue(input: { value: unknown }): number | undefined {
+  const parsed = v.safeParse(v.pipe(v.number(), v.finite(), v.minValue(1)), input.value);
+  return parsed.success ? Math.floor(parsed.output) : undefined;
 }

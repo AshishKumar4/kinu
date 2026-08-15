@@ -19,6 +19,7 @@ import type { ModelProvider, ModelInfo, ProviderDeps } from '@proteus/core';
 import { authCacheKey, cloneModelInfos, listModelsDevProviderModels } from '@proteus/core';
 import { CLOUDFLARE_AI_GATEWAY_CRED_KEY, cloudflareAccountAPIRoot } from '../lib/cloudflare-oauth.js';
 import { createCloudflareAIFetch, mapGatewayError } from './cloudflare-ai-fetch.js';
+import * as v from 'valibot';
 
 export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
 
@@ -26,18 +27,24 @@ export const MY_GATEWAY_PROVIDER_ID = 'my-gateway';
  *  serve, mapped to the models.dev catalog id that carries model metadata AND
  *  doubles as the wire author prefix (`author/model`). `google-ai-studio` is
  *  the one slug whose author differs from the slug itself. */
-const GATEWAY_SLUG_TO_CATALOG: Record<string, string> = {
-  openai: 'openai',
-  anthropic: 'anthropic',
-  'google-ai-studio': 'google',
-  xai: 'xai',
-  groq: 'groq',
-  mistral: 'mistral',
-  deepseek: 'deepseek',
-  cerebras: 'cerebras',
-  perplexity: 'perplexity',
-  cohere: 'cohere',
-};
+const GATEWAY_SLUG_TO_CATALOG = new Map([
+  ['openai', 'openai'],
+  ['anthropic', 'anthropic'],
+  ['google-ai-studio', 'google'],
+  ['xai', 'xai'],
+  ['groq', 'groq'],
+  ['mistral', 'mistral'],
+  ['deepseek', 'deepseek'],
+  ['cerebras', 'cerebras'],
+  ['perplexity', 'perplexity'],
+  ['cohere', 'cohere'],
+]);
+const ProviderConfigsSchema = v.object({
+  result: v.optional(v.array(v.object({ provider_slug: v.optional(v.string()) }))),
+});
+const CreditBalanceSchema = v.object({
+  result: v.optional(v.object({ balance: v.optional(v.number()) })),
+});
 
 /** Providers Unified Billing can pay for without a stored key
  *  (developers.cloudflare.com/ai-gateway/features/unified-billing/). Listed
@@ -68,7 +75,7 @@ export function createMyGatewayProvider(): ModelProvider {
       const slugs = await servableProviderSlugs(auth.baseURL, auth.headers, deps);
       const models: ModelInfo[] = [];
       for (const slug of slugs) {
-        const catalogId = GATEWAY_SLUG_TO_CATALOG[slug];
+        const catalogId = GATEWAY_SLUG_TO_CATALOG.get(slug);
         if (!catalogId) continue; // slug the OpenAI-compat surface can't serve
         for (const model of await listModelsDevProviderModels(catalogId, deps)) {
           models.push({ ...model, id: `${catalogId}/${model.id}` });
@@ -120,9 +127,9 @@ async function servableProviderSlugs(
       { headers },
     );
     if (res.ok) {
-      const body = await res.json() as { result?: Array<{ provider_slug?: unknown }> };
+      const body = v.parse(ProviderConfigsSchema, await res.json());
       for (const row of body.result ?? []) {
-        if (typeof row?.provider_slug === 'string') slugs.add(row.provider_slug);
+        if (row.provider_slug !== undefined) slugs.add(row.provider_slug);
       }
     }
   } catch { /* BYOK listing unavailable — fall through to unified billing */ }
@@ -130,8 +137,8 @@ async function servableProviderSlugs(
   try {
     const res = await fetchImpl(`${account}/ai-gateway/billing/credit-balance`, { headers });
     if (res.ok) {
-      const body = await res.json() as { result?: { balance?: unknown } };
-      if (typeof body.result?.balance === 'number' && body.result.balance > 0) {
+      const body = v.parse(CreditBalanceSchema, await res.json());
+      if (body.result?.balance !== undefined && body.result.balance > 0) {
         for (const slug of UNIFIED_BILLING_SLUGS) slugs.add(slug);
       }
     }
@@ -139,4 +146,3 @@ async function servableProviderSlugs(
 
   return [...slugs].sort();
 }
-

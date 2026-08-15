@@ -8,7 +8,23 @@
  * is wired — the same structural gate the native tool's action enum reads.
  */
 import type { CodemodeProvider } from '../rlm.js';
+import * as v from 'valibot';
+import { decodeJsonValue, type JsonValue } from '../utils/json.js';
 import { createMemoryDispatcher, type MemoryToolDeps } from './memory-tool.js';
+
+const SessionOptionsSchema = v.object({
+  query: v.optional(v.string()),
+  around_message_id: v.optional(v.string()),
+  window: v.optional(v.number()),
+  limit: v.optional(v.number()),
+  max_chars: v.optional(v.number()),
+});
+
+const ConfidenceSchema = v.optional(v.number());
+
+async function decodeMemoryResult(input: { pending: Promise<unknown> }): Promise<JsonValue> {
+  return decodeJsonValue({ value: await input.pending });
+}
 
 const TYPES_BASE = `  /** Save a prose note or lesson too long to be a keyed value. */
   save(content: string): Promise<string>;
@@ -37,28 +53,37 @@ const TYPES_FACTS = `
  */
 export function createMemoryCodemodeProvider(deps: () => MemoryToolDeps): CodemodeProvider {
   const hasFacts = !!deps().facts;
-  const dispatch = (action: string) => (...args: unknown[]): Promise<unknown> => {
+  const dispatch = (action: string) => async (...args: unknown[]): Promise<JsonValue> => {
     const d = deps();
     const run = createMemoryDispatcher(d);
     switch (action) {
       case 'save':
-        return run({ action: 'save', content: String(args[0] ?? '') });
+        return decodeMemoryResult({ pending: run({ action: 'save', content: String(args[0] ?? '') }) });
       case 'search':
-        return run({ action: 'search', query: String(args[0] ?? '') });
+        return decodeMemoryResult({ pending: run({ action: 'search', query: String(args[0] ?? '') }) });
       case 'sessions': {
-        const opts = (args[0] && typeof args[0] === 'object' ? args[0] : {}) as {
-          query?: string; around_message_id?: string; window?: number; limit?: number; max_chars?: number;
-        };
-        return run({ action: 'sessions', ...opts });
+        const options = v.safeParse(SessionOptionsSchema, args[0] ?? {});
+        if (!options.success) return { error: 'memory.sessions: invalid options' };
+        return decodeMemoryResult({ pending: run({ action: 'sessions', ...options.output }) });
       }
-      case 'remember':
-        return run({ action: 'remember', key: String(args[0] ?? ''), value: args[1], confidence: args[2] as number | undefined });
+      case 'remember': {
+        const confidence = v.safeParse(ConfidenceSchema, args[2]);
+        if (!confidence.success) return { error: 'memory.remember: confidence must be a number' };
+        return decodeMemoryResult({
+          pending: run({
+            action: 'remember',
+            key: String(args[0] ?? ''),
+            value: args[1],
+            confidence: confidence.output,
+          }),
+        });
+      }
       case 'recall':
-        return run({ action: 'recall', key: String(args[0] ?? '') });
+        return decodeMemoryResult({ pending: run({ action: 'recall', key: String(args[0] ?? '') }) });
       case 'forget':
-        return run({ action: 'forget', key: String(args[0] ?? '') });
+        return decodeMemoryResult({ pending: run({ action: 'forget', key: String(args[0] ?? '') }) });
       default:
-        return Promise.resolve({ error: `unknown memory action '${action}'` });
+        return { error: `unknown memory action '${action}'` };
     }
   };
 

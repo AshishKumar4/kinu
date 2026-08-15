@@ -4,9 +4,9 @@
  *
  * Two tiers:
  *   'all_local_actions' — the base grant: the agent may run device actions
- *     (exec/read/write/…). File-plane access through the /pc mount is scoped
+ *     (exec/read/write/…). Laptop file access is scoped
  *     to the consented subtree (the device connect dir / home).
- *   'full_filesystem'   — the stronger tier: additionally lifts the /pc
+ *   'full_filesystem'   — the stronger tier: additionally lifts the laptop
  *     subtree scope so absolute paths outside the consented directory are
  *     reachable. Implies the base grant. Never the default.
  *
@@ -25,6 +25,7 @@
  */
 
 import type { DynamicApproval } from '../prompting/volatile-context.js';
+import * as v from 'valibot';
 
 export const DEVICE_CONSENT_SCOPE = 'all_local_actions';
 export const DEVICE_CONSENT_SCOPE_FULL_FS = 'full_filesystem';
@@ -74,9 +75,10 @@ export function summarizeDeviceAction(method: string, params: unknown[]): Device
   };
 }
 
-function summarizeParam(value: unknown): string {
-  const text = typeof value === 'string' ? value : JSON.stringify(value);
-  return (text ?? String(value)).slice(0, 120);
+function summarizeParam<Value>(value: Value): string {
+  const text = v.safeParse(v.string(), value);
+  const rendered = text.success ? text.output : JSON.stringify(value);
+  return (rendered ?? String(value)).slice(0, 120);
 }
 
 /** What the agent is asking permission for. */

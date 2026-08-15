@@ -9,20 +9,26 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
+import { makeSql } from './helpers.js';
 import {
   RESERVED_VIEW_TITLES, VIEW_DATA_SOURCES, VIEW_LIMITS,
   createView, deleteView, initViewTables, listViewVersions, listViews, parseViewSpec,
   readView, resolveViewPath, revertView, viewSlug,
-  type ViewSpec,
 } from '../src/views/index.js';
-import type { SqlExecutor, VFS } from '../src/types/primitives.js';
+import type { VFS } from '../src/types/primitives.js';
 
 // ── fixtures ────────────────────────────────────────────────────────────────
 
-const validSpec = (over: Partial<ViewSpec> = {}): unknown => ({
-  v: 1,
-  title: 'Deploy health',
-  blocks: [
+interface ViewSpecInput {
+  v: number;
+  title: string;
+  blocks: object[];
+  refreshMs?: number;
+}
+
+const validSpec = (overrides: Partial<ViewSpecInput> = {}): ViewSpecInput => ({
+  v: 1, title: 'Deploy health', blocks: [
     { type: 'stat', label: 'Open changes', source: { rpc: 'getReleaseBoard', path: 'changes' }, agg: 'count' },
     {
       type: 'table',
@@ -30,7 +36,7 @@ const validSpec = (over: Partial<ViewSpec> = {}): unknown => ({
       columns: [{ field: 'status', label: 'Status', as: 'badge' }],
     },
   ],
-  ...over,
+  ...overrides,
 });
 
 function memoryVfs(): VFS {
@@ -41,19 +47,24 @@ function memoryVfs(): VFS {
       if (hit === undefined) throw new Error(`ENOENT: ${path}`);
       return hit;
     },
-    writeFile: async (path, data) => { files.set(path, typeof data === 'string' ? data : new TextDecoder().decode(data)); },
+    writeFile: async (path, data) => {
+      if (v.is(v.string(), data)) files.set(path, data);
+      else files.set(path, new TextDecoder().decode(data));
+    },
     readdir: async (path) => [...files.keys()].filter((f) => f.startsWith(`${path}/`)),
-    stat: async (path) => (files.has(path) ? { size: files.get(path)!.length, mtimeMs: 0, isDir: false } : null),
+    stat: async (path) => {
+      const data = files.get(path);
+      return data === undefined ? null : { size: data.length, mtimeMs: 0, isDir: false };
+    },
     unlink: async (path) => { files.delete(path); },
     mkdir: async () => {},
     exists: async (path) => files.has(path),
   };
 }
 
-function store(): { vfs: VFS; sql: SqlExecutor; db: Database } {
+function store() {
   const db = new Database(':memory:');
-  const sql = (<T>(strings: TemplateStringsArray, ...values: unknown[]): T[] =>
-    db.query(strings.join('?')).all(...(values as never[])) as T[]) as unknown as SqlExecutor;
+  const sql = makeSql(db);
   initViewTables((ddl: string) => { db.exec(ddl); });
   return { vfs: memoryVfs(), sql, db };
 }
@@ -71,7 +82,7 @@ describe('view spec — what a view may say', () => {
   test('refuses a data source that is not on the allowlist', () => {
     const out = parseViewSpec(validSpec({
       blocks: [{ type: 'stat', label: 'x', source: { rpc: 'destroyAgent' } }],
-    } as unknown as Partial<ViewSpec>));
+    }));
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.error).toContain('unknown data source');
@@ -83,10 +94,10 @@ describe('view spec — what a view may say', () => {
     for (const rpc of ['listPendingConsents', 'sampleOutcomeLabeling', 'decideReleaseApproval']) {
       const out = parseViewSpec(validSpec({
         blocks: [{ type: 'list', source: { rpc } }],
-      } as unknown as Partial<ViewSpec>));
+      }));
       expect(out.ok).toBe(false);
     }
-    expect(VIEW_DATA_SOURCES as readonly string[]).not.toContain('listPendingConsents');
+    expect(new Set<string>(VIEW_DATA_SOURCES).has('listPendingConsents')).toBe(false);
   });
 
   test('refuses block types that do not exist, rather than dropping them', () => {
@@ -98,7 +109,7 @@ describe('view spec — what a view may say', () => {
       { type: 'image', url: 'https://evil.example/pixel.gif' },
       { type: 'link', href: 'javascript:alert(1)', label: 'Approve' },
     ]) {
-      const out = parseViewSpec(validSpec({ blocks: [block] } as unknown as Partial<ViewSpec>));
+      const out = parseViewSpec(validSpec({ blocks: [block] }));
       expect(out.ok).toBe(false);
     }
   });
@@ -106,7 +117,7 @@ describe('view spec — what a view may say', () => {
   test('refuses unknown keys on a known block instead of stripping them', () => {
     const out = parseViewSpec(validSpec({
       blocks: [{ type: 'markdown', text: 'hi', onClick: 'approve()' }],
-    } as unknown as Partial<ViewSpec>));
+    }));
     expect(out.ok).toBe(false);
   });
 
@@ -124,7 +135,7 @@ describe('view spec — what a view may say', () => {
     for (const path of ['__proto__', 'constructor.prototype', 'a.__proto__.b', 'a[0]', 'a b']) {
       const out = parseViewSpec(validSpec({
         blocks: [{ type: 'stat', label: 'x', source: { rpc: 'getReleaseBoard', path } }],
-      } as unknown as Partial<ViewSpec>));
+      }));
       expect(out.ok).toBe(false);
     }
   });
@@ -135,13 +146,13 @@ describe('view spec — what a view may say', () => {
         type: 'section', title: 'Outer',
         blocks: [{ type: 'section', title: 'Inner', blocks: [{ type: 'markdown', text: 'x' }] }],
       }],
-    } as unknown as Partial<ViewSpec>);
+    });
     expect(parseViewSpec(nested).ok).toBe(false);
   });
 
   test('bounds the things the renderer has to walk', () => {
     const many = Array.from({ length: VIEW_LIMITS.blocks + 1 }, () => ({ type: 'markdown', text: 'x' }));
-    expect(parseViewSpec(validSpec({ blocks: many } as unknown as Partial<ViewSpec>)).ok).toBe(false);
+    expect(parseViewSpec(validSpec({ blocks: many })).ok).toBe(false);
     expect(parseViewSpec(validSpec({ refreshMs: 100 })).ok).toBe(false);
     expect(parseViewSpec(validSpec({ refreshMs: 15_000 })).ok).toBe(true);
     expect(parseViewSpec(validSpec({ title: 'x'.repeat(VIEW_LIMITS.titleChars + 1) })).ok).toBe(false);
@@ -150,7 +161,7 @@ describe('view spec — what a view may say', () => {
   test('names the failing field so the model can fix it in one shot', () => {
     const out = parseViewSpec(validSpec({
       blocks: [{ type: 'stat', label: 'x', source: { rpc: 'nope' } }],
-    } as unknown as Partial<ViewSpec>));
+    }));
     expect(out.ok).toBe(false);
     if (out.ok) return;
     expect(out.error).toContain('blocks.0.source.rpc');
@@ -176,7 +187,8 @@ describe('view path resolution', () => {
     expect(resolveViewPath({ a: 1 }, '__proto__')).toBeUndefined();
     expect(resolveViewPath({ a: 1 }, 'constructor')).toBeUndefined();
     // Inherited properties are not own properties, so they do not resolve.
-    expect(resolveViewPath(Object.create({ inherited: 'leak' }) as object, 'inherited')).toBeUndefined();
+    const inherited: import('../src/utils/json.js').JsonObject = Object.create({ inherited: 'leak' });
+    expect(resolveViewPath(inherited, 'inherited')).toBeUndefined();
   });
 });
 

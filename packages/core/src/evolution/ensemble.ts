@@ -98,6 +98,7 @@
  * the next calibration set with the panel and audit a slice of it by hand.
  */
 
+import * as v from 'valibot';
 import type { LLM, SqlExecutor } from '../types/primitives.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { formatScoreInterval } from '../utils/stats.js';
@@ -165,10 +166,7 @@ export function buildEnsembleJudgePrompt(item: LabelingItem): string {
 
 function parseVerdict(raw: string): OutcomeLabel | null {
   try {
-    const { verdict } = extractJsonObject(raw) as { verdict?: unknown };
-    return (OUTCOME_LABELS as readonly string[]).includes(verdict as string)
-      ? verdict as OutcomeLabel
-      : null;
+    return v.parse(v.object({ verdict: v.picklist(OUTCOME_LABELS) }), extractJsonObject(raw)).verdict;
   } catch {
     return null;
   }
@@ -589,7 +587,7 @@ export function renderEnsembleReport(report: EnsembleReport): string {
 function standInVerdict(
   kappa: EnsembleReport['kappa'],
   accuracy: ClassifierAccuracy | null,
-): { qualified: boolean; conditions: StandInCondition[] } {
+) {
   const pair = kappa.humanEnsemble;
   const against = kappa.humanClassifier;
   const conditions: StandInCondition[] = [

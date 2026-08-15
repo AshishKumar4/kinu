@@ -112,8 +112,9 @@ function htmlToText(html: string): string {
 }
 
 function attachmentSize(content: ArrayBuffer | Uint8Array | string): number {
-  if (typeof content === 'string') return content.length;
-  return content.byteLength;
+  return content instanceof ArrayBuffer || content instanceof Uint8Array
+    ? content.byteLength
+    : content.length;
 }
 
 /** Parse a buffered raw MIME message into the turn-input fields. */

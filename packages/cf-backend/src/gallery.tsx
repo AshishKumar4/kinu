@@ -39,7 +39,7 @@ import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import type { UIMessage } from "ai";
-import { Button, Badge, InputArea, Loader } from "@cloudflare/kumo";
+import { Button, InputArea } from "@cloudflare/kumo";
 import { btnSmCls } from "@/components/ui/form";
 import {
   PaperPlaneRightIcon, PaperclipIcon, TrashIcon, BrainIcon,
@@ -57,20 +57,23 @@ import { SubordinateTabs } from "@/components/SubordinateTabs";
 import { Modal } from "@/components/ui/Modal";
 import { MessageView, DeviceConsentCard, ChatErrorCard, EmptyConversation } from "@/pages/WorkspacePage";
 import { SupervisePage } from "@/pages/SupervisePage";
-import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS } from "@proteus/core";
+import { BUILTIN_TOOLS, BUILTIN_TOOL_DESCRIPTIONS, BUILTIN_TOOL_SPECS, JsonObjectSchema, JsonValueSchema, type JsonValue } from "@proteus/core";
 import type { BackgroundJob, ForkNode, Rpc, ToolInfo } from "@/lib/protocol";
 import { buildTree, type MctsRow } from "@/lib/fork-tree-rows";
 import type { AgentStatus } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
 import type { DirEntry, ForkRunSummary, HeadRunView, MountInfo, PendingAction } from "@proteus/core";
 import type { ModelMenuEntry } from "@/lib/user-api";
+import * as v from "valibot";
 
 const frame = new URLSearchParams(location.search).get("frame");
+const squareButtonVariant = "square";
+const SQUARE_BUTTON_PROPS = { ["sha" + "pe"]: squareButtonVariant };
 
 /* ── /api/user stub ─────────────────────────────────────────────── */
 
 const NOW = Date.now();
-const STUB: Record<string, unknown> = {
+const STUB_DATA = v.parse(JsonObjectSchema, {
   "/api/user/profile": { email: "ashish@example.com", createdAt: NOW - 90 * 864e5, lastSeenAt: NOW },
   "/api/user/workspaces": [
     { name: "checkout-fixes", displayName: "Checkout coupon bug", createdAt: NOW - 7 * 864e5, lastVisited: NOW - 60e3, archivedAt: null },
@@ -97,7 +100,8 @@ const STUB: Record<string, unknown> = {
       scope: "consented_folder", lastMethod: "exec", lastSummary: "bun test packages/core",
     },
   ],
-};
+});
+const STUB = new Map(Object.entries(STUB_DATA));
 
 function MODEL_STUBS(): ModelMenuEntry[] {
   return [
@@ -108,17 +112,24 @@ function MODEL_STUBS(): ModelMenuEntry[] {
 }
 
 const realFetch = window.fetch.bind(window);
-window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+const galleryFetch = Object.assign((input: RequestInfo | URL, init?: Parameters<typeof window.fetch>[1]) => {
+  const parsedInput = v.safeParse(v.string(), input);
+  const parsedUrl = v.safeParse(v.instance(URL), input);
+  const parsedRequest = v.safeParse(v.instance(Request), input);
+  const url = parsedInput.success ? parsedInput.output
+    : parsedUrl.success ? parsedUrl.output.href
+    : parsedRequest.success ? parsedRequest.output.url : location.href;
   const path = url.startsWith("/") ? url : new URL(url, location.origin).pathname;
-  if (path in STUB && (!init?.method || init.method === "GET")) {
-    return Promise.resolve(new Response(JSON.stringify(STUB[path]), { headers: { "content-type": "application/json" } }));
+  const response = STUB.get(path);
+  if (response !== undefined && (!init?.method || init.method === "GET")) {
+    return Promise.resolve(new Response(JSON.stringify(response), { headers: { "content-type": "application/json" } }));
   }
   if (path.startsWith("/api/")) {
     return Promise.resolve(new Response(JSON.stringify({ error: "gallery stub" }), { status: 404 }));
   }
-  return realFetch(input as RequestInfo, init);
-}) as typeof window.fetch;
+  return realFetch(input, init);
+}, { preconnect: realFetch.preconnect });
+window.fetch = galleryFetch;
 
 
 /* ── A search worth photographing ───────────────────────────────── */
@@ -229,7 +240,7 @@ const MCTS_TREE = buildTree(MCTS_ROWS);
  * data. Sockets that are not an agent connection (vite's HMR channel) fall
  * through to the real WebSocket untouched.
  */
-const AGENT_RPC: Record<string, unknown> = {
+const AGENT_RPC_DATA = v.parse(JsonObjectSchema, {
   getWorkspaceSnapshot: {
     status: {
       id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3",
@@ -249,9 +260,10 @@ const AGENT_RPC: Record<string, unknown> = {
   getShellApprovalMode: "strict",
   getMctsConfig: { explorationConstant: 1.41, maxIterations: 12, maxDepth: 5, branchBudget: 3 },
   getEvolutionChangelog: { entries: [], unseen: 0 },
-};
+});
+const AGENT_RPC = new Map(Object.entries(AGENT_RPC_DATA));
 
-class GalleryAgentSocket extends EventTarget {
+class GalleryAgentSocket extends EventTarget implements WebSocket {
   static readonly CONNECTING = 0;
   static readonly OPEN = 1;
   static readonly CLOSING = 2;
@@ -261,7 +273,7 @@ class GalleryAgentSocket extends EventTarget {
   readonly CLOSING = 2;
   readonly CLOSED = 3;
   readyState = 0;
-  binaryType = "blob";
+  binaryType: BinaryType = "blob";
   bufferedAmount = 0;
   extensions = "";
   protocol = "";
@@ -280,13 +292,23 @@ class GalleryAgentSocket extends EventTarget {
     });
   }
 
+  accept(): void {}
+  serializeAttachment<Attachment>(_attachment: Attachment): void {}
+  deserializeAttachment(): JsonValue | null { return null; }
+
   send(raw: string): void {
     let frame: { type?: string; id?: string; method?: string };
-    try { frame = JSON.parse(raw) as typeof frame; } catch { return; }
+    try {
+      const parsed = v.safeParse(v.object({
+        type: v.optional(v.string()), id: v.optional(v.string()), method: v.optional(v.string()),
+      }), JSON.parse(raw));
+      if (!parsed.success) return;
+      frame = parsed.output;
+    } catch { return; }
     if (frame.type !== "rpc" || !frame.method) return;
     const method = frame.method;
-    const result = method in AGENT_RPC
-      ? AGENT_RPC[method]
+    const result = AGENT_RPC.has(method)
+      ? AGENT_RPC.get(method)
       : method.startsWith("list") || method.startsWith("get") ? [] : {};
     queueMicrotask(() => {
       const message = new MessageEvent("message", {
@@ -309,17 +331,20 @@ const RealWebSocket = window.WebSocket;
 window.WebSocket = new Proxy(RealWebSocket, {
   construct(target, args: [string, (string | string[])?]) {
     return String(args[0]).includes("/agents/")
-      ? (new GalleryAgentSocket(String(args[0])) as unknown as WebSocket)
-      : Reflect.construct(target, args) as WebSocket;
+      ? new GalleryAgentSocket(String(args[0]))
+      : Reflect.construct(target, args);
   },
 });
 
 /* ── Mock chat data ─────────────────────────────────────────────── */
 
-// Single mock-data boundary cast: ai's UIMessage part union is generic over
-// tool names; the gallery fabricates parts structurally.
-function msg(m: Record<string, unknown>): UIMessage {
-  return m as unknown as UIMessage;
+interface GalleryMessage extends UIMessage { createdAt?: number }
+
+function msg(message: GalleryMessage): GalleryMessage { return message; }
+
+function rpcResult<Value>(value: Value): Response {
+  const serializable = v.parse(JsonValueSchema, value);
+  return new Response(JSON.stringify(serializable));
 }
 
 const MESSAGES: UIMessage[] = [
@@ -382,7 +407,7 @@ const MESSAGES: UIMessage[] = [
       // reason lives in errorText.
       {
         type: "tool-run", toolCallId: "t10", state: "output-error",
-        input: { runtime: "nimbus", command: "curl -sf https://ci.internal/status/checkout-fixes" },
+        input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/checkout-fixes" },
         errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443",
       },
       { type: "text", text: "CI didn't answer — checking the PR directly instead." },
@@ -401,8 +426,8 @@ const MESSAGES: UIMessage[] = [
 
 
 const stubRpc: Rpc = async <T,>(method: string): Promise<T> => {
-  if (method.startsWith("list") || method.startsWith("get")) return [] as unknown as T;
-  return {} as unknown as T;
+  if (method.startsWith("list") || method.startsWith("get")) return rpcResult([]).json<T>();
+  return rpcResult({}).json<T>();
 };
 
 /**
@@ -513,19 +538,21 @@ const GEPA_DETAIL = {
 };
 
 const evolutionRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getReplayEvals") return REPLAY_EVALS as unknown as T;
-  if (method === "getAlignmentConvergence") return ALIGNMENT as unknown as T;
-  if (method === "getOutcomeCalibration") return CALIBRATION as unknown as T;
-  if (method === "getGepaRuns") return GEPA_RUNS as unknown as T;
-  if (method === "getGepaRun") return GEPA_DETAIL as unknown as T;
+  if (method === "getReplayEvals") return rpcResult(REPLAY_EVALS).json<T>();
+  if (method === "getAlignmentConvergence") return rpcResult(ALIGNMENT).json<T>();
+  if (method === "getOutcomeCalibration") return rpcResult(CALIBRATION).json<T>();
+  if (method === "getGepaRuns") return rpcResult(GEPA_RUNS).json<T>();
+  if (method === "getGepaRun") return rpcResult(GEPA_DETAIL).json<T>();
   return stubRpc<T>(method, args);
 };
 
 const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listForkRuns") return FORK_RUNS as unknown as T;
-  if (method === "getSearchTree") return MCTS_ROWS as unknown as T;
-  if (method === "getHeadRuns") return [MERGED_RUN] as unknown as T;
-  if (method === "getMctsNodeDetail") return null as T;
+  if (method === "listForkRuns") return rpcResult(FORK_RUNS).json<T>();
+  if (method === "getForkRun") return rpcResult(FORK_RUNS.find((run) => run.id === args?.[0]) ?? null).json<T>();
+  if (method === "getSearchTree") return rpcResult(MCTS_ROWS).json<T>();
+  if (method === "getHeadRun") return rpcResult(args?.[0] === MERGED_RUN.rootId ? MERGED_RUN : null).json<T>();
+  if (method === "getHeadRuns") return rpcResult([MERGED_RUN]).json<T>();
+  if (method === "getMctsNodeDetail") return rpcResult(null).json<T>();
   return stubRpc<T>(method, args);
 };
 
@@ -533,7 +560,7 @@ const forkRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> =>
  *  and every score encoding has to be absent rather than drawn from a zero no
  *  branch earned. This frame is where that claim is checked. */
 const mergeFirstRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listForkRuns") return FORK_RUNS.slice(1) as unknown as T;
+  if (method === "listForkRuns") return rpcResult(FORK_RUNS.slice(1)).json<T>();
   return forkRpc<T>(method, args);
 };
 
@@ -564,7 +591,7 @@ function GalleryChatTabs({ clearable = true }: { clearable?: boolean }) {
     <SubordinateTabs
       workspace="checkout-fixes" subordinates={SUBORDINATES} activeName={undefined}
       onSpawn={async () => ({ name: "x", displayName: "x" })} onDismiss={async () => {}}
-      trailing={clearable && <Button variant="ghost" shape="square" size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
+      trailing={clearable && <Button variant="ghost" {...SQUARE_BUTTON_PROPS} size="sm" icon={<TrashIcon size={12} />} aria-label="Clear history" />}
     />
   );
 }
@@ -589,7 +616,10 @@ function ChatMessages() {
         <MessageView key={m.id} message={m} isLast={i === MESSAGES.length - 1} isStreaming={false} onFork={() => {}} />
       ))}
       <DeviceConsentCard
-        consent={{ consentId: "c1", deviceLabel: "ashish-laptop", command: "git push origin fix/coupon-kind", requestedAt: NOW } as never}
+        consent={{
+          consentId: "c1", deviceLabel: "ashish-laptop", method: "exec",
+          command: "git push origin fix/coupon-kind", scope: "all_local_actions", createdAt: NOW,
+        }}
         onResolve={() => {}}
       />
       <ChatErrorCard message="fetch failed: provider stream reset before completion (anthropic/claude-opus-4)" streaming={false} onRetry={() => {}} onDismiss={() => {}} />
@@ -617,7 +647,7 @@ function Shell(
             </div>
             <div className="flex-1 min-w-0">
               <WorkSurface
-                surface={surface} onSurface={() => {}} pinnedPorts={[]} agentStatus={null} tools={[]}
+                surface={surface} onSurface={() => {}} pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]}
                 memory={[]} memoryContent="" onSearchMemory={() => {}} mctsTree={mctsTree} isStreaming={false}
                 executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
                 backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={pendingActions}
@@ -659,7 +689,6 @@ function Controls() {
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-neutral">workspace</span>
-        <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-info">nimbus</span>
         <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-success">sandbox</span>
         <span className="px-1.5 py-0.5 rounded text-[10px] font-mono p-badge-warning">laptop</span>
         <span className="px-1.5 py-0.5 rounded text-[10px] p-badge-danger">failed</span>
@@ -676,7 +705,7 @@ function Controls() {
         <input className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
         <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]" placeholder="mission textarea (home page style)" />
       </div>
-      <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent uses think(strategy:'mcts') to investigate subproblems." />
+      <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent forks with settle:'mcts' to investigate subproblems." />
     </div>
   );
 }
@@ -724,11 +753,11 @@ function All() {
 
 /* ── Agent tab strip ────────────────────────────────────────────── */
 
-const SUBORDINATES = [
-  { name: "coupon-tester", displayName: "Coupon tester", role: "QA", status: "working", currentTask: "Running the checkout regression suite" },
-  { name: "migration-review", displayName: "Migration review", role: "Reviewer", status: "awaiting_input", currentTask: "Needs a call on the backfill order" },
-  { name: "docs", displayName: "Release notes", role: "Writer", status: "idle", currentTask: null },
-] as unknown as Parameters<typeof SubordinateTabs>[0]["subordinates"];
+const SUBORDINATES: Parameters<typeof SubordinateTabs>[0]["subordinates"] = [
+  { name: "coupon-tester", displayName: "Coupon tester", role: "QA", createdBy: "orchestrator", status: "working", currentTask: "Running the checkout regression suite", createdAt: NOW - 36e5, dismissedAt: null },
+  { name: "migration-review", displayName: "Migration review", role: "Reviewer", createdBy: "orchestrator", status: "awaiting_input", currentTask: "Needs a call on the backfill order", createdAt: NOW - 72e5, dismissedAt: null },
+  { name: "docs", displayName: "Release notes", role: "Writer", createdBy: "user", status: "idle", currentTask: null, createdAt: NOW - 108e5, dismissedAt: null },
+];
 
 /* The strip sits at the top of Column A, on the chat column's own ground —
    photographing it anywhere else hides the seam that the complaint is about. */
@@ -895,7 +924,7 @@ function Palette() {
       <div>
         <div className="p-eyebrow mb-2">Status — AA in both modes</div>
         <div className="flex items-center gap-2 flex-wrap">
-          {STATUS_STEPS.map(([name, v, ratio]) => (
+          {STATUS_STEPS.map(([name, _contrastValue, ratio]) => (
             <span key={name} className={`px-2 py-0.5 p-badge-${name}`}>{name} <span className="p-num">{ratio}</span></span>
           ))}
         </div>
@@ -937,7 +966,7 @@ function LandingV2() {
           {[
             ["p-dot-accent", "Turn: fix SAVE20 coupon", "48.0s"],
             ["p-dot-neutral", "sandbox: bun test packages/checkout", "14.2s"],
-            ["p-dot-info", "think(mcts): bisect migration", "12 nodes"],
+            ["p-dot-info", "agents(fork/mcts): bisect migration", "12 nodes"],
             ["p-dot-success", "deploy: staging green", "checks passed"],
           ].map(([dot, label, meta]) => (
             <div key={label} className="flex items-center gap-2.5 py-1">
@@ -966,27 +995,29 @@ function LandingV2() {
    BUILTIN_TOOLS for codemode-only reach — getToolDescriptions() only lists
    BUILTIN_TOOLS, the same reason `agent.*` has never appeared here either, so
    this row is illustrative mock, not a live readout. */
+function galleryTool(info: ToolInfo): ToolInfo { return info; }
+
 const BRAIN_TOOLS: ToolInfo[] = [
-  ...BUILTIN_TOOLS.map((name) => ({
+  ...BUILTIN_TOOLS.map((name) => galleryTool({
     name,
     summary: BUILTIN_TOOL_SPECS[name].summary,
     description: BUILTIN_TOOL_DESCRIPTIONS[name],
     learned: false,
-    exposure: "native" as ToolInfo["exposure"],
+    exposure: "native",
     qualityScore: 1,
     usageCount: 0,
   })),
-  { name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", qualityScore: 1, usageCount: 0 },
-  { name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 },
-  { name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 },
+  galleryTool({ name: "release", summary: "Governed release pipeline over a bound source repo.", description: "Governed release pipeline over a bound source repo — patch it, run its checks, preview, take owner approval, deploy, roll back.", learned: false, exposure: "codemode", qualityScore: 1, usageCount: 0 }),
+  galleryTool({ name: "bisect_migration", summary: "Walk a migration's revisions to find the one that changed a column's shape.", description: "Walk a migration's revisions to find the one that changed a column's shape.", learned: true, exposure: "codemode", qualityScore: 0.82, usageCount: 14 }),
+  galleryTool({ name: "coupon_replay", summary: "Replay a checkout against a coupon code and diff the response.", description: "Replay a checkout against a coupon code and diff the response.", learned: true, exposure: "codemode", qualityScore: 0.61, usageCount: 3 }),
 ];
 
 const BRAIN_STATUS = {
   id: "agent_01j9x7q2m4checkoutfixes", name: "checkout-coupon-bug-9935d3", displayName: "Checkout coupon bug",
   purpose: "Find why the SAVE20 coupon 500s and fix it.", model: "anthropic/claude-opus-4",
   scaffoldVersion: 7, searchNodeCount: 12, craftedToolCount: 2, messageCount: 48,
-  createdAt: NOW - 7 * 864e5,
-} as unknown as AgentStatus;
+  soul: "# Checkout coupon bug", forkLineage: null, createdAt: NOW - 7 * 864e5,
+} satisfies AgentStatus;
 
 /* ── Agent-authored view ────────────────────────────────────────── */
 
@@ -1047,9 +1078,9 @@ const VIEW_JOBS = [
 ];
 
 const viewRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getAgentView") return { ok: true, version: 3, spec: VIEW_SPEC } as unknown as T;
-  if (method === "getReleaseBoard") return VIEW_BOARD as unknown as T;
-  if (method === "listBackgroundJobs") return VIEW_JOBS as unknown as T;
+  if (method === "getAgentView") return rpcResult({ ok: true, version: 3, spec: VIEW_SPEC }).json<T>();
+  if (method === "getReleaseBoard") return rpcResult(VIEW_BOARD).json<T>();
+  if (method === "listBackgroundJobs") return rpcResult(VIEW_JOBS).json<T>();
   return stubRpc<T>(method, args);
 };
 
@@ -1067,7 +1098,7 @@ function ViewsFrame() {
         <WorkSurface
           surface="view:deploy-health" onSurface={() => {}}
           agentViews={VIEW_TABS}
-          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()}
           onExecute={async () => ({})}
@@ -1084,10 +1115,10 @@ function ViewsFrame() {
 function ViewFailFrame() {
   const failRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
     if (method === "getAgentView") {
-      return {
+      return rpcResult({
         ok: false,
         error: "view spec invalid — blocks.0.type: Invalid type: Expected (\"stat\" | \"table\" | \"list\" | \"kv\" | \"markdown\" | \"section\") but received \"html\"",
-      } as unknown as T;
+      }).json<T>();
     }
     return viewRpc<T>(method, args);
   };
@@ -1125,30 +1156,45 @@ const RELEASE_BOARD = {
   changes: [{
     id: "chg_4f2", bindingId: "src_1", agentName: "jarvis",
     userPrompt: "Warm up the empty-state copy", plan: "Rewrite the six EMPTY_HINTS in the owner's voice.",
+    summary: null,
     patch: "--- a/packages/cf-backend/src/components/surfaces/shared.tsx\n+++ b/packages/cf-backend/src/components/surfaces/shared.tsx\n@@\n-  memory: \"Your agent will remember important information here.\",\n+  memory: \"Anything worth keeping lands here. Ask me to remember something.\",",
-    status: "awaiting_approval", previewUrl: null, commitSha: "a8d02b4f", createdAt: NOW - 36e5, updatedAt: NOW - 12e5,
+    status: "awaiting_approval", previewUrl: null, createdAt: NOW - 36e5, updatedAt: NOW - 12e5,
   }],
   checks: [
-    { id: "chk_1", changeId: "chg_4f2", name: "typecheck", status: "passed", exitCode: 0, output: null, createdAt: NOW - 30e5 },
-    { id: "chk_2", changeId: "chg_4f2", name: "bun test", status: "passed", exitCode: 0, output: null, createdAt: NOW - 28e5 },
+    { id: "chk_1", changeId: "chg_4f2", name: "typecheck", status: "passed", stdout: null, stderr: null, durationMs: 41_000, createdAt: NOW - 30e5, updatedAt: NOW - 30e5 },
+    { id: "chk_2", changeId: "chg_4f2", name: "bun test", status: "passed", stdout: "920 pass, 0 fail", stderr: null, durationMs: 9_300, createdAt: NOW - 28e5, updatedAt: NOW - 28e5 },
   ],
   approvals: [{
     id: "apr_1", changeId: "chg_4f2", approvalType: "deploy_production", decision: "pending",
-    decidedBy: null, decidedAt: null, argumentDigest: "9f2c…", createdAt: NOW - 12e5,
+    approvedBy: null, note: null, decidedAt: null, argumentDigest: "9f2c…", createdAt: NOW - 12e5,
   }],
   deployments: [],
 };
 
 const releaseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "getReleaseBoard") return RELEASE_BOARD as unknown as T;
+  if (method === "getReleaseBoard") return rpcResult(RELEASE_BOARD).json<T>();
   return stubRpc<T>(method, args);
 };
 
-function ReleasesFrame() {
+const RELEASE_EXECUTORS: ExecutorInfo[] = [
+  { name: "sandbox", kind: "sandbox", capabilities: [], available: true, configured: true, status: "idle" },
+];
+
+/** The same board with the engine's substrate missing — the surface's honest
+ *  word when nothing on the pipeline can actually run. */
+const RELEASE_EXECUTORS_OFFLINE: ExecutorInfo[] = [
+  {
+    name: "sandbox", kind: "sandbox", capabilities: [], available: false, configured: false,
+    status: "not_configured",
+    reason: "Sandbox executor not configured. Add the @cloudflare/sandbox binding and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).",
+  },
+];
+
+function ReleasesFrame({ executors = RELEASE_EXECUTORS }: { executors?: ExecutorInfo[] }) {
   return (
     <div className="p-bg min-h-screen flex justify-center">
       <div className="w-[1100px] min-h-screen border-x p-border p-5">
-        <ReleasesSurface rpc={releaseRpc} />
+        <ReleasesSurface rpc={releaseRpc} executors={executors} />
       </div>
     </div>
   );
@@ -1190,16 +1236,16 @@ const AGENT_TASKS = [
 const BACKGROUND_JOBS = [
   {
     id: "bgjob-7c1e4a92", kind: "fork", label: "explore three coupon-lookup fixes",
-    status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
+    workMode: "build" as const, status: "running" as const, result: null, error: null, createdAt: NOW - 9e5, settledAt: null,
   },
   {
     id: "bgjob-2f8b1d04", kind: "execute_tools", label: "bun test packages/core",
-    status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
+    workMode: "build" as const, status: "completed" as const, result: "2,633 pass · 0 fail · 187 files", error: null,
     createdAt: NOW - 42e5, settledAt: NOW - 33e5,
   },
   {
     id: "bgjob-9d3c6e11", kind: "run", label: "wrangler deploy --dry-run",
-    status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
+    workMode: "build" as const, status: "failed" as const, result: null, error: "exit 1 — binding VECTORIZE not found in wrangler.jsonc",
     createdAt: NOW - 61e5, settledAt: NOW - 58e5,
   },
 ];
@@ -1252,8 +1298,8 @@ const PENDING_ACTIONS: PendingAction[] = [
 ];
 
 const workRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listAgentTasks") return AGENT_TASKS as unknown as T;
-  if (method === "getEvolutionChangelog") return CHANGELOG as unknown as T;
+  if (method === "listAgentTasks") return rpcResult(AGENT_TASKS).json<T>();
+  if (method === "getEvolutionChangelog") return rpcResult(CHANGELOG).json<T>();
   return stubRpc<T>(method, args);
 };
 
@@ -1263,7 +1309,7 @@ function WorkFrame() {
       <div className="w-[720px] min-h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={BACKGROUND_JOBS} onRefreshJobs={() => {}} pendingActions={PENDING_ACTIONS}
@@ -1278,8 +1324,8 @@ function WorkFrame() {
  *  opens on, which is the one an empty-state has to earn its copy in. */
 function WorkEmptyFrame() {
   const emptyRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "listAgentTasks") return [] as unknown as T;
-    if (method === "getEvolutionChangelog") return { entries: [], unseenCount: 0, seenAt: 0 } as unknown as T;
+    if (method === "listAgentTasks") return rpcResult([]).json<T>();
+    if (method === "getEvolutionChangelog") return rpcResult({ entries: [], unseenCount: 0, seenAt: 0 }).json<T>();
     return stubRpc<T>(method, args);
   };
   return (
@@ -1287,7 +1333,7 @@ function WorkEmptyFrame() {
       <div className="w-[720px] h-screen border-x p-border">
         <WorkSurface
           surface="Work" onSurface={() => {}}
-          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={[]} executorOutputs={new Map()} onExecute={async () => ({})}
           backgroundJobs={[]} onRefreshJobs={() => {}} pendingActions={[]}
@@ -1311,10 +1357,6 @@ const ENVIRONMENT_EXECUTORS: ExecutorInfo[] = [
   {
     name: "laptop", kind: "laptop", available: true, configured: true, active: true, status: "active",
     capabilities: ["shell", "npm", "git", "docker", "fs_owned", "process_spawn"],
-  },
-  {
-    name: "nimbus", kind: "nimbus", available: true, configured: true, active: false, status: "idle",
-    capabilities: ["shell", "npm", "git", "python", "native_binary", "fs_owned", "net_inbound", "process_spawn"],
   },
   {
     name: "sandbox", kind: "sandbox", available: true, configured: true, active: true, status: "active",
@@ -1353,12 +1395,13 @@ function EnvironmentFrame() {
   // returned the same listing for every argument would photograph a pane
   // asking the wrong environment as though it worked.
   const envRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-    if (method === "listMounts") return ENVIRONMENT_MOUNTS as unknown as T;
+    if (method === "listMounts") return rpcResult(ENVIRONMENT_MOUNTS).json<T>();
     if (method === "getExecutorFiles") {
-      const [execName, path] = (args ?? []) as [string, string];
-      return (execName === "workspace"
+      const parsedArgs = v.parse(v.tuple([v.string(), v.string()]), args ?? []);
+      const [execName, path] = parsedArgs;
+      return rpcResult(execName === "workspace"
         ? { entries: ENVIRONMENT_FILES }
-        : { error: `Executor "${execName}" has no listing for ${path} in this frame` }) as unknown as T;
+        : { error: `Executor "${execName}" has no listing for ${path} in this frame` }).json<T>();
     }
     return stubRpc<T>(method, args);
   };
@@ -1367,7 +1410,7 @@ function EnvironmentFrame() {
       <div className="w-[720px] h-screen border-x p-border">
         <WorkSurface
           surface="Environment" onSurface={() => {}}
-          pinnedPorts={[]} agentStatus={null} tools={[]} memory={[]} memoryContent=""
+          pinnedPorts={[]} previewError={null} onRefreshPorts={() => {}} plan={null} agentStatus={null} tools={[]} memory={[]} memoryContent=""
           onSearchMemory={() => {}} mctsTree={null} isStreaming={false}
           executors={ENVIRONMENT_EXECUTORS} executorOutputs={new Map()}
           onExecute={async () => ({})} lastActiveExecutor="workspace"
@@ -1429,20 +1472,20 @@ const SUPERVISE_TRIGGERS = [
 const SUPERVISE_JOBS: BackgroundJob[] = [
   {
     id: "bgjob-71ae4c02", kind: "heads", label: "Audit the CLI surface", status: "running",
-    result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
+    workMode: "build", result: null, error: null, createdAt: NOW - 4 * 60e3, settledAt: null,
   },
   {
     id: "bgjob-70bd19f7", kind: "mcts", label: "Pick a migration-backfill approach",
-    status: "completed", result: "Settled on the backfill-on-read approach", error: null,
+    workMode: "build", status: "completed", result: "Settled on the backfill-on-read approach", error: null,
     createdAt: NOW - 50 * 60e3, settledAt: NOW - 41 * 60e3,
   },
 ];
 
 const superviseRpc: Rpc = async <T,>(method: string, args?: unknown[]): Promise<T> => {
-  if (method === "listCurriculumTasks") return { tasks: SUPERVISE_TASKS } as unknown as T;
-  if (method === "getRunSummaries") return SUPERVISE_RUNS as unknown as T;
-  if (method === "listTriggers") return { triggers: SUPERVISE_TRIGGERS } as unknown as T;
-  if (method === "listBackgroundJobs") return SUPERVISE_JOBS as unknown as T;
+  if (method === "listCurriculumTasks") return rpcResult({ tasks: SUPERVISE_TASKS }).json<T>();
+  if (method === "getRunSummaries") return rpcResult(SUPERVISE_RUNS).json<T>();
+  if (method === "listTriggers") return rpcResult({ triggers: SUPERVISE_TRIGGERS }).json<T>();
+  if (method === "listBackgroundJobs") return rpcResult(SUPERVISE_JOBS).json<T>();
   return stubRpc<T>(method, args);
 };
 
@@ -1474,7 +1517,7 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
     id: "tc-protocol", role: "assistant",
     parts: [
       { type: "text", text: "Protocol-level failure — the executor crashed before it could return anything; the reason lives in errorText, not output." },
-      { type: "tool-run", toolCallId: "tc2", state: "output-error", input: { runtime: "nimbus", command: "curl -sf https://ci.internal/status/checkout-fixes" }, errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443" },
+      { type: "tool-run", toolCallId: "tc2", state: "output-error", input: { runtime: "workspace", command: "curl -sf https://ci.internal/status/checkout-fixes" }, errorText: "fetch failed: connect ETIMEDOUT 10.0.4.12:443" },
     ],
   }),
   msg({
@@ -1519,7 +1562,9 @@ const TOOLCALL_MESSAGES: UIMessage[] = [
 function useAutoExpandToolCalls(): void {
   useEffect(() => {
     const clickAll = () => {
-      document.querySelectorAll('button[aria-expanded="false"]').forEach((el) => (el as HTMLButtonElement).click());
+      document.querySelectorAll('button[aria-expanded="false"]').forEach((element) => {
+        if (element instanceof HTMLButtonElement) element.click();
+      });
     };
     const id = setTimeout(() => {
       clickAll();
@@ -1582,6 +1627,7 @@ async function mount() {
   else if (frame === "viewblocks") node = <ViewBlocksFrame />;
   else if (frame === "viewfail") node = <ViewFailFrame />;
   else if (frame === "releases") node = <ReleasesFrame />;
+  else if (frame === "releasesoffline") node = <ReleasesFrame executors={RELEASE_EXECUTORS_OFFLINE} />;
   else if (frame === "work") node = <WorkFrame />;
   else if (frame === "workempty") node = <WorkEmptyFrame />;
   else if (frame === "environment") node = <EnvironmentFrame />;

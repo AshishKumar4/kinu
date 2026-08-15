@@ -39,6 +39,7 @@ const ACTOR_DDL = [
     action           TEXT NOT NULL DEFAULT '',
     observation      TEXT NOT NULL DEFAULT '',
     code_used        TEXT,
+    code_language    TEXT,
     visits           INTEGER NOT NULL DEFAULT 0,
     value            REAL NOT NULL DEFAULT 0,
     depth            INTEGER NOT NULL DEFAULT 0,
@@ -209,8 +210,8 @@ function adoptLegacyAgentIdentity(sql: SqlExecutor): void {
       `[0]
     : undefined;
   if (legacy) {
-    sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
+    void sql`INSERT INTO workspace_identity (id, name, owner_user_id, created_at)
         VALUES (${legacy.id}, ${legacy.name}, ${legacy.owner_user_id ?? ''}, ${legacy.created_at})`;
   }
-  sql`DROP TABLE agent_identity`;
+  void sql`DROP TABLE agent_identity`;
 }

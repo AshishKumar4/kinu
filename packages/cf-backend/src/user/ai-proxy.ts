@@ -28,10 +28,14 @@ import { MY_GATEWAY_PROVIDER_ID } from '../providers/my-gateway.js';
 import { listAvailableModels } from './available-models.js';
 import { json } from '../lib/http.js';
 import { ownerCaller } from './workspace-capability.js';
+import * as v from 'valibot';
 
 export const USER_AI_PROXY_PREFIX = '/api/user/ai/v1';
 
 const PROXY_PLACEHOLDER = 'https://proteus-user-ai-proxy.invalid';
+const ChatCompletionRouteSchema = v.object({
+  model: v.pipe(v.string(), v.trim(), v.minLength(1)),
+});
 
 export async function handleUserAIProxyRequest(
   request: Request,
@@ -60,14 +64,11 @@ export async function handleUserAIProxyRequest(
 
 async function proxyChatCompletion(request: Request, env: Env, userDO: DurableObjectStub<UserDO>): Promise<Response> {
   const body = await request.text();
-  let model: unknown;
+  let model: string;
   try {
-    model = (JSON.parse(body) as { model?: unknown }).model;
+    model = v.parse(ChatCompletionRouteSchema, JSON.parse(body)).model;
   } catch {
-    return errorResponse(400, 'Body must be JSON.');
-  }
-  if (typeof model !== 'string' || !model.trim()) {
-    return errorResponse(400, 'model is required — "@cf/{model}" for Workers AI, or "{provider}/{model}" for your AI Gateway.');
+    return errorResponse(400, 'Body must be JSON with a non-empty model.');
   }
   const workersAI = model.startsWith('@cf/');
   if (!workersAI && !model.includes('/')) {

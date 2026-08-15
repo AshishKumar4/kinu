@@ -22,9 +22,19 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { Glob } from 'bun';
-import { dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 const CSS_FILES = ['../src/index.css'] as const;
+
+interface GlobParts {
+  root: string;
+  rest: string;
+}
+
+interface GlobScan {
+  scanRoot: string;
+  files: string[];
+}
 
 /** `@source "<glob>";` — Tailwind v4's scan directive. */
 function sourceGlobs(cssPath: string): string[] {
@@ -34,17 +44,17 @@ function sourceGlobs(cssPath: string): string[] {
 
 /** Split a glob into the longest literal prefix directory and the pattern
  *  under it, so the scan is rooted where the glob actually points. */
-function splitGlob(pattern: string): { root: string; rest: string } {
+function splitGlob(pattern: string): GlobParts {
   const parts = pattern.split('/');
   const firstMagic = parts.findIndex((p) => /[*?[{]/.test(p));
-  if (firstMagic === -1) return { root: parts.join('/'), rest: '**/*' };
+  if (firstMagic === -1) return { root: dirname(pattern), rest: basename(pattern) };
   return { root: parts.slice(0, firstMagic).join('/') || '.', rest: parts.slice(firstMagic).join('/') };
 }
 
 /** Files a `@source` glob actually reaches. A root that does not exist is the
  *  headline case — it is "matched nothing", not a crash, because the whole
  *  point is that Tailwind treats it that way too. */
-function scan(cssPath: string, pattern: string): { scanRoot: string; files: string[] } {
+function scan(cssPath: string, pattern: string): GlobScan {
   const { root, rest } = splitGlob(pattern);
   const scanRoot = resolve(dirname(cssPath), root);
   if (!existsSync(scanRoot)) return { scanRoot, files: [] };
@@ -81,9 +91,9 @@ describe('Tailwind @source globs', () => {
     // reference, which is what has to reach the stylesheet.
     const cssPath = resolve(import.meta.dir, '../src/index.css');
     const kumo = sourceGlobs(cssPath).find((g) => g.includes('kumo'));
-    expect(kumo).toBeDefined();
+    if (!kumo) throw new Error('index.css must declare a Kumo @source');
 
-    const { scanRoot, files } = scan(cssPath, kumo!);
+    const { scanRoot, files } = scan(cssPath, kumo);
     const found = files.some((file) => readFileSync(join(scanRoot, file), 'utf8').includes('bg-kumo-'));
 
     expect(found).toBe(true);

@@ -7,6 +7,7 @@
  */
 
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import type { SerializedMessage } from '../heads/types.js';
 import type { SplitPhaseEvent } from '../heads/controller.js';
 import type { RunEventInput } from '../events/types.js';
@@ -27,10 +28,11 @@ export function narrowInheritedRole(role: string): SerializedMessage['role'] {
  *  URLs from attachments) are reduced to their filename/mediaType reference so
  *  spawned heads never inherit megabytes of base64. */
 export function serializeContentForHeads(content: ModelMessage['content']): string {
-  if (typeof content === 'string') return content;
+  const text = v.safeParse(v.string(), content);
+  if (text.success) return text.output;
   if (Array.isArray(content)) {
     return JSON.stringify(content.map((part) =>
-      part && typeof part === 'object' && 'type' in part && part.type === 'file'
+      part.type === 'file'
         ? { type: 'file', mediaType: part.mediaType, filename: part.filename }
         : part));
   }
@@ -57,6 +59,7 @@ export function headPhaseRunEvent(event: SplitPhaseEvent): RunEventInput {
       totalTokens: event.cost.totalTokens,
       mergedNarrative: event.mergedNarrative,
       fileChanges: [...event.fileChanges],
+      blindSpots: [...event.blindSpots],
     };
 }
 

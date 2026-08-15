@@ -4,6 +4,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import type { UIMessageChunk } from 'ai';
 import { scaffoldEventsToUIStream } from './ui-stream.js';
 import type { ScaffoldEvent, ScaffoldRunResult, ScaffoldEmitFn } from './executor.js';
 
@@ -21,9 +22,9 @@ function scriptedRunner(
   };
 }
 
-async function collect(gen: AsyncGenerator<unknown>): Promise<Array<{ type: string; [k: string]: unknown }>> {
-  const out: Array<{ type: string; [k: string]: unknown }> = [];
-  for await (const c of gen) out.push(c as { type: string });
+async function collect(gen: AsyncGenerator<UIMessageChunk>): Promise<UIMessageChunk[]> {
+  const out: UIMessageChunk[] = [];
+  for await (const chunk of gen) out.push(chunk);
   return out;
 }
 
@@ -39,10 +40,10 @@ describe('scaffoldEventsToUIStream', () => {
     expect(chunks[2]).toMatchObject({ type: 'text-delta', delta: 'Hello ' });
     expect(chunks[3]).toMatchObject({ type: 'text-delta', delta: 'world' });
     // text-start / text-delta / text-end share one id.
-    const id = chunks[1]?.id;
+    const id = chunks.find((chunk) => chunk.type === 'text-start')?.id;
     expect(id).toBeString();
-    expect(chunks[2]?.id).toBe(id);
-    expect(chunks[4]?.id).toBe(id);
+    expect(chunks.find((chunk) => chunk.type === 'text-delta')?.id).toBe(id);
+    expect(chunks.find((chunk) => chunk.type === 'text-end')?.id).toBe(id);
   });
 
   test('ui_chunk events pass through verbatim, inner start/finish stripped', async () => {

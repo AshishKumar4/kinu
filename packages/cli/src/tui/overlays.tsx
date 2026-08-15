@@ -157,9 +157,9 @@ export function ModelPickerOverlay({ models, failures, currentSpec, terminal, lo
           showDescription={false}
           showScrollIndicator={true}
           wrapSelection={true}
-          onSelect={(_index, option) => {
-            const selected = option?.value;
-            if (isModelEntry(selected)) onSelect(selected);
+          onSelect={(index) => {
+            const selected = filteredModels[index];
+            if (selected) onSelect(selected);
           }}
           style={{
             flexGrow: 1,
@@ -218,9 +218,9 @@ export function WalkbackOverlay({ candidates, terminal, onSelect }: WalkbackOver
         showDescription={false}
         showScrollIndicator={true}
         wrapSelection={true}
-        onSelect={(_index, option) => {
-          const selected = option?.value;
-          if (isForkPoint(selected)) onSelect(selected);
+          onSelect={(index) => {
+            const selected = candidates[index];
+            if (selected) onSelect(selected);
         }}
         style={{
           flexGrow: 1,
@@ -246,9 +246,9 @@ interface ChangelogOverlayProps {
   onSelect: (entry: ChangelogEntry) => void;
 }
 
-const CHANGELOG_GLYPH: Record<ChangelogEntry['kind'], string> = {
+const CHANGELOG_GLYPH = {
   scaffold: '⟳', tool: '⚒', view: '▦', fact: '✦', gepa: '◬', replay: '⏱', outcomes: '☑',
-};
+} satisfies Record<ChangelogEntry['kind'], string>;
 
 /** The Evolution Changelog digest (/changelog): every self-change with its
  *  evidence number; Enter reverts the selected line through the real
@@ -286,9 +286,9 @@ export function ChangelogOverlay({ view, terminal, onSelect }: ChangelogOverlayP
           showDescription={true}
           showScrollIndicator={true}
           wrapSelection={true}
-          onSelect={(_index, option) => {
-            const selected = option?.value;
-            if (isChangelogEntry(selected)) onSelect(selected);
+          onSelect={(index) => {
+            const selected = view.entries[index];
+            if (selected) onSelect(selected);
           }}
           style={{
             flexGrow: 1,
@@ -353,9 +353,9 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
         showDescription={true}
         showScrollIndicator={true}
         wrapSelection={true}
-        onSelect={(_index, option) => {
-          const selected = option?.value;
-          if (isTakeCandidate(selected)) onSelect(selected);
+        onSelect={(index) => {
+          const selected = set.candidates[index];
+          if (selected) onSelect(selected);
         }}
         style={{
           flexGrow: 1,
@@ -372,29 +372,6 @@ export function TakesOverlay({ set, terminal, onSelect }: TakesOverlayProps) {
       />
     </PaletteFrame>
   );
-}
-
-function isTakeCandidate(value: unknown): value is AlternateTakeCandidate {
-  return !!value
-    && typeof value === 'object'
-    && typeof (value as AlternateTakeCandidate).nodeId === 'string'
-    && typeof (value as AlternateTakeCandidate).text === 'string'
-    && typeof (value as AlternateTakeCandidate).score === 'number';
-}
-
-function isChangelogEntry(value: unknown): value is ChangelogEntry {
-  return !!value
-    && typeof value === 'object'
-    && typeof (value as ChangelogEntry).id === 'string'
-    && typeof (value as ChangelogEntry).summary === 'string'
-    && typeof (value as ChangelogEntry).kind === 'string';
-}
-
-function isForkPoint(value: unknown): value is ForkPoint {
-  return !!value
-    && typeof value === 'object'
-    && typeof (value as ForkPoint).text === 'string'
-    && typeof (value as ForkPoint).occurrenceFromEnd === 'number';
 }
 
 interface DeviceConsentOverlayProps {
@@ -511,14 +488,6 @@ export function PhaseLine({ label }: { label: string | null }) {
       <text><span fg={tuiColors.accent}>{`${SPINNER_FRAMES[frame]} ${label}`}</span></text>
     </box>
   );
-}
-
-function isModelEntry(value: unknown): value is AgentModelEntry {
-  return !!value
-    && typeof value === 'object'
-    && typeof (value as AgentModelEntry).spec === 'string'
-    && typeof (value as AgentModelEntry).label === 'string'
-    && typeof (value as AgentModelEntry).provider === 'string';
 }
 
 interface PaletteFrameProps {

@@ -42,7 +42,10 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
     setBusy(true);
     setErr(null);
     try { await rpc(method, [job.id]); onRefresh(); }
-    catch (e) { setErr(`${method.replace("BackgroundJob", "")} failed: ${(e as Error).message}`); }
+    catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setErr(`${method.replace("BackgroundJob", "")} failed: ${message}`);
+    }
     finally { setBusy(false); }
   }, [rpc, onRefresh, job.id]);
 
@@ -69,7 +72,7 @@ export function JobCard({ job, onRefresh, rpc }: JobCardProps) {
         <div className="flex items-center gap-1 shrink-0">
           {job.status === "running" ? (
             <Button size="sm" variant="ghost" disabled={busy} onClick={() => act("cancelBackgroundJob")}
-              title="Hard-cancel — aborts the underlying work">
+              title="Hard-cancel, aborting the underlying work">
               <XCircleIcon size={13} /><span className="ml-1">Cancel</span>
             </Button>
           ) : (

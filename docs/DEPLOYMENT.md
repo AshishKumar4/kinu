@@ -5,14 +5,16 @@
 ## Live Instance
 
 **Production:** https://proteus.ashishkumarsingh.com  
-**Sandbox previews:** `https://<port>-<sandbox>-<token>.<PREVIEW_HOST_SUFFIX>`
+**Preview hosts:** one capability hostname per exposed Workspace or Sandbox port
+under `<PREVIEW_HOST_SUFFIX>`
 
-Previewed apps are agent-written HTML, so each exposed port gets a hostname of
-its own — isolated from the app and from every other preview, which is what
-lets a previewed app keep cookies, storage and same-origin fetch. This is the
-@cloudflare/sandbox SDK's own scheme, so Proteus derives no hostnames itself.
-It needs a wildcard DNS record; `PREVIEW_HOST_SUFFIX` below has the two steps,
-and `packages/cf-backend/src/lib/preview-origin.ts` has the reasoning.
+Previewed apps are agent-written HTML, so each exposed port gets a capability
+hostname of its own. Sandbox uses the @cloudflare/sandbox SDK hostname; the
+authoritative Workspace uses a Nimbus session capability bound into the same
+preview-host trust boundary. The suffix needs a wildcard DNS record;
+`PREVIEW_HOST_SUFFIX` below has the two steps, and
+`packages/cf-backend/src/lib/preview-origin.ts` has the reasoning and the
+remaining Public Suffix List prerequisite for complete cookie-site isolation.
 
 ## Local Development
 
@@ -244,23 +246,23 @@ non-200, or filters to nothing. OpenRouter is the exception: it queries its own
 
 The default model id lives once in `@proteus/core` as
 `DEFAULT_WORKERS_AI_MODEL_ID` / `DEFAULT_WORKERS_AI_MODEL_SPEC`
-(`@cf/moonshotai/kimi-k2.6`), and is written into the user's `default_model`
-config on first Cloudflare sign-in. The Workers AI fallback catalog carries five
+(`@cf/deepseek-ai/deepseek-v4-pro-0813`), and is written into the user's `default_model`
+config on first Cloudflare sign-in. The Workers AI fallback catalog carries six
 entries:
 
 | Model ID | Name | Context |
 |----------|------|---------|
-| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | 262k — default; reasoning + tools + vision |
+| `@cf/deepseek-ai/deepseek-v4-pro-0813` | DeepSeek V4 Pro 0813 | 1,048k — default; reasoning + tools; paid access required |
+| `@cf/moonshotai/kimi-k2.6` | Kimi K2.6 | 262k — reasoning + tools + vision |
 | `@cf/nvidia/nemotron-3-120b-a12b` | Nemotron 3 Super 120B | 256k |
 | `@cf/openai/gpt-oss-120b` | GPT OSS 120B | 128k |
 | `@cf/openai/gpt-oss-20b` | GPT OSS 20B | 128k |
 | `@cf/meta/llama-4-scout-17b-16e-instruct` | Llama 4 Scout | 131k |
 
-Model choice interacts with prompt caching: as of the 2026-07-13 catalog check,
-only `kimi-k2.6` (plus `kimi-k2.7-code` and `glm-5.2`) bills a discounted
-cached-input rate, so those are the only Workers AI models where the
-session-affinity pin buys anything. The others bill input at full rate
-regardless.
+Model choice interacts with prompt caching: as of the 2026-08-15 account
+catalog check, `deepseek-v4-pro-0813`, `kimi-k2.6`, `kimi-k2.7-code`, and
+`glm-5.2` bill a discounted cached-input rate. Those models can benefit from
+the session-affinity pin; the remaining catalog models bill input at full rate.
 
 ### Rate limits
 
@@ -281,7 +283,7 @@ exhausted budget returns the original response rather than throwing.
 | `AI_GATEWAY_URL` | wrangler.jsonc `vars` | AI Gateway endpoint URL |
 | `AI_GATEWAY_AUTH` | Wrangler secret | `Bearer <token>` (NEVER in code) |
 | `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
-| `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone sandbox previews are served under, one hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
+| `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |
 | `CLI_APPROVAL_ORIGIN` | wrangler.jsonc `vars` | Browser approval origin for CLI auth |
 | `GOOGLE_OAUTH_CLIENT_ID` | wrangler.jsonc `vars` | Google OAuth client id |
@@ -346,10 +348,23 @@ bun run deploy
 
 ### Order of operations
 
-1. **Pre-deploy verification** — runs `scripts/e2e-test.sh`. Skip with
-   `SKIP_E2E=1` for doc-only or config-only deploys.
-2. **Build** — `bun install` (if root `node_modules` missing), `vite build`,
-   then `scripts/build-cli-source-archive.sh` (CLI source tarball, `.sha256`,
+Before step 1, the script verifies Wrangler authentication and, when a checkout
+has no root `node_modules`, installs the locked dependency graph with
+`bun install --frozen-lockfile`. It refuses a dirty checkout so the build SHA in
+`/api/health` always identifies the exact source bytes that were published.
+
+1. **Required pre-deploy gates** — unconditionally runs `bun run check`; the
+   deploy contract test; the root, test-utils, Cloudflare-backend, CLI-backend,
+   and full production CLI suites (including its PTY and composition-conformance
+   coverage); deterministic eval and every credential-free benchmark, inference
+   proxy, Pi-worker, accounting, statistics, and report test; the secret-scanner
+   self-test and scan; Layergate conformance and its fault-localization matrix;
+   and the full Lean proof, consistency, and traceability gate. The costly
+   159-task corpus validation remains a separately preserved provenance run,
+   not a per-deploy check. Any failure exits before Vite, archive generation, or
+   Wrangler. There is no production-deploy skip variable.
+2. **Build** — `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
+   source tarball, `.sha256`,
    `proteus-version.json`). Fails if any of the three is missing from
    `packages/cf-backend/dist/client/downloads/`.
 3. **Deploy** — `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
@@ -399,7 +414,6 @@ the stamp names a commit that does not describe what shipped.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CLOUDFLARE_ACCOUNT_ID` | `f44999d1ddda7012e9a87729eba250f1` | Deploy account |
-| `SKIP_E2E` | `0` | `1` to skip pre-deploy E2E tests |
 
 ### Staging
 

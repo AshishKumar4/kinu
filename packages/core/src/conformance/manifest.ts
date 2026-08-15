@@ -43,7 +43,7 @@ export const WIRED: CapabilityStatus = { wired: true };
 export type RootStatuses = Readonly<Record<ConformanceRoot, CapabilityStatus>>;
 
 /** Shorthand: wired on every root. */
-const EVERYWHERE: RootStatuses = { 'cf-orchestrator': WIRED, 'cf-subordinate': WIRED, cli: WIRED };
+const EVERYWHERE = { 'cf-orchestrator': WIRED, 'cf-subordinate': WIRED, cli: WIRED } satisfies RootStatuses;
 
 export const CONFORMANCE_PLANES = ['tool', 'agents-action', 'memory-action', 'table'] as const;
 export type ConformancePlane = (typeof CONFORMANCE_PLANES)[number];
@@ -72,21 +72,17 @@ const NO_USER_PLANE = (what: string): string =>
 const ORCHESTRATOR_IS_SINK = 'the orchestrator IS the report sink; only subordinate actors report upward';
 const CLI_HAS_NO_STAFF = 'local sessions have no subordinate roster; the fork rung is the whole local ladder';
 
-/** The cloud workspace's durable base. The CLI works on the real machine, so
- *  it provisions no emulated filesystem and none of its bookkeeping. */
-/** The workspace filesystem — the same component on every root now that there
- *  is only one of them. */
-const NIMBUS_BASE: RootStatuses = {
-  'cf-orchestrator': WIRED,
-  'cf-subordinate': WIRED,
+const NIMBUS_BASE = {
+  'cf-orchestrator': { absent: 'the hosted workspace lives in its NIMBUS_SESSION Durable Object' },
+  'cf-subordinate': { absent: 'the hosted workspace lives in its NIMBUS_SESSION Durable Object' },
   cli: WIRED,
-};
+} satisfies RootStatuses;
 const LAZY_ON_FIRST_USE = (what: string): string => `created lazily on first use by ${what}, not at boot`;
-const RELEASE_TABLE: RootStatuses = {
+const RELEASE_TABLE = {
   'cf-orchestrator': { absent: "the release board lives in the owner's UserDO on cf, not on the workspace DO" },
   'cf-subordinate': { absent: SUBORDINATE_SCOPED('the release lane') },
   cli: WIRED,
-};
+} satisfies RootStatuses;
 
 // ── The manifest ─────────────────────────────────────────────────────────────
 
@@ -156,6 +152,11 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     conversation_history: EVERYWHERE,
     crafted_tools: EVERYWHERE,
     craft_scores: EVERYWHERE,
+    _v2_codegen_migration_done: {
+      'cf-orchestrator': WIRED,
+      'cf-subordinate': { absent: 'the one-time crafted-tool duplicate migration runs only on the orchestrator' },
+      cli: { absent: 'the one-time crafted-tool duplicate migration runs only on the hosted orchestrator' },
+    },
     search_nodes: EVERYWHERE,
     fibers: EVERYWHERE,
     evolution_events: EVERYWHERE,
@@ -166,6 +167,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     scaffold_regression_fixtures: EVERYWHERE,
     task_history: EVERYWHERE,
     scaffold_evaluations: EVERYWHERE,
+    scaffold_trial_queue: EVERYWHERE,
 
     // ── evolution / outcome ledger ──
     turn_outcomes: EVERYWHERE,
@@ -197,6 +199,13 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     // per actor is what makes the list mean anything.
     agent_tasks: EVERYWHERE,
     background_jobs: EVERYWHERE,
+    // Gated commands parked on the owner. The TABLE is part of the shared
+    // workspace schema everywhere; what differs is who can decide the rows —
+    // the deferral channel is wired into the approval policy on cf, where the
+    // needs-you queue that decides them lives. A local session keeps its
+    // interactive channel (the human is at the terminal), so nothing parks.
+    deferred_approvals: EVERYWHERE,
+    plan_reviews: EVERYWHERE,
     compaction_state: EVERYWHERE,
     compaction_archive: EVERYWHERE,
     imported_experience: EVERYWHERE,
@@ -225,9 +234,8 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     release_deployments: RELEASE_TABLE,
 
     // ── the workspace filesystem ──
-    // Nimbus, on every root — one filesystem, one shell, one set of paths. The
-    // generation counter is what stops a re-created Durable Object from
-    // reissuing write authority a dead process still holds.
+    // The local CLI retains the embedded SQLite workspace. Hosted actors use
+    // NIMBUS_SESSION directly and never create this second filesystem.
     proteus_workspace_generation: NIMBUS_BASE,
     // The filesystem itself. This is the exact set NimbusWorkspace.destroy()
     // drops — the namespace the library commits to owning inside a host's
@@ -242,7 +250,6 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     vfs_append_module_state: NIMBUS_BASE,
     vfs_append_pid_revocations: NIMBUS_BASE,
     vfs_append_acked_gaps: NIMBUS_BASE,
-
     // ── cf-orchestrator-local planes ──
     workspace_subordinates: {
       'cf-orchestrator': WIRED,
@@ -267,7 +274,7 @@ export const BACKEND_CONFORMANCE: ConformanceManifest = {
     vfs_baseline: {
       'cf-orchestrator': WIRED,
       'cf-subordinate': { absent: SUBORDINATE_SCOPED('the workspace VFS baseline snapshot') },
-      cli: { absent: 'local file state is checkpointed by the shadow-git store, not a VFS baseline table' },
+      cli: WIRED,
     },
     turn_feedback: {
       'cf-orchestrator': WIRED,
@@ -310,8 +317,8 @@ export interface ObservedSurface {
 
 /** The registry-closed planes, used by the comparator to distinguish
  *  "undeclared" (open plane: add a manifest entry) from impossible states. */
-export const PLANE_UNIVERSE: Partial<Record<ConformancePlane, readonly string[]>> = {
+export const PLANE_UNIVERSE = {
   tool: BUILTIN_TOOLS,
   'agents-action': AGENTS_TOOL_ACTIONS,
   'memory-action': [...MEMORY_NOTE_ACTIONS, ...MEMORY_FACT_ACTIONS],
-};
+} satisfies Partial<Record<ConformancePlane, readonly string[]>>;

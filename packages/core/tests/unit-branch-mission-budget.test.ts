@@ -30,7 +30,7 @@ import { initCraftScoreTables } from '../src/craft/schemas.js';
 import {
   MissionGovernor, localMissionScope, type MissionScope,
 } from '../src/mission-budget.js';
-import type { LLM, SqlExecutor, RawSqlExec } from '../src/types/primitives.js';
+import type { LLM, SqlExecutor, RawSqlExec, SqlValue } from '../src/types/primitives.js';
 import type { AgentRuntime, BranchUsage } from '../src/types/agent-runtime.js';
 
 /** A ledger over real SQLite that records every statement issued through it. */
@@ -39,13 +39,13 @@ function countingLedger() {
   const rawSql = makeSql(db);
   const rawExec = makeExecRaw(db);
   const statements: string[] = [];
-  const sql = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+  const sql: SqlExecutor = <T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
     statements.push(strings.join('?').replace(/\s+/g, ' ').trim());
-    return (rawSql as unknown as (s: TemplateStringsArray, ...v: unknown[]) => unknown)(strings, ...values);
-  }) as unknown as SqlExecutor;
-  const execRaw: RawSqlExec = (ddl, ...args) => {
+    return rawSql<T>(strings, ...values);
+  };
+  const execRaw: RawSqlExec = (ddl) => {
     statements.push(ddl.replace(/\s+/g, ' ').trim());
-    return rawExec(ddl, ...args);
+    rawExec(ddl);
   };
   return { db, sql, execRaw, statements };
 }
@@ -55,7 +55,7 @@ const PER_REFLECTION: BranchUsage = { input: 300, output: 100 };
 
 /** A search whose branches always propose something and always score low
  *  enough to reflect, each call reporting a fixed spend. */
-function branchingRuntime(): { rt: AgentRuntime; rollouts: () => number; reflections: () => number } {
+function branchingRuntime() {
   const { rt } = createTestRuntime();
   // Score every branch below mcts.reflectionThreshold, so the reflect phase —
   // a second far-side model call per branch — actually runs.
@@ -70,7 +70,7 @@ function branchingRuntime(): { rt: AgentRuntime; rollouts: () => number; reflect
   rt.spawnBranch = async () => ({
     explore: async () => {
       rollouts++;
-      return { text: 'an approach', codeUsed: null, usage: PER_ROLLOUT };
+      return { text: 'an approach', usage: PER_ROLLOUT };
     },
     generateReflection: async () => {
       reflections++;
@@ -86,7 +86,7 @@ function branchingRuntime(): { rt: AgentRuntime; rollouts: () => number; reflect
 async function search(rt: AgentRuntime, mission: MissionScope | null, budget = 3, branches = 2) {
   return runMCTS(rt, createMockSession(), 'choose an approach', {
     budget, branches, judgeSamples: 1, maxEvalLLMCalls: 1,
-    ...(mission ? { mission } : {}),
+    mission: mission ?? undefined,
   });
 }
 
@@ -256,7 +256,7 @@ describe('a declared budget reaches the search between expansions', () => {
 
     const { rt } = branchingRuntime();
     rt.spawnBranch = async () => ({
-      explore: async () => ({ text: 'an approach', codeUsed: null }),
+      explore: async () => ({ text: 'an approach' }),
       generateReflection: async () => ({ text: 'no lesson' }),
     });
 

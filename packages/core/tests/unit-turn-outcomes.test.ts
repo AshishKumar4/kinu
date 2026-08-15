@@ -16,6 +16,7 @@ import {
 } from '../src/evolution/outcomes.js';
 import type { ScaffoldArchiveEntry } from '../src/scaffold/archive.js';
 import { initRunEventTables, RunEventRecorder } from '../src/events/recorder.js';
+import type { ToolCallRecord } from '../src/evolution/types.js';
 
 function setup() {
   const db = new Database(':memory:');
@@ -25,7 +26,7 @@ function setup() {
 }
 
 describe('isTrivialTurn — the LLM-call pre-filter', () => {
-  const turn = (userMessage: string, toolCalls: Array<{ name: string; args: Record<string, unknown>; result: unknown }> = []) =>
+  const turn = (userMessage: string, toolCalls: ToolCallRecord[] = []) =>
     ({ userMessage, toolCalls });
 
   test('greetings and acknowledgements are trivial', () => {
@@ -113,7 +114,7 @@ function legacyRow(db: Database, id: string) {
 }
 
 describe('executionVerdict — the environment\'s verdict, read symmetrically', () => {
-  const turn = (over: Partial<{ hadError: boolean; toolCalls: Array<{ name: string; args: Record<string, unknown>; result: unknown }> }> = {}) =>
+  const turn = (over: Partial<{ hadError: boolean; toolCalls: ToolCallRecord[] }> = {}) =>
     ({ hadError: false, toolCalls: [{ name: 'run', args: { command: 'make' }, result: 'ok' }], ...over });
 
   test('a turn that acted on the world and finished clean SUCCEEDED', () => {
@@ -399,9 +400,9 @@ describe('buildOutcomeEvalSplit — GEPA train/val discipline (disjoint)', () =>
       id TEXT PRIMARY KEY, parent_id TEXT, content TEXT NOT NULL, created_at INTEGER NOT NULL
     )`);
     const now = Date.now();
-    sql`INSERT INTO messages (id, parent_id, content, created_at)
+    void sql`INSERT INTO messages (id, parent_id, content, created_at)
         VALUES (${'u0'}, ${null}, ${'fix task 0'}, ${now - 1_000})`;
-    sql`INSERT INTO messages (id, parent_id, content, created_at)
+    void sql`INSERT INTO messages (id, parent_id, content, created_at)
         VALUES (${'n0'}, ${'u0'}, ${'bad answer 0'}, ${now + 1_000})`;
     const recorder = new RunEventRecorder(sql);
     recorder.emit('run-1', { type: 'run_start', agentId: 'agent', caused_by: 'chat', userMessage: 'fix task 0' });

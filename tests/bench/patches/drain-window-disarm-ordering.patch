@@ -1,8 +1,7 @@
 diff --git a/packages/core/src/orchestrator/drain-scheduler.ts b/packages/core/src/orchestrator/drain-scheduler.ts
-index 35b3a44..2377169 100644
 --- a/packages/core/src/orchestrator/drain-scheduler.ts
 +++ b/packages/core/src/orchestrator/drain-scheduler.ts
-@@ -41,10 +41,11 @@ export class DrainScheduler {
+@@ -41,9 +41,10 @@
      if (this.armed) return;
      this.armed = true;
      this.setTimer(async () => {
@@ -14,4 +13,3 @@ index 35b3a44..2377169 100644
 +        this.armed = false;
          // Never wedge: the window is already disarmed, the next schedule()
          // re-arms. Events stay pending in the EventLog for the next drain.
-         console.warn('[proteus] debounced drain failed:', (err as Error).message);

@@ -14,7 +14,10 @@ export function diffLines(before: string, after: string): LineDiff {
   const n = a.length, m = b.length;
 
   // lcs[i][j] = length of the longest common subsequence of a[i:] and b[j:].
-  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));
+  const lcs: number[][] = Array.from(
+    { length: n + 1 },
+    () => Array.from<number>({ length: m + 1 }).fill(0),
+  );
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       lcs[i]![j] = a[i] === b[j] ? lcs[i + 1]![j + 1]! + 1 : Math.max(lcs[i + 1]![j]!, lcs[i]![j + 1]!);
@@ -77,10 +80,10 @@ export const MAX_LINES_PER_FILE = 1000;
 
 /**
  * Parse `git diff` unified output into FileDiff[] — the general per-executor
- * change-set for executors with a real git repo (sandbox/laptop/nimbus). Pure:
- * the caller runs `git diff` via the executor's shell and passes the text
- * here. Handles new/deleted/modified/renamed files and binary markers; hunk
- * `@@` headers are kept as context rows.
+ * change-set for executors with a real git repo (sandbox, laptop, or standalone
+ * Nimbus integrations). Pure: the caller runs `git diff` via the executor's
+ * shell and passes the text here. Handles new/deleted/modified/renamed files
+ * and binary markers; hunk `@@` headers are kept as context rows.
  */
 export function parseGitDiff(unified: string): FileDiff[] {
   const out: FileDiff[] = [];

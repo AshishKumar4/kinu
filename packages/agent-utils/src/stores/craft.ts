@@ -1,5 +1,6 @@
 import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool, CraftedToolProvider } from "../codemode/builder";
+import * as v from "valibot";
 
 // ---------------------------------------------------------------------------
 // SQLite row type
@@ -15,13 +16,27 @@ type CraftRow = SqlRow<{
 	updated_at: number;
 }>;
 
+const StringDictionarySchema = v.record(v.string(), v.string());
+
+function parseParams(params: string): Record<string, string> {
+	const value: unknown = JSON.parse(params);
+	return v.parse(StringDictionarySchema, value, {
+		message: "crafted tool params must be a string dictionary",
+	});
+}
+
+function isCraftScope(scope: string): scope is CraftedTool["scope"] {
+	return scope === "local" || scope === "shared";
+}
+
 function rowToTool(row: CraftRow): CraftedTool {
+	if (!isCraftScope(row.scope)) throw new Error(`invalid crafted tool scope: ${row.scope}`);
 	return {
 		name: row.name,
 		description: row.description,
-		params: row.params ? JSON.parse(row.params) as Record<string, string> : null,
+		params: row.params ? parseParams(row.params) : null,
 		code: row.code,
-		scope: row.scope as CraftedTool["scope"],
+		scope: row.scope,
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 	};
@@ -120,29 +135,29 @@ export class CraftStore implements CraftedToolProvider {
 	}
 
 	get(name: string): CraftedTool | null {
-		const rows = [...this.sql`SELECT * FROM crafted_tools WHERE name = ${name}`] as CraftRow[];
+		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools WHERE name = ${name}`;
 		return rows.length > 0 ? rowToTool(rows[0]) : null;
 	}
 
 	list(): CraftedTool[] {
-		const rows = [...this.sql`SELECT * FROM crafted_tools ORDER BY updated_at DESC`] as CraftRow[];
+		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools ORDER BY updated_at DESC`;
 		return rows.map(rowToTool);
 	}
 
 	search(query: string, limit = 10): CraftedTool[] {
 		const safeQuery = `"${query.replace(/"/g, '""')}"`;
-		const rows = [...this.sql`
+		const rows = this.sql<CraftRow>`
 			SELECT t.* FROM crafted_tools t
 			JOIN crafted_tools_fts f ON t.rowid = f.rowid
 			WHERE crafted_tools_fts MATCH ${safeQuery}
 			ORDER BY rank
 			LIMIT ${limit}
-		`] as CraftRow[];
+		`;
 		return rows.map(rowToTool);
 	}
 
 	getAll(): CraftedTool[] {
-		const rows = [...this.sql`SELECT * FROM crafted_tools`] as CraftRow[];
+		const rows = this.sql<CraftRow>`SELECT * FROM crafted_tools`;
 		return rows.map(rowToTool);
 	}
 }

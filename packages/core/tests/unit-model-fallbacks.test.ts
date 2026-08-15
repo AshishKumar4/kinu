@@ -10,6 +10,10 @@ import {
 // bare tools+streaming profile — that under-reports the window enough to
 // trigger premature compaction and drops reasoning/caching from the prompt.
 describe('model fallbacks track new releases', () => {
+  test('DeepSeek V4 Pro keeps its documented context window without a catalog', () => {
+    expect(contextWindowForModel('workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813')).toBe(1_048_576);
+  });
+
   test('Kimi context windows by generation', () => {
     expect(contextWindowForModel('moonshotai/kimi-k3')).toBe(1_048_576);
     expect(contextWindowForModel('openrouter/moonshotai/kimi-k3')).toBe(1_048_576);

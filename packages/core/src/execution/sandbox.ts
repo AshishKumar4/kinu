@@ -16,6 +16,7 @@
  *   sandbox.listPorts()
  */
 
+import * as v from 'valibot';
 import { isAbortError, raceAbort } from '@proteus/agent-utils';
 import type { ExecutorProvider, ExecutorCapability } from './types.js';
 import { readExecSignal } from './signal.js';
@@ -25,6 +26,12 @@ import { makeVfsError } from '../vfs/errno.js';
 import { shellQuote } from '../utils/shell.js';
 import { vfsDirname } from '../utils/vfs-helpers.js';
 import { base64ToBytes, bytesToBase64 } from '../utils/base64.js';
+import type { JsonValue } from '../utils/json.js';
+
+interface SandboxExposeOptions {
+  hostname: string;
+  name?: string;
+}
 
 /**
  * Duck-typed handle — matches the subset of @cloudflare/sandbox's getSandbox()
@@ -46,17 +53,17 @@ export interface SandboxHandle {
   readFile(path: string, opts?: { encoding?: 'utf-8' | 'base64' }):
     Promise<{ content?: string; encoding?: string; isBinary?: boolean; exitCode?: number }>;
   /** Pass `encoding: 'base64'` to write binary content byte-exactly. */
-  writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<unknown>;
+  writeFile(path: string, content: string, opts?: { encoding?: 'utf-8' | 'base64' }): Promise<JsonValue | void>;
   listFiles(path: string, opts?: { recursive?: boolean }):
     Promise<{ files: Array<{ name?: string; path?: string; type?: string; size?: number; isDirectory?: boolean }> }>;
-  deleteFile(path: string): Promise<unknown>;
+  deleteFile(path: string): Promise<JsonValue | void>;
   /** Expose a port; `hostname` is the suffix the returned preview URL is built on. */
   exposePort(port: number, opts: { hostname: string; name?: string }):
     Promise<{ url: string; port: number; name?: string }>;
-  unexposePort(port: number): Promise<unknown>;
+  unexposePort(port: number): Promise<JsonValue | void>;
   /** SDK method is `getExposedPorts(hostname)`; `hostname` builds each row's `url`. */
   getExposedPorts(hostname: string):
-    Promise<Array<{ url: string; port: number; status?: string }>>;
+    Promise<Array<{ url: string; port: number; name?: string; status?: string }>>;
   /** Snapshot a directory to R2 (squashfs). Returns a small serializable handle
    *  to store and later pass to restoreBackup. (SDK createBackup.) */
   createBackup(opts: BackupOptions): Promise<DirectoryBackup>;
@@ -128,6 +135,11 @@ const NOT_CONFIGURED =
   'Sandbox executor not configured. Add the @cloudflare/sandbox binding ' +
   'and Container to wrangler.jsonc (see docs/EXECUTION-LAYER-SPEC.md).';
 
+const PREVIEWS_NOT_CONFIGURED =
+  'Sandbox previews are off: PREVIEW_HOST_SUFFIX is unset, so there is no zone to mint preview ' +
+  'hostnames on. Turning them on takes a proxied wildcard DNS record and a matching route on a zone; ' +
+  'the PREVIEW_HOST_SUFFIX note in wrangler.jsonc has both steps. Exec and files still work.';
+
 /**
  * Substring markers (lower-cased) for transient sandbox/RPC errors that the
  * SDK either auto-retries via 503 or does NOT retry at all (mid-request 500
@@ -146,8 +158,24 @@ const TRANSIENT_MARKERS = [
   'http error! status: 500',
 ];
 
-export function isSandboxTransientError(err: unknown): boolean {
-  const msg = (err instanceof Error ? err.message : String(err)).toLowerCase();
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
+}
+
+function parseInput<TSchema extends v.GenericSchema>(
+  schema: TSchema,
+  input: { value: unknown },
+): v.InferOutput<TSchema> | undefined {
+  const result = v.safeParse(schema, input.value);
+  return result.success ? result.output : undefined;
+}
+
+const StringSchema = v.string();
+const OptionalStringSchema = v.optional(v.string());
+const PortSchema = v.pipe(v.number(), v.minValue(1), v.maxValue(65535));
+
+export function isSandboxTransientError(error: Error | string): boolean {
+  const msg = (error instanceof Error ? error.message : error).toLowerCase();
   return TRANSIENT_MARKERS.some(m => msg.includes(m));
 }
 
@@ -165,7 +193,9 @@ export async function withSandboxRetry<T>(fn: () => Promise<T>, attempts = 3): P
       return await fn();
     } catch (err) {
       lastErr = err;
-      if (!isSandboxTransientError(err) || i === attempts - 1) throw err;
+      if (!isSandboxTransientError(err instanceof Error ? err : String(err)) || i === attempts - 1) {
+        throw err;
+      }
       await new Promise(r => setTimeout(r, 500 * Math.pow(2, i)));
     }
   }
@@ -185,15 +215,17 @@ function normalize(res: { output?: string; stdout?: string; stderr?: string; exi
  *
  * @param handle             SDK `getSandbox()` result.
  * @param previewHostSuffix  `env.PREVIEW_HOST_SUFFIX` — the zone previews are
- *                           served under. Required when handle is supplied;
- *                           the SDK builds every preview URL on it.
+ *                           served under; the SDK builds every preview URL on
+ *                           it. Optional: without it exec/files work in full
+ *                           and only the port-exposure surface refuses, with
+ *                           the preview-specific reason.
  */
 export function createSandboxExecutor(
   handle?: SandboxHandle,
   previewHostSuffix?: string,
 ): ExecutorProvider {
-  const connected = handle != null
-    && typeof previewHostSuffix === 'string' && previewHostSuffix.length > 0;
+  const connected = handle != null;
+  const previews = previewHostSuffix !== undefined && previewHostSuffix.length > 0;
   let active = false;
   const touch = async <T>(fn: () => Promise<T>): Promise<T> => {
     active = true;
@@ -203,55 +235,65 @@ export function createSandboxExecutor(
   const tools: ExecutorProvider['tools'] = {
     exec: {
       description: 'Run a shell command in the sandbox container.',
-      execute: async (command: unknown, options?: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
-        const signal = readExecSignal(options);
+        const command = parseInput(StringSchema, { value: args[0] });
+        if (command === undefined) return 'exec error: command must be a string';
+        const signal = readExecSignal({ context: args[1] });
         try {
           // The sandbox SDK has no kill for an in-flight exec — abort stops
           // the wait; the container-side command runs to its own timeout.
           const res = await raceAbort(
-            () => withSandboxRetry(() => touch(() => handle.exec(String(command), { timeout: 60_000 }))),
+            () => withSandboxRetry(() => touch(() => handle.exec(command, { timeout: 60_000 }))),
             signal,
             'sandbox exec aborted — the command may still finish inside the container',
           );
           return normalize(res);
         } catch (err) {
           if (isAbortError(err)) throw err;
-          return `exec error: ${err instanceof Error ? err.message : String(err)}`;
+          return `exec error: ${errorMessage({ error: err })}`;
         }
       },
     },
     readFile: {
       description: 'Read a file from the sandbox.',
-      execute: async (path: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const path = parseInput(StringSchema, { value: args[0] });
+        if (path === undefined) return 'read error: path must be a string';
         try {
-          const r = await withSandboxRetry(() => touch(() => handle.readFile(String(path))));
+          const r = await withSandboxRetry(() => touch(() => handle.readFile(path)));
           if (r.exitCode && r.exitCode !== 0) return `read error: exit ${r.exitCode}`;
           return r.content ?? '';
         } catch (err) {
-          return `read error: ${err instanceof Error ? err.message : String(err)}`;
+          return `read error: ${errorMessage({ error: err })}`;
         }
       },
     },
     writeFile: {
       description: 'Write content to a file in the sandbox. Creates parent dirs.',
-      execute: async (path: unknown, content: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const path = parseInput(StringSchema, { value: args[0] });
+        const content = parseInput(StringSchema, { value: args[1] });
+        if (path === undefined) return 'write error: path must be a string';
+        if (content === undefined) return 'write error: content must be a string';
         try {
-          await withSandboxRetry(() => touch(() => handle.writeFile(String(path), String(content))));
-          return `wrote ${String(path)}`;
+          await withSandboxRetry(() => touch(() => handle.writeFile(path, content)));
+          return `wrote ${path}`;
         } catch (err) {
-          return `write error: ${err instanceof Error ? err.message : String(err)}`;
+          return `write error: ${errorMessage({ error: err })}`;
         }
       },
     },
     listFiles: {
       description: 'List files in a directory. Returns newline-separated entries prefixed "d" or "-".',
-      execute: async (path: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const path = parseInput(OptionalStringSchema, { value: args[0] });
+        if (args[0] !== undefined && path === undefined) return 'list error: path must be a string';
         try {
-          const r = await withSandboxRetry(() => touch(() => handle.listFiles(String(path ?? '/'), { recursive: false })));
+          const r = await withSandboxRetry(() => touch(() => handle.listFiles(path ?? '/', { recursive: false })));
           if (!r?.files?.length) return '';
           return r.files
             .map(f => {
@@ -261,33 +303,37 @@ export function createSandboxExecutor(
             })
             .join('\n');
         } catch (err) {
-          return `list error: ${err instanceof Error ? err.message : String(err)}`;
+          return `list error: ${errorMessage({ error: err })}`;
         }
       },
     },
     readdir: {
       description: 'Alias for listFiles — list entries in a directory.',
-      execute: async (path: unknown): Promise<string> => {
-        return (await tools.listFiles.execute(path)) as string;
+      execute: async (...args: unknown[]): Promise<string> => {
+        return v.parse(v.string(), await tools.listFiles.execute(args[0]));
       },
     },
     deleteFile: {
       description: 'Delete a file or directory.',
-      execute: async (path: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const path = parseInput(StringSchema, { value: args[0] });
+        if (path === undefined) return 'delete error: path must be a string';
         try {
-          await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(String(path)))));
-          return `deleted ${String(path)}`;
+          await withSandboxRetry(() => touch(() => Promise.resolve(handle.deleteFile(path))));
+          return `deleted ${path}`;
         } catch (err) {
-          return `delete error: ${err instanceof Error ? err.message : String(err)}`;
+          return `delete error: ${errorMessage({ error: err })}`;
         }
       },
     },
     exists: {
       description: 'Check if a path exists — uses shell test.',
-      execute: async (path: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
-        const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(String(path))} && echo true || echo false`)));
+        const path = parseInput(StringSchema, { value: args[0] });
+        if (path === undefined) return 'false';
+        const res = await withSandboxRetry(() => touch(() => handle.exec(`test -e ${JSON.stringify(path)} && echo true || echo false`)));
         const out = (res.stdout ?? res.output ?? '').trim();
         return out.includes('true') ? 'true' : 'false';
       },
@@ -300,11 +346,13 @@ export function createSandboxExecutor(
         'clear error if nothing is listening — at which point start your server first ' +
         '(e.g. `nohup python3 -m http.server <port> --directory /workspace/<app> > /tmp/srv.log 2>&1 &` ' +
         'for static sites, or `nohup node server.js > /tmp/srv.log 2>&1 &` for Node) and retry.',
-      execute: async (port: unknown, name?: unknown): Promise<string> => {
-        if (!handle || !previewHostSuffix) return NOT_CONFIGURED;
-        const p = Number(port);
-        if (!Number.isFinite(p) || p <= 0 || p > 65535) {
-          return `expose error: invalid port ${port}`;
+      execute: async (...args: unknown[]): Promise<string> => {
+        if (!handle) return NOT_CONFIGURED;
+        if (!previewHostSuffix) return PREVIEWS_NOT_CONFIGURED;
+        const p = parseInput(PortSchema, { value: args[0] });
+        const name = parseInput(OptionalStringSchema, { value: args[1] });
+        if (p === undefined) {
+          return `expose error: invalid port ${String(args[0])}`;
         }
         // Pre-flight: verify a server is listening on the port inside the
         // container. Without this we hand back a preview URL that 502s
@@ -340,41 +388,44 @@ export function createSandboxExecutor(
           // Continue — the SDK exposePort call below will surface its own
           // error if exposure can't be set up; we don't want to gate the
           // happy path on a probe glitch.
-          console.warn(`[sandbox.exposePort] port probe failed (continuing): ${(err as Error).message}`);
+          console.warn(`[sandbox.exposePort] port probe failed (continuing): ${errorMessage({ error: err })}`);
         }
         try {
-          const opts: { hostname: string; name?: string } = { hostname: previewHostSuffix };
+          const opts: SandboxExposeOptions = { hostname: previewHostSuffix };
           if (name != null) opts.name = String(name);
           const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(p, opts)));
           return exposed.url;
         } catch (err) {
-          return `expose error: ${err instanceof Error ? err.message : String(err)}`;
+          return `expose error: ${errorMessage({ error: err })}`;
         }
       },
     },
     unexposePort: {
       description: 'Stop exposing a port.',
-      execute: async (port: unknown): Promise<string> => {
+      execute: async (...args: unknown[]): Promise<string> => {
         if (!handle) return NOT_CONFIGURED;
+        const port = parseInput(PortSchema, { value: args[0] });
+        if (port === undefined) return `unexpose error: invalid port ${String(args[0])}`;
         try {
-          await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(Number(port)))));
+          await withSandboxRetry(() => touch(() => Promise.resolve(handle.unexposePort(port))));
           return `unexposed ${port}`;
         } catch (err) {
-          return `unexpose error: ${err instanceof Error ? err.message : String(err)}`;
+          return `unexpose error: ${errorMessage({ error: err })}`;
         }
       },
     },
     listPorts: {
       description: 'List currently exposed ports. Returns JSON array of {port,url,status}.',
       execute: async (): Promise<string> => {
-        if (!handle || !previewHostSuffix) return NOT_CONFIGURED;
+        if (!handle) return NOT_CONFIGURED;
+        if (!previewHostSuffix) return PREVIEWS_NOT_CONFIGURED;
         try {
           // SDK method is getExposedPorts — the tool we expose is still
           // named listPorts for backward compat with the codemode namespace.
           const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
           return JSON.stringify((ports ?? []).map(p => ({ port: p.port, status: p.status, url: p.url })));
         } catch (err) {
-          return `listPorts error: ${err instanceof Error ? err.message : String(err)}`;
+          return `listPorts error: ${errorMessage({ error: err })}`;
         }
       },
     },
@@ -406,7 +457,7 @@ declare namespace sandbox {
   return {
     name: 'sandbox',
     kind: 'sandbox',
-    ...(handle ? { files: sandboxFiles(handle) } : {}),
+    files: handle ? sandboxFiles(handle) : undefined,
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
     getStatus: () => ({
@@ -414,7 +465,9 @@ declare namespace sandbox {
       available: connected,
       active,
       status: connected ? (active ? 'active' : 'idle') : 'not_configured',
-      ...(connected ? {} : { reason: NOT_CONFIGURED }),
+      // An available sandbox with previews off carries the preview reason so
+      // surfaces that hand out preview URLs can say so before anyone tries.
+      ...(connected ? (previews ? {} : { reason: PREVIEWS_NOT_CONFIGURED }) : { reason: NOT_CONFIGURED }),
     }),
     connect: async () => { /* sandbox starts on first RPC */ },
     disconnect: async () => { /* The sandbox DO persists, but its CONTAINER
@@ -431,9 +484,8 @@ declare namespace sandbox {
     // the ExecutorProvider abstraction so any caller can ask any executor
     // to expose a port without knowing it's "sandbox" specifically.
     async exposePort(port, opts) {
-      if (!handle || !previewHostSuffix) {
-        return { supported: false, reason: 'sandbox not configured (no handle / preview host suffix)' };
-      }
+      if (!handle) return { supported: false, reason: NOT_CONFIGURED };
+      if (!previewHostSuffix) return { supported: false, reason: PREVIEWS_NOT_CONFIGURED };
       if (!Number.isFinite(port) || port <= 0 || port > 65535) {
         return { supported: false, reason: `invalid port ${port}` };
       }
@@ -463,7 +515,7 @@ declare namespace sandbox {
         // Probe glitch — proceed; SDK call will surface its own error.
       }
       try {
-        const sdkOpts: { hostname: string; name?: string } = { hostname: previewHostSuffix };
+        const sdkOpts: SandboxExposeOptions = { hostname: previewHostSuffix };
         if (opts?.name) sdkOpts.name = opts.name;
         const exposed = await withSandboxRetry(() => touch(() => handle.exposePort(port, sdkOpts)));
         return {
@@ -474,7 +526,7 @@ declare namespace sandbox {
           verified_listening,
         };
       } catch (err) {
-        return { supported: false, reason: (err as Error).message };
+        return { supported: false, reason: errorMessage({ error: err }) };
       }
     },
 
@@ -486,17 +538,13 @@ declare namespace sandbox {
 
     async listExposedPorts() {
       if (!handle || !previewHostSuffix) return [];
-      try {
-        const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
-        return (ports ?? []).map(p => ({
-          port: p.port,
-          url: p.url,
-          name: (p as { name?: string }).name,
-          status: 'unknown' as const,
-        }));
-      } catch {
-        return [];
-      }
+      const ports = await withSandboxRetry(() => touch(() => handle.getExposedPorts(previewHostSuffix)));
+      return (ports ?? []).map(p => ({
+        port: p.port,
+        url: p.url,
+        name: p.name,
+        status: 'unknown' as const,
+      }));
     },
   };
 }
@@ -533,7 +581,7 @@ export function sandboxFiles(handle: SandboxHandle): VFS {
     },
 
     async writeFile(path, data) {
-      if (typeof data === 'string') await handle.writeFile(path, data);
+      if (v.is(v.string(), data)) await handle.writeFile(path, data);
       else await handle.writeFile(path, bytesToBase64(data), { encoding: 'base64' });
     },
 

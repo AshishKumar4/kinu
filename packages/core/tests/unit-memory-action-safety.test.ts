@@ -20,40 +20,64 @@
 
 import { describe, test, expect } from 'bun:test';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
+import { toolExecute } from '@proteus/test-utils';
 import { createTestRuntime } from './helpers.js';
-import type { FactsStore } from '../src/memory/facts.js';
+import type { Fact, FactsStore } from '../src/memory/facts.js';
+import type { JsonValue } from '../src/utils/json.js';
 
-type MemoryTool = { execute: (args: Record<string, unknown>) => Promise<unknown> };
+interface MemoryToolProbeInput {
+  action: string;
+  key?: string;
+  value?: JsonValue;
+}
+
+interface RecordingFacts extends FactsStore {
+  forgotten: string[];
+  remembered: string[];
+}
 
 /** An in-memory FactsStore that also records every mutation attempted on it. */
-function recordingFacts(): FactsStore & { forgotten: string[]; remembered: string[] } {
-  const rows = new Map<string, { key: string; value: unknown; confidence: number }>();
+function recordingFacts(): RecordingFacts {
+  const rows = new Map<string, Fact>();
   const forgotten: string[] = [];
   const remembered: string[] = [];
   return {
     forgotten,
     remembered,
-    upsert(key: string, value: unknown, opts?: { confidence?: number }) {
+    upsert(key, value, opts) {
       remembered.push(key);
-      rows.set(key, { key, value, confidence: opts?.confidence ?? 1 });
+      const existing = rows.has(key);
+      rows.set(key, {
+        key,
+        value,
+        confidence: opts?.confidence ?? 1,
+        source: opts?.source ?? 'tool',
+        lastObservedAt: 0,
+      });
+      return existing ? 'changed' : 'created';
     },
-    recall(key: string) {
-      const row = rows.get(key);
-      return row
-        ? { ...row, source: 'tool' as const, lastObservedAt: 0 }
-        : null;
+    recall(key) {
+      return rows.get(key) ?? null;
     },
-    forget(key: string) {
+    forget(key) {
       forgotten.push(key);
       rows.delete(key);
     },
-  } as unknown as FactsStore & { forgotten: string[]; remembered: string[] };
+    recentTopK(k) {
+      return [...rows.values()].slice(0, k);
+    },
+    all() {
+      return [...rows.values()];
+    },
+  };
 }
 
 function memoryTool(facts: FactsStore) {
   const { rt } = createTestRuntime();
   const tools = buildBuiltinTools({ rt, facts });
-  return tools.memory as unknown as MemoryTool;
+  return {
+    execute: toolExecute<MemoryToolProbeInput, JsonValue>(tools.memory),
+  };
 }
 
 describe('the memory tool refuses actions it does not know', () => {

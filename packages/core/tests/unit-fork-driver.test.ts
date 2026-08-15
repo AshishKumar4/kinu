@@ -20,10 +20,10 @@ async function sourceWorkspace() {
   const sql = makeSql(db);
   initAllTables(makeExecRaw(db));
   const vfs = createWorkspaceBundle(db).vfs;
-  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${'SRC'}, ${'atlas'}, ${100})`;
   await writeSoul(vfs, sql, 'help with testing');
-  sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
-  sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;
+  void sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m1'}, ${'user'}, ${'hello'}, ${1000})`;
+  void sql`INSERT INTO messages (id, role, content, created_at) VALUES (${'m2'}, ${'assistant'}, ${'hi'}, ${1100})`;
   return { db, sql, vfs };
 }
 

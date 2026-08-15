@@ -12,9 +12,24 @@
  *     (Evolution Changelog digests, background-job completions).
  */
 
-import type { EmailThreadAddr, EventLog, ReplyChannelStore } from '@proteus/core';
+import { JsonValueSchema, type EmailThreadAddr, type EventLog, type JsonValue, type ReplyChannelStore } from '@proteus/core';
 import { agentEmailAddress } from './inbound.js';
 import type { EmailOutbox } from './outbox.js';
+import * as v from 'valibot';
+
+const EmailThreadAddrSchema = v.object({
+  to: v.string(),
+  from: v.string(),
+  subject: v.string(),
+  message_id: v.nullable(v.string()),
+  references: v.nullable(v.string()),
+});
+const ReplyPayloadSchema = v.object({ content: v.optional(JsonValueSchema) });
+
+export interface EmailThreadingHeaders {
+  'In-Reply-To'?: string;
+  References?: string;
+}
 
 /** What the dispatcher needs at send time. Resolved per dispatch so binding
  *  and display-name changes never go stale on a long-lived DO. */
@@ -33,7 +48,7 @@ function replySubject(subject: string): string {
 
 /** Threading headers per RFC 5322: reply points In-Reply-To at the inbound
  *  Message-ID and appends it to the inherited References chain. */
-export function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): Record<string, string> {
+export function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'references'>): EmailThreadingHeaders {
   if (!addr.message_id) return {};
   return {
     'In-Reply-To': addr.message_id,
@@ -41,10 +56,11 @@ export function threadingHeaders(addr: Pick<EmailThreadAddr, 'message_id' | 'ref
   };
 }
 
-function payloadText(payload: unknown): string {
-  if (typeof payload === 'string') return payload;
-  const content = (payload as { content?: unknown } | null)?.content;
-  if (typeof content === 'string') return content;
+function payloadText(payload: JsonValue): string {
+  if (v.is(v.string(), payload)) return payload;
+  const parsed = v.safeParse(ReplyPayloadSchema, payload);
+  const content = parsed.success ? parsed.output.content : undefined;
+  if (v.is(v.string(), content)) return content;
   return JSON.stringify(content ?? payload ?? '');
 }
 
@@ -60,7 +76,7 @@ export function createEmailThreadDispatcher(
       }
       let addr: EmailThreadAddr;
       try {
-        addr = JSON.parse(channel.holder_addr) as EmailThreadAddr;
+        addr = v.parse(EmailThreadAddrSchema, JSON.parse(channel.holder_addr));
       } catch {
         return { delivered: false, detail: 'malformed email_thread holder_addr' };
       }

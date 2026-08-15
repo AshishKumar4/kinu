@@ -61,13 +61,13 @@ const LABEL_KEYS: ReadonlyArray<readonly [string, OutcomeLabel]> = [
 /** What each verdict means, in the words a human deciding between them needs.
  *  The ensemble judges (ensemble.ts) are given these same sentences verbatim —
  *  two raters answering differently-worded questions would not be comparable. */
-export const OUTCOME_LABEL_HELP: Record<OutcomeLabel, string> = {
+export const OUTCOME_LABEL_HELP = {
   accepted: 'the user moved on, or built on the answer',
   corrected: 'the user re-asked, fixed it, or contradicted it',
   frustrated: 'the user said, in so many words, that it was bad',
   abandoned: 'the thread was dropped; the follow-up is a new topic',
   unclear: 'you genuinely cannot tell from what is here',
-};
+} satisfies Record<OutcomeLabel, string>;
 
 // ── The calibration universe ─────────────────────────────────────
 

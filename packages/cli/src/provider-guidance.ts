@@ -14,6 +14,8 @@
 
 import { describeProviderError } from '@proteus/core';
 
+export type ProviderFailure = Parameters<typeof describeProviderError>[0];
+
 export interface GuidedFailure {
   /** The failure in the provider's own words. Never empty —
    *  `describeProviderError` always resolves to something readable. */
@@ -55,7 +57,7 @@ const CLASSES: ReadonlyArray<{ match: RegExp; hint: string }> = [
  * tell the user what to run (the "No LLM configured" family names its own
  * commands) keep their own wording rather than gaining a second, weaker hint.
  */
-export function guideFailure(error: unknown): GuidedFailure {
+export function guideFailure(error: ProviderFailure): GuidedFailure {
   const message = describeProviderError(error);
   if (/proteus [a-z]/.test(message)) return { message };
   const matched = CLASSES.find((entry) => entry.match.test(message));

@@ -15,6 +15,7 @@ import type { RunEventRecorder } from '../events/recorder.js';
 import type { RunEvent } from '../events/types.js';
 import type { BackgroundJobStore } from '../jobs/store.js';
 import type { SqlExecutor } from '../types/primitives.js';
+import { parseJsonValue, type JsonValue } from '../utils/json.js';
 
 export type TimelineKind =
   | 'llm-turn' | 'tool-call' | 'runtime-exec' | 'mcts' | 'scaffold' | 'shadow-eval'
@@ -30,7 +31,7 @@ export interface TimelineSpan {
   /** Latency in ms when known (tool calls, activity timings). */
   elapsedMs?: number;
   /** Preserved structured payload (e.g. evolution_events.data) for drill-in. */
-  data?: unknown;
+  data?: JsonValue;
   source: 'run' | 'evolution' | 'mcts' | 'background';
   /** Id for driving the work surface (node id, run-event id, root id…). */
   refId?: string;
@@ -38,8 +39,8 @@ export interface TimelineSpan {
   rawType?: string;
 }
 
-export function safeJsonParse(s: string): unknown {
-  try { return JSON.parse(s); } catch { return s; }
+export function safeJsonParse(s: string): JsonValue {
+  try { return parseJsonValue(s); } catch { return s; }
 }
 
 /** Map a crafted/builtin tool name to a timeline kind. `think` is the
@@ -104,7 +105,7 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
     case 'run_end':
       return { ...base, kind: e.reason === 'aborted' ? 'abort' : 'other', label: e.reason ? `Run ended (${e.reason})` : 'Run ended', detail: e.error };
     default:
-      return { ...base, kind: 'other', label: (e as { type: string }).type };
+      return { ...base, kind: 'other', label: e.type };
   }
 }
 

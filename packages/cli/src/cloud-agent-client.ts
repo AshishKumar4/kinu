@@ -1,16 +1,25 @@
 import { CHAT_MESSAGE_TYPES } from 'agents/chat';
-import { CLOUD_MAX_INLINE_ATTACHMENT_BYTES, ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import {
+  CLOUD_MAX_INLINE_ATTACHMENT_BYTES,
+  JsonObjectSchema,
+  JsonValueSchema,
+  ORCHESTRATOR_AGENT_SLUG,
+  decodeJsonValue,
+  parseJsonValue,
+  type JsonObject,
+  type JsonValue,
+} from '@proteus/core';
 import type {
   CheckpointAvailability, FileCheckpointEntry, FileRestorePlan, FileRestoreResult,
 } from '@proteus/core';
 import {
   callAgentRpc,
+  CloudAgentStatusSchema,
+  CloudBackgroundJobSchema,
+  CloudToolDescriptionsSchema,
   createCloudAgentConnectTicket,
   listCloudAvailableModels,
-  type CloudAgentStatus,
-  type CloudBackgroundJob,
   type CloudChatMessage,
-  type CloudToolDescriptions,
 } from './cloud-api.js';
 import {
   createCliSession,
@@ -43,7 +52,145 @@ import {
   type DeviceConsentSurface,
   type FileCheckpointSurface,
   type ForkPoint,
+  type PendingDeviceConsent,
 } from './agent-client.js';
+import * as v from 'valibot';
+
+const ReasoningEffortSchema = v.picklist(['low', 'medium', 'high'] satisfies ReasoningEffort[]);
+const PendingDeviceConsentSchema: v.GenericSchema<PendingDeviceConsent> = v.object({
+  consentId: v.string(),
+  deviceLabel: v.string(),
+  method: v.string(),
+  command: v.string(),
+});
+const ResolveDeviceConsentSchema = v.object({ ok: v.boolean() });
+const FileRestoreChangeSchema = v.object({
+  path: v.string(),
+  kind: v.picklist(['modify', 'create', 'delete']),
+});
+const FileCheckpointEntrySchema: v.GenericSchema<FileCheckpointEntry> = v.object({
+  id: v.string(),
+  dir: v.string(),
+  at: v.number(),
+  turnId: v.nullable(v.string()),
+  sessionId: v.nullable(v.string()),
+  reason: v.string(),
+});
+const FileRestorePlanSchema: v.GenericSchema<FileRestorePlan> = v.object({
+  dir: v.string(),
+  id: v.string(),
+  files: v.array(FileRestoreChangeSchema),
+});
+const FileRestoreResultSchema: v.GenericSchema<FileRestoreResult> = v.object({
+  dir: v.string(),
+  id: v.string(),
+  files: v.array(FileRestoreChangeSchema),
+  preRestoreId: v.nullable(v.string()),
+});
+const CheckpointAvailabilitySchema: v.GenericSchema<CheckpointAvailability> = v.object({
+  available: v.boolean(),
+  reason: v.optional(v.string()),
+});
+const CloudChatMessageSchema: v.GenericSchema<CloudChatMessage> = v.object({
+  id: v.string(),
+  role: v.picklist(['user', 'assistant', 'system']),
+  content: v.string(),
+  createdAt: v.union([v.string(), v.number()]),
+});
+const BranchTurnResultSchema = v.nullable(v.object({
+  accepted: v.optional(v.boolean()),
+  reason: v.optional(v.string()),
+}));
+const ForkAgentResultSchema = v.nullable(v.object({ name: v.optional(v.string()) }));
+const ChangelogRevertActionSchema = v.variant('type', [
+  v.object({ type: v.literal('scaffold_rollback'), target: v.string() }),
+  v.object({ type: v.literal('craft_retire'), target: v.string() }),
+  v.object({ type: v.literal('view_revert'), target: v.string() }),
+  v.object({ type: v.literal('fact_forget'), target: v.string() }),
+  v.object({ type: v.literal('fact_forget_many'), targets: v.array(v.string()) }),
+]);
+const ChangelogEntrySchema: v.GenericSchema<ChangelogEntry> = v.lazy(() => v.object({
+  id: v.string(),
+  kind: v.picklist(['scaffold', 'tool', 'view', 'fact', 'gepa', 'replay', 'outcomes']),
+  at: v.number(),
+  summary: v.string(),
+  evidence: v.string(),
+  revert: v.optional(ChangelogRevertActionSchema),
+  scaffoldVersion: v.optional(v.number()),
+  items: v.optional(v.array(ChangelogEntrySchema)),
+}));
+const ChangelogViewSchema = v.nullable(v.object({
+  entries: v.optional(v.array(ChangelogEntrySchema), []),
+  unseenCount: v.optional(v.number(), 0),
+}));
+const ChangelogRevertResultSchema: v.GenericSchema<ChangelogRevertResult> = v.object({
+  ok: v.boolean(),
+  detail: v.optional(v.string()),
+  error: v.optional(v.string()),
+});
+const AlternateTakeCandidateSchema = v.object({
+  nodeId: v.string(),
+  text: v.string(),
+  score: v.number(),
+  visits: v.number(),
+  depth: v.number(),
+  origin: v.optional(v.picklist(['live', 'branch'])),
+});
+const AlternateTakeSetSchema: v.GenericSchema<AlternateTakeSet> = v.object({
+  id: v.string(),
+  turnId: v.nullable(v.string()),
+  sessionId: v.nullable(v.string()),
+  task: v.string(),
+  source: v.picklist(['mcts', 'branch', 'heads']),
+  winnerNodeId: v.string(),
+  chosenNodeId: v.nullable(v.string()),
+  candidates: v.array(AlternateTakeCandidateSchema),
+  createdAt: v.number(),
+  pickedAt: v.nullable(v.number()),
+});
+const TakePickOutcomeSchema: v.GenericSchema<TakePickOutcome> = v.object({
+  outcome: v.picklist(['accepted', 'corrected']),
+  changedAnswer: v.boolean(),
+  chosen: AlternateTakeCandidateSchema,
+  set: AlternateTakeSetSchema,
+  continuationQueued: v.boolean(),
+});
+const SearchNodeProjectionSchema = v.object({
+  depth: v.number(),
+  status: v.string(),
+  value: v.optional(v.number()),
+  visits: v.optional(v.number()),
+  action: v.optional(v.nullable(v.string())),
+});
+const ModelSpecSchema = v.object({ spec: v.nullable(v.string()) });
+const SetModelResultSchema = v.object({ ok: v.literal(true), spec: v.string() });
+const ReasoningEffortResultSchema = v.object({ effort: v.nullable(ReasoningEffortSchema) });
+const SetReasoningEffortResultSchema = v.object({ ok: v.literal(true), effort: ReasoningEffortSchema });
+
+const SocketFrameSchema = v.objectWithRest({
+  type: v.string(),
+  id: v.optional(v.string()),
+  success: v.optional(v.boolean()),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(JsonValueSchema),
+  body: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+}, JsonValueSchema);
+type SocketFrame = v.InferOutput<typeof SocketFrameSchema>;
+
+const BranchStatusEventSchema = v.variant('status', [
+  v.object({
+    type: v.literal('branch_status'), status: v.literal('running'), branchId: v.string(), task: v.string(),
+  }),
+  v.object({
+    type: v.literal('branch_status'), status: v.literal('settled'), branchId: v.string(), task: v.string(),
+    takeSetId: v.string(), turnId: v.string(),
+  }),
+  v.object({
+    type: v.literal('branch_status'), status: v.literal('error'), branchId: v.string(), task: v.string(),
+    message: v.optional(v.string()),
+  }),
+]);
 
 export interface CloudAgentClientOptions {
   origin: string;
@@ -98,7 +245,7 @@ export class CloudAgentClient implements AgentClient {
   private connectPromise: Promise<void> | null = null;
   private readonly activeTurns = new Map<string, ActiveTurn>();
   /** In-flight @callable RPCs over the agent websocket ({type:'rpc'} frames). */
-  private readonly pendingRpcs = new Map<string, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
+  private readonly pendingRpcs = new Map<string, { resolve: (value: JsonValue) => void; reject: (err: Error) => void }>();
 
   constructor(opts: CloudAgentClientOptions) {
     this.origin = opts.origin;
@@ -109,15 +256,21 @@ export class CloudAgentClient implements AgentClient {
     this.sessionOptions = opts.session ?? {};
     this.activeCliSession = createCliSession(opts.agentName, this.sessionOptions);
     this.consents = {
-      listPending: () => this.callHttp('listPendingConsents'),
-      resolve: (consentId, decision) => this.callHttp('resolveDeviceConsent', [consentId, decision]),
+      listPending: () => this.callHttp('listPendingConsents', v.array(PendingDeviceConsentSchema)),
+      resolve: (consentId, decision) => this.callHttp(
+        'resolveDeviceConsent', ResolveDeviceConsentSchema, [consentId, decision],
+      ),
     };
     // Checkpoints live on the user's device daemon; the DO forwards.
     this.checkpoints = {
-      list: async (limit) => await this.callRpc('listFileCheckpoints', [limit ?? 50]) as FileCheckpointEntry[],
-      plan: async (dir, id) => await this.callRpc('planFileRestore', [dir, id]) as FileRestorePlan,
-      restore: async (dir, id) => await this.callRpc('restoreFileCheckpoint', [dir, id]) as FileRestoreResult,
-      status: async () => await this.callRpc('checkpointStatus', []) as CheckpointAvailability,
+      list: async (limit) => v.parse(
+        v.array(FileCheckpointEntrySchema), await this.callRpc('listFileCheckpoints', [limit ?? 50]),
+      ),
+      plan: async (dir, id) => v.parse(FileRestorePlanSchema, await this.callRpc('planFileRestore', [dir, id])),
+      restore: async (dir, id) => v.parse(
+        FileRestoreResultSchema, await this.callRpc('restoreFileCheckpoint', [dir, id]),
+      ),
+      status: async () => v.parse(CheckpointAvailabilitySchema, await this.callRpc('checkpointStatus', [])),
     };
   }
 
@@ -158,13 +311,13 @@ export class CloudAgentClient implements AgentClient {
     const text = promptText(prompt).trim();
     if (!text) return false;
     this.activeCliSession.append('user', { text, branched: true, cwd: opts.cwd ?? process.cwd(), backend: 'cloud' });
-    const fail = (message: string) => this.emit({
-      type: 'broadcast',
-      event: { type: 'branch_status', status: 'error', branchId: '', task: text, message } satisfies BranchStatusEvent,
-    });
+    const fail = (message: string) => {
+      const event: BranchStatusEvent = { type: 'branch_status', status: 'error', branchId: '', task: text, message };
+      this.emit({ type: 'broadcast', event });
+    };
     void this.callRpc('branchTurn', [text])
       .then((result) => {
-        const r = result as { accepted?: boolean; reason?: string } | null;
+        const r = v.parse(BranchTurnResultSchema, result);
         if (!r?.accepted) fail(r?.reason ?? 'The cloud agent rejected the branch.');
       })
       .catch((err) => fail(err instanceof Error ? err.message : String(err)));
@@ -180,13 +333,14 @@ export class CloudAgentClient implements AgentClient {
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
 
     // The JSONL log records attachment names, never the data-URL payloads.
-    this.activeCliSession.append('user', {
+    const sessionEntry: JsonObject = {
       text,
       cwd: opts.cwd ?? process.cwd(),
       backend: 'cloud',
-      ...(steered ? { steered: true } : {}),
-      ...(files.length > 0 ? { attachments: files.map((f) => f.filename) } : {}),
-    });
+    };
+    if (steered) sessionEntry.steered = true;
+    if (files.length > 0) sessionEntry.attachments = files.map((file) => file.filename);
+    this.activeCliSession.append('user', sessionEntry);
     this.emit({ type: 'turn-start', kind: 'user', text });
 
     const requestId = randomRequestId();
@@ -202,22 +356,21 @@ export class CloudAgentClient implements AgentClient {
       this.activeTurns.set(requestId, turn);
 
       try {
-        ws.send(JSON.stringify({
+        const body: JsonObject = {
+          messages: [decodeJsonValue({ value: createUserUiMessage(text, files) })],
+          trigger: 'submit-message',
+        };
+        if (opts.cwd) body.cwd = opts.cwd;
+        if (this.oneShot) body.oneShot = true;
+        const request: JsonObject = {
           id: requestId,
           init: {
             method: 'POST',
-            body: JSON.stringify({
-              messages: [createUserUiMessage(text, files)],
-              trigger: 'submit-message',
-              ...(opts.cwd ? { cwd: opts.cwd } : {}),
-              // Turn continuity for the DO's outcome ledger: a one-shot
-              // invocation's prompt is an independent task, not a verdict on
-              // whatever this workspace answered last.
-              ...(this.oneShot ? { oneShot: true } : {}),
-            }),
+            body: JSON.stringify(body),
           },
           type: CHAT_MESSAGE_TYPES.USE_CHAT_REQUEST,
-        }));
+        };
+        ws.send(JSON.stringify(request));
       } catch (err) {
         // The turn-start already went out — keep the lifecycle paired.
         this.activeTurns.delete(requestId);
@@ -233,14 +386,13 @@ export class CloudAgentClient implements AgentClient {
    *  sibling client pointed at the fork. */
   async fork(point: ForkPoint): Promise<AgentForkResult> {
     if (this.activeTurns.size > 0) throw new Error('Cannot fork while a turn is running.');
-    const rows = await this.callHttp<CloudChatMessage[]>('getChatHistory');
+    const rows = await this.callHttp('getChatHistory', v.array(CloudChatMessageSchema));
     const pivot = findForkPivot(rows, point);
     if (pivot < 0) throw new Error('Could not locate that message in the agent’s chat history.');
     if (pivot === 0) throw new Error('Cannot walk back before the first message of a cloud workspace.');
     const untilId = rows[pivot - 1]!.id;
-    const result = await this.callRpc('forkAgent', [untilId]);
-    const forkName = (result as { name?: unknown } | null)?.name;
-    if (typeof forkName !== 'string' || !forkName) throw new Error('Cloud fork returned no agent name.');
+    const forkName = v.parse(ForkAgentResultSchema, await this.callRpc('forkAgent', [untilId]))?.name;
+    if (!forkName) throw new Error('Cloud fork returned no agent name.');
     const sibling = new CloudAgentClient({
       origin: this.origin,
       token: this.token,
@@ -258,17 +410,17 @@ export class CloudAgentClient implements AgentClient {
    *  for surfaces that must not force a websocket open (consents polling,
    *  history, status). Live-session ops (branch, fork, takes, checkpoints)
    *  ride callRpc on the already-open socket instead. */
-  private callHttp<T>(method: string, args: unknown[] = []): Promise<T> {
-    return callAgentRpc<T>(this.origin, this.token, this.cloudName, method, args);
+  private callHttp<T>(method: string, schema: v.GenericSchema<T>, args: JsonValue[] = []): Promise<T> {
+    return callAgentRpc(this.origin, this.token, this.cloudName, method, schema, args);
   }
 
   /** Invoke a @callable agent method over the websocket ({type:'rpc'}). */
-  private async callRpc(method: string, args: unknown[]): Promise<unknown> {
+  private async callRpc(method: string, args: JsonValue[]): Promise<JsonValue> {
     await this.ensureOpen();
     const ws = this.ws;
     if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error('Cloud workspace connection is not open.');
     const id = randomRequestId();
-    return await new Promise<unknown>((resolve, reject) => {
+    return await new Promise<JsonValue>((resolve, reject) => {
       this.pendingRpcs.set(id, { resolve, reject });
       try {
         ws.send(JSON.stringify({ type: 'rpc', id, method, args }));
@@ -285,7 +437,7 @@ export class CloudAgentClient implements AgentClient {
    *  ever dropped here. */
   stop(): string[] {
     const ws = this.ws;
-    for (const [id, turn] of [...this.activeTurns]) {
+    for (const [id, turn] of this.activeTurns) {
       if (ws?.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.CHAT_REQUEST_CANCEL, id }));
       }
@@ -303,7 +455,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async history(): Promise<AgentTranscriptMessage[]> {
-    const rows = await this.callHttp<CloudChatMessage[]>('getChatHistory');
+    const rows = await this.callHttp('getChatHistory', v.array(CloudChatMessageSchema));
     return rows.map((row) => ({ id: row.id, role: row.role, content: row.content }));
   }
 
@@ -317,7 +469,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async status(): Promise<AgentClientStatus> {
-    const status = await this.callHttp<CloudAgentStatus>('getAgentStatus');
+    const status = await this.callHttp('getAgentStatus', CloudAgentStatusSchema);
     return {
       name: status.displayName ?? status.name,
       purpose: status.purpose,
@@ -331,7 +483,7 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async describeTools(): Promise<AgentToolSurface> {
-    const tools = await this.callHttp<CloudToolDescriptions>('getToolDescriptions');
+    const tools = await this.callHttp('getToolDescriptions', CloudToolDescriptionsSchema);
     return {
       builtIn: tools.builtIn.map(({ name, description }) => ({ name, description })),
       crafted: tools.crafted.map(({ name, description }) => ({ name, description })),
@@ -339,16 +491,16 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async readMemory(): Promise<string> {
-    return await this.callHttp<string>('getMemoryContent');
+    return await this.callHttp('getMemoryContent', v.string());
   }
 
   async changelog(limit?: number): Promise<AgentChangelogView> {
-    const result = await this.callRpc('getEvolutionChangelog', [{ limit: limit ?? 50 }]) as {
-      entries?: ChangelogEntry[]; unseenCount?: number;
-    } | null;
+    const result = v.parse(
+      ChangelogViewSchema, await this.callRpc('getEvolutionChangelog', [{ limit: limit ?? 50 }]),
+    );
     const view: AgentChangelogView = {
-      entries: Array.isArray(result?.entries) ? result.entries : [],
-      unseenCount: typeof result?.unseenCount === 'number' ? result.unseenCount : 0,
+      entries: result?.entries ?? [],
+      unseenCount: result?.unseenCount ?? 0,
     };
     // Viewing is the acknowledgement — best effort, the digest still renders.
     await this.callRpc('markChangelogSeen', []).catch(() => {});
@@ -356,62 +508,53 @@ export class CloudAgentClient implements AgentClient {
   }
 
   async revertChangelogEntry(id: string): Promise<ChangelogRevertResult> {
-    const result = await this.callRpc('revertChangelogEntry', [id]) as ChangelogRevertResult | null;
-    return result ?? { ok: false, error: 'cloud revert returned no result' };
+    return v.parse(ChangelogRevertResultSchema, await this.callRpc('revertChangelogEntry', [id]));
   }
 
   async latestTakes(): Promise<AlternateTakeSet | null> {
-    return await this.callRpc('latestAlternateTakes', []) as AlternateTakeSet | null;
+    return v.parse(v.nullable(AlternateTakeSetSchema), await this.callRpc('latestAlternateTakes', []));
   }
 
   async pickTake(takeId: string, nodeId: string): Promise<TakePickOutcome> {
-    const result = await this.callRpc('pickAlternateTake', [takeId, nodeId]) as TakePickOutcome | null;
-    if (!result) throw new Error('cloud pick returned no result');
-    return result;
+    return v.parse(TakePickOutcomeSchema, await this.callRpc('pickAlternateTake', [takeId, nodeId]));
   }
 
   async searchNodes(): Promise<AgentSearchNode[]> {
-    const rows = await this.callHttp<unknown[]>('getMctsTree');
-    if (!Array.isArray(rows)) return [];
-    return rows.flatMap((row) => {
-      if (!row || typeof row !== 'object') return [];
-      const node = row as Record<string, unknown>;
-      if (typeof node.depth !== 'number' || typeof node.status !== 'string') return [];
-      return [{
-        depth: node.depth,
-        status: node.status,
-        value: typeof node.value === 'number' ? node.value : 0,
-        visits: typeof node.visits === 'number' ? node.visits : 0,
-        action: typeof node.action === 'string' ? node.action : null,
-      }];
-    });
+    const rows = await this.callHttp('getMctsTree', v.array(SearchNodeProjectionSchema));
+    return rows.map((node) => ({
+      depth: node.depth,
+      status: node.status,
+      value: node.value ?? 0,
+      visits: node.visits ?? 0,
+      action: node.action ?? null,
+    }));
   }
 
   async listJobs(limit = 20): Promise<AgentJobSummary[]> {
-    const jobs = await this.callHttp<CloudBackgroundJob[]>('listBackgroundJobs', [limit]);
+    const jobs = await this.callHttp('listBackgroundJobs', v.array(CloudBackgroundJobSchema), [limit]);
     return jobs.map((job) => ({ id: job.id, kind: job.kind, status: job.status }));
   }
 
   async getModelSpec(): Promise<string | null> {
-    return (await this.callHttp<{ spec: string | null }>('getStoredModelSpec')).spec;
+    return (await this.callHttp('getStoredModelSpec', ModelSpecSchema)).spec;
   }
 
   async setModel(spec: string): Promise<{ spec: string }> {
-    return { spec: (await this.callHttp<{ ok: true; spec: string }>('setModel', [spec])).spec };
+    return { spec: (await this.callHttp('setModel', SetModelResultSchema, [spec])).spec };
   }
 
   async getReasoningEffort(): Promise<ReasoningEffort | null> {
-    return (await this.callHttp<{ effort: ReasoningEffort | null }>('getReasoningEffort')).effort;
+    return (await this.callHttp('getReasoningEffort', ReasoningEffortResultSchema)).effort;
   }
 
   async setReasoningEffort(effort: ReasoningEffort): Promise<{ effort: ReasoningEffort }> {
     return {
-      effort: (await this.callHttp<{ ok: true; effort: ReasoningEffort }>('setReasoningEffort', [effort])).effort,
+      effort: (await this.callHttp('setReasoningEffort', SetReasoningEffortResultSchema, [effort])).effort,
     };
   }
 
   async listModels(): Promise<AgentModelMenu> {
-    const menu = normalizeModelMenu(await listCloudAvailableModels(this.origin, this.token));
+    const menu = normalizeModelMenu({ payload: await listCloudAvailableModels(this.origin, this.token) });
     // Only a menu with nothing in it AND nothing to explain is an error; a
     // provider that failed is reported to the picker, not thrown at it.
     if (menu.models.length === 0 && menu.failures.length === 0) {
@@ -484,15 +627,15 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private handleMessage(event: MessageEvent): void {
-    const payload = parseSocketJson(event.data);
+    const payload = parseSocketJson(event);
     if (!payload) return;
 
-    if (payload.type === 'rpc' && typeof payload.id === 'string') {
+    if (payload.type === 'rpc' && payload.id) {
       const pending = this.pendingRpcs.get(payload.id);
       if (!pending) return;
       this.pendingRpcs.delete(payload.id);
-      if (payload.success === true) pending.resolve(payload.result);
-      else pending.reject(new Error(typeof payload.error === 'string' && payload.error ? payload.error : 'Cloud workspace RPC failed.'));
+      if (payload.success === true) pending.resolve(payload.result ?? null);
+      else pending.reject(new Error(jsonErrorMessage(payload.error, 'Cloud workspace RPC failed.')));
       return;
     }
 
@@ -507,24 +650,24 @@ export class CloudAgentClient implements AgentClient {
 
     // Ack a resuming stream only when it is one of our own turns, so the DO
     // replays its chunks after a reconnect; other clients' streams are ignored.
-    if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && typeof payload.id === 'string') {
+    if (payload.type === CHAT_MESSAGE_TYPES.STREAM_RESUMING && payload.id) {
       if (this.activeTurns.has(payload.id)) {
         this.ws?.send(JSON.stringify({ type: CHAT_MESSAGE_TYPES.STREAM_RESUME_ACK, id: payload.id }));
       }
       return;
     }
 
-    if (payload.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || typeof payload.id !== 'string') return;
+    if (payload.type !== CHAT_MESSAGE_TYPES.USE_CHAT_RESPONSE || !payload.id) return;
     const active = this.activeTurns.get(payload.id);
     if (!active) return;
     if (payload.error) {
       this.activeTurns.delete(payload.id);
-      const message = typeof payload.body === 'string' && payload.body ? payload.body : 'Cloud agent stream failed.';
+      const message = payload.body || 'Cloud agent stream failed.';
       this.emit({ type: 'error', message });
       this.settleTurn(active, true);
       return;
     }
-    if (typeof payload.body === 'string' && payload.body.trim()) {
+    if (payload.body?.trim()) {
       this.applyChunk(active, payload.body);
     }
     if (payload.done) {
@@ -534,38 +677,43 @@ export class CloudAgentClient implements AgentClient {
   }
 
   private applyChunk(active: ActiveTurn, body: string): void {
-    let chunk: unknown;
-    try { chunk = JSON.parse(body); }
+    let parsed: JsonValue;
+    try { parsed = parseJsonValue(body); }
     catch { return; }
-    if (!isRecord(chunk) || typeof chunk.type !== 'string') return;
-    switch (chunk.type) {
+    const result = v.safeParse(JsonObjectSchema, parsed);
+    if (!result.success) return;
+    const chunk = result.output;
+    const type = v.safeParse(v.string(), chunk.type);
+    if (!type.success) return;
+    switch (type.output) {
       case 'text-delta': {
-        const delta = typeof chunk.delta === 'string' ? chunk.delta : '';
+        const delta = jsonString(chunk.delta, '');
         if (!delta) return;
         active.text += delta;
         this.emit({ type: 'text-delta', delta });
         return;
       }
       case 'tool-input-available': {
-        const toolName = typeof chunk.toolName === 'string' ? chunk.toolName : 'tool';
-        const toolCallId = typeof chunk.toolCallId === 'string' ? chunk.toolCallId : '';
-        const call = { name: toolName, args: chunk.input, result: undefined };
+        const toolName = jsonString(chunk.toolName, 'tool');
+        const toolCallId = jsonString(chunk.toolCallId, '');
+        const args = asRecord({ value: chunk.input ?? null });
+        const call = { name: toolName, args, result: undefined };
         active.toolCalls.push(call);
         if (toolCallId) active.toolById.set(toolCallId, call);
-        this.emit({ type: 'tool-call', toolName, toolCallId, args: asRecord(chunk.input) });
+        this.emit({ type: 'tool-call', toolName, toolCallId, args });
         return;
       }
       case 'tool-output-available':
       case 'tool-output-error': {
-        const toolCallId = typeof chunk.toolCallId === 'string' ? chunk.toolCallId : '';
+        const toolCallId = jsonString(chunk.toolCallId, '');
         const call = active.toolById.get(toolCallId);
-        const result = chunk.type === 'tool-output-error'
-          ? String(chunk.errorText ?? 'tool error')
-          : stringifyToolOutput(chunk.output);
+        const result = type.output === 'tool-output-error'
+          ? jsonErrorMessage(chunk.errorText, 'tool error')
+          : stringifyToolOutput(chunk.output ?? null);
         if (call) call.result = result;
         this.emit({
           type: 'tool-result', toolName: call?.name ?? 'tool', toolCallId, result,
-          success: chunk.type !== 'tool-output-error',
+          success: type.output !== 'tool-output-error',
         });
         return;
       }
@@ -590,46 +738,52 @@ export class CloudAgentClient implements AgentClient {
 
 /** Narrow a branch_status frame to the fields its consumers rely on
  *  (describeBranchStatus switches on status; the TUI keys on branchId). */
-function parseBranchStatusEvent(payload: Record<string, unknown>): BranchStatusEvent | null {
-  if (typeof payload.branchId !== 'string' || typeof payload.task !== 'string') return null;
-  const base = { type: 'branch_status' as const, branchId: payload.branchId, task: payload.task };
-  switch (payload.status) {
-    case 'running':
-      return { ...base, status: 'running' };
-    case 'settled':
-      if (typeof payload.takeSetId !== 'string' || typeof payload.turnId !== 'string') return null;
-      return { ...base, status: 'settled', takeSetId: payload.takeSetId, turnId: payload.turnId };
-    case 'error':
-      return { ...base, status: 'error', message: typeof payload.message === 'string' ? payload.message : 'branch failed' };
-    default:
-      return null;
-  }
+function parseBranchStatusEvent(payload: SocketFrame): BranchStatusEvent | null {
+  const result = v.safeParse(BranchStatusEventSchema, payload);
+  if (!result.success) return null;
+  const event = result.output;
+  if (event.status !== 'error') return event;
+  return { ...event, message: event.message ?? 'branch failed' };
 }
 
-function parseSocketJson(data: unknown): Record<string, unknown> | null {
+function parseSocketJson(event: MessageEvent): SocketFrame | null {
   try {
-    const text = typeof data === 'string'
-      ? data
-      : data instanceof ArrayBuffer
-        ? new TextDecoder().decode(data)
-        : ArrayBuffer.isView(data)
-          ? new TextDecoder().decode(data)
+    const data: unknown = event.data;
+    const textResult = v.safeParse(v.string(), data);
+    const bufferResult = v.safeParse(v.instance(ArrayBuffer), data);
+    const bytesResult = v.safeParse(v.instance(Uint8Array), data);
+    const text = textResult.success
+      ? textResult.output
+      : bufferResult.success
+        ? new TextDecoder().decode(bufferResult.output)
+        : bytesResult.success
+          ? new TextDecoder().decode(bytesResult.output)
           : String(data);
-    const parsed = JSON.parse(text);
-    return isRecord(parsed) ? parsed : null;
+    const parsed = parseJsonValue(text);
+    const frame = v.safeParse(SocketFrameSchema, parsed);
+    return frame.success ? frame.output : null;
   } catch {
     return null;
   }
 }
 
-function stringifyToolOutput(output: unknown): string {
-  return typeof output === 'string' ? output : JSON.stringify(output);
+function stringifyToolOutput(output: JsonValue): string {
+  const text = v.safeParse(v.string(), output);
+  return text.success ? text.output : JSON.stringify(output);
+}
+
+function jsonErrorMessage(value: JsonValue | undefined, fallback: string): string {
+  if (value === undefined) return fallback;
+  const text = v.safeParse(v.string(), value);
+  return text.success && text.output ? text.output : String(value);
+}
+
+function jsonString(value: JsonValue | undefined, fallback: string): string {
+  if (value === undefined) return fallback;
+  const text = v.safeParse(v.string(), value);
+  return text.success ? text.output : fallback;
 }
 
 function randomRequestId(): string {
   return crypto.randomUUID().replace(/-/g, '').slice(0, 12);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === 'object' && !Array.isArray(value);
 }

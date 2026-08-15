@@ -8,6 +8,7 @@
 // harness wraps a mock `Shell` with the policy under test and hands it to
 // `rt.shell`, exactly as a backend's runtime.ts does at construction.
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
@@ -36,18 +37,21 @@ function harness(opts: {
   const asked: ShellApprovalRequest[] = [];
   const policy: ShellApprovalPolicy = {
     mode: () => opts.mode ?? 'strict',
-    ...(opts.approve
-      ? {
-          requestApproval: async (req: ShellApprovalRequest) => {
-            asked.push(req);
-            return opts.approve!(req);
-          },
-        }
-      : {}),
   };
+  if (opts.approve) {
+    const approve = opts.approve;
+    policy.requestApproval = async (req: ShellApprovalRequest) => {
+        asked.push(req);
+        return approve(req);
+      };
+  }
   const shell = withApprovalGatedShell(rawShell, policy);
-  const tools = buildBuiltinTools({ rt: { ...rt, shell } as AgentRuntime });
-  return { run: tools.run as unknown as RunTool, executed, asked };
+  const runtime: AgentRuntime = { ...rt, shell };
+  const tools = buildBuiltinTools({ rt: runtime });
+  const run: RunTool = {
+    execute: toolExecute<{ command: string; runtime?: string }, string>(tools.run),
+  };
+  return { run, executed, asked };
 }
 
 describe('run tool — interactive shell approval channel', () => {

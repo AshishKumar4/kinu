@@ -23,6 +23,7 @@ import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 import { createVercelAILLM } from '../llm.js';
 import { buildRuntime } from '../runtime-builder.js';
+import { initWorkspaceBaselineTable, resetWorkspaceBaseline } from '../read-models/workspace-diff.js';
 
 export { wrapDatabase, type AgentDatabase } from './inline-primitives.js';
 
@@ -54,7 +55,7 @@ function buildComponents(
   const schedule = createInlineSchedule(sql);
 
   const mockBranch: BranchHandle = {
-    explore: async () => ({ text: 'exploration result', codeUsed: null }),
+    explore: async () => ({ text: 'exploration result' }),
     generateReflection: async () => ({ text: 'no reflection available' }),
   };
 
@@ -80,10 +81,11 @@ export async function createWorkspace(
   const { sql, execRaw } = wrapDatabase(db);
 
   initAllTables(execRaw);
+  initWorkspaceBaselineTable(execRaw);
   const workspace = createInlineWorkspace(db);
 
   const workspaceId = nanoid();
-  sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
+  void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES (${workspaceId}, ${config.name}, ${nowMs()})`;
 
   // SOUL.md — the workspace's canonical identity document, embodied by its
   // default agent. seedSoul also seeds the mission a listing reads.
@@ -91,12 +93,14 @@ export async function createWorkspace(
 
   await workspace.vfs.mkdir('scaffold', { recursive: true });
   await workspace.vfs.writeFile('scaffold/agent.js', config.scaffold ?? INITIAL_SCAFFOLD_SOURCE);
-  sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${nowMs()}, ${'initial bootstrap'})`;
+  void sql`INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale) VALUES (0, ${nowMs()}, ${'initial bootstrap'})`;
 
   await workspace.vfs.mkdir('memory', { recursive: true });
   await workspace.vfs.writeFile('memory/MEMORY.md', `# ${config.name}\n\nCreated: ${new Date().toISOString()}\n`);
 
-  return buildComponents(db, sql, execRaw, workspace, {
+  const runtime = buildComponents(db, sql, execRaw, workspace, {
     llm: config.llm, judge: config.judge, agentId: workspaceId, agentName: config.name,
   });
+  await resetWorkspaceBaseline(runtime);
+  return runtime;
 }

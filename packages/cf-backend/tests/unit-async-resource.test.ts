@@ -29,9 +29,12 @@ describe('async resource transitions', () => {
     expect(lastValue(loadFailed(state, new Error('offline again')))).toEqual([1, 2, 3]);
   });
 
-  test('revalidating keeps a loaded value on screen; retrying after a failure does not', () => {
+  test('revalidating and retrying keep the last loaded value on screen', () => {
     expect(beginLoad(loadSucceeded([1]))).toEqual({ status: 'ready', value: [1] });
     expect(beginLoad(loadFailed(LOADING, 'nope'))).toEqual({ status: 'loading' });
+    const stale = loadFailed(loadSucceeded([1]), 'offline');
+    expect(beginLoad(stale)).toBe(stale);
+    expect(lastValue(beginLoad(stale))).toEqual([1]);
   });
 
   test('a successful load clears the error', () => {

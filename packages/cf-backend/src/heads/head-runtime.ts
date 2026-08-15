@@ -8,7 +8,7 @@
  */
 
 import type {
-  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, MergeLLMFn,
+  HeadRuntime, HeadGrounding, SpawnedHead, HeadInput, MergeLLMFn, SqlExecutor,
 } from "@proteus/core";
 import {
   generateJson,
@@ -25,12 +25,12 @@ import { agentAffinityKey } from "@proteus/core";
 import type { UserDO } from "../user/user-do.js";
 import type { UserCaller } from "../user/workspace-capability.js";
 
-/** Agent surface this head runtime needs — `env` is protected on the DO base
- *  but the orchestrator (a subclass) passes `this` cast to this view. */
-type HeadHost = Think<Env> & { readonly env: Env };
+type HeadHost = Think<Env>;
 
 export function createCFHeadRuntime(
   orchestrator: HeadHost,
+  env: Env,
+  sql: SqlExecutor,
   ownerUserId: string,
   capabilityToken: () => Promise<string | null>,
   parentWorkspaceName: string,
@@ -39,38 +39,32 @@ export function createCFHeadRuntime(
   // Auth flows through the orchestrator's owner UserDO stub. ownerUserId
   // is read once from workspace_identity by the orchestrator and threaded down,
   // as is the workspace capability token every privileged call presents.
-  const userDOStub = orchestrator.env.UserDO.get(
-    orchestrator.env.UserDO.idFromName(ownerUserId),
-  ) as DurableObjectStub<UserDO>;
+  // SAFETY: Env.UserDO is generated from the UserDO binding, whose stubs implement UserDO RPC methods.
+  const userDOStub = env.UserDO.get(env.UserDO.idFromName(ownerUserId)) as DurableObjectStub<UserDO>;
   const caller = async (): Promise<UserCaller> => {
     const workspaceToken = await capabilityToken();
     if (!workspaceToken) throw new Error('This workspace has not been issued a capability token yet.');
     return { workspaceToken };
   };
   const reg = createAgentProviderRegistry({
-    env: orchestrator.env,
+    env,
     userDO: { stub: userDOStub, caller },
     appTitle: 'Proteus (heads)',
     workersAI: { sessionAffinity: agentAffinityKey(orchestrator.name) },
   });
 
-  const config = createAgentConfigStore(
-    orchestrator.sql.bind(orchestrator) as unknown as import('@proteus/core').SqlExecutor,
-  );
+  const config = createAgentConfigStore(sql);
   const mergeLLM: MergeLLMFn = async (prompt): Promise<MergeOutput> => {
     const stored = config.getModel();
     const spec = reg.normalizeSpecSync(stored);
     const model = reg.resolveModel(spec);
     const providerOptions = reasoningEffortOptions('low', parseModelSpec(spec).provider);
-    return generateJson({
-      model,
-      schema: MergeOutputSchema,
-      prompt,
-      ...(providerOptions ? { providerOptions } : {}),
-    });
+    return providerOptions
+      ? generateJson({ model, schema: MergeOutputSchema, prompt, providerOptions })
+      : generateJson({ model, schema: MergeOutputSchema, prompt });
   };
 
-  return {
+  const runtime: HeadRuntime = {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
       // Facet actors share their parent workspace's identity for UserDO/MCP
       // ownership. The spawning actor's facet name is not a registered
@@ -82,6 +76,7 @@ export function createCFHeadRuntime(
       });
     },
     mergeLLM,
-    ...(grounding ? { grounding } : {}),
   };
+  if (grounding) runtime.grounding = grounding;
+  return runtime;
 }

@@ -232,7 +232,7 @@ export function craftFailureMarker(name: string): string {
  *  error rides as `cause`, so nothing about the diagnosis is lost — and the
  *  model sees WHICH crafted tool broke, which is the same information the
  *  score is taken from. */
-export function craftInvocationError(name: string, cause: unknown): Error {
+export function craftInvocationError(name: string, cause: Error | string): Error {
   const message = cause instanceof Error ? cause.message : String(cause);
   return new Error(`${craftFailureMarker(name)} ${message}`, { cause });
 }
@@ -282,7 +282,7 @@ export interface CraftLedger {
  */
 export function seedCraftScore(sql: SqlExecutor, name: string, now = nowMs()): void {
   try {
-    sql`INSERT OR IGNORE INTO craft_scores (tool_name, score, uses, last_used_at)
+    void sql`INSERT OR IGNORE INTO craft_scores (tool_name, score, uses, last_used_at)
         VALUES (${name}, ${CRAFT_NEUTRAL_PRIOR}, 0, ${now})`;
   } catch {
     /* craft_scores may not exist on a bare runtime — never fatal */

@@ -97,7 +97,7 @@ export async function observeCompletionState(deps: {
   if (blocks.length === 0) return null;
   return clampToolResult(blocks.join('\n\n'), {
     maxChars: COMPLETION_OBSERVATION_MAX_CHARS,
-    ...(deps.vfs ? { vfs: deps.vfs } : {}),
+    vfs: deps.vfs,
   });
 }
 

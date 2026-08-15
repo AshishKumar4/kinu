@@ -12,6 +12,7 @@
  */
 import { nanoid, type SqlExec } from '@proteus/core';
 import { sha256Hex } from '../lib/crypto.js';
+import * as v from 'valibot';
 
 // Scopes renamed from agent.read/agent.exec with no back-compat migration by
 // design — pre-production, tokens are reissued on redeploy (owner decision
@@ -75,7 +76,7 @@ export function normalizeAccessTokenScopes(
     return { ok: false, error: `At least one scope is required. Valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}.` };
   }
   for (const scope of requested) {
-    if (!(ACCESS_TOKEN_SCOPES as readonly string[]).includes(scope)) {
+    if (!v.is(v.picklist(ACCESS_TOKEN_SCOPES), scope)) {
       return { ok: false, error: `Unknown scope "${scope}". Valid scopes: ${ACCESS_TOKEN_SCOPES.join(', ')}.` };
     }
   }
@@ -121,10 +122,10 @@ export async function verifyAccessToken(sql: SqlExec, token: string): Promise<Ac
   const userId = parseAccessTokenUserId(token);
   if (!userId) return { ok: false, error: 'malformed token' };
   const tokenHash = await sha256Hex(token);
-  const row = sql.exec(
+  const row = v.parse(v.optional(v.object({ scopes: v.string(), revoked_at: v.nullable(v.number()) })), sql.exec(
     `SELECT scopes, revoked_at FROM user_access_tokens WHERE token_hash = ? LIMIT 1`,
     tokenHash,
-  ).toArray()[0] as { scopes: string; revoked_at: number | null } | undefined;
+  ).toArray()[0]);
   if (!row || row.revoked_at !== null) return { ok: false, error: 'invalid token' };
   const scopes = parseScopeList(row.scopes);
   if (scopes.length === 0) return { ok: false, error: 'invalid token' };
@@ -147,7 +148,9 @@ export function listAccessTokens(sql: SqlExec): AccessTokenRecord[] {
 
 /** Revoke by token name or token hash. Already-revoked or unknown refs report
  *  `revoked: false` so callers can give an honest 404. */
-export function revokeAccessToken(sql: SqlExec, ref: string): { ok: true; revoked: boolean } {
+export interface AccessTokenRevocation { ok: true; revoked: boolean }
+
+export function revokeAccessToken(sql: SqlExec, ref: string): AccessTokenRevocation {
   const cleanRef = ref.trim();
   if (!cleanRef) return { ok: true, revoked: false };
   const hit = sql.exec(
@@ -169,10 +172,10 @@ export function revokeAccessToken(sql: SqlExec, ref: string): { ok: true; revoke
  *  validity checks alongside session tokens, and to pin the resulting agent
  *  websocket to the bearer's scopes. */
 export function getActiveAccessTokenScopes(sql: SqlExec, tokenHash: string): AccessTokenScope[] | null {
-  const row = sql.exec(
+  const row = v.parse(v.optional(v.object({ scopes: v.string() })), sql.exec(
     `SELECT scopes FROM user_access_tokens WHERE token_hash = ? AND revoked_at IS NULL LIMIT 1`,
     tokenHash,
-  ).toArray()[0] as { scopes: string } | undefined;
+  ).toArray()[0]);
   if (!row) return null;
   const scopes = parseScopeList(String(row.scopes));
   return scopes.length > 0 ? scopes : null;

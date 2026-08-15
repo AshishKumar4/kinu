@@ -16,7 +16,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 import { initSearchTables } from '../src/mcts/schemas.js';
 import { initMctsSearchTable } from '../src/mcts/search-store.js';
 import { initHeadsTables } from '../src/heads/schema.js';
-import { listForkRuns } from '../src/read-models/fork-runs.js';
+import { listForkRuns, readForkRun } from '../src/read-models/fork-runs.js';
 import { newBranchId } from '../src/steer-branch.js';
 
 function freshDb() {
@@ -175,6 +175,22 @@ describe('listForkRuns', () => {
     expect(listForkRuns(sql).map((r) => r.id)).toEqual(['r-real']);
   });
 
+  test('Steer-as-Branch rows cannot consume the fork limit before they are excluded', () => {
+    const { db, sql } = freshDb();
+    seedMergedRun(db, {
+      rootId: 'r-real', task: 'the real fork', at: 1000,
+      heads: [{ status: 'completed' }], merged: true,
+    });
+    for (let index = 0; index < 30; index += 1) {
+      seedMergedRun(db, {
+        rootId: newBranchId(), task: `redirect ${index}`, at: 2000 + index,
+        heads: [{ status: 'completed' }], merged: true,
+      });
+    }
+
+    expect(listForkRuns(sql, 30).map((run) => run.id)).toEqual(['r-real']);
+  });
+
   test('legacy unscoped search rows stay invisible', () => {
     const { db, sql } = freshDb();
     db.prepare(
@@ -194,6 +210,26 @@ describe('listForkRuns', () => {
     const runs = listForkRuns(sql, 3);
     expect(runs).toHaveLength(3);
     expect(runs.map((r) => r.id)).toEqual(['s3', 'm3', 's2']);
+  });
+
+  test('an exact lookup reaches a fork outside the recent-list window', () => {
+    const { db, sql } = freshDb();
+    seedMergedRun(db, {
+      rootId: 'bookmarked', task: 'historical fork', at: 1,
+      heads: [{ status: 'completed' }], merged: true,
+    });
+    for (let index = 0; index < 30; index += 1) {
+      seedCompetedRun(db, {
+        rootId: `recent-${index}`, task: `recent ${index}`, at: 100 + index,
+        branches: 1, winner: 0.5, ledger: 'converged',
+      });
+    }
+
+    expect(listForkRuns(sql, 30).some((run) => run.id === 'bookmarked')).toBe(false);
+    expect(readForkRun(sql, 'bookmarked')).toMatchObject({
+      id: 'bookmarked', task: 'historical fork', settle: 'merged',
+    });
+    expect(readForkRun(sql, 'missing')).toBeNull();
   });
 
   test('nothing forked yet is an empty list, not a throw', () => {

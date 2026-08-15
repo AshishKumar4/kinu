@@ -11,10 +11,12 @@
  * the logic that belongs beside it.
  */
 
+import * as v from 'valibot';
 import type { EventLog, PublishResult } from '../events/hub/log.js';
 import type { SubordinateReportStatus } from '../events/hub/types.js';
 import type { SerializedMessage } from '../heads/types.js';
 import type { SqlExec } from '../types/primitives.js';
+import type { WorkMode } from '../prompting/surface.js';
 import type {
   SubordinateHandoff,
   SubordinateRosterEntry,
@@ -32,6 +34,13 @@ export interface SubordinateLiveStatus {
   }>;
 }
 
+const ActivityRowSchema = v.object({
+  event: v.string(),
+  detail: v.nullable(v.string()),
+  elapsed_ms: v.number(),
+  created_at: v.number(),
+});
+
 export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
   const recentSteps = sql.exec(
     `SELECT event, detail, elapsed_ms, created_at
@@ -39,12 +48,9 @@ export function readSubordinateLiveStatus(sql: SqlExec): SubordinateLiveStatus {
      ORDER BY created_at DESC, id DESC
      LIMIT 5`,
   ).toArray().flatMap((row) => {
-    const event = readString(row, 'event');
-    const detail = row.detail;
-    const elapsedMs = row.elapsed_ms;
-    const createdAt = row.created_at;
-    if (event === null || (detail !== null && typeof detail !== 'string')
-      || typeof elapsedMs !== 'number' || typeof createdAt !== 'number') return [];
+    const parsed = v.safeParse(ActivityRowSchema, row);
+    if (!parsed.success) return [];
+    const { event, detail, elapsed_ms: elapsedMs, created_at: createdAt } = parsed.output;
     return [{
       event,
       summary: detail?.trim() || event,
@@ -76,29 +82,18 @@ interface IdentityRow {
   owner_user_id: string;
 }
 
-function readString(row: Record<string, unknown>, key: string): string | null {
-  const value = row[key];
-  return typeof value === 'string' ? value : null;
-}
+const IdentityRowSchema: v.GenericSchema<IdentityRow> = v.object({
+  name: v.string(),
+  display_name: v.string(),
+  role: v.string(),
+  mission: v.string(),
+  parent_workspace: v.string(),
+  owner_user_id: v.string(),
+});
 
-function parseIdentityRow(row: Record<string, unknown>): IdentityRow | null {
-  const name = readString(row, 'name');
-  const displayName = readString(row, 'display_name');
-  const role = readString(row, 'role');
-  const mission = readString(row, 'mission');
-  const parentWorkspace = readString(row, 'parent_workspace');
-  const ownerUserId = readString(row, 'owner_user_id');
-  return name !== null && displayName !== null && role !== null && mission !== null
-    && parentWorkspace !== null && ownerUserId !== null
-    ? {
-        name,
-        display_name: displayName,
-        role,
-        mission,
-        parent_workspace: parentWorkspace,
-        owner_user_id: ownerUserId,
-      }
-    : null;
+function parseIdentityRow<T>(row: T): IdentityRow | null {
+  const parsed = v.safeParse(IdentityRowSchema, row);
+  return parsed.success ? parsed.output : null;
 }
 
 function mapIdentityRow(row: IdentityRow): SubordinateIdentity {
@@ -192,36 +187,20 @@ interface RosterRow {
 const ROSTER_COLUMNS =
   'name, display_name, role, created_by, status, current_task, created_at, dismissed_at';
 
-function isSubordinateStatus(value: unknown): value is SubordinateStatus {
-  return value === 'idle' || value === 'working'
-    || value === 'awaiting_input' || value === 'dismissed';
-}
+const RosterRowSchema: v.GenericSchema<RosterRow> = v.object({
+  name: v.string(),
+  display_name: v.string(),
+  role: v.string(),
+  created_by: v.picklist(['orchestrator', 'user']),
+  status: v.picklist(['idle', 'working', 'awaiting_input', 'dismissed']),
+  current_task: v.nullable(v.string()),
+  created_at: v.number(),
+  dismissed_at: v.nullable(v.number()),
+});
 
-function parseRosterRow(row: Record<string, unknown>): RosterRow | null {
-  const name = readString(row, 'name');
-  const displayName = readString(row, 'display_name');
-  const role = readString(row, 'role');
-  const createdBy = row.created_by;
-  const status = row.status;
-  const currentTask = row.current_task;
-  const createdAt = row.created_at;
-  const dismissedAt = row.dismissed_at;
-  if (name === null || displayName === null || role === null) return null;
-  if (createdBy !== 'orchestrator' && createdBy !== 'user') return null;
-  if (!isSubordinateStatus(status)) return null;
-  if (currentTask !== null && typeof currentTask !== 'string') return null;
-  if (typeof createdAt !== 'number') return null;
-  if (dismissedAt !== null && typeof dismissedAt !== 'number') return null;
-  return {
-    name,
-    display_name: displayName,
-    role,
-    created_by: createdBy,
-    status,
-    current_task: currentTask,
-    created_at: createdAt,
-    dismissed_at: dismissedAt,
-  };
+function parseRosterRow<T>(row: T): RosterRow | null {
+  const parsed = v.safeParse(RosterRowSchema, row);
+  return parsed.success ? parsed.output : null;
 }
 
 function mapRosterRow(row: RosterRow): SubordinateRosterEntry {
@@ -237,7 +216,7 @@ function mapRosterRow(row: RosterRow): SubordinateRosterEntry {
   };
 }
 
-function parseStoredRosterRow(row: Record<string, unknown>): SubordinateRosterEntry {
+function parseStoredRosterRow<T>(row: T): SubordinateRosterEntry {
   const parsed = parseRosterRow(row);
   if (!parsed) throw new Error('Stored subordinate roster row is malformed.');
   return mapRosterRow(parsed);
@@ -464,6 +443,7 @@ export function admitSubordinateTask(log: EventLog, input: {
   deliverable?: string;
   deadlineHint?: string;
   inheritedContext?: string;
+  mode: WorkMode;
   now: number;
 }): PublishResult {
   const fromWorkspace = requiredText(input.fromWorkspace, 'fromWorkspace');
@@ -471,18 +451,20 @@ export function admitSubordinateTask(log: EventLog, input: {
   const deliverable = optionalText(input.deliverable);
   const deadlineHint = optionalText(input.deadlineHint);
   const inheritedContext = optionalText(input.inheritedContext);
+  const payload = {
+    from_workspace: fromWorkspace,
+    kind: input.kind,
+    body,
+    proteus_mode: input.mode,
+  };
+  if (deliverable) Object.assign(payload, { deliverable });
+  if (deadlineHint) Object.assign(payload, { deadline_hint: deadlineHint });
+  if (inheritedContext) Object.assign(payload, { inherited_context: inheritedContext });
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
       variant: 'subordinate_task',
-      payload: {
-        from_workspace: fromWorkspace,
-        kind: input.kind,
-        body,
-        ...(deliverable ? { deliverable } : {}),
-        ...(deadlineHint ? { deadline_hint: deadlineHint } : {}),
-        ...(inheritedContext ? { inherited_context: inheritedContext } : {}),
-      },
+      payload,
     },
     now: input.now,
   });
@@ -491,11 +473,10 @@ export function admitSubordinateTask(log: EventLog, input: {
 /**
  * The sender-visible half of an admission.
  *
- * `turnInFlight` is the subordinate's live-turn flag read at admission time: a
- * drain batch bound while a turn is live splices into that turn's next step
- * (BackendHost.turnInFlight) instead of queueing behind it, so a busy
- * subordinate is steered rather than blocked. A duplicate admission scheduled
- * no drain of its own — it lands with the backlog that is already waiting.
+ * `turnInFlight` is the subordinate's live-turn flag read at admission time.
+ * Delegated work carries a trusted Plan/Build mode and therefore gets its own
+ * turn instead of being spliced into unrelated live work. A duplicate
+ * admission schedules no drain of its own and lands with the existing backlog.
  */
 export function describeSubordinateHandoff(input: {
   admission: PublishResult;
@@ -506,7 +487,7 @@ export function describeSubordinateHandoff(input: {
     eventId: input.admission.id,
     delivery: !input.admission.admitted
       ? 'queued'
-      : input.turnInFlight ? 'steering_live_turn' : 'starts_now',
+      : input.turnInFlight ? 'queued' : 'starts_now',
     phase: {
       busy: input.turnInFlight,
       lastActivityAt: input.live.lastActivity,
@@ -526,10 +507,9 @@ export function normalizeReportContent(content: string): string {
  * Where a subordinate's outbound message came from, and therefore who it is
  * for.
  *
- * A subordinate answers to two audiences and only one of them is its parent.
- * `report_tool` is the subordinate deliberately choosing to speak upward.
- * `turn_end` is the automatic relay of a finished turn's answer, which belongs
- * to whoever asked the question — and that is not always the parent.
+ * `report_tool` is a deliberate report and `turn_end` is the automatic relay
+ * of a finished assigned turn. The parent still admits either only while it
+ * has an open assignment for that subordinate.
  */
 export type SubordinateReportOrigin = 'report_tool' | 'turn_end';
 
@@ -568,20 +548,15 @@ export function subordinateRelaysTurnEnd(input: {
  * that wakes it, bills a turn and writes into its history?
  *
  * The subordinate cannot answer this, because only the parent knows whether it
- * is waiting on this subordinate for anything. A deliberate `report` always
- * enters: the subordinate chose to speak, and that choice is the whole contract.
- * An automatic turn-end relay enters only while the roster still shows work the
- * parent actually handed over. With no open assignment the turn was driven by
- * something downstream of the owner's own conversation — most often a
- * background job that conversation detached, which wakes the subordinate
- * programmatically and would otherwise smuggle the owner's dialogue upward one
- * hop removed.
+ * is waiting for anything. With no open assignment, neither an explicit tool
+ * call nor an automatic relay may create a parent turn. This also blocks a
+ * background job detached from the owner's private chat from smuggling that
+ * conversation upward on its later programmatic wake.
  */
 export function parentAdmitsSubordinateReport(input: {
-  origin: SubordinateReportOrigin;
   entry: SubordinateRosterEntry;
 }): boolean {
-  return input.origin === 'report_tool' || input.entry.currentTask !== null;
+  return input.entry.currentTask !== null;
 }
 
 /** `contentPath` addresses the spill the caller already wrote for this exact
@@ -595,22 +570,25 @@ export function admitSubordinateReport(log: EventLog, input: {
   content: string;
   task?: string;
   contentPath?: string;
+  mode: WorkMode;
   now: number;
 }): PublishResult {
   const fromSubordinate = requiredText(input.fromSubordinate, 'fromSubordinate');
   const content = normalizeReportContent(input.content);
   const task = optionalText(input.task);
+  const payload = {
+    from_subordinate: fromSubordinate,
+    status: input.status,
+    content,
+    proteus_mode: input.mode,
+  };
+  if (task) Object.assign(payload, { task });
+  if (input.contentPath) Object.assign(payload, { content_path: input.contentPath });
   return log.publish({
     descriptor: {
       ingress: 'subordinate',
       variant: 'subordinate_report',
-      payload: {
-        from_subordinate: fromSubordinate,
-        status: input.status,
-        content,
-        ...(task ? { task } : {}),
-        ...(input.contentPath ? { content_path: input.contentPath } : {}),
-      },
+      payload,
     },
     now: input.now,
   });
@@ -626,12 +604,13 @@ export interface SubordinateRuntime {
   }): Promise<void>;
   assign(name: string, input: {
     body: string;
+    mode: WorkMode;
     deliverable?: string;
     deadlineHint?: string;
     inheritedContext?: string;
   }): Promise<SubordinateHandoff>;
-  status(name: string): Promise<unknown>;
-  message(name: string, content: string): Promise<SubordinateHandoff>;
+  status(name: string): Promise<SubordinateLiveStatus>;
+  message(name: string, content: string, mode: WorkMode): Promise<SubordinateHandoff>;
   dismiss(name: string, keepHistory: boolean): Promise<void>;
 }
 
@@ -650,7 +629,7 @@ function displayNameForRole(role: string): string {
     .join(' ');
 }
 
-function rollback(error: unknown, action: () => void, operation: string): never {
+function rollback<T>(error: T, action: () => void, operation: string): never {
   try {
     action();
   } catch (rollbackError) {
@@ -662,8 +641,8 @@ function rollback(error: unknown, action: () => void, operation: string): never 
   throw error;
 }
 
-async function rollbackSpawn(
-  error: unknown,
+async function rollbackSpawn<T>(
+  error: T,
   runtime: SubordinateRuntime,
   roster: SubordinateRosterStore,
   name: string,
@@ -691,20 +670,26 @@ async function rollbackSpawn(
   throw error;
 }
 
-function errorMessage(error: unknown): string {
+function errorMessage<T>(error: T): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 async function statusView(
   runtime: SubordinateRuntime,
   roster: SubordinateRosterEntry,
-): Promise<{ roster: SubordinateRosterEntry; live: unknown; liveError?: string }> {
+): Promise<SubordinateStatusView> {
   if (roster.status === 'dismissed') return { roster, live: null };
   try {
     return { roster, live: await runtime.status(roster.name) };
   } catch (error) {
     return { roster, live: null, liveError: errorMessage(error) };
   }
+}
+
+interface SubordinateStatusView {
+  roster: SubordinateRosterEntry;
+  live: SubordinateLiveStatus | null;
+  liveError?: string;
 }
 
 /** The one orchestration policy behind both the LLM agents tool and the future
@@ -719,54 +704,91 @@ export function createTeamToolDeps(deps: {
   broadcast(event: SubordinatesChangedEvent): void;
   broadcastTask(event: { subordinate: string; content: string; timestamp: number }): void;
 }): TeamToolDeps {
-  const changed = (assignedTask?: SubordinatesChangedEvent['assignedTask']) => deps.broadcast({
-    type: 'subordinates_changed',
-    subordinates: deps.roster.list(),
-    ...(assignedTask ? { assignedTask } : {}),
-  });
+  const changed = (assignedTask?: SubordinatesChangedEvent['assignedTask']) => {
+    const event: SubordinatesChangedEvent = {
+      type: 'subordinates_changed',
+      subordinates: deps.roster.list(),
+    };
+    if (assignedTask) Object.assign(event, { assignedTask });
+    deps.broadcast(event);
+  };
+
+  const provision = async (input: {
+    name?: string;
+    role: string;
+    mission: string;
+    model?: string;
+  }, ownerCreated: boolean, mode: WorkMode | null): Promise<{
+    name: string;
+    displayName: string;
+    createdAt: number;
+    subordinate: SubordinateRosterEntry;
+  }> => {
+    const role = requiredText(input.role, 'role');
+    const mission = requiredText(input.mission, 'mission');
+    const name = input.name?.trim() || deps.createName(role);
+    if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
+      throw new Error('subordinate name must be a lowercase URL-safe slug (letters, digits, hyphens)');
+    }
+    if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
+
+    const displayName = displayNameForRole(role);
+    const spawnInput: Parameters<SubordinateRuntime['spawn']>[0] = {
+      name,
+      displayName,
+      role,
+      mission,
+    };
+    if (input.model) Object.assign(spawnInput, { model: input.model });
+    await deps.runtime.spawn(spawnInput);
+    let rosterCreated = false;
+    const createdAt = deps.now();
+    try {
+      const subordinate: SubordinateRosterEntry = {
+        name,
+        displayName,
+        role,
+        createdBy: ownerCreated ? 'user' : 'orchestrator',
+        status: ownerCreated ? 'idle' : 'working',
+        currentTask: ownerCreated ? null : mission,
+        createdAt,
+        dismissedAt: null,
+      };
+      deps.roster.create(subordinate);
+      rosterCreated = true;
+      if (!ownerCreated) {
+        if (mode === null) throw new Error('subordinate task mode is required');
+        const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
+        const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
+          body: mission,
+          mode,
+        };
+        if (inheritedContext) Object.assign(assignment, { inheritedContext });
+        await deps.runtime.assign(name, assignment);
+      }
+    } catch (error) {
+      await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
+    }
+    return {
+      name,
+      displayName,
+      createdAt,
+      subordinate: deps.roster.requireActive(name),
+    };
+  };
 
   return {
     list: async () => deps.roster.list(),
 
-    spawn: async (input) => {
-      const role = requiredText(input.role, 'role');
-      const mission = requiredText(input.mission, 'mission');
-      const name = input.name?.trim() || deps.createName(role);
-      if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(name)) {
-        throw new Error('subordinate name must be a lowercase URL-safe slug (letters, digits, hyphens)');
-      }
-      if (deps.roster.get(name)) throw new Error(`subordinate "${name}" already exists`);
+    create: async (input) => {
+      const { name, displayName, subordinate } = await provision(input, true, null);
+      changed();
+      return { name, displayName, subordinate };
+    },
 
-      const displayName = displayNameForRole(role);
-      await deps.runtime.spawn({
-        name,
-        displayName,
-        role,
-        mission,
-        ...(input.model ? { model: input.model } : {}),
-      });
-      let rosterCreated = false;
-      const createdAt = deps.now();
-      try {
-        deps.roster.create({
-          name,
-          displayName,
-          role,
-          createdBy: input.createdBy ?? 'orchestrator',
-          status: 'working',
-          currentTask: mission,
-          createdAt,
-          dismissedAt: null,
-        });
-        rosterCreated = true;
-        const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
-        await deps.runtime.assign(name, {
-          body: mission,
-          ...(inheritedContext ? { inheritedContext } : {}),
-        });
-      } catch (error) {
-        await rollbackSpawn(error, deps.runtime, deps.roster, name, rosterCreated);
-      }
+    spawn: async (input) => {
+      const mission = requiredText(input.mission, 'mission');
+      const { name, displayName, createdAt } = await provision(input, false, input.mode);
       changed({ name, task: mission });
       deps.broadcastTask({ subordinate: name, content: mission, timestamp: createdAt });
       return { name, displayName };
@@ -781,12 +803,14 @@ export function createTeamToolDeps(deps: {
         const deliverable = optionalText(input.deliverable);
         const deadlineHint = optionalText(input.deadlineHint);
         const inheritedContext = renderSubordinateInheritedContext(deps.inheritedContext());
-        handoff = await deps.runtime.assign(input.name, {
+        const assignment: Parameters<SubordinateRuntime['assign']>[1] = {
           body: task,
-          ...(deliverable ? { deliverable } : {}),
-          ...(deadlineHint ? { deadlineHint } : {}),
-          ...(inheritedContext ? { inheritedContext } : {}),
-        });
+          mode: input.mode,
+        };
+        if (deliverable) Object.assign(assignment, { deliverable });
+        if (deadlineHint) Object.assign(assignment, { deadlineHint });
+        if (inheritedContext) Object.assign(assignment, { inheritedContext });
+        handoff = await deps.runtime.assign(input.name, assignment);
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate assignment');
       }
@@ -806,7 +830,7 @@ export function createTeamToolDeps(deps: {
       deps.roster.resumeAfterMessage(input.name);
       let handoff: SubordinateHandoff;
       try {
-        handoff = await deps.runtime.message(input.name, content);
+        handoff = await deps.runtime.message(input.name, content, input.mode);
       } catch (error) {
         rollback(error, () => deps.roster.restore(before), 'subordinate message');
       }
@@ -816,6 +840,9 @@ export function createTeamToolDeps(deps: {
 
     dismiss: async (input) => {
       const before = deps.roster.requireExisting(input.name);
+      if (before.createdBy === 'user' && input.requestedBy !== 'user') {
+        throw new Error(`subordinate "${input.name}" was created by the owner and only the owner can dismiss it`);
+      }
       // Archive by default: the facet and its context are kept (merely no
       // longer addressed), so a dismissal is never silent data loss. Wiping
       // the subordinate's storage requires an explicit keepHistory=false.

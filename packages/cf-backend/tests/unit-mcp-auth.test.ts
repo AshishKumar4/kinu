@@ -7,6 +7,7 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 
 mockAgentsSdk();
 const { handleMcpRequest } = await import('../src/mcp-server.js');
@@ -14,37 +15,64 @@ const { handleMcpRequest } = await import('../src/mcp-server.js');
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface UnusedAuthDatabase {
+  readonly unused?: never;
+}
+
+interface McpTestBindings<UserStub, AgentStub> {
+  AUTH_DB: UnusedAuthDatabase;
+  UserDO: TestNamespace<UserStub>;
+  OrchestratorAgent: TestNamespace<AgentStub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<UserStub, AgentStub>(bindings: McpTestBindings<UserStub, AgentStub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: Bearer-authenticated MCP requests read exactly the two constructed
+  // namespaces and credential key; AUTH_DB is present but unreachable without a cookie.
+  return env as Env;
+}
+
 function mcpEnv() {
   const calls: string[] = [];
   const userDO = {
-    async verifyCliToken(_caller: unknown, token: string) {
+    async verifyCliToken(_caller: UserCaller, token: string) {
       return token === TOKEN
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasWorkspace(_caller: unknown, name: string) { return name === 'jarvis'; },
+    async hasWorkspace(_caller: UserCaller, name: string) { return name === 'jarvis'; },
     async ensureWorkspaceCapability() {},
   };
   const agent = {
     async claimOwner(userId: string) { calls.push(`claim:${userId}`); return { owner: userId, capabilityHash: 'sha-existing' }; },
   };
-  const env = {
+  const env = testEnv({
     // Present but never reached in these tests (no session cookie is sent);
     // its presence makes the unauthenticated path a clean AuthError 401.
     AUTH_DB: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
   return { env, calls };
 }
 
 function initializeRequest(agentName: string, token?: string) {
+  const headers = new Headers({
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+  });
+  if (token) headers.set('authorization', `Bearer ${token}`);
   return new Request(`https://proteus.example.com/mcp/v1/${agentName}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    headers,
     body: JSON.stringify({
       jsonrpc: '2.0',
       id: 1,

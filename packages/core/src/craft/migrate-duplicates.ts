@@ -73,7 +73,7 @@ export function migrateCraftedToolDuplicates(
     const drop = rows.slice(1);
 
     for (const r of drop) {
-      sql`DELETE FROM crafted_tools WHERE name = ${r.name}`;
+      void sql`DELETE FROM crafted_tools WHERE name = ${r.name}`;
       report.rowsDeletedCraftedTools++;
     }
 
@@ -94,8 +94,8 @@ export function migrateCraftedToolDuplicates(
         const scoreRowsBefore = sql<{ c: number }>`
           SELECT COUNT(*) AS c FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
         const before = scoreRowsBefore[0]?.c ?? 0;
-        sql`DELETE FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
-        sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
+        void sql`DELETE FROM craft_scores WHERE LOWER(tool_name) = ${g.lower_name}`;
+        void sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at, created_at)
           VALUES (${keep.name}, ${m.score}, ${m.uses ?? 0},
                   ${m.last_used_at ?? Date.now()}, ${m.created_at ?? Date.now()})`;
         // Kept row replaced (1 delete+1 insert); the rest of deletes are the
@@ -114,6 +114,6 @@ export function migrateCraftedToolDuplicates(
     });
   }
 
-  sql`INSERT INTO _v2_codegen_migration_done (id) VALUES (1)`;
+  void sql`INSERT INTO _v2_codegen_migration_done (id) VALUES (1)`;
   return report;
 }

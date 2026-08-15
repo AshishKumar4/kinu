@@ -1,4 +1,5 @@
-import { ORCHESTRATOR_AGENT_SLUG } from '@proteus/core';
+import { JsonValueSchema, ORCHESTRATOR_AGENT_SLUG, parseJsonValue, type JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 
 const origin = (process.env.PROTEUS_SMOKE_ORIGIN ?? 'https://proteus-staging.ashishkmr472.workers.dev').replace(/\/+$/, '');
 const agentName = process.env.PROTEUS_SMOKE_AGENT ?? `smoke-workspace-${Date.now().toString(36)}`;
@@ -11,30 +12,43 @@ function wsOrigin(httpOrigin: string): string {
   throw new Error(`Unsupported origin: ${httpOrigin}`);
 }
 
-async function jsonFetch<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function jsonFetch(path: string, init: RequestInit = {}): Promise<JsonValue | undefined> {
   const res = await fetch(`${origin}${path}`, {
     ...init,
     headers: {
       'content-type': 'application/json',
-      ...(init.headers ?? {}),
+      ...init.headers,
     },
   });
   const text = await res.text();
   if (!res.ok) throw new Error(`${init.method ?? 'GET'} ${path} -> ${res.status}: ${text}`);
-  return text ? JSON.parse(text) as T : undefined as T;
+  return text ? parseJsonValue(text) : undefined;
 }
 
-interface WorkspaceSnapshot {
-  status?: {
-    name?: string;
-    purpose?: string;
-  };
-  tools?: {
-    builtIn?: unknown[];
-    crafted?: unknown[];
-  };
-  executors?: unknown[];
-}
+const WorkspaceSnapshotSchema = v.object({
+  status: v.optional(v.object({
+    name: v.optional(v.string()),
+    purpose: v.optional(v.string()),
+  })),
+  tools: v.optional(v.object({
+    builtIn: v.optional(v.array(JsonValueSchema)),
+    crafted: v.optional(v.array(JsonValueSchema)),
+  })),
+  executors: v.optional(v.array(JsonValueSchema)),
+});
+
+type WorkspaceSnapshot = v.InferOutput<typeof WorkspaceSnapshotSchema>;
+
+const WorkspaceMessageSchema = v.variant('type', [
+  v.object({ type: v.literal('cf_agent_identity') }),
+  v.object({
+    type: v.literal('rpc'),
+    id: v.string(),
+    success: v.optional(v.boolean()),
+    error: v.optional(JsonValueSchema),
+    result: v.optional(WorkspaceSnapshotSchema),
+  }),
+]);
 
 async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
   return new Promise((resolve, reject) => {
@@ -66,9 +80,13 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
       if (!settled) finish(() => reject(new Error(`Workspace websocket closed early: ${event.code} ${event.reason}`)));
     });
     ws.addEventListener('message', (event) => {
-      let msg: Record<string, unknown>;
-      try { msg = JSON.parse(String(event.data)); } catch { return; }
-      if (msg.type === 'cf_agent_identity' && !sentRpc) {
+      let message: v.InferOutput<typeof WorkspaceMessageSchema>;
+      try {
+        message = v.parse(WorkspaceMessageSchema, parseJsonValue(String(event.data)));
+      } catch {
+        return;
+      }
+      if (message.type === 'cf_agent_identity' && !sentRpc) {
         sentRpc = true;
         ws.send(JSON.stringify({
           type: 'rpc',
@@ -78,12 +96,16 @@ async function waitForWorkspaceSnapshot(): Promise<WorkspaceSnapshot> {
         }));
         return;
       }
-      if (msg.type !== 'rpc' || msg.id !== rpcId) return;
-      if (msg.success === false) {
-        finish(() => reject(new Error(`getWorkspaceSnapshot failed: ${String(msg.error ?? 'unknown')}`)));
+      if (message.type !== 'rpc' || message.id !== rpcId) return;
+      if (message.success === false) {
+        finish(() => reject(new Error(`getWorkspaceSnapshot failed: ${String(message.error ?? 'unknown')}`)));
         return;
       }
-      finish(() => resolve(msg.result as WorkspaceSnapshot));
+      if (!message.result) {
+        finish(() => reject(new Error('getWorkspaceSnapshot returned no result')));
+        return;
+      }
+      finish(() => resolve(message.result));
     });
   });
 }

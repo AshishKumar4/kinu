@@ -3,8 +3,11 @@
  * codemode sandbox. One member, mirroring the native `report` tool's one
  * action shape; calls the SAME ReportToolDeps.report the native tool does.
  */
+import * as v from 'valibot';
 import type { CodemodeProvider } from '../rlm.js';
 import type { ReportToolDeps } from './builtins.js';
+
+const ReportStatusSchema = v.picklist(['progress', 'completed', 'blocked']);
 
 const TYPES = `export declare const report: {
   /** Report progress, completion, or a blocker on your current assignment
@@ -26,11 +29,12 @@ export function createReportCodemodeProvider(deps: () => ReportToolDeps): Codemo
       send: {
         description: 'Report progress, completion, or a blocker to the workspace orchestrator.',
         execute: async (...args: unknown[]) => {
-          const status = args[0] as 'progress' | 'completed' | 'blocked';
-          const content = String(args[1] ?? '');
-          if (!content.trim()) return { error: 'report.send requires non-empty content' };
+          const status = v.safeParse(ReportStatusSchema, args[0]);
+          const content = v.safeParse(v.pipe(v.string(), v.trim(), v.minLength(1)), args[1]);
+          if (!status.success) return { error: 'report.send requires a valid status' };
+          if (!content.success) return { error: 'report.send requires non-empty content' };
           try {
-            return await deps().report({ status, content });
+            return await deps().report({ status: status.output, content: content.output });
           } catch (err) {
             return { error: err instanceof Error ? err.message : String(err) };
           }

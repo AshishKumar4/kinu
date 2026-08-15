@@ -6,7 +6,9 @@
  * Architecture reference: docs/ARCHITECTURE.md — "Backends and the AgentRuntime contract"
  */
 
-import type { SqlExecutor } from '@proteus/agent-utils';
+import type { SqlExecutor, SqlValue } from '@proteus/agent-utils';
+import type { ToolSet as AiToolSet } from 'ai';
+import type { JsonObject, JsonValue } from '../utils/json.js';
 
 /**
  * The tagged-template SQL primitive. Both DO sql and better-sqlite3 satisfy it.
@@ -39,10 +41,13 @@ export interface RawSqlExec {
  * {@link SqlExecutor} wherever the statement is a literal.
  */
 export interface SqlExec {
-  exec(query: string, ...bindings: unknown[]): {
-    toArray(): Array<Record<string, unknown>>;
+  exec(query: string, ...bindings: SqlValue[]): {
+    toArray(): SqlExecRow[];
   };
 }
+
+/** One dynamically queried SQLite row in the portable value vocabulary. */
+export type SqlExecRow = Record<string, SqlValue>;
 
 /**
  * VFS interface — the workspace filesystem implements it, and so does each
@@ -91,11 +96,11 @@ export interface Memory {
 
 export interface ResolvedProvider {
   name: string;
-  fns: Record<string, (...args: unknown[]) => Promise<unknown>>;
+  fns: Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>;
 }
 
 export interface ExecuteResult {
-  result: unknown;
+  result: JsonValue | undefined;
   error?: string;
   logs?: string[];
 }
@@ -106,14 +111,20 @@ export interface ExecuteResult {
  * Network blocked by default (globalOutbound: null on CF). No persistent state.
  */
 export interface Executor {
+  /** Languages this executor can actually run, in preference order. */
+  readonly languages: readonly [string, ...string[]];
   execute(
     code: string,
-    providers: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
+    providers: ResolvedProvider[] | Record<string, (...args: JsonValue[]) => Promise<JsonValue | undefined>>,
     /** Caller-declared wall-clock budget. Tool-call code gets the executor's
      *  own short default; a scaffold turn is a whole agentic loop and declares
      *  its own (runScaffold). Executors that cannot honour it may ignore it —
      *  every caller races its own timeout regardless. */
-    opts?: { timeoutMs?: number },
+    opts?: {
+      timeoutMs?: number;
+      /** Omitted means the executor's first declared language. */
+      language?: string;
+    },
   ): Promise<ExecuteResult>;
 }
 
@@ -123,11 +134,11 @@ export interface ModelMessage {
 }
 
 export interface StepResult {
-  toolCalls?: Array<{ toolName: string; args: Record<string, unknown> }>;
+  toolCalls?: Array<{ toolName: string; args: JsonObject }>;
   text?: string;
 }
 
-export type ToolSet = Record<string, unknown>;
+export type ToolSet = AiToolSet;
 
 /** 4. LLM — inference */
 export interface LLM {
@@ -143,8 +154,8 @@ export interface LLM {
 
 /** Fiber checkpoint context. stash() is a synchronous SQLite write. */
 export interface FiberCtx {
-  stash(data: unknown): void;
-  snapshot: unknown | null;
+  stash(data: JsonValue): void;
+  snapshot: JsonValue | null;
 }
 
 /**
@@ -162,6 +173,9 @@ export interface Identity {
   id: string;
   name: string;
   scaffold: {
+    /** Canonical live scaffold path for this actor. Version archives append
+     * `.vN` to this path. */
+    path: string;
     exists(): Promise<boolean>;
     read(): Promise<string>;
     write(code: string): Promise<void>;

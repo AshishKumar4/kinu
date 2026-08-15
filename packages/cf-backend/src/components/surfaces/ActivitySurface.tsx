@@ -7,13 +7,11 @@
  * the same argument that retired the Run Timeline. `proteus debug` prints the
  * rows for anyone who wants them; the table and its RPC are untouched.
  *
- * Two kinds of number live here and they are never blended. The provider's
- * report (what the request cost, what was a cache read) is authoritative and
- * labelled `API`. The breakdown of where the context went is measured locally,
- * labelled `est`, and reconciled against the API total in the open: the bar
- * carries a rule at the provider's figure, and the residual between the two is
- * its own row. Anything the backend could not source renders as an em dash and
- * a reason, never as a plausible zero.
+ * Provider-reported tokens and cache reads are authoritative and labelled
+ * `API`. Category attribution uses the exact composed-content character counts
+ * Proteus measures locally. Providers do not report per-category tokens, so
+ * this surface never invents them. Anything the backend could not source
+ * renders as an em dash and a reason, never as a plausible zero.
  */
 import { useCallback } from "react";
 import {
@@ -25,7 +23,7 @@ import { useAsyncResource, lastValue } from "@/hooks/use-async-resource";
 import { fmtTokens, fmtUsd, fmtPct } from "@/lib/format";
 import type { ActivitySnapshot, Rpc } from "@/lib/protocol";
 import type { ContextComposition, ContextPlane } from "@proteus/core";
-import { breakdownView, shareOfReported, type BreakdownPlane, type BreakdownRow } from "./activity-breakdown";
+import { breakdownView, shareOfMeasured, type BreakdownPlane, type BreakdownRow } from "./activity-breakdown";
 
 /** Live surface: a turn in flight re-measures every step. */
 const STREAMING_POLL_MS = 1500;
@@ -33,15 +31,15 @@ const IDLE_POLL_MS = 10_000;
 
 /** Planes read as one brass ramp rather than five hues — this is one quantity
  *  split by origin, not five unrelated series. */
-const PLANE_LABEL: Record<ContextPlane, string> = {
+const PLANE_LABEL = {
   system: "System prompt",
   tools: "Tool definitions",
   messages: "Conversation",
   ephemeral: "Live-state blocks",
-};
-const PLANE_ALPHA: Record<ContextPlane, number> = {
+} satisfies Record<ContextPlane, string>;
+const PLANE_ALPHA = {
   system: 1, tools: 0.72, messages: 0.46, ephemeral: 0.26,
-};
+} satisfies Record<ContextPlane, number>;
 const planeFill = (plane: ContextPlane): string =>
   `color-mix(in srgb, var(--c-accent) ${Math.round(PLANE_ALPHA[plane] * 100)}%, transparent)`;
 
@@ -91,13 +89,13 @@ function Num({ children, className = "" }: { children: React.ReactNode; classNam
 }
 
 /** Marks a figure's provenance. The whole panel turns on this distinction. */
-function Source({ kind }: { kind: "API" | "est" }) {
+function Source({ kind }: { kind: "API" | "local" }) {
   return (
     <span
       className={`text-[9px] px-1 py-px rounded uppercase tracking-wide ${kind === "API" ? "p-badge-info" : "p-badge-neutral"}`}
       title={kind === "API"
-        ? "Reported by the provider for this step — authoritative."
-        : "Measured locally from the composed request — an estimate, not the provider's count."}
+        ? "The provider's authoritative count for this step."
+        : "Exact character counts measured from the locally composed prompt content; not provider token attribution."}
     >{kind}</span>
   );
 }
@@ -148,11 +146,11 @@ function ContextBlock({ snap }: { snap: ActivitySnapshot }) {
         </>
       ) : (
         <p className="text-[10px] p-text-3 mt-1">
-          Context window unknown — the model catalog has not answered, so no share is shown.
+          Context window unknown. The model catalog has not answered, so no share is shown.
         </p>
       )}
 
-      <Breakdown context={latest.context} reported={reported} />
+      <Breakdown context={latest.context} />
     </section>
   );
 }
@@ -167,7 +165,7 @@ function Meter({ value }: { value: number }) {
   );
 }
 
-function Breakdown({ context, reported }: { context: ContextComposition | null; reported: number }) {
+function Breakdown({ context }: { context: ContextComposition | null }) {
   if (context === null) {
     return (
       <div className="mt-4">
@@ -179,73 +177,53 @@ function Breakdown({ context, reported }: { context: ContextComposition | null; 
     );
   }
 
-  const { planes, estimated, residual, span } = breakdownView(context, reported);
+  const { planes, measuredChars, span } = breakdownView(context);
 
   return (
     <div className="mt-4">
       <div className="flex items-baseline gap-2 mb-2">
-        <h4 className="text-[11px] font-semibold p-text-2">Where it went</h4>
-        <Source kind="est" />
+        <h4 className="text-[11px] font-semibold p-text-2">Composed content</h4>
+        <Source kind="local" />
         <span className="ml-auto text-[10px] p-text-3">
-          {context.measuredChars.toLocaleString()} chars ÷ {context.charsPerToken}
+          {measuredChars.toLocaleString()} exact chars
         </span>
       </div>
 
-      <StackedBar planes={planes} span={span} reported={reported} residual={residual} />
+      <StackedBar planes={planes} span={span} />
 
       <table className="w-full mt-3 border-collapse">
         <tbody>
           {planes.map((plane) => (
-            <PlaneRows key={plane.plane} plane={plane} reported={reported} />
+            <PlaneRows key={plane.plane} plane={plane} measuredChars={measuredChars} />
           ))}
         </tbody>
       </table>
 
-      <Reconciliation reported={reported} estimated={estimated} residual={residual} />
+      <p className="text-[10px] p-text-3 leading-relaxed mt-2.5 pt-2.5 border-t p-border">
+        These rows are exact character counts for the prompt content Proteus composed. Cloudflare
+        reports the request&apos;s total tokens but not how those tokens divide across sections, so no
+        per-section token counts are inferred.
+      </p>
     </div>
   );
 }
 
-/** Hatched, not tinted: the remainder is unknown territory, and a flat fill
- *  would read as a fifth measured plane. */
-const UNACCOUNTED_FILL =
-  "repeating-linear-gradient(-45deg, var(--c-neutral-tint) 0 3px, transparent 3px 6px)";
-
 const swatch = "w-2 h-2 rounded-[2px] inline-block shrink-0 border p-border";
 
 function StackedBar(
-  { planes, span, reported, residual }:
-  { planes: readonly BreakdownPlane[]; span: number; reported: number; residual: number },
+  { planes, span }: { planes: readonly BreakdownPlane[]; span: number },
 ) {
-  const over = residual < 0;
   return (
-    <div className="relative">
+    <div>
       <div className="flex h-3 rounded overflow-hidden" style={{ background: "var(--c-neutral-tint)" }}>
         {planes.map((row) => (
           <div
             key={row.plane}
-            style={{ width: `${(row.tokens / span) * 100}%`, background: planeFill(row.plane) }}
-            title={`${PLANE_LABEL[row.plane]} — ${row.tokens.toLocaleString()} tokens (est)`}
+            style={{ width: `${(row.chars / span) * 100}%`, background: planeFill(row.plane) }}
+            title={`${PLANE_LABEL[row.plane]} — ${row.chars.toLocaleString()} composed-content characters`}
           />
         ))}
-        {residual > 0 && (
-          <div
-            style={{ width: `${(residual / span) * 100}%`, background: UNACCOUNTED_FILL }}
-            title={`Unaccounted — ${residual.toLocaleString()} tokens the provider billed that the breakdown does not explain`}
-          />
-        )}
       </div>
-      {/* Only drawn when it falls INSIDE the segments: an estimate that
-          overshoots is the case worth seeing. Otherwise the hatch already ends
-          exactly at the provider's figure, and a rule on the bar's own edge
-          reads as a border. */}
-      {over && (
-        <div
-          className="absolute top-0 bottom-0 w-px pointer-events-none"
-          style={{ left: `${(reported / span) * 100}%`, background: "var(--c-text)" }}
-          title={`Provider-reported input: ${reported.toLocaleString()} tokens`}
-        />
-      )}
       <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1.5">
         {planes.map((row) => (
           <span key={row.plane} className="flex items-center gap-1 text-[10px] p-text-3">
@@ -253,24 +231,12 @@ function StackedBar(
             {PLANE_LABEL[row.plane]}
           </span>
         ))}
-        {residual > 0 && (
-          <span className="flex items-center gap-1 text-[10px] p-text-3">
-            <span className={swatch} style={{ background: UNACCOUNTED_FILL }} />
-            Unaccounted
-          </span>
-        )}
-        {over && (
-          <span className="flex items-center gap-1 text-[10px] p-text-3">
-            <span className="w-px h-2.5 inline-block" style={{ background: "var(--c-text)" }} />
-            API total
-          </span>
-        )}
       </div>
     </div>
   );
 }
 
-function PlaneRows({ plane, reported }: { plane: BreakdownPlane; reported: number }) {
+function PlaneRows({ plane, measuredChars }: { plane: BreakdownPlane; measuredChars: number }) {
   return (
     <>
       <tr className="border-t p-border">
@@ -280,9 +246,9 @@ function PlaneRows({ plane, reported }: { plane: BreakdownPlane; reported: numbe
             <span className="text-[11px] font-medium p-text">{PLANE_LABEL[plane.plane]}</span>
           </span>
         </td>
-        <td className="py-1 text-right w-16"><Num className="text-[11px] p-text">{fmtTokens(plane.tokens)}</Num></td>
+        <td className="py-1 text-right w-20"><Num className="text-[11px] p-text">{plane.chars.toLocaleString()} ch</Num></td>
         <td className="py-1 text-right w-12">
-          <Num className="text-[11px] p-text-2">{fmtPct(shareOfReported(plane.tokens, reported), 1)}</Num>
+          <Num className="text-[11px] p-text-2">{fmtPct(shareOfMeasured(plane.chars, measuredChars), 1)}</Num>
         </td>
       </tr>
       {plane.rows.map((row: BreakdownRow) => (
@@ -293,50 +259,13 @@ function PlaneRows({ plane, reported }: { plane: BreakdownPlane; reported: numbe
               {row.items > 1 && <span className="p-text-3"> ×{row.items}</span>}
             </span>
           </td>
-          <td className="py-px text-right"><Num className="text-[11px] p-text-3">{fmtTokens(row.tokens)}</Num></td>
+          <td className="py-px text-right"><Num className="text-[11px] p-text-3">{row.chars.toLocaleString()} ch</Num></td>
           <td className="py-px text-right">
-            <Num className="text-[11px] p-text-3">{fmtPct(shareOfReported(row.tokens, reported), 1)}</Num>
+            <Num className="text-[11px] p-text-3">{fmtPct(shareOfMeasured(row.chars, measuredChars), 1)}</Num>
           </td>
         </tr>
       ))}
     </>
-  );
-}
-
-function Reconciliation({ reported, estimated, residual }: { reported: number; estimated: number; residual: number }) {
-  const over = residual < 0;
-  const share = reported > 0 ? Math.abs(residual) / reported : null;
-  return (
-    <div className="mt-3 pt-2.5 border-t p-border flex flex-col gap-1">
-      <Line label="Measured locally" value={`${estimated.toLocaleString()} tok`} source="est" />
-      <Line label="Reported by the provider" value={`${reported.toLocaleString()} tok`} source="API" />
-      <div className="flex items-baseline gap-2">
-        <span className={`text-[11px] font-medium ${over ? "p-warning" : "p-text-2"}`}>
-          {over ? "Over-attributed" : "Unaccounted"}
-        </span>
-        <span className="ml-auto">
-          <Num className={`text-[11px] ${over ? "p-warning" : "p-text"}`}>
-            {over ? "−" : ""}{Math.abs(residual).toLocaleString()} tok
-          </Num>
-          {share !== null && <span className="text-[10px] p-text-3 ml-1.5">({fmtPct(share, 1)})</span>}
-        </span>
-      </div>
-      <p className="text-[10px] p-text-3 leading-relaxed mt-0.5">
-        {over
-          ? "The local estimate exceeds what the provider charged — this prompt packs more characters into each token than the divisor assumes, so dividing by it over-counts."
-          : "No provider reports which parts of a prompt its tokens came from, so the breakdown is measured locally and the remainder is left named rather than spread across the rows."}
-      </p>
-    </div>
-  );
-}
-
-function Line({ label, value, source }: { label: string; value: string; source: "API" | "est" }) {
-  return (
-    <div className="flex items-baseline gap-2">
-      <span className="text-[11px] p-text-2">{label}</span>
-      <Source kind={source} />
-      <Num className="text-[11px] p-text ml-auto">{value}</Num>
-    </div>
   );
 }
 
@@ -439,7 +368,7 @@ function CacheBlock({ snap }: { snap: ActivitySnapshot }) {
             <Stat label="p95" value={fmtPct(cacheHit.p95, 1)} />
           </dl>
           <p className="text-[10px] p-text-3 mt-2 leading-relaxed">
-            Cached input over total input, per step — the cached tokens are a subset of the input the
+            Cached input over total input, per step. The cached tokens are a subset of the input the
             provider billed. The EMA weights recent steps at α={cacheHit.emaAlpha}; the mean and p95
             are over the {cacheHit.samples} step{cacheHit.samples === 1 ? "" : "s"} retained in the
             run-event log, not all time.

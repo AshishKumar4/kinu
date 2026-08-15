@@ -58,6 +58,12 @@ function predictionOf(sql: ReturnType<typeof makeSql>, outcomeId: string): TurnO
   return sql<{ outcome: TurnOutcome }>`SELECT outcome FROM turn_outcomes WHERE id = ${outcomeId}`[0].outcome;
 }
 
+type OutcomeLabelInput = Parameters<typeof recordOutcomeLabels>[1]['labels'][number];
+
+function outcomeLabel(outcomeId: string, label: OutcomeLabel): OutcomeLabelInput {
+  return { outcomeId, label };
+}
+
 // ── Budget allocation ────────────────────────────────────────────
 
 describe('allocateLabelBudget', () => {
@@ -153,7 +159,7 @@ describe('sampleForLabeling', () => {
     const first = sampleForLabeling(sql, { size: 20 });
     recordOutcomeLabels(sql, {
       labeler: 'owner',
-      labels: first.map((item) => ({ outcomeId: item.outcomeId, label: 'accepted' as OutcomeLabel })),
+      labels: first.map((item) => outcomeLabel(item.outcomeId, 'accepted')),
     });
 
     const second = sampleForLabeling(sql, { size: 20 });
@@ -299,7 +305,7 @@ describe('the gold label ledger', () => {
     for (let pass = 0; pass < 12; pass++) {
       recordOutcomeLabels(sql, {
         labeler: 'owner',
-        labels: Array.from({ length: 60 }, (_, i) => ({ outcomeId: `outc-${pass}-${i}`, label: 'accepted' as OutcomeLabel })),
+        labels: Array.from({ length: 60 }, (_, i) => outcomeLabel(`outc-${pass}-${i}`, 'accepted')),
         now: 1000 + pass,
       });
     }
@@ -343,7 +349,7 @@ describe('calibrationReport', () => {
       .filter((item) => predictionOf(sql, item.outcomeId) !== 'frustrated');
     recordOutcomeLabels(sql, {
       labeler: 'owner',
-      labels: drawn.map((item) => ({ outcomeId: item.outcomeId, label: 'accepted' as OutcomeLabel })),
+      labels: drawn.map((item) => outcomeLabel(item.outcomeId, 'accepted')),
     });
 
     const report = calibrationReport(sql);
@@ -362,9 +368,13 @@ describe('calibrationReport', () => {
       labeler: 'owner',
       labels: drawn.map((item, i) => {
         const predicted = predictionOf(sql, item.outcomeId);
-        if (predicted === 'accepted') return { outcomeId: item.outcomeId, label: (i % 5 === 0 ? 'corrected' : 'accepted') as OutcomeLabel };
-        if (predicted === 'frustrated') return { outcomeId: item.outcomeId, label: (i % 3 === 0 ? 'accepted' : 'frustrated') as OutcomeLabel };
-        return { outcomeId: item.outcomeId, label: 'corrected' as OutcomeLabel };
+        if (predicted === 'accepted') {
+          return outcomeLabel(item.outcomeId, i % 5 === 0 ? 'corrected' : 'accepted');
+        }
+        if (predicted === 'frustrated') {
+          return outcomeLabel(item.outcomeId, i % 3 === 0 ? 'accepted' : 'frustrated');
+        }
+        return outcomeLabel(item.outcomeId, 'corrected');
       }),
     });
 
@@ -399,10 +409,10 @@ describe('calibrationReport', () => {
     const drawn = sampleForLabeling(sql, { size: 60 });
     recordOutcomeLabels(sql, {
       labeler: 'owner',
-      labels: drawn.map((item, i) => ({
-        outcomeId: item.outcomeId,
-        label: (i % 6 === 0 ? 'unclear' : predictionOf(sql, item.outcomeId)) as OutcomeLabel,
-      })),
+      labels: drawn.map((item, i) => outcomeLabel(
+        item.outcomeId,
+        i % 6 === 0 ? 'unclear' : predictionOf(sql, item.outcomeId),
+      )),
     });
 
     const report = calibrationReport(sql);
@@ -419,8 +429,8 @@ describe('calibrationReport', () => {
     recordOutcomeLabels(sql, {
       labeler: 'owner',
       labels: [
-        ...drawn.map((item) => ({ outcomeId: item.outcomeId, label: predictionOf(sql, item.outcomeId) as OutcomeLabel })),
-        { outcomeId: 'outc-vanished', label: 'corrected' as OutcomeLabel },
+        ...drawn.map((item) => outcomeLabel(item.outcomeId, predictionOf(sql, item.outcomeId))),
+        outcomeLabel('outc-vanished', 'corrected'),
       ],
     });
 
@@ -445,12 +455,12 @@ describe('calibrationReport', () => {
     const drawn = sampleForLabeling(sql, { size: 100 });
     recordOutcomeLabels(sql, {
       labeler: 'owner',
-      labels: drawn.map((item, i) => ({
-        outcomeId: item.outcomeId,
-        label: (predictionOf(sql, item.outcomeId) === 'accepted' && i % 4 === 0
+      labels: drawn.map((item, i) => outcomeLabel(
+        item.outcomeId,
+        predictionOf(sql, item.outcomeId) === 'accepted' && i % 4 === 0
           ? 'corrected'
-          : predictionOf(sql, item.outcomeId)) as OutcomeLabel,
-      })),
+          : predictionOf(sql, item.outcomeId),
+      )),
     });
 
     const report = calibrationReport(sql);

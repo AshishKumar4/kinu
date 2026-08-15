@@ -8,6 +8,8 @@
  * growing a parallel re-implementation of the wiring it checks.
  */
 
+import * as v from 'valibot';
+import { JsonObjectSchema, type JsonObject } from '../utils/json.js';
 import {
   BACKEND_CONFORMANCE,
   CONFORMANCE_PLANES,
@@ -45,10 +47,16 @@ export interface ConformanceReport {
   readonly unmeasured: readonly ConformancePlane[];
 }
 
-function statusFor(plane: ConformancePlane, name: string, root: ConformanceRoot,
-  manifest: ConformanceManifest): CapabilityStatus | undefined {
-  const entry = (manifest[plane] as Readonly<Record<string, RootStatuses>>)[name];
-  return entry?.[root];
+function declaredEntries(
+  plane: ConformancePlane,
+  manifest: ConformanceManifest,
+): Array<[string, RootStatuses]> {
+  switch (plane) {
+    case 'tool': return Object.entries(manifest.tool);
+    case 'agents-action': return Object.entries(manifest['agents-action']);
+    case 'memory-action': return Object.entries(manifest['memory-action']);
+    case 'table': return Object.entries(manifest.table);
+  }
 }
 
 export function compareSurface(
@@ -64,16 +72,17 @@ export function compareSurface(
       unmeasured.push(plane);
       continue;
     }
-    const declared = manifest[plane] as Readonly<Record<string, RootStatuses>>;
+    const declared = declaredEntries(plane, manifest);
 
-    for (const [name, statuses] of Object.entries(declared)) {
+    for (const [name, statuses] of declared) {
       const status = statuses[observed.root];
       if ('wired' in status && !seen.has(name)) {
         findings.push({ kind: 'missing', plane, root: observed.root, name });
       }
     }
     for (const name of [...seen].sort()) {
-      const status = statusFor(plane, name, observed.root, manifest);
+      const statuses = declared.find(([declaredName]) => declaredName === name)?.[1];
+      const status: CapabilityStatus | undefined = statuses?.[observed.root];
       if (status === undefined) {
         findings.push({ kind: 'undeclared', plane, root: observed.root, name });
       } else if ('absent' in status) {
@@ -85,11 +94,11 @@ export function compareSurface(
   return { root: observed.root, findings, unmeasured };
 }
 
-const FINDING_ADVICE: Record<ConformanceFindingKind, string> = {
+const FINDING_ADVICE = {
   missing: 'wire it at this root, or declare it { absent: reason } in conformance/manifest.ts',
   undeclared: 'declare it in conformance/manifest.ts — the Record type will force a decision for every root',
   contradicted: 'the wiring and the manifest disagree; whichever is right, make the other match',
-};
+} satisfies Record<ConformanceFindingKind, string>;
 
 export function renderConformanceFindings(report: ConformanceReport): string {
   return report.findings
@@ -120,21 +129,28 @@ export function normalizeObservedTables(names: Iterable<string>): Set<string> {
 
 /** The action enum of a builtin tool's input schema — the artifact the model
  *  actually sees, from the ToolSet the composition root actually built. */
-export function observedActionEnum(tool: unknown): Set<string> {
-  const schema = (tool as { inputSchema?: unknown })?.inputSchema;
-  const raw = schemaJson(schema);
-  const action = (raw as { properties?: { action?: { enum?: unknown } } })?.properties?.action;
-  const values = Array.isArray(action?.enum) ? action.enum : [];
-  return new Set(values.filter((v): v is string => typeof v === 'string'));
+const ToolSchema = v.object({ inputSchema: v.optional(v.unknown()) });
+const ActionEnumSchema = v.object({
+  properties: v.object({
+    action: v.object({ enum: v.array(v.string()) }),
+  }),
+});
+
+export function observedActionEnum<Tool>(tool: Tool): Set<string> {
+  const parsedTool = v.safeParse(ToolSchema, tool);
+  if (!parsedTool.success) return new Set();
+  const raw = schemaJson(parsedTool.output.inputSchema);
+  const parsedAction = v.safeParse(ActionEnumSchema, raw);
+  return new Set(parsedAction.success ? parsedAction.output.properties.action.enum : []);
 }
 
 /** Unwrap an AI-SDK schema wrapper (jsonSchema(...) carries the raw object on
  *  jsonSchema; a plain object schema is already raw). */
-function schemaJson(schema: unknown): unknown {
-  if (schema && typeof schema === 'object' && 'jsonSchema' in schema) {
-    return (schema as { jsonSchema: unknown }).jsonSchema;
-  }
-  return schema;
+function schemaJson<Schema>(schema: Schema): JsonObject | null {
+  const wrapped = v.safeParse(v.object({ jsonSchema: JsonObjectSchema }), schema);
+  if (wrapped.success) return wrapped.output.jsonSchema;
+  const direct = v.safeParse(JsonObjectSchema, schema);
+  return direct.success ? direct.output : null;
 }
 
 // ── Phantom callables ────────────────────────────────────────────────────────
@@ -151,15 +167,16 @@ function schemaJson(schema: unknown): unknown {
 export function phantomCallables(text: string, callables: ReadonlySet<string>): string[] {
   const phantoms = new Set<string>();
   for (const m of text.matchAll(/\b([a-z][a-z0-9_]*(?:\.[a-z][a-zA-Z0-9_]*)*)\(/g)) {
-    const name = m[1]!;
+    const name = m[1];
+    if (!name) continue;
     // Single short words before `(` are overwhelmingly prose ("run(", "do(");
     // an instruction names either a namespaced call or a snake_case function.
     if (!name.includes('.') && !name.includes('_')) continue;
     if (callables.has(name)) continue;
     // A namespaced call resolves if its namespace root is a real callable
     // surface (`workspace.readdir(...)` under a wired `workspace` namespace).
-    const root = name.split('.', 1)[0]!;
-    if (name.includes('.') && callables.has(`${root}.*`)) continue;
+    const root = name.split('.', 1)[0];
+    if (root && name.includes('.') && callables.has(`${root}.*`)) continue;
     phantoms.add(name);
   }
   return [...phantoms].sort();

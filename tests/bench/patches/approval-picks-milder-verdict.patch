@@ -1,15 +1,14 @@
 diff --git a/packages/core/src/safety/approval-gate.ts b/packages/core/src/safety/approval-gate.ts
-index 2680e58..877583d 100644
 --- a/packages/core/src/safety/approval-gate.ts
 +++ b/packages/core/src/safety/approval-gate.ts
-@@ -174,8 +174,8 @@ const RULES: Rule[] = [
+@@ -191,8 +191,8 @@
   */
- const SEVERITY: Record<ApprovalDecision, number> = {
+ const SEVERITY = {
    allow: 0,
 -  warn: 1,
 -  gate: 2,
 +  warn: 2,
 +  gate: 1,
    deny: 3,
- };
- 
+ } satisfies Record<ApprovalDecision, number>;
+

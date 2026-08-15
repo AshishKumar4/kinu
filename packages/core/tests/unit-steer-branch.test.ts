@@ -281,16 +281,21 @@ describe('headPhaseRunEvent — one row shape for both backends', () => {
     // invisible until it was recorded, and a backend transcribing the row by
     // hand is exactly how it goes missing again. fileChanges is the same
     // argument for the split's EFFECT: what it did, not only what it spent.
+    // blindSpots is the same argument once more, for a field whose own value is
+    // still unmeasured: it can only be judged by reading it across real splits,
+    // which requires it to be on the row.
     expect(headPhaseRunEvent({
       kind: 'merge',
       rootId: 'run-7',
       cost: { headCount: 3, headsWithFindings: 1, totalTokens: 900, totalWallClockMs: 0, maxDepth: 0 },
       mergedNarrative: 'one lead held up',
       fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
+      blindSpots: ['nobody checked the migration path'],
     })).toEqual({
       type: 'head_merge', rootId: 'run-7', headCount: 3, headsWithFindings: 1,
       totalTokens: 900, mergedNarrative: 'one lead held up',
       fileChanges: [{ id: 'h1', changes: [{ path: '/workspace/a.ts', status: 'changed', added: 4, removed: 1 }] }],
+      blindSpots: ['nobody checked the migration path'],
     });
   });
 });

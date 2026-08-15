@@ -1,5 +1,5 @@
 import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { Database } from 'bun:sqlite';
 import { DEFAULT_SESSION_REFLECTION_INTERVAL } from '@proteus/core';
@@ -97,7 +97,11 @@ function startDaemon(opts: { quiet?: boolean } = {}): number | null {
   // (not the real CLI), spawning a daemon child would re-execute the test,
   // which would call ensureLocalDaemonRunning() again, creating an infinite
   // fork loop.  Refuse silently in quiet mode, throw loudly otherwise.
-  if (/test|spec|e2e/i.test(entry)) {
+  // The FILE is what decides — a checkout whose path merely contains
+  // "test"/"spec"/"e2e" (a worktree name, a user's directory) is not a test
+  // script, and matching the whole path made the real CLI refuse its daemon
+  // from such a checkout.
+  if (/test|spec|e2e/i.test(basename(entry))) {
     if (!opts.quiet) throw new Error(`Refusing to start daemon from a test script: ${entry}`);
     return null;
   }
@@ -246,19 +250,19 @@ async function tickAgent(name: string, now: number): Promise<number | null> {
 function sessionEvolutionDue(db: Database): boolean {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'session_window'`).get();
   if (!table) return false;
-  const row = db.query(`SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1`).get() as { n: number } | null;
+  const row = db.query<{ n: number }, []>('SELECT COUNT(*) AS n FROM session_window WHERE in_window = 1').get();
   return (row?.n ?? 0) >= DEFAULT_SESSION_REFLECTION_INTERVAL;
 }
 
 function nextTriggerAt(db: Database): number | null {
   const table = db.query(`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'triggers'`).get();
   if (!table) return null;
-  const row = db.query(`
+  const row = db.query<{ next_fire_at: number | null }, []>(`
     SELECT MIN(next_fire_at) AS next_fire_at
     FROM triggers
     WHERE state = 'active' AND next_fire_at IS NOT NULL
-  `).get() as { next_fire_at: number | null } | null;
-  return typeof row?.next_fire_at === 'number' ? row.next_fire_at : null;
+  `).get();
+  return row?.next_fire_at ?? null;
 }
 
 function logSessionEvent(agentName: string, event: SessionEvent): void {

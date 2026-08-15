@@ -9,6 +9,7 @@ import { join } from 'node:path';
 import { unitHash } from '../packages/core/src/index.js';
 import type { LLMProviderConfig, Solver, SolverContext, SolverResult } from '../packages/core/src/index.js';
 import { applyPatch, sandboxEnv } from './bench-sandbox.js';
+import { parseWorkerOutput } from './bench-worker-protocol.js';
 
 export type PatchLookup = ReadonlyMap<string, string>;
 
@@ -18,7 +19,7 @@ export const nullSolver: Solver = {
   id: 'null',
   description: 'no-op control — must fail every task',
   async solve(): Promise<SolverResult> {
-    return {};
+    return { modelCalls: 0 };
   },
 };
 
@@ -29,7 +30,7 @@ export function createOracleSolver(patches: PatchLookup): Solver {
     description: 'reverse-applies the defect — must pass every task',
     async solve(ctx: SolverContext): Promise<SolverResult> {
       applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
-      return {};
+      return { modelCalls: 0 };
     },
   };
 }
@@ -48,7 +49,7 @@ export function createNoisyOracleSolver(patches: PatchLookup, rate: number, labe
     async solve(ctx: SolverContext): Promise<SolverResult> {
       const draw = unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`);
       if (draw < rate) applyPatch(ctx.sandboxDir, patchFor(patches, ctx.task.id), { reverse: true });
-      return {};
+      return { modelCalls: 0 };
     },
   };
 }
@@ -72,15 +73,6 @@ export interface AgentSolverOptions {
   repoRoot: string;
   /** Home for the 'shared' arm. Ignored when state is 'fresh'. */
   sharedHome?: string;
-}
-
-interface WorkerOutput {
-  tokens: number;
-  steps: number;
-  hadError: boolean;
-  budgetBreach: 'tokens' | null;
-  peakPromptTokens: number;
-  error?: string;
 }
 
 export interface AgentWorkerOptions extends Omit<AgentSolverOptions, 'id' | 'description'> {
@@ -116,17 +108,121 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
     sessionId: opts.state === 'shared' ? 'bench' : ctx.task.id,
   };
 
-  const proc = Bun.spawn(
-    ['bun', join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts')],
-    {
-      cwd: ctx.sandboxDir,
-      env: sandboxEnv(home),
-      stdin: Buffer.from(JSON.stringify(input)),
-      stdout: 'pipe',
-      stderr: 'pipe',
-      signal: ctx.signal,
+  return spawnWorker({
+    script: join(opts.repoRoot, 'scripts', 'bench-agent-worker.ts'),
+    home, ctx, input,
+  });
+}
+
+export interface PiWorkerOptions {
+  ctx: SolverContext;
+  llm: LLMProviderConfig;
+  repoRoot: string;
+  asks: readonly string[];
+  removeAfterAsk: ReadonlyArray<string | null>;
+  verifierRetry: boolean;
+}
+
+/** Official Pi coding-agent SDK over its native read/bash/edit/write surface.
+ *  The retry arm differs only by one machine-check feedback turn. */
+export function runPiWorker(opts: PiWorkerOptions): Promise<SolverResult> {
+  return spawnWorker({
+    script: join(opts.repoRoot, 'scripts', 'bench-pi-worker.ts'),
+    home: opts.ctx.proteusHome,
+    ctx: opts.ctx,
+    input: {
+      agentDir: join(opts.ctx.proteusHome, 'pi-agent'),
+      asks: opts.asks,
+      removeAfterAsk: opts.removeAfterAsk,
+      maxTokens: opts.ctx.budget.maxTokens,
+      llm: opts.llm,
+      task: opts.ctx.task,
+      repoRoot: opts.repoRoot,
+      verifierRetry: opts.verifierRetry,
     },
-  );
+  });
+}
+
+export interface PiSolverOptions {
+  id: 'pi:vanilla' | 'pi:retry';
+  description: string;
+  verifierRetry: boolean;
+  llm: LLMProviderConfig;
+  repoRoot: string;
+}
+
+export function createPiSolver(opts: PiSolverOptions): Solver {
+  return {
+    id: opts.id,
+    description: opts.description,
+    solve: (ctx) => runPiWorker({
+      ...opts,
+      ctx,
+      asks: [ctx.task.prompt],
+      removeAfterAsk: [null],
+    }),
+  };
+}
+
+export interface PanelSolverOptions {
+  id: string;
+  description: string;
+  /** One provider config per fork. All identical is the self-MoA arm; one per
+   *  vendor family is the mixed arm. */
+  panel: readonly LLMProviderConfig[];
+  /** The merge model, held constant across arms so a difference is the panel's. */
+  analyst: LLMProviderConfig;
+  repoRoot: string;
+}
+
+/**
+ * A fork PANEL against the sandbox — the mixed-vs-self MoA arms.
+ *
+ * Deliberately not an agent turn: the panel is the treatment, so nothing
+ * upstream of it may vary between arms. Both arms run the identical worker with
+ * the identical task and differ only in the provider list.
+ */
+export function createPanelSolver(opts: PanelSolverOptions): Solver {
+  return {
+    id: opts.id,
+    description: opts.description,
+    async solve(ctx: SolverContext): Promise<SolverResult> {
+      return spawnWorker({
+        script: join(opts.repoRoot, 'scripts', 'bench-panel-worker.ts'),
+        home: ctx.proteusHome,
+        ctx,
+        input: {
+          dbPath: join(ctx.proteusHome, `panel-${ctx.task.id}`, 'agent.db'),
+          workspaceName: `panel-${ctx.task.id}`,
+          purpose: 'Fix defects in a TypeScript repository so its own test suite and typecheck pass.',
+          ask: ctx.task.prompt,
+          panel: opts.panel,
+          analyst: opts.analyst,
+          maxTokens: ctx.budget.maxTokens,
+        },
+      });
+    },
+  };
+}
+
+/** Spawn a worker script over the attempt's sandbox + throwaway home and read
+ *  its single JSON result line. Shared by the agent and panel solvers — the
+ *  isolation contract (cwd, pruned env, one JSON line on stdout) is the same
+ *  for both and must not drift between them. */
+async function spawnWorker(opts: {
+  script: string;
+  home: string;
+  ctx: SolverContext;
+  input: unknown;
+}): Promise<SolverResult> {
+  const proc = Bun.spawn(['bun', opts.script], {
+    cwd: opts.ctx.sandboxDir,
+    env: sandboxEnv(opts.home),
+    stdin: Buffer.from(JSON.stringify(opts.input)),
+    stdout: 'pipe',
+    stderr: 'pipe',
+    signal: opts.ctx.signal,
+  });
 
   const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
@@ -136,19 +232,23 @@ export async function runAgentWorker(opts: AgentWorkerOptions): Promise<SolverRe
 
   const line = stdout.trim().split('\n').filter(Boolean).pop();
   if (!line) {
-    return { error: `agent worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
+    return { error: `worker produced no result (exit ${proc.exitCode}): ${stderr.slice(-800)}` };
   }
-  let parsed: WorkerOutput;
+  let parsed;
   try {
-    parsed = JSON.parse(line) as WorkerOutput;
-  } catch {
-    return { error: `agent worker emitted unparseable output: ${line.slice(0, 400)}` };
+    parsed = parseWorkerOutput(line);
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return { error: `worker emitted invalid output: ${detail}; ${line.slice(0, 400)}` };
   }
-  return {
+  const error = parsed.error ?? (parsed.hadError ? 'worker reported an error without a diagnostic' : undefined);
+  const result: SolverResult = {
     tokens: parsed.tokens,
     peakPromptTokens: parsed.peakPromptTokens,
-    ...(parsed.error ? { error: parsed.error } : {}),
   };
+  if (parsed.modelCalls !== undefined) result.modelCalls = parsed.modelCalls;
+  if (error) result.error = error;
+  return result;
 }
 
 /** The real thing: one Proteus turn against the sandbox, in its own process. */

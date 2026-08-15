@@ -49,12 +49,12 @@ export function normalQuantile(p: number): number {
 }
 
 function logGamma(x: number): number {
-  const g = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+  const g = [76.18009172947146, -86.50532032941678, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
   let y = x;
   const tmp = x + 5.5 - (x + 0.5) * Math.log(x + 5.5);
   let ser = 1.000000000190015;
   for (let j = 0; j < 6; j++) ser += g[j] / ++y;
-  return -tmp + Math.log((2.5066282746310005 * ser) / x);
+  return -tmp + Math.log((2.5066282746310007 * ser) / x);
 }
 
 /** log C(n, k) — via log-gamma so large discordant counts stay exact enough. */
@@ -105,7 +105,7 @@ export interface BootstrapOptions {
  *  entries are per-TASK differences over repeats, makes this a cluster
  *  bootstrap: a task is resampled whole, so within-task correlation is carried
  *  into the interval instead of being washed out. */
-export function pairedBootstrapCI(diffs: readonly number[], opts: BootstrapOptions = {}): { mean: number; ci: Interval } {
+export function pairedBootstrapCI(diffs: readonly number[], opts: BootstrapOptions = {}) {
   const alpha = opts.alpha ?? DEFAULT_ALPHA;
   const iterations = opts.iterations ?? DEFAULT_BOOTSTRAP_ITERATIONS;
   const n = diffs.length;

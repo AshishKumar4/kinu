@@ -9,6 +9,8 @@
 
  */
 
+import * as v from 'valibot';
+
 /** The closed set of POSIX-style codes the file plane raises. */
 export type VfsErrorCode =
   | 'EPERM'      // operation not permitted
@@ -23,35 +25,48 @@ export type VfsErrorCode =
   | 'EROFS';     // read-only mount / synthetic mount table
 
 /** Canonical negative errno numbers (Linux ABI), keyed by code. */
-export const ERRNO: Readonly<Record<VfsErrorCode, number>> = {
+export const ERRNO = {
   EPERM: -1, ENOENT: -2, EIO: -5, ENXIO: -6, EACCES: -13, EEXIST: -17,
   ENOTDIR: -20, EISDIR: -21, ENOTEMPTY: -39, EROFS: -30,
-};
+} satisfies Readonly<Record<VfsErrorCode, number>>;
 
-export interface VfsError extends Error {
-  code: VfsErrorCode;
-  errno: number;
-  path: string;
+const VfsErrorCodeSchema = v.picklist([
+  'EPERM', 'ENOENT', 'EIO', 'ENXIO', 'EACCES', 'EEXIST', 'ENOTDIR',
+  'EISDIR', 'ENOTEMPTY', 'EROFS',
+]);
+
+export class VfsError extends Error {
+  readonly errno: number;
+
+  constructor(
+    readonly code: VfsErrorCode,
+    message: string,
+    readonly path: string | undefined,
+  ) {
+    super(`${code}: ${message}`);
+    this.name = 'VfsError';
+    this.errno = ERRNO[code];
+  }
 }
 
 /** Errno-style error shared by the composite and its mount adapters. */
 export function makeVfsError(code: VfsErrorCode, message: string, path: string): VfsError {
-  const err = new Error(`${code}: ${message}`) as VfsError;
-  err.code = code;
-  err.errno = ERRNO[code];
-  err.path = path;
-  return err;
+  return new VfsError(code, message, path);
 }
 
 /** The same error with guidance appended to its message. Code, errno and path
  *  are preserved, so callers switching on `code` are unaffected — only what a
  *  human or a model reads changes. */
-export function withVfsErrorHint(err: VfsError, hint: string): VfsError {
-  const next = new Error(`${err.message} — ${hint}`) as VfsError;
-  next.code = err.code;
-  next.errno = err.errno;
-  next.path = err.path;
-  return next;
+export function withVfsErrorHint(err: VfsErrorLike, hint: string): VfsError {
+  const prefix = `${err.code}: `;
+  const message = err.message.startsWith(prefix) ? err.message.slice(prefix.length) : err.message;
+  return new VfsError(err.code, `${message} — ${hint}`, err.path);
+}
+
+interface VfsErrorLike extends Error {
+  readonly code: VfsErrorCode;
+  readonly errno?: number;
+  readonly path?: string;
 }
 
 /** The addressing correction every file surface appends to a path error. It
@@ -60,7 +75,8 @@ export function withVfsErrorHint(err: VfsError, hint: string): VfsError {
 export { vfsAddressingHint } from '@proteus/agent-utils/vfs';
 
 /** True when `err` carries a code from the closed taxonomy. */
-export function isVfsError(err: unknown): err is VfsError {
-  return err instanceof Error && typeof (err as VfsError).code === 'string'
-    && (err as VfsError).code in ERRNO;
+export function isVfsError<T>(error: T): error is T & VfsErrorLike {
+  return error instanceof Error
+    && 'code' in error
+    && v.is(VfsErrorCodeSchema, error.code);
 }

@@ -34,6 +34,15 @@ export interface ConnectDeviceOptions {
   onPoll?: () => void;
 }
 
+export interface StartDaemonResult {
+  started: boolean;
+}
+
+export interface ConnectOutcomeDescription {
+  ok: boolean;
+  message: string;
+}
+
 export type ConnectDeviceResult =
   | { kind: 'connected'; deviceId: string }
   | { kind: 'timeout'; deviceId: string }
@@ -43,7 +52,7 @@ export type ConnectDeviceResult =
 export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions = {}): Promise<ConnectDeviceResult> {
   if (opts.session && persistentDaemonPid() !== null) {
     // The persistent daemon owns device.json and its credentials — leave it alone.
-    const devices = await listCloudDevices(auth.origin, auth.token).catch(() => [] as CloudDevice[]);
+    const devices = await listCloudDevices(auth.origin, auth.token).catch((): CloudDevice[] => []);
     return { kind: 'already-running', connected: devices.some((device) => device.connected) };
   }
   if (!nodeAvailable()) {
@@ -65,7 +74,7 @@ export async function connectDevice(auth: DeviceAuth, opts: ConnectDeviceOptions
  * process (killed on exit, no pidfile) and no-ops when a persistent daemon is
  * already running.
  */
-export function startDaemon(opts: { session?: boolean } = {}): { started: boolean } {
+export function startDaemon(opts: { session?: boolean } = {}): StartDaemonResult {
   if (opts.session && persistentDaemonPid() !== null) return { started: false };
   // Replace, don't accumulate: a previous daemon (with its old credentials)
   // must die before the new one starts.
@@ -171,7 +180,7 @@ export async function deviceStatusLine(): Promise<string> {
 }
 
 /** Shared outcome wording for the chat connect surfaces. */
-export function describeConnectOutcome(result: ConnectDeviceResult, session: boolean): { ok: boolean; message: string } {
+export function describeConnectOutcome(result: ConnectDeviceResult, session: boolean): ConnectOutcomeDescription {
   switch (result.kind) {
     case 'already-running':
       return result.connected

@@ -51,7 +51,7 @@ export interface DevicePresenceStore {
 export function observeDevicePresence(
   store: DevicePresenceStore,
   status: DeviceStatus,
-): { presence: DevicePresence; notice: string | null } {
+) {
   const presence = devicePresence(status);
   const lastSeen = parseDevicePresence(store.get(DEVICE_PRESENCE_CONFIG_KEY));
   if (lastSeen !== presence) store.set(DEVICE_PRESENCE_CONFIG_KEY, presence);

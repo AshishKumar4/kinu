@@ -25,6 +25,7 @@
 import { describe, test, expect } from 'bun:test';
 import { toolExecute } from '@proteus/test-utils';
 import { tool, jsonSchema } from 'ai';
+import * as v from 'valibot';
 import { createTestRuntime } from './helpers.js';
 import {
   buildBuiltinTools,
@@ -35,28 +36,48 @@ import {
   createMemoryCodemodeProvider,
   createReportCodemodeProvider,
   withApprovalGatedShell,
+  projectJsonValue,
+  type CodemodeProvider,
   type CraftedToolExecute,
-  type ReleaseActionInput,
+  type CreateExecuteToolFactory,
+  type JsonValue,
+  type MemoryToolInput,
+  type ReleaseApproval,
+  type ReleaseCheck,
+  type ReleaseDeployment,
+  type ReleaseSource,
   type ReleaseToolDeps,
+  type TeamToolDeps,
 } from '../src/index.js';
+
+interface RecordedReleaseCheck {
+  changeId: string;
+  input: Parameters<ReleaseToolDeps['recordCheck']>[1];
+}
+
+interface CircularValue {
+  self?: CircularValue;
+}
 
 // v2.1(E): core has no in-process fallback. Tests wire the same Node
 // executor factory that cli-backend ships in production.
 const nodeCraftedExecute: CraftedToolExecute = (t) => {
-  let compiled: ((arg: unknown) => Promise<unknown>) | null = null;
+  let compiled: ((arg: JsonValue) => Promise<JsonValue | undefined>) | null = null;
   return async (arg) => {
     if (!compiled) {
-      const fn = new Function('return (' + t.code + ')')();
-      if (typeof fn !== 'function') throw new Error(`${t.name} not a function`);
-      compiled = fn as (arg: unknown) => Promise<unknown>;
+      const evaluated = v.parse(v.function(), new Function('return (' + t.code + ')')());
+      compiled = async (input) => {
+        const result = await evaluated(input);
+        return v.safeParse(v.undefined(), result).success
+          ? undefined
+          : projectJsonValue({ value: result });
+      };
     }
     return compiled(arg);
   };
 };
 
-const nodeExecFactory = (opts: {
-  craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-}) => {
+const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
   return tool({
     description: 'test exec_tools',
     inputSchema: jsonSchema<{ code: string }>({
@@ -65,15 +86,18 @@ const nodeExecFactory = (opts: {
     execute: async (a: { code: string }) => {
       try {
         // Resolved per execute, exactly as the cli-backend factory does.
-        const codemode: Record<string, (arg: unknown) => Promise<unknown>> = {};
-        for (const [n, e] of Object.entries(opts.craftedTools())) {
-          codemode[n] = e.execute as (arg: unknown) => Promise<unknown>;
+        const codemode: Record<string, (arg: JsonValue) => Promise<JsonValue | undefined>> = {};
+        for (const [name, entry] of Object.entries(opts.craftedTools())) {
+          codemode[name] = entry.execute;
         }
         const fn = new Function('workspace', 'codemode', 'tools', 'return (async () => { ' + a.code + ' })()');
-        const result = await fn({}, codemode, codemode);
+        const rawResult = await fn({}, codemode, codemode);
+        const result = v.safeParse(v.undefined(), rawResult).success
+          ? undefined
+          : projectJsonValue({ value: rawResult });
         return { result };
-      } catch (e) {
-        return { result: undefined, error: (e as Error).message };
+      } catch (error) {
+        return { result: undefined, error: error instanceof Error ? error.message : String(error) };
       }
     },
   });
@@ -83,17 +107,24 @@ function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
   return buildBuiltinTools({
     rt,
     craftedToolExecute: nodeCraftedExecute,
-    createExecuteTool: nodeExecFactory as never,
-    codemodeLoader: { __test: true } as unknown,
+    createExecuteTool: nodeExecFactory,
+    codemodeLoader: { __test: true },
   });
 }
 
 // agents, web and report are conditional on their deps. Base = everything
 // else. Full surface = all canonical tools.
 const CONDITIONAL_TOOLS = ['agents', 'web', 'report'] as const;
+const CONDITIONAL_TOOL_NAMES = new Set<string>(CONDITIONAL_TOOLS);
 const BASE_TOOLS = BUILTIN_TOOLS.filter(
-  (n) => !(CONDITIONAL_TOOLS as readonly string[]).includes(n),
+  (name) => !CONDITIONAL_TOOL_NAMES.has(name),
 );
+
+function codemodeExecute(provider: CodemodeProvider, name: string): (...args: JsonValue[]) => Promise<object | string | number | boolean | null | undefined> {
+  const entry = provider.tools[name];
+  if (!entry) throw new Error(`Expected ${provider.name}.${name} to be registered`);
+  return async (...args) => await entry.execute(...args);
+}
 
 describe('Agent tools (canonical surface — skills/agents/web conditional)', () => {
   test('without conditional deps: base tools only', () => {
@@ -120,8 +151,16 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       eventId: 'evt-1', delivery: 'starts_now' as const,
       phase: { busy: false, lastActivityAt: null, workingOn: null },
     };
-    const stubTeam = {
+    const stubTeam: TeamToolDeps = {
       list: async () => [],
+      create: async () => ({
+        name: 's',
+        displayName: 'S',
+        subordinate: {
+          name: 's', displayName: 'S', role: 'researcher', createdBy: 'user', status: 'idle',
+          currentTask: null, createdAt: 1, dismissedAt: null,
+        },
+      }),
       spawn: async () => ({ name: 's', displayName: 'S' }),
       assign: async () => ({ ok: true as const, name: 's', ...stubHandoff }),
       status: async () => ({}),
@@ -141,11 +180,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = buildBuiltinTools({
       rt,
       craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory as never,
-      codemodeLoader: { __test: true } as unknown,
+      createExecuteTool: nodeExecFactory,
+      codemodeLoader: { __test: true },
       facts: stubFacts,
       webSearch: stubWebSearch,
-      agents: { team: stubTeam, peers: stubPeers },
+      agents: { mode: 'build', team: stubTeam, peers: stubPeers },
       report: stubReport,
     });
     const names = Object.keys(t);
@@ -156,10 +195,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   test('each tool carries description + inputSchema', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    for (const [, v] of Object.entries(t)) {
-      const tool = v as { description?: string; inputSchema?: unknown };
-      expect(tool.description).toBeTruthy();
-      expect(tool.inputSchema).toBeTruthy();
+    for (const [, entry] of Object.entries(t)) {
+      expect(entry.description).toBeTruthy();
+      expect(entry.inputSchema).toBeTruthy();
     }
   });
 
@@ -171,6 +209,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // Either can invoke a crafted tool; the prompt must advertise both.
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('codemode.*');
     expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('tools.');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.execute_tools).toContain('canonical durable workspace');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.run).toContain('shell over the canonical durable workspace');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('small fixed command set');
+    expect(BUILTIN_TOOL_DESCRIPTIONS.run).not.toContain('running programs there fails');
   });
 
   test('memory action=save appends to MEMORY.md', async () => {
@@ -194,14 +236,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
     const memoryTool = { execute: toolExecute<{ action: 'save' | 'search'; content?: string; query?: string }, string>(t.memory) };
     const result = await memoryTool.execute({ action: 'search', query: 'machine learning' });
-    expect(typeof result).toBe('string');
+    expect(result).toContain('machine learning');
   });
 
   test('memory keyed-fact actions round-trip through the facts store', async () => {
     const { rt } = createTestRuntime();
-    const store = new Map<string, { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }>();
+    const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
     const facts = {
-      upsert: (key: string, value: unknown, opts?: { confidence?: number }) => {
+      upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
         store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
         return 'created' as const;
       },
@@ -211,10 +253,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory as never, codemodeLoader: { __test: true } as unknown,
+      createExecuteTool: nodeExecFactory, codemodeLoader: { __test: true },
       facts,
     });
-    const memory = { execute: toolExecute<Record<string, unknown>, Record<string, unknown>>(t.memory) };
+    const memory = { execute: toolExecute<MemoryToolInput, JsonValue>(t.memory) };
 
     expect(await memory.execute({ action: 'remember', key: 'user.tz', value: 'UTC', confidence: 0.9 }))
       .toEqual({ ok: true, key: 'user.tz' });
@@ -226,7 +268,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     expect(await memory.execute({ action: 'recall', key: 'user.tz' })).toEqual({ found: false, key: 'user.tz' });
 
     // The pre-flight that keeps a non-serializable value from crashing the turn.
-    const circular: Record<string, unknown> = {};
+    const circular: CircularValue = {};
     circular.self = circular;
     expect(await memory.execute({ action: 'remember', key: 'k', value: circular })).toHaveProperty('error');
     expect(await memory.execute({ action: 'recall', key: '' })).toEqual({ error: 'key must be a non-empty string' });
@@ -238,20 +280,23 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const { rt } = createTestRuntime();
     const t = buildBuiltinTools({
       rt, craftedToolExecute: nodeCraftedExecute,
-      createExecuteTool: nodeExecFactory as never, codemodeLoader: { __test: true } as unknown,
+      createExecuteTool: nodeExecFactory, codemodeLoader: { __test: true },
       facts: { upsert: () => 'created' as const, recall: () => null, forget: () => {}, recentTopK: () => [], all: () => [] },
     });
-    expect((t.memory as { description: string }).description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);
+    expect(t.memory.description).toBe(BUILTIN_TOOL_DESCRIPTIONS.memory);
   });
 
   test('without a facts store the keyed-fact actions are not on the schema', () => {
     const { rt } = createTestRuntime();
     const t = tools(rt);
-    const schema = (t.memory as unknown as { inputSchema: { jsonSchema: { properties: { action: { enum: string[] } } } } })
-      .inputSchema.jsonSchema;
-    expect(schema.properties.action.enum).toEqual(['save', 'search', 'sessions']);
+    const schema = v.parse(v.object({
+      jsonSchema: v.object({
+        properties: v.object({ action: v.object({ enum: v.array(v.string()) }) }),
+      }),
+    }), t.memory.inputSchema);
+    expect(schema.jsonSchema.properties.action.enum).toEqual(['save', 'search', 'sessions']);
     // ...and the docstring does not advertise what the runtime cannot do.
-    expect((t.memory as { description: string }).description).not.toContain('remember');
+    expect(t.memory.description).not.toContain('remember');
   });
 
   // ── release.* codemode (not a native tool — see file header) ─────────────
@@ -261,18 +306,49 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   // are the only way the ledger learns what the agent ran itself. The
   // codemode member set gates on the same dep the runtime does, so neither
   // actor reads the other's.
+  const releaseChange = {
+    id: 'chg-1', agentName: 'jarvis', bindingId: 'src-1', status: 'draft' as const,
+    userPrompt: 'ship it', plan: null, summary: null, patch: null, previewUrl: null,
+    createdAt: 1, updatedAt: 1,
+  };
+  const releaseSource: ReleaseSource = {
+    id: 'src-1', kind: 'local', label: 'workspace', repoUrl: null,
+    defaultBranch: null, localDeviceId: null, localRoot: '/workspace',
+    deployTarget: null, createdAt: 1, updatedAt: 1,
+  };
+  const releaseCheck: ReleaseCheck = {
+    id: 'chk-1', changeId: 'chg-1', name: 'tests', status: 'passed',
+    stdout: null, stderr: null, durationMs: null, createdAt: 1, updatedAt: 1,
+  };
+  const releaseApproval: ReleaseApproval = {
+    id: 'approval-1', changeId: 'chg-1', approvalType: 'apply', decision: 'pending',
+    approvedBy: null, note: null, argumentDigest: 'digest', createdAt: 1, decidedAt: null,
+  };
+  const releaseDeployment: ReleaseDeployment = {
+    id: 'deployment-1', changeId: 'chg-1', environment: 'local',
+    workerVersionId: null, deploymentId: null, rollbackTarget: null, deployedAt: 1,
+  };
   const releaseLedgerDeps: ReleaseToolDeps = {
-    board: async () => ({}), bindSource: async () => ({} as never), create: async () => ({}),
-    update: async () => ({}), transition: async () => ({}), recordCheck: async () => ({} as never),
-    requestApproval: async () => ({} as never), recordDeployment: async () => ({} as never),
+    board: async () => ({ bindings: [], changes: [], checks: [], approvals: [], deployments: [] }),
+    bindSource: async () => releaseSource, create: async () => releaseChange,
+    update: async () => releaseChange, transition: async () => releaseChange,
+    recordCheck: async () => releaseCheck,
+    requestApproval: async () => releaseApproval,
+    recordDeployment: async () => releaseDeployment,
   };
 
   test('with an execution engine, release.* offers only what execution earns', () => {
     const deps: ReleaseToolDeps = {
       ...releaseLedgerDeps,
       engine: {
-        apply: async () => ({} as never), runChecks: async () => ({} as never), preview: async () => ({} as never),
-        deploy: async () => ({} as never), rollback: async () => ({} as never),
+        apply: async () => ({ ok: true, workdir: '/workspace', commit: 'abc1234', status: 'patching' }),
+        runChecks: async () => ({ ok: true, allPassed: true, results: [], status: 'preview_ready' }),
+        preview: async () => ({ ok: true, url: 'https://preview.example.com' }),
+        deploy: async () => ({
+          ok: true, environment: 'local', workerVersionId: null, deploymentId: null,
+          rollbackTarget: null, status: 'deployed',
+        }),
+        rollback: async () => ({ ok: true, restored: 'abc1234', verified: true, status: 'rolled_back' }),
       },
     };
     const provider = createReleaseCodemodeProvider(() => deps);
@@ -300,18 +376,24 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   });
 
   test('release.* members dispatch through the SAME runReleaseAction the provider is built on', async () => {
-    let recorded: unknown = null;
+    const recorded: RecordedReleaseCheck[] = [];
     const deps: ReleaseToolDeps = {
       ...releaseLedgerDeps,
-      recordCheck: async (changeId, input) => { recorded = { changeId, input }; return { id: 'chk-1' } as never; },
+      recordCheck: async (changeId, input) => {
+        recorded.push({ changeId, input });
+        return releaseCheck;
+      },
     };
     const provider = createReleaseCodemodeProvider(() => deps);
-    const result = await provider.tools.recordCheck!.execute('chg-1', { name: 'tests', status: 'passed' });
-    expect(result).toEqual({ id: 'chk-1' });
-    expect(recorded).toEqual({ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } });
+    const result = await codemodeExecute(provider, 'recordCheck')(
+      'chg-1',
+      { name: 'tests', status: 'passed' },
+    );
+    expect(result).toEqual(releaseCheck);
+    expect(recorded).toEqual([{ changeId: 'chg-1', input: { name: 'tests', status: 'passed' } }]);
     // The dispatcher's own validation still applies — a missing changeId
     // refuses cleanly rather than throwing.
-    const refused = await runReleaseAction(deps, { action: 'apply' } as ReleaseActionInput);
+    const refused = await runReleaseAction(deps, { action: 'apply' });
     expect(refused).toMatchObject({ error: expect.stringContaining('execution engine') });
   });
 
@@ -325,7 +407,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     // No facts wired: remember/recall/forget are absent, matching the native
     // tool's own action-enum gating.
     expect(Object.keys(provider.tools).sort()).toEqual(['save', 'search', 'sessions']);
-    const saved = await provider.tools.save!.execute('Remember: prefer snake_case');
+    const saved = await codemodeExecute(provider, 'save')('Remember: prefer snake_case');
     expect(String(saved)).toContain('saved');
     const found = await rt.memory.read('memory/MEMORY.md');
     expect(found).toContain('snake_case');
@@ -333,9 +415,9 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
 
   test('memory.* exposes remember/recall/forget only when a FactsStore is wired, over the SAME store', async () => {
     const { rt } = createTestRuntime();
-    const store = new Map<string, { key: string; value: unknown; confidence: number; source: string; lastObservedAt: number }>();
+    const store = new Map<string, { key: string; value: JsonValue; confidence: number; source: string; lastObservedAt: number }>();
     const facts = {
-      upsert: (key: string, value: unknown, opts?: { confidence?: number }) => {
+      upsert: (key: string, value: JsonValue, opts?: { confidence?: number }) => {
         store.set(key, { key, value, confidence: opts?.confidence ?? 1, source: 'tool', lastObservedAt: 7 });
         return 'created' as const;
       },
@@ -345,11 +427,14 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     };
     const provider = createMemoryCodemodeProvider(() => ({ memory: rt.memory, sql: rt.storage.sql, facts }));
     expect(Object.keys(provider.tools)).toContain('remember');
-    await provider.tools.remember!.execute('user.tz', 'UTC', 0.9);
+    await codemodeExecute(provider, 'remember')('user.tz', 'UTC', 0.9);
     expect(store.get('user.tz')?.value).toBe('UTC');
-    const recalled = await provider.tools.recall!.execute('user.tz') as Record<string, unknown>;
+    const recalled = v.parse(v.object({
+      found: v.boolean(), key: v.string(), value: v.unknown(), confidence: v.number(),
+      source: v.string(), lastObservedAt: v.number(),
+    }), await codemodeExecute(provider, 'recall')('user.tz'));
     expect(recalled).toEqual({ found: true, key: 'user.tz', value: 'UTC', confidence: 0.9, source: 'tool', lastObservedAt: 7 });
-    await provider.tools.forget!.execute('user.tz');
+    await codemodeExecute(provider, 'forget')('user.tz');
     expect(store.has('user.tz')).toBe(false);
   });
 
@@ -357,10 +442,10 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
   // native tool's own tests (same table-init fixture).
 
   test('report.* dispatches through the SAME ReportToolDeps.report the native `report` tool calls', async () => {
-    let captured: { status?: string; content?: string } = {};
+    let captured = {} satisfies { status?: string; content?: string };
     const deps = { report: async (input: { status: 'progress' | 'completed' | 'blocked'; content: string }) => { captured = input; return { delivered: true }; } };
     const provider = createReportCodemodeProvider(() => deps);
-    const result = await provider.tools.send!.execute('completed', 'Fix landed; tests added.');
+    const result = await codemodeExecute(provider, 'send')('completed', 'Fix landed; tests added.');
     expect(result).toEqual({ delivered: true });
     expect(captured).toEqual({ status: 'completed', content: 'Fix landed; tests added.' });
   });
@@ -375,7 +460,6 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const t = tools({ ...rt, shell: undefined });
     const tool = { execute: toolExecute<{ command: string }, string>(t.run) };
     const result = await tool.execute({ command: 'echo hi' });
-    expect(typeof result).toBe('string');
     expect(result).toContain('Error');
   });
 
@@ -389,10 +473,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     const tool = { execute: toolExecute<{ command: string; runtime?: string }, string>(t.run) };
     for (const runtime of ['sandbox', 'nimbus', 'laptop'] as const) {
       const result = await tool.execute({ command: 'echo hi', runtime });
-      const parsed = JSON.parse(result) as { error: string; runtime: string; message: string };
+      const parsed = v.parse(v.object({
+        error: v.string(), runtime: v.string(), message: v.string(),
+      }), JSON.parse(result));
       expect(parsed.error).toBe('runtime_not_provisioned');
       expect(parsed.runtime).toBe(runtime);
-      expect(typeof parsed.message).toBe('string');
       expect(parsed.message.length).toBeGreaterThan(0);
     }
   });
@@ -438,8 +523,11 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
     });
 
     const t = tools(rt);
-    const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };
+    const tool = {
+      execute: toolExecute<{ code: string }, { result: JsonValue | undefined; error?: string }>(t.execute_tools),
+    };
     const result = await tool.execute({ code: 'return await codemode.double(21);' });
+    expect(result.error).toBeUndefined();
     expect(result.result).toBe(42);
   });
 
@@ -453,7 +541,7 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       name: 'weak', description: 'low quality', params: null,
       code: 'async () => "should never run"', scope: 'local',
     });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('weak', 0.01, ${Date.now()})`;
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, last_used_at) VALUES ('weak', 0.01, ${Date.now()})`;
 
     const t = tools(rt);
     const tool = { execute: toolExecute<{ code: string }, { result: unknown }>(t.execute_tools) };

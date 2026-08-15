@@ -10,6 +10,25 @@
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MissionScope } from '../mission-budget.js';
 import type { LanguageModel } from 'ai';
+import type { WorkMode } from '../prompting/surface.js';
+import type { JsonValue } from '../utils/json.js';
+
+export type StrategyOptionValue = JsonValue | object;
+export interface BuiltinStrategyOptions {
+  mcts?: StrategyOptionValue;
+  heads?: StrategyOptionValue;
+}
+export type StrategyOptions = ReadonlyMap<string, StrategyOptionValue> | BuiltinStrategyOptions;
+
+export function strategyOption(
+  options: StrategyOptions | undefined,
+  key: string,
+): StrategyOptionValue | undefined {
+  if (options && 'get' in options) return options.get(key);
+  if (key === 'mcts') return options?.mcts;
+  if (key === 'heads') return options?.heads;
+  return undefined;
+}
 
 export interface StrategyBudget {
   /** Max LLM calls / tree iterations / parallel heads, depending on strategy. */
@@ -25,6 +44,9 @@ export interface StrategyBudget {
 
 export interface StrategyContext {
   task: string;
+  /** Trusted parent work mode. Strategies must preserve Plan's mutation bar
+   * across every head they spawn. */
+  mode: WorkMode;
   rt: AgentRuntime;
   /** Resolved language model for this exploration. */
   model: LanguageModel;
@@ -32,7 +54,7 @@ export interface StrategyContext {
   /** Conversation context that exploration may want to see. */
   history?: ReadonlyArray<{ role: 'user' | 'assistant' | 'system' | 'tool'; content: string }>;
   /** Per-strategy options. Strategies validate their own shape. */
-  options?: Record<string, unknown>;
+  options?: StrategyOptions;
   /**
    * The mission budget this exploration charges. `ctx.rt.llm` is already
    * governed for whatever reaches a model through it in THIS process; this is

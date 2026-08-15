@@ -10,15 +10,21 @@
 // to actually reach the model's next request.
 import { describe, expect, test } from 'bun:test';
 import { tool, type ModelMessage } from 'ai';
-import type { ModelStreamPart } from '@proteus/test-utils';
+import { MockLanguageModelV3 } from 'ai/test';
+import type { LanguageModelV3StreamPart } from '@ai-sdk/provider';
+import { createTestRuntime } from '@proteus/test-utils';
+import { Database } from 'bun:sqlite';
+import * as v from 'valibot';
 import { z } from 'zod';
 import {
-  AgentOrchestrator, isFailingToolResult, runChat,
+  AgentOrchestrator, TurnSteering, isFailingToolResult, runChat,
   IDENTICAL_CALLS_BEFORE_STEER, CONSECUTIVE_FAILURES_BEFORE_STEER, LONG_TURN_STEPS_BEFORE_STEER,
-  TURN_STEERING_HEADER, ExtensionHost, type BackendHost,
+  STEPS_WITHOUT_PROGRESS_BEFORE_STEER,
+  TURN_STEERING_HEADER, ExtensionHost, EvolutionEngine, EventLog, initEventsHubTables,
+  type BackendHost,
 } from '../src/index.js';
-import type { EventLog } from '../src/events/hub/log.js';
-import type { EvolutionEngine } from '../src/evolution/engine.js';
+import type { JsonObject } from '../src/utils/json.js';
+import { makeSqlExec } from './helpers.js';
 
 const user = (text: string): ModelMessage => ({ role: 'user', content: text });
 
@@ -31,20 +37,26 @@ function newTurn(): AgentOrchestrator {
     turnInFlight: () => false,
     setTimer: () => {},
   };
-  return new AgentOrchestrator({
-    host, engine: {} as EvolutionEngine, eventLog: {} as EventLog,
-  });
+  const { rt } = createTestRuntime();
+  const sql = makeSqlExec(new Database(':memory:'));
+  initEventsHubTables(sql);
+  return new AgentOrchestrator({ host, engine: new EvolutionEngine(rt, { enabled: false }), eventLog: new EventLog(sql) });
 }
 
 /** The step the model would see: whatever the turn extension hands back (or the
  *  unchanged input when nothing was injected). */
 function step(orch: AgentOrchestrator, stepNumber: number, messages: ModelMessage[]): ModelMessage[] {
-  return orch.turnExtension.prepareStep!({ stepNumber, messages }) ?? messages;
+  const prepareStep = orch.turnExtension.prepareStep;
+  if (!prepareStep) throw new Error('Expected turn steering prepareStep extension');
+  return prepareStep({ stepNumber, messages }) ?? messages;
 }
 
 function injected(messages: readonly ModelMessage[]): string[] {
   return messages
-    .map((m) => (typeof m.content === 'string' ? m.content : ''))
+    .map((message) => {
+      const content = v.safeParse(v.string(), message.content);
+      return content.success ? content.output : '';
+    })
     .filter((text) => text.startsWith(TURN_STEERING_HEADER));
 }
 
@@ -61,7 +73,7 @@ function fail(orch: AgentOrchestrator, toolName: string, times = 1): void {
 }
 
 /** The same call, answered the same way, `times` times. */
-function repeat(orch: AgentOrchestrator, toolName: string, args: Record<string, unknown>, times = 1): void {
+function repeat(orch: AgentOrchestrator, toolName: string, args: JsonObject, times = 1): void {
   for (let i = 0; i < times; i++) {
     orch.turnExtension.onToolCall!({ toolName, args });
     orch.turnExtension.onToolResult!({ toolName, args, result: 'the same output', success: true });
@@ -148,9 +160,8 @@ describe('repeated-failure trigger', () => {
     step(orch, 0, [user('q')]);
     fail(orch, 'run', CONSECUTIVE_FAILURES_BEFORE_STEER);
     const at1 = step(orch, 1, [user('q'), user('a1')]);
-    expect(at1.map((m) => m.content)).toEqual([
-      'q', 'a1', expect.stringContaining(TURN_STEERING_HEADER) as unknown as string,
-    ]);
+    expect(at1.slice(0, 2).map((message) => message.content)).toEqual(['q', 'a1']);
+    expect(at1[2]?.content).toContain(TURN_STEERING_HEADER);
     // Later steps rebuild from scratch: the nudge re-applies at its original
     // position (cache-prefix stability) and is not re-issued.
     fail(orch, 'run', 5);
@@ -283,6 +294,164 @@ describe('repeated-call trigger', () => {
   });
 });
 
+// A stalled step is the SAME call answered DIFFERENTLY every time — a
+// `git status`, a `curl /health`, a `make` whose only change is a timestamp.
+// The identical-output detector cannot see any of those, which is exactly why
+// this trigger exists.
+describe('no-progress trigger', () => {
+  test('a turn that keeps succeeding and getting nowhere is told so', () => {
+    const orch = newTurn();
+    // The first call is new ground; from then on the frontier never moves.
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean 0', success: true,
+    });
+    let steered: string[] = [];
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
+      steered = injected(step(orch, s, [user('ship it')]));
+      // Nothing new happens between boundaries: the same command, a different
+      // answer each time (so the repeat detector stays silent).
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
+      });
+      if (s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER) expect(steered).toEqual([]);
+    }
+    steered = injected(step(orch, STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, [user('ship it')]));
+    expect(steered).toHaveLength(1);
+    expect(steered[0]).toContain('steps in a row with nothing new');
+    expect(steered[0]).toContain('Steps that succeed are not the same as steps that get somewhere');
+    expect(steered[0]).toContain('hint, not an instruction');
+    expect(orch.steering.snapshot()).toEqual({
+      trigger: 'no_progress', step: STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1, converted: false,
+    });
+  });
+
+  test('a turn making new calls is never steered by this trigger', () => {
+    // Information-gathering is work. A trigger that fired on a long read-only
+    // investigation would be spam, and the owner's rule is no spam. (Kept
+    // under the long-turn threshold so THAT steer is not what is measured.)
+    const orch = newTurn();
+    for (let s = 1; s < LONG_TURN_STEPS_BEFORE_STEER; s++) {
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: `grep pattern${s} src/` }, result: 'no match', success: true,
+      });
+      expect(injected(step(orch, s, [user('q')]))).toEqual([]);
+    }
+    expect(orch.steering.snapshot()).toBeNull();
+  });
+
+  test('a file touched for the first time is progress, and resets the stall', () => {
+    // The half no tool-call signature can show: an `execute_tools` program is
+    // ONE call, and what it did is only visible in the shared file ledger.
+    // Two near-threshold stalls with one new file between them: twice the
+    // steps it takes to fire, and it does not, because the turn moved.
+    const orch = newTurn();
+    let boundary = 0;
+    let answer = 0;
+    const idle = () => orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'ls' }, result: `listing ${++answer}`, success: true,
+    });
+    const runStall = () => {
+      for (let i = 0; i < STEPS_WITHOUT_PROGRESS_BEFORE_STEER - 1; i++) {
+        expect(injected(step(orch, ++boundary, [user('q')]))).toEqual([]);
+        idle();
+      }
+    };
+
+    idle();
+    runStall();
+    orch.acc.files.observeWhole('/src/server.ts', 'export const x = 1;\n');
+    runStall();
+
+    expect(boundary).toBeGreaterThan(STEPS_WITHOUT_PROGRESS_BEFORE_STEER);
+    expect(orch.steering.snapshot()).toBeNull();
+  });
+
+  test('an edit that landed is progress; one that missed is not', () => {
+    // `sed -i` exits 0 whether or not it matched — a failed edit is a step
+    // that spent and moved nothing, and the ledger is what can tell.
+    const orch = newTurn();
+    const missed = newTurn();
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
+      for (const o of [orch, missed]) {
+        o.turnExtension.onToolResult!({
+          toolName: 'execute_tools', args: { code: 'edit()' }, result: `attempt ${s}`, success: true,
+        });
+      }
+      if (s === 3) {
+        orch.acc.files.recordEdit('/a.ts', null);
+        missed.acc.files.recordEdit('/a.ts', 'ambiguous');
+      }
+      injected(step(orch, s, [user('q')]));
+      injected(step(missed, s, [user('q')]));
+    }
+    // Both turns re-issue an identical-looking call, so neither trips the
+    // repeat detector on args alone; only the landed edit is progress.
+    expect(orch.steering.snapshot()).toBeNull();
+    expect(missed.steering.snapshot()?.trigger).toBe('no_progress');
+  });
+
+  test('the identical-call steer still outranks it — it can name what repeats', () => {
+    const orch = newTurn();
+    repeat(orch, 'run', { command: 'make' }, IDENTICAL_CALLS_BEFORE_STEER);
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) step(orch, s, [user('q')]);
+    expect(orch.steering.snapshot()?.trigger).toBe('repeated_call');
+  });
+
+  test('…and it outranks the long-turn steer, because it can say why', () => {
+    // Both would be true at once on a long circling turn. The one that names
+    // the problem is worth more than the one that names the length — and it
+    // gets there first, at half the step count.
+    const orch = newTurn();
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
+    });
+    let fired: string[] = [];
+    for (let s = 1; s <= LONG_TURN_STEPS_BEFORE_STEER + 1 && fired.length === 0; s++) {
+      fired = injected(step(orch, s, [user('q')]));
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
+      });
+    }
+    expect(orch.steering.snapshot()?.trigger).toBe('no_progress');
+    expect(orch.steering.snapshot()!.step).toBeLessThan(LONG_TURN_STEPS_BEFORE_STEER);
+  });
+
+  test('converted means the turn went somewhere it had not been', () => {
+    const orch = newTurn();
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
+    });
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER + 1; s++) {
+      step(orch, s, [user('q')]);
+      orch.turnExtension.onToolResult!({
+        toolName: 'run', args: { command: 'git status' }, result: `clean ${s}`, success: true,
+      });
+    }
+    expect(orch.steering.snapshot()).toMatchObject({ trigger: 'no_progress', converted: false });
+
+    // Re-covering the same ground is not a conversion…
+    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git status' } });
+    expect(orch.steering.snapshot()?.converted).toBe(false);
+
+    // …reaching for something the turn has not done is.
+    orch.turnExtension.onToolCall!({ toolName: 'run', args: { command: 'git log -1' } });
+    expect(orch.steering.snapshot()?.converted).toBe(true);
+  });
+
+  test('a new turn starts with a clean stall counter', () => {
+    const orch = newTurn();
+    orch.turnExtension.onToolResult!({
+      toolName: 'run', args: { command: 'git status' }, result: 'clean', success: true,
+    });
+    for (let s = 1; s <= STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) step(orch, s, [user('q')]);
+    orch.beginTurn(Date.now());
+    expect(orch.steering.snapshot()).toBeNull();
+    for (let s = 0; s < STEPS_WITHOUT_PROGRESS_BEFORE_STEER; s++) {
+      expect(injected(step(orch, s, [user('next')]))).toEqual([]);
+    }
+  });
+});
+
 describe('long-turn trigger', () => {
   test('a long turn with no delegation is nudged once, naming fork', () => {
     const orch = newTurn();
@@ -315,6 +484,57 @@ describe('long-turn trigger', () => {
     // Long and undelegated as well — still one line in the conversation.
     expect(injected(step(orch, LONG_TURN_STEPS_BEFORE_STEER + 1, [user('q')]))).toHaveLength(1);
     expect(orch.steering.snapshot()?.trigger).toBe('repeated_failure');
+  });
+});
+
+describe('execution-recovery detection (the failure ledger\'s second reader)', () => {
+  const failing = (s: TurnSteering, args: JsonObject) =>
+    s.onToolResult({ toolName: 'run', args, result: 'Error: boom', success: false });
+  const clean = (s: TurnSteering, args: JsonObject) =>
+    s.onToolResult({ toolName: 'run', args, result: 'ok', success: true });
+
+  test('a steer-worthy streak broken by a CHANGED call reports the recovery, echoes bounded', () => {
+    const steering = new TurnSteering();
+    const long = 'x'.repeat(500);
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) {
+      expect(failing(steering, { command: `npm test ${long} ${i}` })).toBeNull();
+    }
+    const recovery = clean(steering, { command: 'bun test' })!;
+    expect(recovery.tool).toBe('run');
+    expect(recovery.failures).toBe(CONSECUTIVE_FAILURES_BEFORE_STEER);
+    expect(recovery.failedArgs).toContain('npm test');
+    expect(recovery.failedArgs.length).toBeLessThanOrEqual(201); // echo cap + ellipsis
+    expect(recovery.succeededArgs).toContain('bun test');
+    expect(recovery.failedSignature.startsWith('run')).toBe(true);
+    // The streak is spent: the next clean call has nothing to recover from.
+    expect(clean(steering, { command: 'bun lint' })).toBeNull();
+  });
+
+  test('below the steer threshold there is nothing to write down', () => {
+    const steering = new TurnSteering();
+    failing(steering, { command: 'a' });
+    failing(steering, { command: 'b' });
+    expect(clean(steering, { command: 'c' })).toBeNull();
+  });
+
+  test('the SAME call finally working is a lucky retry, not a recovery', () => {
+    const steering = new TurnSteering();
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: 'make' });
+    expect(clean(steering, { command: 'make' })).toBeNull();
+  });
+
+  test('another tool\'s success neither claims nor clears the streak', () => {
+    const steering = new TurnSteering();
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: `try ${i}` });
+    expect(steering.onToolResult({ toolName: 'web_fetch', args: { url: 'x' }, result: 'page', success: true })).toBeNull();
+    expect(clean(steering, { command: 'the fix' })).not.toBeNull();
+  });
+
+  test('reset drops a streak with the rest of the turn state', () => {
+    const steering = new TurnSteering();
+    for (let i = 0; i < CONSECUTIVE_FAILURES_BEFORE_STEER; i++) failing(steering, { command: `try ${i}` });
+    steering.reset();
+    expect(clean(steering, { command: 'unrelated' })).toBeNull();
   });
 });
 
@@ -351,29 +571,52 @@ describe('conversion + turn boundaries', () => {
 
 /** A model that calls `flaky` on every step until it is told otherwise, so a
  *  turn accumulates failures. Records the prompt of every request. */
-function grindingModel(prompts: ModelMessage[][]) {
+interface PromptMessage {
+  content: string | Array<{ text?: string }>;
+}
+
+const PromptSchema = v.array(v.object({
+  content: v.union([
+    v.string(),
+    v.array(v.object({ text: v.optional(v.string()) })),
+  ]),
+}));
+
+function parsePrompt(input: { value: unknown }): PromptMessage[] {
+  return v.parse(PromptSchema, input.value);
+}
+
+function grindingModel(prompts: PromptMessage[][]) {
   let step = 0;
-  return {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (opts: { prompt: unknown }) => {
-      prompts.push(opts.prompt as ModelMessage[]);
+  return new MockLanguageModelV3({
+    doStream: async (opts) => {
+      prompts.push(parsePrompt({ value: opts.prompt }));
       step += 1;
       const done = step > 4;
       return {
-        stream: new ReadableStream<ModelStreamPart>({
+        stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             if (done) {
               c.enqueue({ type: 'text-start', id: 't' });
               c.enqueue({ type: 'text-delta', id: 't', delta: 'giving up' });
               c.enqueue({ type: 'text-end', id: 't' });
-              c.enqueue({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+              c.enqueue({
+                type: 'finish', finishReason: { unified: 'stop', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
             } else {
               c.enqueue({ type: 'tool-call', toolCallId: `tc${step}`, toolName: 'flaky', input: '{}' });
-              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+              c.enqueue({
+                type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
             }
             c.close();
           },
@@ -381,19 +624,23 @@ function grindingModel(prompts: ModelMessage[][]) {
         response: { headers: {} },
       };
     },
-  };
+  });
 }
 
 /** Every text part of a request's prompt, whatever shape the SDK put it in. */
-function promptText(messages: ModelMessage[]): string {
-  return messages.map((m) => (typeof m.content === 'string'
-    ? m.content
-    : (m.content as Array<{ text?: string }>).map((part) => part.text ?? '').join(' '))).join('\n');
+function promptText(messages: PromptMessage[]): string {
+  return messages.map((message) => {
+    const text = v.safeParse(v.string(), message.content);
+    return text.success
+      ? text.output
+      : v.parse(v.array(v.object({ text: v.optional(v.string()) })), message.content)
+        .map((part) => part.text ?? '').join(' ');
+  }).join('\n');
 }
 
 describe('through a real runChat turn', () => {
   test('the nudge reaches the model\'s next request after the third failure', async () => {
-    const prompts: ModelMessage[][] = [];
+    const prompts: PromptMessage[][] = [];
     let flakyCalls = 0;
     const orch = newTurn();
     const tools = {
@@ -407,10 +654,10 @@ describe('through a real runChat turn', () => {
       }),
     };
     for await (const _ of runChat({
-      model: grindingModel(prompts) as never,
+      model: grindingModel(prompts),
       system: 'sys',
       history: [user('build caffe')],
-      tools: tools as never,
+      tools,
       maxSteps: 6,
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
@@ -420,7 +667,7 @@ describe('through a real runChat turn', () => {
     const seen = prompts.map((p) => promptText(p).includes(TURN_STEERING_HEADER));
     expect(seen.slice(0, 3)).toEqual([false, false, false]);
     expect(seen[3]).toBe(true);
-    expect(promptText(prompts[3]!)).toContain('`flaky` has failed 3 times in a row');
+    expect(promptText(prompts[3] ?? [])).toContain('`flaky` has failed 3 times in a row');
     // …and it says it exactly once, however many more steps the turn runs.
     for (const prompt of prompts.slice(3)) {
       expect(promptText(prompt).split(TURN_STEERING_HEADER)).toHaveLength(2);
@@ -434,7 +681,7 @@ describe('through a real runChat turn', () => {
     // The fidelity that the unit tests cannot give: `args` on the tool-result
     // seam has to survive the provider round-trip, or the repeat detector is
     // comparing empty objects and every tool looks like one repeating call.
-    const prompts: ModelMessage[][] = [];
+    const prompts: PromptMessage[][] = [];
     const orch = newTurn();
     const tools = {
       run: tool({
@@ -444,10 +691,10 @@ describe('through a real runChat turn', () => {
       }),
     };
     for await (const _ of runChat({
-      model: repeatingModel(prompts, 'make') as never,
+      model: repeatingModel(prompts, 'make'),
       system: 'sys',
       history: [user('build it')],
-      tools: tools as never,
+      tools,
       maxSteps: 6,
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
@@ -455,15 +702,15 @@ describe('through a real runChat turn', () => {
     const seen = prompts.map((p) => promptText(p).includes(TURN_STEERING_HEADER));
     expect(seen.slice(0, 3)).toEqual([false, false, false]);
     expect(seen[3]).toBe(true);
-    expect(promptText(prompts[3]!)).toContain('`run` has run 3 times with the same arguments');
-    expect(promptText(prompts[3]!)).toContain('make');
+    expect(promptText(prompts[3] ?? [])).toContain('`run` has run 3 times with the same arguments');
+    expect(promptText(prompts[3] ?? [])).toContain('make');
     expect(orch.steering.snapshot()).toEqual({
       trigger: 'repeated_call', step: 3, tool: 'run', converted: false,
     });
   });
 
   test('the same tool with DIFFERENT commands is never called a repeat, through the same path', async () => {
-    const prompts: ModelMessage[][] = [];
+    const prompts: PromptMessage[][] = [];
     const orch = newTurn();
     const tools = {
       run: tool({
@@ -473,10 +720,10 @@ describe('through a real runChat turn', () => {
       }),
     };
     for await (const _ of runChat({
-      model: repeatingModel(prompts, null) as never,
+      model: repeatingModel(prompts, null),
       system: 'sys',
       history: [user('look around')],
-      tools: tools as never,
+      tools,
       maxSteps: 6,
       extensions: new ExtensionHost().register(orch.turnExtension),
     })) { /* drain */ }
@@ -488,32 +735,40 @@ describe('through a real runChat turn', () => {
 
 /** Calls `run` on every step: with `command` fixed (a real repeat) or with a
  *  fresh command each step (different work). */
-function repeatingModel(prompts: ModelMessage[][], command: string | null) {
+function repeatingModel(prompts: PromptMessage[][], command: string | null) {
   let step = 0;
-  return {
-    specificationVersion: 'v2' as const,
-    provider: 'fake',
-    modelId: 'fake-model',
-    supportedUrls: {},
-    doStream: async (opts: { prompt: unknown }) => {
-      prompts.push(opts.prompt as ModelMessage[]);
+  return new MockLanguageModelV3({
+    doStream: async (opts) => {
+      prompts.push(parsePrompt({ value: opts.prompt }));
       step += 1;
       const done = step > 4;
       return {
-        stream: new ReadableStream<ModelStreamPart>({
+        stream: new ReadableStream<LanguageModelV3StreamPart>({
           start(c) {
             c.enqueue({ type: 'stream-start', warnings: [] });
             if (done) {
               c.enqueue({ type: 'text-start', id: 't' });
               c.enqueue({ type: 'text-delta', id: 't', delta: 'giving up' });
               c.enqueue({ type: 'text-end', id: 't' });
-              c.enqueue({ type: 'finish', finishReason: 'stop', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+              c.enqueue({
+                type: 'finish', finishReason: { unified: 'stop', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
             } else {
               c.enqueue({
                 type: 'tool-call', toolCallId: `tc${step}`, toolName: 'run',
                 input: JSON.stringify({ command: command ?? `ls dir${step}` }),
               });
-              c.enqueue({ type: 'finish', finishReason: 'tool-calls', usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 } });
+              c.enqueue({
+                type: 'finish', finishReason: { unified: 'tool-calls', raw: undefined },
+                usage: {
+                  inputTokens: { total: 1, noCache: 1, cacheRead: undefined, cacheWrite: undefined },
+                  outputTokens: { total: 1, text: 1, reasoning: undefined },
+                },
+              });
             }
             c.close();
           },
@@ -521,5 +776,5 @@ function repeatingModel(prompts: ModelMessage[][], command: string | null) {
         response: { headers: {} },
       };
     },
-  };
+  });
 }

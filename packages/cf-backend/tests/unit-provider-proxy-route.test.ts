@@ -11,6 +11,9 @@
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { handleCliRequest } from '../src/cli/routes.js';
+import { asFetchFunction } from '@proteus/core';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
 
 const USER_ID = '0123456789abcdef0123456789abcdef';
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
@@ -23,6 +26,12 @@ const CREDENTIALS_URL = 'https://proteus.example.com/api/user/ai/proxy/credentia
 const CATALOG = {
   groq: { id: 'groq', name: 'Groq', npm: '@ai-sdk/groq', models: {} },
 };
+const CredentialListSchema = v.object({
+  credentials: v.array(v.object({
+    key: v.string(),
+    baseURL: v.optional(v.string()),
+  })),
+});
 
 const originalFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = originalFetch; });
@@ -32,14 +41,14 @@ interface StoredCredential { key: string; baseURL?: string; headers?: Record<str
 function setupEnv(stored: StoredCredential[]) {
   const byKey = new Map(stored.map((c) => [c.key, c]));
   const userDO = {
-    async verifyCliToken(_caller: unknown, bearer: string) {
+    async verifyCliToken(_caller: UserCaller, bearer: string) {
       return {
         ok: bearer === SESSION_TOKEN,
         tokenHash: 'session-hash',
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async verifyAccessToken(_caller: unknown, bearer: string) {
+    async verifyAccessToken(_caller: UserCaller, bearer: string) {
       const scopes = bearer === AI_TOKEN ? ['ai.proxy'] : bearer === READ_TOKEN ? ['workspace.read'] : null;
       if (!scopes) return { ok: false, error: 'invalid token' };
       return {
@@ -49,17 +58,24 @@ function setupEnv(stored: StoredCredential[]) {
         user: { id: USER_ID, email: 'ashish@example.com', displayName: 'Ashish' },
       };
     },
-    async listCredentials(_caller: unknown) {
+    async listCredentials(_caller: UserCaller) {
       return stored.map((c) => ({ key: c.key, kind: 'bearer', createdAt: 0, updatedAt: 0 }));
     },
-    async getCredentialBaseURL(_caller: unknown, key: string) {
+    async getCredentialBaseURL(_caller: UserCaller, key: string) {
       return byKey.get(key)?.baseURL ?? null;
     },
-    async getAuthHeaders(_caller: unknown, key: string) {
+    async getAuthHeaders(_caller: UserCaller, key: string) {
       return byKey.get(key)?.headers ?? null;
     },
   };
-  return { UserDO: { idFromName: (n: string) => n, get: () => userDO }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+  const env: Partial<Env> = {};
+  Object.assign(env, {
+    UserDO: { idFromName: (name: string) => name, get: () => userDO },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  });
+  // SAFETY: Provider proxy tests reach only the constructed UserDO namespace
+  // and credential key; both bindings are exact and present above.
+  return env as Env;
 }
 
 function forwardRequest(opts: {
@@ -71,24 +87,22 @@ function forwardRequest(opts: {
   headers?: Record<string, string>;
 }) {
   const token = opts.token === undefined ? SESSION_TOKEN : opts.token;
-  return new Request(FORWARD_URL, {
-    method: opts.method ?? 'POST',
-    headers: {
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-      ...(opts.cred ? { 'x-proteus-proxy-cred': opts.cred } : {}),
-      ...(opts.target ? { 'x-proteus-proxy-target': opts.target } : {}),
-      'content-type': 'application/json',
-      ...opts.headers,
-    },
-    ...(opts.method === 'GET' ? {} : { body: opts.body ?? '{"model":"x"}' }),
-  });
+  const headers = new Headers();
+  if (token) headers.set('authorization', `Bearer ${token}`);
+  if (opts.cred) headers.set('x-proteus-proxy-cred', opts.cred);
+  if (opts.target) headers.set('x-proteus-proxy-target', opts.target);
+  headers.set('content-type', 'application/json');
+  for (const [name, value] of Object.entries(opts.headers ?? {})) headers.set(name, value);
+  const init: RequestInit = { method: opts.method ?? 'POST', headers };
+  if (opts.method !== 'GET') init.body = opts.body ?? '{"model":"x"}';
+  return new Request(FORWARD_URL, init);
 }
 
 interface Upstream { url: string; method: string; headers: Headers; body: string }
 
 function captureUpstream(respond: () => Response): Upstream[] {
   const captured: Upstream[] = [];
-  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     if (url.startsWith('https://models.dev/')) return Response.json(CATALOG);
     captured.push({
@@ -98,8 +112,13 @@ function captureUpstream(respond: () => Response): Upstream[] {
       body: init?.body instanceof ArrayBuffer ? new TextDecoder().decode(init.body) : String(init?.body ?? ''),
     });
     return respond();
-  }) as typeof fetch;
+  });
   return captured;
+}
+
+function handled(response: Response | null): Response {
+  if (!response) throw new Error('Provider proxy route did not handle the request');
+  return response;
 }
 
 describe('provider proxy auth gate', () => {
@@ -137,7 +156,7 @@ describe('GET /credentials', () => {
     const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
-    const body = await res!.json() as { credentials: Array<{ key: string; baseURL?: string }> };
+    const body = v.parse(CredentialListSchema, await handled(res).json());
 
     expect(body.credentials.map((c) => c.key).sort())
       .toEqual(['groq.bearer', 'openai-compat.default', 'openrouter.bearer']);
@@ -157,7 +176,7 @@ describe('GET /credentials', () => {
     const res = await handleCliRequest(new Request(CREDENTIALS_URL, {
       headers: { authorization: `Bearer ${SESSION_TOKEN}` },
     }), env);
-    const body = await res!.json() as { credentials: Array<{ key: string }> };
+    const body = v.parse(CredentialListSchema, await handled(res).json());
     expect(body.credentials.map((c) => c.key)).toEqual(['openai.bearer']);
   });
 });
@@ -206,7 +225,7 @@ describe('POST /forward', () => {
     }), env);
 
     expect(res?.headers.get('content-type')).toBe('text/event-stream');
-    const text = await res!.text();
+    const text = await handled(res).text();
     expect(text).toContain('"prompt_tokens":7');
     expect(text).toContain('[DONE]');
   });
@@ -221,7 +240,7 @@ describe('POST /forward', () => {
 
     expect(res?.status).toBe(403);
     expect(seen).toHaveLength(0);
-    expect(await res!.text()).toContain('attacker.example');
+    expect(await handled(res).text()).toContain('attacker.example');
   });
 
   test('refuses the Cloudflare login outright', async () => {
@@ -243,7 +262,7 @@ describe('POST /forward', () => {
       cred: 'openai.bearer', target: 'https://api.openai.com/v1/chat/completions',
     }), env);
     expect(res?.status).toBe(401);
-    expect(await res!.text()).toContain('openai.bearer');
+    expect(await handled(res).text()).toContain('openai.bearer');
   });
 
   test('an unroutable credential key is a 400, not a silent direct send', async () => {

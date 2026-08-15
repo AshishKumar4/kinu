@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/jobs/store.ts b/packages/core/src/jobs/store.ts
-index 8bd6b0b..6cd4849 100644
 --- a/packages/core/src/jobs/store.ts
 +++ b/packages/core/src/jobs/store.ts
-@@ -103,7 +103,7 @@ export class BackgroundJobStore {
+@@ -105,7 +105,7 @@
     *  reclaim that already bumped the epoch (§5.3). */
    settle(id: string, epoch: number, result: string, now: number): void {
-     this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
+     void this.sql`UPDATE background_jobs SET status='completed', result=${result}, settled_at=${now}
 -      WHERE id=${id} AND status='running' AND epoch=${epoch}`;
 +      WHERE id=${id} AND status='running'`;
    }
- 
+
    /** Mark a running job failed. No-op if already settled or the epoch is stale. */

@@ -16,6 +16,8 @@
 // in the two backend suites; here the surface itself is the subject.
 import { describe, expect, test } from 'bun:test';
 import { createTestRuntime, createTestStrategy } from '@proteus/test-utils';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
 import {
   AGENTS_TOOL_ACTIONS,
   FORK_STRATEGY_ID,
@@ -23,6 +25,10 @@ import {
   createAgentsCodemodeProvider,
   createAgentsTool,
   createStrategyRegistry,
+  strategyOption,
+  decodeJsonValue,
+  type CodemodeProvider,
+  type JsonValue,
   type AgentsForkDeps,
   type AgentsToolDeps,
   type PeersToolDeps,
@@ -32,17 +38,38 @@ import {
   type SubordinateDelivery, type SubordinateHandoff,
 } from '../src/index.ts';
 
-interface Call { action: string; input: unknown }
+interface Call { action: string; input: JsonValue }
 
-type SandboxFn = (...args: unknown[]) => Promise<unknown>;
+const ErrorResultSchema = v.object({ error: v.string() });
+const AgentsInputSchemaContract = v.object({
+  jsonSchema: v.object({
+    properties: v.object({
+      action: v.object({ enum: v.array(v.string()) }),
+    }),
+  }),
+});
 
 /** The namespace as sandbox code sees it: one callable per exposed member. */
-function namespaceOf(deps: () => AgentsToolDeps): Record<string, SandboxFn> {
-  const provider = createAgentsCodemodeProvider(deps);
+function namespaceOf(deps: () => TestAgentsToolDeps) {
+  const provider = createAgentsCodemodeProvider(() => withBuildMode(deps()));
   expect(provider.name).toBe('agents');
-  const ns: Record<string, SandboxFn> = {};
-  for (const [name, entry] of Object.entries(provider.tools)) ns[name] = entry.execute;
-  return ns;
+  return provider.tools;
+}
+
+function member(tools: CodemodeProvider['tools'], name: string) {
+  const descriptor = tools[name];
+  if (!descriptor) throw new Error(`missing agents.${name}`);
+  return descriptor;
+}
+
+function recordCall<Value>(calls: Call[], action: string, input: Value): void {
+  calls.push({ action, input: decodeJsonValue({ value: input }) });
+}
+
+type TestAgentsToolDeps = Omit<AgentsToolDeps, 'mode'> & { mode?: AgentsToolDeps['mode'] };
+
+function withBuildMode(deps: TestAgentsToolDeps): AgentsToolDeps {
+  return { mode: 'build', ...deps };
 }
 
 function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
@@ -50,7 +77,7 @@ function forkDeps(overrides: Partial<AgentsForkDeps> = {}): AgentsForkDeps {
   registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: 'forked' }));
   registry.register(createTestStrategy({ id: 'mcts', answer: 'searched' }));
   const { rt } = createTestRuntime();
-  return { registry, rt, model: rt.llm as never, ...overrides };
+  return { registry, rt, model: new MockLanguageModelV3(), ...overrides };
 }
 
 const rosterEntry: SubordinateRosterEntry = {
@@ -65,55 +92,64 @@ const handoff = (delivery: SubordinateDelivery, busy: boolean): SubordinateHando
   phase: { busy, lastActivityAt: 1234, workingOn: busy ? 'reading src/auth.ts' : null },
 });
 
-function makeTeam(): { deps: TeamToolDeps; calls: Call[] } {
+function makeTeam() {
   const calls: Call[] = [];
   return {
     calls,
     deps: {
       list: async () => [rosterEntry],
+      create: async (input) => ({
+        name: input.name ?? 'researcher',
+        displayName: 'Researcher',
+        subordinate: {
+          name: input.name ?? 'researcher', displayName: 'Researcher', role: input.role,
+          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+        },
+      }),
       spawn: async (input) => {
-        calls.push({ action: 'spawn', input });
+        recordCall(calls, 'spawn', input);
         return { name: input.name ?? 'researcher', displayName: 'Researcher' };
       },
-      assign: async (input) => { calls.push({ action: 'assign', input }); return { ok: true, name: input.name, ...handoff('steering_live_turn', true) }; },
-      status: async (input) => { calls.push({ action: 'status', input }); return { roster: [rosterEntry] }; },
-      message: async (input) => { calls.push({ action: 'message', input }); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
+      assign: async (input) => { recordCall(calls, 'assign', input); return { ok: true, name: input.name, ...handoff('queued', true) }; },
+      status: async (input) => { recordCall(calls, 'status', input); return { roster: [rosterEntry] }; },
+      message: async (input) => { recordCall(calls, 'message', input); return { ok: true, name: input.name, ...handoff('starts_now', false) }; },
       dismiss: async (input) => {
-        calls.push({ action: 'dismiss', input });
+        recordCall(calls, 'dismiss', input);
         return { ok: true, name: input.name, historyKept: input.keepHistory ?? false };
       },
-    },
+    } satisfies TeamToolDeps,
   };
 }
 
-function makePeers(): { deps: PeersToolDeps; calls: Call[] } {
+function makePeers() {
   const calls: Call[] = [];
   return {
     calls,
     deps: {
       listPeers: async () => [{ name: 'scout', displayName: 'Scout' }],
       ask: async (input) => {
-        calls.push({ action: 'ask', input });
+        recordCall(calls, 'ask', input);
         return { status: 'replied', from: input.agent, reply: 'answer' };
       },
-      send: async (input) => { calls.push({ action: 'send', input }); return { status: 'delivered', message_id: 'ox1' }; },
-      reply: async (input) => { calls.push({ action: 'reply', input }); return { ok: true }; },
+      send: async (input) => { recordCall(calls, 'send', input); return { status: 'delivered', message_id: 'ox1' }; },
+      reply: async (input) => { recordCall(calls, 'reply', input); return { ok: true }; },
       spawnWorkspace: async (input) => {
-        calls.push({ action: 'spawn_workspace', input });
+        recordCall(calls, 'spawn_workspace', input);
         return { agent: input.name ?? 'specialist', created: true, status: 'replied', from: 'specialist', reply: 'done' };
       },
-    },
+    } satisfies PeersToolDeps,
   };
 }
 
 function fullDeps(): AgentsToolDeps {
-  return { fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps };
+  return withBuildMode({ fork: forkDeps(), team: makeTeam().deps, peers: makePeers().deps });
 }
 
-function actionEnumOf(deps: AgentsToolDeps): string[] {
-  const schema = createAgentsTool(deps).inputSchema as unknown as {
-    jsonSchema: { properties: { action: { enum: string[] } } };
-  };
+function actionEnumOf(deps: TestAgentsToolDeps): string[] {
+  const schema = v.parse(
+    AgentsInputSchemaContract,
+    createAgentsTool(withBuildMode(deps)).inputSchema,
+  );
   return schema.jsonSchema.properties.action.enum;
 }
 
@@ -121,7 +157,7 @@ function actionEnumOf(deps: AgentsToolDeps): string[] {
 
 describe('agents.* codemode namespace — dep gating', () => {
   test('fork-only deps (CLI / subordinate) expose exactly agents.fork', () => {
-    const deps: AgentsToolDeps = { fork: forkDeps() };
+    const deps = withBuildMode({ fork: forkDeps() });
     expect(Object.keys(namespaceOf(() => deps))).toEqual(['fork']);
   });
 
@@ -131,12 +167,12 @@ describe('agents.* codemode namespace — dep gating', () => {
   });
 
   test('team-without-peers drops reply, keeps the subordinate verbs', () => {
-    const deps: AgentsToolDeps = { team: makeTeam().deps };
+    const deps = withBuildMode({ team: makeTeam().deps });
     expect(Object.keys(namespaceOf(() => deps))).toEqual(['staff', 'ask', 'send', 'list', 'dismiss']);
   });
 
   test('the namespace members ARE the tool action enum — one gate, never two', () => {
-    for (const deps of [{ fork: forkDeps() }, fullDeps(), { team: makeTeam().deps }] as AgentsToolDeps[]) {
+    for (const deps of [withBuildMode({ fork: forkDeps() }), fullDeps(), withBuildMode({ team: makeTeam().deps })]) {
       expect(Object.keys(namespaceOf(() => deps))).toEqual(actionEnumOf(deps));
       expect(Object.keys(namespaceOf(() => deps))).toEqual(agentsActionsFor(deps));
     }
@@ -152,12 +188,34 @@ describe('agents.* codemode namespace — dep gating', () => {
 // ── The projection reaches the same deps as the tool ────────────────────────
 
 describe('agents.* codemode namespace — dispatch', () => {
+  test('a Plan provider keeps its trusted mode after the host advances to Build', async () => {
+    const team = makeTeam();
+    let currentMode: 'plan' | 'build' = 'plan';
+    const provider = createAgentsCodemodeProvider(() => ({ mode: currentMode, team: team.deps }));
+    currentMode = 'build';
+
+    await member(provider.tools, 'send').execute({ agent: 'researcher', message: 'inspect only' });
+
+    expect(team.calls[0]).toMatchObject({
+      action: 'message',
+      input: { mode: 'plan', name: 'researcher', content: 'inspect only' },
+    });
+  });
+
+  test('Plan mode keeps every fork settle strategy available', async () => {
+    const provider = createAgentsCodemodeProvider(() => ({ mode: 'plan', fork: forkDeps() }));
+    expect(await member(provider.tools, 'fork').execute({ task: 'research', settle: 'mcts' }))
+      .toMatchObject({ strategy: 'mcts', text: 'searched' });
+    expect(await member(provider.tools, 'fork').execute({ task: 'research' }))
+      .toMatchObject({ strategy: FORK_STRATEGY_ID, text: 'forked' });
+  });
+
   test('fork routes through the strategy registry and returns the settled answer', async () => {
     const ns = namespaceOf(() => ({ fork: forkDeps() }));
-    expect(await ns.fork({ task: 'map the options' })).toMatchObject({
+    expect(await member(ns, 'fork').execute({ task: 'map the options' })).toMatchObject({
       strategy: FORK_STRATEGY_ID, text: 'forked',
     });
-    expect(await ns.fork({ task: 'map the options', settle: 'mcts' })).toMatchObject({
+    expect(await member(ns, 'fork').execute({ task: 'map the options', settle: 'mcts' })).toMatchObject({
       strategy: 'mcts', text: 'searched',
     });
   });
@@ -175,34 +233,34 @@ describe('agents.* codemode namespace — dispatch', () => {
     const { rt } = createTestRuntime();
     const controller = { __infra: true };
     const ns = namespaceOf(() => ({
-      fork: { registry, rt, model: rt.llm as never, defaultOptions: () => ({ heads: { controller } }) },
+      fork: { registry, rt, model: new MockLanguageModelV3(), defaultOptions: () => ({ heads: { controller } }) },
     }));
     const specs = [
       { task: 'survey prior art', rationale: 'establish baseline' },
       { task: 'sketch a design', rationale: 'exercise constraints' },
     ];
-    await ns.fork({ task: 'ship it', forks: specs, merge_strategy: 'consensus', budget: 9, wall_clock_ms: 4321 });
+    await member(ns, 'fork').execute({ task: 'ship it', forks: specs, merge_strategy: 'consensus', budget: 9, wall_clock_ms: 4321 });
     expect(observed?.task).toBe('ship it');
     expect(observed?.budget).toEqual({ maxIterations: 9, wallClockMs: 4321 });
     // Host-injected infra survives the caller's fields, same deep merge as the tool.
-    expect(observed?.options?.heads).toEqual({ controller, heads: specs, mergeStrategy: 'consensus' });
+    expect(strategyOption(observed?.options, 'heads')).toEqual({ controller, heads: specs, mergeStrategy: 'consensus' });
   });
 
   test('staff / ask / send / reply / list / dismiss reach the same transports', async () => {
     const team = makeTeam();
     const peers = makePeers();
-    const deps: AgentsToolDeps = { fork: forkDeps(), team: team.deps, peers: peers.deps };
+    const deps = withBuildMode({ fork: forkDeps(), team: team.deps, peers: peers.deps });
     const ns = namespaceOf(() => deps);
 
-    expect(await ns.staff({ role: 'researcher', mission: 'Map the landscape' }))
+    expect(await member(ns, 'staff').execute({ role: 'researcher', mission: 'Map the landscape' }))
       .toEqual({ name: 'researcher', displayName: 'Researcher' });
-    expect(await ns.ask({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
+    expect(await member(ns, 'ask').execute({ agent: 'researcher', message: 'Survey auth', deliverable: 'a note' }))
       .toMatchObject({ status: 'working', agent: 'researcher' });
-    expect(await ns.send({ agent: 'researcher', message: 'also check the CLI' }))
+    expect(await member(ns, 'send').execute({ agent: 'researcher', message: 'also check the CLI' }))
       .toMatchObject({ status: 'delivered', agent: 'researcher', delivery: 'starts_now', event_id: 'evt-starts_now' });
-    expect(await ns.reply({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
-    expect(await ns.list()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
-    expect(await ns.dismiss({ agent: 'researcher' }))
+    expect(await member(ns, 'reply').execute({ event_id: 'pe1', message: 'here you go' })).toEqual({ ok: true });
+    expect(await member(ns, 'list').execute()).toEqual({ subordinates: [rosterEntry], peers: [{ name: 'scout', displayName: 'Scout' }] });
+    expect(await member(ns, 'dismiss').execute({ agent: 'researcher' }))
       .toEqual({ ok: true, name: 'researcher', historyKept: true });
 
     expect(team.calls.map((c) => c.action)).toEqual(['spawn', 'assign', 'message', 'dismiss']);
@@ -212,7 +270,7 @@ describe('agents.* codemode namespace — dispatch', () => {
   test('a peer ask from the sandbox rides the peer transport with the clamped timeout', async () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ peers: peers.deps }));
-    expect(await ns.ask({ agent: 'scout', message: 'What changed?', topic: 'research', timeout_seconds: 9999 }))
+    expect(await member(ns, 'ask').execute({ agent: 'scout', message: 'What changed?', topic: 'research', timeout_seconds: 9999 }))
       .toEqual({ status: 'replied', from: 'scout', reply: 'answer' });
     expect(peers.calls[0].input).toMatchObject({ agent: 'scout', topic: 'research', timeoutMs: 600_000 });
   });
@@ -224,18 +282,18 @@ describe('agents.* codemode namespace — dispatch', () => {
       const registry = createStrategyRegistry();
       registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, answer: `generation ${generation}` }));
       const { rt } = createTestRuntime();
-      return { fork: { registry, rt, model: rt.llm as never } };
+      return { fork: { registry, rt, model: new MockLanguageModelV3() } };
     });
-    expect(await ns.fork({ task: 'a' })).toMatchObject({ text: 'generation 2' });
-    expect(await ns.fork({ task: 'b' })).toMatchObject({ text: 'generation 3' });
+    expect(await member(ns, 'fork').execute({ task: 'a' })).toMatchObject({ text: 'generation 2' });
+    expect(await member(ns, 'fork').execute({ task: 'b' })).toMatchObject({ text: 'generation 3' });
   });
 
   test('deps failures come back as inspectable values, never thrown into the script', async () => {
     const registry = createStrategyRegistry();
     registry.register(createTestStrategy({ id: FORK_STRATEGY_ID, throwError: 'kaboom' }));
     const { rt } = createTestRuntime();
-    const ns = namespaceOf(() => ({ fork: { registry, rt, model: rt.llm as never } }));
-    const result = await ns.fork({ task: 't' }) as { error: string };
+    const ns = namespaceOf(() => ({ fork: { registry, rt, model: new MockLanguageModelV3() } }));
+    const result = v.parse(ErrorResultSchema, await member(ns, 'fork').execute({ task: 't' }));
     expect(result.error).toMatch(/Fork \(settle=merge\) failed.*kaboom/);
   });
 });
@@ -248,7 +306,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const peers = makePeers();
     const ns = namespaceOf(() => ({ team: team.deps, peers: peers.deps }));
     // `dismiss` would archive the subordinate; the member called was `list`.
-    expect(await ns.list({ action: 'dismiss', agent: 'researcher' })).toEqual({ roster: [rosterEntry] });
+    expect(await member(ns, 'list').execute({ action: 'dismiss', agent: 'researcher' })).toEqual({ roster: [rosterEntry] });
     expect(team.calls.map((c) => c.action)).toEqual(['status']);
   });
 
@@ -258,7 +316,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     // The node sandbox appends `{ signal }` to every call, so `agents.list()`
     // arrives as list({ signal }). It must still be the roster, not a lookup
     // of a subordinate named after the context.
-    expect(await ns.list({ signal: new AbortController().signal })).toEqual({ subordinates: [rosterEntry] });
+    expect(await member(ns, 'list').execute({ signal: new AbortController().signal })).toEqual({ subordinates: [rosterEntry] });
     expect(team.calls).toEqual([]);
   });
 
@@ -267,8 +325,8 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
     const ns = namespaceOf(() => ({ peers: peers.deps }));
     // Sandbox input carries none of the tool schema's validation, so a field of
     // the wrong type has to come back as a value the script can read.
-    const result = await ns.send({ agent: 'scout', message: 'hi', topic: 42 }) as { error: string };
-    expect(result.error).toMatch(/trim is not a function|not a function/);
+    const result = v.parse(ErrorResultSchema, await member(ns, 'send').execute({ agent: 'scout', message: 'hi', topic: 42 }));
+    expect(result.error).toMatch(/Expected string/);
     expect(peers.calls).toEqual([]);
   });
 
@@ -283,24 +341,24 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
       },
     });
     const { rt } = createTestRuntime();
-    const ns = namespaceOf(() => ({ fork: { registry, rt, model: rt.llm as never } }));
+    const ns = namespaceOf(() => ({ fork: { registry, rt, model: new MockLanguageModelV3() } }));
     const controller = new AbortController();
-    await ns.fork({ task: 't' }, { signal: controller.signal });
+    await member(ns, 'fork').execute({ task: 't' }, { signal: controller.signal });
     expect(observed).toBe(controller.signal);
   });
 
   test('a non-object argument is a sharp error, not a deps call', async () => {
     const team = makeTeam();
     const ns = namespaceOf(() => ({ team: team.deps }));
-    expect(await ns.staff('just a string')).toEqual({ error: 'agents.staff: expects a single options object' });
-    expect(await ns.dismiss(['researcher'])).toEqual({ error: 'agents.dismiss: expects a single options object' });
+    expect(await member(ns, 'staff').execute('just a string')).toEqual({ error: 'agents.staff: expects a single options object' });
+    expect(await member(ns, 'dismiss').execute(['researcher'])).toEqual({ error: 'agents.dismiss: expects a single options object' });
     expect(team.calls).toEqual([]);
   });
 
   test('missing required fields stay the tool\'s own sharp errors', async () => {
     const ns = namespaceOf(() => fullDeps());
-    expect(await ns.ask({ agent: 'researcher' })).toEqual({ error: 'ask requires agent and message' });
-    expect(await ns.fork({})).toEqual({ error: 'fork requires task' });
+    expect(await member(ns, 'ask').execute({ agent: 'researcher' })).toEqual({ error: 'ask requires agent and message' });
+    expect(await member(ns, 'fork').execute({})).toEqual({ error: 'fork requires task' });
   });
 });
 
@@ -308,7 +366,7 @@ describe('agents.* codemode namespace — sandbox input handling', () => {
 
 describe('agents.* codemode namespace — declared types', () => {
   test('declares exactly the gated members', () => {
-    const forkOnly = createAgentsCodemodeProvider(() => ({ fork: forkDeps() })).types ?? '';
+    const forkOnly = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
     expect(forkOnly).toContain('fork(input: {');
     expect(forkOnly).not.toContain('staff(input: {');
     expect(forkOnly).not.toContain('dismiss(input: {');
@@ -318,7 +376,7 @@ describe('agents.* codemode namespace — declared types', () => {
   });
 
   test('the fork docstring states the non-resumable cost of forking in-sandbox', () => {
-    const types = createAgentsCodemodeProvider(() => ({ fork: forkDeps() })).types ?? '';
+    const types = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types ?? '';
     expect(types).toContain('NOT resumable from here');
     expect(types).toContain('execute_tools declines background resume');
     expect(types).toContain('top-level `agents` tool');
@@ -328,9 +386,9 @@ describe('agents.* codemode namespace — declared types', () => {
     // Two unrelated deps objects, same actions: the declaration the cf and node
     // sandboxes show the model must not differ by a byte, because it is one
     // literal per action rather than text derived from whatever is wired.
-    const a = createAgentsCodemodeProvider(() => ({ fork: forkDeps() })).types;
-    const b = createAgentsCodemodeProvider(() => ({
-      fork: { registry: createStrategyRegistry(), rt: createTestRuntime().rt, model: null as never },
+    const a = createAgentsCodemodeProvider(() => withBuildMode({ fork: forkDeps() })).types;
+    const b = createAgentsCodemodeProvider(() => withBuildMode({
+      fork: { registry: createStrategyRegistry(), rt: createTestRuntime().rt, model: new MockLanguageModelV3() },
     })).types;
     expect(a).toBe(b);
   });

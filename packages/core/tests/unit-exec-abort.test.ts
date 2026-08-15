@@ -2,14 +2,19 @@
 // tools. Previously the whole AbortSignal chain was a silent no-op: createShell
 // dropped the signal and every remote executor ignored the trailing options.
 import { describe, test, expect } from 'bun:test';
+import { toolExecute } from '@proteus/test-utils';
+import * as v from 'valibot';
 import { buildBuiltinTools } from '../src/tools/builtins.js';
 import { createSandboxExecutor, type SandboxHandle } from '../src/execution/sandbox.js';
 import { createDeviceTunnelExecutor, type DeviceTransport } from '../src/execution/device-tunnel-executor.js';
-import { createNimbusExecutor, type NimbusSandboxHandle } from '../src/execution/nimbus.js';
+import {
+  createNimbusExecutor,
+  type NimbusExecResult,
+  type NimbusSandboxHandle,
+} from '../src/execution/nimbus.js';
 import { createTestRuntime } from './helpers.js';
 import type { AgentRuntime } from '../src/types/agent-runtime.js';
-
-type RunTool = { execute: (args: { command: string; runtime?: string }, options?: unknown) => Promise<string> };
+import type { Shell } from '../src/types/primitives.js';
 
 function hangingPromise<T>(): Promise<T> {
   return new Promise<T>(() => {});
@@ -20,21 +25,29 @@ describe('run tool — workspace shell abort', () => {
     const { rt } = createTestRuntime();
     const controller = new AbortController();
     const executed: string[] = [];
-    const shell = {
-      exec: async (command: string, opts?: string | { stdin?: string; signal?: AbortSignal }) => {
-        const signal = typeof opts === 'object' ? opts?.signal : undefined;
+    const ShellOptionsSchema = v.object({
+      stdin: v.optional(v.string()),
+      signal: v.optional(v.instance(AbortSignal)),
+    });
+    const shell: Shell = {
+      exec: async (command, options) => {
+        const parsed = v.safeParse(ShellOptionsSchema, options);
+        const signal = parsed.success ? parsed.output.signal : undefined;
         executed.push(command);
         // Simulate the agent-utils shell contract: aborted → exit 130.
         if (signal?.aborted) return { stdout: '', stderr: 'aborted', exitCode: 130 };
         return { stdout: 'done', stderr: '', exitCode: 0 };
       },
     };
-    const rtWithShell = { ...rt, shell } as AgentRuntime;
+    const rtWithShell: AgentRuntime = { ...rt, shell };
     const tools = buildBuiltinTools({ rt: rtWithShell });
-    const run = tools.run as unknown as RunTool;
+    const run = toolExecute<{ command: string; runtime?: string }, string>(tools.run);
 
     controller.abort();
-    const result = await run.execute({ command: 'cat big.txt && cat big2.txt' }, { abortSignal: controller.signal });
+    const result = await run(
+      { command: 'cat big.txt && cat big2.txt' },
+      { toolCallId: 'abort-test', messages: [], abortSignal: controller.signal },
+    );
     expect(result).toContain('exit 130');
     expect(executed).toEqual(['cat big.txt && cat big2.txt']);
   });
@@ -42,9 +55,18 @@ describe('run tool — workspace shell abort', () => {
 
 describe('remote executor exec abort', () => {
   test('sandbox exec stops waiting and throws AbortError on abort', async () => {
-    const handle = {
+    const handle: SandboxHandle = {
       exec: () => hangingPromise(),
-    } as unknown as SandboxHandle;
+      readFile: async () => ({}),
+      writeFile: async () => {},
+      listFiles: async () => ({ files: [] }),
+      deleteFile: async () => {},
+      exposePort: async (port) => ({ url: `https://preview.example.com/${port}`, port }),
+      unexposePort: async () => {},
+      getExposedPorts: async () => [],
+      createBackup: async ({ dir }) => ({ id: 'backup', dir }),
+      restoreBackup: async ({ id, dir }) => ({ success: true, id, dir }),
+    };
     const provider = createSandboxExecutor(handle, 'preview.example.com');
     const controller = new AbortController();
 
@@ -68,14 +90,14 @@ describe('remote executor exec abort', () => {
   });
 
   test('nimbus exec stops waiting and throws AbortError on abort', async () => {
-    const box = {
+    const box: NimbusSandboxHandle = {
       ready: async () => {},
-      exec: () => hangingPromise(),
+      exec: () => hangingPromise<NimbusExecResult>(),
       files: {
         read: async () => null, write: async () => {}, list: async () => [],
         exists: async () => false, delete: async () => {},
       },
-    } as unknown as NimbusSandboxHandle;
+    };
     const provider = createNimbusExecutor({ box });
     const controller = new AbortController();
 

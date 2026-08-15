@@ -51,7 +51,7 @@ not shadow a built-in command name.
 
 | Field | Type | What it is |
 | --- | --- | --- |
-| `model` | string | Default model spec for new work, e.g. `workers-ai/@cf/moonshotai/kimi-k2.6`. `PROTEUS_MODEL` and `--model` override it. |
+| `model` | string | Default model spec for new work, e.g. `workers-ai/@cf/deepseek-ai/deepseek-v4-pro-0813`. `PROTEUS_MODEL` and `--model` override it. |
 | `reasoningEffort` | `"low"` \| `"medium"` \| `"high"` | Default reasoning effort. |
 
 ## Providers

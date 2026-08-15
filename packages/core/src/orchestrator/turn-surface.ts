@@ -59,7 +59,8 @@ export async function resolveTurnSkills(opts: {
   try {
     available = await discoverSkills(opts.vfs);
   } catch (err) {
-    console.warn('[proteus] skills discovery failed:', (err as Error).message);
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[proteus] skills discovery failed:', message);
     available = [...BUILTIN_SKILLS];
   }
   const explicit = extractExplicitInvocations(opts.userText);

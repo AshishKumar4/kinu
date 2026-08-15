@@ -16,6 +16,7 @@
 
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
+import * as v from 'valibot';
 import type { Memory, VFS } from '../types/primitives.js';
 import type { TurnContextBudget } from '../context-budget.js';
 import { isVfsError, vfsAddressingHint } from '../vfs/errno.js';
@@ -23,13 +24,12 @@ import { ensureDir, vfsDirname } from '../utils/vfs-helpers.js';
 import { memoryIndexPath } from '../memory/note.js';
 import { BUILTIN_TOOL_DESCRIPTIONS } from './registry.js';
 import { applyFileEdits, readFileSlice, BOM, type FileEdit } from './file-edit.js';
-import {
-  TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed, type FileSeenVerdict,
-} from './file-ledger.js';
+import { TurnFileLedger, type FileEditOutcomeReason, type FileSeenNeed } from './file-ledger.js';
 import { DEFAULT_TOOL_RESULT_MAX_CHARS } from './clamp.js';
+import type { JsonValue } from '../utils/json.js';
 
 export interface FileToolDeps {
-  /** The agent's composite filesystem (rt.storage.vfs). */
+  /** The agent's canonical workspace filesystem (rt.storage.vfs). */
   vfs: VFS;
   /** The turn's read/edit ledger. */
   ledger: TurnFileLedger;
@@ -52,10 +52,11 @@ export interface FileToolInput {
 }
 
 /** A VFS failure, rendered for the model and classified for the ledger. */
-async function vfsFailure(vfs: VFS, err: unknown, action: string, path: string): Promise<{
+async function vfsFailure(vfs: VFS, input: { error: unknown }, action: string, path: string): Promise<{
   reason: FileEditOutcomeReason;
   error: string;
 }> {
+  const err = input.error;
   if (!isVfsError(err)) {
     return { reason: 'io', error: `${action} ${path} failed: ${err instanceof Error ? err.message : String(err)}` };
   }
@@ -71,21 +72,23 @@ async function vfsFailure(vfs: VFS, err: unknown, action: string, path: string):
 
 /**
  * The file plane's dispatch logic — read / write / edit over one VFS,
- * ledger and budget. Factored out so `workspace.editFile` (the codemode
- * reach for the same exact-match, read-before-write-enforced edit — see
- * execution/inline.ts) calls the SAME implementation the native `file` tool
- * does, sharing the SAME TurnFileLedger: an edit gated here refuses
- * identically regardless of which surface the model used, and a read/edit
- * done through one surface is known to the other.
+ * ledger and budget. Factored out so codemode's `workspace.writeFile` and
+ * `workspace.editFile` call the SAME implementation as the native `file`
+ * tool, sharing the SAME TurnFileLedger. A guarded write refuses identically
+ * regardless of surface, and a read/write/edit through one is known to the
+ * other.
  */
-export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<unknown> {
+export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput) => Promise<JsonValue> {
   const { vfs, ledger, budget } = deps;
 
   /** Text of a file. A VFS is free to answer `{encoding:'utf8'}` with bytes;
    *  decoding beats an unchecked cast that would throw out of `execute`. */
   const readText = async (path: string): Promise<string> => {
     const raw = await vfs.readFile(path, { encoding: 'utf8' });
-    return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    const text = v.safeParse(v.string(), raw);
+    return text.success
+      ? text.output
+      : new TextDecoder().decode(v.parse(v.instance(Uint8Array), raw));
   };
 
   /** The one write path. `observe` runs the moment the bytes land — a later
@@ -104,10 +107,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
   /** The read-before-write gate, shared by edit and overwriting write. Returns
    *  the ledger's verdict with the refusal it earns, so the caller reports the
    *  reason it already computed rather than asking twice. */
-  const gate = (path: string, current: string, action: 'edit' | 'overwrite'): {
-    verdict: FileSeenVerdict;
-    refusal: string | null;
-  } => {
+  const gate = (path: string, current: string, action: 'edit' | 'overwrite') => {
     const need: FileSeenNeed = action === 'edit' ? 'part' : 'whole';
     const verdict = ledger.seenState(path, current, need);
     switch (verdict.state) {
@@ -130,8 +130,8 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
     }
   };
 
-  return async (args: FileToolInput): Promise<unknown> => {
-    const path = typeof args.path === 'string' ? args.path.trim() : '';
+  return async (args: FileToolInput): Promise<JsonValue> => {
+    const path = args.path.trim();
     if (!path) return { error: 'file requires `path`.' };
 
     switch (args.action) {
@@ -140,7 +140,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         try {
           content = await readText(path);
         } catch (err) {
-          return { error: (await vfsFailure(vfs, err, 'read', path)).error };
+          return { error: (await vfsFailure(vfs, { error: err }, 'read', path)).error };
         }
         const configured = DEFAULT_TOOL_RESULT_MAX_CHARS;
         const cap = budget.capFor(configured);
@@ -160,13 +160,13 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
       }
 
       case 'write': {
-        if (typeof args.content !== 'string') return { error: 'file action=write requires `content`.' };
+        if (args.content === undefined) return { error: 'file action=write requires `content`.' };
         let existing: string | null = null;
         try {
           existing = await readText(path);
         } catch (err) {
           if (!isVfsError(err) || err.code !== 'ENOENT') {
-            return { error: (await vfsFailure(vfs, err, 'write', path)).error };
+            return { error: (await vfsFailure(vfs, { error: err }, 'write', path)).error };
           }
         }
         if (existing !== null) {
@@ -177,7 +177,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         try {
           await persist(path, content, () => ledger.observeWhole(path, content));
         } catch (err) {
-          return { error: (await vfsFailure(vfs, err, 'write', path)).error };
+          return { error: (await vfsFailure(vfs, { error: err }, 'write', path)).error };
         }
         return { ok: true, path, bytes: args.content.length, action: existing === null ? 'created' : 'replaced' };
       }
@@ -189,19 +189,21 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
         }
         // A malformed edit must not be read as the destructive option: a
         // missing new_text would otherwise default to deleting the match.
-        const malformed = raw.findIndex((e) => typeof e?.old_text !== 'string' || typeof e?.new_text !== 'string');
+        const EditInputSchema = v.object({ old_text: v.string(), new_text: v.string() });
+        const malformed = raw.findIndex((edit) => !v.safeParse(EditInputSchema, edit).success);
         if (malformed !== -1) {
           return { error:
             `edits[${malformed}] needs both old_text and new_text. ` +
             'old_text is the text to find; new_text replaces it, and "" deletes it.' };
         }
-        const edits: FileEdit[] = raw.map((e) => ({ oldText: e.old_text as string, newText: e.new_text as string }));
+        const edits: FileEdit[] = v.parse(v.array(EditInputSchema), raw)
+          .map((edit) => ({ oldText: edit.old_text, newText: edit.new_text }));
 
         let current: string;
         try {
           current = await readText(path);
         } catch (err) {
-          const failure = await vfsFailure(vfs, err, 'edit', path);
+          const failure = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, failure.reason);
           return { error: failure.error };
         }
@@ -222,7 +224,7 @@ export function createFileDispatcher(deps: FileToolDeps): (input: FileToolInput)
           // itself changed, so what it knew about the file it still knows.
           await persist(path, outcome.content, () => ledger.observeEdited(path, current, outcome.content));
         } catch (err) {
-          const failure = await vfsFailure(vfs, err, 'edit', path);
+          const failure = await vfsFailure(vfs, { error: err }, 'edit', path);
           ledger.recordEdit(path, failure.reason);
           return { error: failure.error };
         }

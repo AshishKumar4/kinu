@@ -9,9 +9,40 @@
  * Usage: bun scripts/ws-test-harness.ts [base-url] [agent-name]
  */
 
+import * as v from "valibot";
+import { JsonValueSchema, parseJsonValue, type JsonValue } from "../packages/core/src/index.js";
+
 const BASE_URL = process.argv[2] ?? "http://localhost:5173";
 const AGENT_NAME = process.argv[3] ?? "e2e-test-agent";
 const TIMEOUT_MS = 30_000;
+
+const chatFrameSchema = v.object({
+  type: v.string(),
+  id: v.optional(v.string()),
+  body: v.optional(v.string()),
+  done: v.optional(v.boolean()),
+  error: v.optional(v.boolean()),
+  messages: v.optional(v.array(JsonValueSchema)),
+});
+
+const rpcFrameSchema = v.object({
+  type: v.string(),
+  id: v.string(),
+  success: v.boolean(),
+  result: v.optional(JsonValueSchema),
+  error: v.optional(v.string()),
+});
+
+const agentStatusSchema = v.object({ name: v.string(), model: v.string() });
+const toolListSchema = v.object({
+  builtIn: v.array(v.string()),
+  crafted: v.array(JsonValueSchema),
+});
+const modelListSchema = v.object({
+  current: v.string(),
+  models: v.array(JsonValueSchema),
+});
+const memorySearchSchema = v.array(v.object({ snippet: v.string() }));
 
 // ── helpers ──────────────────────────────────────────────────────
 
@@ -28,6 +59,10 @@ function fail(name: string, detail?: string) {
   failCount++;
   const extra = detail ? ` — ${detail}` : "";
   console.log(`FAIL: ${name}${extra}`);
+}
+
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function wsUrl(): string {
@@ -50,7 +85,7 @@ function connect(): Promise<WebSocket> {
     ws.addEventListener("open", () => {});
     ws.addEventListener("message", (ev) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(chatFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === "cf_agent_chat_messages") {
           clearTimeout(timer);
           resolve(ws);
@@ -69,18 +104,23 @@ function connect(): Promise<WebSocket> {
 }
 
 /** Send an RPC and wait for its response. */
-function rpc(ws: WebSocket, method: string, args: unknown[] = []): Promise<unknown> {
+function rpc<Output>(
+  ws: WebSocket,
+  method: string,
+  outputSchema: v.GenericSchema<Output>,
+  args: JsonValue[] = [],
+): Promise<Output> {
   return new Promise((resolve, reject) => {
     const id = uid();
     const timer = setTimeout(() => reject(new Error(`RPC ${method} timeout`)), TIMEOUT_MS);
 
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(rpcFrameSchema, parseJsonValue(String(ev.data)));
         if (msg.type === "rpc" && msg.id === id) {
           clearTimeout(timer);
           ws.removeEventListener("message", handler);
-          if (msg.success) resolve(msg.result);
+          if (msg.success) resolve(v.parse(outputSchema, msg.result));
           else reject(new Error(msg.error ?? "RPC failed"));
         }
       } catch {}
@@ -92,23 +132,22 @@ function rpc(ws: WebSocket, method: string, args: unknown[] = []): Promise<unkno
 }
 
 /** Send a chat message and collect all streamed response chunks. Returns concatenated body text. */
-function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bodies: string[]; fullMessages: unknown[] }> {
+function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bodies: string[] }> {
   return new Promise((resolve, reject) => {
     const reqId = uid();
     const timer = setTimeout(() => reject(new Error("Chat response timeout")), timeoutMs);
     const bodies: string[] = [];
-    let fullMessages: unknown[] = [];
     let streamDone = false;
 
     const finish = () => {
       clearTimeout(timer);
       ws.removeEventListener("message", handler);
-      resolve({ bodies, fullMessages });
+      resolve({ bodies });
     };
 
     const handler = (ev: MessageEvent) => {
       try {
-        const msg = JSON.parse(String(ev.data));
+        const msg = v.parse(chatFrameSchema, parseJsonValue(String(ev.data)));
 
         // Collect streamed response chunks
         if (msg.type === "cf_agent_use_chat_response" && msg.id === reqId) {
@@ -127,7 +166,6 @@ function chat(ws: WebSocket, text: string, timeoutMs = TIMEOUT_MS): Promise<{ bo
 
         // The full message list comes after the stream completes
         if (msg.type === "cf_agent_chat_messages" && bodies.length > 0) {
-          fullMessages = msg.messages ?? [];
           if (streamDone) finish();
         }
       } catch {}
@@ -160,32 +198,32 @@ async function testHttpGetMessages() {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     if (resp.ok) {
-      const data = await resp.json() as unknown[];
+      const data = v.parse(v.array(JsonValueSchema), await resp.json());
       pass("HTTP GET /get-messages", `status=${resp.status}, ${data.length} messages`);
     } else {
       fail("HTTP GET /get-messages", `status=${resp.status}`);
     }
-  } catch (e: any) {
-    fail("HTTP GET /get-messages", e.message);
+  } catch (error) {
+    fail("HTTP GET /get-messages", errorMessage(error));
   }
 }
 
 async function testRpcGetAgentStatus(ws: WebSocket) {
   try {
-    const result = await rpc(ws, "getAgentStatus") as Record<string, unknown>;
-    if (result && typeof result.name === "string" && typeof result.model === "string") {
+    const result = await rpc(ws, "getAgentStatus", agentStatusSchema);
+    if (result.name.length > 0 && result.model.length > 0) {
       pass("RPC getAgentStatus", `name=${result.name}, model=${result.model}`);
     } else {
       fail("RPC getAgentStatus", `unexpected shape: ${JSON.stringify(result).slice(0, 200)}`);
     }
-  } catch (e: any) {
-    fail("RPC getAgentStatus", e.message);
+  } catch (error) {
+    fail("RPC getAgentStatus", errorMessage(error));
   }
 }
 
 async function testRpcGetToolList(ws: WebSocket) {
   try {
-    const result = await rpc(ws, "getToolList") as { builtIn: string[]; crafted: unknown[] };
+    const result = await rpc(ws, "getToolList", toolListSchema);
     const expectedTools = ["execute_tools", "run", "explore", "save_note", "search_memory"];
     const hasAll = expectedTools.every(t => result.builtIn.includes(t));
     if (hasAll && result.builtIn.length === 5) {
@@ -193,69 +231,57 @@ async function testRpcGetToolList(ws: WebSocket) {
     } else {
       fail("RPC getToolList", `builtIn=${JSON.stringify(result.builtIn)}`);
     }
-  } catch (e: any) {
-    fail("RPC getToolList", e.message);
+  } catch (error) {
+    fail("RPC getToolList", errorMessage(error));
   }
 }
 
 async function testRpcGetEvolutionEvents(ws: WebSocket) {
   try {
-    const result = await rpc(ws, "getEvolutionEvents", [10]) as unknown[];
-    if (Array.isArray(result)) {
-      pass("RPC getEvolutionEvents", `${result.length} events`);
-    } else {
-      fail("RPC getEvolutionEvents", `not an array: ${typeof result}`);
-    }
-  } catch (e: any) {
-    fail("RPC getEvolutionEvents", e.message);
+    const result = await rpc(ws, "getEvolutionEvents", v.array(JsonValueSchema), [10]);
+    pass("RPC getEvolutionEvents", `${result.length} events`);
+  } catch (error) {
+    fail("RPC getEvolutionEvents", errorMessage(error));
   }
 }
 
 async function testRpcGetMctsTree(ws: WebSocket) {
   try {
-    const result = await rpc(ws, "getMctsTree") as unknown[];
-    if (Array.isArray(result)) {
-      pass("RPC getMctsTree", `${result.length} nodes`);
-    } else {
-      fail("RPC getMctsTree", `not an array: ${typeof result}`);
-    }
-  } catch (e: any) {
-    fail("RPC getMctsTree", e.message);
+    const result = await rpc(ws, "getMctsTree", v.array(JsonValueSchema));
+    pass("RPC getMctsTree", `${result.length} nodes`);
+  } catch (error) {
+    fail("RPC getMctsTree", errorMessage(error));
   }
 }
 
 async function testRpcGetExecutors(ws: WebSocket) {
   try {
-    const result = await rpc(ws, "getExecutors") as unknown[];
-    if (Array.isArray(result)) {
-      pass("RPC getExecutors", `${result.length} executors`);
-    } else {
-      fail("RPC getExecutors", `not an array: ${typeof result}`);
-    }
-  } catch (e: any) {
-    fail("RPC getExecutors", e.message);
+    const result = await rpc(ws, "getExecutors", v.array(JsonValueSchema));
+    pass("RPC getExecutors", `${result.length} executors`);
+  } catch (error) {
+    fail("RPC getExecutors", errorMessage(error));
   }
 }
 
 async function testRpcGetAvailableModels(ws: WebSocket) {
   try {
-    const result = await rpc(ws, "getAvailableModels") as { current: string; models: unknown[] };
-    if (result && typeof result.current === "string" && Array.isArray(result.models)) {
+    const result = await rpc(ws, "getAvailableModels", modelListSchema);
+    if (result.current.length > 0) {
       pass("RPC getAvailableModels", `current=${result.current}, ${result.models.length} models`);
     } else {
       fail("RPC getAvailableModels", `unexpected: ${JSON.stringify(result).slice(0, 200)}`);
     }
-  } catch (e: any) {
-    fail("RPC getAvailableModels", e.message);
+  } catch (error) {
+    fail("RPC getAvailableModels", errorMessage(error));
   }
 }
 
 async function testChatStreaming(ws: WebSocket) {
   try {
     // Switch to fast model first
-    await rpc(ws, "setModel", ["@cf/meta/llama-4-scout-17b-16e-instruct"]);
+    await rpc(ws, "setModel", v.optional(JsonValueSchema), ["@cf/meta/llama-4-scout-17b-16e-instruct"]);
 
-    const { bodies, fullMessages } = await chat(ws, "Reply with exactly: PONG");
+    const { bodies } = await chat(ws, "Reply with exactly: PONG");
 
     // (a) Response streams back (not empty)
     if (bodies.length === 0) {
@@ -271,8 +297,8 @@ async function testChatStreaming(ws: WebSocket) {
     } else {
       fail("Chat response not empty", "concatenated body is empty");
     }
-  } catch (e: any) {
-    fail("Chat streams back", e.message);
+  } catch (error) {
+    fail("Chat streams back", errorMessage(error));
     fail("Chat response not empty", "skipped — depends on chat streaming");
   }
 }
@@ -302,8 +328,8 @@ async function testChatToolCalls(ws: WebSocket) {
       // Even if the raw stream doesn't show it, check the final messages
       fail("Chat tool calls appear in stream", `no tool indicators in ${allBody.length} chars of stream`);
     }
-  } catch (e: any) {
-    fail("Chat tool calls appear in stream", e.message);
+  } catch (error) {
+    fail("Chat tool calls appear in stream", errorMessage(error));
   }
 }
 
@@ -320,13 +346,14 @@ async function testWorkspaceReadFile(ws: WebSocket) {
     } else {
       fail("workspace.readFile()", "empty or crashed");
     }
-  } catch (e: any) {
+  } catch (error) {
+    const message = errorMessage(error);
     // Model validation errors (e.g. Llama returning int content) are a known
     // model compatibility issue, not an agent bug. Treat as a soft pass.
-    if (e.message?.includes("Type validation failed")) {
+    if (message.includes("Type validation failed")) {
       pass("workspace.readFile()", "tool invoked (model returned malformed stream — known model issue)");
     } else {
-      fail("workspace.readFile()", e.message);
+      fail("workspace.readFile()", message);
     }
   }
 }
@@ -347,11 +374,12 @@ async function testWorkspaceWriteFile(ws: WebSocket) {
     } else {
       fail("workspace.writeFile() + readFile() round-trip", "empty response");
     }
-  } catch (e: any) {
-    if (e.message?.includes("Type validation failed")) {
+  } catch (error) {
+    const message = errorMessage(error);
+    if (message.includes("Type validation failed")) {
       pass("workspace.writeFile() + readFile() round-trip", "tool invoked (model returned malformed stream — known model issue)");
     } else {
-      fail("workspace.writeFile() + readFile() round-trip", e.message);
+      fail("workspace.writeFile() + readFile() round-trip", message);
     }
   }
 }
@@ -364,10 +392,10 @@ async function testSaveNoteSearchMemory(ws: WebSocket) {
     await chat(ws, `Use the save_note tool to save exactly this: "${marker}". Reply only DONE.`, 60_000);
 
     // Search for it
-    const searchResult = await rpc(ws, "doSearchMemory", [marker]) as Array<{ snippet: string }>;
-    if (Array.isArray(searchResult) && searchResult.some(r => r.snippet?.includes(marker))) {
+    const searchResult = await rpc(ws, "doSearchMemory", memorySearchSchema, [marker]);
+    if (searchResult.some(r => r.snippet.includes(marker))) {
       pass("save_note + search_memory round-trip", `found marker "${marker}" in search results`);
-    } else if (Array.isArray(searchResult) && searchResult.length > 0) {
+    } else if (searchResult.length > 0) {
       // FTS may tokenize differently — if we got any results at all, partial pass
       pass("save_note + search_memory round-trip", `search returned ${searchResult.length} results (marker may be tokenized)`);
     } else {
@@ -380,8 +408,8 @@ async function testSaveNoteSearchMemory(ws: WebSocket) {
         fail("save_note + search_memory round-trip", `search returned empty, chat: ${allBody.slice(0, 200)}`);
       }
     }
-  } catch (e: any) {
-    fail("save_note + search_memory round-trip", e.message);
+  } catch (error) {
+    fail("save_note + search_memory round-trip", errorMessage(error));
   }
 }
 
@@ -392,8 +420,8 @@ async function testClearConversation(ws: WebSocket) {
     // Wait a moment for it to take effect
     await new Promise(r => setTimeout(r, 500));
     pass("Clear conversation", "sent cf_agent_chat_clear");
-  } catch (e: any) {
-    fail("Clear conversation", e.message);
+  } catch (error) {
+    fail("Clear conversation", errorMessage(error));
   }
 }
 
@@ -415,8 +443,8 @@ async function main() {
   try {
     ws = await connect();
     pass("WebSocket connect", `connected to ${wsUrl()}`);
-  } catch (e: any) {
-    fail("WebSocket connect", e.message);
+  } catch (error) {
+    fail("WebSocket connect", errorMessage(error));
     console.log(`\nDONE: ${passCount} passed, ${failCount} failed`);
     process.exit(failCount > 0 ? 1 : 0);
   }

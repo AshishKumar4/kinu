@@ -2,25 +2,27 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-A workspace's state lives in one Durable Object's SQLite database — the
-`OrchestratorAgent` DO. The schema is split across several subsystems, each
-owning its tables and creating them idempotently.
+A hosted workspace has two explicit durable authorities. `NIMBUS_SESSION` owns
+the workspace files and execution state. The `OrchestratorAgent` Durable
+Object's SQLite owns relational actor state. The schema is split across several
+subsystems, each owning its tables and creating them idempotently. There is no
+shadow VFS or synchronization path between those authorities.
 
 Three other Durable Object classes hold their own isolated databases:
 `SubordinateAgent` (the full actor schema plus a one-row `subordinate_identity`),
 `ExplorationAgent` (`facet_owner`, `facet_parent`, `traces` — the isolation MCTS
 branches depend on), and `UserDO` (the per-user `user_*` / `device_*` tables and
-the owner's `experience_library`, which are the user's, not any workspace's). Three things live outside DO SQLite
-entirely: browser auth in the `AUTH_DB` D1 database
+the owner's `experience_library`, which are the user's, not any workspace's).
+Four things live outside actor SQLite entirely: browser auth in the `AUTH_DB` D1 database
 (`packages/cf-backend/migrations/auth/`), sandbox `/workspace` backups in the
-`BACKUP_BUCKET` R2 bucket, and optional embedding recall in the
+`BACKUP_BUCKET` R2 bucket, the authoritative Nimbus workspace, and optional embedding recall in the
 `MEMORY_VECTORS` Vectorize index — which is an addition to FTS5, never the
 source of truth.
 
 ## Entity Relationship
 
-The core workspace tables, as created by `initAllTables`
-(`core/src/identity/schema.ts`) and the agent-utils stores:
+The relational workspace tables, as created by the Core schema initializers and
+agent-utils stores:
 
 ```mermaid
 erDiagram
@@ -73,7 +75,8 @@ erDiagram
         TEXT task "MCTS task"
         TEXT action "Approach taken"
         TEXT observation "Result"
-        TEXT code_used "Code from exploration"
+        TEXT code_used "Runnable source from exploration"
+        TEXT code_language "Executor language for code_used"
         INTEGER depth "Tree depth"
         INTEGER visits "Backprop count (default 0)"
         REAL value "Running mean score (default 0)"
@@ -155,7 +158,7 @@ erDiagram
         INTEGER created_at "Epoch ms"
     }
 
-    vfs_files ||--o{ memory_chunks : "indexed by"
+    vfs_files ||--o{ memory_chunks : "CLI only: indexed by"
     memory_chunks ||--|| memory_chunks_fts : "FTS5 sync"
     crafted_tools ||--|| crafted_tools_fts : "FTS5 sync"
     search_nodes ||--o{ search_nodes : "parent_id"
@@ -163,13 +166,20 @@ erDiagram
 
 ## Agent Identity (SOUL.md)
 
-The agent's identity document lives at `SOUL.md` in the VFS root — an ordinary `vfs_files` entry written through the canonical SqliteFS encoding (`writeVfsFileSync`). `readSoul`/`writeSoul`/`seedSoul` (`core/src/identity/soul.ts`) are the accessors; the system prompt, evolution engine, and `setSoul` RPC all go through them. SOUL.md is deliberately mutable: the user edits it via `setSoul` and the agent can evolve it through its own file tools (unlike the old creation-only `agent_soul` table).
+The agent's identity document lives at `SOUL.md` in the workspace VFS. On the
+hosted backend that file is in the authoritative Nimbus session; on the CLI it
+uses the local VFS adapter. `readSoul`/`writeSoul`/`seedSoul`
+(`core/src/identity/soul.ts`) are the accessors; the system prompt, evolution
+engine, and `setSoul` RPC all go through them. The owner may edit SOUL.md; the
+agent does not rewrite its own identity.
 
-**Migration:** `readSoul` performs two one-time migrations for pre-existing agents — a legacy `agent_soul` table is rendered into SOUL.md and dropped, and TEXT-typed SOUL.md rows (from a broken raw-SQL writer) are recovered and rewritten as canonical BLOBs.
+## Workspace files and the local SqliteFS adapter
 
-## SqliteFS (Virtual Filesystem)
-
-From `@proteus/agent-utils`. Provides a POSIX-like filesystem backed by a single `vfs_files` table.
+The hosted backend uses `NIMBUS_SESSION`; `vfs_files` is not created for a fresh
+cloud workspace. The CLI backend uses the `@proteus/agent-utils` POSIX-like
+filesystem backed by `vfs_files`. Memory indexing reads through the active VFS
+adapter on either backend, so the relational `memory_chunks` index does not
+become a second file authority.
 
 **Chunked storage:** Files larger than 1.8MB are split across multiple rows with `chunk_index`. Reads concatenate all chunks. Writes split and store atomically.
 

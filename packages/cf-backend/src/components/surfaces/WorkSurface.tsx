@@ -21,12 +21,12 @@ import {
   MonitorIcon, TreeStructureIcon, GitDiffIcon, StackIcon, GaugeIcon,
   PulseIcon, SparkleIcon, FingerprintIcon,
 } from "@phosphor-icons/react";
-import type { AgentViewSummary, PendingAction } from "@proteus/core";
+import type { AgentViewSummary, PendingAction, PlanReview } from "@proteus/core";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { tabCls } from "@/components/ui/form";
 import type { AgentStatus, ExecutorOutput } from "@/hooks/use-proteus";
 import type { ExecutorInfo } from "@/lib/executors";
-import type { ToolInfo, MemoryEntry, ForkNode, BackgroundJob, Rpc } from "@/lib/protocol";
+import type { ToolInfo, MemoryEntry, ForkNode, BackgroundJob, ExecutorCommandResult, Rpc } from "@/lib/protocol";
 import { OutputSurface, type PinnedPort } from "./OutputSurface";
 import { AgentSurface } from "./AgentSurface";
 import { ExplorationSurface } from "./ExplorationSurface";
@@ -51,20 +51,23 @@ export const agentViewSurface = (slug: string): AgentViewSurfaceKind => `view:${
 export const agentViewSlug = (surface: SurfaceKind): string | null =>
   surface.startsWith("view:") ? surface.slice("view:".length) : null;
 
-const SURFACE_ICON: Record<(typeof SURFACES)[number], React.ComponentType<{ size?: number }>> = {
+const SURFACE_ICON = {
   Output: MonitorIcon,
   Work: PulseIcon,
   Releases: GitDiffIcon,
   Exploration: TreeStructureIcon,
   Agent: FingerprintIcon,
   Environment: StackIcon,
-};
+} satisfies Record<(typeof SURFACES)[number], React.ComponentType<{ size?: number }>>;
 
 export interface WorkSurfaceProps {
   surface: SurfaceKind;
   onSurface: (s: SurfaceKind) => void;
   // Output
   pinnedPorts: PinnedPort[];
+  previewError: string | null;
+  onRefreshPorts: () => void;
+  plan: PlanReview | null;
   // Agent
   agentStatus: AgentStatus | null;
   tools: ToolInfo[];
@@ -79,7 +82,7 @@ export interface WorkSurfaceProps {
   executors: ExecutorInfo[];
   executorOutputs: Map<string, ExecutorOutput[]>;
   lastActiveExecutor?: string | null;
-  onExecute: (id: string, cmd: string) => Promise<{ stdout?: string; stderr?: string; exitCode?: number; error?: string }>;
+  onExecute: (id: string, cmd: string) => Promise<ExecutorCommandResult>;
   // Work
   backgroundJobs: BackgroundJob[];
   onRefreshJobs: () => void;
@@ -161,7 +164,7 @@ export function WorkSurface(props: WorkSurfaceProps) {
         <button
           onClick={() => onSurface(ACTIVITY_SURFACE)}
           aria-label="Activity"
-          title="Activity — context, cost and cache"
+          title="Activity: context, cost and cache"
           className={`${tabCls} px-2.5 ${surface === ACTIVITY_SURFACE ? "p-tab-active" : ""}`}>
           <GaugeIcon size={14} />
         </button>
@@ -169,7 +172,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
 
       <div className="flex-1 overflow-y-auto p-5 min-h-0">
         <ErrorBoundary key={surface} label={surface}>
-          {surface === "Output" && <OutputSurface pinnedPorts={props.pinnedPorts} executors={props.executors} lastActiveExecutor={props.lastActiveExecutor} rpc={props.rpc} />}
+          {surface === "Output" && <OutputSurface
+            pinnedPorts={props.pinnedPorts}
+            previewError={props.previewError}
+            onRefreshPorts={props.onRefreshPorts}
+            plan={props.plan}
+            executors={props.executors}
+            lastActiveExecutor={props.lastActiveExecutor}
+            rpc={props.rpc}
+          />}
           {surface === "Work" && (
             <WorkTab
               pendingActions={props.pendingActions}
@@ -181,8 +192,15 @@ export function WorkSurface(props: WorkSurfaceProps) {
               rpc={props.rpc}
             />
           )}
-          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} />}
-          {surface === "Exploration" && <ExplorationSurface liveTree={props.mctsTree} isStreaming={props.isStreaming} rpc={props.rpc} />}
+          {surface === "Releases" && <ReleasesSurface rpc={props.rpc} executors={props.executors} />}
+          {surface === "Exploration" && (
+            <ExplorationSurface
+              liveTree={props.mctsTree}
+              isStreaming={props.isStreaming}
+              backgroundJobs={props.backgroundJobs}
+              rpc={props.rpc}
+            />
+          )}
           {surface === "Agent" && (
             <AgentSurface
               agentStatus={props.agentStatus} tools={props.tools}

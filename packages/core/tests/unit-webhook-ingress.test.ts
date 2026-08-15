@@ -15,18 +15,10 @@ import {
   type SqlExec, type WebhookDelivery,
 } from '../src/index.js';
 import { createMemoryVfs } from '@proteus/test-utils';
+import { makeSqlExec } from './helpers.js';
 
 function makeSql(db: Database): SqlExec {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...bindings as never[]) as Array<Record<string, unknown>> };
-      }
-      stmt.run(...bindings as never[]);
-      return { toArray: () => [] };
-    },
-  };
+  return makeSqlExec(db);
 }
 
 const NOW = 1_700_000_000_000;
@@ -144,9 +136,15 @@ describe('webhook ingress admits a verified delivery', () => {
       trigger_id, cf_mtls_verified: true, body_text: JSON.stringify({ blob: 'x'.repeat(4000) }),
     });
 
-    const path = (h.log.pending({ variant: 'webhook' })[0].payload as { body_path?: string }).body_path;
+    const [event] = h.log.pending({ variant: 'webhook' });
+    if (event.payload_visibility !== 'full' && event.payload_visibility !== 'redact') {
+      throw new Error(`expected readable webhook payload, received ${event.payload_visibility}`);
+    }
+    if (event.variant !== 'webhook') throw new Error(`expected webhook event, received ${event.variant}`);
+    const path = event.payload.body_path;
     expect(path).toBeString();
-    expect(await h.files.get(path!)).toContain('x'.repeat(4000));
+    if (!path) throw new Error('large webhook body was not spilled');
+    expect(await h.files.get(path)).toContain('x'.repeat(4000));
   });
 });
 

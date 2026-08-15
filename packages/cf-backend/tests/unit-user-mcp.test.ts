@@ -14,12 +14,13 @@
  *      survive, errors are caught.
  */
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import {
   validateMcpServerInput,
   parseAllowedTools, mapConnectionStatus,
   parseMcpHeaders, buildMcpHeaderTransportOpts,
 } from '../src/user/mcp.ts';
-import { isMcpToolKey, mcpToolKey } from '@proteus/core';
+import { isMcpToolKey, mcpToolKey, type JsonObject, type JsonValue } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 
 // ── 1. validateMcpServerInput ──────────────────────────────────────────────
@@ -198,7 +199,7 @@ describe('buildMcpHeaderTransportOpts', () => {
   test('headers → requestInit.headers + an SSE eventSourceInit fetch', () => {
     const opts = buildMcpHeaderTransportOpts({ Authorization: 'Bearer live' });
     expect(opts?.requestInit.headers).toEqual({ Authorization: 'Bearer live' });
-    expect(typeof opts?.eventSourceInit.fetch).toBe('function');
+    expect(opts?.eventSourceInit.fetch).toBeInstanceOf(Function);
   });
 
   // The SDK snapshots a server's transport via JSON.stringify (functions are
@@ -210,7 +211,12 @@ describe('buildMcpHeaderTransportOpts', () => {
   // the SDK; no restore-time re-injection needed.)
   test('requestInit.headers survives a storage round-trip; the fetch closure does not', () => {
     const opts = buildMcpHeaderTransportOpts({ Authorization: 'Bearer live' });
-    const persisted = JSON.parse(JSON.stringify({ ...opts, type: 'sse' }));
+    const PersistedTransportSchema = v.object({
+      requestInit: v.object({ headers: v.record(v.string(), v.string()) }),
+      eventSourceInit: v.object({}),
+      type: v.literal('sse'),
+    });
+    const persisted = v.parse(PersistedTransportSchema, JSON.parse(JSON.stringify({ ...opts, type: 'sse' })));
     expect(persisted.requestInit).toEqual({ headers: { Authorization: 'Bearer live' } });
     expect(persisted.eventSourceInit).toEqual({}); // fetch closure gone
     expect(persisted.type).toBe('sse');
@@ -237,21 +243,23 @@ describe('buildBuiltinTools mcp_ prefix guard', () => {
 // input to UserDO's caller-ownership gate (userMcp_callTool → hasWorkspace).
 
 interface FakeUserDOStub {
-  userMcp_callTool(callerAgentName: string, serverId: string, name: string, args: unknown): Promise<unknown>;
+  userMcp_callTool(callerAgentName: string, serverId: string, name: string, args: JsonObject): Promise<JsonValue>;
 }
 
 function buildAdapter(stub: FakeUserDOStub, callerAgentName: string, serverId: string, name: string) {
-  return tool({
+  const execute = async (args: JsonObject): Promise<JsonValue> => {
+    try { return await stub.userMcp_callTool(callerAgentName, serverId, name, args); }
+    catch (err) { return { isError: true, error: err instanceof Error ? err.message : String(err) }; }
+  };
+  const adapter = tool({
     description: `${serverId}/${name}`,
-    inputSchema: jsonSchema<Record<string, unknown>>({
+    inputSchema: jsonSchema<JsonObject>({
       type: 'object',
       properties: { x: { type: 'string' } },
     }),
-    execute: async (args: unknown) => {
-      try { return await stub.userMcp_callTool(callerAgentName, serverId, name, args); }
-      catch (err) { return { isError: true, error: (err as Error).message }; }
-    },
+    execute,
   });
+  return { adapter, execute };
 }
 
 describe('orchestrator MCP tool adapter', () => {
@@ -263,8 +271,9 @@ describe('orchestrator MCP tool adapter', () => {
         return { content: [{ type: 'text', text: 'ok' }] };
       },
     };
-    const adapter = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
-    const result = await (adapter.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' });
+    const { adapter, execute } = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
+    expect(adapter.execute).toBe(execute);
+    const result = await execute({ x: 'hi' });
     expect(captured[0]).toEqual({ caller: 'my-workspace', id: 'srv1', name: 'echo', args: { x: 'hi' } });
     expect(result).toEqual({ content: [{ type: 'text', text: 'ok' }] });
   });
@@ -281,11 +290,11 @@ describe('orchestrator MCP tool adapter', () => {
       },
     };
     const rejected = buildAdapter(stub, 'not-mine', 'srv1', 'echo');
-    expect(await (rejected.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' }))
+    expect(await rejected.execute({ x: 'hi' }))
       .toEqual({ isError: true, error: "MCP call rejected: 'not-mine' is not one of your workspaces." });
 
     const allowed = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
-    expect(await (allowed.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' }))
+    expect(await allowed.execute({ x: 'hi' }))
       .toEqual({ content: [{ type: 'text', text: 'ok' }] });
   });
 
@@ -294,7 +303,7 @@ describe('orchestrator MCP tool adapter', () => {
       async userMcp_callTool() { throw new Error('upstream MCP server unavailable'); },
     };
     const adapter = buildAdapter(stub, 'my-workspace', 'srv1', 'echo');
-    const result = await (adapter.execute as (a: unknown) => Promise<unknown>)({ x: 'hi' });
+    const result = await adapter.execute({ x: 'hi' });
     expect(result).toEqual({ isError: true, error: 'upstream MCP server unavailable' });
   });
 });
@@ -309,7 +318,7 @@ describe('buildBuiltinTools assertion', () => {
     // We monkey-patch BUILTIN_TOOL_DESCRIPTIONS via a local builtins copy
     // wouldn't be DRY; instead, recompute the guard inline against a known
     // bad shape so the contract stays in one place.
-    const tools: Record<string, unknown> = { execute_tools: {}, mcp_evil: {} };
+    const tools = { execute_tools: {}, mcp_evil: {} };
     const offenders = Object.keys(tools).filter(isMcpToolKey);
     expect(offenders).toEqual(['mcp_evil']);
   });

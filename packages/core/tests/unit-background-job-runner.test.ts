@@ -12,16 +12,17 @@ import {
 } from '../src/jobs/index.js';
 import { buildDrainBatch, EventLog, initEventsHubTables } from '../src/events/hub/index.js';
 import type { BackendHost, ProgrammaticTurn } from '../src/types/backend-host.js';
-import type { Schedule } from '../src/types/primitives.js';
-import { makeSql, makeExecRaw } from './helpers.js';
+import type { Schedule, SqlExecutor, SqlValue } from '../src/types/primitives.js';
+import type { JsonValue } from '../src/utils/json.js';
+import { makeSql, makeExecRaw, makeSqlExec } from './helpers.js';
 
 /** A fiber that runs the body inline + captures each ctx.stash + exposes the
  *  in-flight body promises so a test can await detach completion. */
 function fakeFiber() {
-  const stashes: unknown[] = [];
+  const stashes: JsonValue[] = [];
   const runs: Promise<unknown>[] = [];
   const fiber: Schedule['fiber'] = async (_name, fn) => {
-    const body = fn({ stash: (d: unknown) => { stashes.push(d); }, snapshot: null });
+    const body = fn({ stash: (data) => { stashes.push(data); }, snapshot: null });
     runs.push(body);
     return body;
   };
@@ -50,16 +51,24 @@ function fakeHost() {
   };
 }
 
-function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
-  const db = new Database(':memory:');
+/** One process's view of the lifecycle. `db` is threaded when a test needs a
+ *  SECOND process over the same durable rows — a restart, which is the only
+ *  place orphan recovery can happen. */
+function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy; db?: Database } = {}) {
+  const db = opts.db ?? new Database(':memory:');
   initBackgroundJobsTable(makeExecRaw(db));
-  const store = new BackgroundJobStore(makeSql(db));
-  const hubSql = {
-    exec(query: string, ...bindings: unknown[]) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  // The registry behind a switchable fault, so a test can reproduce the one
+  // failure the in-process settlement path cannot survive: teardown closing the
+  // database out from under a fiber that is still running ("Cannot use a closed
+  // database"), and then a LATER process opening the same durable rows.
+  const realSql = makeSql(db);
+  const storeFault = { closed: false };
+  const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: SqlValue[]): T[] => {
+    if (storeFault.closed) throw new Error('Cannot use a closed database');
+    return realSql<T>(strings, ...values);
+  }) satisfies SqlExecutor;
+  const store = new BackgroundJobStore(sql);
+  const hubSql = makeSqlExec(db);
   initEventsHubTables(hubSql);
   const eventLog = new EventLog(hubSql);
   const { fiber, stashes, runs, settled } = fakeFiber();
@@ -72,20 +81,21 @@ function setup(opts: { resume?: JobResumer; policy?: BackgroundPolicy } = {}) {
     scheduleDrain: () => { drainSchedules++; },
     logActivity: (e: string, d?: string) => logs.push({ e, d }),
     onSettled: (job: BackgroundJob) => notified.push({ id: job.id, status: job.status }),
-    ...(opts.resume ? { resume: opts.resume } : {}),
-    ...(opts.policy ? { policy: () => opts.policy! } : {}),
+    resume: opts.resume,
+    policy: opts.policy ? () => opts.policy! : undefined,
   };
   const runner = new BackgroundJobRunner(runnerDeps);
   return {
     runner, runnerDeps, store, eventLog, stashes, runs, settled, host, enqueued,
     setStatus, setRejection, logs, notified, drainSchedules: () => drainSchedules,
+    storeFault, db,
   };
 }
 
 describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('resolving work settles the job + wakes a synthesis turn (once)', async () => {
     const { runner, store, eventLog, enqueued, stashes, settled, notified } = setup();
-    const id = runner.create('think', { q: 1 }, new AbortController());
+    const id = runner.create('think', { q: 1 }, 'build', new AbortController());
     expect(store.get(id)?.status).toBe('running');
 
     runner.detach(id, 'think', Promise.resolve('the answer'));
@@ -110,7 +120,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
   test('rejecting work fails the job + the wake says failed', async () => {
     const { runner, store, enqueued, settled, notified } = setup();
-    const id = runner.create('run', {}, new AbortController());
+    const id = runner.create('run', {}, 'build', new AbortController());
     runner.detach(id, 'run', Promise.reject(new Error('boom')));
     await settled();
 
@@ -127,9 +137,9 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   // already reached logActivity; settle/fail — the terminal answer — did not.
   test('both settle and fail reach logActivity, not just start/cancel/resume', async () => {
     const { runner, settled, logs } = setup();
-    const ok = runner.create('think', {}, new AbortController());
+    const ok = runner.create('think', {}, 'build', new AbortController());
     runner.detach(ok, 'think', Promise.resolve('answer'));
-    const bad = runner.create('run', {}, new AbortController());
+    const bad = runner.create('run', {}, 'build', new AbortController());
     runner.detach(bad, 'run', Promise.reject(new Error('boom')));
     await settled();
 
@@ -142,7 +152,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('a skipped wake publishes a self-trusted retry event for the standard drain', async () => {
     const { runner, store, eventLog, setStatus, logs, settled, drainSchedules } = setup();
     setStatus('skipped');
-    const id = runner.create('think', {}, new AbortController());
+    const id = runner.create('think', {}, 'build', new AbortController());
     runner.detach(id, 'think', Promise.resolve('ok'));
     await settled();
 
@@ -151,7 +161,12 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const pending = eventLog.pending();
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ variant: 'timer', trust: 'self', priority: 'normal' });
-    expect((pending[0]!.payload as { trigger_id: string }).trigger_id).toBe(`background-job-wake:${id}`);
+    const wake = pending[0];
+    if (!wake || wake.variant !== 'timer'
+      || (wake.payload_visibility !== 'full' && wake.payload_visibility !== 'redact')) {
+      throw new Error('expected a readable timer wake event');
+    }
+    expect(wake.payload.trigger_id).toBe(`background-job-wake:${id}`);
     expect(buildDrainBatch(pending)?.text).toContain(`agent.jobResult('${id}')`);
     expect(drainSchedules()).toBe(1);
   });
@@ -159,7 +174,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('a rejected wake publishes the same durable retry event', async () => {
     const { runner, eventLog, setRejection, settled, drainSchedules } = setup();
     setRejection(new Error('queue unavailable'));
-    const id = runner.create('run', {}, new AbortController());
+    const id = runner.create('run', {}, 'build', new AbortController());
     runner.detach(id, 'run', Promise.resolve('ok'));
     await settled();
 
@@ -173,7 +188,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
   test('a retry-ledger failure surfaces from wake', async () => {
     const { runner, store, eventLog, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
-    const id = runner.create('run', {}, new AbortController());
+    const id = runner.create('run', {}, 'build', new AbortController());
     store.settle(id, 0, '"saved"', Date.now());
     eventLog.publish = () => { throw new Error('ledger unavailable'); };
 
@@ -184,7 +199,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
     const { runner, store, eventLog, stashes, settled, setRejection } = setup();
     setRejection(new Error('queue unavailable'));
     eventLog.publish = () => { throw new Error('ledger unavailable'); };
-    const id = runner.create('think', {}, new AbortController());
+    const id = runner.create('think', {}, 'build', new AbortController());
 
     runner.detach(id, 'think', Promise.resolve('the answer'));
     // Both fiber implementations DELETE their recovery row in a `finally`, so a
@@ -198,7 +213,7 @@ describe('BackgroundJobRunner.detach — settle/fail → wake', () => {
 
   test('a store write that fails mid-settlement still reaches a terminal status', async () => {
     const { runner, store, stashes, settled, notified } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = runner.create('think', {}, 'build', new AbortController());
     store.settle = () => { throw new Error('storage unavailable'); };
 
     runner.detach(id, 'think', Promise.resolve('the answer'));
@@ -218,31 +233,31 @@ describe('BackgroundJobRunner.create — descriptive labels', () => {
   // was actually doing. Same audit as the logActivity fix above.
   test('an agents fork gets a settle-mode + task label', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'fork', task: 'investigate the flaky test', settle: 'mcts' }, new AbortController());
+    const id = runner.create('agents', { action: 'fork', task: 'investigate the flaky test', settle: 'mcts' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('fork(settle=mcts): investigate the flaky test');
   });
 
   test('an agents fork with no settle defaults the label to merge', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'fork', task: 'split the work' }, new AbortController());
+    const id = runner.create('agents', { action: 'fork', task: 'split the work' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('fork(settle=merge): split the work');
   });
 
   test('a run call labels the runtime + command', () => {
     const { runner, store } = setup();
-    const id = runner.create('run', { runtime: 'sandbox', command: 'npm test' }, new AbortController());
+    const id = runner.create('run', { runtime: 'sandbox', command: 'npm test' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('sandbox: npm test');
   });
 
   test('an execute_tools call labels the code snippet', () => {
     const { runner, store } = setup();
-    const id = runner.create('execute_tools', { code: '  const x = await workspace.readFile("/a");\n  return x;' }, new AbortController());
+    const id = runner.create('execute_tools', { code: '  const x = await workspace.readFile("/a");\n  return x;' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBe('const x = await workspace.readFile("/a");\n  return x;');
   });
 
   test('an unrecognized shape gets no label rather than a guess', () => {
     const { runner, store } = setup();
-    const id = runner.create('agents', { action: 'staff', agent: 'x' }, new AbortController());
+    const id = runner.create('agents', { action: 'staff', agent: 'x' }, 'build', new AbortController());
     expect(store.get(id)?.label).toBeNull();
   });
 });
@@ -251,15 +266,19 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   test('cancel aborts the work + marks cancelled; the fiber does not relabel or wake', async () => {
     const { runner, store, enqueued, settled } = setup();
     const controller = new AbortController();
-    const id = runner.create('run', {}, controller);
-    let reject!: (e: unknown) => void;
-    runner.detach(id, 'run', new Promise((_, r) => { reject = r; }));
+    const id = runner.create('run', {}, 'build', controller);
+    const rejections: Array<(error: Error) => void> = [];
+    runner.detach(id, 'run', new Promise((_, rejectPromise) => {
+      rejections.push((error) => rejectPromise(error));
+    }));
 
     expect(runner.cancel(id)).toBe(true);
     expect(store.get(id)?.status).toBe('cancelled');
     expect(controller.signal.aborted).toBe(true);
     expect(runner.cancel(id)).toBe(false);                  // already settled → no-op
 
+    const reject = rejections[0];
+    if (!reject) throw new Error('work rejection was not captured');
     reject(new Error('aborted'));                            // the work unwinds on its abort
     await settled();
     expect(store.get(id)?.status).toBe('cancelled');        // NOT relabelled failed
@@ -270,9 +289,9 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
     const { runner, store } = setup();
     const c1 = new AbortController();
     const c2 = new AbortController();
-    const id1 = runner.create('run', { one: true }, c1);
-    const id2 = runner.create('think', { two: true }, c2);
-    const done = runner.create('run', { done: true }, new AbortController());
+    const id1 = runner.create('run', { one: true }, 'build', c1);
+    const id2 = runner.create('think', { two: true }, 'build', c2);
+    const done = runner.create('run', { done: true }, 'build', new AbortController());
     store.settle(done, 0, '"done"', Date.now());
 
     expect(new Set(runner.cancelRunning())).toEqual(new Set([id1, id2]));
@@ -285,10 +304,18 @@ describe('BackgroundJobRunner.cancel — operator hard-cancel', () => {
   });
 });
 
+// Recovery always runs against rows a DEAD executor left behind, so these
+// start from the durable row alone — an evicted runner's in-memory cancel
+// handles went with the process that held them.
 describe('BackgroundJobRunner.recover — evict mid-flight', () => {
+  const orphanRow = (store: BackgroundJobStore, id: string): string => {
+    store.create({ id, kind: 'think', workMode: 'build', input: '{}', now: 1 });
+    return id;
+  };
+
   test('a job stashed running is failed + woken', async () => {
     const { runner, store, enqueued } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'je');
     await runner.recover({ jobId: id, phase: 'running' });
 
     expect(store.get(id)?.status).toBe('failed');
@@ -299,7 +326,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 
   test('a job already stashed settled is NOT re-failed or re-woken', async () => {
     const { runner, store, enqueued } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'js');
     store.settle(id, 0, '"x"', 123);
     await runner.recover({ jobId: id, phase: 'settled' });
 
@@ -309,7 +336,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 
   test('an outcome persisted before the settled checkpoint is re-woken without duplicate notification', async () => {
     const { runner, store, enqueued, notified } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'jp');
     store.settle(id, 0, '"saved"', Date.now());
 
     await runner.recover({ jobId: id, phase: 'running' });
@@ -321,7 +348,7 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 
   test('a cancelled outcome with a running checkpoint stays silent on recovery', async () => {
     const { runner, store, enqueued } = setup();
-    const id = runner.create('think', {}, new AbortController());
+    const id = orphanRow(store, 'jx');
     store.cancel(id, 0, Date.now());
 
     await runner.recover({ jobId: id, phase: 'running' });
@@ -334,10 +361,15 @@ describe('BackgroundJobRunner.recover — evict mid-flight', () => {
 describe('BackgroundJobRunner.recover — resume from durable checkpoint', () => {
   test('a resumable job is reclaimed under a fresh epoch and re-driven to completion', async () => {
     let seenInput: unknown = undefined;
-    const resume: JobResumer = async (_kind, input) => { seenInput = input; return { text: 'resumed answer' }; };
+    let seenMode: 'plan' | 'build' | undefined;
+    const resume: JobResumer = async (_kind, input, mode) => {
+      seenInput = input;
+      seenMode = mode;
+      return { text: 'resumed answer' };
+    };
     const { runner, store, enqueued, settled, notified, logs } = setup({ resume });
     // A job created with its tool input, then interrupted mid-flight (stashed running).
-    store.create({ id: 'jr', kind: 'think', input: '{"strategy":"mcts","task":"t"}', now: 1 });
+    store.create({ id: 'jr', kind: 'think', workMode: 'plan', input: '{"strategy":"mcts","task":"t"}', now: 1 });
 
     await runner.recover({ jobId: 'jr', phase: 'running' });
     await settled(); // let the re-drive fiber finish
@@ -348,8 +380,10 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
     expect(job?.status).toBe('completed');
     expect(job?.result).toBe('{"text":"resumed answer"}');
     expect(seenInput).toEqual({ strategy: 'mcts', task: 't' });
+    expect(seenMode).toBe('plan');
     expect(enqueued).toHaveLength(1);
     expect(enqueued[0].metadata?.status).toBe('completed');
+    expect(enqueued[0].metadata?.proteusMode).toBe('plan');
     expect(notified).toEqual([{ id: 'jr', status: 'completed' }]);
     expect(logs.find((l) => l.e === 'bg_job_resume')).toBeTruthy();
   });
@@ -357,7 +391,7 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
   test('a kind the resumer cannot re-drive falls back to the eviction failure', async () => {
     const resume: JobResumer = async (kind) => { throw new JobNotResumable(kind); };
     const { runner, store, enqueued, settled } = setup({ resume });
-    store.create({ id: 'jn', kind: 'run', input: '{}', now: 1 });
+    store.create({ id: 'jn', kind: 'run', workMode: 'build', input: '{}', now: 1 });
 
     await runner.recover({ jobId: 'jn', phase: 'running' });
     await settled();
@@ -369,24 +403,111 @@ describe('BackgroundJobRunner.recover — resume from durable checkpoint', () =>
 
   test('a job that evicts on every activation is failed after the resume-attempt cap', async () => {
     const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ evicted again
-    const { runner, store, enqueued } = setup({ resume });
-    store.create({ id: 'jc', kind: 'think', input: '{}', now: 1 });
+    const first = setup({ resume });
+    first.store.create({ id: 'jc', kind: 'think', workMode: 'build', input: '{}', now: 1 });
 
-    // Five recoveries re-drive; the sixth exceeds the cap and fails the job.
-    for (let i = 0; i < 6; i++) await runner.recover({ jobId: 'jc', phase: 'running' });
+    // One activation per recovery — a re-drive lives in the activation that
+    // started it, and the next eviction brings up a new one.
+    let last = first;
+    for (let activation = 0; activation < 6; activation++) {
+      last = setup({ resume, db: first.db });
+      await last.runner.recover({ jobId: 'jc', phase: 'running' });
+    }
 
-    const job = store.get('jc');
+    const job = first.store.get('jc');
     expect(job?.status).toBe('failed');
     expect(job?.error).toContain('gave up');
     expect(job?.resumeAttempts).toBe(6);
-    expect(enqueued.at(-1)?.metadata?.status).toBe('failed');
+    expect(last.enqueued.at(-1)?.metadata?.status).toBe('failed');
+  });
+
+  test('a job this runner is already driving is never re-driven out from under itself', async () => {
+    // A resume leaves a fiber row of its own, so one cold start can hand the
+    // SAME job to recover() twice — and the registry sweep names it as well.
+    const resume: JobResumer = () => new Promise<never>(() => {});
+    const { runner, store } = setup({ resume });
+    store.create({ id: 'jd', kind: 'agents', workMode: 'build', input: '{}', now: 1 });
+
+    await runner.recover({ jobId: 'jd', phase: 'running' });
+    await runner.recover({ jobId: 'jd', phase: 'running' });
+    await runner.recoverOrphans();
+
+    expect(store.get('jd')?.resumeAttempts).toBe(1);
+    expect(store.get('jd')?.epoch).toBe(1);
+  });
+});
+
+// The field failure this sweep exists for: a one-shot CLI run detached a job,
+// gave up waiting on it, and closed its database — after which the fiber's
+// settle write AND its last-resort force-fail both failed against the same dead
+// handle ("background-job settlement failed" / "force-fail failed", verbatim).
+// The row stayed 'running' with no fiber row left pointing at it, so a
+// fiber-keyed recovery never looked at it again: never resumed to a result,
+// never failed, and permanently holding one of the detach slots.
+describe('BackgroundJobRunner.recoverOrphans — a job cannot stay running forever', () => {
+  test('a settlement whose store closed under it strands the row — and the next start settles it', async () => {
+    const { runner, store, storeFault, settled, enqueued, db } = setup();
+    const id = runner.create('run', { command: 'sleep 1' }, 'build', new AbortController());
+    let finish: () => void = () => {};
+    runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('done'); }));
+
+    // Teardown: the process gave up on the fiber and closed the database.
+    storeFault.closed = true;
+    finish();
+    await settled();
+
+    // Reproduction: neither the outcome nor the force-fail could be written.
+    storeFault.closed = false;
+    expect(store.get(id)?.status).toBe('running');
+
+    // A later process over the same rows: nothing in memory owns this job, and
+    // no fiber row survived to announce it — the registry sweep is the only
+    // thing that can still reach it.
+    const next = setup({ db });
+    await next.runner.recoverOrphans();
+
+    expect(next.store.get(id)?.status).toBe('failed');
+    expect(next.store.get(id)?.error).toContain('eviction');
+    expect(next.enqueued.at(-1)?.metadata?.status).toBe('failed');
+    expect(enqueued).toHaveLength(0); // the stranded process woke nobody
+  });
+
+  test('resuming is bounded: repeated restarts end in a terminal status, not another re-drive', async () => {
+    const resume: JobResumer = () => new Promise<never>(() => {}); // never settles ⇒ orphaned again
+    const first = setup({ resume });
+    first.store.create({ id: 'jz', kind: 'agents', workMode: 'build', input: '{}', now: 1 });
+
+    // Each restart finds the row, reclaims it, and re-drives — until the cap.
+    for (let start = 0; start < 6; start++) {
+      await setup({ resume, db: first.db }).runner.recoverOrphans();
+    }
+
+    const job = first.store.get('jz');
+    expect(job?.status).toBe('failed');
+    expect(job?.error).toContain('gave up');
+    expect(first.store.runningIds()).toEqual([]);
+  });
+
+  test('a job whose executor is alive in THIS process is not reclaimed as an orphan', async () => {
+    const resume: JobResumer = async () => 'should not run';
+    const { runner, store, settled } = setup({ resume });
+    let finish: () => void = () => {};
+    const id = runner.create('run', {}, 'build', new AbortController());
+    runner.detach(id, 'run', new Promise<string>((resolve) => { finish = () => resolve('real result'); }));
+
+    await runner.recoverOrphans();
+    expect(store.get(id)?.resumeAttempts).toBe(0);
+
+    finish();
+    await settled();
+    expect(store.get(id)?.result).toBe('"real result"');
   });
 });
 
 describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring', () => {
   test('crossing the threshold mints a running job (carrying input) + logs bg_job_started', () => {
     const { runner, store, logs } = setup();
-    const deps = runner.thresholdDeps('heads', { code: '1+1' }, new AbortController());
+    const deps = runner.thresholdDeps('heads', { code: '1+1' }, 'build', new AbortController());
     const outcome = deps.onThreshold('heads', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
     const id = outcome.detached ? outcome.jobId : '';
@@ -397,11 +518,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
 
   test('the threshold carries the session surface\'s detach policy', () => {
     const { runner } = setup();
-    expect(runner.thresholdDeps('run', {}, new AbortController()).thresholdMs)
+    expect(runner.thresholdDeps('run', {}, 'build', new AbortController()).thresholdMs)
       .toBe(BACKGROUND_POLICY.interactive.detachAfterMs);
 
     const oneShot = setup({ policy: BACKGROUND_POLICY['one-shot'] });
-    expect(oneShot.runner.thresholdDeps('run', {}, new AbortController()).thresholdMs)
+    expect(oneShot.runner.thresholdDeps('run', {}, 'build', new AbortController()).thresholdMs)
       .toBe(BACKGROUND_POLICY['one-shot'].detachAfterMs);
 
     // Resolved per read, not captured once: a backend whose surface is a
@@ -426,10 +547,10 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
     // bound that compounds into a fork storm (52 concurrent builds → OOM kill).
     const { runner, store, logs } = setup();
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      store.create({ id: `busy-${i}`, kind: 'run', input: '{}', now: Date.now() });
+      store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
     const controller = new AbortController();
-    const deps = runner.thresholdDeps('run', { command: 'pystan build' }, controller);
+    const deps = runner.thresholdDeps('run', { command: 'pystan build' }, 'build', controller);
     const outcome = deps.onThreshold('run', new Promise(() => { /* still running */ }));
 
     expect(outcome.detached).toBe(false);
@@ -446,10 +567,10 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   test('under the cap a refusal never happens — the boundary is exact', () => {
     const { runner, store } = setup();
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS - 1; i++) {
-      store.create({ id: `busy-${i}`, kind: 'run', input: '{}', now: Date.now() });
+      store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
     const outcome = runner
-      .thresholdDeps('run', {}, new AbortController())
+      .thresholdDeps('run', {}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
   });
@@ -457,11 +578,11 @@ describe('BackgroundJobRunner.thresholdDeps — withBackgroundThreshold wiring',
   test('a settled job frees a slot — the cap counts what is in flight, not what ever ran', () => {
     const { runner, store } = setup();
     for (let i = 0; i < MAX_CONCURRENT_DETACHED_JOBS; i++) {
-      store.create({ id: `busy-${i}`, kind: 'run', input: '{}', now: Date.now() });
+      store.create({ id: `busy-${i}`, kind: 'run', workMode: 'build', input: '{}', now: Date.now() });
     }
     store.settle('busy-0', 0, 'done', Date.now());
     const outcome = runner
-      .thresholdDeps('run', {}, new AbortController())
+      .thresholdDeps('run', {}, 'build', new AbortController())
       .onThreshold('run', new Promise(() => { /* still running */ }));
     expect(outcome.detached).toBe(true);
   });

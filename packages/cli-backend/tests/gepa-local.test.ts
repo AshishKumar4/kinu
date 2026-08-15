@@ -14,6 +14,7 @@
 import { describe, test, expect } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import type { LanguageModel } from 'ai';
+import { TestLanguageModelV2 } from './test-language-model.js';
 import {
   bootstrapScaffold, initWorkspaceSchema, listGepaRuns, recordTurnOutcome, seedSoul,
   type LLMProviderConfig,
@@ -29,11 +30,9 @@ const DUMMY_LLM: LLMProviderConfig = {
  *  (the reflection LM) with `completion`. */
 function scriptedModel(answer: string, completion: string): LanguageModel {
   const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
-  return {
-    specificationVersion: 'v2',
+  return new TestLanguageModelV2({
     provider: 'fake',
     modelId: 'fake-model',
-    supportedUrls: {},
     doGenerate: async () => ({
       content: [{ type: 'text', text: completion }],
       finishReason: 'stop' as const,
@@ -54,7 +53,7 @@ function scriptedModel(answer: string, completion: string): LanguageModel {
       }),
       response: { headers: {} },
     }),
-  } as unknown as LanguageModel;
+  });
 }
 
 /** A candidate scaffold the 4-gate modify pipeline accepts: it delegates to the
@@ -84,7 +83,7 @@ async function setup(judge: () => Promise<string>) {
     id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT 'default', parent_id TEXT,
     role TEXT NOT NULL, content TEXT NOT NULL,
     created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000))`);
-  const rt = createCLIRuntime(db as never, {
+  const rt = createCLIRuntime(db, {
     dbPath: `/tmp/proteus-gepa-${Math.floor(performance.now())}.db`,
     llm: DUMMY_LLM,
   });
@@ -150,7 +149,8 @@ describe('GEPA runs on the local backend', () => {
     // one is a full scaffold execution plus a judge call.
     expect(runs[0]!.metricCalls).toBeGreaterThan(result.seedScore!.n);
     expect(judgeCalls()).toBe(runs[0]!.metricCalls);
-    const candidates = db.query(`SELECT COUNT(*) AS c FROM gepa_candidates`).get() as { c: number };
+    const candidates = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_candidates`).get();
+    if (!candidates) throw new Error('GEPA candidate count row is missing');
     expect(candidates.c).toBeGreaterThan(0);
     db.close();
   }, 60_000);
@@ -171,7 +171,8 @@ describe('GEPA runs on the local backend', () => {
     expect(result.ok).toBe(false);
     expect(result.error).toMatch(/negative|failure|labeled/i);
     // A refusal costs nothing: no run row, so the lineage stays honest.
-    const runs = db.query(`SELECT COUNT(*) AS c FROM gepa_runs`).get() as { c: number };
+    const runs = db.query<{ c: number }, []>(`SELECT COUNT(*) AS c FROM gepa_runs`).get();
+    if (!runs) throw new Error('GEPA run count row is missing');
     expect(runs.c).toBe(0);
     db.close();
   }, 30_000);

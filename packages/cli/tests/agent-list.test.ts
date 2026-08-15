@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { reconcileAgentRefs } from '../src/agent-list.js';
+import * as v from 'valibot';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -99,10 +100,13 @@ describe('CLI cloud agent registry sync', () => {
     });
 
     expect(proc.exitCode).toBe(0);
-    const parsed = JSON.parse(proc.stdout.toString()) as {
-      result: Array<{ name: string; mode: string; label: string }>;
-      config: { agents: Record<string, { mode: string; displayName?: string }>; aliases?: Record<string, string> };
-    };
+    const parsed = v.parse(v.object({
+      result: v.array(v.object({ name: v.string(), mode: v.string(), label: v.string() })),
+      config: v.object({
+        agents: v.record(v.string(), v.object({ mode: v.string(), displayName: v.optional(v.string()) })),
+        aliases: v.optional(v.record(v.string(), v.string())),
+      }),
+    }), JSON.parse(proc.stdout.toString()));
     expect(parsed.config.agents.stale).toBeUndefined();
     expect(parsed.config.agents['web-agent']).toMatchObject({ mode: 'cloud', displayName: 'Web Agent' });
     expect(parsed.config.agents.localbot).toMatchObject({ mode: 'local', displayName: 'Local Bot' });

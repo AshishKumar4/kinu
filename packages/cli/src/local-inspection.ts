@@ -33,31 +33,58 @@ import {
   selectEnsembleJudges,
   type AlignmentConvergence,
   type CalibrationReport,
+  type BackgroundJob,
   type ChatHistoryEntry,
   type CorpusEvalReport,
   type CorpusTurn,
   type EvolutionChangelogView,
+  type GepaCandidate,
+  type GepaRunSummary,
+  type HeadRunView,
   type WeakLabel,
   type EnsembleReport,
   type EnsembleRunResult,
   type LabelIngestResult,
   type LabelingItem,
+  type JsonObject,
+  type JsonValue,
   type OutcomeLabel,
   type EventVariant,
+  type ProteusEvent,
+  type QueryFilter,
   type ReleaseBoard,
   type RunEvent,
   type ScaffoldVersionView,
   type SearchNode,
+  type TriggerRow,
   type MctsSearchRunSummary,
   type ReasoningEffort,
-  summarizeSoul,
+  decodeJsonValue,
+  parseJsonValue,
   type SqlExec,
 } from '@proteus/core';
-import { makeSql, createHostShell } from '@proteus/cli-backend';
+import { makeSql, makeSqlExec, createHostShell } from '@proteus/cli-backend';
+import * as v from 'valibot';
 import { agentDbPath } from './config.js';
 import { createConfiguredLocalModelResolver } from './local-model-resolver.js';
 
 type SqliteDb = Database;
+
+const EventVariantSchema = v.picklist([
+  'chat',
+  'webhook',
+  'process_done',
+  'timer',
+  'peer_agent',
+  'subordinate_task',
+  'subordinate_report',
+  'file_changed',
+  'email',
+  'internal',
+  'reply_request',
+  'mcp_chat',
+  'mcp_third_party',
+] satisfies EventVariant[]);
 
 export interface LocalMctsNodeDetail {
   id: string;
@@ -108,7 +135,37 @@ export interface LocalAgentInfoSnapshot {
   reasoningEffort: ReasoningEffort | null;
 }
 
-export function getLocalAgentState(name: string): unknown {
+interface LocalStatus {
+  id: string | null;
+  name: string | null;
+  purpose: string;
+  soul: string;
+  createdAt: number | null;
+  scaffoldVersion: number;
+  searchNodeCount: number;
+  craftedToolCount: number;
+  messageCount: number;
+  model: string | null;
+  reasoningEffort: ReasoningEffort | null;
+}
+
+interface LocalToolSummary {
+  builtIn: readonly string[];
+  crafted: Array<{ name: string; description: string }>;
+  executors: LocalExecutorInfo[];
+}
+
+export interface LocalAgentState {
+  status: LocalStatus;
+  tools: LocalToolSummary;
+  memoryContent: string;
+  mcts: LocalSearchNode[];
+  timeline: JsonObject[];
+  executors: LocalExecutorInfo[];
+  release: ReleaseBoard;
+}
+
+export function getLocalAgentState(name: string): LocalAgentState {
   return withLocalDb(name, (db) => ({
     status: getLocalStatus(db),
     tools: getLocalToolSummary(db),
@@ -122,18 +179,7 @@ export function getLocalAgentState(name: string): unknown {
 
 export function getLocalAgentInfo(name: string): LocalAgentInfoSnapshot {
   return withLocalDb(name, (db) => {
-    const status = getLocalStatus(db) as {
-      id: string | null;
-      name: string | null;
-      purpose: string;
-      soul: string;
-      createdAt: number | null;
-      scaffoldVersion: number;
-      searchNodeCount: number;
-      craftedToolCount: number;
-      model: string | null;
-      reasoningEffort: ReasoningEffort | null;
-    };
+    const status = getLocalStatus(db);
     return {
       id: status.id ?? name,
       name: status.name ?? name,
@@ -206,14 +252,13 @@ export function searchLocalMemory(name: string, query: string, limit = 10): Arra
   });
 }
 
-export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): unknown[] {
+export function listLocalEvents(name: string, opts: { variant?: string; since?: number; limit?: number } = {}): ProteusEvent[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'agent_log')) return [];
-    return new EventLog(hubSql(db)).query({
-      ...(opts.variant ? { variant: opts.variant as EventVariant } : {}),
-      ...(opts.since ? { since: opts.since } : {}),
-      limit: opts.limit ?? 50,
-    });
+    const filter: QueryFilter = { limit: opts.limit ?? 50 };
+    if (opts.variant) filter.variant = v.parse(EventVariantSchema, opts.variant);
+    if (opts.since) filter.since = opts.since;
+    return new EventLog(hubSql(db)).query(filter);
   });
 }
 
@@ -235,9 +280,9 @@ export function listLocalRunEvents(
   ));
 }
 
-export function listLocalTimeline(name: string, limit = 100): unknown[] {
+export function listLocalTimeline(name: string, limit = 100): JsonObject[] {
   return withLocalDb(name, (db) => {
-    const rows: unknown[] = [];
+    const rows: JsonObject[] = [];
     // The durable run-event log of the most recent run — tool calls, steps and
     // turn boundaries. The cloud timeline spine leads with the same source.
     if (tableExists(db, 'run_events')) {
@@ -248,7 +293,7 @@ export function listLocalTimeline(name: string, limit = 100): unknown[] {
           id: `${e.runId}:${e.eventIndex}`,
           kind: `run:${e.type}`,
           runId: e.runId,
-          payload: e,
+          payload: decodeJsonValue({ value: e }),
           ts: Date.parse(e.timestamp) || 0,
         })));
       }
@@ -377,14 +422,14 @@ export function getLocalMctsNode(name: string, nodeId: string): LocalMctsNodeDet
   });
 }
 
-export function listLocalHeads(name: string, limit = 20): unknown[] {
+export function listLocalHeads(name: string, limit = 20): HeadRunView[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'head_journal')) return [];
     return new HeadJournal(makeSql(db)).listRuns(limit);
   });
 }
 
-export function listLocalGepaRuns(name: string, limit = 20): unknown[] {
+export function listLocalGepaRuns(name: string, limit = 20): GepaRunSummary[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'gepa_runs')) return [];
     return listGepaRuns(makeSql(db), limit);
@@ -536,7 +581,12 @@ export async function runLocalCorpusEval(name: string, input: {
   });
 }
 
-export function getLocalGepaRun(name: string, runId: string): unknown {
+export interface LocalGepaRunDetail {
+  run: GepaRunSummary;
+  candidates: GepaCandidate[];
+}
+
+export function getLocalGepaRun(name: string, runId: string): LocalGepaRunDetail | null {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'gepa_runs')) return null;
     const sql = makeSql(db);
@@ -610,7 +660,7 @@ export function setLocalReasoningEffort(name: string, effort: ReasoningEffort): 
   });
 }
 
-export function listLocalTriggers(name: string): { triggers: unknown[] } {
+export function listLocalTriggers(name: string): { triggers: TriggerRow[] } {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'triggers')) return { triggers: [] };
     return { triggers: new TriggerRegistry(hubSql(db), NOOP_ALARM).list() };
@@ -624,7 +674,7 @@ export function cancelLocalTrigger(name: string, id: string): { changed: boolean
   });
 }
 
-export function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): unknown {
+export function createLocalTimerTrigger(name: string, input: { cron?: string; atMs?: number; label?: string }): TriggerRow | null {
   return withLocalWritableDb(name, (db) => {
     initEventsHubTables(hubSql(db));
     const now = Date.now();
@@ -634,12 +684,13 @@ export function createLocalTimerTrigger(name: string, input: { cron?: string; at
       : input.atMs;
     if (input.cron && nextFireAt === null) throw new Error(`Unsupported cron expression: ${input.cron}`);
     if (!nextFireAt) throw new Error('A future trigger time is required.');
+    const spec: JsonObject = {};
+    if (input.cron) spec.cron = input.cron;
+    else spec.atMs = nextFireAt;
+    if (input.label) spec.label = input.label;
     const id = registry.register({
       kind: input.cron ? 'timer_cron' : 'timer_oneshot',
-      spec: {
-        ...(input.cron ? { cron: input.cron } : { atMs: input.atMs }),
-        ...(input.label ? { label: input.label } : {}),
-      },
+      spec,
       creator_trust: 'owner',
       next_fire_at: nextFireAt,
     }, now);
@@ -647,7 +698,7 @@ export function createLocalTimerTrigger(name: string, input: { cron?: string; at
   });
 }
 
-export function listLocalJobs(name: string, limit = 20): unknown[] {
+export function listLocalJobs(name: string, limit = 20): BackgroundJob[] {
   return withLocalDb(name, (db) => {
     if (!tableExists(db, 'background_jobs')) return [];
     return new BackgroundJobStore(makeSql(db)).list(limit);
@@ -733,11 +784,11 @@ function ensureLocalAgent(name: string): void {
 }
 
 function all<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T[] {
-  return db.query(sql).all(...params) as T[];
+  return db.prepare<T, SQLQueryBindings[]>(sql).all(...params);
 }
 
 function get<T>(db: SqliteDb, sql: string, ...params: SQLQueryBindings[]): T | null {
-  return db.query(sql).get(...params) as T | null;
+  return db.prepare<T, SQLQueryBindings[]>(sql).get(...params);
 }
 
 function tableExists(db: SqliteDb, name: string): boolean {
@@ -756,14 +807,6 @@ function columnSet(db: SqliteDb, table: string): Set<string> {
 function safeIdentifier(value: string): string {
   if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(value)) throw new Error(`Unsafe SQL identifier: ${value}`);
   return value;
-}
-
-function decodeBlob(value: unknown): string {
-  if (value == null) return '';
-  if (typeof value === 'string') return value;
-  if (value instanceof Uint8Array) return new TextDecoder().decode(value);
-  if (value instanceof ArrayBuffer) return new TextDecoder().decode(value);
-  return String(value);
 }
 
 function readMctsNode(db: SqliteDb, id: string): SearchNode | null {
@@ -791,7 +834,7 @@ function summarizeMcts(node: SearchNode): LocalMctsNodeDetail['path'][number] {
   };
 }
 
-function getLocalStatus(db: SqliteDb): unknown {
+function getLocalStatus(db: SqliteDb): LocalStatus {
   // `agent_identity` is the pre-rename table. Read it here rather than adopting
   // it: this path is READ-ONLY, and the adoption belongs to the write-capable
   // open path (identity/schema.ts adoptLegacyAgentIdentity).
@@ -842,7 +885,7 @@ function getLocalStatus(db: SqliteDb): unknown {
   };
 }
 
-function getLocalToolSummary(db: SqliteDb): unknown {
+function getLocalToolSummary(db: SqliteDb): LocalToolSummary {
   const crafted = tableExists(db, 'crafted_tools')
     ? all<{ name: string; description: string }>(db, `SELECT name, description FROM crafted_tools ORDER BY name`)
     : [];
@@ -860,32 +903,19 @@ const NOOP_ALARM = {
 };
 
 function hubSql(db: SqliteDb): SqlExec {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.query(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        const rows = stmt.all(...(bindings as SQLQueryBindings[])) as Array<Record<string, unknown>>;
-        return { toArray: () => rows };
-      }
-      stmt.run(...(bindings as SQLQueryBindings[]));
-      return {
-        toArray: () => [],
-      };
-    },
-  };
+  return makeSqlExec(db);
 }
 
-function parseJson(value: string | null): unknown {
+function parseJson(value: string | null): JsonValue {
   if (value == null) return null;
   try {
-    return JSON.parse(value);
+    return parseJsonValue(value);
   } catch {
     return value;
   }
 }
 
-function timestampOf(value: unknown): number {
-  if (typeof value !== 'object' || value === null || !('ts' in value)) return 0;
-  const ts = (value as { ts?: unknown }).ts;
-  return typeof ts === 'number' ? ts : 0;
+function timestampOf(value: JsonObject): number {
+  const parsed = v.safeParse(v.number(), value.ts);
+  return parsed.success ? parsed.output : 0;
 }

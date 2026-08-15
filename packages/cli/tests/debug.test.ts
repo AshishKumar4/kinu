@@ -11,10 +11,12 @@ import { Database } from 'bun:sqlite';
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
   BackgroundJobStore, MctsSearchStore, RunEventRecorder,
+  JsonArraySchema, JsonObjectSchema, JsonValueSchema, type JsonValue,
   initBackgroundJobsTable, initHeadsTables, initMctsSearchTable, initRunEventTables, initSearchTables,
 } from '@proteus/core';
 import { makeSql } from '@proteus/cli-backend';
 import { redactSecrets } from '../src/commands/debug.js';
+import * as v from 'valibot';
 
 const tempDirs: string[] = [];
 const repoRoot = resolve(__dirname, '../../..');
@@ -130,9 +132,9 @@ function seedInvestigationWorkspace(dbPath: string): void {
   // one still running — the exact shape a 12-hour-old job with no visible
   // progress needs a duration/heartbeat readout for. ──
   const jobs = new BackgroundJobStore(sql);
-  jobs.create({ id: 'job-1', kind: 'agents', label: 'fork(settle=mcts)', input: `token=${SECRET_PROTEUS_TOKEN}`, now: 5050 });
+  jobs.create({ id: 'job-1', kind: 'agents', workMode: 'build', label: 'fork(settle=mcts)', input: `token=${SECRET_PROTEUS_TOKEN}`, now: 5050 });
   jobs.settle('job-1', 0, JSON.stringify({ ok: true }), 5050 + 125_000);
-  jobs.create({ id: 'job-2', kind: 'agents', input: '{}', now: 5060 });
+  jobs.create({ id: 'job-2', kind: 'agents', workMode: 'build', input: '{}', now: 5060 });
 
   db.close();
 }
@@ -194,7 +196,9 @@ describe('proteus debug — local backend', () => {
     expect(raw).not.toContain(SECRET_PROTEUS_TOKEN);
     expect(raw).toContain('[REDACTED]');
 
-    const records = raw.trim().split('\n').map((l) => JSON.parse(l) as { t: string });
+    const records = raw.trim().split('\n').map((line) => v.parse(
+      v.objectWithRest({ t: v.string() }, JsonValueSchema), JSON.parse(line),
+    ));
     const counts = new Map<string, number>();
     for (const rec of records) counts.set(rec.t, (counts.get(rec.t) ?? 0) + 1);
     expect(counts.get('run')).toBe(2);
@@ -204,7 +208,11 @@ describe('proteus debug — local backend', () => {
     expect(counts.get('background_job')).toBe(2);
     expect(counts.get('end')).toBe(1);
     // Full per-run event fidelity — the richest source, verbatim.
-    const runEvents = records.filter((r2) => r2.t === 'run_event') as unknown as Array<{ runId: string; type: string }>;
+    const RunEventSchema = v.object({ t: v.literal('run_event'), runId: v.string(), type: v.string() });
+    const runEvents = records.flatMap((record) => {
+      const event = v.safeParse(RunEventSchema, record);
+      return event.success ? [event.output] : [];
+    });
     expect(runEvents.filter((e) => e.runId === 'run-new').map((e) => e.type)).toEqual([
       'run_start', 'tool_call_start', 'tool_call_end', 'tool_call_start', 'tool_call_end', 'run_end',
     ]);
@@ -219,10 +227,10 @@ describe('proteus debug — local backend', () => {
 
     const r = await result(runCli(home, ['debug', 'invest', '--out', join(out, 'b.jsonl'), '--json'], repoRoot));
     expect(r.exitCode).toBe(0);
-    const summary = JSON.parse(r.stdout) as {
-      runs: Array<{ runId: string; jobPollsAfterHandle: number }>;
-      mctsSearches: Array<{ rootId: string; nodeCount: number; maxDepth: number }>;
-    };
+    const summary = v.parse(v.object({
+      runs: v.array(v.object({ runId: v.string(), jobPollsAfterHandle: v.number() })),
+      mctsSearches: v.array(v.object({ rootId: v.string(), nodeCount: v.number(), maxDepth: v.number() })),
+    }), JSON.parse(r.stdout));
     const newRun = summary.runs.find((run) => run.runId === 'run-new');
     expect(newRun?.jobPollsAfterHandle).toBe(1);
     const [latest, previous] = summary.mctsSearches;
@@ -244,15 +252,17 @@ describe('proteus debug — cloud backend', () => {
         if (request.headers.get('authorization') !== 'Bearer ptc_stored_session') {
           return Response.json({ error: 'unauthorized' }, { status: 401 });
         }
-        const body = await request.json() as { method: string; args: unknown[] };
-        calls.push(body.method);
-        const respond = (result: unknown) => Response.json({ result });
-        switch (body.method) {
+        const body = v.parse(JsonObjectSchema, await request.json());
+        const method = v.parse(v.string(), body.method);
+        const args = v.parse(JsonArraySchema, body.args);
+        calls.push(method);
+        const respond = (result: JsonValue) => Response.json({ result });
+        switch (method) {
           case 'getWorkspaceSnapshot': return respond({ status: { displayName: 'skywriter', purpose: 'p', scaffoldVersion: 1, model: 'x' } });
           case 'getChatHistory': return respond([{ id: 'm1', role: 'user', content: 'hi', createdAt: 1 }]);
           case 'listRuns': return respond([{ runId: 'run-cloud', lastTs: new Date(1000).toISOString(), eventCount: 2 }]);
           case 'getRunEvents': {
-            const [, opts] = body.args as [string, { since: number }];
+            const opts = v.parse(v.object({ since: v.number() }), args[1]);
             if (opts.since > 0) return respond([]);
             return respond([
               { type: 'run_start', eventIndex: 0, runId: 'run-cloud', timestamp: new Date(1000).toISOString(), caused_by: 'chat' },

@@ -2,12 +2,12 @@
 
 > Maintained by Claude (AI-edited documentation, presented as-is); verify against the code when precision matters.
 
-Proteus is a self-evolving agent **workspace**. You create a workspace — a durable
-container with its own filesystem, execution environments, and sessions — and its
+Proteus is a self-evolving agent **workspace**. You create a workspace (a durable
+container with its own filesystem, execution environments, and sessions) and its
 agent answers chat, runs tools, explores strategies with Monte Carlo Tree Search,
 learns reusable tools, and can rewrite its own agentic loop.
 
-The design has one rule that keeps it honest: **one shared brain, thin adapters.**
+The design has one rule: **one shared brain, thin adapters.**
 Everything platform-independent lives in `packages/core`. The cloud backend
 (`packages/cf-backend`, a Durable Object over Cloudflare's [Think](https://github.com/cloudflare/agents))
 and the local backend (`packages/cli-backend`) are thin shells that give the same
@@ -19,8 +19,8 @@ paths are cited so you can jump to the source.
 A workspace is the container; agents are the actors inside it. The workspace is
 1:1 with an `OrchestratorAgent` Durable Object on the cloud backend
 (`cf-backend/src/orchestrator.ts`). Its file plane is the workspace filesystem
-(`core/src/vfs/nimbus-workspace.ts`) — Nimbus over that DO's own SQLite, with a
-real shell over the same bytes — and its execution plane is an
+(`core/src/execution/nimbus.ts`), one authoritative `NIMBUS_SESSION` with a
+real shell, runtimes, processes, and ports over the same bytes. Its execution plane is an
 `ExecutionRouter` (`core/src/execution/router.ts`) that dispatches to whichever
 OTHER environment is asked for, running commands target-native rather than
 emulating them. There is no mount table: every other environment is its own
@@ -30,41 +30,42 @@ filesystem in its own native paths, reached through its namespace.
 graph TB
     subgraph WS["Workspace = OrchestratorAgent DO (orchestrator.ts)"]
         direction TB
-        Files["Workspace filesystem — Nimbus over this DO's SQLite<br/>(core/src/vfs/nimbus-workspace.ts), durable, real shell"]
+        Files["Workspace filesystem — authoritative NIMBUS_SESSION<br/>(runtime.ts + execution/nimbus.ts), durable, real shell"]
         subgraph Execs["ExecutionRouter — target-native exec, each its own filesystem"]
             W["workspace.* — the file plane above (default runtime)"]
             S["sandbox.* — full Linux container (when configured)"]
-            N["nimbus.* — a SEPARATE Nimbus session (when provisioned)"]
             P["laptop.* — the user's own machine (connect + consent)"]
         end
-        State["State: sessions · SOUL.md · memory · scaffold<br/>CraftStore · evolution ledgers · triggers"]
+        State["Actor SQL: sessions · plans · task/evolution ledgers<br/>Nimbus files: SOUL.md · memory · actor scaffolds"]
     end
 
     Orch["orchestrator (default agent)<br/>the workspace's voice"] --> WS
-    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>own workspace, parent reached as parent.*"] -.->|report events| Orch
-    Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>own private workspace, parent reached as parent.*"] -.->|findings merge back| Orch
+    Subs["subordinates<br/>SubordinateAgent facets (subordinate-agent.ts)<br/>shared workspace, actor-scoped shell + scaffold"] -.->|assigned-work reports| Orch
+    Heads["heads / MCTS branches<br/>ExplorationAgent facets (exploration.ts)<br/>shared workspace, actor-scoped shell + private scaffold"] -.->|findings merge back| Orch
     Peers["peers<br/>the owner's other workspaces"] -.->|peer transport| Orch
 ```
 
-The mount table is the source of truth: `listMounts()` (an orchestrator RPC over
-`compositeVfs.listMounts()`) returns each live mount plus its declared policy
-(`readOnly`, `durable | ephemeral | live-shared`, credentials-stay-in-host). The
-`/pc` mount is served by the `pc-agent` reverse-WebSocket daemon
-(`packages/pc-agent`) running on the user's machine. See
+The environment list is the source of truth: `listMounts()` (an orchestrator RPC
+over `listEnvironments(executionRouter)`, `core/src/read-models/files.ts`)
+returns one row per executor that has a filesystem, with its namespace prefix,
+whether it is live, and its declared policy (`readOnly`, `rootPath`, and a
+`durable | ephemeral | live-shared` consistency). The `laptop` environment is
+served by the `pc-agent` reverse-WebSocket daemon (`packages/pc-agent`) running
+on the user's machine. See
 [WORKSPACES.md](./WORKSPACES.md) for the full noun model.
 
 ## The actor hierarchy
 
 Three DO classes act inside a workspace, and their inheritance is the security
-model, not an implementation detail:
+model:
 
 ```mermaid
 graph TB
     A["Agent&lt;Env&gt; — agents SDK"]
     T["Think — @cloudflare/think"]
     AA["ActorAgent (abstract)<br/>cf-backend/src/actor-agent.ts<br/>runtime · BackendHost · AgentOrchestrator<br/>ExtensionHost · Think hook bridge"]
-    O["OrchestratorAgent<br/>deps: team · peers · releases"]
-    S["SubordinateAgent<br/>deps: report"]
+    O["OrchestratorAgent<br/>agents: fork · staff · ask/send/reply · list/dismiss<br/>codemode: release · plan submit"]
+    S["SubordinateAgent<br/>agents: fork · report on assigned turns"]
     E["ExplorationAgent<br/>hand-built head tools only"]
     OMS["OwnedModelServices<br/>owner-scoped provider · model<br/>affinity · web search"]
 
@@ -83,25 +84,22 @@ hook bridge. A subclass supplies only a four-member profile — `getOwnerUserId`
 `actorToolDeps`, `engine`, `notifyOwner` — plus three optional hooks
 (`workspaceName`, `extraCodemodeProviders`, `isClientRpcMethodDenied`).
 
-**Tool gating is structural, not flagged.** `DEPS_GATED_TOOLS` is
-`['team', 'peers', 'report', 'release']`, and `actorActiveTools()` filters
-the active set by which deps the profile actually wired. The orchestrator wires
-`team`, `peers`, and `releases`; a subordinate wires only `report`. That
-is the whole mechanism — a subordinate cannot staff subordinates of its own
-because there is no `team` tool in its ToolSet to call.
+**Tool gating is structural, not prompt-only.** Every full-loop actor gets the
+ordinary built-ins. The `agents` schema is derived from the capabilities its
+profile wires: every actor can fork, while only the orchestrator wires durable
+staffing and peer transport. `report` is present only for a subordinate's
+parent-assigned turn. Release is a codemode provider only on the orchestrator
+and is omitted from Plan-mode tool construction; `submit_plan` is present only
+for an orchestrator Plan turn.
 
-**`ExplorationAgent` deliberately stays on the bare `Agent`.** It is not an
-`ActorAgent` and never inherits the actor tool surface. Its ToolSet is
-hand-assembled by `buildHeadTools()` — `record_evidence`, `record_decision`,
-`execute_tools`, `run`, `file`, `web`, and the depth-budgeted `split_subheads`.
-No `agents`, so it cannot delegate. Its file plane is genuinely its own — a
-private workspace filesystem in its own facet's SQLite that siblings cannot
-see — and the parent workspace is reached the way every other environment is,
-as an executor: `parent.*` / `run { runtime: 'parent' }` over the parent RPC
-handle (`core/src/execution/parent.ts`), which runs the parent's REAL shell in
-its own native paths rather than walking it a file at a time.
-Recursion is bounded by construction: its one fan-out path, `split_subheads`,
-decrements `maxDepth` on every spawn and refuses once the budget is exhausted.
+**`ExplorationAgent` deliberately stays on the bare `Agent`.** It has two
+explicit modes. An MCTS rollout gets no tools or runtime at all. A branching
+head gets the hand-built head surface — evidence, decisions, `execute_tools`,
+`run`, `file`, `web`, and depth-budgeted subheads — over the canonical parent
+workspace. It shares files/processes/ports, while its SQL journal, scaffold path,
+and `shellId` are private. It never inherits the full actor tool surface.
+Recursion is bounded by construction: `split_subheads` decrements `maxDepth` on
+every spawn and refuses once the budget is exhausted.
 
 All three share the owner/provider/model/web substrate by **composition**, not
 inheritance: `OwnedModelServices`
@@ -113,30 +111,26 @@ owner from the `facet_owner` row its parent seeds.
 
 ## Subordinates
 
-`team(action:'spawn')` calls `orchestrator.subAgent(SubordinateAgent, name)` and
-immediately seeds the facet's identity. That identity is single-row and
+`agents({action:'staff', ...})` calls
+`orchestrator.subAgent(SubordinateAgent, name)` and immediately seeds the
+facet's identity. That identity is single-row and
 immutable after seeding: re-seeding with a different name, parent workspace, or
 owner throws, and the seeding RPC is denied to client sockets, so only a
 worker-held parent stub can create one.
 
 A subordinate is a *durable* teammate, not a one-shot call. It has its own
-SQLite, runs the full turn loop, keeps its own evolution engine and history, and
-survives hibernation. Its own filesystem is its own; the parent workspace is
-reached as an EXECUTOR — `createParentExecutor` registers a `parent.*` namespace
-over the parent stub (`subordinate-agent.ts` `registerParentWorkspace`) — rather
-than as a directory of this facet, because the parent is another Durable Object
-behind async RPC exactly like the sandbox and the user's machine. The six
-parent-side methods it calls (`readWorkspaceFile`, `writeWorkspaceFile`,
-`listWorkspaceFiles`, `statWorkspaceFile`, `deleteWorkspaceFile`,
-`execWorkspaceCommand`) deliberately carry no `@callable`, so nothing but a
-parent stub can reach them. Exec planes stay keyed on the *parent's* workspace
-name, so the sandbox and the user's PC are shared rather than duplicated.
+SQLite turn/history state, full loop, and evolution engine, and survives
+hibernation. Its runtime is keyed to the parent's workspace name, so it uses the
+same authoritative Nimbus files, processes, ports, Sandbox, and device consent.
+Its `shellId` and scaffold path are actor-private; its rendered identity comes
+from `subordinate_identity` rather than overwriting the workspace `SOUL.md`.
 
 Work arrives as an `ingress: 'subordinate'` event with variant
 `subordinate_task`; results come back through `receiveSubordinateEvent` as
 variant `subordinate_report`, which broadcasts to sockets and schedules a drain
 on the parent. If a subordinate finishes an assigned turn without calling
-`report`, its answer is relayed automatically. `dismiss` deletes the facet
+`report`, its answer is relayed automatically. Owner-driven subordinate chat is
+private and has no report tool. `dismiss` deletes the facet
 unless `keep_history` is set, in which case only the roster row is marked
 dismissed.
 
@@ -148,7 +142,7 @@ everything inline.
 
 ## The turn pipeline
 
-Every turn — cloud or local — flows through the same `ExtensionHost`
+Every turn, cloud or local, flows through the same `ExtensionHost`
 (`core/src/extension.ts`), the one small, stable seam both backends fire. On the
 cloud the `OrchestratorAgent` bridges Think's subclass hooks onto that host;
 on the CLI, `LocalAgentSession` (`cli-backend/src/local-session.ts`) drives
@@ -190,7 +184,7 @@ What the boxes are:
 | `beforeToolCall` / `afterToolCall` | `emitToolCall` / `emitToolResult`; the evolution engine records each call | `orchestrator.ts` |
 | `_transformInferenceResult` | the **mutable scaffold** seam — an evolved `agent.js` becomes the turn's inference loop; un-evolved passes through untouched | `core/src/scaffold/inference-transform.ts` |
 | `onChatResponse` | `emitTurnEnd` → fire-and-forget evolution (never blocks the queue); the turn-failure classifier may arm a one-shot force-compaction retry | `orchestrator.ts`, `core/src/turn-failure.ts` |
-| `getModel` / `getSystemPrompt` / `getTools` | model from `agent_config`; `SOUL.md` from the VFS; the 12 builtin tools, filtered to the actor's wired deps | `core/src/tools/registry.ts` |
+| `getModel` / `getSystemPrompt` / `getTools` | model from `agent_config`; `SOUL.md` from the VFS; the eight builtin tools, filtered to the actor's wired deps | `core/src/tools/registry.ts` |
 
 The two default registrants attach at construction on both backends:
 
@@ -198,7 +192,7 @@ The two default registrants attach at construction on both backends:
   default `transformContext`: the vendored better-compact staged-pruning ladder
   (`compaction/src/engine/`) plus the Proteus codec (`compaction/src/codec.ts`,
   AI-SDK `ModelMessage[]` ⇄ ladder `Turn[]`). It runs once per turn assembly over
-  shared stores — raw transcripts in the CompositeVFS, the replayable plan + the
+  shared stores — raw transcripts in the canonical workspace VFS, the replayable plan + the
   measured token trigger in one `compaction_state` row. The trigger is 85% of
   the model's context window (`COMPACTION_PRESETS.light`, measured against the
   provider's own reported prompt tokens floored by the history estimate plus the
@@ -207,31 +201,32 @@ The two default registrants attach at construction on both backends:
   reasoning → remaining tool output → assistant runs → prefix summary. The first
   rung is Proteus's own (`relieveEphemeralPressure`): a superseded
   `<dynamic_context>` block is stale by definition and re-derivable from live
-  state, so it is the cheapest thing in the request to give up — and, being
-  woven per model step, it is the one thing a ladder stage can never see. What
+  state, so it is the cheapest thing in the request to give up. Being woven per
+  model step, it is also the one thing a ladder stage can never see. What
   it frees is subtracted from the pressure the engine is told about, so relief
   here can stand the rest of the ladder down.
 - **Signal delivery** (`proteus.signals`, a `prepareStep` hook) is the ONE way
-  anything asynchronous reaches the agent, at the ONE time anything reaches it
-  (`core/src/orchestrator/signals.ts`). A producer — the event-hub drain, a
-  settled background job, an overflow retry, a take pick, an MCP task — states
-  intent and nothing else; the signal is spliced into the live turn's next step
-  using the `StepInjections` math (`core/src/prompting/step-injections.ts`).
-  When no turn is running there is no next step, so delivery starts one
-  (`BackendHost.enqueueTurn`) — that is what "next step" means to an idle
-  agent, not a second timing, and `BackendHost.turnInFlight` is the fact the
-  seam reads to tell them apart. The spliced message is ephemeral exactly like
+  anything asynchronous reaches the agent (`core/src/orchestrator/signals.ts`).
+  A producer (the event-hub drain, a settled background job, an overflow retry,
+  a take pick, an MCP task) states intent and nothing else. A signal compatible
+  with the active turn is spliced into its next step using the `StepInjections`
+  math (`core/src/prompting/step-injections.ts`); a signal that requires its own
+  turn or carries a different trusted Plan/Build mode is enqueued immediately
+  through `BackendHost.enqueueTurn`. When no turn is running, enqueueing starts
+  one. `BackendHost.turnInFlight` and the trusted mode are the only routing
+  facts. A spliced message is ephemeral exactly like
   the `<dynamic_context>` block beside it: model-visible at the tip, never
   durable history, gone on a cold start. The turn's own mechanical steering
   (`core/src/orchestrator/turn-steering.ts`) is not delivered — it is handed to the step being
-  prepared, so it cannot outlive it. One buffer and one splice for every
-  signal, so no registration order can shift another producer's recorded
-  indices. It is the DO counterpart of the CLI's `proteus.steering` drain —
-  same mechanism, one host.
+  prepared, so it cannot outlive it. Every compatible live-turn signal uses one
+  buffer and one splice, so no registration order can shift another producer's
+  recorded indices; queued own-turn signals use the same delivery host without
+  entering that buffer. It is the DO counterpart of the CLI's
+  `proteus.steering` drain — same mechanism, one host.
 
 Supporting context machinery, all in `core/src/prompting` and shared by both
 backends: the **attachment sanitizer** (`attachment-sanitizer.ts`) offloads
-model-incompatible file parts to `/local/attachments` so a poisoned transcript
+model-incompatible file parts to `attachments/` so a poisoned transcript
 heals byte-stably; the **DynamicContextLedger** (`volatile-context.ts`) re-reads
 live state at every model step and appends a fresh `<dynamic_context>` block only
 when its render changes, freezing earlier blocks in place to preserve provider
@@ -284,8 +279,8 @@ loop through `LocalAgentSession` instead of the WebSocket transport.
 
 ## Events and ingress
 
-The workspace is not only chat-driven — it wakes on external events through a
-durable `EventLog` (`core/src/events/hub/log.ts`, schema in
+The workspace wakes on external events as well as on chat, through a durable
+`EventLog` (`core/src/events/hub/log.ts`, schema in
 `core/src/events/hub/schema.ts`). Delivery uses a **lease**: the `consumed_at`
 column on the `agent_log` table is set when an event is bound to a turn
 (`markConsumed`), cleared on completion (`markTurnCompleted`), released on
@@ -309,8 +304,8 @@ each backend supplies only the transport in front of one: the Worker's HTTP and
 `email()` routes and the DO alarm on cf, the process timer locally.
 
 The full `IngressKind` union in `core/src/events/hub/types.ts` is wider than
-this — it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
-`mcp_streamable`, `self_emit`, and `reply_request` — but the five above are the
+this (it also names `chat_ws`, `sandbox_cb`, `process_watch`, `file_watch`,
+`mcp_streamable`, `self_emit`, and `reply_request`), but the five above are the
 paths that wake a sleeping workspace from outside its own turn.
 
 ## MCP — user-level once-auth, zero token transfer
@@ -340,8 +335,8 @@ update.
 
 Neither kind is an attestation of who is calling: Cloudflare gives a Durable
 Object no way to learn that, so a sibling DO sharing `env` can derive the owner
-capability too. What the boundary buys is that the tool surface — the part an
-injected prompt can steer — reaches the UserDO only through code presenting a
+capability too. What the boundary buys is that the tool surface (the part an
+injected prompt can steer) reaches the UserDO only through code presenting a
 workspace token, and is attenuated by tier whichever tool gate someone forgets.
 
 Today every workspace is registered `full` — the whole user surface, exactly as
@@ -384,13 +379,13 @@ and [MCTS.md](./MCTS.md).
 ```mermaid
 graph TB
     subgraph pkgs["packages/"]
-        Core["core/<br/>turn pipeline + ExtensionHost, CompositeVFS,<br/>ExecutionRouter, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, 12 builtin tools, EventLog"]
+        Core["core/<br/>turn pipeline + ExtensionHost, canonical VFS,<br/>ExecutionRouter, MCTS, EvolutionEngine,<br/>CraftStore, scaffold, eight builtin tools, EventLog"]
         Utils["agent-utils/<br/>SqliteFS · MemoryStore (FTS5)<br/>CraftStore (FTS5) · POSIX shell emulator"]
         Compact["compaction/<br/>vendored better-compact ladder + Proteus codec"]
         CF["cf-backend/<br/>ActorAgent → OrchestratorAgent + SubordinateAgent,<br/>ExplorationAgent (Facets), UserDO, React UI"]
         CLI["cli/<br/>proteus create/chat/exec/evolve/…"]
         CLIB["cli-backend/<br/>LocalAgentSession, bun:sqlite,<br/>subprocess sandbox, child_process branches"]
-        PC["pc-agent/<br/>reverse-WS device daemon → /pc"]
+        PC["pc-agent/<br/>reverse-WS device daemon → laptop.*"]
         TU["test-utils/<br/>shared test fakes + fixtures"]
     end
 
@@ -417,12 +412,13 @@ graph TB
 ## Backends and the AgentRuntime contract
 
 `AgentRuntime` is the seam every backend implements so `packages/core` never has
-to know where it runs. `packages/cf-backend` binds it to Durable Object SQLite
-and Think; `packages/cli-backend` binds it to `bun:sqlite` and a local process.
+to know where it runs. `packages/cf-backend` binds actor state to Durable Object
+SQLite, workspace files/execution to Nimbus, and the turn driver to Think;
+`packages/cli-backend` binds it to `bun:sqlite` and a local process.
 
 | Primitive | CF backend | CLI backend |
 |---|---|---|
-| Storage | SqliteFS over DO SQLite | SqliteFS over `bun:sqlite` |
+| Storage | Nimbus VFS + actor DO SQL | SqliteFS over `bun:sqlite` |
 | Memory | MemoryStore (FTS5 BM25) | MemoryStore (FTS5 BM25) |
 | Executor | codemode LOADER / `new Function()` fallback | Bun subprocess sandbox |
 | LLM | Workers AI binding or AI Gateway | AI Gateway via AI SDK |
@@ -476,11 +472,11 @@ MCTS rollouts run `low`, scaffold mutation runs `high`.
 
 ## Storage and formal models
 
-All workspace state lives in one Durable Object SQLite database — the VFS
-(`vfs_files`, including `SOUL.md`), memory, crafted tools + scores, MCTS
-`search_nodes`, `scaffold_versions`, evolution ledgers, `agent_log`,
-`compaction_state`, and Think's own session tables. The schema and the SqliteFS /
-MemoryStore internals are documented in [STORAGE.md](./STORAGE.md).
+Workspace state has two explicit authorities. The Nimbus session owns files,
+including `SOUL.md`, memory markdown, and scaffolds. The workspace actor's
+SQLite owns relational state: plans, messages, memory/craft indexes, MCTS,
+evolution, event logs, and Think session tables. The schema and boundaries are
+documented in [STORAGE.md](./STORAGE.md).
 
 Selected core algorithms are modeled in Lean 4 (`lean/`): 84 named theorems over
 hand-maintained abstract models of agent, evolution, execution, MCTS, safety, and

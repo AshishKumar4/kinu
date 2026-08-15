@@ -3,7 +3,7 @@ import { describe, test, expect } from 'bun:test';
 import { dedupeKeyFor } from '../src/events/hub/index.ts';
 import type { ProteusEvent } from '../src/events/hub/index.ts';
 
-function base(): ProteusEvent {
+function base(): Extract<ProteusEvent, { variant: 'webhook' }> {
   return {
     id: 'eid',
     trace_id: 'tid',
@@ -36,7 +36,7 @@ describe('dedupeKeyFor — webhook', () => {
   test('different bodies → different keys', () => {
     const e1 = base();
     const e2 = { ...base() };
-    (e2.payload as { body: unknown }).body = { action: 'closed' };
+    e2.payload.body = { action: 'closed' };
     expect(dedupeKeyFor(e1)).not.toBe(dedupeKeyFor(e2));
   });
   test('different time buckets → different keys', () => {
@@ -47,7 +47,7 @@ describe('dedupeKeyFor — webhook', () => {
   test('different webhook_id → different keys even for same body', () => {
     const e1 = base();
     const e2 = { ...base() };
-    (e2.payload as { webhook_id: string }).webhook_id = 'gh-issues';
+    e2.payload.webhook_id = 'gh-issues';
     expect(dedupeKeyFor(e1)).not.toBe(dedupeKeyFor(e2));
   });
 });
@@ -81,7 +81,7 @@ describe('dedupeKeyFor — peer_agent', () => {
     ...base(),
     ingress: 'peer_async',
     variant: 'peer_agent',
-    payload: { from_agent_name: 'scout', from_user_id: 'u1', topic, body: 'hi', sender_event_id },
+    payload: { from_agent_name: 'scout', from_user_id: 'u1', topic, body: 'hi', sender_event_id, proteus_mode: 'build' },
   });
   test('keyed by (sender, sender_event_id) — a crash redelivery is a no-op', () => {
     expect(dedupeKeyFor(peer('ox1', 'status'))).toBe('peer:scout:ox1');

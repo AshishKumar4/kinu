@@ -1,11 +1,32 @@
 // Payload visibility — redaction + LLM rendering.
 import { describe, test, expect } from 'bun:test';
 import { createMemoryVfs } from '@proteus/test-utils';
+import * as v from 'valibot';
 import {
   EVENT_BRIEF_MAX_CHARS, applyVisibilityForStorage, eventContentPath,
   renderForLLM, spillEventContent,
 } from '../src/events/hub/index.ts';
-import type { ProteusEvent } from '../src/events/hub/index.ts';
+import type { BaseEvent } from '../src/events/hub/index.ts';
+
+const StoredHttpSchema = v.object({
+  headers: v.record(v.string(), v.string()),
+  body: v.object({ ok: v.boolean() }),
+});
+const StoredUserSchema = v.object({
+  user: v.object({ api_key: v.string(), password: v.string() }),
+  data: v.string(),
+});
+const StoredHashSchema = v.object({
+  _visibility: v.string(),
+  sha256: v.string(),
+  size: v.number(),
+});
+
+const EVENT_BASE = {
+  id: 'eid', trace_id: 'tid', caused_by: null,
+  trust: 'authenticated', priority: 'normal', received_at: 0,
+  schema_version: 1, reply_channel: null, dedupe_key: null,
+} satisfies Omit<BaseEvent, 'ingress' | 'variant' | 'payload_visibility'>;
 
 describe('applyVisibilityForStorage — full', () => {
   test('returns payload unchanged', () => {
@@ -21,7 +42,7 @@ describe('applyVisibilityForStorage — redact', () => {
       headers: { authorization: 'Bearer sk-abc123', 'content-type': 'application/json' },
       body: { ok: true },
     }, 'redact');
-    const stored = r.stored as { headers: Record<string, string>; body: unknown };
+    const stored = v.parse(StoredHttpSchema, r.stored);
     expect(stored.headers.authorization).toBe('<redacted:authorization>');
     expect(stored.headers['content-type']).toBe('application/json');
     expect(stored.body).toEqual({ ok: true });
@@ -31,7 +52,7 @@ describe('applyVisibilityForStorage — redact', () => {
       user: { name: 'alice', api_key: 'k', password: 'p' },
       data: 'visible',
     }, 'redact');
-    const stored = r.stored as { user: { api_key: string; password: string }; data: string };
+    const stored = v.parse(StoredUserSchema, r.stored);
     expect(stored.user.api_key).toBe('<redacted:api_key>');
     expect(stored.user.password).toBe('<redacted:password>');
     expect(stored.data).toBe('visible');
@@ -41,7 +62,7 @@ describe('applyVisibilityForStorage — redact', () => {
 describe('applyVisibilityForStorage — hash', () => {
   test('replaces payload with sha256+size summary', () => {
     const r = applyVisibilityForStorage({ secret: 'value' }, 'hash');
-    const stored = r.stored as { _visibility: string; sha256: string; size: number };
+    const stored = v.parse(StoredHashSchema, r.stored);
     expect(stored._visibility).toBe('hash');
     expect(stored.sha256).toHaveLength(64);
     expect(stored.size).toBeGreaterThan(0);
@@ -49,40 +70,38 @@ describe('applyVisibilityForStorage — hash', () => {
 });
 
 describe('renderForLLM', () => {
-  function eventFor(variant: ProteusEvent['variant'], payload: unknown, vis: 'full' | 'hash' = 'full'): ProteusEvent {
-    return {
-      id: 'eid', trace_id: 'tid', caused_by: null,
-      ingress: 'webhook_hmac', variant, trust: 'authenticated',
-      priority: 'normal', payload_visibility: vis,
-      received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
-      payload,
-    } as ProteusEvent;
-  }
   test('chat — brief truncates to ~200 chars', () => {
     const text = 'x'.repeat(500);
-    const r = renderForLLM({ ...eventFor('chat', { text }), ingress: 'chat_ws' });
+    const r = renderForLLM({
+      ...EVENT_BASE, ingress: 'chat_ws', variant: 'chat', payload_visibility: 'full', payload: { text },
+    });
     expect(r.brief.length).toBeLessThanOrEqual(200);
     expect(r.variant).toBe('chat');
   });
   test('webhook — brief shows method + body excerpt', () => {
-    const r = renderForLLM(eventFor('webhook', { http_method: 'POST', body: { ok: true }, webhook_id: 'w', http_headers: {}, delivery_id: 'd' }));
+    const r = renderForLLM({
+      ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'full',
+      payload: { http_method: 'POST', body: { ok: true }, webhook_id: 'w', http_headers: {}, delivery_id: 'd' },
+    });
     expect(r.brief).toContain('POST');
   });
   test('hash-visibility events show redacted brief', () => {
-    const r = renderForLLM(eventFor('webhook',
-      { _visibility: 'hash', sha256: 'abc'.repeat(20), size: 42, content_type: 'object' },
-      'hash'));
+    const r = renderForLLM({
+      ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'hash',
+      payload: { _visibility: 'hash', sha256: 'abc'.repeat(20), size: 42, content_type: 'object' },
+    });
     expect(r.brief).toContain('redacted');
   });
   test('an internal note names its kind and never leaks its payload bytes', () => {
     // `data` is whatever the emitting layer put there; the brief is the model's
     // view of an event, not a dump of it. The kind is the actionable fact.
-    const e = eventFor('internal', {
-      kind: 'email_inbound_rate_limited',
-      data: 'window resets at 2026-08-11T09:00:00Z',
+    const r = renderForLLM({
+      ...EVENT_BASE, ingress: 'self_emit', variant: 'internal', payload_visibility: 'full',
+      payload: {
+        kind: 'email_inbound_rate_limited',
+        data: 'window resets at 2026-08-11T09:00:00Z',
+      },
     });
-    e.ingress = 'self_emit';
-    const r = renderForLLM(e);
     expect(r.brief).toBe('email_inbound_rate_limited');
     expect(r.brief).not.toContain('2026-08-11');
   });
@@ -92,17 +111,19 @@ describe('renderForLLM', () => {
     // `read_external_payload(event_id)` — a function that existed nowhere on
     // any backend. Text injected into the prompt is an API contract; it may
     // only cite what the runtime can actually serve.
-    const r = renderForLLM(eventFor('webhook',
-      { _visibility: 'opaque_handle', handle: 'opaque:abcd1234' },
-      'opaque_handle' as never));
+    const r = renderForLLM({
+      ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'opaque_handle',
+      payload: { _visibility: 'opaque_handle', handle: 'opaque:abcd1234' },
+    });
     expect(r.brief).toContain('opaque:abcd1234');
     expect(r.brief).toContain('withheld');
     expect(r.brief).not.toContain('read_external_payload');
   });
   test('is_self_caused is true for self_emit', () => {
-    const e = eventFor('internal', { kind: 'reflect', data: {} });
-    e.ingress = 'self_emit';
-    const r = renderForLLM(e);
+    const r = renderForLLM({
+      ...EVENT_BASE, ingress: 'self_emit', variant: 'internal', payload_visibility: 'full',
+      payload: { kind: 'reflect', data: {} },
+    });
     expect(r.is_self_caused).toBe(true);
   });
 
@@ -117,10 +138,15 @@ describe('renderForLLM', () => {
       const { vfs } = createMemoryVfs();
       const content_path = await spillEventContent(vfs, longReport);
       expect(content_path).toBe(eventContentPath(longReport));
+      if (content_path === null) throw new Error('long subordinate report was not spilled');
 
-      const r = renderForLLM(eventFor('subordinate_report', {
-        from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
-      }));
+      const r = renderForLLM({
+        ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
+        payload: {
+          from_subordinate: 'researcher', status: 'completed', content: longReport, content_path,
+          proteus_mode: 'build',
+        },
+      });
       // Bounded, but it SAYS it is bounded and where the rest lives: head,
       // an in-band omitted count, tail, then the resolvable path.
       expect(r.brief.startsWith(`completed: ${longReport.slice(0, 100)}`)).toBe(true);
@@ -136,9 +162,13 @@ describe('renderForLLM', () => {
       expect(await spillEventContent(vfs, shortReport)).toBeNull();
       expect(files.size).toBe(0);
 
-      const r = renderForLLM(eventFor('subordinate_report', {
-        from_subordinate: 'researcher', status: 'completed', content: shortReport, task: 'Survey auth',
-      }));
+      const r = renderForLLM({
+        ...EVENT_BASE, ingress: 'subordinate', variant: 'subordinate_report', payload_visibility: 'full',
+        payload: {
+          from_subordinate: 'researcher', status: 'completed', content: shortReport,
+          task: 'Survey auth', proteus_mode: 'build',
+        },
+      });
       expect(r.brief).toBe('completed [re: Survey auth]: Survey done — three seams found; note written.');
     });
 
@@ -147,11 +177,15 @@ describe('renderForLLM', () => {
       const body = { question: 'x'.repeat(900) };
       const serialized = JSON.stringify(body);
       const body_path = await spillEventContent(vfs, serialized);
+      if (body_path === null) throw new Error('long peer body was not spilled');
 
-      const r = renderForLLM(eventFor('peer_agent', {
-        from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
-        body, sender_event_id: 'se1', body_path,
-      }));
+      const r = renderForLLM({
+        ...EVENT_BASE, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
+        payload: {
+          from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
+          body, sender_event_id: 'se1', body_path, proteus_mode: 'build',
+        },
+      });
       expect(r.brief.startsWith(`research: ${serialized.slice(0, 100)}`)).toBe(true);
       expect(r.brief).toContain(
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
@@ -167,10 +201,13 @@ describe('renderForLLM', () => {
       expect(await spillEventContent(vfs, JSON.stringify('shipping today'))).toBeNull();
       expect(files.size).toBe(0);
 
-      const r = renderForLLM(eventFor('peer_agent', {
-        from_agent_name: 'scout', from_user_id: 'u1', topic: 'status',
-        body: 'shipping today', sender_event_id: 'se1',
-      }));
+      const r = renderForLLM({
+        ...EVENT_BASE, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
+        payload: {
+          from_agent_name: 'scout', from_user_id: 'u1', topic: 'status',
+          body: 'shipping today', sender_event_id: 'se1', proteus_mode: 'build',
+        },
+      });
       expect(r.brief).toBe('status: "shipping today"');
     });
 
@@ -182,11 +219,15 @@ describe('renderForLLM', () => {
       const body = { event: 'deploy.failed', log: 'y'.repeat(900), action: 'rollback' };
       const serialized = JSON.stringify(body);
       const body_path = await spillEventContent(vfs, serialized);
+      if (body_path === null) throw new Error('long webhook body was not spilled');
 
-      const r = renderForLLM(eventFor('webhook', {
-        webhook_id: 'w', http_method: 'POST', http_headers: {}, delivery_id: 'd',
-        body, body_path,
-      }));
+      const r = renderForLLM({
+        ...EVENT_BASE, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'full',
+        payload: {
+          webhook_id: 'w', http_method: 'POST', http_headers: {}, delivery_id: 'd',
+          body, body_path,
+        },
+      });
       expect(r.brief).toContain('deploy.failed');
       expect(r.brief).toContain(
         `[... ${serialized.length - EVENT_BRIEF_MAX_CHARS} chars omitted from the middle ...]`,
@@ -200,15 +241,16 @@ describe('renderForLLM', () => {
       const { vfs } = createMemoryVfs();
       const body_text = `Please review:\n${'context line\n'.repeat(90)}Ship it by Friday.`;
       const body_path = await spillEventContent(vfs, body_text);
+      if (body_path === null) throw new Error('long email body was not spilled');
 
       const r = renderForLLM({
-        ...eventFor('email', {
+        ...EVENT_BASE, ingress: 'email_inbound', variant: 'email', payload_visibility: 'full',
+        payload: {
           from: 'owner@example.com', to: 'agent@example.com', subject: 'Release',
           body_text, message_id: null, in_reply_to: null, references: null,
           attachments: [{ filename: 'a.csv', content_type: 'text/csv', size: 4 }],
           body_path,
-        }),
-        ingress: 'email_inbound',
+        },
       });
       expect(r.brief.startsWith('"Release" [1 attachment]: Please review:')).toBe(true);
       expect(r.brief).toContain(

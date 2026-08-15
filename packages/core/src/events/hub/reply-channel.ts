@@ -16,28 +16,46 @@
  * it's determined mechanically by the consumed event.
  */
 
+import * as v from 'valibot';
 import {
   type ReplyChannelId, type ReplyChannelKind, type ReplyChannelRow,
   type ReplyChannelState, type EventId, type PayloadPolicy,
 } from './types.js';
 import { ulid } from './ulid.js';
 import type { SqlExec } from '../../types/primitives.js';
+import { parseJsonValue, type JsonValue } from '../../utils/json.js';
 
-const TTL_MS: Record<Exclude<ReplyChannelKind, 'none'>, number> = {
+const TTL_MS = {
   ws_session: 0,          // 0 → bound to holder, no clock-based expiry
   http_pending: 30_000,
   peer_back: 24 * 60 * 60 * 1000,
   mcp_pending: 60_000,
   email_thread: 24 * 60 * 60 * 1000,
-};
+} satisfies Record<Exclude<ReplyChannelKind, 'none'>, number>;
 
 /** Dispatcher that actually moves the reply over the wire. Implementations
  *  live in cf-backend (one per kind). */
 export interface ReplyDispatcher {
   /** Deliver `payload` to the channel's `holder_addr`. Throws on transport
    *  failure; the caller retries via channel's attempt_count. */
-  dispatch(channel: ReplyChannelRow, payload: unknown): Promise<{ delivered: boolean; detail?: string }>;
+  dispatch(channel: ReplyChannelRow, payload: JsonValue): Promise<{ delivered: boolean; detail?: string }>;
 }
+
+const ReplyChannelRowSchema = v.object({
+  id: v.string(),
+  event_id: v.string(),
+  kind: v.picklist(['ws_session', 'http_pending', 'peer_back', 'mcp_pending', 'email_thread', 'none']),
+  holder_addr: v.string(),
+  ttl_expires_at: v.number(),
+  payload_policy: v.picklist(['full', 'redact', 'hash', 'hmac', 'opaque_handle']),
+  state: v.picklist(['open', 'replied', 'expired', 'aborted']),
+  reply_payload: v.nullable(v.string()),
+  attempt_count: v.number(),
+  created_at: v.number(),
+  updated_at: v.number(),
+});
+const IdRowSchema = v.object({ id: v.string() });
+const CountRowSchema = v.object({ n: v.number() });
 
 export interface OpenChannelOpts {
   event_id: EventId;
@@ -84,7 +102,7 @@ export class ReplyChannelStore {
        WHERE event_id = ? AND state = 'open'${kind ? ` AND kind = ?` : ''}
        ORDER BY created_at DESC LIMIT 1`,
       ...(kind ? [event_id, kind] : [event_id]),
-    ).toArray() as Array<{ id: string }>;
+    ).toArray().map((row) => v.parse(IdRowSchema, row));
     return rows.length > 0 ? this.get(rows[0].id) : null;
   }
 
@@ -93,21 +111,21 @@ export class ReplyChannelStore {
       `SELECT id, event_id, kind, holder_addr, ttl_expires_at, payload_policy,
               state, reply_payload, attempt_count, created_at, updated_at
        FROM reply_channels WHERE id = ?`, id,
-    ).toArray() as Array<Record<string, unknown>>;
+    ).toArray();
     if (rows.length === 0) return null;
-    const r = rows[0];
+    const r = v.parse(ReplyChannelRowSchema, rows[0]);
     return {
-      id: r.id as string,
-      event_id: r.event_id as string,
-      kind: r.kind as ReplyChannelKind,
-      holder_addr: r.holder_addr as string,
-      ttl_expires_at: r.ttl_expires_at as number,
-      payload_policy: r.payload_policy as PayloadPolicy,
-      state: r.state as ReplyChannelState,
-      reply_payload: r.reply_payload != null ? JSON.parse(r.reply_payload as string) : null,
-      attempt_count: r.attempt_count as number,
-      created_at: r.created_at as number,
-      updated_at: r.updated_at as number,
+      id: r.id,
+      event_id: r.event_id,
+      kind: r.kind,
+      holder_addr: r.holder_addr,
+      ttl_expires_at: r.ttl_expires_at,
+      payload_policy: r.payload_policy,
+      state: r.state,
+      reply_payload: r.reply_payload === null ? null : parseJsonValue(r.reply_payload),
+      attempt_count: r.attempt_count,
+      created_at: r.created_at,
+      updated_at: r.updated_at,
     };
   }
 
@@ -130,7 +148,7 @@ export class ReplyChannelStore {
    * In all cases except `channel_closed`, an audit row should be appended
    * to `agent_log` by the caller (kind='reply_attempt').
    */
-  async reply(id: ReplyChannelId, payload: unknown, now: number): Promise<ReplyOutcome> {
+  async reply(id: ReplyChannelId, payload: JsonValue, now: number): Promise<ReplyOutcome> {
     const channel = this.get(id);
     if (!channel) return { outcome: 'channel_not_found' };
     if (channel.state !== 'open') return { outcome: 'channel_closed', state: channel.state };
@@ -165,7 +183,7 @@ export class ReplyChannelStore {
       return { outcome: 'failed', detail: r.detail };
     } catch (err) {
       this.bumpAttempt(id, now);
-      return { outcome: 'failed', detail: (err as Error).message };
+      return { outcome: 'failed', detail: err instanceof Error ? err.message : String(err) };
     }
   }
 
@@ -212,8 +230,8 @@ export class ReplyChannelStore {
   private countOpen(): number {
     const rows = this.sql.exec(
       `SELECT COUNT(*) AS n FROM reply_channels WHERE state = 'open'`,
-    ).toArray() as Array<{ n: number }>;
-    return rows[0]?.n ?? 0;
+    ).toArray();
+    return rows[0] ? v.parse(CountRowSchema, rows[0]).n : 0;
   }
 }
 
@@ -223,4 +241,3 @@ export type ReplyOutcome =
   | { outcome: 'channel_closed'; state: ReplyChannelState }
   | { outcome: 'no_dispatcher'; kind: ReplyChannelKind }
   | { outcome: 'failed'; detail?: string };
-

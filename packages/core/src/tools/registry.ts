@@ -100,7 +100,7 @@ export const DELEGATION_CONVERSE =
   'reply answers an incoming agent message event by its event_id; staff scope=workspace creates a specialist workspace of its own. ' +
   // The delivery contract, stated because it changes how to delegate: there is
   // no waiting for a helper to free up, and no reason to hold work back.
-  'A busy agent is never blocked on — your message is spliced into the turn it is already running, so send follow-ups as soon as you have them.';
+  'A busy agent is never blocked on — your message is queued immediately for its own mode-homogeneous turn, so send follow-ups as soon as you have them.';
 
 // ── Durable-state doctrine (single source) ──────────────────────────────────
 // `memory` is ONE tool because it is one concept — state this agent writes down
@@ -236,7 +236,7 @@ export function releaseToolActions(hasEngine: boolean): readonly ReleaseToolActi
  * resolved once at turn start (orchestrator/turn-surface.ts), never by a
  * tool call.
  */
-export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
+export const BUILTIN_TOOL_SPECS = {
   execute_tools: {
     name: 'execute_tools',
     // llm.query is deliberately NOT here — it exists only on the CF backend,
@@ -245,13 +245,11 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'Run JavaScript against active executor namespaces, codemode.* providers, tools.<name> crafted tools, and agent helpers.',
     whenToUse: 'Use when a step needs real logic: loops, branching, several calls whose results feed each other, crafted tool calls, and anything that has to hold state between calls.',
     whenNotToUse: 'Do not use for a single shell command when `run` is enough, or to read and edit a file when `file` is enough.',
-    // The recurring mental-model error: models read `workspace.*` as the
-    // machine's filesystem and call workspace.readdir('/app') on a container
-    // path, which cannot resolve. Stating what the namespace IS is what stops
-    // the whole class, not a better error on the tenth attempt.
+    // Other runtimes still own their own paths. The workspace namespace is the
+    // stable anchor: the same canonical bytes as `file` and `run` workspace.
     doctrine:
-      'workspace.* is the agent\'s OWN virtual filesystem, not the filesystem of the machine or container this agent runs on — a container path such as /app is not reachable through it. '
-      + 'Read and write files that live on a real machine or container by running a shell command there with the `run` tool, in the runtime that owns them.',
+      'workspace.* is the agent\'s canonical durable workspace: the same files addressed by the `file` tool and `run` with runtime "workspace". '
+      + 'A separate container or machine remains a separate filesystem in its own paths; address it through its listed runtime.',
     result: 'Returns whatever the code returns, as a structured result, or a structured error.',
     example: "execute_tools({code:\"const files = await workspace.readdir('reports'); return files.slice(0, 5)\"})",
   },
@@ -265,17 +263,11 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     // execution-status block carries the measured cpus/mem when the runtime
     // declares them; this is the sentence that tells the model to use them.
     //
-    // The other recurring error this doctrine exists to stop: a fork given
-    // `run` and no `execute_tools` never sees the workspace-namespace warning
-    // that lives on execute_tools's own doctrine, so it hits the same trap —
-    // `runtime: 'workspace'` reads as a real machine because the label says
-    // so, then a real-machine path against it comes back empty or ENOENT and
-    // gets misread as "nothing is here" instead of "wrong runtime."
     doctrine:
       'Inside a container `nproc`, `/proc/cpuinfo` and `free` report the HOST, not your cgroup — sizing `-j` or worker counts from them will OOM the job. When the execution status lists cpus/mem for a runtime, those are the real limits: size parallelism from them. '
-      + '`runtime: "workspace"` is Proteus\'s own internal virtual filesystem, emulated with a small fixed command set — it never contains a repository checkout or any real machine\'s files, and running programs there fails outright. A path that looks like it belongs to a real machine or container (e.g. `/workspace/...`) resolves against whichever runtime actually owns it, not this one — pick that runtime explicitly.',
+      + '`runtime: "workspace"` is the shell over the canonical durable workspace; its live execution status is authoritative for which programs and runtimes it supports. Separate containers and machines keep their own files and paths, so select those runtimes explicitly when the work lives there.',
     result: 'Returns the command output — both streams, labelled when both wrote — prefixed with the exit code when it is non-zero, or a structured runtime_not_provisioned error.',
-    example: "run({runtime:'sandbox', command:'npm test'})",
+    example: "run({runtime:'workspace', command:'npm test'})",
   },
   // ── The file plane (single source) ────────────────────────────────────────
   // ONE tool, three actions, for the same reason `memory` is one tool: reading
@@ -285,9 +277,9 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
   // they mirror (workspace.readFile / writeFile), so there is one vocabulary.
   file: {
     name: 'file',
-    summary: 'Read files, replace exact text inside them, and create them, on any filesystem this agent can reach.',
+    summary: 'Read files, replace exact text inside them, and create them in the agent\'s canonical workspace filesystem.',
     whenToUse:
-      'Every file you read and every file you change. '
+      'Every canonical workspace file you read or change; use a separate environment\'s namespace for files on that environment. '
       + 'read pages through a large file with offset/limit. '
       + 'edit replaces old_text with new_text: copy old_text exactly as the read showed it, with enough surrounding lines that it occurs once, and put several changes to one file in one call. '
       + 'write creates a file, or replaces one whole.',
@@ -319,7 +311,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
       'Do not delegate a single short coherent change you can simply do directly, or forks that would race on the same mutable resource. Caution: every subordinate or peer message wakes that agent for a full turn, so send purposeful work.',
     result:
       'fork produces the merged (or mcts-scored) answer with per-fork outputs — on a live session the call hands back a background job at spawn and that answer arrives as the wake when it settles; staff/dismiss return roster state. '
-      + 'ask/send return event_id plus delivery (steering_live_turn = spliced into the turn it is running, starts_now = it was idle, queued = already waiting) '
+      + 'ask/send return event_id plus delivery (starts_now = it was idle, queued = it will run in its own mode-homogeneous turn) '
       + 'and subordinate_phase (what it was doing) — subordinate reports and peer replies then arrive as events that wake you, citing that event_id.',
     // The fork call, because it is the one shape here a model gets wrong: the
     // trajectory data has `agents` called with an invented `fork_specs` for
@@ -369,7 +361,7 @@ export const BUILTIN_TOOL_SPECS: Record<BuiltinToolName, BuiltinToolSpec> = {
     result: 'Returns delivery confirmation; the report reaches the orchestrator as a background event that wakes it.',
     example: "report({status:'completed', content:'Auth migration merged; 3 regression tests added.'})",
   },
-};
+} satisfies Record<BuiltinToolName, BuiltinToolSpec>;
 
 /** Render a spec into the JSON-schema tool docstring. Providers weight the
  *  schema `description` most for tool selection, so the when-to-use doctrine
@@ -384,7 +376,13 @@ export function renderToolSchemaDescription(spec: BuiltinToolSpec): string {
   ].join('\n');
 }
 
-export const BUILTIN_TOOL_DESCRIPTIONS: Record<BuiltinToolName, string> =
-  Object.fromEntries(
-    BUILTIN_TOOLS.map((name) => [name, renderToolSchemaDescription(BUILTIN_TOOL_SPECS[name])]),
-  ) as Record<BuiltinToolName, string>;
+export const BUILTIN_TOOL_DESCRIPTIONS = {
+  execute_tools: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.execute_tools),
+  run: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.run),
+  file: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.file),
+  tasks: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.tasks),
+  agents: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.agents),
+  memory: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.memory),
+  web: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.web),
+  report: renderToolSchemaDescription(BUILTIN_TOOL_SPECS.report),
+} satisfies Record<BuiltinToolName, string>;

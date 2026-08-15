@@ -17,6 +17,7 @@
  * same thread (In-Reply-To / References).
  */
 
+import * as v from 'valibot';
 import type { EventLog } from '../hub/log.js';
 import type { ReplyChannelStore } from '../hub/reply-channel.js';
 import type { TriggerRegistry } from '../hub/triggers.js';
@@ -34,6 +35,7 @@ import { tryConsumeWebhookRateLimit } from './rate-limit.js';
  * makes it silently deaf while it believes it has seen its inbox.
  */
 export const EMAIL_INBOUND_RATE_PER_MIN = 30;
+const EmailAllowlistSchema = v.object({ allow: v.optional(v.array(v.string())) });
 
 /** All senders share one rate-limit window; the key is not a trigger id. */
 const EMAIL_INBOUND_RATE_KEY = 'email:inbound';
@@ -154,7 +156,7 @@ export async function acceptInboundEmail(
     in_reply_to: msg.in_reply_to,
     references: msg.references,
     attachments: msg.attachments,
-    ...(bodyPath ? { body_path: bodyPath } : {}),
+    body_path: bodyPath || undefined,
   };
 
   const reply_channel_id = deps.replies.open({
@@ -196,8 +198,8 @@ export function readEmailAllowlist(registry: TriggerRegistry): string[] {
   try {
     return registry.list({ kind: 'email_route', state: 'active' })
       .flatMap((t) => {
-        const allow = (t.spec as { allow?: unknown }).allow;
-        return Array.isArray(allow) ? allow.filter((a): a is string => typeof a === 'string') : [];
+        const spec = v.safeParse(EmailAllowlistSchema, t.spec);
+        return spec.success ? (spec.output.allow ?? []) : [];
       });
   } catch { return []; }
 }
@@ -210,7 +212,7 @@ export function readEmailAllowlist(registry: TriggerRegistry): string[] {
  */
 export function setEmailAllowlist(
   registry: TriggerRegistry, allow: string[], now: number,
-): { allowlist: string[] } {
+) {
   const cleaned = [...new Set(
     allow.map(normalizeEmailAddress).filter((a) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(a)),
   )];
@@ -327,7 +329,8 @@ export class EmailInbox {
       });
       this.deps.onAdmitted();
     } catch (err) {
-      console.warn('[proteus] email rate-drop notice failed:', (err as Error).message);
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn('[proteus] email rate-drop notice failed:', message);
     }
   }
 }

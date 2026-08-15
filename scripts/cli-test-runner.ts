@@ -21,7 +21,7 @@ process.env.PROTEUS_SKIP_DAEMON = "1";
 // Provide dummy LLM config so resolveLLMConfig() doesn't throw.
 process.env.PROTEUS_BASE_URL = process.env.PROTEUS_BASE_URL ?? "http://localhost:5173/workers-ai/v1";
 process.env.PROTEUS_AUTH = process.env.PROTEUS_AUTH ?? "Bearer test";
-process.env.PROTEUS_MODEL = process.env.PROTEUS_MODEL ?? "@cf/meta/llama-4-scout-17b-16e-instruct";
+process.env.PROTEUS_MODEL = process.env.PROTEUS_MODEL ?? "@cf/deepseek-ai/deepseek-v4-pro-0813";
 
 const TEST_ROOT = join(tmpdir(), `proteus-cli-e2e-home-${Date.now()}`);
 process.env.PROTEUS_HOME = TEST_ROOT;
@@ -42,6 +42,10 @@ function pass(name: string, detail?: string) {
 function fail(name: string, detail?: string) {
   failCount++;
   console.log(`FAIL: ${name}${detail ? ` — ${detail}` : ""}`);
+}
+
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function cleanup() {
@@ -72,14 +76,17 @@ async function testCreate() {
   // Duplicate should fail
   let dupFailed = false;
   const origExit = process.exit;
-  // @ts-ignore — stub process.exit to catch the expected exit(1)
-  process.exit = ((code?: number) => { if (code === 1) dupFailed = true; }) as any;
+  process.exit = (code) => {
+    if (code === 1) dupFailed = true;
+    throw new Error(`process.exit(${String(code)})`);
+  };
   try {
     await createCommand(AGENT_NAME, { mode: "local", purpose: "dupe" });
   } catch {
     dupFailed = true;
+  } finally {
+    process.exit = origExit;
   }
-  process.exit = origExit;
 
   if (dupFailed) {
     pass("proteus create (duplicate rejected)", "correctly refused");
@@ -108,9 +115,9 @@ async function testList() {
     } else {
       fail("proteus list", "empty output");
     }
-  } catch (e: any) {
+  } catch (error) {
     console.log = origLog;
-    fail("proteus list", e.message);
+    fail("proteus list", errorMessage(error));
   }
 }
 
@@ -135,9 +142,9 @@ async function testStatus() {
     } else {
       fail("proteus status", "empty output");
     }
-  } catch (e: any) {
+  } catch (error) {
     console.log = origLog;
-    fail("proteus status", e.message);
+    fail("proteus status", errorMessage(error));
   }
 }
 
@@ -190,7 +197,9 @@ async function testDbIntegrity() {
 
   const db = new Database(dbPath, { readonly: true });
   try {
-    const tables = db.query("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as { name: string }[];
+    const tables = db.query<{ name: string }, []>(
+      "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name",
+    ).all();
     const tableNames = tables.map(t => t.name);
 
     // `inodes` is the workspace filesystem's own table (Nimbus). The agent's
@@ -208,17 +217,22 @@ async function testDbIntegrity() {
     // listing needs is a column on the identity row, maintained by writeSoul.
     // Checking the column here is what this path can do without opening a
     // filesystem — which is the whole reason the column exists.
-    const soulFile = db.query(
+    const soulFile = db.query<{ n: number }, []>(
       "SELECT COUNT(*) AS n FROM inodes WHERE path LIKE '%SOUL.md'",
-    ).get() as { n: number } | null;
-    const mission = db.query("SELECT mission FROM workspace_identity LIMIT 1").get() as { mission: string } | null;
-    if ((soulFile?.n ?? 0) > 0 && (mission?.mission ?? "").includes("E2E test agent")) {
-      pass("DB SOUL.md", `file present, mission: "${mission!.mission}"`);
+    ).get();
+    const mission = db.query<{ mission: string }, []>(
+      "SELECT mission FROM workspace_identity LIMIT 1",
+    ).get();
+    const missionText = mission?.mission ?? "";
+    if ((soulFile?.n ?? 0) > 0 && missionText.includes("E2E test agent")) {
+      pass("DB SOUL.md", `file present, mission: "${missionText}"`);
     } else {
       fail("DB SOUL.md", `soul file rows=${soulFile?.n ?? 0}, mission=${JSON.stringify(mission?.mission)}`);
     }
 
-    const identity = db.query("SELECT name FROM workspace_identity LIMIT 1").get() as { name: string } | null;
+    const identity = db.query<{ name: string }, []>(
+      "SELECT name FROM workspace_identity LIMIT 1",
+    ).get();
     if (identity?.name === AGENT_NAME) {
       pass("DB workspace_identity", `name: "${identity.name}"`);
     } else {

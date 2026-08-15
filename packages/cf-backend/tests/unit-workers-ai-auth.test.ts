@@ -13,6 +13,7 @@ import { join } from 'node:path';
 import { generateText } from 'ai';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
 import { CloudflareOAuthTokenError, refreshCloudflareCredential } from '../src/lib/cloudflare-oauth.ts';
+import { asFetchFunction } from '@proteus/core';
 
 const ACCOUNT_BASE_URL = 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1';
 
@@ -30,7 +31,7 @@ function chatCompletionResponse(): Response {
 describe('Workers AI credential refresh', () => {
   test('refresh merges rotated tokens into the stored credential shape', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    globalThis.fetch = asFetchFunction(async (input: RequestInfo | URL, init?: RequestInit) => {
       expect(String(input)).toBe('https://dash.cloudflare.com/oauth2/token');
       const body = new URLSearchParams(String(init?.body));
       expect(body.get('grant_type')).toBe('refresh_token');
@@ -42,7 +43,7 @@ describe('Workers AI credential refresh', () => {
         expires_in: 3600,
         scope: 'user-details.read ai.write offline_access',
       }), { headers: { 'content-type': 'application/json' } });
-    }) as unknown as typeof fetch;
+    });
     try {
       const next = await refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -56,7 +57,7 @@ describe('Workers AI credential refresh', () => {
       );
       expect(next.accessToken).toBe('cf-access-2');
       expect(next.refreshToken).toBe('cf-refresh-2');
-      expect(next.expiresAt!).toBeGreaterThan(Date.now());
+      expect(next.expiresAt).toBeGreaterThan(Date.now());
       expect(next.metadata?.accountId).toBe('abc123abc123abc1');
       expect(next.metadata?.scopes).toEqual(['user-details.read', 'ai.write', 'offline_access']);
     } finally {
@@ -73,10 +74,10 @@ describe('Workers AI credential refresh', () => {
 
   test('a revoked refresh token surfaces as a typed invalid_grant error', async () => {
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = (async () => new Response(JSON.stringify({
+    globalThis.fetch = asFetchFunction(async () => new Response(JSON.stringify({
       error: 'invalid_grant',
       error_description: 'The provided authorization grant is invalid',
-    }), { status: 400, headers: { 'content-type': 'application/json' } })) as unknown as typeof fetch;
+    }), { status: 400, headers: { 'content-type': 'application/json' } }));
     try {
       const attempt = refreshCloudflareCredential(
         { CLOUDFLARE_OAUTH_CLIENT_ID: 'cid', CLOUDFLARE_OAUTH_CLIENT_SECRET: 'csec' },
@@ -107,7 +108,7 @@ describe('Workers AI credential refresh', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: stub,
-      fetch: (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetch: asFetchFunction(async (_input: RequestInfo | URL, init?: RequestInit) => {
         const headers = new Headers(init?.headers);
         wire.push(headers.get('authorization'));
         if (headers.get('authorization') === 'Bearer cf-stale') {
@@ -116,7 +117,7 @@ describe('Workers AI credential refresh', () => {
           });
         }
         return chatCompletionResponse();
-      }) as unknown as typeof fetch,
+      }),
     });
 
     const result = await generateText({

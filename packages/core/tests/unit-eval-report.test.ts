@@ -16,8 +16,8 @@ function result(
     strategyA: 'baseline',
     strategyB: 'candidate',
     verdict: { winner, scoreA, scoreB, rationale: `${caseId}-rationale` },
-    runA: { caseId, strategyId: 'baseline', output: 'a', durationMs: 10, ...(extra?.errorA ? { error: extra.errorA } : {}) },
-    runB: { caseId, strategyId: 'candidate', output: 'b', durationMs: 20, ...(extra?.errorB ? { error: extra.errorB } : {}) },
+    runA: { caseId, strategyId: 'baseline', output: 'a', durationMs: 10, error: extra?.errorA },
+    runB: { caseId, strategyId: 'candidate', output: 'b', durationMs: 20, error: extra?.errorB },
   };
 }
 
@@ -83,6 +83,28 @@ describe('evaluateGate', () => {
     const gate = evaluateGate(empty, 0);
     expect(gate.pass).toBe(false);
     expect(gate.reason).toContain('no eval cases');
+  });
+
+  // A dead provider scores every case as a 0.5 tie, which clears a 0.5 floor.
+  test('a run whose strategies errored fails, however the aggregate lands', () => {
+    const broken = buildEvalReport(
+      [result('c1', 'tie', 0.5, 0.5, { errorA: 'connection refused', errorB: 'connection refused' })],
+      { strategyA: 'a', strategyB: 'b' },
+    );
+    const gate = evaluateGate(broken, 0.5);
+    expect(gate.pass).toBe(false);
+    expect(gate.reason).toContain('errored');
+    // Even a floor of zero cannot rescue it — there is nothing to floor.
+    expect(evaluateGate(broken, 0).pass).toBe(false);
+  });
+
+  test('one errored case fails a run that would otherwise clear the floor', () => {
+    const mixed = buildEvalReport(
+      [result('c1', 'b', 0.9, 0.95), result('c2', 'tie', 0.5, 0.5, { errorB: 'timeout' })],
+      { strategyA: 'a', strategyB: 'b' },
+    );
+    expect(evaluateGate(mixed, 0.5).pass).toBe(false);
+    expect(evaluateGate(mixed, 0.5).reason).toContain('1/2');
   });
 
   test('default threshold is a committed floor', () => {

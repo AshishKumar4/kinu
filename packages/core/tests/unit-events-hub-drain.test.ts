@@ -2,17 +2,48 @@
 // turn, excluding the agent's own self-emitted/internal events (anti-self-wake).
 import { describe, test, expect } from 'bun:test';
 import { buildDrainBatch } from '../src/events/hub/index.ts';
-import type { ProteusEvent } from '../src/events/hub/index.ts';
+import type { BaseEvent, IngressKind, PeerAgentPayload, ProteusEvent } from '../src/events/hub/index.ts';
 
-function evt(id: string, over: Partial<ProteusEvent>): ProteusEvent {
+const EVENT_BASE = {
+  trace_id: 'tid', caused_by: null, trust: 'authenticated', priority: 'normal',
+  received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+} satisfies Omit<BaseEvent, 'id' | 'ingress' | 'variant' | 'payload_visibility'>;
+
+function webhook(id: string): ProteusEvent {
   return {
-    id, trace_id: 'tid', caused_by: null,
-    ingress: 'webhook_hmac', variant: 'webhook', trust: 'authenticated',
-    priority: 'normal', payload_visibility: 'full',
-    received_at: 0, schema_version: 1, reply_channel: null, dedupe_key: null,
+    ...EVENT_BASE, id, ingress: 'webhook_hmac', variant: 'webhook', payload_visibility: 'full',
     payload: { http_method: 'POST', body: {}, webhook_id: 'w', http_headers: {}, delivery_id: 'd' },
-    ...over,
-  } as ProteusEvent;
+  };
+}
+
+function internal(id: string, ingress: Extract<IngressKind, 'self_emit' | 'sandbox_cb'>, data: string): ProteusEvent {
+  return {
+    ...EVENT_BASE, id, ingress, variant: 'internal', payload_visibility: 'full',
+    payload: { kind: 'note', data },
+  };
+}
+
+function timer(id: string): ProteusEvent {
+  return {
+    ...EVENT_BASE, id, ingress: 'timer_alarm', variant: 'timer', payload_visibility: 'full',
+    payload: { trigger_id: 'trg-daily', scheduled_fire_at: 0, label: 'daily' },
+  };
+}
+
+function peer(id: string, replyExpected = false): ProteusEvent {
+  const payload = {
+    from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
+    body: 'What changed upstream?', sender_event_id: 'ox1', proteus_mode: 'build',
+  } satisfies PeerAgentPayload;
+  return replyExpected
+    ? {
+        ...EVENT_BASE, id, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
+        payload: { ...payload, reply_expected: true },
+      }
+    : {
+        ...EVENT_BASE, id, ingress: 'peer_async', variant: 'peer_agent', payload_visibility: 'full',
+        payload,
+      };
 }
 
 describe('buildDrainBatch', () => {
@@ -22,16 +53,16 @@ describe('buildDrainBatch', () => {
 
   test('excludes self_emit and internal events (anti-self-wake loop)', () => {
     const events = [
-      evt('a', { ingress: 'self_emit', variant: 'internal', payload: { kind: 'note', data: 'x' } }),
-      evt('b', { variant: 'internal', ingress: 'sandbox_cb', payload: { kind: 'note', data: 'y' } }),
+      internal('a', 'self_emit', 'x'),
+      internal('b', 'sandbox_cb', 'y'),
     ];
     expect(buildDrainBatch(events)).toBeNull();
   });
 
   test('batches external events with their ids and a turn-driving message', () => {
     const events = [
-      evt('wh1', { variant: 'webhook', ingress: 'webhook_hmac' }),
-      evt('tm1', { variant: 'timer', ingress: 'timer_alarm', payload: { trigger_id: 'trg-daily', scheduled_fire_at: 0, label: 'daily' } }),
+      webhook('wh1'),
+      timer('tm1'),
     ];
     const batch = buildDrainBatch(events)!;
     expect(batch).not.toBeNull();
@@ -42,7 +73,7 @@ describe('buildDrainBatch', () => {
   });
 
   test('the same batch renders a mid-turn variant that folds in instead of stopping', () => {
-    const batch = buildDrainBatch([evt('wh1', { variant: 'webhook', ingress: 'webhook_hmac' })])!;
+    const batch = buildDrainBatch([webhook('wh1')])!;
     expect(batch.text).toContain('arrived while you were idle');
     expect(batch.text).toContain('then stop');
     expect(batch.midTurnText).toContain('arrived while you were working');
@@ -53,8 +84,8 @@ describe('buildDrainBatch', () => {
 
   test('mixes external + self → only external drains', () => {
     const events = [
-      evt('ext', { variant: 'webhook', ingress: 'webhook_hmac' }),
-      evt('self', { ingress: 'self_emit', variant: 'internal', payload: { kind: 'note', data: 'z' } }),
+      webhook('ext'),
+      internal('self', 'self_emit', 'z'),
     ];
     const batch = buildDrainBatch(events)!;
     expect(batch.ids).toEqual(['ext']);
@@ -63,16 +94,8 @@ describe('buildDrainBatch', () => {
 });
 
 describe('buildDrainBatch — peer messages', () => {
-  const peer = (id: string, over: Record<string, unknown> = {}): ProteusEvent => evt(id, {
-    ingress: 'peer_async', variant: 'peer_agent', trust: 'authenticated',
-    payload: {
-      from_agent_name: 'scout', from_user_id: 'u1', topic: 'research',
-      body: 'What changed upstream?', sender_event_id: 'ox1', ...over,
-    },
-  } as Partial<ProteusEvent>);
-
   test('an ask renders the mechanical reply route (peers reply + event id)', () => {
-    const batch = buildDrainBatch([peer('pe1', { reply_expected: true })])!;
+    const batch = buildDrainBatch([peer('pe1', true)])!;
     expect(batch.text).toContain('[peer_agent] from peer agent (scout)');
     expect(batch.text).toContain('What changed upstream?');
     expect(batch.text).toContain("peers({action:'reply', event_id:'pe1'");

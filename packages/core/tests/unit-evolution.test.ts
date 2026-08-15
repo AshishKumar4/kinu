@@ -7,6 +7,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { createTestRuntime } from './helpers.js';
 import { EvolutionEngine, type EvolutionEvent, type CompletedTurn, type CompletedSession } from '../src/evolution/index.js';
 import { listTurnOutcomes, listLessons, recordLesson } from '../src/evolution/outcomes.js';
@@ -102,7 +103,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('craft EMA moves on outcomes: corrected pushes a tool score down, accepted up', async () => {
     const { rt } = createTestRuntime({ llmResponses: classifierResponses('corrected') });
     initCraftScoreTables(rt.storage.execRaw);
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
                    VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine = new EvolutionEngine(rt);
 
@@ -119,7 +120,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
       llmResponses: classifierResponses('accepted', { 'Extract a reusable pattern': 'not json' }),
     });
     initCraftScoreTables(rt2.storage.execRaw);
-    rt2.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
+    void rt2.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
                     VALUES ('my_crafted_tool', 0.5, 1, ${Date.now()})`;
     const engine2 = new EvolutionEngine(rt2);
     await engine2.reviewTurn(makeTurn({
@@ -177,8 +178,9 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const complete = events.filter(e => e.type === 'turn_complete');
     expect(complete).toHaveLength(1);
     expect(complete[0]!.message).toContain('ungraded');
-    expect((complete[0]!.data as { graded: boolean; source: unknown }).graded).toBe(false);
-    expect((complete[0]!.data as { source: unknown }).source).toBeNull();
+    const completionData = v.parse(v.object({ graded: v.boolean(), source: v.nullable(v.string()) }), complete[0]!.data);
+    expect(completionData.graded).toBe(false);
+    expect(completionData.source).toBeNull();
   });
 
   test('no follow-up but real tool work: the ENVIRONMENT grades it, and says so', async () => {
@@ -263,7 +265,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     rt.llm.complete = async () => { llmCalls++; return 'unused'; };
     rt.storage.execRaw(`CREATE TABLE turn_feedback (
       message_id TEXT PRIMARY KEY, feedback TEXT NOT NULL, created_at INTEGER NOT NULL)`);
-    rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at) VALUES ('msg-1', 'positive', 1)`;
+    void rt.storage.sql`INSERT INTO turn_feedback (message_id, feedback, created_at) VALUES ('msg-1', 'positive', 1)`;
     const engine = new EvolutionEngine(rt);
 
     const turn = makeTurn();
@@ -281,7 +283,7 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
     const engine = new EvolutionEngine(rt);
     rt.llm.complete = async () => { llmCalls++; return 'unused'; };
     // recordTakePick already wrote the turn's explicit preference row.
-    rt.storage.sql`INSERT INTO turn_outcomes
+    void rt.storage.sql`INSERT INTO turn_outcomes
         (id, turn_id, session_id, outcome, confidence, source, user_message, assistant_response, followup, created_at)
       VALUES ('outc-pick', 'msg-1', 'default', 'corrected', 1, 'take_pick', 'q', 'a', 'the chosen take', 1)`;
 
@@ -322,8 +324,8 @@ describe('EvolutionEngine.reviewTurn — the outcome signal', () => {
   test('applyExplicitFeedback (late thumbs) upserts the ledger and corroborates lessons', async () => {
     const { rt } = createTestRuntime();
     const engine = new EvolutionEngine(rt);
-    rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u1', 'default', 'user', 'the task')`;
-    rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('a1', 'default', 'u1', 'assistant', 'the answer')`;
+    void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES ('u1', 'default', 'user', 'the task')`;
+    void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES ('a1', 'default', 'u1', 'assistant', 'the answer')`;
     recordLesson(rt.storage.sql, {
       turnIds: ['a1'], text: 'late-corroborated lesson', source: 'turn_reflection', status: 'provisional',
     });

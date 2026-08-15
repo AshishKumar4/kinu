@@ -9,8 +9,11 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { jsonSchema, tool, type ToolSet } from 'ai';
 
-import { createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql } from './helpers.js';
+import {
+  createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
+} from './helpers.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
 import { createAgentConfigStore } from '../src/config/store.js';
@@ -19,7 +22,7 @@ import { getRunTimeline } from '../src/read-models/timeline.js';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs.js';
 import { getAgentStatus, getChatHistory, getToolList, uiMessageText } from '../src/read-models/status.js';
 import {
-  getWorkspaceDiff, readWorkspaceFiles, resetWorkspaceBaseline,
+  getWorkspaceDiff, initWorkspaceBaselineTable, readWorkspaceFiles, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files.js';
 import {
@@ -31,18 +34,14 @@ import {
   setAlwaysActiveSkills, setEvolutionConfig, setModel, setReasoningEffort, setShellApprovalMode,
 } from '../src/read-models/config-plane.js';
 import { getEvolutionChangelog, markChangelogSeen } from '../src/read-models/evolution-views.js';
+import type { JsonValue } from '../src/utils/json.js';
 
 /** A workspace with the real schema — the same entry point both backends run. */
 function workspace() {
   const db = new Database(':memory:');
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
-  const exec = {
-    exec(query: string, ...bindings: unknown[]) {
-      const rows = db.query(query).all(...bindings as never[]) as Array<Record<string, unknown>>;
-      return { toArray: () => rows };
-    },
-  };
+  const exec = makeSqlExec(db);
   initWorkspaceSchema({ execRaw, sql, exec });
   return { db, sql, execRaw, vfs: createWorkspaceBundle(db).vfs, config: createAgentConfigStore(sql) };
 }
@@ -60,9 +59,9 @@ function jobPlane() {
   const runner: BackgroundJobControl = {
     cancel: () => true,
     cancelRunning: () => [],
-    create: (kind, input) => {
+    create: (kind, input, mode) => {
       const id = `retry-${++created}`;
-      jobs.create({ id, kind, input: JSON.stringify(input), now: Date.now() });
+      jobs.create({ id, kind, workMode: mode, input: JSON.stringify(input), now: Date.now() });
       return id;
     },
     detach: (jobId, kind) => { detached.push({ jobId, kind }); },
@@ -122,11 +121,11 @@ describe('run timeline', () => {
     events.emit('r1', { type: 'run_start', agentId: 'a1', caused_by: 'chat' });
     events.emit('r1', { type: 'text_delta', text: 'noise' });
     const base = Date.now() + 1000;
-    sql`INSERT INTO evolution_events (id, type, message, data, created_at)
+    void sql`INSERT INTO evolution_events (id, type, message, data, created_at)
       VALUES ('e1', 'scaffold_proposed', 'v2 proposed', '{"version":2}', ${base})`;
-    sql`INSERT INTO search_nodes (id, parent_id, depth, visits, value, status, action, task, created_at)
+    void sql`INSERT INTO search_nodes (id, parent_id, depth, visits, value, status, action, task, created_at)
       VALUES ('n1', NULL, 0, 1, 0.5, 'terminal', 'explore A', 't', ${base + 1000})`;
-    jobs.create({ id: 'j1', kind: 'run', now: base + 2000 });
+    jobs.create({ id: 'j1', kind: 'run', workMode: 'build', now: base + 2000 });
 
     const spans = getRunTimeline({ sql, events, jobs, currentRunId: 'r1' });
 
@@ -145,7 +144,7 @@ describe('run timeline', () => {
     initRunEventTables(execRaw);
     const events = new RunEventRecorder(sql);
     for (let i = 0; i < 5; i++) {
-      sql`INSERT INTO evolution_events (id, type, message, created_at)
+      void sql`INSERT INTO evolution_events (id, type, message, created_at)
         VALUES (${`e${i}`}, 'reflection', ${`m${i}`}, ${i * 100})`;
     }
     const spans = getRunTimeline({ sql, events, jobs: new BackgroundJobStore(sql), currentRunId: null }, { limit: 2 });
@@ -165,8 +164,8 @@ describe('run timeline', () => {
 describe('agent status', () => {
   test('identity, counts and config in one shape', async () => {
     const { db, sql, config, vfs } = workspace();
-    sql`INSERT INTO workspace_identity (id, name, created_at) VALUES ('id-1', 'jarvis', 42)`;
-    sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'user', 'hi', 1)`;
+    void sql`INSERT INTO workspace_identity (id, name, created_at) VALUES ('id-1', 'jarvis', 42)`;
+    void sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'user', 'hi', 1)`;
     config.setReasoningEffort('high');
 
     expect(await getAgentStatus({
@@ -192,9 +191,9 @@ describe('agent status', () => {
 
   test('chat history flattens UI-message parts and bounds the page', () => {
     const { db, sql } = workspace();
-    sql`CREATE TABLE assistant_messages (id TEXT, role TEXT, content TEXT, created_at TEXT)`;
-    sql`INSERT INTO assistant_messages VALUES ('a', 'user', ${JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] })}, '2026-01-01')`;
-    sql`INSERT INTO assistant_messages VALUES ('b', 'tool', 'not a chat role', '2026-01-02')`;
+    void sql`CREATE TABLE assistant_messages (id TEXT, role TEXT, content TEXT, created_at TEXT)`;
+    void sql`INSERT INTO assistant_messages VALUES ('a', 'user', ${JSON.stringify({ parts: [{ type: 'text', text: 'hello' }] })}, '2026-01-01')`;
+    void sql`INSERT INTO assistant_messages VALUES ('b', 'tool', 'not a chat role', '2026-01-02')`;
 
     expect(getChatHistory(sql)).toEqual([
       { id: 'a', role: 'user', content: 'hello', createdAt: '2026-01-01' },
@@ -204,7 +203,7 @@ describe('agent status', () => {
 
   test('chat history falls back to the plain mirror when there is no rich table', () => {
     const { db, sql } = workspace();
-    sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'assistant', 'plain', 5)`;
+    void sql`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ('m1', 'default', 'assistant', 'plain', 5)`;
     expect(getChatHistory(sql, 1)).toEqual([
       { id: 'm1', role: 'assistant', content: 'plain', createdAt: 5 },
     ]);
@@ -224,7 +223,7 @@ describe('agent status', () => {
     await rt.craftStore.create({
       name: 'summarize', description: 'sum', params: null, code: 'x', scope: 'local',
     });
-    sql`INSERT INTO craft_scores VALUES ('summarize', 0.9, 7)`;
+    void sql`INSERT INTO craft_scores VALUES ('summarize', 0.9, 7)`;
 
     const list = getToolList(sql, rt.craftStore);
     expect(list.builtIn.length).toBeGreaterThan(0);
@@ -232,26 +231,29 @@ describe('agent status', () => {
       { name: 'summarize', description: 'sum', scope: 'local', qualityScore: 0.9, usageCount: 7 },
     ]);
     // An unscored tool reads as the neutral prior, never as zero.
-    sql`DELETE FROM craft_scores`;
+    void sql`DELETE FROM craft_scores`;
     expect(getToolList(sql, rt.craftStore).crafted[0]).toMatchObject({ qualityScore: 0.5, usageCount: 0 });
     db.close();
   });
 });
 
 describe('workspace change-set', () => {
-  test('the first read captures the baseline and shows nothing; the next shows the change', async () => {
+  test('work completed before the first read remains visible against the birth baseline', async () => {
     const { rt, db } = createTestRuntime();
-    db.exec(`CREATE TABLE IF NOT EXISTS vfs_baseline (path TEXT PRIMARY KEY, content TEXT)`);
+    initWorkspaceBaselineTable(rt.storage.execRaw);
+    await resetWorkspaceBaseline(rt);
     await rt.storage.vfs.writeFile('notes.md', 'one\n');
 
-    expect(await getWorkspaceDiff(rt)).toEqual({ files: [], baselineJustCaptured: true });
+    const first = await getWorkspaceDiff(rt);
+    expect(first.baselineJustCaptured).toBe(false);
+    expect(first.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'added', 2]]);
 
+    expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
     await rt.storage.vfs.writeFile('notes.md', 'one\ntwo\n');
     const after = await getWorkspaceDiff(rt);
     expect(after.baselineJustCaptured).toBe(false);
     expect(after.files.map((f) => [f.path, f.status, f.added])).toEqual([['notes.md', 'changed', 1]]);
 
-    // Re-baselining is what "mark reviewed" does — the change-set empties.
     expect(await resetWorkspaceBaseline(rt)).toMatchObject({ ok: true });
     expect((await getWorkspaceDiff(rt)).files).toEqual([]);
     db.close();
@@ -271,7 +273,7 @@ describe('workspace change-set', () => {
 describe('executor file plane', () => {
   /** A router holding one executor, the way a real runtime hands one over. */
   function router(files?: import('../src/types/primitives.js').VFS) {
-    return { getProvider: (name: string) => (name === 'workspace' ? { ...(files ? { files } : {}) } : undefined) };
+    return { getProvider: (name: string) => (name === 'workspace' ? (files ? { files } : {}) : undefined) };
   }
 
   test('workspace listings are typed, sized and directories-first', async () => {
@@ -327,14 +329,19 @@ describe('executor file plane', () => {
 describe('background-job control plane', () => {
   test('a settled job retries through its stored input on the raw surface', () => {
     const { db, jobs, runner, detached } = jobPlane();
-    const seen: unknown[] = [];
-    const tools = { search: { execute: (input: unknown) => { seen.push(input); return Promise.resolve('done'); } } };
+    const seen: JsonValue[] = [];
+    const tools: ToolSet = {
+      search: tool({
+        inputSchema: jsonSchema<JsonValue>({}),
+        execute: async (input) => { seen.push(input); return 'done'; },
+      }),
+    };
 
-    jobs.create({ id: 'j1', kind: 'search', input: JSON.stringify({ q: 'proteus' }), now: 1 });
+    jobs.create({ id: 'j1', kind: 'search', workMode: 'build', input: JSON.stringify({ q: 'proteus' }), now: 1 });
     jobs.settle('j1', 0, 'old result', 2);
 
     const retry = retryBackgroundJob({
-      jobs, jobRunner: runner, rawTools: () => tools as never, logActivity: () => undefined,
+      jobs, jobRunner: runner, rawTools: () => tools, logActivity: () => undefined,
     }, 'j1');
 
     expect(retry.ok).toBe(true);
@@ -347,25 +354,25 @@ describe('background-job control plane', () => {
 
   test('retry states the reason it cannot run rather than failing silently', () => {
     const { db, jobs, runner } = jobPlane();
-    const deps = { jobs, jobRunner: runner, rawTools: () => ({}) as never, logActivity: () => undefined };
+    const deps = { jobs, jobRunner: runner, rawTools: (): ToolSet => ({}), logActivity: () => undefined };
 
     expect(retryBackgroundJob(deps, 'missing')).toEqual({ ok: false, error: 'job not found' });
 
-    jobs.create({ id: 'running', kind: 'run', input: '{}', now: 1 });
+    jobs.create({ id: 'running', kind: 'run', workMode: 'build', input: '{}', now: 1 });
     expect(retryBackgroundJob(deps, 'running')).toEqual({ ok: false, error: 'job still running' });
 
-    jobs.create({ id: 'noinput', kind: 'run', now: 1 });
+    jobs.create({ id: 'noinput', kind: 'run', workMode: 'build', now: 1 });
     jobs.settle('noinput', 0, 'r', 2);
     expect(retryBackgroundJob(deps, 'noinput')).toEqual({ ok: false, error: 'no stored input to retry' });
 
-    jobs.create({ id: 'gone', kind: 'vanished', input: '{}', now: 1 });
+    jobs.create({ id: 'gone', kind: 'vanished', workMode: 'build', input: '{}', now: 1 });
     jobs.settle('gone', 0, 'r', 2);
     expect(retryBackgroundJob(deps, 'gone')).toEqual({ ok: false, error: 'tool "vanished" unavailable' });
     db.close();
   });
 
   test('cancelling current work aborts foreground tools and announces the outcome', () => {
-    const { db, jobs, runner } = jobPlane();
+    const { db, runner } = jobPlane();
     const live = new AbortController();
     const already = new AbortController();
     already.abort();
@@ -466,7 +473,7 @@ describe('config plane', () => {
 describe('changelog view', () => {
   test('unseen counts against the stored watermark, and marking seen zeroes it', () => {
     const { db, sql, config } = workspace();
-    sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
+    void sql`INSERT INTO crafted_tools (name, description, params, code, scope, created_at, updated_at)
       VALUES ('summarize', 'sum', NULL, 'x', 'local', ${Date.now()}, ${Date.now()})`;
 
     expect(getEvolutionChangelog(config, sql).entries).toHaveLength(1);

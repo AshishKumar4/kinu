@@ -1,9 +1,9 @@
 /**
  * CF runtime adapter — bridges Think's DO context to core's AgentRuntime.
  *
- * Storage is pure DO SQLite — no R2, no @cloudflare/shell:
- *   VFS      → Nimbus over this DO's SQLite. The whole workspace filesystem.
- *   Shell    → Nimbus's shell over those same bytes.
+ * Workspace storage is one NIMBUS_SESSION Durable Object:
+ *   VFS      → Nimbus SDK files in the session.
+ *   Shell    → Nimbus SDK exec over those same bytes.
  *   Memory   → MemoryStore (FTS5-indexed markdown chunks)
  *   CraftStore → CraftStore (FTS5-indexed tool storage)
  *
@@ -21,41 +21,53 @@ import type {
   CraftStore as CoreCraftStore, CraftedTool as CoreCraftedTool,
   FiberCtx, ExecutionRouter,
   TurnAccumulator,
+  DeferredApprovalChannel,
+  WriteObserver,
 } from "@proteus/core";
 import {
-  createWorkspaceFilesystem, nextWorkspaceGeneration, type WorkspaceVFS,
-  DefaultExecutionRouter, createInlineExecutor,
+  nimbusSessionFiles, nimbusSessionShell,
+  observeWrites,
+  type WorkspaceVFS,
+  DefaultExecutionRouter, createNimbusWorkspaceExecutor,
   withApprovalGatedShell, type ShellApprovalPolicy,
   createSandboxExecutor, createDeviceTunnelExecutor, type DeviceTransport,
-  createNimbusExecutor, type NimbusSandboxHandle,
+  type NimbusSandboxHandle,
   createCloudflareVectorStore, createWorkersAIEmbedder, createNoopVectorStore,
+  decodeJsonValue,
   effortFor,
   createAgentConfigStore, selectFastModel,
-  type VectorStore, type VectorizeIndex,
+  type VectorStore,
 } from "@proteus/core";
 import type { SandboxHandle } from "@proteus/core";
 import { getSandbox } from "@cloudflare/sandbox";
 import { previewHostSuffix } from "./lib/preview-origin.js";
-import { Nimbus } from "@nimbus-sh/sdk";
 import { MemoryStore } from "@proteus/agent-utils/memory";
 import { CraftStore as AgentUtilsCraftStore } from "@proteus/agent-utils/stores";
 import { generateText } from "ai";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import type { Agent } from "agents";
 import { abortExplorationFacet, spawnBranchFacet } from "./facet-spawn.js";
-import { createHubDeviceTransport } from "./device-transport.js";
-import { createAgentProviderRegistry, type UserCredentialSource } from "./providers/agent-registry.js";
+import {
+  createHubDeviceTransport,
+  type DeviceHubClient,
+  type HubDeviceTransportOpts,
+} from "./device-transport.js";
+import {
+  createAgentProviderRegistry,
+  type UserCredentialClient,
+  type UserCredentialSource,
+} from "./providers/agent-registry.js";
 import { resolveJudgeModelSelection } from "./providers/judge-model.js";
 import type { UserCaller } from "./user/workspace-capability.js";
 import { adaptMemory, backfillMemoryVectors } from "./memory-sync.js";
-import { agentAffinityKey, explorePrompt, extractCodeBlock, formatInheritedContext, missionCallUsage, reflectionPrompt } from "@proteus/core";
-import type { UserDO } from "./user/user-do.js";
+import { agentAffinityKey, explorePrompt, formatInheritedContext, missionCallUsage, reflectionPrompt } from "@proteus/core";
+import type { ProteusSandbox } from "./proteus-sandbox.js";
 import {
-  nimbusSandboxConfig,
-  nimbusSandboxIdForAgent,
-  nimbusSubjectForAgent,
-  nimbusTenantForUser,
+  createNimbusWorkspaceSandbox,
+  nimbusPreviewConfigured,
+  nimbusPreviewUrl,
 } from "./nimbus-route.js";
+import * as v from 'valibot';
 
 /**
  * The agent surface these runtime builders need — the bare agents-SDK `Agent`
@@ -69,7 +81,9 @@ import {
  * legitimately needs them. A subclass (which DOES have access) passes `this`
  * cast to this view — so the access is sound, just opened to these helpers.
  */
-type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'> & {
+type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'abortSubAgent'>;
+
+export interface CFRuntimeAccess {
   readonly env: Env;
   readonly ctx: DurableObjectState;
   /** The turn's ledger + budget, when this actor has one — ActorAgent
@@ -78,8 +92,10 @@ type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'ab
    *  back to a private ledger there. Optional, not narrowed further than
    *  TurnAccumulator's own two turn-scoped fields, so this stays the same
    *  "bare surface" the type's own docstring commits to. */
-  readonly acc?: Pick<TurnAccumulator, 'files' | 'context'>;
-};
+  readonly acc?: () => Pick<TurnAccumulator, 'files' | 'context'>;
+  getCliCwdForDevice?(): string | null;
+  getCheckpointMetaForDevice?(): { turnId: string; sessionId: string } | null;
+}
 
 /**
  * The one bridge between the Agents SDK's `Agent.sql` and the SqlExecutor
@@ -87,8 +103,15 @@ type AgentHost = Pick<Agent<Env>, 'name' | 'sql' | 'runFiber' | 'subAgent' | 'ab
  * nominally satisfy a primitive that admits ArrayBuffer — an assertion is
  * unavoidable, and this is the single place it is made.
  */
-function boundSql(agent: AgentHost): SqlExecutor {
-  return agent.sql.bind(agent) as unknown as SqlExecutor;
+export function bindAgentSql(agent: Pick<Agent<Env>, 'sql'>): SqlExecutor {
+  // SAFETY: this is the repository's sole Agents-SDK SQL adapter. The SDK and
+  // SqlExecutor are the same tagged-template protocol; SqlExecutor additionally
+  // admits ArrayBuffer, which Durable Object SQLite accepts at runtime.
+  return agent.sql.bind(agent) as SqlExecutor;
+}
+
+function errorMessage<Thrown>(thrown: Thrown): string {
+  return thrown instanceof Error ? thrown.message : String(thrown);
 }
 
 /**
@@ -97,7 +120,7 @@ function boundSql(agent: AgentHost): SqlExecutor {
  *
  * The orchestrator passes its own owner lookup (workspace_identity) and its
  * DO name; a facet actor passes its own owner row and the PARENT workspace
- * name, so it shares the workspace's sandbox container, Nimbus session, and
+ * name, so it shares the authoritative workspace, sandbox container, and
  * device consent instead of materializing fresh planes keyed by facet name.
  * A fork's window onto its parent is not configured here: it is an EXECUTOR
  * the facet registers post-construction (`createParentExecutor`), the same way
@@ -107,18 +130,43 @@ export interface ActorRuntimeIdentity {
   /** Owner userId, or null while unclaimed. Resolved per call — never cached
    *  here, so a first use before owner claim can't bake in null. */
   ownerUserId(): string | null;
-  /** The workspace whose exec planes (sandbox, nimbus, /pc consent) this
+  /** The workspace whose exec planes (workspace, sandbox, /pc consent) this
    *  actor rides. */
   workspaceName: string;
+  /** Stable shell state within the shared workspace session. Distinct actors
+   * share files, processes and ports without sharing cwd or exported env. */
+  shellId: string;
+  /** Live scaffold file for this actor. The default agent owns the canonical
+   * workspace scaffold; facets keep their independently versioned control
+   * program under the same workspace's internal actor directory. */
+  scaffoldPath: string;
   /** The workspace capability token this actor presents to the UserDO — its
    *  own for a workspace DO, its parent's for a facet. Null until claimed. */
   capabilityToken(): Promise<string | null>;
 }
 
-function userDOStubFor(agent: AgentHost, actor: ActorRuntimeIdentity): DurableObjectStub<UserDO> | null {
+interface RuntimeUserDOClient extends UserCredentialClient, DeviceHubClient {
+  getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }>;
+}
+
+interface RuntimeUserDONamespace {
+  idFromName(name: string): DurableObjectId;
+  get(id: DurableObjectId): RuntimeUserDOClient;
+}
+
+function userDOStubFor(env: Env, actor: ActorRuntimeIdentity): RuntimeUserDOClient | null {
   const userId = actor.ownerUserId();
   if (!userId) return null;
-  return agent.env.UserDO.get(agent.env.UserDO.idFromName(userId)) as DurableObjectStub<UserDO>;
+  const namespaceView: Partial<RuntimeUserDONamespace> = {};
+  Object.assign(namespaceView, {
+    idFromName: (name: string) => env.UserDO.idFromName(name),
+    get: (id: DurableObjectId) => env.UserDO.get(id),
+  });
+  // SAFETY: the generated Env.UserDO binding contract exposes these exact
+  // UserDO RPC methods; the narrower view avoids instantiating every unrelated
+  // RPC signature at each runtime call site.
+  const namespace = namespaceView as RuntimeUserDONamespace;
+  return namespace.get(namespace.idFromName(userId));
 }
 
 /** This actor's identity for a privileged UserDO call. Rejects — rather than
@@ -132,8 +180,8 @@ async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
 /** The credential source for a provider registry built inside an actor. Null
  *  when the workspace is unclaimed, leaving only env-bound providers usable —
  *  the pre-existing behaviour for an ownerless agent. */
-function userCredentialSourceFor(agent: AgentHost, actor: ActorRuntimeIdentity): UserCredentialSource | null {
-  const stub = userDOStubFor(agent, actor);
+function userCredentialSourceFor(env: Env, actor: ActorRuntimeIdentity): UserCredentialSource | null {
+  const stub = userDOStubFor(env, actor);
   return stub ? { stub, caller: () => userCallerFor(actor) } : null;
 }
 
@@ -164,39 +212,56 @@ export interface CFRuntimeHooks {
    * craftStore.list() live; other adapters can use it for eager notification.
    */
   onToolRegistered?: (tool: { name: string; description: string; code: string }) => void;
+  /**
+   * Where a 'gate'-tier command goes when nobody is there to approve it — the
+   * owner's parked-action queue (core's safety/deferred-approval.ts). A thunk,
+   * and read at exec time, for the two reasons the runtime's other thunks are:
+   * the queue's wake rides the orchestrator's signal seam, which this builder
+   * deliberately cannot see (`AgentHost` is the bare agents-SDK surface), and
+   * resolving it during construction would re-enter the caller's own lazy
+   * runtime getter. Returning undefined — a head, a subordinate — means no
+   * queue: neither owns a needs-you queue its parked actions could be decided
+   * from, so 'strict' keeps its explanatory refusal there.
+   */
+  deferrals?: () => DeferredApprovalChannel | undefined;
+  /** Attribute writes made through this actor's canonical workspace file
+   * plane. Used by heads to report only their own direct file mutations while
+   * every actor still addresses the same workspace. */
+  workspaceObserver?: WriteObserver;
 }
 
 /**
  * Build a full AgentRuntime from a Think agent's DO context.
  */
-export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, hooks: CFRuntimeHooks = {}): CFRuntime {
-  const sql = boundSql(agent);
-  const execRaw: RawSqlExec = (ddl: string) => agent.ctx.storage.sql.exec(ddl);
+export function createCFRuntime(
+  agent: AgentHost,
+  access: CFRuntimeAccess,
+  actor: ActorRuntimeIdentity,
+  hooks: CFRuntimeHooks = {},
+): CFRuntime {
+  const sql = bindAgentSql(agent);
+  const execRaw: RawSqlExec = (ddl: string) => access.ctx.storage.sql.exec(ddl);
 
-  // The workspace filesystem: Nimbus over this Durable Object's OWN SQLite. A
-  // real filesystem with a real shell over the same bytes, and the only one —
-  // the sandbox, a Nimbus session and the user's machine are EXECUTORS, reached
-  // through their own namespaces in their own native paths.
-  //
-  // The generation counter must never repeat for this database, or a dead
-  // process keeps live write authority; DO storage is what makes it durable.
-  const workspace = createWorkspaceFilesystem({
-    sql: agent.ctx.storage.sql,
-    transactions: agent.ctx,
-    generation: nextWorkspaceGeneration(agent.ctx.storage.sql),
-  });
-  const vfs: CoreVFS = workspace.vfs;
+  const env = access.env;
+  if (!env.NIMBUS_SESSION) {
+    throw new Error('CF runtime requires the NIMBUS_SESSION binding: the Nimbus session is the hosted workspace');
+  }
+  const workspaceBox = createAgentNimbusHandle(env, actor);
+  const workspaceVfs = nimbusSessionFiles(workspaceBox);
+  const vfs = hooks.workspaceObserver
+    ? observeWrites(workspaceVfs, hooks.workspaceObserver)
+    : workspaceVfs;
 
   // MemoryStore from agent-utils — FTS5-indexed search over the workspace
   // filesystem itself, so `memory/MEMORY.md` is the same file the agent reads
   // with the `file` tool and greps in the shell.
-  const memoryStore = new MemoryStore(vfs, sql);
+  const memoryStore = new MemoryStore(workspaceVfs, sql);
   memoryStore.ensureSchema();
 
   // Vectorize-backed semantic memory, scoped to this workspace's namespace.
   // Noop when env.AI / env.MEMORY_VECTORS aren't configured, so hybrid search
   // degrades to FTS5-only. Built before the memory adapter so writes embed.
-  const vectorStore = buildVectorStore(agent, actor);
+  const vectorStore = buildVectorStore(env, actor);
   // Owns the semantic-index completeness markers, read by the backfill and
   // cleared by the write path when a sync fails.
   const memoryConfig = createAgentConfigStore(sql);
@@ -215,112 +280,95 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   // Adapt CraftStore to core's CraftStore interface
   const craftStore = adaptCraftStore(craftStoreImpl);
 
-  const envForExec = agent.env as Env & Record<string, unknown>;
+  const envForExec = env;
   if (!envForExec.LOADER) {
     throw new Error("CF runtime requires env.LOADER binding (worker_loaders in wrangler.jsonc)");
   }
   const executor = createExecutor(envForExec.LOADER);
-  const llm = createDualPathLLM(agent, actor);
+  const llm = createDualPathLLM(agent, env, actor, sql);
   const schedule = createRealSchedule(agent);
-  const identity = createIdentity(agent, vfs, sql);
+  const identity = createIdentity(agent, access.ctx, vfs, sql, actor.scaffoldPath);
 
-  // Execution router — manages codemode providers (workspace, nimbus, sandbox, laptop)
+  // Execution router — manages workspace plus the separate sandbox and laptop.
   // Live shell-approval policy every gated exec boundary consults (`run`'s
   // workspace/router dispatch and every ExecutorProvider's exec — see
   // execution/approval.ts). `mode` reads agent_config directly off the SAME
   // store the memory backfill above already opened, so a setShellApprovalMode
   // RPC takes effect on the very next command with no toolset rebuild needed.
-  const approvalPolicy: ShellApprovalPolicy = { mode: () => memoryConfig.getShellApprovalMode() };
-  // The workspace shell is Nimbus's, over the same bytes `vfs` addresses.
+  // `deferrals` is what stops an unattended run dying on its first `sudo`: with
+  // no interactive channel on this backend, a 'gate' decision under 'strict'
+  // used to be an explanatory refusal, so a night's run stopped there. It is
+  // now parked on the owner and the model is told so — never told it ran.
+  // A getter, so the queue is resolved at exec time like every other member of
+  // this policy — see ShellApprovalPolicy's own doc on live reads.
+  const approvalPolicy: ShellApprovalPolicy = {
+    mode: () => memoryConfig.getShellApprovalMode(),
+    get deferrals() { return hooks.deferrals?.(); },
+  };
+  // The workspace shell is the authoritative Nimbus session's shell, over the
+  // exact same bytes `vfs` addresses.
   // Gated at the Shell object, so what it wraps is transparent to the seam.
-  const shell = withApprovalGatedShell(workspace.shell, approvalPolicy);
+  const shell = withApprovalGatedShell(nimbusSessionShell(workspaceBox), approvalPolicy);
   const executionRouter: ExecutionRouter = new DefaultExecutionRouter(approvalPolicy);
-  executionRouter.register(createInlineExecutor({
-    vfs, memory, craftStore, shell,
-    // sql is used by workspace.listTools() to look up EMA craft_scores.
-    sql,
-    // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
-    onToolRegistered: hooks.onToolRegistered,
-    // Shares the native `file` tool's turn ledger/budget with workspace.*
-    // (editFile's gate, readFile/writeFile's observe). The thunks are passed
-    // unconditionally and read `agent.acc` only when actually CALLED (a tool
-    // execution, always well after this runtime finished constructing) —
-    // never here, synchronously, inside this lazy getter's own body, where
-    // touching `agent.acc` (ActorAgent only) could recurse back into
-    // `this.rt` through `this.orch`'s own dependency chain before `_rt` is
-    // cached. Undefined for a head (ExplorationAgent has no `acc`) — the
-    // executor falls back to a private ledger there, same as before this
-    // existed.
-    ledger: () => agent.acc?.files,
-    budget: () => agent.acc?.context,
+  executionRouter.register(createNimbusWorkspaceExecutor({
+    box: workspaceBox,
+    runtimeCatalog: env.NIMBUS_RUNTIME_CACHE != null,
+    inboundNetwork: nimbusPreviewConfigured(env),
+    inline: {
+      vfs, memory, craftStore, shell,
+      // sql is used by workspace.listTools() to look up EMA craft_scores.
+      sql,
+      // Optional eager notification; PreambleCraftedExecutor live-reads CraftStore.
+      onToolRegistered: hooks.onToolRegistered,
+      // Shares the native `file` tool's turn ledger/budget with workspace.*
+      // (editFile's gate, readFile/writeFile's observe). The thunks are passed
+      // unconditionally and read the supplied turn accumulator only when called.
+      ledger: () => access.acc?.().files,
+      budget: () => access.acc?.().context,
+    },
   }));
   // Register Sandbox executor — Proteus's primary remote exec surface.
   // Backed by @cloudflare/sandbox: one Linux container per agent, keyed
   // by the agent's stable name. `PREVIEW_HOST_SUFFIX` is the zone the SDK
   // builds preview URLs on — `<port>-<sandbox>-<token>.<suffix>`, routed back
   // by preview-proxy.ts. `sandboxId` is the stable DO key those URLs carry.
-  const env = agent.env as Env & Record<string, unknown>;
   const previewSuffix = previewHostSuffix(env) ?? undefined;
   const sandboxId = `proteus-${actor.workspaceName}`;
   // Every remote mount exposes the environment's REAL root ('/'); the
   let sandboxHandle: SandboxHandle | null = null;
-  if (env.Sandbox && previewSuffix) {
+  if (env.Sandbox) {
     try {
-      const rawHandle = getSandbox(
-        env.Sandbox as Parameters<typeof getSandbox>[0],
-        sandboxId,
-        { normalizeId: true },
-      ) as unknown as SandboxHandle;
+      const rawHandle = adaptCloudflareSandbox(getSandbox(env.Sandbox, sandboxId, { normalizeId: true }));
       const configStore = createAgentConfigStore(sql);
       const handle = createRestoringSandboxHandle(rawHandle, configStore);
       sandboxHandle = handle;
       // The executor carries its own file view over this same (restoring) raw
-      // handle, for the file manager's sandbox pane.
+      // handle, for the file manager's sandbox pane. An unset
+      // PREVIEW_HOST_SUFFIX turns off previews alone: exec, files and the
+      // release engine keep working, and port exposure refuses with the
+      // preview-specific reason.
       executionRouter.register(createSandboxExecutor(handle, previewSuffix));
-      console.log(`[proteus] SandboxExecutor registered (previews=*.${previewSuffix} id=${sandboxId})`);
+      console.log(`[proteus] SandboxExecutor registered (${previewSuffix ? `previews=*.${previewSuffix}` : "previews off — PREVIEW_HOST_SUFFIX unset"} id=${sandboxId})`);
     } catch (err) {
-      console.warn("[proteus] Failed to register SandboxExecutor:", (err as Error).message);
+      console.warn("[proteus] Failed to register SandboxExecutor:", errorMessage(err));
       executionRouter.register(createSandboxExecutor());
     }
   } else {
-    if (!previewSuffix) console.warn("[proteus] PREVIEW_HOST_SUFFIX not set — Sandbox executor running in stub mode");
     executionRouter.register(createSandboxExecutor());
-  }
-
-  // Register Nimbus — Proteus's built-in lightweight sandbox. This uses the
-  // official SDK against the local NIMBUS_SESSION binding, so there are no
-  // endpoint/token secrets. The handle is lazy: no session is touched until
-  // the agent actually calls nimbus.*.
-  if (env.NIMBUS_SESSION) {
-    try {
-      const nimbusBox = createAgentNimbusHandle(agent, actor);
-      executionRouter.register(createNimbusExecutor({ box: nimbusBox }));
-      console.log('[proteus] NimbusExecutor registered (NIMBUS_SESSION binding)');
-    } catch (err) {
-      console.warn('[proteus] Failed to register NimbusExecutor:', (err as Error).message);
-      executionRouter.register(createNimbusExecutor());
-    }
-  } else {
-    executionRouter.register(createNimbusExecutor());
   }
 
   // Register the laptop executor. The device socket lives on the user's UserDO
   // (the user-level hub), so this executor FORWARDS each JSON-RPC call there —
   // one connected device serves all of the user's agents.
-  const cliCwdForDevice = () =>
-    typeof (agent as unknown as { getCliCwdForDevice?: () => string | null }).getCliCwdForDevice === 'function'
-      ? (agent as unknown as { getCliCwdForDevice: () => string | null }).getCliCwdForDevice()
-      : null;
-  const deviceTransport = createHubDeviceTransport({
-    hub: () => userDOStubFor(agent, actor),
+  const cliCwdForDevice = () => access.getCliCwdForDevice?.() ?? null;
+  const deviceTransportOptions: HubDeviceTransportOpts = {
+    hub: () => userDOStubFor(env, actor),
     caller: () => userCallerFor(actor),
     agentName: actor.workspaceName,
     cliCwd: cliCwdForDevice,
-    checkpointMeta: () => {
-      const host = agent as unknown as { getCheckpointMetaForDevice?: () => { turnId: string; sessionId: string } | null };
-      return typeof host.getCheckpointMetaForDevice === 'function' ? host.getCheckpointMetaForDevice() : null;
-    },
-  });
+    checkpointMeta: () => access.getCheckpointMetaForDevice?.() ?? null,
+  };
+  const deviceTransport = createHubDeviceTransport(deviceTransportOptions);
   void deviceTransport.refreshStatus();
   // The executor's file view scopes paths to the consented subtree (connect dir
   // / home) unless the agent holds the full-filesystem consent tier on the hub.
@@ -328,7 +376,7 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   executionRouter.register(createDeviceTunnelExecutor(deviceTransport, {
     consentedRoot: cliCwdForDevice,
     hasFullFilesystem: async () => {
-      const hub = userDOStubFor(agent, actor);
+      const hub = userDOStubFor(env, actor);
       if (!hub) return false;
       try {
         return (await hub.getDeviceFsConsent(await userCallerFor(actor), actor.workspaceName)).fullFilesystem;
@@ -340,13 +388,13 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
   return {
     storage: { vfs, sql, execRaw },
     memory, executor, llm, schedule, identity, craftStore,
-    judgeModel: createJudgeLLM(agent, actor),
-    fastLlm: createFastLLM(agent, actor),
-    spawnBranch: createFacetSpawner(agent, actor),
+    judgeModel: createJudgeLLM(agent, env, actor, sql),
+    fastLlm: createFastLLM(agent, env, actor, sql),
+    spawnBranch: createFacetSpawner(agent, env, actor),
     abortBranch: createFacetAborter(agent),
     executionRouter,
     shell,
-    localVfs: workspace.vfs,
+    localVfs: workspaceVfs,
     deviceTransport,
     vectorStore,
     sandboxHandle,
@@ -354,68 +402,109 @@ export function createCFRuntime(agent: AgentHost, actor: ActorRuntimeIdentity, h
 }
 
 
-function publicOriginForNimbus(env: Env & Record<string, unknown>): string {
-  if (typeof env.CLI_PUBLIC_ORIGIN === "string" && env.CLI_PUBLIC_ORIGIN.length > 0) {
-    return env.CLI_PUBLIC_ORIGIN.replace(/\/+$/, "");
-  }
-  return "https://proteus.local";
-}
-
-function createAgentNimbusHandle(agent: AgentHost, actor: ActorRuntimeIdentity): NimbusSandboxHandle {
+function createAgentNimbusHandle(env: Env, actor: ActorRuntimeIdentity): NimbusSandboxHandle {
   let cachedKey = "";
-  let cachedBox: any = null;
+  let cachedBox: ReturnType<typeof createNimbusWorkspaceSandbox> | null = null;
 
   const current = () => {
-    const env = agent.env as Env & Record<string, unknown>;
-    const tenant = nimbusTenantForUser(actor.ownerUserId());
-    const subject = nimbusSubjectForAgent(actor.workspaceName);
-    const sessionId = nimbusSandboxIdForAgent(actor.workspaceName);
-    const origin = publicOriginForNimbus(env);
-    const key = `${origin}|${tenant}|${subject}|${sessionId}`;
+    const ownerUserId = actor.ownerUserId();
+    if (!ownerUserId) {
+      throw new Error('Nimbus workspace is unavailable until the workspace owner claim completes');
+    }
+    const key = `${ownerUserId}|${actor.workspaceName}`;
     if (!cachedBox || cachedKey !== key) {
       cachedKey = key;
-      cachedBox = Nimbus.fromEnv(
-        env as Record<string, unknown>,
-        nimbusSandboxConfig(origin, tenant, subject),
-        { binding: "NIMBUS_SESSION" },
-      ).sandbox(sessionId, {
-        tenant,
-        subject,
-        root: "/home/user",
-      });
+      cachedBox = createNimbusWorkspaceSandbox(env, ownerUserId, actor.workspaceName);
     }
     return cachedBox;
   };
 
+  const previewUrl = (port: number, capability: string | null | undefined): string | undefined => {
+    const ownerUserId = actor.ownerUserId();
+    if (!ownerUserId || !capability) return undefined;
+    return nimbusPreviewUrl(env, ownerUserId, actor.workspaceName, port, capability);
+  };
+  const jsonResult = async (result: Promise<unknown>) => {
+    const value = await result;
+    return value === undefined ? undefined : decodeJsonValue({ value });
+  };
+
   return {
     ready: () => current().ready(),
-    exec: (command, options) => current().exec(command, options),
-    startProcess: (command, options) => current().startProcess(command, options),
-    runCode: (code, options) => current().runCode(code, options),
+    exec: (command, options) => current().exec(command, { ...options, shellId: actor.shellId }),
+    startProcess: (command, options) => current().startProcess(command, { ...options, shellId: actor.shellId }),
+    runCode: (code, options) => current().runCode(code, { ...options, shellId: actor.shellId }),
     files: {
       read: (path) => current().files.read(path),
       readBytes: (path) => current().files.readBytes(path),
       write: (path, content) => current().files.write(path, content),
+      stat: (path) => current().files.stat(path),
+      lstat: (path) => current().files.lstat(path),
+      rename: (from, to) => current().files.rename(from, to),
+      chmod: (path, mode) => current().files.chmod(path, mode),
       list: (path) => current().files.list(path),
       exists: (path) => current().files.exists(path),
       mkdir: (path) => current().files.mkdir(path),
       delete: (path, options) => current().files.delete(path, options),
     },
     runtimes: {
-      ensure: (specs, options) => current().runtimes.ensure(specs, options),
-      install: (spec, options) => current().runtimes.install(spec, options),
-      list: () => current().runtimes.list(),
+      ensure: (specs, options) => jsonResult(current().runtimes.ensure(specs, options)),
+      install: (spec, options) => jsonResult(current().runtimes.install(spec, options)),
+      list: () => jsonResult(current().runtimes.list()),
     },
     processes: {
-      list: () => current().processes.list(),
-      kill: (pid) => current().processes.kill(pid),
-      logs: (pid, options) => current().processes.logs(pid, options),
+      list: () => jsonResult(current().processes.list()),
+      kill: (pid) => jsonResult(current().processes.kill(pid)),
+      logs: (pid, options) => jsonResult(current().processes.logs(pid, options)),
     },
     ports: {
-      expose: (port) => current().ports.expose(port),
+      expose: async (port) => {
+        const exposed = await current().ports.expose(port);
+        if (!exposed.capability) throw new Error(`No process is listening on workspace port ${port}`);
+        const url = previewUrl(port, exposed.capability);
+        if (!url) throw new Error('Workspace preview URLs are unavailable because the preview host or user-plane secret is not configured');
+        return { ...exposed, url };
+      },
       unexpose: (port) => current().ports.unexpose(port),
-      list: () => current().ports.list(),
-      url: (port) => current().ports.url(port),
+      list: async () => (await current().ports.list()).map((entry) => ({
+        ...entry,
+        url: previewUrl(entry.port, entry.capability),
+      })),
+    },
+  };
+}
+
+async function jsonResultOrVoid<Result>(result: Promise<Result>) {
+  const value = await result;
+  return value === undefined ? undefined : decodeJsonValue({ value });
+}
+
+/** The SDK's response classes are serializable but intentionally do not carry
+ * JsonObject index signatures. Rebuild the small portable SandboxHandle at the
+ * boundary and validate opaque mutation responses before core observes them. */
+function adaptCloudflareSandbox(handle: ProteusSandbox): SandboxHandle {
+  return {
+    exec: (command, opts) => handle.exec(command, opts),
+    readFile: (path, opts) => handle.readFile(path, opts),
+    writeFile: (path, content, opts) => jsonResultOrVoid(handle.writeFile(path, content, opts)),
+    listFiles: (path, opts) => handle.listFiles(path, opts),
+    deleteFile: (path) => jsonResultOrVoid(handle.deleteFile(path)),
+    exposePort: (port, opts) => handle.exposePort(port, opts),
+    unexposePort: (port) => jsonResultOrVoid(handle.unexposePort(port)),
+    getExposedPorts: (hostname) => handle.getExposedPorts(hostname),
+    createBackup: async (opts) => {
+      const backup = await handle.createBackup({
+        ...opts,
+        excludes: opts.excludes ? [...opts.excludes] : undefined,
+      });
+      if (backup.localBucket !== undefined) {
+        return { id: backup.id, dir: backup.dir, localBucket: backup.localBucket };
+      }
+      return { id: backup.id, dir: backup.dir };
+    },
+    restoreBackup: async (backup) => {
+      const restored = await handle.restoreBackup(backup);
+      return { success: restored.success, dir: restored.dir, id: restored.id };
     },
   };
 }
@@ -431,7 +520,7 @@ function createRestoringSandboxHandle(
     const backup = config.getWorkspaceBackup();
     if (!backup) return;
     try { await handle.restoreBackup(backup); }
-    catch (err) { console.warn('[proteus] workspace restore failed:', (err as Error).message); }
+    catch (err) { console.warn('[proteus] workspace restore failed:', errorMessage(err)); }
   };
   const before = async <T>(fn: () => Promise<T>): Promise<T> => {
     await restoreOnce();
@@ -461,20 +550,20 @@ function createRestoringSandboxHandle(
  * embedder) and env.MEMORY_VECTORS (Vectorize index) are bound; otherwise a noop
  * that makes hybrid search degrade to FTS5-only.
  */
-function buildVectorStore(agent: AgentHost, actor: ActorRuntimeIdentity): VectorStore {
-  const aiBinding = (agent.env as Env & Record<string, unknown>).AI;
-  const vectorizeBinding = (agent.env as Env & Record<string, unknown>).MEMORY_VECTORS;
-  if (!aiBinding || typeof aiBinding === 'string' || !vectorizeBinding) {
+function buildVectorStore(env: Env, actor: ActorRuntimeIdentity): VectorStore {
+  const aiBinding = env.AI;
+  const vectorizeBinding = env.MEMORY_VECTORS;
+  if (!aiBinding || !vectorizeBinding) {
     return createNoopVectorStore();
   }
   try {
     const embedder = createWorkersAIEmbedder({
-      aiBinding: aiBinding as Parameters<typeof createWorkersAIEmbedder>[0]['aiBinding'],
+      aiBinding,
       model: '@cf/baai/bge-small-en-v1.5',
       dimensions: 384,
     });
     const store = createCloudflareVectorStore({
-      index: vectorizeBinding as VectorizeIndex,
+      index: vectorizeBinding,
       embedder,
       // Shared index across all of the user's workspaces — scope every write
       // and query to this workspace so memories never leak across agents.
@@ -483,7 +572,7 @@ function buildVectorStore(agent: AgentHost, actor: ActorRuntimeIdentity): Vector
     console.log(`[proteus] VectorStore (Cloudflare Vectorize) registered (namespace=${actor.workspaceName})`);
     return store;
   } catch (err) {
-    console.warn('[proteus] VectorStore construction failed; falling back to noop:', (err as Error).message);
+    console.warn('[proteus] VectorStore construction failed; falling back to noop:', errorMessage(err));
     return createNoopVectorStore();
   }
 }
@@ -493,8 +582,8 @@ function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
     create(t) {
       impl.create({
         name: t.name, description: t.description,
-        params: t.params as Record<string, string> | undefined ?? undefined,
-        code: t.code, scope: (t.scope ?? "local") as "local" | "shared",
+        params: t.params ?? undefined,
+        code: t.code, scope: t.scope ?? "local",
       });
     },
     update(name, patch) {
@@ -511,13 +600,13 @@ function adaptCraftStore(impl: AgentUtilsCraftStore): CoreCraftStore {
   };
 }
 
-function adaptCraftedTool(t: { name: string; description: string; params: Record<string, string> | null; code: string; scope: string; createdAt: number; updatedAt: number }): CoreCraftedTool {
+function adaptCraftedTool(t: ReturnType<AgentUtilsCraftStore['list']>[number]): CoreCraftedTool {
   return {
     name: t.name,
     description: t.description,
     params: t.params,
     code: t.code,
-    scope: t.scope as CoreCraftedTool["scope"],
+    scope: t.scope,
     createdAt: t.createdAt,
     updatedAt: t.updatedAt,
   };
@@ -532,13 +621,28 @@ function adaptCraftedTool(t: { name: string; description: string; params: Record
 // is the only caller today; any future caller gets the same real-Worker
 // isolation semantics.
 
-function createExecutor(loader: unknown): Executor {
-  const dwe = new DynamicWorkerExecutor({ loader: loader as ConstructorParameters<typeof DynamicWorkerExecutor>[0]["loader"] });
+function createExecutor(loader: WorkerLoader): Executor {
+  const dwe = new DynamicWorkerExecutor({ loader });
   return {
+    languages: ['javascript'],
     async execute(code: string, providers: ResolvedProvider[]): Promise<ExecuteResult> {
       try {
-        const res = await dwe.execute(code, providers);
-        return res as ExecuteResult;
+        const normalized = Array.isArray(providers)
+          ? providers
+          : [{ name: 'codemode', fns: providers }];
+        const bridged = normalized.map((provider) => ({
+          name: provider.name,
+          fns: Object.fromEntries(Object.entries(provider.fns).map(([name, fn]) => [
+            name,
+            async (...args: unknown[]) => fn(...args.map((value) => decodeJsonValue({ value }))),
+          ])),
+        }));
+        const res = await dwe.execute(code, bridged);
+        const result = res.result === undefined ? undefined : decodeJsonValue({ value: res.result });
+        const output: ExecuteResult = { result };
+        if (res.error !== undefined) output.error = res.error;
+        if (res.logs !== undefined) output.logs = res.logs;
+        return output;
       } catch (e) {
         return { result: undefined, error: e instanceof Error ? e.message : String(e) };
       }
@@ -549,23 +653,28 @@ function createExecutor(loader: unknown): Executor {
 // LLM for evolution reflections. Uses the agent's configured provider via
 // the registry — picks up Codex/OpenRouter/etc. automatically when the user
 // has switched providers.
-function readStoredModelSpec(agent: AgentHost): string | null {
+function readStoredModelSpec(sql: SqlExecutor): string | null {
   // Single canonical path through the typed config store — no raw SQL.
-  return createAgentConfigStore(boundSql(agent)).getModel();
+  return createAgentConfigStore(sql).getModel();
 }
 
-function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
+function createDualPathLLM(
+  agent: AgentHost,
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  sql: SqlExecutor,
+): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
       try {
         const reg = createAgentProviderRegistry({
-          env: agent.env,
-          userDO: userCredentialSourceFor(agent, actor),
+          env,
+          userDO: userCredentialSourceFor(env, actor),
           appTitle: 'Proteus',
           workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
         });
-        const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(agent)));
+        const model = reg.resolveModel(reg.normalizeSpecSync(readStoredModelSpec(sql)));
         const result = await generateText({
           model, prompt,
           ...effortFor('reflection'),
@@ -587,17 +696,22 @@ function createDualPathLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
  * Returns null when the vendor has no smaller tier, so the runtime leaves
  * `fastLlm` unset and every reader's documented `?? rt.llm` fallback runs.
  */
-function createFastLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM | undefined {
-  const config = createAgentConfigStore(boundSql(agent));
+function createFastLLM(
+  agent: AgentHost,
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  sql: SqlExecutor,
+): LLM | undefined {
+  const config = createAgentConfigStore(sql);
   const registry = createAgentProviderRegistry({
-    env: agent.env,
-    userDO: userCredentialSourceFor(agent, actor),
+    env,
+    userDO: userCredentialSourceFor(env, actor),
     appTitle: 'Proteus (fast)',
     workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
   });
   const selected = () => selectFastModel({
     fastSpec: config.getFastModel(),
-    chatSpec: registry.normalizeSpecSync(readStoredModelSpec(agent)),
+    chatSpec: registry.normalizeSpecSync(readStoredModelSpec(sql)),
     providers: registry.registry.list(),
   });
   if (selected().source === 'chat-model') return undefined;
@@ -626,14 +740,19 @@ function createFastLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM | und
  * core's selectJudgeModel). Errors propagate — the evaluator's judge ensemble
  * drops failed samples instead of misreading them as scores.
  */
-function createJudgeLLM(agent: AgentHost, actor: ActorRuntimeIdentity): LLM {
+function createJudgeLLM(
+  agent: AgentHost,
+  env: Env,
+  actor: ActorRuntimeIdentity,
+  sql: SqlExecutor,
+): LLM {
   return {
     async *stream() { yield ""; },
     async complete(prompt: string): Promise<string> {
-      const config = createAgentConfigStore(boundSql(agent));
+      const config = createAgentConfigStore(sql);
       const registry = createAgentProviderRegistry({
-        env: agent.env,
-        userDO: userCredentialSourceFor(agent, actor),
+        env,
+        userDO: userCredentialSourceFor(env, actor),
         appTitle: 'Proteus (judge)',
         workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
       });
@@ -659,7 +778,10 @@ function createRealSchedule(agent: AgentHost): Schedule {
     cron: async () => {},
     fiber: async <T>(name: string, fn: (ctx: FiberCtx) => Promise<T>): Promise<T> => {
       return agent.runFiber(name, async (sdkCtx) => {
-        return fn({ stash: sdkCtx.stash, snapshot: sdkCtx.snapshot });
+        const snapshot = sdkCtx.snapshot === null
+          ? null
+          : decodeJsonValue({ value: sdkCtx.snapshot });
+        return fn({ stash: sdkCtx.stash, snapshot });
       });
     },
   };
@@ -667,14 +789,29 @@ function createRealSchedule(agent: AgentHost): Schedule {
 
 // ── Identity ─────────────────────────────────────────────────────
 
-function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: SqlExecutor): Identity {
+function createIdentity(
+  agent: AgentHost,
+  ctx: DurableObjectState,
+  vfs: CoreVFS,
+  sql: SqlExecutor,
+  scaffoldPath: string,
+): Identity {
   return {
-    id: agent.ctx.id.toString(),
+    id: ctx.id.toString(),
     name: agent.name,
     scaffold: {
-      exists: () => vfs.exists("scaffold/agent.js"),
-      read: () => vfs.readFile("scaffold/agent.js", { encoding: "utf8" }) as Promise<string>,
-      write: (code: string) => vfs.writeFile("scaffold/agent.js", code),
+      path: scaffoldPath,
+      exists: () => vfs.exists(scaffoldPath),
+      read: async () => {
+        const content = await vfs.readFile(scaffoldPath, { encoding: "utf8" });
+        if (!v.is(v.string(), content)) throw new Error(`Scaffold ${scaffoldPath} did not decode as UTF-8 text`);
+        return content;
+      },
+      write: async (code: string) => {
+        const slash = scaffoldPath.lastIndexOf('/');
+        if (slash > 0) await vfs.mkdir(scaffoldPath.slice(0, slash), { recursive: true });
+        await vfs.writeFile(scaffoldPath, code);
+      },
       version: async () =>
         (sql<{ v: number }>`SELECT COALESCE(MAX(version), 0) as v FROM scaffold_versions`)[0]?.v ?? 0,
     },
@@ -683,7 +820,7 @@ function createIdentity(agent: AgentHost, vfs: CoreVFS, sql: SqlExecutor): Ident
 
 // ── MCTS branches via real Facets (spawn seam: facet-spawn.ts) ───
 
-function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
+function createFacetSpawner(agent: AgentHost, env: Env, actor: ActorRuntimeIdentity): (branchId: string) => Promise<BranchHandle> {
   return async (branchId: string): Promise<BranchHandle> => {
     try {
       return await spawnBranchFacet(agent, branchId, {
@@ -691,8 +828,8 @@ function createFacetSpawner(agent: AgentHost, actor: ActorRuntimeIdentity): (bra
         capabilityToken: await actor.capabilityToken(),
       });
     } catch (err) {
-      console.warn(`[proteus] subAgent failed for branch ${branchId}: ${(err as Error).message}. Using inline fallback.`);
-      return createInlineBranch(agent);
+      console.warn(`[proteus] subAgent failed for branch ${branchId}: ${errorMessage(err)}. Using inline fallback.`);
+      return createInlineBranch(agent, env);
     }
   };
 }
@@ -709,14 +846,14 @@ function createFacetAborter(agent: AgentHost): (branchId: string) => Promise<voi
  * the LLM config, never the agent reference or its storage. The closure has
  * no path to agent.sql or agent.ctx.storage.
  */
-function createInlineBranch(agent: AgentHost): BranchHandle {
+function createInlineBranch(agent: AgentHost, env: Env): BranchHandle {
   // Capture only env (not agent.sql / agent.ctx.storage) so the branch
   // closure satisfies StorageIsolation. Stored credentials are not available
   // here — with a null UserDO stub the registry's sync default skips the
   // credential-gated workers-ai and uses the env-bound ai-gateway, which
   // needs no credential reads.
   const reg = createAgentProviderRegistry({
-    env: agent.env,
+    env,
     userDO: null,
     appTitle: 'Proteus (inline branch)',
     workersAI: { sessionAffinity: agentAffinityKey(agent.name) },
@@ -725,14 +862,16 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
   const getModel = () => reg.resolveModel(spec);
 
   return {
-    explore: async (history, craftedTools, siblings = []) => {
+    explore: async (history, craftedTools, languages, mode, siblings = []) => {
       // The SAME question the facet asks (core explorePrompt), so a fallback
       // branch is comparable with a facet one — they are scored against each
       // other. This path once asked a materially weaker version of it while
       // claiming to match, which is exactly what the shared prompt prevents.
       const { system, user } = explorePrompt({
+        mode,
         context: formatInheritedContext(history),
         craftedTools,
+        languages,
         siblings,
       });
       const result = await generateText({
@@ -742,7 +881,7 @@ function createInlineBranch(agent: AgentHost): BranchHandle {
         ...effortFor('mcts_rollout'),
       });
       const text = result.text.trim();
-      return { text, codeUsed: extractCodeBlock(text), usage: missionCallUsage(result.usage) };
+      return { text, usage: missionCallUsage(result.usage) };
     },
     // No trace table on this path — the reflection is about the task alone,
     // and the shared prompt drops the attempt heading rather than showing an

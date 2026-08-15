@@ -8,9 +8,8 @@
 
 import type { AgentRuntime, CraftStore as CoreCraftStore, Shell } from '@proteus/core';
 import type {
-  Storage, Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
+  Schedule, Memory, VFS, SqlExec, SqlExecutor, SqlValue, RawSqlExec, WorkspaceSchemaSql,
 } from '@proteus/core';
-import type { CraftedTool } from '@proteus/core';
 import type { ExecutorProvider, ResourceLimits } from '@proteus/core';
 import type { RequestShellApproval, ShellApprovalPolicy } from '@proteus/core';
 import { spawn } from 'node:child_process';
@@ -18,7 +17,7 @@ import { promises as fs } from 'node:fs';
 import { resolve as resolvePath } from 'node:path';
 import {
   type LLMProviderConfig, buildRuntime,
-  createWorkspaceFilesystem, nextWorkspaceGeneration, observeWrites, type WriteObserver,
+  observeWrites, type WriteObserver,
   WORKSPACE_IDENTITY_DDL,
   createParentExecutor, createParentWorkspaceVfs,
   type ParentWorkspaceHandle, type ParentRpcWrite, type ParentRpcResult,
@@ -26,6 +25,10 @@ import {
   withApprovalGatedShell,
   selectFastModel, createAgentConfigStore, initAgentConfigTable,
 } from '@proteus/core';
+import {
+  createWorkspace as createWorkspaceFilesystem,
+  nextWorkspaceGeneration,
+} from '@proteus/core/workspace';
 import { MemoryStore } from '@proteus/agent-utils';
 import { CraftStore as AgentUtilsCraftStore } from '@proteus/agent-utils';
 import { createSandboxedExecutor } from './executor.js';
@@ -39,6 +42,8 @@ import {
 } from './model-resolver.js';
 import type { LocalCodexAuthStore } from './codex-auth-store.js';
 import type { OAuthCredential, FileCheckpoints } from '@proteus/core';
+import type { Database, SQLQueryBindings } from 'bun:sqlite';
+import * as v from 'valibot';
 
 export interface CLIRuntimeConfig {
   dbPath: string;
@@ -54,26 +59,42 @@ export interface CLIRuntimeConfig {
 }
 
 /** The bun:sqlite surface every local SQL adapter here needs. */
-export interface LocalDb {
-  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-  exec(sql: string): void;
+export type LocalDb = Database;
+
+type WorkspaceSql = Parameters<typeof createWorkspaceFilesystem>[0]['sql'];
+type WorkspaceTransactions = Parameters<typeof createWorkspaceFilesystem>[0]['transactions'];
+interface NimbusSqlRow {
+  [column: string]: string | number | bigint | null | ArrayBuffer | ArrayBufferView;
+}
+interface LocalSqlRow {
+  [column: string]: string | number | boolean | null | ArrayBuffer | Uint8Array;
 }
 
-export function makeSql(db: { prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void } }): SqlExecutor {
-  const sql = function <T = unknown>(
+const sqlBindingSchema = v.union([
+  v.string(), v.number(), v.bigint(), v.boolean(), v.null(),
+  v.instance(ArrayBuffer), v.instance(Uint8Array),
+]);
+
+function bunSqlBinding(input: { value: unknown }): SQLQueryBindings {
+  const value = v.parse(sqlBindingSchema, input.value);
+  return value instanceof ArrayBuffer ? new Uint8Array(value) : value;
+}
+
+export function makeSql(db: Database): SqlExecutor {
+  const sql: SqlExecutor = function <T = unknown>(
     strings: TemplateStringsArray,
     ...values: SqlValue[]
   ): T[] {
     const query = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
     // The filesystem binds BLOBs as ArrayBuffer (Cloudflare DO storage.sql's
     // native type); bun:sqlite only binds TypedArrays, so coerce.
-    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
+    const bound = values.map((value) => bunSqlBinding({ value }));
     const isRead = /^\s*(SELECT|WITH|PRAGMA)/i.test(query);
-    const stmt = db.prepare(query);
-    if (isRead) return stmt.all(...bound) as T[];
+    const stmt = db.prepare<T, SQLQueryBindings[]>(query);
+    if (isRead) return stmt.all(...bound);
     stmt.run(...bound);
     return [];
-  } as SqlExecutor;
+  };
   return sql;
 }
 
@@ -86,20 +107,15 @@ export function makeExecRaw(db: { exec(sql: string): void }): RawSqlExec {
  * returned by iteration. `makeSqlExec` already speaks this shape; Nimbus wants
  * the iterable directly rather than a `toArray` cursor.
  */
-export function nimbusSql(db: {
-  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-}): { exec(query: string, ...bindings: unknown[]): Iterable<Record<string, never>> } {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const bound = bindings.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v ?? null));
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return stmt.all(...bound) as Array<Record<string, never>>;
-      }
-      stmt.run(...bound);
-      return [] as Array<Record<string, never>>;
-    },
+export function nimbusSql(db: Database): WorkspaceSql {
+  const exec: WorkspaceSql['exec'] = (query, ...bindings) => {
+    const bound = bindings.map((value) => bunSqlBinding({ value }));
+    const stmt = db.prepare<NimbusSqlRow, SQLQueryBindings[]>(query);
+    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return stmt.all(...bound);
+    stmt.run(...bound);
+    return [];
   };
+  return { exec };
 }
 
 /**
@@ -109,12 +125,10 @@ export function nimbusSql(db: {
  * without one, which is stated rather than silently pretended — every atomic
  * write becomes a torn write that reports success.
  */
-export function localTransactions(db: unknown): { storage: { transactionSync<T>(cb: () => T): T } } {
-  const tx = (db as { transaction?: (fn: () => unknown) => () => unknown }).transaction;
+export function localTransactions(db: Database): WorkspaceTransactions {
   return {
     storage: {
-      transactionSync: <T,>(cb: () => T): T =>
-        typeof tx === 'function' ? (tx.call(db, cb) as () => T)() : cb(),
+      transactionSync: <T,>(callback: () => T): T => db.transaction(callback)(),
     },
   };
 }
@@ -122,19 +136,27 @@ export function localTransactions(db: unknown): { storage: { transactionSync<T>(
 /** Positional-binding SQL — what the events hub, the release board and
  *  the experience library speak. A Durable Object's `ctx.storage.sql` is this
  *  natively; bun:sqlite is one wrapper away. */
-export function makeSqlExec(db: {
-  prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-}): SqlExec {
-  return {
-    exec(query: string, ...bindings: unknown[]) {
-      const stmt = db.prepare(query);
-      if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
-        return { toArray: () => stmt.all(...bindings) as Array<Record<string, unknown>> };
-      }
-      stmt.run(...bindings);
-      return { toArray: () => [] };
-    },
+export function makeSqlExec(db: Pick<Database, 'prepare'>): SqlExec {
+  const exec: SqlExec['exec'] = (query, ...bindings) => {
+    const bound = bindings.map((value) => bunSqlBinding({ value }));
+    const stmt = db.prepare<LocalSqlRow, SQLQueryBindings[]>(query);
+    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) {
+      return { toArray: () => stmt.all(...bound).map(toSqlRow) };
+    }
+    stmt.run(...bound);
+    return { toArray: () => [] };
   };
+  return { exec };
+}
+
+function toSqlRow(row: LocalSqlRow) {
+  const output: Record<string, SqlValue> = {};
+  for (const [column, value] of Object.entries(row)) {
+    output[column] = value instanceof Uint8Array
+      ? new Uint8Array(value).buffer
+      : value;
+  }
+  return output;
 }
 
 /** The three handles core's `initWorkspaceSchema` needs, all onto one local
@@ -152,7 +174,8 @@ function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
     append: (path, content) => store.appendToFile(path, content),
     async index(path) {
       try {
-        const content = await vfs.readFile(path, { encoding: 'utf8' }) as string;
+        const raw = await vfs.readFile(path, { encoding: 'utf8' });
+        const content = raw instanceof Uint8Array ? new TextDecoder().decode(raw) : raw;
         await store.indexFile(path, content);
       } catch { /* file may not exist */ }
     },
@@ -165,57 +188,28 @@ function adaptMemory(store: MemoryStore, vfs: VFS): Memory {
 
 /**
  * Adapt agent-utils CraftStore to core CraftStore interface.
- * Handles the type differences (createdAt vs created_at, scope values).
+ * The concrete store returns null for a miss; core uses undefined.
  */
 function adaptCraftStore(store: AgentUtilsCraftStore): CoreCraftStore {
   return {
     create(tool) {
-      store.create({
-        name: tool.name,
-        description: tool.description,
-        params: tool.params as Record<string, string> | undefined ?? undefined,
-        code: tool.code,
-        scope: tool.scope as 'local' | 'shared',
-      });
+      store.create(tool);
     },
     update(name, patch) {
-      store.update(name, {
-        description: patch.description,
-        code: patch.code,
-        scope: patch.scope as 'local' | 'shared' | undefined,
-      });
+      store.update(name, patch);
     },
     get(name) {
-      const t = store.get(name);
-      if (!t) return undefined;
-      return toCraftedTool(t);
+      return store.get(name) ?? undefined;
     },
     delete(name) { store.delete(name); },
-    list() { return store.list().map(toCraftedTool); },
-    search(query, limit = 10) { return store.search(query, limit).map(toCraftedTool); },
-    getAll() { return store.getAll().map(toCraftedTool); },
-  };
-}
-
-function toCraftedTool(t: { name: string; description: string; params: Record<string, string> | null; code: string; scope: string; createdAt: number; updatedAt: number }): CraftedTool {
-  return {
-    name: t.name,
-    description: t.description,
-    params: t.params,
-    code: t.code,
-    scope: t.scope as 'local' | 'shared',
-    createdAt: t.createdAt,
-    updatedAt: t.updatedAt,
+    list() { return store.list(); },
+    search(query, limit = 10) { return store.search(query, limit); },
+    getAll() { return store.getAll(); },
   };
 }
 
 export function createCLIRuntime(
-  db: {
-    prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-    exec(sql: string): void;
-    run(sql: string, params?: unknown[]): void;
-    query(sql: string): { get(...params: unknown[]): unknown; all(...params: unknown[]): unknown[] };
-  },
+  db: Database,
   config: CLIRuntimeConfig,
 ): AgentRuntime {
   const sql = makeSql(db);
@@ -239,7 +233,7 @@ export function createCLIRuntime(
   } else {
     agentId = crypto.randomUUID();
     agentName = config.agentName ?? 'agent';
-    sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
+    void sql`INSERT INTO workspace_identity (id, name) VALUES (${agentId}, ${agentName})`;
   }
 
   const llm = createLocalProviderLLM({
@@ -333,6 +327,7 @@ export function createCLIRuntime(
   // built before that surface exists, so the channel can only be attached
   // after the fact.
   let approvalChannel: RequestShellApproval | null = null;
+  let turnFileLedgerProvider: Parameters<NonNullable<AgentRuntime['setTurnFileLedgerProvider']>>[0] = null;
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => agentConfig.getShellApprovalMode(),
     requestApproval: (req) => approvalChannel?.(req) ?? Promise.resolve(null),
@@ -355,9 +350,12 @@ export function createCLIRuntime(
   // `sql` is not optional in practice: workspace.createTool seeds the crafted
   // tool's score prior and writes the misevolution veto trail through it, and
   // listTools quotes real EMA scores from it.
-  executionRouter.register(createInlineExecutor({
-    vfs, memory, craftStore, shell, sql, ...(limits ? { resourceLimits: limits } : {}),
-  }));
+  const inlineOptions: Parameters<typeof createInlineExecutor>[0] = {
+    vfs, memory, craftStore, shell, sql,
+    ledger: () => turnFileLedgerProvider?.(),
+  };
+  if (limits) inlineOptions.resourceLimits = limits;
+  executionRouter.register(createInlineExecutor(inlineOptions));
   executionRouter.register(createLocalLaptopExecutor(process.cwd(), hostShell, checkpoints, limits));
 
   return buildRuntime({
@@ -366,6 +364,7 @@ export function createCLIRuntime(
     spawnBranch: spawn, abortBranch: abort,
     executionRouter, shell, checkpoints,
     setShellApprovalChannel: (fn) => { approvalChannel = fn; },
+    setTurnFileLedgerProvider: (provider) => { turnFileLedgerProvider = provider; },
   });
 }
 
@@ -384,10 +383,7 @@ export function createCLIRuntime(
  * real execution, and what the doctrine promises a fork.
  */
 export function buildCLIHeadRuntime(
-  db: {
-    prepare(sql: string): { all(...params: unknown[]): unknown[]; run(...params: unknown[]): void };
-    exec(sql: string): void;
-  },
+  db: Database,
   opts: {
     parentRuntime: AgentRuntime; cwd: string; agentId: string; agentName: string;
     /** Watches every write this head makes to the PARENT workspace, so the
@@ -396,7 +392,7 @@ export function buildCLIHeadRuntime(
     writeObserver?: WriteObserver;
   },
 ): AgentRuntime {
-  const { parentRuntime: parent, cwd } = opts;
+  const { parentRuntime: parent } = opts;
   const sql = makeSql(db);
   const execRaw = makeExecRaw(db);
 
@@ -422,21 +418,24 @@ export function buildCLIHeadRuntime(
   // same interface the cloud head satisfies with Durable Object RPC.
   const parentVfs = parent.storage.vfs;
   const ok = <T>(value: T): ParentRpcResult<T> => ({ ok: true, value });
-  const fail = <T>(path: string, error: unknown): ParentRpcResult<T> => ({
-    ok: false,
-    error: {
-      code: (error as { code?: string })?.code === 'ENOENT' ? 'ENOENT' : 'EIO',
-      message: error instanceof Error ? error.message : String(error),
-      path,
-    },
-  });
+  const fail = <T>(input: { path: string; error: unknown }): ParentRpcResult<T> => {
+    const parsed = v.safeParse(v.object({ code: v.optional(v.string()) }), input.error);
+    return {
+      ok: false,
+      error: {
+        code: parsed.success && parsed.output.code === 'ENOENT' ? 'ENOENT' : 'EIO',
+        message: input.error instanceof Error ? input.error.message : String(input.error),
+        path: input.path,
+      },
+    };
+  };
   const attempt = async <T>(path: string, fn: () => Promise<T>): Promise<ParentRpcResult<T>> => {
-    try { return ok(await fn()); } catch (error) { return fail<T>(path, error); }
+    try { return ok(await fn()); } catch (error) { return fail<T>({ path, error }); }
   };
   const parentHandle: ParentWorkspaceHandle = {
     read: (path) => attempt(path, async () => {
       const content = await parentVfs.readFile(path);
-      return typeof content === 'string' ? new TextEncoder().encode(content) : content;
+      return content instanceof Uint8Array ? content : new TextEncoder().encode(content);
     }),
     write: (input: ParentRpcWrite) => attempt(input.path, async () => {
       if (input.kind === 'file') await parentVfs.writeFile(input.path, input.data);
@@ -464,12 +463,14 @@ export function buildCLIHeadRuntime(
   if (laptop) executionRouter.register(laptop);
   const checkpoints = parent.checkpoints;
 
-  return buildRuntime({
+  const runtimeOptions: Parameters<typeof buildRuntime>[0] = {
     sql, execRaw, vfs, llm: parent.llm, executor: parent.executor, schedule: parent.schedule,
     agentId: opts.agentId, agentName: opts.agentName, memory, craftStore, judgeModel: parent.judgeModel,
     spawnBranch: parent.spawnBranch, abortBranch: parent.abortBranch,
-    executionRouter, shell, ...(checkpoints ? { checkpoints } : {}),
-  });
+    executionRouter, shell,
+  };
+  if (checkpoints) runtimeOptions.checkpoints = checkpoints;
+  return buildRuntime(runtimeOptions);
 }
 
 /** How long after the command's own exit we keep reading its pipes. A pipe
@@ -477,13 +478,20 @@ export function buildCLIHeadRuntime(
  *  that in microseconds, so this is generous for the command and short enough
  *  that an orphaned grandchild's inherited pipe never becomes our problem. */
 const EXITED_COMMAND_DRAIN_MS = 250;
+const shellOptionsSchema = v.object({
+  stdin: v.optional(v.string()),
+  signal: v.optional(v.instance(AbortSignal)),
+});
+const abortContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
 
 export function createHostShell(cwd: string): Shell {
   return {
     exec(command: string, stdinOrOptions?: string | { stdin?: string; signal?: AbortSignal }) {
       return new Promise((resolve) => {
-        const stdin = typeof stdinOrOptions === 'string' ? stdinOrOptions : stdinOrOptions?.stdin;
-        const signal = typeof stdinOrOptions === 'string' ? undefined : stdinOrOptions?.signal;
+        const stdinText = v.safeParse(v.string(), stdinOrOptions);
+        const options = v.safeParse(shellOptionsSchema, stdinOrOptions);
+        const stdin = stdinText.success ? stdinText.output : options.success ? options.output.stdin : undefined;
+        const signal = options.success ? options.output.signal : undefined;
         let settled = false;
         const child = spawn('/bin/sh', ['-lc', command], {
           cwd,
@@ -563,8 +571,8 @@ export function withCheckpointedShell(shell: Shell, checkpoints: FileCheckpoints
 function createLocalLaptopExecutor(
   cwd: string, shell: Shell, checkpoints: FileCheckpoints, resourceLimits: ResourceLimits | null,
 ): ExecutorProvider {
-  const toHostPath = (path: unknown) => resolvePath(cwd, String(path || '.'));
-  return {
+  const toHostPath = (path: string) => resolvePath(cwd, path || '.');
+  const provider: ExecutorProvider = {
     name: 'laptop',
     kind: 'laptop',
     // The machine's own files, in the machine's own absolute paths. Writes
@@ -572,7 +580,6 @@ function createLocalLaptopExecutor(
     // /undo covers file-plane mutations too.
     files: createHostMountVFS(checkpoints),
     capabilities: new Set(['shell', 'git', 'npm', 'fs_shared', 'net_outbound', 'process_spawn']),
-    ...(resourceLimits ? { resourceLimits } : {}),
     positionalArgs: true,
     isAvailable: () => true,
     connect: async () => {},
@@ -580,30 +587,31 @@ function createLocalLaptopExecutor(
     tools: {
       exec: {
         description: 'Run a shell command on the local machine in the directory where the CLI was invoked.',
-        execute: async (command: unknown, context?: unknown) => {
-          const signal = readAbortSignal(context);
-          const result = await shell.exec(String(command), signal ? { signal } : undefined);
+        execute: async (command, context) => {
+          const signal = readAbortSignal({ context });
+          const result = await shell.exec(coerceText({ value: command }), signal ? { signal } : undefined);
           return formatExecResult(result);
         },
       },
       readFile: {
         description: 'Read a UTF-8 file from the local machine.',
-        execute: async (path: unknown) => fs.readFile(toHostPath(path), 'utf-8'),
+        execute: async (path) => fs.readFile(toHostPath(coercePath({ value: path })), 'utf-8'),
       },
       writeFile: {
         description: 'Write a UTF-8 file on the local machine. Parent directories are created.',
-        execute: async (path: unknown, content: unknown) => {
-          const p = toHostPath(path);
+        execute: async (path, content) => {
+          const text = coerceText({ value: content });
+          const p = toHostPath(coercePath({ value: path }));
           await checkpoints.ensureCheckpoint(checkpoints.workdirForPath(p), 'file write');
           await fs.mkdir(resolvePath(p, '..'), { recursive: true });
-          await fs.writeFile(p, String(content), 'utf-8');
-          return `Written ${String(content).length} bytes to ${p}`;
+          await fs.writeFile(p, text, 'utf-8');
+          return `Written ${text.length} bytes to ${p}`;
         },
       },
       listFiles: {
         description: 'List local directory entries as {name,type}.',
-        execute: async (path: unknown = '.') => {
-          const entries = await fs.readdir(toHostPath(path), { withFileTypes: true });
+        execute: async (path = '.') => {
+          const entries = await fs.readdir(toHostPath(coercePath({ value: path })), { withFileTypes: true });
           return entries.map((e) => ({ name: e.name, type: e.isDirectory() ? 'dir' : 'file' }));
         },
       },
@@ -615,12 +623,18 @@ function createLocalLaptopExecutor(
   listFiles(path?: string): Promise<Array<{name: string; type: "dir" | "file"}>>;
 };`,
   };
+  return resourceLimits ? { ...provider, resourceLimits } : provider;
 }
 
-function readAbortSignal(context: unknown): AbortSignal | undefined {
-  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
-  const signal = (context as { signal?: unknown }).signal;
-  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
-    ? signal as AbortSignal
-    : undefined;
+function coerceText(input: { value: unknown }): string {
+  return String(input.value);
+}
+
+function coercePath(input: { value: unknown }): string {
+  return input.value ? String(input.value) : '.';
+}
+
+function readAbortSignal(input: { context: unknown }): AbortSignal | undefined {
+  const parsed = v.safeParse(abortContextSchema, input.context);
+  return parsed.success ? parsed.output.signal : undefined;
 }

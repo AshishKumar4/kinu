@@ -33,7 +33,7 @@ const V0_CODE = 'async function* run(rt, task) { yield "v0"; }';
 const V1_CODE = 'async function* run(rt, task) { yield "v1-pending"; }';
 const RATIONALE = 'Session reflection: stream tool results incrementally for long tasks.';
 
-function setup(): { rt: AgentRuntime; facts: ReturnType<typeof createFactsStore> } {
+function setup() {
   const { rt } = createTestRuntime();
   const execRaw = rt.storage.execRaw;
   initScaffoldTables(execRaw);
@@ -48,7 +48,7 @@ function setup(): { rt: AgentRuntime; facts: ReturnType<typeof createFactsStore>
 
 async function seedScaffoldPending(rt: AgentRuntime): Promise<number> {
   await rt.identity.scaffold.write(V0_CODE);
-  rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+  void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                  VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
   const result = await modifyScaffold(rt, RATIONALE, V1_CODE);
   expect(result.ok).toBe(true);
@@ -89,7 +89,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('a scaffold entry says which failure the version was written for', async () => {
     const { rt } = setup();
     await rt.identity.scaffold.write(V0_CODE);
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (0, ${Date.now() - 60_000}, ${'bootstrap'}, 'current')`;
     const result = await modifyScaffold(rt, RATIONALE, `// pathology: no_action/prose\n${V1_CODE}`);
     expect(result.ok).toBe(true);
@@ -104,7 +104,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       name: 'fetch_and_summarize', description: 'Fetch a URL and summarize it',
       code: 'async (args) => args.url', params: null, scope: 'shared',
     });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
                    VALUES ('fetch_and_summarize', 0.82, 5, ${Date.now()})`;
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
@@ -135,11 +135,11 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt, facts } = setup();
     const now = Date.now();
     facts.upsert('old.fact', 'outside');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'old.fact'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'old.fact'`;
     facts.upsert('sandbox.npm_version', 'npm v10');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 2000} WHERE key = 'sandbox.npm_version'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 2000} WHERE key = 'sandbox.npm_version'`;
     facts.upsert('project.deploy_target', 'example.workers.dev');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 1000} WHERE key = 'project.deploy_target'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 1000} WHERE key = 'project.deploy_target'`;
 
     const [entry] = buildChangelog(rt.storage.sql, { since: now - 30_000 })
       .filter((e) => e.kind === 'fact');
@@ -154,7 +154,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('same-value re-observation keeps a stable id and does not refresh the digest', () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v10');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
     const original = buildChangelog(rt.storage.sql)[0].items![0];
 
     facts.upsert('sandbox.npm_version', 'npm v10', { confidence: 0.9, source: 'sleep-time-compute' });
@@ -167,7 +167,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
   test('value change refreshes the stable fact entry', () => {
     const { rt, facts } = setup();
     facts.upsert('sandbox.npm_version', 'npm v9');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = 1000 WHERE key = 'sandbox.npm_version'`;
 
     facts.upsert('sandbox.npm_version', 'npm v10');
 
@@ -190,7 +190,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
       runId: abortedId, status: 'aborted', stopReason: 'aborted', winnerId: null,
       metricCalls: 0, iterations: 0,
     });
-    sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+    void sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
         VALUES ('rpl-1', ${Date.now()}, 6, 4, 2, 0.75, 0.25, 0, '[]')`;
     recordTurnOutcome(sql, {
       outcome: 'accepted', confidence: 1, source: 'explicit',
@@ -232,9 +232,9 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     const { rt, facts } = setup();
     const now = Date.now();
     facts.upsert('older', 'a');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 10_000} WHERE key = 'older'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 10_000} WHERE key = 'older'`;
     facts.upsert('newer', 'b');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'newer'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'newer'`;
 
     const entries = buildChangelog(rt.storage.sql);
     expect(entries).toHaveLength(1);
@@ -258,7 +258,7 @@ describe('buildChangelog — every kind from the seeded ledgers', () => {
     await applyPromotionDecision(rt, getPendingScaffold(rt.storage.sql)!, 'promote');
     const now = Date.now();
     const replayRow = (id: string, at: number, n: number, mean: number, scaffoldVersion: number) => {
-      rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+      void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
           VALUES (${id}, ${at}, ${n}, ${n / 2}, ${n / 2}, ${mean}, ${1 - mean}, ${scaffoldVersion}, '[]')`;
     };
     // 0.50 → 0.75 over 4 instances: the intervals overlap almost entirely, so
@@ -291,9 +291,9 @@ describe('unseen-count logic (the badge)', () => {
     const { rt, facts } = setup();
     const now = Date.now();
     facts.upsert('seen_fact', 'x');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'seen_fact'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now - 60_000} WHERE key = 'seen_fact'`;
     facts.upsert('fresh_fact', 'y');
-    rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'fresh_fact'`;
+    void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${now} WHERE key = 'fresh_fact'`;
 
     expect(countUnseenChangelog(rt.storage.sql, 0)).toBe(1);
     expect(countUnseenChangelog(rt.storage.sql, now - 30_000)).toBe(1);
@@ -364,7 +364,7 @@ describe('renderChangelogText — the one text form', () => {
   test('numbers entries, shows evidence, marks revertables', () => {
     const { rt, facts } = setup();
     facts.upsert('k', 'v', { confidence: 0.7 });
-    rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
+    void rt.storage.sql`INSERT INTO replay_evals (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
         VALUES ('rpl-2', ${Date.now() - 1000}, 3, 2, 1, 0.9, 0.1, NULL, '[]')`;
 
     const entries = buildChangelog(rt.storage.sql);
@@ -393,7 +393,7 @@ describe('reverts — real paths only', () => {
   test('craft retire removes the tool and its score; double-revert errors', async () => {
     const { rt, facts } = setup();
     rt.craftStore.create({ name: 'tmp_tool', description: 'temp', code: 'async () => 1', params: null, scope: 'local' });
-    rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
+    void rt.storage.sql`INSERT INTO craft_scores (tool_name, score, uses, last_used_at)
                    VALUES ('tmp_tool', 0.5, 2, ${Date.now()})`;
 
     const result = await executeChangelogRevert({ rt, facts }, { type: 'craft_retire', target: 'tmp_tool' });
@@ -576,7 +576,7 @@ describe('session-end digest — assembled when the window closes', () => {
 function seedTools(rt: AgentRuntime, names: ReadonlyArray<string>, at: (i: number) => number): void {
   names.forEach((name, i) => {
     rt.craftStore.create({ name, description: `d-${name}`, code: 'async () => 1', params: null, scope: 'local' });
-    rt.storage.sql`UPDATE crafted_tools SET created_at = ${at(i)}, updated_at = ${at(i)}
+    void rt.storage.sql`UPDATE crafted_tools SET created_at = ${at(i)}, updated_at = ${at(i)}
                    WHERE name = ${name}`;
   });
 }
@@ -613,7 +613,7 @@ describe('buildChangelog — ordering, limit, and the since window', () => {
     const now = Date.now();
     seedTools(rt, ['t1', 't2', 't3', 't4', 't5', 't6'], (i) => now - (5 - i) * 1000);
     for (let i = 0; i < 6; i++) {
-      rt.storage.sql`INSERT INTO replay_evals
+      void rt.storage.sql`INSERT INTO replay_evals
         (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
         VALUES (${`r${i}`}, ${now - (5 - i) * 1000 - 500}, 8, 4, 4, 0.5, 0.5, 0, '[]')`;
     }
@@ -653,12 +653,12 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt } = setup();
     initRunEventTables(rt.storage.execRaw);
     const written = Date.now() - 3_600_000;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (1, ${written}, 'earlier way of working', 'superseded')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (2, ${written}, ${RATIONALE}, 'current')`;
     const promotedAt = Date.now() - 1_000;
-    rt.storage.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
+    void rt.storage.sql`INSERT INTO run_events (run_id, event_index, type, payload, ts)
       VALUES ('run-1', 0, 'scaffold_promotion',
               ${JSON.stringify({ fromVersion: 1, toVersion: 2 })},
               ${new Date(promotedAt).toISOString()})`;
@@ -677,7 +677,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const written = Date.now() - 10_000;
     const statuses = ['current', 'pending', 'rolled_back', 'superseded'] as const;
     statuses.forEach((status, i) => {
-      rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+      void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                      VALUES (${i + 1}, ${written + i}, 'r', ${status})`;
     });
 
@@ -694,7 +694,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt } = setup();
     const created = Date.now();
     rt.craftStore.create({ name: 'skewed', description: 'd', code: 'async () => 1', params: null, scope: 'local' });
-    rt.storage.sql`UPDATE crafted_tools SET created_at = ${created}, updated_at = ${created - 60_000}
+    void rt.storage.sql`UPDATE crafted_tools SET created_at = ${created}, updated_at = ${created - 60_000}
                    WHERE name = 'skewed'`;
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'tool');
@@ -729,7 +729,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
       const { rt, facts } = setup();
       for (const [key, at] of order) {
         facts.upsert(key, 'v');
-        rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${at} WHERE key = ${key}`;
+        void rt.storage.sql`UPDATE agent_facts SET last_observed_at = ${at} WHERE key = ${key}`;
       }
       return buildChangelog(rt.storage.sql).filter((e) => e.kind === 'fact')[0].id;
     };
@@ -746,7 +746,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
       runId, status: 'completed', stopReason: 'iterations_exhausted',
       winnerId: 'cand-1', metricCalls: 12, iterations: 3,
     });
-    rt.storage.sql`UPDATE gepa_runs SET ended_at = ${endedAt} WHERE run_id = ${runId}`;
+    void rt.storage.sql`UPDATE gepa_runs SET ended_at = ${endedAt} WHERE run_id = ${runId}`;
 
     const [entry] = buildChangelog(rt.storage.sql).filter((e) => e.kind === 'gepa');
     expect(entry.at).toBe(endedAt);
@@ -760,7 +760,7 @@ describe('buildChangelog — per-kind timestamps and evidence', () => {
     const { rt } = setup();
     const now = Date.now();
     const row = (id: string, at: number, mean: number) => {
-      rt.storage.sql`INSERT INTO replay_evals
+      void rt.storage.sql`INSERT INTO replay_evals
         (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version, details)
         VALUES (${id}, ${at}, 40, 20, 20, ${mean}, ${1 - mean}, 0, '[]')`;
     };
@@ -802,9 +802,9 @@ describe('renderChangelogText + revert guards', () => {
     // Discarding the stale one through it would restore the wrong file.
     const { rt, facts } = setup();
     const written = Date.now() - 10_000;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (1, ${written}, 'stale proposal', 'pending')`;
-    rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
+    void rt.storage.sql`INSERT INTO scaffold_versions (version, written_at, rationale, status)
                    VALUES (2, ${written + 1}, 'live proposal', 'pending')`;
     expect(getPendingScaffold(rt.storage.sql)!.version).toBe(2);
 

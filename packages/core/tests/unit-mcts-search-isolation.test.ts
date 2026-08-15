@@ -33,7 +33,7 @@ function initTables(rt: AgentRuntime): void {
  *  made to score higher than the next. */
 function scriptedLLM(score: () => number, onSummary: () => string): LLM {
   return {
-    async *stream() { throw new Error('MCTS never streams — branches are mocked'); },
+    stream() { throw new Error('MCTS never streams — branches are mocked'); },
     async complete(prompt: string) {
       if (prompt.includes('Summarize in')) return onSummary();
       return JSON.stringify({ score: score(), rationale: 'scripted' });
@@ -42,20 +42,28 @@ function scriptedLLM(score: () => number, onSummary: () => string): LLM {
 }
 
 function nodesOf(db: Database, rootId: string): Array<{ id: string; status: string; task: string }> {
-  return db.query('SELECT id, status, task FROM search_nodes WHERE root_id = ?')
-    .all(rootId) as Array<{ id: string; status: string; task: string }>;
+  return db.query<{ id: string; status: string; task: string }, [string]>(
+    'SELECT id, status, task FROM search_nodes WHERE root_id = ?',
+  ).all(rootId);
 }
 
 function rootIdOfNode(db: Database, nodeId: string): string | null {
-  return (db.query('SELECT root_id FROM search_nodes WHERE id = ?')
-    .get(nodeId) as { root_id: string | null } | null)?.root_id ?? null;
+  return db.query<{ root_id: string | null }, [string]>(
+    'SELECT root_id FROM search_nodes WHERE id = ?',
+  ).get(nodeId)?.root_id ?? null;
+}
+
+function requiredRootId(db: Database, nodeId: string): string {
+  const rootId = rootIdOfNode(db, nodeId);
+  if (!rootId) throw new Error(`Expected node '${nodeId}' to belong to a search tree`);
+  return rootId;
 }
 
 describe('MCTS search isolation', () => {
   test('a convergence that throws settles the search as failed, not converged, and leaves no open node', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db as unknown as Database));
+    const store = new MctsSearchStore(makeSql(db));
     // converge() awaits a summary call after the branches are scored; failing it
     // is the cheapest faithful stand-in for "the settle work did not complete".
     rt.llm = scriptedLLM(() => 0.9, () => { throw new Error('summary model down'); });
@@ -65,7 +73,9 @@ describe('MCTS search isolation', () => {
       budget: 1, branches: 1, search: store,
     })).rejects.toThrow('summary model down');
 
-    const rootId = (db.query('SELECT root_id FROM mcts_search_runs').get() as { root_id: string }).root_id;
+    const run = db.query<{ root_id: string }, []>('SELECT root_id FROM mcts_search_runs').get();
+    if (!run) throw new Error('Expected a durable MCTS search run');
+    const rootId = run.root_id;
     // The durable record must never claim an outcome the search did not reach.
     expect(store.get(rootId)?.status).toBe('failed');
     // And the tree must be retired, so nothing here is selectable ever again.
@@ -89,18 +99,18 @@ describe('MCTS search isolation', () => {
     const second = await runMCTS(rt, createMockSession(), 'TASK TWO', { budget: 1, branches: 1 });
 
     expect(second.winnerId).not.toBe(first.winnerId);
-    const secondRoot = rootIdOfNode(db, second.winnerId)!;
+    const secondRoot = requiredRootId(db, second.winnerId);
     expect(secondRoot).not.toBe(rootIdOfNode(db, first.winnerId));
     expect(nodesOf(db, secondRoot).every(n => n.task === 'TASK TWO')).toBe(true);
 
-    const history = db.query('SELECT task FROM task_history ORDER BY rowid').all() as Array<{ task: string }>;
+    const history = db.query<{ task: string }, []>('SELECT task FROM task_history ORDER BY rowid').all();
     expect(history.map(h => h.task)).toEqual(['TASK ONE', 'TASK TWO']);
   });
 
   test('a search abandoned mid-run cannot capture a later search\'s budget', async () => {
     const { rt, db } = createTestRuntime();
     initTables(rt);
-    const store = new MctsSearchStore(makeSql(db as unknown as Database));
+    const store = new MctsSearchStore(makeSql(db));
     rt.llm = scriptedLLM(() => 0.9, () => 'summary');
     rt.judgeModel = rt.llm;
 
@@ -113,17 +123,18 @@ describe('MCTS search isolation', () => {
     })).rejects.toThrow();
     const abandoned = store.findResumable('ABANDONED');
     expect(abandoned).not.toBeNull();
-    const openBefore = nodesOf(db, abandoned!.rootId).filter(n => n.status === 'open').length;
+    if (!abandoned) throw new Error('Expected the evicted search to remain resumable');
+    const openBefore = nodesOf(db, abandoned.rootId).filter(n => n.status === 'open').length;
     expect(openBefore).toBeGreaterThan(0);
 
     // Search B runs a different task while A's tree is still open.
     const second = await runMCTS(rt, createMockSession(), 'LATER', { budget: 2, branches: 2 });
 
-    const laterRoot = rootIdOfNode(db, second.winnerId)!;
-    expect(laterRoot).not.toBe(abandoned!.rootId);
+    const laterRoot = requiredRootId(db, second.winnerId);
+    expect(laterRoot).not.toBe(abandoned.rootId);
     expect(nodesOf(db, laterRoot).every(n => n.task === 'LATER')).toBe(true);
     // B neither expanded under A's frontier nor closed it — A stays resumable.
-    expect(nodesOf(db, abandoned!.rootId).filter(n => n.status === 'open').length).toBe(openBefore);
-    expect(store.findResumable('ABANDONED')?.rootId).toBe(abandoned!.rootId);
+    expect(nodesOf(db, abandoned.rootId).filter(n => n.status === 'open').length).toBe(openBefore);
+    expect(store.findResumable('ABANDONED')?.rootId).toBe(abandoned.rootId);
   });
 });

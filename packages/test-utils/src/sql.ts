@@ -4,8 +4,8 @@
 // Tests previously each defined this setup inline; centralising it kills ~120
 // lines of duplication across unit-facts / unit-curriculum / unit-sleep-time /
 // unit-eval / etc.
-import { Database } from 'bun:sqlite';
-import type { SqlExecutor } from '@proteus/core';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import type { SqlExecutor, SqlValue } from '@proteus/core';
 
 export interface TestSql {
   /** Tagged-template SQL — matches `SqlExecutor` shape from @proteus/core. */
@@ -27,12 +27,17 @@ export function createTestSql(): TestSql {
   // Convert a template literal into `?`-bound prepared statement.
   // Returns rows as a typed array — Tagged-template form matches the
   // SqlExecutor signature: `sql<Row>\`SELECT ...\``.
-  const sql = (<T = unknown>(strings: TemplateStringsArray, ...values: unknown[]): T[] => {
+  const sql: SqlExecutor = function <T = unknown>(
+    strings: TemplateStringsArray,
+    ...values: SqlValue[]
+  ): T[] {
     const q = strings.reduce((acc, s, i) => acc + s + (i < values.length ? '?' : ''), '');
     // bun:sqlite binds TypedArrays, not ArrayBuffers (the canonical VFS BLOB type).
-    const bound = values.map((v) => (v instanceof ArrayBuffer ? new Uint8Array(v) : v));
-    return db.prepare(q).all(...(bound as never[])) as T[];
-  }) as unknown as SqlExecutor;
+    const bound: SQLQueryBindings[] = values.map((value) => (
+      value instanceof ArrayBuffer ? new Uint8Array(value) : value
+    ));
+    return db.prepare<T, SQLQueryBindings[]>(q).all(...bound);
+  };
 
   return { sql, execRaw, db, close: () => db.close() };
 }

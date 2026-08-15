@@ -14,15 +14,23 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
 import { orchestratorHarness } from './helpers/actor-harness.js';
 
 interface Broadcast { type: string; phase: string; nodeCount: number; nodes: Array<{ id: string }> }
+const BroadcastSchema = v.object({
+  type: v.string(),
+  phase: v.string(),
+  nodeCount: v.number(),
+  nodes: v.array(v.object({ id: v.string() })),
+});
 
-function captureBroadcasts(agent: object): Broadcast[] {
+function captureBroadcasts(agent: ReturnType<typeof orchestratorHarness>['agent']): Broadcast[] {
   const sent: Broadcast[] = [];
-  (agent as { broadcast: (payload: string) => void }).broadcast = (payload: string) => {
-    sent.push(JSON.parse(payload) as Broadcast);
-  };
+  Object.defineProperty(agent, 'broadcast', {
+    configurable: true,
+    value: (payload: string) => { sent.push(v.parse(BroadcastSchema, JSON.parse(payload))); },
+  });
   return sent;
 }
 

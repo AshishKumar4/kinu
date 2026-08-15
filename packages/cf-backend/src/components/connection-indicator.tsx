@@ -1,14 +1,14 @@
 import type { ConnectionStatus } from "@/hooks/use-proteus";
 
-const STATUS_MAP: Record<ConnectionStatus, { dot: string; cls: string; label: string }> = {
+const STATUS_MAP = {
   connected:    { dot: "bg-[var(--c-success)]", cls: "p-success", label: "Connected" },
   connecting:   { dot: "bg-[var(--c-warning)]", cls: "p-warning", label: "Connecting..." },
   disconnected: { dot: "bg-[var(--c-danger)]",  cls: "p-danger",  label: "Disconnected" },
   error:        { dot: "bg-[var(--c-danger)]",  cls: "p-danger",  label: "Error" },
-};
+} satisfies Record<ConnectionStatus, { dot: string; cls: string; label: string }>;
 
 export function ConnectionIndicator({ status }: { status: ConnectionStatus }) {
-  const s = STATUS_MAP[status] ?? STATUS_MAP.disconnected;
+  const s = STATUS_MAP[status];
   return (
     <div className="flex shrink-0 items-center gap-2" role="status" aria-label={s.label}>
       <span className={`size-2 rounded-full ${s.dot}`} />

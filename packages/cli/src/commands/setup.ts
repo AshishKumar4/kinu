@@ -1,5 +1,6 @@
 import {
   createCodexOAuthClient,
+  decodeJsonValue,
   decodeCodexAccountId,
   tokensToCredential,
 } from '@proteus/core';
@@ -45,7 +46,7 @@ export async function storeProviderSecret(opts: {
     return 'local';
   }
   try {
-    await setCloudCredential(cloud.origin, cloud.token, opts.credKey, opts.credential);
+    await setCloudCredential(cloud.origin, cloud.token, opts.credKey, decodeJsonValue({ value: opts.credential }));
   } catch (err) {
     // Deliberately not falling back to disk: the user asked for account
     // storage, and writing the secret somewhere they did not choose is the
@@ -95,7 +96,6 @@ export async function setupCommand(opts: {
 
   const config = loadConfigFile();
   let cloudReady = Boolean(config.accessToken);
-  let cloudSkipped = Boolean(opts.skipCloud);
   if (cloudReady) {
     console.log(`${OK('✓')} Signed in${config.user?.email ? ` as ${ACCENT(config.user.email)}` : ''}`);
     console.log(DIM('Local workspaces you create signed in get free Workers AI (no key needed).'));
@@ -109,8 +109,6 @@ export async function setupCommand(opts: {
     if (shouldLogin) {
       await authCommand({ origin: opts.origin });
       cloudReady = Boolean(loadConfigFile().accessToken);
-    } else {
-      cloudSkipped = true;
     }
   }
 
@@ -154,7 +152,7 @@ export async function setupCommand(opts: {
     saveConfigFile(withProvider(next, {
       model: `codex/${model}`,
       providers: {
-        ...(next.providers ?? {}),
+        ...next.providers,
         codex: {
           accessToken: credential.accessToken,
           refreshToken: credential.refreshToken,
@@ -177,7 +175,7 @@ export async function setupCommand(opts: {
       credential: { kind: 'bearer', token: key },
       storeLocally: () => saveConfigFile(withProvider(next, {
         model: spec,
-        providers: { ...(next.providers ?? {}), openai: { apiKey: key } },
+        providers: { ...next.providers, openai: { apiKey: key } },
       })),
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.openai; }),
       model: spec,
@@ -195,7 +193,7 @@ export async function setupCommand(opts: {
       credential: { kind: 'bearer', token: key },
       storeLocally: () => saveConfigFile(withProvider(next, {
         model: spec,
-        providers: { ...(next.providers ?? {}), openrouter: { apiKey: key } },
+        providers: { ...next.providers, openrouter: { apiKey: key } },
       })),
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.openrouter; }),
       model: spec,
@@ -213,7 +211,7 @@ export async function setupCommand(opts: {
       credential: { kind: 'bearer', token: key },
       storeLocally: () => saveConfigFile(withProvider(next, {
         model: spec,
-        providers: { ...(next.providers ?? {}), anthropic: { apiKey: key } },
+        providers: { ...next.providers, anthropic: { apiKey: key } },
       })),
       clearLocally: () => updateConfigFile((config) => { delete config.providers?.anthropic; }),
       model: spec,
@@ -233,9 +231,9 @@ export async function setupCommand(opts: {
       storeLocally: () => saveConfigFile(withProvider(next, {
         model: spec,
         providers: {
-          ...(next.providers ?? {}),
+          ...next.providers,
           openaiCompat: {
-            ...(next.providers?.openaiCompat ?? {}),
+            ...next.providers?.openaiCompat,
             default: { baseURL, apiKey },
           },
         },
@@ -308,11 +306,11 @@ function withProvider(config: ProteusConfig, patch: Pick<ProteusConfig, 'model' 
     ...config,
     model: patch.model,
     providers: {
-      ...(config.providers ?? {}),
-      ...(patch.providers ?? {}),
+      ...config.providers,
+      ...patch.providers,
       openaiCompat: {
-        ...(config.providers?.openaiCompat ?? {}),
-        ...(patch.providers?.openaiCompat ?? {}),
+        ...config.providers?.openaiCompat,
+        ...patch.providers?.openaiCompat,
       },
     },
   };

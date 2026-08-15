@@ -2,8 +2,12 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
-import { DEFAULT_WORKERS_AI_MODEL_ID } from "@proteus/core";
+import {
+  DEFAULT_WORKERS_AI_MODEL_ID, JsonObjectSchema, JsonValueSchema, parseJsonValue,
+  type JsonObject, type JsonValue,
+} from "@proteus/core";
 import { validateAliasName, validateAgentName } from "../src/config.js";
+import * as v from 'valibot';
 
 const tempDirs: string[] = [];
 
@@ -78,7 +82,7 @@ describe("CLI config safety", () => {
 const CLOUD_ORIGIN = "https://proteus.example.com";
 const CLOUD_TOKEN = "ptc_0123456789abcdef0123456789abcdef_abcdefghijklmnopqrstuvwxyz";
 
-describe("resolveLLMConfig — signed-in Cloudflare AI (no BYO keys)", () => {
+describe("resolveLLMConfig — signed-in Cloudflare AI", () => {
   test("derives the worker AI proxy endpoint with the platform default model", () => {
     const out = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN });
     expect(out).toEqual({
@@ -93,17 +97,30 @@ describe("resolveLLMConfig — signed-in Cloudflare AI (no BYO keys)", () => {
     const pinned = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model: "workers-ai/@cf/meta/llama-4" });
     expect(pinned).toMatchObject({ name: "workers-ai", model: "@cf/meta/llama-4" });
 
+    const partner = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model: "workers-ai/minimax/m3" });
+    expect(partner).toMatchObject({ name: "workers-ai", model: "minimax/m3" });
+
     const gateway = runResolveLLM({ origin: CLOUD_ORIGIN, accessToken: CLOUD_TOKEN, model: "my-gateway/openai/gpt-4.1" });
     expect(gateway).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
   });
 
-  test("BYO provider keys keep precedence over the signed-in proxy", () => {
+  test("signed-in Cloudflare AI remains the default when unrelated BYO keys exist", () => {
     const out = runResolveLLM({
       origin: CLOUD_ORIGIN,
       accessToken: CLOUD_TOKEN,
       providers: { openai: { apiKey: "sk-test" } },
     });
-    expect(out).toMatchObject({ name: "openai" });
+    expect(out).toMatchObject({ name: "workers-ai", model: DEFAULT_WORKERS_AI_MODEL_ID });
+  });
+
+  test("an explicit model selection still overrides the signed-in default", () => {
+    const out = runResolveLLM({
+      origin: CLOUD_ORIGIN,
+      accessToken: CLOUD_TOKEN,
+      model: "openai/gpt-5.5",
+      providers: { openai: { apiKey: "sk-test" } },
+    });
+    expect(out).toMatchObject({ name: "openai", model: "gpt-5.5" });
   });
 
   test("an explicit direct endpoint keeps precedence over the signed-in proxy", () => {
@@ -130,7 +147,7 @@ describe("resolveLLMConfig — signed-in Cloudflare AI (no BYO keys)", () => {
 /** Runs resolveLLMConfig in a clean subprocess (config.ts binds PROTEUS_HOME at
  *  import) with the provider/cloud env scrubbed, returning the config or
  *  { error } as JSON. */
-function runResolveLLM(config: Record<string, unknown>, extraEnv: Record<string, string> = {}): unknown {
+function runResolveLLM(config: JsonObject, extraEnv: Record<string, string> = {}): JsonValue {
   const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-llm-"));
   tempDirs.push(proteusHome);
   writeFileSync(join(proteusHome, "config.json"), JSON.stringify(config), { mode: 0o600 });
@@ -139,7 +156,7 @@ function runResolveLLM(config: Record<string, unknown>, extraEnv: Record<string,
     try { console.log(JSON.stringify(resolveLLMConfig())); }
     catch (err) { console.log(JSON.stringify({ error: err instanceof Error ? err.message : String(err) })); }
   `;
-  const env: Record<string, string | undefined> = { ...process.env, PROTEUS_HOME: proteusHome, ...extraEnv };
+  const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome, ...extraEnv };
   for (const name of [
     "PROTEUS_TOKEN", "PROTEUS_ORIGIN", "PROTEUS_MODEL", "PROTEUS_BASE_URL", "PROTEUS_AUTH",
     "AI_GATEWAY_BASE_URL", "AI_GATEWAY_AUTH", "AI_GATEWAY_MODEL",
@@ -155,7 +172,7 @@ function runResolveLLM(config: Record<string, unknown>, extraEnv: Record<string,
     stderr: "pipe",
   });
   expect(proc.exitCode).toBe(0);
-  return JSON.parse(proc.stdout.toString());
+  return parseJsonValue(proc.stdout.toString());
 }
 
 function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
@@ -171,7 +188,7 @@ function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
     try { const auth = requireAuthConfig(); console.log(process.env.PROTEUS_TOKEN ? 'ok ' + auth.token : 'ok'); }
     catch (err) { console.log(err instanceof Error ? err.message : String(err)); }
   `;
-  const env: Record<string, string | undefined> = { ...process.env, PROTEUS_HOME: proteusHome };
+  const env: NodeJS.ProcessEnv = { ...process.env, PROTEUS_HOME: proteusHome };
   if (envToken) env.PROTEUS_TOKEN = envToken;
   else delete env.PROTEUS_TOKEN;
   return Bun.spawnSync({
@@ -183,14 +200,25 @@ function runRequireAuth(tokenExpiresAt: string, envToken?: string) {
   });
 }
 
-function runPreferenceWrite(): {
-  modelResult: unknown;
-  effortShow: unknown;
-  effortSet: unknown;
-  invalid: unknown;
-  config: Record<string, unknown>;
-  invalidLoaded: unknown;
-} {
+interface PreferenceWriteResult {
+  modelResult: JsonValue;
+  effortShow: JsonValue;
+  effortSet: JsonValue;
+  invalid: JsonValue;
+  config: JsonObject;
+  invalidLoaded?: JsonValue;
+}
+
+const PreferenceWriteResultSchema: v.GenericSchema<PreferenceWriteResult> = v.object({
+  modelResult: JsonValueSchema,
+  effortShow: JsonValueSchema,
+  effortSet: JsonValueSchema,
+  invalid: JsonValueSchema,
+  config: JsonObjectSchema,
+  invalidLoaded: v.optional(JsonValueSchema),
+});
+
+function runPreferenceWrite(): PreferenceWriteResult {
   const proteusHome = mkdtempSync(join(tmpdir(), "proteus-cli-preferences-"));
   tempDirs.push(proteusHome);
   const script = `
@@ -220,5 +248,5 @@ function runPreferenceWrite(): {
     stderr: "pipe",
   });
   expect(proc.exitCode).toBe(0);
-  return JSON.parse(proc.stdout.toString());
+  return v.parse(PreferenceWriteResultSchema, JSON.parse(proc.stdout.toString()));
 }

@@ -11,7 +11,10 @@
 // messages, the generateText loop (with the abort/step/budget stop condition),
 // and the HeadReport assembly (via the shared head-summary helpers).
 
-import { generateText, tool, jsonSchema, type ToolSet, type LanguageModel } from 'ai';
+import {
+  generateText, tool, jsonSchema,
+  type ToolSet, type LanguageModel,
+} from 'ai';
 import {
   type HeadInput, type HeadReport, type HeadId,
   type Evidence, type Decision, type ArtifactRef,
@@ -23,6 +26,7 @@ import { nanoid } from '../utils/nanoid.js';
 import { extractFinalText, extractHeadSteps, synthesizeHeadSummary } from './head-summary.js';
 import { HeadFileChanges } from './file-changes.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
+import { isJsonObject, projectJsonValue, type JsonObject } from '../utils/json.js';
 
 /**
  * The mutable findings a head accumulates as it runs — evidence/decisions
@@ -54,7 +58,7 @@ export class HeadCapture {
   recordEvidence(e: Evidence): void { this.evidence.push(e); }
   recordDecision(d: Decision): void { this.decisions.push(d); }
   recordArtifact(a: ArtifactRef): void { this.artifacts.push(a); }
-  recordToolCall(name: string, args: Record<string, unknown>, result: string): void {
+  recordToolCall(name: string, args: JsonObject, result: string): void {
     this.toolCalls.push({ name, args, result });
   }
 }
@@ -77,7 +81,10 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
       execute: async ({ kind, body, ref, confidence }) => {
         const ev: Evidence = { id: `ev-${nanoid(6)}`, kind, body, ref, confidence };
         capture.recordEvidence(ev);
-        capture.recordToolCall('record_evidence', { kind, body, ref, confidence }, 'ok');
+        const args: JsonObject = { kind, body };
+        if (ref !== undefined) args.ref = ref;
+        if (confidence !== undefined) args.confidence = confidence;
+        capture.recordToolCall('record_evidence', args, 'ok');
         return `evidence recorded (id=${ev.id})`;
       },
     }),
@@ -116,24 +123,32 @@ export function buildHeadAccumulatorTools(capture: HeadCapture): ToolSet {
 export function withHeadCaptureRecording(tools: ToolSet, capture: HeadCapture): ToolSet {
   const out: ToolSet = {};
   for (const [name, entry] of Object.entries(tools)) {
-    const execute = entry.execute;
-    if (!execute) { out[name] = entry; continue; }
-    out[name] = {
-      ...entry,
-      execute: async (input: unknown, options: never) => {
-        const args = (input && typeof input === 'object' ? input : { input }) as Record<string, unknown>;
-        try {
-          const result = await execute(input as never, options);
-          capture.recordToolCall(name, args, 'ok');
-          return result;
-        } catch (err) {
-          capture.recordToolCall(name, args, `error: ${err instanceof Error ? err.message : String(err)}`);
-          throw err;
-        }
-      },
-    } as ToolSet[string];
+    out[name] = recordingTool(name, entry, capture);
   }
   return out;
+}
+
+function recordingTool<Entry extends ToolSet[string]>(
+  name: string,
+  entry: Entry,
+  capture: HeadCapture,
+): Entry {
+  const execute = entry.execute;
+  if (!execute) return entry;
+  return Object.assign({}, entry, {
+    execute: async (input: never, options: never) => {
+      const value = projectJsonValue({ value: input });
+      const args: JsonObject = isJsonObject(value) ? value : { input: value };
+      try {
+        const result = await execute(input, options);
+        capture.recordToolCall(name, args, 'ok');
+        return result;
+      } catch (err) {
+        capture.recordToolCall(name, args, `error: ${err instanceof Error ? err.message : String(err)}`);
+        throw err;
+      }
+    },
+  });
 }
 
 /** The head's system prompt — task framing + the head conventions (record_*,
@@ -152,12 +167,17 @@ const HEAD_PROMPT_TOOL_NAMES = [
  *  it holds none of them, the prompt says so instead of implying it can look
  *  things up. */
 const HEAD_WORK_TOOLS = ['execute_tools', 'run', 'file'] as const;
+export type HeadWorkspaceLayout = 'shared-workspace' | 'private-scratch';
 
 function hasHeadTool(tools: ReadonlySet<string>, ...names: readonly string[]): boolean {
   return names.some((name) => tools.has(name));
 }
 
-function renderHeadToolConventions(input: HeadInput, availableToolNames?: readonly string[]): string[] {
+function renderHeadToolConventions(
+  input: HeadInput,
+  workspaceLayout: HeadWorkspaceLayout,
+  availableToolNames?: readonly string[],
+): string[] {
   const tools = new Set(availableToolNames ?? HEAD_PROMPT_TOOL_NAMES);
   const lines: string[] = ['Conventions:'];
   if (hasHeadTool(tools, 'record_evidence')) {
@@ -167,25 +187,44 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
     lines.push('- record_decision when you make a substantive choice the parent might want to reconcile.');
   }
   if (hasHeadTool(tools, 'execute_tools')) {
+    const executionDoctrine = workspaceLayout === 'shared-workspace'
+      ? '- execute_tools runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
+        + '`workspace.*` is the canonical workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
+        + '`sandbox.*` is its container, and `laptop.*` is the user\'s machine. '
+        + '`workspace.exec` runs a real shell in the workspace, so `grep -rn X .` searches it in one call. '
+        + '`web.*` and `llm.query` are also in scope.'
+      : '- execute_tools runs JavaScript across the environments exposed to this local head: '
+        + '`workspace.*` is your private scratch, `parent.*` is the canonical parent workspace containing the task\'s code and data, '
+        + 'and `laptop.*` is the user\'s machine. Start with `parent.*` for project work; use `workspace.*` only for private scratch. '
+        + '`web.*` and `llm.query` are also in scope.';
     lines.push(
-      '- execute_tools runs JavaScript against the SAME resources your parent agent has. Each environment is its own filesystem in its own paths: '
-      + '`parent.*` is the workspace you were forked from (start there — the code and data you were spawned to study usually live in it), '
-      + '`sandbox.*` and `nimbus.*` are its containers, `laptop.*` is the user\'s machine, and `workspace.*` is YOUR private scratch. '
-      + '`parent.exec` runs a real shell in the parent workspace, so `grep -rn X .` searches it in one call. '
-      + '`web.*` and `llm.query` are also in scope.',
+      executionDoctrine,
+      ...(input.mode === 'plan'
+        ? ['- This is a Plan research head: use execute_tools only for read-only inspection. Do not call mutating workspace, process, port, release, or deployment operations.']
+        : []),
     );
   }
   if (hasHeadTool(tools, 'run')) {
+    const runDoctrine = workspaceLayout === 'shared-workspace'
+      ? '- run executes one shell command. Name the runtime: `sandbox` / `laptop` are the parent agent\'s separate environments, '
+        + 'and the default `workspace` runtime is the canonical workspace you were forked from.'
+      : '- run executes one shell command. The runtime `parent` is the canonical parent workspace, the default `workspace` runtime is private scratch, '
+        + 'and runtime `laptop` is the user\'s machine.';
     lines.push(
-      '- run executes one shell command. Name the runtime: `sandbox` / `nimbus` / `laptop` are the parent agent\'s real environments with real binaries, '
-      + 'and `parent` is the workspace you forked. The default `workspace` runtime is a real shell over YOUR OWN private scratch filesystem.',
+      runDoctrine,
+      ...(input.mode === 'plan'
+        ? ['- In Plan mode, run only read-only inspection commands. Do not install, write, launch servers, expose ports, or change system state.']
+        : []),
     );
   }
   if (hasHeadTool(tools, 'file')) {
-    lines.push(
-      '- file reads and edits your own workspace filesystem. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read '
-      + 'rather than rewriting the file or shelling out to sed.',
-    );
+    const filePlane = workspaceLayout === 'shared-workspace'
+      ? 'the canonical workspace filesystem'
+      : 'your private scratch filesystem; use parent.* inside execute_tools for the canonical parent workspace';
+    lines.push(input.mode === 'plan'
+      ? `- file is available for reading ${filePlane}. Do not edit, write, or delete files in Plan mode.`
+      : `- file reads and edits ${filePlane}. Read a file before you edit or overwrite it, and edit by replacing exact text you copied out of the read `
+        + 'rather than rewriting the file or shelling out to sed.');
   }
   if (hasHeadTool(tools, 'web')) {
     lines.push('- Loop `web` action=search to gather, then action=fetch to read the promising results; record_evidence each finding worth surfacing.');
@@ -207,11 +246,19 @@ function renderHeadToolConventions(input: HeadInput, availableToolNames?: readon
   return [
     ...lines,
     '',
-    `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace). Read-only inspection of shared resources is always fine.`,
+    input.mode === 'plan'
+      ? 'You are ONE OF SEVERAL Plan research heads with read access to the parent workspace. Inspect it read-only, do not create scratch files or worktrees, and return evidence and recommendations to the parent plan.'
+      : workspaceLayout === 'shared-workspace'
+        ? `You are ONE OF SEVERAL heads running concurrently against the same agent's resources. When you touch a SHARED MUTABLE resource, isolate yourself so you don't race a sibling: for any git repo, create your own worktree (\`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`) before working; for shared files, write under your own head-namespaced path (\`shared/findings/${input.id}/…\` in the parent workspace). Read-only inspection of shared resources is always fine.`
+        : `Your workspace and file tools are private scratch. The canonical parent workspace exposed through parent.* is shared with sibling heads; isolate any mutation there (for a git repo, create a worktree such as \`git worktree add ../head-${input.id.slice(0, 8)} <branch>\`). Read-only inspection is always fine.`,
   ];
 }
 
-export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: readonly string[]): string {
+export function buildHeadSystemPrompt(
+  input: HeadInput,
+  availableToolNames?: readonly string[],
+  workspaceLayout: HeadWorkspaceLayout = 'shared-workspace',
+): string {
   return [
     `You are a "head" — one of several parallel reasoning threads in a self-evolving agent runtime.`,
     ``,
@@ -219,11 +266,15 @@ export function buildHeadSystemPrompt(input: HeadInput, availableToolNames?: rea
     `Why you were spawned: ${input.rationale}`,
     `Merge strategy: ${input.mergeStrategy} (your work will be combined with sibling heads via this strategy).`,
     ``,
-    ...renderHeadToolConventions(input, availableToolNames),
+    ...renderHeadToolConventions(input, workspaceLayout, availableToolNames),
     ``,
-    input.budget.maxWallClockMs === undefined
-      ? `Take the time the task needs — there is no time or token limit on this run. You may split ${input.budget.maxDepth} more level(s) deep.`
-      : `Deadline: ${input.budget.maxWallClockMs}ms wall-clock (the caller asked for one). You may split ${input.budget.maxDepth} more level(s) deep.`,
+    // The depth clause is dropped rather than reading "you may split 0 more
+    // level(s)": at zero the tool is not on the surface at all (head-tools.ts),
+    // and the conventions above already say so.
+    (input.budget.maxWallClockMs === undefined
+      ? 'Take the time the task needs — there is no time or token limit on this run.'
+      : `Deadline: ${input.budget.maxWallClockMs}ms wall-clock (the caller asked for one).`)
+    + (input.budget.maxDepth > 0 ? ` You may split ${input.budget.maxDepth} more level(s) deep.` : ''),
   ].join('\n');
 }
 
@@ -303,6 +354,10 @@ export interface HeadInferenceDeps {
    *  + the backend's scratch tools (sandbox/shared/split). The caller assembles
    *  (and may filter) it so each backend keeps control over its allowed surface. */
   tools: ToolSet;
+  /** The backend's actual file topology. The prompt must name the same plane
+   * the tools reach; local heads have private scratch plus parent.*, while
+   * hosted heads operate directly on the shared canonical workspace. */
+  workspaceLayout: HeadWorkspaceLayout;
   /** Shared findings accumulator — the tools mutate this same instance. */
   capture: HeadCapture;
   /**
@@ -369,7 +424,7 @@ export async function runHeadInference(input: HeadInput, deps: HeadInferenceDeps
     }
     const result = await generateText({
       model: deps.model,
-      system: buildHeadSystemPrompt(input, Object.keys(deps.tools)),
+      system: buildHeadSystemPrompt(input, Object.keys(deps.tools), deps.workspaceLayout),
       messages: buildHeadMessages(input),
       tools: deps.tools,
       onStepFinish: async (step) => {

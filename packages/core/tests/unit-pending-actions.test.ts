@@ -14,19 +14,27 @@ import { describe, test, expect } from 'bun:test';
 import { buildPendingActions, type PendingActionInputs } from '../src/read-models/pending-actions.js';
 import { VIEW_DATA_SOURCES } from '../src/views/sources.js';
 import type { BackgroundJob } from '../src/jobs/store.js';
+import type { DeferredApproval } from '../src/safety/deferred-approval.js';
 
 function job(over: Partial<BackgroundJob>): BackgroundJob {
   return {
-    id: 'bgjob-1', kind: 'run', label: 'bun test', status: 'completed',
+    id: 'bgjob-1', kind: 'run', label: 'bun test', workMode: 'build', status: 'completed',
     result: null, error: null, createdAt: 1000, settledAt: 1100, epoch: 0, resumeAttempts: 0,
     ...over,
   };
 }
 
 const EMPTY: PendingActionInputs = {
-  approvals: [], changes: [], scaffoldVersions: [], jobs: [],
+  approvals: [], changes: [], scaffoldVersions: [], jobs: [], deferredActions: [],
   unseenChanges: { count: 0, revertable: 0, latestAt: 0 }, curriculum: [],
 };
+
+function parked(over: Partial<DeferredApproval> = {}): DeferredApproval {
+  return {
+    id: 'defer-1', command: 'sudo systemctl restart nginx', reason: 'Approval review: gate',
+    status: 'queued', requestedAt: 2000, decidedAt: null, ...over,
+  };
+}
 
 describe('buildPendingActions', () => {
   test('nothing waiting is an empty queue', () => {
@@ -133,17 +141,43 @@ describe('buildPendingActions', () => {
     expect(actions.map((a) => a.id)).toEqual(['cur_1']);
   });
 
+  test('a command the agent parked on the owner is a needs-you row', () => {
+    const [action] = buildPendingActions({ ...EMPTY, deferredActions: [parked()] });
+    expect(action).toEqual({
+      id: 'defer-1',
+      kind: 'deferred_action',
+      title: 'Approve: a command the agent is waiting on',
+      detail: 'sudo systemctl restart nginx',
+      at: 2000,
+    });
+  });
+
+  test('a decided parked command has stopped needing anyone', () => {
+    // Every non-queued status: an answered action is history, and an approval
+    // the agent has since spent doubly so.
+    expect(buildPendingActions({
+      ...EMPTY,
+      deferredActions: [
+        parked({ id: 'd1', status: 'approved', decidedAt: 3000 }),
+        parked({ id: 'd2', status: 'denied', decidedAt: 3000 }),
+        parked({ id: 'd3', status: 'used', decidedAt: 3000 }),
+      ],
+    })).toEqual([]);
+  });
+
   test('the queue is newest-first across every kind', () => {
     const actions = buildPendingActions({
       approvals: [{ id: 'apr', changeId: 'c', approvalType: 'apply', decision: 'pending', createdAt: 3000 }],
       changes: [{ id: 'c', userPrompt: 'a change' }],
       scaffoldVersions: [{ version: 8, status: 'pending', rationale: 'r', written_at: 5000 }],
       jobs: [job({ id: 'bgjob-bad', status: 'failed', error: 'boom', settledAt: 1000 })],
+      deferredActions: [parked({ requestedAt: 6000 })],
       unseenChanges: { count: 2, revertable: 2, latestAt: 4000 },
       curriculum: [{ id: 'cur', task: 't', status: 'pending', proposedAt: 2000 }],
     });
     expect(actions.map((a) => a.kind)).toEqual([
-      'scaffold_version', 'unseen_changes', 'release_approval', 'curriculum_task', 'failed_job',
+      'deferred_action', 'scaffold_version', 'unseen_changes', 'release_approval',
+      'curriculum_task', 'failed_job',
     ]);
   });
 });
@@ -152,6 +186,7 @@ describe('the needs-you queue stays host-owned', () => {
   test('listPendingActions is not a source an agent-authored view may name', () => {
     // Same doctrine as listPendingConsents: a view that can draw the queue an
     // owner reads before approving something can draw a plausible fake of it.
-    expect(VIEW_DATA_SOURCES as readonly string[]).not.toContain('listPendingActions');
+    const viewDataSources = new Set<string>(VIEW_DATA_SOURCES);
+    expect(viewDataSources.has('listPendingActions')).toBe(false);
   });
 });

@@ -29,119 +29,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      # The scanner's own gate. Its patterns, its ignore-file semantics, and the
+      # fact that the committed ignore file really does suppress the fixture it
+      # names — all asserted before the scan is trusted to gate anything.
+      - name: Scanner self-test
+        run: bun test scripts/secret-scan.test.ts
+
       - name: Scan for secret patterns
-        shell: bash
-        run: |
-          set -euo pipefail
-          FAILED=0
-
-          echo "::group::Scanning for Bearer tokens in source files"
-          # Bearer tokens in non-example, non-ignore files
-          if grep -rPn 'cf-aig-authorization.*Bearer\s+[A-Za-z0-9_-]{30,}' \
-               --include='*.ts' --include='*.tsx' --include='*.js' \
-               --include='*.json' --include='*.jsonc' --include='*.md' \
-               --exclude-dir=node_modules --exclude-dir=.git \
-               . 2>/dev/null \
-             | grep -v '\.env\.example' \
-             | grep -v '\.secretscanignore' \
-             | grep -v 'process\.env\.' \
-             | grep -v '<your-'; then
-            echo "::error::Found hardcoded Bearer token in source files"
-            FAILED=1
-          else
-            echo "No Bearer token leaks found"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Scanning for AWS access keys"
-          if grep -rPn 'AKIA[A-Z0-9]{16}' \
-               --include='*.ts' --include='*.tsx' --include='*.js' \
-               --include='*.json' --include='*.jsonc' --include='*.env' \
-               --exclude-dir=node_modules --exclude-dir=.git \
-               . 2>/dev/null \
-             | grep -v '\.env\.example' \
-             | grep -v '\.secretscanignore'; then
-            echo "::error::Found AWS access key in source files"
-            FAILED=1
-          else
-            echo "No AWS key leaks found"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Scanning for private keys"
-          if grep -rPn '-----BEGIN\s+(RSA |EC |DSA |OPENSSH )?PRIVATE KEY' \
-               --include='*.ts' --include='*.tsx' --include='*.js' \
-               --include='*.json' --include='*.pem' --include='*.key' \
-               --exclude-dir=node_modules --exclude-dir=.git \
-               . 2>/dev/null \
-             | grep -v '\.secretscanignore'; then
-            echo "::error::Found private key in source files"
-            FAILED=1
-          else
-            echo "No private key leaks found"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Scanning for hardcoded password/secret assignments"
-          # Catches: password = "actual-value", secret_key: "actual-value", etc.
-          # Excludes: type annotations, empty strings, env references, placeholders
-          if grep -rPn '(password|secret_key|api_key|api_secret|auth_token|oauth_token)\s*[:=]\s*["\x27][A-Za-z0-9_/+=-]{8,}["\x27]' \
-               --include='*.ts' --include='*.tsx' --include='*.js' \
-               --include='*.json' --include='*.jsonc' \
-               --exclude-dir=node_modules --exclude-dir=.git \
-               . 2>/dev/null \
-             | grep -v '\.env\.example' \
-             | grep -v '\.secretscanignore' \
-             | grep -v 'process\.env\.' \
-             | grep -v '<your-' \
-             | grep -v '""' \
-             | grep -v "type\s" \
-             | grep -v "interface\s"; then
-            echo "::error::Found hardcoded secret assignment in source files"
-            FAILED=1
-          else
-            echo "No hardcoded secret assignments found"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Scanning for connection strings with embedded credentials"
-          if grep -rPn '(mongodb|postgres|mysql|redis|amqp)://[^:]+:[^@\s]{8,}@' \
-               --include='*.ts' --include='*.tsx' --include='*.js' \
-               --include='*.json' --include='*.jsonc' \
-               --exclude-dir=node_modules --exclude-dir=.git \
-               . 2>/dev/null \
-             | grep -v '\.env\.example' \
-             | grep -v '\.secretscanignore' \
-             | grep -v '<your-' \
-             | grep -v 'localhost'; then
-            echo "::error::Found connection string with embedded credentials"
-            FAILED=1
-          else
-            echo "No credential-bearing connection strings found"
-          fi
-          echo "::endgroup::"
-
-          echo "::group::Scanning for JWT tokens"
-          if grep -rPn 'eyJ[A-Za-z0-9_-]{20,}\.eyJ[A-Za-z0-9_-]{20,}\.' \
-               --include='*.ts' --include='*.tsx' --include='*.js' \
-               --include='*.json' --include='*.jsonc' \
-               --exclude-dir=node_modules --exclude-dir=.git \
-               . 2>/dev/null \
-             | grep -v '\.secretscanignore' \
-             | grep -v '\.test\.'; then
-            echo "::error::Found JWT token in source files"
-            FAILED=1
-          else
-            echo "No JWT token leaks found"
-          fi
-          echo "::endgroup::"
-
-          if [ "$FAILED" -ne 0 ]; then
-            echo ""
-            echo "::error::Secret scan FAILED — review the findings above."
-            echo "If these are false positives, add the file:line to .secretscanignore"
-            exit 1
-          fi
-
-          echo ""
-          echo "All secret pattern scans passed."
+        run: bun scripts/secret-scan.ts

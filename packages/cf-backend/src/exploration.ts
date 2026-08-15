@@ -14,10 +14,9 @@
  *
  *   HEAD mode — long-form multi-step inference for the branching-heads
  *               primitive (the `agents` tool's fork action). initHead() /
- *               runAsHead() / abortHead() drive an agentic loop over a FORK of
- *               the parent workspace: the parent's sandbox container, Nimbus
- *               session and device consent, with the parent's workspace files
- *               mounted at /workspace (see headRuntime()). Its tool surface —
+ *               runAsHead() / abortHead() drive an agentic loop over the
+ *               canonical workspace filesystem, Nimbus processes/ports,
+ *               sandbox and device consent (see headRuntime()). Its tool surface —
  *               and the containment that keeps the delegation surface off it —
  *               is declared in @proteus/core head-tools.
  *
@@ -39,7 +38,7 @@
 import { Agent, callable, type AgentContext } from "agents";
 import { EXPLORATION_RPC_SURFACE, sealRpcSurface } from "./rpc-surface.js";
 import { generateText } from "ai";
-import { explorePrompt, extractCodeBlock, formatInheritedContext, generateJson, missionCallUsage, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
+import { explorePrompt, formatInheritedContext, generateJson, isWorkMode, missionCallUsage, parseModelSpec, reasoningEffortOptions, reflectionPrompt, resolveMaxSteps } from "@proteus/core";
 import type { OrchestratorAgent } from "./orchestrator.js";
 import {
   type CraftedTool,
@@ -51,9 +50,7 @@ import {
   type MergeStrategy,
   type HeadBudget,
   type MergeResult,
-  type ParentWorkspaceHandle, type ParentRpcWrite, type VFS as CoreVFS,
   type SqlExecutor,
-  createParentExecutor, createParentWorkspaceVfs, observeWrites,
   initHeadsTables,
   HeadController,
   HeadJournal,
@@ -64,10 +61,11 @@ import {
   HeadCapture,
   runHeadInference,
   type MissionScope,
+  type WorkMode,
 } from "@proteus/core";
 import { OwnedModelServices } from "./owned-model-services.js";
 import { spawnHeadFacet } from "./facet-spawn.js";
-import { createCFRuntime, type CFRuntime } from "./runtime.js";
+import { bindAgentSql, createCFRuntime, type CFRuntime } from "./runtime.js";
 import { createExecuteToolsTool } from "./execute-tools.js";
 import { buildHeadToolSet } from "@proteus/core";
 
@@ -105,63 +103,25 @@ export class ExplorationAgent extends Agent<Env> {
   }
 
   private get boundSql(): SqlExecutor {
-    return this.sql.bind(this) as unknown as SqlExecutor;
+    return bindAgentSql(this);
   }
 
-  /**
-   * The head's runtime — a FORK of the parent workspace's, built lazily because
-   * only head mode has one (see the class docstring for why MCTS mode must not).
-   *
-   * Forked, not fresh: `workspaceName` is the PARENT's, so every exec plane the
-   * runtime keys off it — the `proteus-<workspace>` sandbox container, the
-   * Nimbus session, the /pc device consent, the Vectorize namespace — resolves
-   * to the same plane the parent agent works in. This is exactly how a
-   * SubordinateAgent rides its parent (subordinate-agent.ts workspaceName), and
-   * the reason ActorRuntimeIdentity separates "who I am" from "whose exec planes
-   * I ride" at all.
-   *
-   * Storage stays this facet's own, so `/local` is a private scratch siblings
-   * can't see; the parent's durable workspace files arrive as the `/parent`
-   * mount over the same parent RPC handle subordinates use. Named `/parent`,
-   * not `/workspace`: the `run` tool's `runtime: "workspace"` already names
-   * this facet's OWN emulated scratch shell, and a head that typed a `/workspace`
-   * path into `run` (reading the mount doctrine, not the runtime enum) got
-   * silent ENOENT against that unrelated empty shell — see head-inference.ts.
-   */
-  private _headRt: CFRuntime | null = null;
-  private _parentFiles: CoreVFS | null = null;
-  private _parentHandle: ParentWorkspaceHandle | null = null;
-  private headRuntime(): CFRuntime {
-    if (this._headRt) return this._headRt;
+  /** A head has private SQL ledgers and shell state, but not another workspace.
+   * Its canonical file plane is wrapped with this run's observer before tools
+   * are built, so writes are attributable without another executor or VFS. */
+  private headRuntime(capture: HeadCapture): CFRuntime {
     const parent = this.getSharedParentStub();
     const workspaceName = this.getSharedParent();
     if (!parent || !workspaceName) {
       throw new Error('This head was spawned without a parent workspace; setSharedParent must run before runAsHead.');
     }
-    const rt = createCFRuntime(this as unknown as Parameters<typeof createCFRuntime>[0], {
+    return createCFRuntime(this, { env: this.env, ctx: this.ctx }, {
       ownerUserId: () => this.getOwnerUserId(),
       workspaceName,
+      shellId: `head:${this.name}`,
+      scaffoldPath: `.proteus/heads/${encodeURIComponent(this.name)}/scaffold/agent.js`,
       capabilityToken: async () => this.getCapabilityToken(),
-    });
-    const handle: ParentWorkspaceHandle = {
-      read: (path: string) => parent.readWorkspaceFile(path),
-      write: (input: ParentRpcWrite) => parent.writeWorkspaceFile(input),
-      list: (path: string) => parent.listWorkspaceFiles(path),
-      stat: (path: string) => parent.statWorkspaceFile(path),
-      delete: (path: string) => parent.deleteWorkspaceFile(path),
-      exec: (command: string) => parent.execWorkspaceCommand(command),
-    };
-    // Attribution wraps the view BEFORE the executor is built, so every write
-    // this head makes to the parent — and nothing a sibling makes — lands in
-    // this head's capture. The recorder is installed per head run
-    // (buildHeadTools); until then writes simply go unobserved.
-    this._parentFiles = createParentWorkspaceVfs(handle);
-    this._parentHandle = handle;
-    rt.executionRouter?.register(createParentExecutor({
-      handle, vfs: this._parentFiles, workspaceName,
-    }));
-    this._headRt = rt;
-    return rt;
+    }, { workspaceObserver: capture.files });
   }
 
   /** ExplorationAgents inherit ownership from the orchestrator that spawned
@@ -204,9 +164,9 @@ export class ExplorationAgent extends Agent<Env> {
   private facetOwnerRow(): { user_id: string; capability_token: string | null } | null {
     try {
       this.ensureFacetOwnerTable();
-      const rows = this.ctx.storage.sql.exec(
+      const rows = this.ctx.storage.sql.exec<{ user_id: string; capability_token: string | null }>(
         `SELECT user_id, capability_token FROM facet_owner WHERE id = 1`,
-      ).toArray() as Array<{ user_id: string; capability_token: string | null }>;
+      ).toArray();
       return rows[0] ?? null;
     } catch { return null; }
   }
@@ -219,8 +179,8 @@ export class ExplorationAgent extends Agent<Env> {
     return this.facetOwnerRow()?.capability_token ?? null;
   }
 
-  /** The ROOT workspace this head forks: whose exec planes it rides, whose files
-   *  it mounts at /workspace, and where the whole split's findings accumulate.
+  /** The ROOT workspace this head forks: whose canonical Nimbus session and
+   *  execution planes it shares, and where the whole split's findings accumulate.
    *  Set by the spawner right after subAgent() and propagated UNCHANGED to
    *  recursive sub-heads, so an intermediate head never becomes the tree's
    *  workspace. Persisted for hibernation. */
@@ -239,9 +199,9 @@ export class ExplorationAgent extends Agent<Env> {
 
   private getSharedParent(): string | null {
     try {
-      const rows = this.ctx.storage.sql.exec(
+      const rows = this.ctx.storage.sql.exec<{ agent_name: string }>(
         `SELECT agent_name FROM facet_parent WHERE id = 1`,
-      ).toArray() as Array<{ agent_name: string }>;
+      ).toArray();
       return rows[0]?.agent_name ?? null;
     } catch { return null; }
   }
@@ -251,7 +211,7 @@ export class ExplorationAgent extends Agent<Env> {
   private getSharedParentStub(): DurableObjectStub<OrchestratorAgent> | null {
     const name = this.getSharedParent();
     if (!name) return null;
-    return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name)) as DurableObjectStub<OrchestratorAgent>;
+    return this.env.OrchestratorAgent.get(this.env.OrchestratorAgent.idFromName(name));
   }
 
   async onStart() {
@@ -261,7 +221,6 @@ export class ExplorationAgent extends Agent<Env> {
         id         TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(9)))),
         step       INTEGER NOT NULL,
         text       TEXT NOT NULL,
-        code_used  TEXT,
         created_at INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
       )
     `);
@@ -275,40 +234,46 @@ export class ExplorationAgent extends Agent<Env> {
   async explore(
     priorHistory: Array<{ role: string; content: string }>,
     craftedTools: CraftedTool[],
+    languages: readonly [string, ...string[]],
+    mode: WorkMode,
     siblings: readonly string[] = [],
   ): Promise<BranchExploration> {
+    if (!isWorkMode(mode)) throw new Error('Branch exploration requires a trusted work mode');
     const { model, providerOptions } = this.resolveLowEffortModel();
     const { system, user } = explorePrompt({
+      mode,
       context: formatInheritedContext(priorHistory),
       craftedTools,
+      languages,
       siblings,
     });
 
-    const { text, usage } = await generateText({
+    const request: Parameters<typeof generateText>[0] = {
       model,
       system,
       messages: [{ role: "user" as const, content: user }],
-      ...(providerOptions ? { providerOptions } : {}),
-    });
+    };
+    if (providerOptions) request.providerOptions = providerOptions;
+    const { text, usage } = await generateText(request);
 
     const trimmed = text.trim();
-    const codeUsed = extractCodeBlock(trimmed);
-    this.sql`INSERT INTO traces (step, text, code_used) VALUES (1, ${trimmed}, ${codeUsed})`;
-    return { text: trimmed, codeUsed, usage: missionCallUsage(usage) };
+    void this.sql`INSERT INTO traces (step, text) VALUES (1, ${trimmed})`;
+    return { text: trimmed, usage: missionCallUsage(usage) };
   }
 
   @callable()
   async generateReflection(task: string): Promise<BranchReflection> {
     const traces = this.sql<{ text: string }>`SELECT text FROM traces ORDER BY step`;
     const { model, providerOptions } = this.resolveLowEffortModel();
-    const { text, usage } = await generateText({
+    const request: Parameters<typeof generateText>[0] = {
       model,
       messages: [{
         role: "user" as const,
         content: reflectionPrompt(task, traces.map(t => t.text).join("\n")),
       }],
-      ...(providerOptions ? { providerOptions } : {}),
-    });
+    };
+    if (providerOptions) request.providerOptions = providerOptions;
+    const { text, usage } = await generateText(request);
     return { text: text.trim(), usage: missionCallUsage(usage) };
   }
 
@@ -342,17 +307,19 @@ export class ExplorationAgent extends Agent<Env> {
     // supplies its model + the forked tool surface. Abort is driven by
     // abortHead() flipping this.headAborted.
     const mission = this.missionScope(input);
-    return runHeadInference(input, {
+    const options: Parameters<typeof runHeadInference>[1] = {
       model: this.ownedModelServices.resolveModel(input.model),
       tools: this.buildHeadTools(input, capture),
       capture,
+      workspaceLayout: 'shared-workspace',
       // The same envelope the parent turn runs to — ActorAgent.maxSteps reads
       // this identical Worker var. A fork of a turn gets the turn's room.
       maxSteps: resolveMaxSteps(this.env.PROTEUS_MAX_STEPS),
       isAborted: () => this.headAborted,
       abortReason: () => this.headAbortReason,
-      ...(mission ? { mission } : {}),
-    });
+    };
+    if (mission) options.mission = mission;
+    return runHeadInference(input, options);
   }
 
   /**
@@ -384,24 +351,13 @@ export class ExplorationAgent extends Agent<Env> {
   // ── Head-mode tool builders ─────────────────────────────────────
 
   private buildHeadTools(input: HeadInput, capture: HeadCapture) {
-    const rt = this.headRuntime();
-    // Attribute this head's writes to the PARENT workspace to this head. The
-    // view is this facet's own, so a sibling head writing the same file at the
-    // same moment lands in ITS capture and never in this one. This head's own
-    // workspace is private scratch and deliberately unattributed.
-    if (this._parentHandle) {
-      rt.executionRouter?.register(createParentExecutor({
-        handle: this._parentHandle,
-        vfs: observeWrites(this._parentFiles!, capture.files),
-        workspaceName: this.getSharedParent() ?? undefined,
-      }));
-    }
+    const rt = this.headRuntime(capture);
     return buildHeadToolSet({
       input,
       capture,
       rt,
       executeTool: createExecuteToolsTool({
-        loader: (this.env as Env & Record<string, unknown>).LOADER,
+        loader: this.env.LOADER,
         rt,
         sql: this.boundSql,
         registry: this.ownedModelServices.providerRegistry(),
@@ -422,6 +378,7 @@ export class ExplorationAgent extends Agent<Env> {
     narrative: string;
     decisions: readonly Decision[];
     unresolvedQuestions: readonly string[];
+    blindSpots: readonly string[];
     childHeadIds: readonly HeadId[];
     headCount: number;
   }> {
@@ -431,45 +388,48 @@ export class ExplorationAgent extends Agent<Env> {
     initHeadsTables((ddl: string) => { this.ctx.storage.sql.exec(ddl); });
 
     const journal = new HeadJournal(this.boundSql);
-    const facet = this;
     const runtime: HeadRuntime = {
-      spawnHead(childInput: HeadInput) {
-        return spawnHeadFacet(facet, childInput, {
-          ownerUserId: facet.getOwnerUserId(),
-          capabilityToken: facet.getCapabilityToken(),
+      spawnHead: (childInput: HeadInput) => {
+        return spawnHeadFacet(this, childInput, {
+          ownerUserId: this.getOwnerUserId(),
+          capabilityToken: this.getCapabilityToken(),
           // The ROOT orchestrator, propagated unchanged so the whole subtree
           // shares one findings scratch (not this intermediate head).
-          sharedParent: facet.getSharedParent(),
+          sharedParent: this.getSharedParent(),
         });
       },
-      async mergeLLM(prompt: string): Promise<MergeOutput> {
-        const { model, providerOptions } = facet.resolveLowEffortModel(parentInput.model);
-        return generateJson({
+      mergeLLM: async (prompt: string): Promise<MergeOutput> => {
+        const { model, providerOptions } = this.resolveLowEffortModel(parentInput.model);
+        const options: Parameters<typeof generateJson<MergeOutput>>[0] = {
           model,
           schema: MergeOutputSchema,
           prompt,
-          ...(providerOptions ? { providerOptions } : {}),
-        });
+        };
+        if (providerOptions) options.providerOptions = providerOptions;
+        return generateJson(options);
       },
     };
 
     const controller = new HeadController(runtime, journal);
-    const result: MergeResult = await controller.run({
+    const controllerInput: Parameters<HeadController['run']>[0] = {
       parentHeadId: parentInput.id,
       rootId: parentInput.rootId,
       inheritedContext: parentInput.inheritedContext,
       request: { rationale: request.rationale, heads: request.heads, mergeStrategy: request.mergeStrategy },
       parentBudget,
+      mode: parentInput.mode,
       model: parentInput.model,
       // A subtree charges the same mission its root does — otherwise a head
       // escapes its budget simply by splitting again.
-      ...(parentInput.missionLabels?.length ? { missionLabels: parentInput.missionLabels } : {}),
-    });
+    };
+    if (parentInput.missionLabels?.length) controllerInput.missionLabels = parentInput.missionLabels;
+    const result: MergeResult = await controller.run(controllerInput);
 
     return {
       narrative: result.mergedNarrative,
       decisions: result.selectedDecisions,
       unresolvedQuestions: result.unresolvedQuestions,
+      blindSpots: result.blindSpots,
       childHeadIds: result.headIds,
       headCount: result.costSummary.headCount,
     };

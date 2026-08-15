@@ -1,15 +1,14 @@
 diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
-index 6a837cf..66bee65 100644
 --- a/packages/core/src/orchestrator/agent-orchestrator.ts
 +++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -389,8 +389,8 @@ export class AgentOrchestrator {
-     const ids = batch.ids;
-     await this.signals.deliver({
+@@ -514,8 +514,8 @@
+     }
+     const signal: AgentSignal = {
        kind: 'event_drain',
 -      text: batch.text,
 -      stepText: batch.midTurnText,
 +      text: batch.midTurnText,
 +      stepText: batch.text,
        replyTurnId: turnId,
-       // The mission scope the woken turn spends under — the link between a
-       // schedule that declared a budget and the ledger its turn debits.
+       compensate: () => this.returnEventsToPending(ids),
+       metadata,

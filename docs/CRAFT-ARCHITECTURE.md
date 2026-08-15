@@ -38,7 +38,7 @@ The reference implementation defers the sandbox Worker module to upstream `@clou
 The reference treats the SQL `CraftStore` as the single source of truth — no in-memory mirror.
 
 - **No in-memory mutation cache.** `craft_tool` → `store.create()` → SQL `INSERT`.
-- **Same-turn visibility via re-read, not via mutation.** `CraftedToolExecutor.execute` calls `craftStore.getAll()` fresh on every `execute()`. No registry, no subscription — just "query the DB every call".
+- **Same-turn visibility via re-read, not via mutation.** `CraftedToolExecutor.execute` calls `craftStore.getAll()` fresh on every `execute()`: no registry and no subscription, just a query per call.
 - **Next-step, not next-arrow.** A newly saved tool is callable in the NEXT codemode invocation — same turn, different step. Within a single `execute_tools` arrow the tool set is frozen (the preamble is built once from that `getAll()` snapshot). On both backends: `createExecuteTool` takes a `craftedTools()` resolver rather than a snapshot, and the CLI binds that record under both `codemode` and `tools`. On CF only `tools.<name>` is callable — the body lives in the preamble, not the dispatcher — so `codemode.<name>` raises and says which form works, rather than returning an error object that reads as a result.
 - **A crafted tool's failure names itself.** Both paths wrap the body so a throw leaves the sandbox as `[crafted:<name>] <message>` (`craftFailureMarker`, `core/src/craft/in-episode.ts`) — see docs/EVOLUTION.md, "In-Episode Evolution".
 - **LiveToolExecutor parallel.** The MCP path uses the same pattern: `LiveToolExecutor.execute` rebuilds its fns per execute from `getLiveTools()`. Mid-turn MCP tool discovery works the same way.
@@ -73,7 +73,7 @@ Normalization of stored code is a single `.trim()`. No semicolon stripping, no d
 
 ## 5. Proteus Pre-Phase-A State
 
-Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). All paths are relative to the repo root, and describe the tree **as it was then** — several of these files have since moved or been deleted (`craft-executor.ts` on the CF side is gone; `getExecuteToolsTool` now lives in `actor-agent.ts`; `BUILTIN_TOOLS` is 10 names, not 5).
+Direct reading of the Proteus tree at the commit immediately preceding Phase A (`2641c96`). All paths are relative to the repo root, and describe the tree **as it was then** — several of these files have since moved or been deleted (`craft-executor.ts` on the CF side is gone; `getExecuteToolsTool` now lives in `actor-agent.ts`; `BUILTIN_TOOLS` is eight names, not five).
 
 ### 5.1 Files observed
 

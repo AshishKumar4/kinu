@@ -29,11 +29,22 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
-      - name: TypeScript check
+      - name: Strict lint and TypeScript check
         run: bun run check
+
+      - name: Production bundle
+        working-directory: packages/cf-backend
+        run: ../../node_modules/.bin/vite build
 
       - name: Core unit tests
         run: bun test --cwd packages/core
+
+      # The shared test fixtures, including the source-slicing helpers the
+      # wiring suites assert through. Untested until now, which is how three of
+      # those suites came to run against whole files instead of the members
+      # they named.
+      - name: Test-utils unit tests
+        run: bun test --cwd packages/test-utils
 
       # The backend suites, including the conformance gates: each backend's
       # REAL composition root observed against the capability manifest

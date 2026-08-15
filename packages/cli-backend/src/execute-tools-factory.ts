@@ -19,10 +19,17 @@
  * Durable Object isolate.
  */
 
-import type { CodemodeProvider } from '@proteus/core';
-import { BUILTIN_TOOL_DESCRIPTIONS, explainNativeToolReferenceError } from '@proteus/core';
+import type {
+  CodemodeProvider,
+  CreateExecuteToolFactory,
+  CraftedToolSet,
+  ExecutorProvider,
+  JsonValue,
+} from '@proteus/core';
+import { BUILTIN_TOOL_DESCRIPTIONS, decodeJsonValue, explainNativeToolReferenceError } from '@proteus/core';
 import { tool, jsonSchema } from 'ai';
 import { addImplicitReturn } from './executor.js';
+import * as v from 'valibot';
 
 export interface NodeExecuteToolFactoryDeps {
   extraProviders?: CodemodeProvider[];
@@ -33,22 +40,28 @@ export interface NodeExecuteToolFactoryDeps {
  *  `tools` literal and the `codemode.<name>` dispatcher name), and the
  *  capturing console. A provider may not take any of them. */
 const FIXED_NAMESPACES: readonly string[] = ['workspace', 'codemode', 'tools', 'console'];
+const abortOptionsSchema = v.object({ abortSignal: v.optional(v.instance(AbortSignal)) });
 
-
-
+type CodemodeExecute = CodemodeProvider['tools'][string]['execute'];
+type CraftedExecute = CraftedToolSet[string]['execute'];
+interface ExecuteSuccess {
+  result: JsonValue;
+  logs?: string[];
+}
+interface ExecuteFailure {
+  result: undefined;
+  error: string;
+  logs?: string[];
+}
 /**
  * Build a createExecuteTool-compatible factory. Pass as deps.createExecuteTool
  * to buildBuiltinTools; pass a sentinel truthy value as deps.codemodeLoader
  * so the factory branch is entered (the loader itself is not used here).
  */
-export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = {}) {
-  return (opts: {
-    craftedTools: () => Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-    providers: unknown[];
-    loader: unknown;
-  }) => {
-    const providers = [
-      ...(opts.providers as CodemodeProvider[]),
+export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = {}): CreateExecuteToolFactory {
+  return (opts) => {
+    const providers: CodemodeProvider[] = [
+      ...opts.providers.map(adaptExecutorProvider),
       ...(deps.extraProviders ?? []),
     ];
 
@@ -61,7 +74,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         properties: { code: { type: 'string', description: 'JavaScript code to execute' } },
         required: ['code'],
       }),
-      execute: async (args: { code: string }, options?: unknown) => {
+      execute: async (args, options) => {
         // `console` is shadowed by a capturing stand-in: this factory runs the
         // model's code in-process, so a real console.* would write straight to
         // the CLI's stdout — which, under `proteus exec --json`, IS the event
@@ -70,23 +83,24 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
         // stays clean. Declared out here so the catch below can return partial
         // output produced before a throw.
         const logs: string[] = [];
-        const capture = (...a: unknown[]) => { logs.push(a.map(formatLogArg).join(' ')); };
+        const capture: Console['log'] = (...values) => {
+          logs.push(values.map((value) => formatLogArg({ value })).join(' '));
+        };
         const sandboxConsole = { log: capture, info: capture, warn: capture, error: capture, debug: capture, trace: capture, dir: capture };
         try {
-          const signal = readAbortSignal(options);
+          const signal = readAbortSignal({ options });
           const context = signal ? { signal } : undefined;
           // Resolved here, not at construction: the CraftStore is read for
           // THIS call, so a tool the model crafted a step ago is callable now.
-          const craftedBindings: Record<string, (arg: unknown) => Promise<unknown>> = {};
+          const craftedBindings: Record<string, CraftedExecute> = {};
           for (const [name, entry] of Object.entries(opts.craftedTools())) {
-            craftedBindings[name] = containRejection(entry.execute as (arg: unknown) => Promise<unknown>);
+            craftedBindings[name] = containCraftedRejection(entry.execute);
           }
-          const providerBindings: Record<string, Record<string, (...a: unknown[]) => Promise<unknown>>> = {};
+          const providerBindings: Record<string, Record<string, CodemodeExecute>> = {};
           for (const p of providers) {
-            if (!p || typeof p !== 'object' || !('name' in p) || !('tools' in p)) continue;
-            const nsp: Record<string, (...a: unknown[]) => Promise<unknown>> = {};
+            const nsp: Record<string, CodemodeExecute> = {};
             for (const [toolName, t] of Object.entries(p.tools)) {
-              nsp[toolName] = containRejection((...a: unknown[]) => t.execute(...a, context));
+              nsp[toolName] = containRejection((...toolArgs) => t.execute(...toolArgs, context));
             }
             providerBindings[p.name] = nsp;
           }
@@ -100,7 +114,7 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
           // duplicate one of them (a `new Function` duplicate-parameter crash).
           const extraNamespaces = Object.keys(providerBindings).filter(n => !FIXED_NAMESPACES.includes(n));
           const argNames = [...FIXED_NAMESPACES, ...extraNamespaces];
-          const argValues: unknown[] = [
+          const argValues: object[] = [
             workspace, craftedBindings, craftedBindings, sandboxConsole,
             ...extraNamespaces.map(n => providerBindings[n]),
           ];
@@ -112,25 +126,49 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
             ...argNames,
             `return (async () => {\n${addImplicitReturn(args.code)}\n})()`,
           );
-          const result = await fn(...argValues);
-          const payload: { result: unknown; logs?: string[] } = {
-            result: result === undefined ? '(no return value)' : result,
+          const rawResult = await fn(...argValues);
+          const payload: ExecuteSuccess = {
+            result: rawResult === undefined
+              ? '(no return value)'
+              : decodeJsonValue({ value: rawResult }),
           };
           if (logs.length > 0) payload.logs = logs;
           return payload;
-        } catch (e) {
+        } catch (error) {
           // A bare `run(...)` etc. inside the model's code throws a plain V8
           // ReferenceError here (no dispatcher involved — `run` was simply
           // never one of the bound argNames above); rewrite that one shape
           // into an actionable correction, same as the CF codemode sandbox.
-          const payload: { result: undefined; error: string; logs?: string[] } = {
-            result: undefined, error: explainNativeToolReferenceError((e as Error).message),
+          const payload: ExecuteFailure = {
+            result: undefined,
+            error: explainNativeToolReferenceError(errorMessage({ error })),
           };
           if (logs.length > 0) payload.logs = logs;
           return payload;
         }
       },
     });
+  };
+}
+
+function adaptExecutorProvider(
+  provider: Pick<ExecutorProvider, 'name' | 'tools' | 'types' | 'positionalArgs'>,
+): CodemodeProvider {
+  const tools: CodemodeProvider['tools'] = {};
+  for (const [name, tool] of Object.entries(provider.tools)) {
+    tools[name] = {
+      description: tool.description,
+      execute: async (...args) => {
+        const result = await tool.execute(...args);
+        return result === undefined ? undefined : decodeJsonValue({ value: result });
+      },
+    };
+  }
+  return {
+    name: provider.name,
+    tools,
+    types: provider.types,
+    positionalArgs: provider.positionalArgs,
   };
 }
 
@@ -146,13 +184,21 @@ export function createNodeExecuteToolFactory(deps: NodeExecuteToolFactoryDeps = 
  * DOES await — that await still sees the real rejection, and the tool's own
  * try/catch still turns it into a returned error.
  */
-function containRejection<A extends unknown[]>(
-  fn: (...args: A) => Promise<unknown>,
-): (...args: A) => Promise<unknown> {
-  return (...args: A) => {
-    let call: Promise<unknown>;
+function containRejection(fn: CodemodeExecute): CodemodeExecute {
+  return (...args) => {
+    let call: ReturnType<CodemodeExecute>;
     try { call = Promise.resolve(fn(...args)); }
     catch (err) { call = Promise.reject(err); }
+    void call.catch(() => { /* the awaiting caller, if any, still sees it */ });
+    return call;
+  };
+}
+
+function containCraftedRejection(fn: CraftedExecute): CraftedExecute {
+  return (arg) => {
+    let call: ReturnType<CraftedExecute>;
+    try { call = Promise.resolve(fn(arg)); }
+    catch (error) { call = Promise.reject(error); }
     void call.catch(() => { /* the awaiting caller, if any, still sees it */ });
     return call;
   };
@@ -161,15 +207,18 @@ function containRejection<A extends unknown[]>(
 /** One console argument → its captured-log string, matching how console
  *  renders it: strings verbatim, everything else JSON (so the model reads the
  *  object it printed, not "[object Object]"). */
-function formatLogArg(a: unknown): string {
-  if (typeof a === 'string') return a;
-  try { return JSON.stringify(a); } catch { return String(a); }
+function formatLogArg(input: { value: unknown }): string {
+  const text = v.safeParse(v.string(), input.value);
+  if (text.success) return text.output;
+  try { return JSON.stringify(input.value) ?? String(input.value); }
+  catch { return String(input.value); }
 }
 
-function readAbortSignal(options: unknown): AbortSignal | undefined {
-  if (!options || typeof options !== 'object' || !('abortSignal' in options)) return undefined;
-  const signal = (options as { abortSignal?: unknown }).abortSignal;
-  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
-    ? signal as AbortSignal
-    : undefined;
+function readAbortSignal(input: { options: unknown }): AbortSignal | undefined {
+  const parsed = v.safeParse(abortOptionsSchema, input.options);
+  return parsed.success ? parsed.output.abortSignal : undefined;
+}
+
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
 }

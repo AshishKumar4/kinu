@@ -16,17 +16,26 @@
 import { describe, expect, test } from 'bun:test';
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import * as v from 'valibot';
 
 const require_ = createRequire(import.meta.url);
-const { handle } = require_(join(import.meta.dir, '../../pc-agent/src/index.js')) as {
-  handle: (msg: unknown, ws: { send(data: string): void }, ctx?: unknown) => void;
-};
 
-interface ExecReply {
-  id: string;
-  result?: { stdout: string; stderr: string; exitCode: number };
-  error?: string;
+interface ExecMessage { readonly id: string; readonly method: 'exec'; readonly params: [string] }
+interface ReplySocket { send(data: string): void }
+
+const PcAgentModuleSchema = v.object({ handle: v.function() });
+const pcAgent = v.parse(PcAgentModuleSchema, require_(join(import.meta.dir, '../../pc-agent/src/index.js')));
+
+function handle(message: ExecMessage, socket: ReplySocket): void {
+  pcAgent.handle(message, socket);
 }
+
+const ExecReplySchema = v.object({
+  id: v.string(),
+  result: v.optional(v.object({ stdout: v.string(), stderr: v.string(), exitCode: v.number() })),
+  error: v.optional(v.string()),
+});
+type ExecReply = v.InferOutput<typeof ExecReplySchema>;
 
 /** Issue one `exec` RPC and resolve with the daemon's reply. */
 function exec(command: string, timeoutMs = 30_000): Promise<{ reply: ExecReply; elapsed: number }> {
@@ -36,7 +45,7 @@ function exec(command: string, timeoutMs = 30_000): Promise<{ reply: ExecReply; 
     const ws = {
       send(data: string) {
         clearTimeout(timer);
-        resolve({ reply: JSON.parse(data) as ExecReply, elapsed: Date.now() - started });
+        resolve({ reply: v.parse(ExecReplySchema, JSON.parse(data)), elapsed: Date.now() - started });
       },
     };
     handle({ id: 'rpc-1', method: 'exec', params: [command] }, ws);

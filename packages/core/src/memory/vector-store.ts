@@ -12,15 +12,21 @@
  * it to the actual Vectorize/AI bindings.
  */
 
+import type { JsonObject } from '../utils/json.js';
+
 /** A Vectorize-shaped binding (subset we need). Duck-typed so core stays dep-free. */
+export interface VectorMutation {
+  ids?: string[];
+}
+
 export interface VectorizeIndex {
-  insert(vectors: VectorRecord[]): Promise<{ ids: string[] } | unknown>;
-  upsert(vectors: VectorRecord[]): Promise<{ ids: string[] } | unknown>;
+  insert(vectors: VectorRecord[]): Promise<VectorMutation>;
+  upsert(vectors: VectorRecord[]): Promise<VectorMutation>;
   query(
     vector: number[],
-    options?: { topK?: number; namespace?: string; returnMetadata?: boolean | 'all' | 'indexed'; filter?: Record<string, unknown> },
+    options?: { topK?: number; namespace?: string; returnMetadata?: boolean | 'all' | 'indexed'; filter?: JsonObject },
   ): Promise<{ matches: VectorMatch[] }>;
-  deleteByIds(ids: string[]): Promise<unknown>;
+  deleteByIds(ids: string[]): Promise<VectorMutation>;
   getByIds(ids: string[]): Promise<VectorRecord[]>;
 }
 
@@ -30,13 +36,13 @@ export interface VectorRecord {
   /** Vectorize namespace — segments the index so a query can be scoped to one
    *  workspace/agent. A vector belongs to exactly one namespace. */
   readonly namespace?: string;
-  readonly metadata?: Record<string, unknown>;
+  readonly metadata?: JsonObject;
 }
 
 export interface VectorMatch {
   readonly id: string;
   readonly score: number;
-  readonly metadata?: Record<string, unknown>;
+  readonly metadata?: JsonObject;
   readonly values?: number[];
 }
 
@@ -166,8 +172,11 @@ export function createCloudflareVectorStore(opts: {
   // not merely unsearchable. The cooldown re-arms on its own, and is long
   // enough that a hard-down backend is not re-probed once per operation.
   let unavailableUntil = 0;
-  const trip = (op: string, err: unknown): void => {
-    console.warn(`[vector-store] ${op} failed:`, err instanceof Error ? err.message : err);
+  const trip = (op: string, input: { error: unknown }): void => {
+    console.warn(
+      `[vector-store] ${op} failed:`,
+      input.error instanceof Error ? input.error.message : input.error,
+    );
     unavailableUntil = Date.now() + VECTOR_BACKEND_COOLDOWN_MS;
   };
 
@@ -189,7 +198,7 @@ export function createCloudflareVectorStore(opts: {
     return Promise.all(chunks.map(async (c, i) => ({
       id: await storageId(c.id),
       values: vectors[i],
-      ...(namespace ? { namespace } : {}),
+      namespace,
       metadata: { path: c.path, startLine: c.startLine, endLine: c.endLine, chunkId: c.id },
     })));
   }
@@ -201,7 +210,7 @@ export function createCloudflareVectorStore(opts: {
       // Rethrown, never swallowed: a caller that treats a failed embed as an
       // indexed chunk (the backfill cursor, the write-path sync) records a
       // completeness the index does not have.
-      trip(op, err);
+      trip(op, { error: err });
       throw err;
     }
   }
@@ -212,7 +221,7 @@ export function createCloudflareVectorStore(opts: {
       const res = await index.query(vec, {
         topK,
         returnMetadata: true,
-        ...(namespace ? { namespace } : {}),
+        namespace,
       });
       return (res.matches ?? []).map((m) => ({
         // The verbatim chunk id (from metadata) — matches the FTS5 hit id so RRF
@@ -225,7 +234,7 @@ export function createCloudflareVectorStore(opts: {
       }));
     } catch (err) {
       // Reads degrade to lexical-only rather than failing the turn.
-      trip('query', err);
+      trip('query', { error: err });
       return [];
     }
   }
@@ -247,7 +256,7 @@ export function createCloudflareVectorStore(opts: {
       try {
         await index.deleteByIds(await Promise.all(ids.map(storageId)));
       } catch (err) {
-        trip('delete', err);
+        trip('delete', { error: err });
         throw err;
       }
     },
@@ -267,7 +276,7 @@ export function createCloudflareVectorStore(opts: {
  * The `aiBinding` is the `env.AI` Worker binding (typed `Ai` in workers-types).
  */
 export function createWorkersAIEmbedder(opts: {
-  aiBinding: { run: (model: string, input: { text: string | string[] }) => Promise<{ data?: number[][] } | unknown> };
+  aiBinding: { run: (model: string, input: { text: string | string[] }) => Promise<{ data?: number[][] }> };
   model?: string;
   dimensions?: number;
 }): Embedder {
@@ -275,7 +284,7 @@ export function createWorkersAIEmbedder(opts: {
   const dimensions = opts.dimensions ?? 384;
 
   async function runOne(text: string): Promise<number[]> {
-    const result = (await opts.aiBinding.run(model, { text })) as { data?: number[][] };
+    const result = await opts.aiBinding.run(model, { text });
     const vec = result?.data?.[0];
     if (!vec || vec.length === 0) {
       throw new Error(`Workers AI embed returned no vector for model ${model}`);
@@ -288,7 +297,7 @@ export function createWorkersAIEmbedder(opts: {
     async embed(text: string) { return runOne(text); },
     async embedBatch(texts: readonly string[]) {
       // bge endpoints accept an array; one request, one response with N vectors.
-      const result = (await opts.aiBinding.run(model, { text: [...texts] })) as { data?: number[][] };
+      const result = await opts.aiBinding.run(model, { text: [...texts] });
       const vectors = result?.data ?? [];
       if (vectors.length !== texts.length) {
         // Fallback: one-by-one (slow but correct).

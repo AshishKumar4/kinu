@@ -31,7 +31,7 @@ import { makeSql, makeExecRaw } from './helpers.js';
 
 // ── Test runtime wiring ──────────────────────────────────────────────
 
-function newJournal(): { sql: ReturnType<typeof makeSql>; journal: HeadJournal; db: Database } {
+function newJournal() {
   const db = new Database(':memory:');
   initHeadsTables(makeExecRaw(db));
   const sql = makeSql(db);
@@ -62,6 +62,7 @@ function fakeMergeOutput(narrative: string): MergeOutput {
     selected_decisions: [{ question: 'Final Q?', choice: 'Final A', rationale: 'Synthesized' }],
     unresolved_questions: ['What about edge case X?'],
     recommendations: ['Take action Y.'],
+    blind_spots: [],
   };
 }
 
@@ -70,10 +71,12 @@ function buildRuntime(opts: {
   reportDelays?: Record<string, number>;
   mergeOutput?: MergeOutput;
   mergeThrows?: Error;
+  spawnedInputs?: HeadInput[];
 }): HeadRuntime {
-  const { reports = {}, reportDelays = {}, mergeOutput, mergeThrows } = opts;
+  const { reports = {}, reportDelays = {}, mergeOutput, mergeThrows, spawnedInputs } = opts;
   return {
     async spawnHead(input: HeadInput): Promise<SpawnedHead> {
+      spawnedInputs?.push(input);
       let aborted = false;
       const id = input.id;
       return {
@@ -111,6 +114,22 @@ const baseRequest: SplitRequest = {
 // ── Tests ────────────────────────────────────────────────────────────
 
 describe('HeadController.run', () => {
+  test('propagates trusted Plan mode to every spawned head', async () => {
+    const { journal } = newJournal();
+    const spawnedInputs: HeadInput[] = [];
+    const controller = new HeadController(buildRuntime({ spawnedInputs }), journal);
+
+    await controller.run({
+      mode: 'plan',
+      parentHeadId: null,
+      inheritedContext: baseContext,
+      request: baseRequest,
+    });
+
+    expect(spawnedInputs).toHaveLength(2);
+    expect(spawnedInputs.every((input) => input.mode === 'plan')).toBe(true);
+  });
+
   test('spawns all heads, records journal entries, returns merged narrative', async () => {
     const { journal } = newJournal();
     const runtime = buildRuntime({
@@ -123,6 +142,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(runtime, journal);
 
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
@@ -141,6 +161,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(runtime, journal);
 
     await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
@@ -163,6 +184,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(runtime, journal);
 
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       rootId: 'root-1',
       inheritedContext: baseContext,
@@ -180,6 +202,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(buildRuntime({}), journal);
 
     await expect(controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
@@ -194,6 +217,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(buildRuntime({}), journal);
 
     await expect(controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: { rationale: 'no heads', heads: [] },
@@ -208,6 +232,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(runtime, journal);
 
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: { rationale: 'tight budget test', heads: [{ task: 'angle A', rationale: 'slow' }] },
@@ -236,6 +261,7 @@ describe('HeadController.run', () => {
     const controller = new HeadController(runtime, journal);
 
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
@@ -251,14 +277,17 @@ describe('HeadController.run', () => {
 
   test('falls back when merge LLM returns schema-invalid output', async () => {
     const { journal } = newJournal();
+    const malformed = fakeMergeOutput('invalid');
+    for (const key of Object.keys(malformed)) Reflect.deleteProperty(malformed, key);
     const runtime: HeadRuntime = {
       spawnHead: buildRuntime({}).spawnHead,
       // Returns an output that doesn't match MergeOutputSchema (missing required fields).
-      mergeLLM: async () => ({} as MergeOutput),
+      mergeLLM: async () => malformed,
     };
     const controller = new HeadController(runtime, journal);
 
     const result = await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest,
@@ -280,8 +309,10 @@ describe('HeadController.run', () => {
     };
     const controller = new HeadController(runtime, journal);
 
-    for (const strategy of ['synthesize', 'best_of', 'consensus'] as MergeStrategy[]) {
+    const strategies: MergeStrategy[] = ['synthesize', 'best_of', 'consensus'];
+    for (const strategy of strategies) {
       await controller.run({
+      mode: 'build',
         parentHeadId: null,
         inheritedContext: baseContext,
         request: { ...baseRequest, mergeStrategy: strategy },
@@ -317,6 +348,7 @@ describe('HeadController.run', () => {
     };
     const controller = new HeadController(runtime, journal);
     await controller.run({
+      mode: 'build',
       parentHeadId: null, rootId: 'r-steps',
       inheritedContext: baseContext,
       request: { rationale: 'trace test', heads: [{ task: 'angle A', rationale: 'a' }] },
@@ -359,6 +391,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     };
 
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
     });
 
@@ -391,6 +424,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     };
 
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
     });
 
@@ -412,6 +446,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
     });
 
     const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
     });
 
@@ -436,6 +471,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
       mergeLLM: async () => fakeMergeOutput('Synthesis of what A found.'),
     };
     const live = await new HeadController(runtime, journal).run({
+      mode: 'build',
       parentHeadId: null, rootId: 'root-1', inheritedContext: baseContext, request: baseRequest,
     });
 
@@ -447,6 +483,7 @@ describe('HeadController.merge — an empty head cannot become a finding', () =>
 describe('HeadJournal.listLive — the live fork roster', () => {
   const spawn = (journal: HeadJournal, rootId: string, id: string) => journal.insertSpawn({
     id, parentId: null, rootId, depth: 1, task: `t-${id}`, rationale: 'why',
+    mode: 'build',
     inheritedContext: [], mergeStrategy: 'consensus',
     budget: { maxDepth: 2, maxWallClockMs: 10, spawnedAt: Date.now() },
   });
@@ -487,6 +524,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     const runtime = buildRuntime({ mergeOutput: fakeMergeOutput('Merged A+B.') });
     const controller = new HeadController(runtime, journal);
     await controller.run({
+      mode: 'build',
       parentHeadId: null, rootId: 'top-root',
       inheritedContext: baseContext,
       request: { rationale: 'Explore two angles', heads: baseRequest.heads },
@@ -510,6 +548,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     const controller = new HeadController(buildRuntime({}), journal);
     for (const root of ['run-1', 'run-2', 'run-3']) {
       await controller.run({
+      mode: 'build',
         parentHeadId: null, rootId: root,
         inheritedContext: baseContext,
         request: { rationale: `r-${root}`, heads: [{ task: `t-${root}`, rationale: 'x' }] },
@@ -519,6 +558,29 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     expect(runs).toHaveLength(2);
     // newest-first by MIN(spawned_at); all share ~same spawnedAt so just assert count + distinctness
     expect(new Set(runs.map((r) => r.rootId)).size).toBe(2);
+  });
+
+  test('an exact run lookup is not bounded by the recent-run window', async () => {
+    const { journal, db } = newJournal();
+    const controller = new HeadController(buildRuntime({}), journal);
+    for (const root of ['bookmarked', 'newer-1', 'newer-2']) {
+      await controller.run({
+        mode: 'build',
+        parentHeadId: null,
+        rootId: root,
+        inheritedContext: baseContext,
+        request: { rationale: `r-${root}`, heads: [{ task: `t-${root}`, rationale: 'x' }] },
+      });
+    }
+    db.prepare("UPDATE head_journal SET spawned_at = 1 WHERE root_id = 'bookmarked'").run();
+    db.prepare("UPDATE head_journal SET spawned_at = 2 WHERE root_id = 'newer-1'").run();
+    db.prepare("UPDATE head_journal SET spawned_at = 3 WHERE root_id = 'newer-2'").run();
+
+    expect(journal.listRuns(2).some((run) => run.rootId === 'bookmarked')).toBe(false);
+    expect(journal.readRun('bookmarked')).toMatchObject({
+      rootId: 'bookmarked', rationale: 'r-bookmarked',
+    });
+    expect(journal.readRun('missing')).toBeNull();
   });
 
   test('child budget is derived from parent: depth-1, envelope undivided', async () => {
@@ -538,6 +600,7 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     const controller = new HeadController(runtime, journal);
 
     await controller.run({
+      mode: 'build',
       parentHeadId: null,
       inheritedContext: baseContext,
       request: baseRequest, // 2 heads
@@ -550,5 +613,129 @@ describe('HeadJournal.listRuns — grouping (the #179 quirk fix)', () => {
     // Fan-out does not divide a child's working room: two siblings each get the
     // parent's envelope, not half of it.
     expect(observed!.budget.maxWallClockMs).toBe(60_000);
+  });
+});
+
+/**
+ * blind_spots — the merge's negative-space field.
+ *
+ * Every other merge output is a function of what the heads SAID, so a framing
+ * all N heads shared has no field to surface in and gets synthesized into a
+ * confident narrative. These lock the carriage rather than the wording: the
+ * field's own value is unmeasured and settled by reading `head_merge` rows
+ * across real splits — the query and the revert rule are stated with the field
+ * itself, in heads/merge-schema.ts.
+ */
+describe('merge blind spots', () => {
+  const withBlindSpots = (...spots: string[]): MergeOutput => ({
+    ...fakeMergeOutput('Synthesis.'),
+    blind_spots: spots,
+  });
+
+  const bankedNothing = (id: string): HeadReport => fakeReport(id, {
+    status: 'budget_exceeded',
+    summary: `Head ${id} did not complete.`,
+    evidence: [], decisions: [], artifactRefs: [],
+  });
+
+  test('reaches the MergeResult, the journal and the merge phase event', async () => {
+    const { journal } = newJournal();
+    const spots = ['no head checked whether the endpoint is rate-limited'];
+    const runtime = buildRuntime({ mergeOutput: withBlindSpots(...spots) });
+    const events: string[][] = [];
+
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null,
+      rootId: 'root-bs',
+      inheritedContext: baseContext,
+      request: baseRequest,
+      onPhase: (e) => { if (e.kind === 'merge') events.push([...e.blindSpots]); },
+    });
+
+    expect(result.blindSpots).toEqual(spots);
+    // The row the falsification query reads.
+    expect(events).toEqual([spots]);
+    // And it survives the cache, so a replayed merge does not quietly lose it.
+    const cached = journal.readCachedMerge('root-bs');
+    if (!cached) throw new Error('expected cached merge');
+    expect(cached.blindSpots).toEqual(spots);
+  });
+
+  test('degrades to [] when the merge model omits the key, exactly like the other list fields', async () => {
+    const { journal } = newJournal();
+    // A model that answers with only a narrative — the documented degradation.
+    const narrativeOnly = fakeMergeOutput('Just a narrative.');
+    for (const key of ['selected_decisions', 'unresolved_questions', 'recommendations', 'blind_spots']) {
+      Reflect.deleteProperty(narrativeOnly, key);
+    }
+    const runtime: HeadRuntime = {
+      ...buildRuntime({}),
+      mergeLLM: async () => narrativeOnly,
+    };
+
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(result.mergedNarrative).toBe('Just a narrative.');
+    expect(result.blindSpots).toEqual([]);
+    expect(result.recommendations).toEqual([]);
+  });
+
+  test('an empty split reports no blind spots — nothing was observed to have a negative space', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({
+      reports: {
+        'angle A': bankedNothing('h-A'),
+        'angle B': bankedNothing('h-B'),
+      },
+      mergeOutput: withBlindSpots('invented'),
+    });
+
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    // The merge never reached a model, so it cannot have produced a blind spot.
+    expect(result.costSummary.headsWithFindings).toBe(0);
+    expect(result.blindSpots).toEqual([]);
+  });
+
+  test('a merge that fails reports no blind spots rather than a stale or invented list', async () => {
+    const { journal } = newJournal();
+    const runtime = buildRuntime({ mergeThrows: new Error('merge model unreachable') });
+
+    const result = await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(result.mergedNarrative).toContain('Merge synthesis unavailable');
+    expect(result.blindSpots).toEqual([]);
+  });
+
+  test('the merge prompt asks the negative-space question and separates it from open questions', async () => {
+    const { journal } = newJournal();
+    let prompt = '';
+    const base = buildRuntime({ mergeOutput: withBlindSpots() });
+    const runtime: HeadRuntime = {
+      spawnHead: base.spawnHead,
+      mergeLLM: async (p, schema) => { prompt = p; return base.mergeLLM(p, schema); },
+    };
+
+    await new HeadController(runtime, journal).run({
+      mode: 'build',
+      parentHeadId: null, inheritedContext: baseContext, request: baseRequest,
+    });
+
+    expect(prompt).toContain('blind_spots');
+    // The distinction is the whole point: without it the model refiles the
+    // heads' own open questions here and the field measures nothing.
+    expect(prompt).toContain('A question a head RAISED is an unresolved_question');
+    // And an honest empty answer must be reachable, or the field becomes filler.
+    expect(prompt).toContain('Return []');
   });
 });

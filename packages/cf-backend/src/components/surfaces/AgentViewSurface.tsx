@@ -22,13 +22,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowClockwiseIcon, CodeIcon, SparkleIcon, WarningIcon } from "@phosphor-icons/react";
 import { Loader } from "@cloudflare/kumo/components/loader";
 import {
-  resolveViewPath,
+  JsonArraySchema, JsonValueSchema, ViewSpecSchema, resolveViewPath,
+  type JsonValue,
   type ViewBlock, type ViewColumn, type ViewLeafBlock, type ViewSource, type ViewSpec,
 } from "@proteus/core";
 import type { Rpc } from "@/lib/protocol";
 import { EmptyState, MarkdownContent, Section } from "./shared";
+import * as v from 'valibot';
 
-type SourceState = { data: unknown } | { error: string };
+type SourceState = { data: JsonValue } | { error: string };
+const AgentViewResponseSchema = v.object({
+  ok: v.boolean(),
+  spec: v.optional(ViewSpecSchema),
+  version: v.optional(v.number()),
+  error: v.optional(v.string()),
+});
 
 /** One fetch per distinct (rpc, limit) pair, however many blocks read it. */
 const sourceKey = (source: ViewSource): string => `${source.rpc}:${source.limit ?? ""}`;
@@ -52,52 +60,52 @@ function collectSources(spec: ViewSpec): ViewSource[] {
 /** Tone by value, over the status words the workspace actually uses. Unknown
  *  values stay neutral rather than guessing — a badge that colours a word it
  *  does not understand is worse than a plain one. */
-const BADGE_TONE: Record<string, string> = {
-  deployed: "p-badge-success", passed: "p-badge-success", ok: "p-badge-success",
-  completed: "p-badge-success", success: "p-badge-success", running: "p-badge-info",
-  applying: "p-badge-info", validating: "p-badge-info", queued: "p-badge-neutral",
-  planning: "p-badge-neutral", patching: "p-badge-neutral", pending: "p-badge-warning",
-  awaiting_approval: "p-badge-warning", preview_ready: "p-badge-warning",
-  failed: "p-badge-danger", rejected: "p-badge-danger", rolled_back: "p-badge-danger",
-  error: "p-badge-danger",
-};
+const BADGE_TONE = new Map([
+  ["deployed", "p-badge-success"], ["passed", "p-badge-success"], ["ok", "p-badge-success"],
+  ["completed", "p-badge-success"], ["success", "p-badge-success"], ["running", "p-badge-info"],
+  ["applying", "p-badge-info"], ["validating", "p-badge-info"], ["queued", "p-badge-neutral"],
+  ["planning", "p-badge-neutral"], ["patching", "p-badge-neutral"], ["pending", "p-badge-warning"],
+  ["awaiting_approval", "p-badge-warning"], ["preview_ready", "p-badge-warning"],
+  ["failed", "p-badge-danger"], ["rejected", "p-badge-danger"], ["rolled_back", "p-badge-danger"],
+  ["error", "p-badge-danger"],
+]);
 
-function scalarText(value: unknown): string {
+function scalarText(value: JsonValue | undefined): string {
   if (value === null || value === undefined) return "—";
-  if (typeof value === "string") return value;
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (v.is(v.string(), value)) return value;
+  if (v.is(v.number(), value) || v.is(v.boolean(), value)) return String(value);
   if (Array.isArray(value)) return `${value.length} items`;
   return "—";
 }
 
-function timeText(value: unknown): string {
-  const ms = typeof value === "number" ? value : Date.parse(String(value));
+function timeText(value: JsonValue | undefined): string {
+  const ms = v.is(v.number(), value) ? value : Date.parse(String(value));
   if (!Number.isFinite(ms)) return "—";
   return new Date(ms).toLocaleString(undefined, {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
 }
 
-function Cell({ value, as }: { value: unknown; as: ViewColumn["as"] }) {
+function Cell({ value, as }: { value: JsonValue | undefined; as: ViewColumn["as"] }) {
   if (as === "badge") {
     const text = scalarText(value);
     return (
       <span className={`inline-flex items-center rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
-        BADGE_TONE[text.toLowerCase()] ?? "p-badge-neutral"
+        BADGE_TONE.get(text.toLowerCase()) ?? "p-badge-neutral"
       }`}>{text.replace(/_/g, " ")}</span>
     );
   }
   if (as === "time") return <span className="p-num p-text-2">{timeText(value)}</span>;
   if (as === "number") {
-    return <span className="p-num">{typeof value === "number" ? value.toLocaleString() : scalarText(value)}</span>;
+    return <span className="p-num">{v.is(v.number(), value) ? value.toLocaleString() : scalarText(value)}</span>;
   }
   return <span>{scalarText(value)}</span>;
 }
 
 // ── the blocks ──────────────────────────────────────────────────────────────
 
-function asRows(value: unknown): unknown[] {
-  return Array.isArray(value) ? value : [];
+function asRows(value: JsonValue | undefined): JsonValue[] {
+  return v.is(JsonArraySchema, value) ? value : [];
 }
 
 function BlockNotice({ text }: { text: string }) {
@@ -130,7 +138,7 @@ function LeafBlock({ block, sources }: { block: ViewLeafBlock; sources: Map<stri
       return (
         <div className="p-card rounded-lg px-3.5 py-3">
           <div className="p-num text-2xl p-text leading-tight">
-            {block.agg === "count" ? (shown as number).toLocaleString() : scalarText(shown)}
+            {block.agg === "count" ? asRows(value).length.toLocaleString() : scalarText(shown)}
             {block.suffix && <span className="text-sm p-text-3 ml-1">{block.suffix}</span>}
           </div>
           <div className="p-eyebrow p-text-3 mt-1">{block.label}</div>
@@ -192,7 +200,7 @@ function LeafBlock({ block, sources }: { block: ViewLeafBlock; sources: Map<stri
             {block.rows.map((row) => (
               <div key={row.field} className="contents">
                 <dt className="p-text-3">{row.label}</dt>
-                <dd className="p-text-2 min-w-0 truncate"><Cell value={resolveViewPath(value, row.field)} as={row.as} /></dd>
+                <dd className="p-text-2 min-w-0 truncate"><Cell value={value === undefined ? undefined : resolveViewPath(value, row.field)} as={row.as} /></dd>
               </div>
             ))}
           </dl>
@@ -263,7 +271,8 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
     const results = await Promise.all(collectSources(loaded).map(async (source): Promise<[string, SourceState]> => {
       try {
         const args = source.limit === undefined ? [] : [source.limit];
-        return [sourceKey(source), { data: await rpc<unknown>(source.rpc, args) }];
+        const data = v.parse(JsonValueSchema, await rpc(source.rpc, args));
+        return [sourceKey(source), { data }];
       } catch (err) {
         return [sourceKey(source), { error: err instanceof Error ? err.message : String(err) }];
       }
@@ -274,9 +283,7 @@ export function AgentViewSurface({ slug, rpc }: { slug: string; rpc: Rpc }) {
   const load = useCallback(async () => {
     setError(null);
     try {
-      const result = await rpc<{ ok: boolean; spec?: ViewSpec; version?: number; error?: string }>(
-        "getAgentView", [slug],
-      );
+      const result = v.parse(AgentViewResponseSchema, await rpc("getAgentView", [slug]));
       if (!result.ok || !result.spec) {
         setSpec(null);
         setError(result.error ?? "This view could not be read.");

@@ -4,10 +4,13 @@
  * without booting the Durable Object (the projection lives in core read-models).
  */
 import { describe, test, expect } from 'bun:test';
-import { runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse, type RunEvent } from '@proteus/core';
+import {
+  runEventToSpan, classifyEvolutionType, toolKindFor, safeJsonParse,
+  type RunEvent, type RunEventInput,
+} from '@proteus/core';
 
-function ev<T extends RunEvent['type']>(type: T, extra: Record<string, unknown>): RunEvent {
-  return { type, eventIndex: 0, runId: 'r1', timestamp: '2026-06-01T00:00:00.000Z', ...extra } as RunEvent;
+function ev(event: RunEventInput): RunEvent {
+  return { eventIndex: 0, runId: 'r1', timestamp: '2026-06-01T00:00:00.000Z', ...event };
 }
 
 describe('toolKindFor', () => {
@@ -38,43 +41,46 @@ describe('classifyEvolutionType', () => {
 
 describe('runEventToSpan', () => {
   test('failure events get first-class failure kinds', () => {
-    expect(runEventToSpan(ev('error', { message: 'boom' })).kind).toBe('error');
-    expect(runEventToSpan(ev('run_end', { reason: 'aborted' })).kind).toBe('abort');
-    expect(runEventToSpan(ev('fiber_recovered', { fiberName: 'mcts', fiberId: 'f1' })).kind).toBe('recovery');
+    expect(runEventToSpan(ev({ type: 'error', message: 'boom' })).kind).toBe('error');
+    expect(runEventToSpan(ev({ type: 'run_end', reason: 'aborted' })).kind).toBe('abort');
+    expect(runEventToSpan(ev({ type: 'fiber_recovered', fiberName: 'mcts', fiberId: 'f1' })).kind).toBe('recovery');
   });
 
   test('head split/merge carry their structured payload + ref', () => {
-    const split = runEventToSpan(ev('head_split', { rootId: 'root1', headIds: ['h1', 'h2'], rationale: 'why' }));
+    const split = runEventToSpan(ev({ type: 'head_split', rootId: 'root1', headIds: ['h1', 'h2'], rationale: 'why' }));
     expect(split.kind).toBe('head-split');
     expect(split.refId).toBe('root1');
     expect(split.data).toEqual({ rootId: 'root1', headIds: ['h1', 'h2'] });
-    expect(runEventToSpan(ev('head_merge', { rootId: 'root1', headCount: 2, mergedNarrative: 'x' })).kind).toBe('head-merge');
+    expect(runEventToSpan(ev({
+      type: 'head_merge', rootId: 'root1', headCount: 2, headsWithFindings: 2,
+      totalTokens: 0, mergedNarrative: 'x', fileChanges: [], blindSpots: [],
+    })).kind).toBe('head-merge');
   });
 
   test('tool calls map by tool name and carry latency on end', () => {
-    expect(runEventToSpan(ev('tool_call_start', { name: 'run', args: {}, toolCallId: 'tc1' })).kind).toBe('runtime-exec');
-    const end = runEventToSpan(ev('tool_call_end', { name: 'execute_tools', toolCallId: 'tc1', durationMs: 42 }));
+    expect(runEventToSpan(ev({ type: 'tool_call_start', name: 'run', args: {}, toolCallId: 'tc1' })).kind).toBe('runtime-exec');
+    const end = runEventToSpan(ev({ type: 'tool_call_end', name: 'execute_tools', toolCallId: 'tc1', durationMs: 42 }));
     expect(end.kind).toBe('tool-call');
     expect(end.elapsedMs).toBe(42);
     expect(end.label).toBe('execute_tools');
-    const failed = runEventToSpan(ev('tool_call_end', { name: 'run', toolCallId: 'tc2', error: 'nonzero exit' }));
+    const failed = runEventToSpan(ev({ type: 'tool_call_end', name: 'run', toolCallId: 'tc2', error: 'nonzero exit' }));
     expect(failed.label).toBe('run failed');
     expect(failed.detail).toBe('nonzero exit');
   });
 
   test('scaffold promotion/rollback are scaffold spans with versions in label', () => {
-    expect(runEventToSpan(ev('scaffold_promotion', { fromVersion: 2, toVersion: 3 })).label).toContain('v2 → v3');
-    expect(runEventToSpan(ev('scaffold_rollback', { fromVersion: 3, toVersion: 2 })).kind).toBe('scaffold');
+    expect(runEventToSpan(ev({ type: 'scaffold_promotion', fromVersion: 2, toVersion: 3 })).label).toContain('v2 → v3');
+    expect(runEventToSpan(ev({ type: 'scaffold_rollback', fromVersion: 3, toVersion: 2 })).kind).toBe('scaffold');
   });
 
   test('run_start is a trigger span carrying the user message', () => {
-    const s = runEventToSpan(ev('run_start', { agentId: 'a1', userMessage: 'do the thing' }));
+    const s = runEventToSpan(ev({ type: 'run_start', agentId: 'a1', userMessage: 'do the thing' }));
     expect(s.kind).toBe('trigger');
     expect(s.detail).toBe('do the thing');
   });
 
   test('timestamp parses to epoch ms', () => {
-    expect(runEventToSpan(ev('turn_start', { turnIndex: 1 })).ts).toBe(Date.parse('2026-06-01T00:00:00.000Z'));
+    expect(runEventToSpan(ev({ type: 'turn_start', turnIndex: 1 })).ts).toBe(Date.parse('2026-06-01T00:00:00.000Z'));
   });
 });
 

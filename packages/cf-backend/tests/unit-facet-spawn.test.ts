@@ -38,6 +38,7 @@ function headInput(): HeadInput {
     parentId: null,
     depth: 1,
     task: 'investigate',
+    mode: 'build',
     rationale: 'one angle',
     inheritedContext: [],
     // The child budget HeadController already decremented for this depth.
@@ -63,7 +64,7 @@ function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } =
     runAsHead: async () => { calls.push({ method: 'runAsHead', args: [] }); return headReport; },
     explore: async (...args: unknown[]) => {
       calls.push({ method: 'explore', args });
-      return { text: 'an approach', codeUsed: null };
+      return { text: 'an approach' };
     },
     generateReflection: async (task: string) => {
       calls.push({ method: 'generateReflection', args: [task] });
@@ -80,9 +81,10 @@ function makeHost(options: { failing?: string; abortSubAgentThrows?: boolean } =
       if (options.abortSubAgentThrows) throw new Error('facet registry gone');
     },
   };
-  // `subAgent` is generic over the child Agent class, so a structural fake can
-  // only be cast in — once, here, at the SDK seam.
-  return { host: host as unknown as FacetHost, calls };
+  // SAFETY: this locally constructed host implements both members FacetHost
+  // owns; every returned exploration stub method is present and records its
+  // exact argument list before returning the owner-shaped result above.
+  return { host: host as FacetHost, calls };
 }
 
 const methods = (calls: Call[]) => calls.map((call) => call.method);
@@ -163,12 +165,12 @@ describe('exploration-facet spawn seam', () => {
     expect(calls[0]?.args).toEqual([ExplorationAgent, 'branch-7']);
     expect(calls[1]?.args).toEqual(['user-1', 'pwc_parent']);
 
-    expect(await branch.explore([{ role: 'user', content: 'hi' }], [])).toEqual({
-      text: 'an approach', codeUsed: null,
+    expect(await branch.explore([{ role: 'user', content: 'hi' }], [], ['javascript'], 'plan')).toEqual({
+      text: 'an approach',
     });
     // Siblings are always sent, so the facet's diversity directive is not
     // left to an RPC-side default.
-    expect(calls[2]?.args).toEqual([[{ role: 'user', content: 'hi' }], [], []]);
+    expect(calls[2]?.args).toEqual([[{ role: 'user', content: 'hi' }], [], ['javascript'], 'plan', []]);
     expect(await branch.generateReflection('the task')).toEqual({ text: 'went wrong' });
   });
 

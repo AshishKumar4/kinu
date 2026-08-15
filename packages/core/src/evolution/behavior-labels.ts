@@ -566,7 +566,7 @@ export async function runCorpusEval(input: CorpusEvalInput): Promise<CorpusEvalR
 
   const classifierRated: RatedTurn[] = [];
   let classifierFailed = 0;
-  const judgeRated = judges.map(() => [] as RatedTurn[]);
+  const judgeRated: RatedTurn[][] = judges.map(() => []);
   const judgeFailed = judges.map(() => 0);
   const panelRated: RatedTurn[] = [];
   let panelSplit = 0;

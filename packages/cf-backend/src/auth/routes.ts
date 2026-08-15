@@ -17,9 +17,35 @@ import {
   isCloudflareCredentialUsable,
   type CloudflareTokenPayload,
 } from '../lib/cloudflare-oauth.js';
-import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC, JsonObjectSchema, JsonValueSchema, type JsonObject } from '@proteus/core';
 import { notifyWorkspacesCredentialsChanged } from '../user/workspace-access.js';
 import { ownerCaller } from '../user/workspace-capability.js';
+import * as v from 'valibot';
+
+const CloudflareUserEnvelopeSchema = v.object({
+  success: v.optional(v.boolean()), result: v.optional(JsonValueSchema),
+});
+const CloudflareUserSchema = v.object({
+  id: v.union([v.string(), v.number()]), email: v.string(),
+  first_name: v.optional(v.nullable(v.string())),
+  last_name: v.optional(v.nullable(v.string())),
+  username: v.optional(v.nullable(v.string())),
+});
+const GitHubUserSchema = v.object({
+  id: v.union([v.number(), v.string()]), login: v.optional(v.string()), name: v.nullable(v.optional(v.string())),
+  email: v.nullable(v.optional(v.string())), avatar_url: v.nullable(v.optional(v.string())),
+});
+const GitHubEmailSchema = v.object({
+  email: v.optional(v.string()), primary: v.optional(v.boolean()), verified: v.optional(v.boolean()),
+});
+interface MutableTokenEndpointResponse {
+  [parameter: string]: oauth.JsonValue | undefined;
+  access_token: string;
+  token_type: 'bearer' | 'dpop';
+  expires_in?: number;
+  refresh_token?: string;
+  scope?: string;
+}
 
 export async function handleAuthRequest(request: Request, env: Env, ctx?: ExecutionContext): Promise<Response | null> {
   const url = new URL(request.url);
@@ -85,7 +111,7 @@ async function renderLogin(request: Request, env: Env): Promise<Response> {
     : `<p>No OAuth providers are configured yet.</p>`;
 
   return html('Sign in to Proteus', `
-    <p class="lede">Choose a configured sign-in method.</p>
+    <p class="lede">Choose a sign-in method.</p>
     <div class="providers">${body}</div>
   `, { headers: { 'cache-control': 'no-store' } });
 }
@@ -316,18 +342,15 @@ async function processCloudflareTokenResponse(response: Response): Promise<oauth
   return cloudflareTokenJsonToResponse(body);
 }
 
-export function cloudflareTokenJsonToResponse(input: unknown): oauth.TokenEndpointResponse {
-  if (!input || typeof input !== 'object') {
-    throw new Error('Cloudflare token endpoint returned an invalid JSON body.');
-  }
-
-  const body = input as Record<string, unknown>;
+export function cloudflareTokenJsonToResponse<Input>(input: Input): oauth.TokenEndpointResponse {
+  const body = v.parse(JsonObjectSchema, input);
   const accessToken = stringClaim(body.access_token);
   if (!accessToken) throw new Error('Cloudflare token endpoint did not return an access token.');
 
-  const out: Record<string, oauth.JsonValue | undefined> = {
+  const tokenType = stringClaim(body.token_type)?.toLowerCase() === 'dpop' ? 'dpop' : 'bearer';
+  const out: MutableTokenEndpointResponse = {
     access_token: accessToken,
-    token_type: (stringClaim(body.token_type) ?? 'bearer').toLowerCase(),
+    token_type: tokenType,
   };
 
   const expiresIn = numberClaim(body.expires_in);
@@ -341,10 +364,10 @@ export function cloudflareTokenJsonToResponse(input: unknown): oauth.TokenEndpoi
 
   for (const [key, value] of Object.entries(body)) {
     if (key in out) continue;
-    if (isJsonValue(value)) out[key] = value;
+    if (v.is(JsonValueSchema, value)) out[key] = value;
   }
 
-  return out as unknown as oauth.TokenEndpointResponse;
+  return out;
 }
 
 async function fetchCloudflareProfile(accessToken: string | undefined): Promise<OAuthProfile> {
@@ -356,18 +379,15 @@ async function fetchCloudflareProfile(accessToken: string | undefined): Promise<
     },
   });
   if (!res.ok) throw new Error(`Cloudflare user lookup failed: ${res.status}`);
-  const body = await res.json() as { success?: boolean; result?: unknown };
+  const body = v.parse(CloudflareUserEnvelopeSchema, await res.json());
   if (body.success === false) throw new Error('Cloudflare user lookup failed.');
   return cloudflareUserResultToProfile(body.result);
 }
 
-export function cloudflareUserResultToProfile(input: unknown): OAuthProfile {
-  if (!input || typeof input !== 'object') {
-    throw new Error('Cloudflare user lookup returned an invalid profile.');
-  }
-  const user = input as Record<string, unknown>;
-  const id = stringClaim(user.id);
-  const email = stringClaim(user.email);
+export function cloudflareUserResultToProfile<Input>(input: Input): OAuthProfile {
+  const user = v.parse(CloudflareUserSchema, input);
+  const id = String(user.id);
+  const email = user.email.trim();
   if (!id) throw new Error('Cloudflare did not return a stable user id.');
   if (!email) throw new Error('Cloudflare did not return an email address.');
 
@@ -395,13 +415,11 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
   };
   const userRes = await fetch('https://api.github.com/user', { headers });
   if (!userRes.ok) throw new Error(`GitHub user lookup failed: ${userRes.status}`);
-  const user = await userRes.json() as {
-    id?: number | string; login?: string; name?: string | null; email?: string | null; avatar_url?: string | null;
-  };
+  const user = v.parse(GitHubUserSchema, await userRes.json());
 
   const emailsRes = await fetch('https://api.github.com/user/emails', { headers });
   if (!emailsRes.ok) throw new Error(`GitHub email lookup failed: ${emailsRes.status}`);
-  const emails = await emailsRes.json() as Array<{ email?: string; primary?: boolean; verified?: boolean }>;
+  const emails = v.parse(v.array(GitHubEmailSchema), await emailsRes.json());
   const verified = emails.filter((e) => e.email && e.verified);
   const primary = verified.find((e) => e.primary) ?? verified[0];
   const email = primary?.email ?? user.email ?? null;
@@ -420,9 +438,16 @@ async function fetchGitHubProfile(accessToken: string): Promise<OAuthProfile> {
   };
 }
 
+interface PublicIdentity {
+  id: string;
+  email: string;
+  provider?: string;
+  displayName: string | null;
+}
+
 function publicIdentity(identity: {
   userId: string; email: string; provider?: string; displayName?: string | null;
-}): Record<string, string | null | undefined> {
+}): PublicIdentity {
   return {
     id: identity.userId,
     email: identity.email,
@@ -450,48 +475,47 @@ function clearSessionCookie(): string {
   return `${SESSION_COOKIE_NAME}=; Path=/; Max-Age=0; HttpOnly; Secure; SameSite=Lax`;
 }
 
-function stringClaim(value: unknown): string | null {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+function stringClaim<Value>(value: Value): string | null {
+  return v.is(v.string(), value) && value.trim() ? value.trim() : null;
 }
 
-function boolClaim(value: unknown): boolean | null {
-  return typeof value === 'boolean' ? value : null;
+function boolClaim<Value>(value: Value): boolean | null {
+  return v.is(v.boolean(), value) ? value : null;
 }
 
-function numberClaim(value: unknown): number | null {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
+function numberClaim<Value>(value: Value): number | null {
+  if (v.is(v.number(), value) && Number.isFinite(value)) return value;
+  if (v.is(v.string(), value) && value.trim()) {
     const parsed = Number(value);
     if (Number.isFinite(parsed)) return parsed;
   }
   return null;
 }
 
-function scopeClaim(value: unknown): string | null {
-  if (typeof value === 'string') return value.trim() || null;
+function scopeClaim<Value>(value: Value): string | null {
+  if (v.is(v.string(), value)) return value.trim() || null;
   if (Array.isArray(value)) {
     const scopes = value
-      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .filter((item): item is string => v.is(v.string(), item) && item.trim().length > 0)
       .map((item) => item.trim());
     return scopes.length ? scopes.join(' ') : null;
   }
   return null;
 }
 
-async function readJsonObject(response: Response, label: string): Promise<Record<string, unknown>> {
-  let parsed: unknown;
+async function readJsonObject(response: Response, label: string): Promise<JsonObject> {
+  let parsed: JsonObject;
   try {
-    parsed = await response.json();
+    parsed = v.parse(JsonObjectSchema, await response.json());
   } catch {
     throw new Error(`${label} did not return JSON.`);
   }
-  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    throw new Error(`${label} returned an invalid JSON body.`);
-  }
-  return parsed as Record<string, unknown>;
+  return parsed;
 }
 
-function summarizeOAuthFailure(error: unknown): { reason: string; log: string } {
+interface OAuthFailureSummary { reason: string; log: string }
+
+function summarizeOAuthFailure<Failure>(error: Failure): OAuthFailureSummary {
   if (error instanceof OAuthProviderTokenError) {
     const reason = `provider_${sanitizeReason(error.providerError)}`;
     return {
@@ -529,14 +553,6 @@ function summarizeOAuthFailure(error: unknown): { reason: string; log: string } 
 function sanitizeReason(value: string | undefined): string {
   const cleaned = (value ?? 'unknown_error').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
   return cleaned || 'unknown_error';
-}
-
-function isJsonValue(value: unknown): value is oauth.JsonValue {
-  if (value === null) return true;
-  if (['string', 'number', 'boolean'].includes(typeof value)) return true;
-  if (Array.isArray(value)) return value.every(isJsonValue);
-  if (typeof value === 'object') return Object.values(value as Record<string, unknown>).every(isJsonValue);
-  return false;
 }
 
 function redirect(location: string, init: ResponseInit = {}): Response {
@@ -665,4 +681,3 @@ function html(title: string, body: string, init: ResponseInit = {}): Response {
     headers,
   });
 }
-

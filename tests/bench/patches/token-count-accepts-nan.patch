@@ -1,13 +1,20 @@
 diff --git a/packages/core/src/bench/types.ts b/packages/core/src/bench/types.ts
-index aee7dae..c31330a 100644
 --- a/packages/core/src/bench/types.ts
 +++ b/packages/core/src/bench/types.ts
-@@ -120,7 +120,7 @@ export function usageTokens(usage: unknown): number {
- function tokenField(usage: unknown, key: string): number {
-   if (typeof usage !== 'object' || usage === null) return 0;
-   const value = (usage as Record<string, unknown>)[key];
--  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
-+  if (typeof value === 'number') return value;
-   if (typeof value === 'object' && value !== null) {
-     const total = (value as Record<string, unknown>).total;
-     if (typeof total === 'number' && Number.isFinite(total)) return total;
+@@ -143,13 +143,13 @@
+ });
+
+ const TokenFieldSchema = v.union([
+-  v.number(),
++  v.custom<number>((value) => Object.is(value, Number.NaN) || v.is(v.number(), value)),
+   v.object({ total: v.optional(v.number()) }),
+ ]);
+
+ function finiteTokenCount(value: v.InferOutput<typeof TokenFieldSchema>): number {
+-  const count = v.is(v.number(), value) ? value : value.total ?? 0;
+-  return Number.isFinite(count) ? count : 0;
++  const count = Object.is(value, Number.NaN) ? Number.NaN : v.is(v.number(), value) ? value : value.total ?? 0;
++  return count;
+ }
+
+ export function usageTokens<Usage>(usage: Usage): number {

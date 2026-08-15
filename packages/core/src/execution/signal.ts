@@ -9,10 +9,11 @@
  * states the remote command may still finish, because their protocols expose
  * no kill for an in-flight exec.
  */
-export function readExecSignal(context: unknown): AbortSignal | undefined {
-  if (!context || typeof context !== 'object' || !('signal' in context)) return undefined;
-  const signal = (context as { signal?: unknown }).signal;
-  return typeof signal === 'object' && signal !== null && 'aborted' in signal && 'addEventListener' in signal
-    ? signal as AbortSignal
-    : undefined;
+import * as v from 'valibot';
+
+const ExecContextSchema = v.object({ signal: v.optional(v.instance(AbortSignal)) });
+
+export function readExecSignal(input: { context: unknown }): AbortSignal | undefined {
+  const parsed = v.safeParse(ExecContextSchema, input.context);
+  return parsed.success ? parsed.output.signal : undefined;
 }

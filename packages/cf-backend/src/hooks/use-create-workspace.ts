@@ -13,6 +13,14 @@ import { createWorkspaceFromMission } from "@/lib/create-workspace";
 import { listAvailableModels } from "@/lib/user-api";
 import { lastValue, useAsyncResource } from "@/hooks/use-async-resource";
 
+/** The creation box's wording, in one place: both surfaces that render it read from here. */
+export const MISSION_LABEL = "Mission";
+export const MISSION_PLACEHOLDER =
+  'A standing brief for the whole workspace. "My personal assistant, Jarvis." "Own the checkout service: find bugs, keep the tests green, ship the fixes."';
+export const MISSION_HELP =
+  "This becomes the workspace's SOUL.md and its name. Nothing runs until you send the first message.";
+export const CONNECT_AI_MESSAGE = "Connect Cloudflare Workers AI before creating a workspace.";
+
 export function useCreateWorkspace() {
   const navigate = useNavigate();
   const [busy, setBusy] = useState(false);

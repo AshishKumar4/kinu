@@ -1,13 +1,12 @@
 diff --git a/packages/core/src/tools/agents-tool.ts b/packages/core/src/tools/agents-tool.ts
-index f2c63fc..8b02e6a 100644
 --- a/packages/core/src/tools/agents-tool.ts
 +++ b/packages/core/src/tools/agents-tool.ts
-@@ -305,7 +305,7 @@ async function runFork(
-   const options: Record<string, unknown> = { ...defaults };
-   for (const [k, v] of Object.entries(callerOpts)) {
-     const d = options[k];
--    options[k] = isPlainObject(d) && isPlainObject(v) ? { ...d, ...v } : v;
-+    options[k] = isPlainObject(d) && isPlainObject(v) ? { ...v, ...d } : v;
+@@ -496,7 +496,7 @@
+     options.set(
+       key,
+       existingObject && valueObject
+-        ? Object.assign({}, existingObject, valueObject)
++        ? Object.assign({}, valueObject, existingObject)
+         : value,
+     );
    }
- 
-   // Ergonomic fork input: fold the typed top-level fields into options.heads,

@@ -2,13 +2,28 @@
  * Execution Layer types — capability-based routing for multi-executor agents.
  *
  * Executors are codemode ToolProviders. The LLM writes JS code that calls
- * namespaced APIs: workspace.readFile(), nimbus.exec(), sandbox.startProcess().
+ * namespaced APIs: workspace.readFile(), workspace.startProcess(), sandbox.exec().
  *
  * Architecture: docs/EXECUTION-LAYER-SPEC.md
  * Lean formalization: lean/Proteus/Execution/{Capabilities,ToolSystem}.lean
  */
 
 import type { VFS } from '../types/primitives.js';
+import type { JsonValue } from '../utils/json.js';
+
+export type ExecutorToolResult = JsonValue | undefined;
+
+export interface ExecutorTool {
+  description: string;
+  execute: (...args: unknown[]) => Promise<ExecutorToolResult>;
+}
+
+export interface ExecutorProviderSurface {
+  name: string;
+  tools: Record<string, ExecutorTool>;
+  types?: string;
+  positionalArgs?: boolean;
+}
 
 export type ExecutorCapability =
   | 'javascript'
@@ -72,7 +87,7 @@ export interface ExecutorStatus {
  * @cloudflare/codemode's interface exactly.
  */
 export interface ExecutorProvider {
-  /** Namespace in the codemode sandbox (e.g. "workspace", "nimbus", "sandbox", "laptop") */
+  /** Namespace in the codemode sandbox (e.g. "workspace", "sandbox", "laptop") */
   readonly name: string;
 
   /** Which kind of executor this is */
@@ -127,10 +142,7 @@ export interface ExecutorProvider {
    * AbortError that says the remote command may still finish (their
    * protocols expose no kill for an in-flight exec). See execution/signal.ts.
    */
-  readonly tools: Record<string, {
-    description: string;
-    execute: (...args: unknown[]) => Promise<unknown>;
-  }>;
+  readonly tools: Record<string, ExecutorTool>;
 
   /**
    * TypeScript declarations for the LLM. Auto-generated if omitted,
@@ -144,8 +156,7 @@ export interface ExecutorProvider {
   /**
    * Generic port-exposure surface. Returns the public preview URL when
    * supported, or a `{supported: false}` rejection with a clear reason
-   * for executors that can't open inbound ports (workspace, nimbus,
-   * laptop).
+   * for executors that can't open inbound ports (for example, laptop).
    *
    * Real implementation: sandbox (via @cloudflare/sandbox SDK).
    *
@@ -218,12 +229,7 @@ export interface ExecutionRouter {
    * Get all available providers formatted for createExecuteTool's
    * `providers` param. Filters out unavailable executors.
    */
-  getProviders(): Array<{
-    name: string;
-    tools: Record<string, { description: string; execute: (...args: unknown[]) => Promise<unknown> }>;
-    types?: string;
-    positionalArgs?: boolean;
-  }>;
+  getProviders(): ExecutorProviderSurface[];
 
   /** List all executors with status — for UI display */
   listExecutors(): ExecutorInfo[];

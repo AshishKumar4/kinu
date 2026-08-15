@@ -28,15 +28,11 @@ import { DynamicWorkerExecutor } from '@cloudflare/codemode';
 import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@proteus/core';
 import type { CraftStore, SqlExecutor } from '@proteus/core';
 
-/** Minimal WorkerLoader shape. Typed loosely — we hand it to DWE untouched. */
-type WorkerLoaderLike = unknown;
-
 /** Codemode's resolved provider shape. */
-interface ResolvedProvider {
-  name: string;
-  fns: Record<string, (...args: unknown[]) => Promise<unknown>>;
+type DynamicProviderInput = Parameters<DynamicWorkerExecutor['execute']>[1];
+type ResolvedProvider = Extract<DynamicProviderInput, object[]>[number] & {
   positionalArgs?: boolean;
-}
+};
 
 /**
  * Select the crafted tools eligible for injection: non-empty, non-comment
@@ -114,13 +110,13 @@ export interface StructuredExecutionError {
   providerName?: string;
 }
 
-function structuredError(
-  err: unknown,
+function structuredError<Thrown>(
+  err: Thrown,
   toolName?: string,
   providerName?: string,
 ): StructuredExecutionError {
   const message = err instanceof Error ? err.message : String(err);
-  const stack = err instanceof Error && typeof err.stack === 'string'
+  const stack = err instanceof Error && err.stack
     ? err.stack.split('\n').slice(0, 10).join('\n')
     : undefined;
   return { error: true, message, stack, toolName, providerName };
@@ -136,7 +132,7 @@ function structuredError(
  */
 function wrapProvidersWithStructuredErrors(providers: ResolvedProvider[]): ResolvedProvider[] {
   return providers.map(p => {
-    const wrappedFns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+    const wrappedFns: ResolvedProvider['fns'] = {};
     for (const [name, fn] of Object.entries(p.fns)) {
       wrappedFns[name] = async (...args: unknown[]) => {
         try {
@@ -171,18 +167,16 @@ export class PreambleCraftedExecutor {
   #craftStore: CraftStore;
   #sql: SqlExecutor;
 
-  constructor(loader: WorkerLoaderLike, craftStore: CraftStore, sql: SqlExecutor) {
-    this.#inner = new DynamicWorkerExecutor({
-      loader: loader as ConstructorParameters<typeof DynamicWorkerExecutor>[0]['loader'],
-    });
+  constructor(loader: WorkerLoader, craftStore: CraftStore, sql: SqlExecutor) {
+    this.#inner = new DynamicWorkerExecutor({ loader });
     this.#craftStore = craftStore;
     this.#sql = sql;
   }
 
   async execute(
     code: string,
-    providers: ResolvedProvider[] | Record<string, (...args: unknown[]) => Promise<unknown>>,
-  ): Promise<{ result: unknown; error?: string; logs?: string[] }> {
+    providers: DynamicProviderInput,
+  ) {
     // Normalize to ResolvedProvider[]. Codemode passes an array in current
     // versions; defensively accept the object-shaped provider map too.
     const providerArr: ResolvedProvider[] = Array.isArray(providers)
@@ -201,8 +195,7 @@ export class PreambleCraftedExecutor {
     const wrappedProviders = wrapProvidersWithStructuredErrors(providerArr);
 
     try {
-      const result = await this.#inner.execute(injected, wrappedProviders) as
-        { result: unknown; error?: string; logs?: string[] };
+      const result = await this.#inner.execute(injected, wrappedProviders);
       // DWE never throws for sandbox-internal failures (a bare `ReferenceError:
       // run is not defined` from code that reached for a native tool as if it
       // were in codemode scope lands here as a string). Rewrite exactly that

@@ -26,7 +26,7 @@ import type { LanguageModel } from 'ai';
 import { createWorkersAIProvider, type WorkersAIOptions } from './workers-ai.js';
 import { createMyGatewayProvider } from './my-gateway.js';
 import { createAIGatewayProvider } from './ai-gateway.js';
-import type { UserDO } from '../user/user-do.js';
+import type { CredentialSummary } from '../user/user-do.js';
 import type { UserCaller } from '../user/workspace-capability.js';
 
 /** Stub for the per-user DO that owns this user's credentials, paired with the
@@ -35,8 +35,18 @@ import type { UserCaller } from '../user/workspace-capability.js';
  *  capability token (resolved per call, since a facet reads it from its
  *  parent). The two travel together so no context can hold the stub without
  *  saying who it is. */
+export interface UserCredentialClient {
+  getAuthHeaders(
+    caller: UserCaller,
+    key: string,
+    opts?: { forceRefresh?: boolean },
+  ): Promise<Record<string, string> | null>;
+  listCredentials(caller: UserCaller): Promise<CredentialSummary[]>;
+  getCredentialBaseURL(caller: UserCaller, key: string): Promise<string | null>;
+}
+
 export interface UserCredentialSource {
-  stub: DurableObjectStub<UserDO>;
+  stub: UserCredentialClient;
   caller: UserCaller | (() => Promise<UserCaller>);
 }
 
@@ -66,7 +76,7 @@ export interface AgentProviderRegistry {
 }
 
 async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> {
-  return typeof source.caller === 'function' ? await source.caller() : source.caller;
+  return source.caller instanceof Function ? await source.caller() : source.caller;
 }
 
 /** Auth resolver proxying to UserDO — getAuth is a thin wrapper over its
@@ -128,8 +138,7 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
   // sync default must skip it and fall back to the env-bound ai-gateway.
   function syncDefaultProvider(): string {
     if (source && registry.get('workers-ai')) return 'workers-ai';
-    if (typeof opts.env.AI_GATEWAY_URL === 'string' && opts.env.AI_GATEWAY_URL
-     && typeof opts.env.AI_GATEWAY_AUTH === 'string' && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
+    if (opts.env.AI_GATEWAY_URL && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
     throw new Error('No sync-resolvable provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');
   }
   function syncDefaultModelId(provider: string): string {

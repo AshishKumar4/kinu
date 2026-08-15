@@ -25,6 +25,7 @@
  */
 
 import type { ToolResultContext } from '../extension.js';
+import * as v from 'valibot';
 import type { CraftCycleRecord } from '../events/types.js';
 import type { CraftLedger } from '../craft/in-episode.js';
 import {
@@ -118,7 +119,8 @@ export class CraftCycle {
     this.seen = new Set(known);
     if (isBackgroundOutcomeText(ctx.result)) return;
     const submitted = ctx.args.code;
-    const code = typeof submitted === 'string' ? submitted : '';
+    const parsedCode = v.safeParse(v.string(), submitted);
+    const code = parsedCode.success ? parsedCode.output : '';
 
     // Creation is attributed only to a call that asked for it — the callable
     // set can also grow from the detached turn-outcome review's own extraction

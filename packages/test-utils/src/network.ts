@@ -5,6 +5,7 @@
 //   2. control the response shape (200/401/etc.)
 //   3. simulate refresh-on-401 flows by switching handlers between calls
 import { asFetchFunction } from '@proteus/core';
+import * as v from 'valibot';
 
 export interface RecordedRequest {
   url: string;
@@ -44,22 +45,24 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
   const handlerCallCount = new Map<MockFetchHandler, number>();
 
   const matches = (h: MockFetchHandler, req: RecordedRequest): boolean => {
-    if (typeof h.match === 'string') return req.url.includes(h.match);
     if (h.match instanceof RegExp) return h.match.test(req.url);
-    return h.match(req);
+    if (isRequestMatcher(h.match)) return h.match(req);
+    return req.url.includes(h.match);
   };
 
   const fetch = asFetchFunction(async (input, init) => {
-    const url = typeof input === 'string' ? input
-              : input instanceof URL ? input.toString()
-              : input.url;
+    const url = input instanceof Request ? input.url
+      : input instanceof URL ? input.toString()
+      : input;
     const method = (init?.method ?? 'GET').toUpperCase();
     const headers: Record<string, string> = {};
     if (init?.headers) {
       new Headers(init.headers).forEach((v, k) => { headers[k] = v; });
     }
-    const body = typeof init?.body === 'string' ? init.body : undefined;
-    const req: RecordedRequest = { url, method, headers, body };
+    const bodyParse = v.safeParse(v.string(), init?.body);
+    const body = bodyParse.success ? bodyParse.output : undefined;
+    const req: RecordedRequest = { url, method, headers };
+    if (body !== undefined) req.body = body;
     requests.push(req);
 
     const handler = handlers.find(h => matches(h, req));
@@ -72,18 +75,18 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     const callIndex = handlerCallCount.get(handler) ?? 0;
     handlerCallCount.set(handler, callIndex + 1);
 
-    const resp = typeof handler.respond === 'function'
+    const resp = isResponder(handler.respond)
       ? handler.respond(req, callIndex)
       : handler.respond;
+    const responseText = v.safeParse(v.string(), resp.body);
     const bodyOut = resp.body === undefined ? ''
-      : typeof resp.body === 'string' ? resp.body
+      : responseText.success ? responseText.output
       : JSON.stringify(resp.body);
+    const responseHeaders = new Headers(resp.headers);
+    if (!responseHeaders.has('content-type')) responseHeaders.set('content-type', 'application/json');
     return new Response(bodyOut, {
       status: resp.status ?? 200,
-      headers: {
-        'content-type': 'application/json',
-        ...(resp.headers ?? {}),
-      },
+      headers: responseHeaders,
     });
   });
 
@@ -91,12 +94,23 @@ export function createMockFetch(handlers: MockFetchHandler[]): MockFetchHandle {
     fetch,
     requests,
     matching(pattern) {
-      if (typeof pattern === 'string') return requests.filter(r => r.url.includes(pattern));
-      return requests.filter(r => pattern.test(r.url));
+      if (pattern instanceof RegExp) return requests.filter(r => pattern.test(r.url));
+      return requests.filter(r => r.url.includes(pattern));
     },
     reset() {
       requests.length = 0;
       handlerCallCount.clear();
     },
   };
+}
+
+type MockResponseFactory = Extract<MockFetchHandler['respond'], (...args: never[]) => object>;
+type RequestMatcher = Extract<MockFetchHandler['match'], (...args: never[]) => boolean>;
+
+function isRequestMatcher(value: MockFetchHandler['match']): value is RequestMatcher {
+  return v.is(v.function(), value);
+}
+
+function isResponder(value: MockFetchHandler['respond']): value is MockResponseFactory {
+  return v.is(v.function(), value);
 }

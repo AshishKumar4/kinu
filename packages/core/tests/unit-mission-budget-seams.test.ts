@@ -10,8 +10,15 @@
 
 import { describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
+import { MockLanguageModelV3 } from 'ai/test';
+import * as v from 'valibot';
 import { createTestRuntime, makeExecRaw, makeSql } from './helpers.js';
-import { MissionGovernor, MissionBudgetExhausted, type MissionBudgetRefusal } from '../src/mission-budget.js';
+import {
+  MissionGovernor,
+  MissionBudgetExhausted,
+  type MissionBudgetRefusal,
+  type MissionScope,
+} from '../src/mission-budget.js';
 import {
   createAgentsCodemodeProvider, createStrategyRegistry, FORK_STRATEGY_ID,
   type AgentsToolDeps, type ExplorationStrategy, type StrategyContext,
@@ -31,7 +38,7 @@ function newGovernor(onExhausted?: (r: MissionBudgetRefusal) => void) {
   const db = new Database(':memory:');
   return new MissionGovernor({
     storage: { sql: makeSql(db), execRaw: makeExecRaw(db) },
-    ...(onExhausted ? { onExhausted } : {}),
+    onExhausted,
   });
 }
 
@@ -47,7 +54,7 @@ function spendingStrategy(id: string, opts: { reportedTokens?: number } = {}): E
         strategy: id,
         best: { text, score: 1, source: id },
         all: [{ text, score: 1, source: id }],
-        cost: { durationMs: 0, iterations: 1, ...(opts.reportedTokens !== undefined ? { tokens: opts.reportedTokens } : {}) },
+        cost: { durationMs: 0, iterations: 1, tokens: opts.reportedTokens },
       };
     },
   };
@@ -67,7 +74,9 @@ function selfMeteringStrategy(id: string, tokens: number): ExplorationStrategy {
         strategy: id,
         best: { text: 'done', score: 1, source: id },
         all: [{ text: 'done', score: 1, source: id }],
-        cost: { durationMs: 0, iterations: 1, tokens, ...(ctx.mission ? { selfMetered: true } : {}) },
+        cost: ctx.mission
+          ? { durationMs: 0, iterations: 1, tokens, selfMetered: true }
+          : { durationMs: 0, iterations: 1, tokens },
       };
     },
   };
@@ -76,7 +85,8 @@ function selfMeteringStrategy(id: string, tokens: number): ExplorationStrategy {
 /** The sandbox's view of `agents.*`, over deps that record every spawn. */
 function sandbox(deps: AgentsToolDeps) {
   const provider = createAgentsCodemodeProvider(() => deps);
-  const ns: Record<string, (...args: unknown[]) => Promise<unknown>> = {};
+  type ProviderExecute = typeof provider.tools[string]['execute'];
+  const ns: Record<string, ProviderExecute> = {};
   for (const [name, entry] of Object.entries(provider.tools)) ns[name] = entry.execute;
   return ns;
 }
@@ -91,31 +101,53 @@ function forkableDeps(opts: {
   const registry = createStrategyRegistry();
   registry.register(opts.selfMetering !== undefined
     ? selfMeteringStrategy(FORK_STRATEGY_ID, opts.selfMetering)
-    : spendingStrategy(FORK_STRATEGY_ID, opts.reportedTokens !== undefined ? { reportedTokens: opts.reportedTokens } : {}));
+    : spendingStrategy(FORK_STRATEGY_ID, { reportedTokens: opts.reportedTokens }));
   const { rt } = createTestRuntime({ llmResponses: { qqqq: 'a'.repeat(40) } });
   const spawns = opts.spawns ?? [];
   return {
-    fork: { registry, rt, model: rt.llm as never },
+    mode: 'build',
+    fork: { registry, rt, model: new MockLanguageModelV3() },
     team: {
       list: async () => [],
+      create: async (input) => ({
+        name: input.name ?? 'helper',
+        displayName: 'Helper',
+        subordinate: {
+          name: input.name ?? 'helper', displayName: 'Helper', role: input.role,
+          createdBy: 'user', status: 'idle', currentTask: null, createdAt: 1, dismissedAt: null,
+        },
+      }),
       spawn: async (input) => { spawns.push(`staff:${input.role}`); return { name: 'helper', displayName: 'Helper' }; },
       assign: async (input) => { spawns.push(`ask:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       status: async () => ({}),
       message: async (input) => { spawns.push(`send:${input.name}`); return { ok: true, name: input.name, ...handoff() }; },
       dismiss: async (input) => ({ ok: true, name: input.name, historyKept: true }),
     },
-    ...(opts.budget ? { budget: opts.budget } : {}),
+    budget: opts.budget,
   };
 }
 
 describe('spawn seam — transitive debit through fork-from-codemode', () => {
+  const ForkTextSchema = v.object({ text: v.string() });
+  const ForkBudgetSchema = v.object({
+    mission_budget: v.optional(v.object({
+      label: v.string(),
+      remaining: v.object({ tokens: v.optional(v.number()) }),
+    })),
+  });
+  const BudgetRefusalSchema = v.object({
+    error: v.literal('budget_exhausted'),
+    seam: v.picklist(['model_call', 'spawn']),
+    label: v.string(),
+  });
+
   test('a fork inside the sandbox debits the mission its run spends against', async () => {
     const governor = newGovernor();
     governor.declare('nightly', {});
     governor.activate(['nightly']);
 
     const deps = forkableDeps({ budget: governor, reportedTokens: 900 });
-    const result = await sandbox(deps).fork!({ task: 'explore' }) as { text: string };
+    const result = v.parse(ForkTextSchema, await sandbox(deps).fork!({ task: 'explore' }));
     expect(result.text).toBe('a'.repeat(40));
 
     const [mission] = governor.snapshot('nightly');
@@ -144,9 +176,10 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
     governor.declare('nightly', {});
     governor.activate(['nightly']);
     const deps = forkableDeps({ budget: governor, reportedTokens: 10 });
-    const out = await sandbox(deps).fork!({ task: 'x', budget_tokens: 1_000, budget_label: 'sweep' }) as {
-      mission_budget?: { label: string; remaining: { tokens?: number } };
-    };
+    const out = v.parse(
+      ForkBudgetSchema,
+      await sandbox(deps).fork!({ task: 'x', budget_tokens: 1_000, budget_label: 'sweep' }),
+    );
     expect(out.mission_budget?.label).toBe('sweep');
     expect(out.mission_budget?.remaining.tokens).toBe(970);
   });
@@ -166,7 +199,7 @@ describe('spawn seam — transitive debit through fork-from-codemode', () => {
       ['ask', { agent: 'helper', message: 'm' }],
       ['send', { agent: 'helper', message: 'm' }],
     ] as const) {
-      const refusal = await ns[member]!(input) as MissionBudgetRefusal;
+      const refusal = v.parse(BudgetRefusalSchema, await ns[member]!(input));
       expect(refusal.error).toBe('budget_exhausted');
       expect(refusal.seam).toBe('spawn');
       expect(refusal.label).toBe('nightly');
@@ -214,17 +247,21 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
       },
     });
     const { rt } = createTestRuntime();
-    await sandbox({ fork: { registry, rt, model: rt.llm as never }, budget: governor }).fork!({ task: 't' });
+    await sandbox({
+      mode: 'build',
+      fork: { registry, rt, model: new MockLanguageModelV3() },
+      budget: governor,
+    }).fork!({ task: 't' });
     expect(handed).toEqual({ labels: ['nightly'] });
   });
 
   test('an unbudgeted fork is handed no scope at all', async () => {
-    let handed: unknown = 'unset';
+    let handed: MissionScope | 'unset' = 'unset';
     const registry = createStrategyRegistry();
     registry.register({
       id: FORK_STRATEGY_ID,
       async explore(ctx: StrategyContext) {
-        handed = ctx.mission;
+        handed = ctx.mission ?? 'unset';
         return {
           strategy: FORK_STRATEGY_ID,
           best: { text: 'x', score: 1, source: 'x' },
@@ -233,8 +270,11 @@ describe('spawn seam — work that runs where the ledger is not reachable', () =
       },
     });
     const { rt } = createTestRuntime();
-    await sandbox({ fork: { registry, rt, model: rt.llm as never } }).fork!({ task: 't' });
-    expect(handed).toBeUndefined();
+    await sandbox({
+      mode: 'build',
+      fork: { registry, rt, model: new MockLanguageModelV3() },
+    }).fork!({ task: 't' });
+    expect(handed).toBe('unset');
   });
 
   test('spend a strategy already charged is not charged again at this seam', async () => {
@@ -344,15 +384,25 @@ describe('model-call seam — the turn accumulator is the meter', () => {
 });
 
 describe('mission scope reaches the woken turn', () => {
-  function timerEvent(id: string, missionLabel?: string): ProteusEvent {
-    return {
+  type TimerEvent = Extract<ProteusEvent, { variant: 'timer' }>;
+
+  function timerEvent(id: string, missionLabel?: string): TimerEvent {
+    const event: TimerEvent = {
       id, variant: 'timer', ingress: 'timer_alarm',
       payload: {
         trigger_id: `t-${id}`, scheduled_fire_at: 0, label: 'nightly sweep',
-        ...(missionLabel ? { mission_label: missionLabel } : {}),
       },
       trust: 'authenticated', priority: 'background', received_at: 0,
-    } as unknown as ProteusEvent;
+      trace_id: id,
+      caused_by: null,
+      payload_visibility: 'full',
+      schema_version: 1,
+      reply_channel: null,
+      dedupe_key: null,
+    };
+    return missionLabel
+      ? { ...event, payload: { ...event.payload, mission_label: missionLabel } }
+      : event;
   }
 
   test('a schedule that declared a budget hands its label to the drain batch', () => {

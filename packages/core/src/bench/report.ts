@@ -44,6 +44,10 @@ export interface BenchCaseScore {
   durationMsB: number;
   tokensA: number;
   tokensB: number;
+  /** Mean observed inference calls per attempt. null means call evidence was
+   *  absent for at least one attempt; it must never be rendered as zero. */
+  modelCallsA: number | null;
+  modelCallsB: number | null;
   /** Largest working set either variant reached on this task — the number the
    *  context-discipline candidates are supposed to move. */
   peakPromptTokensA: number;
@@ -118,9 +122,9 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
   return {
     accept: true,
     reason: `held-out effect ${fmtPp(s.effect)} is significant (exact McNemar p=${s.pValue.toFixed(4)})`,
-    ...(s.resolvable ? {} : {
-      caveat: `the design has 80% power only for effects ≥ ${fmtPp(s.mde)}, so ${fmtPp(s.effect)} is very likely an overestimate — ${s.pairsNeededForObserved} pairs would pin the magnitude down`,
-    }),
+    caveat: s.resolvable
+      ? undefined
+      : `the design has 80% power only for effects ≥ ${fmtPp(s.mde)}, so ${fmtPp(s.effect)} is very likely an overestimate — ${s.pairsNeededForObserved} pairs would pin the magnitude down`,
   };
 }
 
@@ -138,22 +142,23 @@ export interface BuildBenchReportInput {
 /** Per-attempt figures collapsed to one row. Mean rather than total for the
  *  cost fields, so a k=3 row is read against the same per-attempt budget a k=1
  *  row is. */
-function foldRepeats(attempts: readonly AttemptOutcome[]): {
-  passes: number; durationMs: number; tokens: number; peakPromptTokens: number;
-  breach: BudgetBreach | null; error?: string; breachCount: number;
-} {
+function foldRepeats(attempts: readonly AttemptOutcome[]) {
   const n = attempts.length;
   const error = attempts.find((x) => x.error)?.error;
+  const calls = attempts.map((attempt) => attempt.modelCalls);
   return {
     passes: attempts.filter((x) => x.passed).length,
     durationMs: Math.round(attempts.reduce((s, x) => s + x.durationMs, 0) / n),
     tokens: Math.round(attempts.reduce((s, x) => s + x.tokens, 0) / n),
+    modelCalls: calls.every((count) => count !== undefined)
+      ? calls.reduce((sum, count) => sum + count, 0) / n
+      : null,
     // A peak is a maximum, not a mean: averaging peaks across repeats would
     // report a working set no attempt ever actually reached.
     peakPromptTokens: attempts.reduce((m, x) => Math.max(m, x.peakPromptTokens), 0),
     breach: attempts.find((x) => x.budgetBreach)?.budgetBreach ?? null,
     breachCount: attempts.filter((x) => x.budgetBreach).length,
-    ...(error === undefined ? {} : { error }),
+    error,
   };
 }
 
@@ -189,10 +194,11 @@ export function buildBenchReport(input: BuildBenchReportInput): BenchReport {
       passesA: foldA.passes, passesB: foldB.passes,
       durationMsA: foldA.durationMs, durationMsB: foldB.durationMs,
       tokensA: foldA.tokens, tokensB: foldB.tokens,
+      modelCallsA: foldA.modelCalls, modelCallsB: foldB.modelCalls,
       peakPromptTokensA: foldA.peakPromptTokens, peakPromptTokensB: foldB.peakPromptTokens,
       breachA: foldA.breach, breachB: foldB.breach,
-      ...(foldA.error ? { errorA: foldA.error } : {}),
-      ...(foldB.error ? { errorB: foldB.error } : {}),
+      errorA: foldA.error || undefined,
+      errorB: foldB.error || undefined,
     });
     outcomes.push({ taskId, a: a.map((x) => x.passed), b: b.map((x) => x.passed) });
   }
@@ -278,7 +284,17 @@ function renderCost(cases: readonly BenchCaseScore[]): string {
     Math.round(cases.reduce((sum, c) => sum + of(c), 0) / cases.length);
   const peak = (of: (c: BenchCaseScore) => number) =>
     cases.reduce((max, c) => Math.max(max, of(c)), 0);
+  const meanCalls = (side: 'A' | 'B'): string => {
+    const values = cases.map((entry) => side === 'A' ? entry.modelCallsA : entry.modelCallsB);
+    let total = 0;
+    for (const value of values) {
+      if (value === null) return 'unreported';
+      total += value;
+    }
+    return (total / values.length).toFixed(1);
+  };
   return `  tokens/task A=${mean((c) => c.tokensA)}  B=${mean((c) => c.tokensB)}` +
+    `   model calls/task A=${meanCalls('A')}  B=${meanCalls('B')}` +
     `   peak prompt tokens A=${peak((c) => c.peakPromptTokensA)}  B=${peak((c) => c.peakPromptTokensB)}`;
 }
 
@@ -322,10 +338,28 @@ export interface GainReport {
   /** Task order, identical for both arms. */
   sequence: string[];
   perTask: GainTaskScore[];
+  cost: GainCostSummary;
   stats: GainStats;
   /** Published reference points, so a number is read against something. */
   calibration: string;
   headline: string;
+}
+
+export interface GainArmCostSummary {
+  attempts: number;
+  totalTokens: number;
+  meanTokens: number;
+  /** null means at least one attempt did not report call evidence. */
+  totalModelCalls: number | null;
+  meanModelCalls: number | null;
+  peakPromptTokens: number;
+  budgetBreaches: number;
+  errors: number;
+}
+
+export interface GainCostSummary {
+  stateless: GainArmCostSummary;
+  stateful: GainArmCostSummary;
 }
 
 /** CL-Bench's leaderboard, for honest expectation-setting: the leader reaches
@@ -339,8 +373,66 @@ export interface BuildGainReportInput {
   runId: string;
   config: BenchRunConfig;
   perTask: readonly GainTaskScore[];
+  attempts: readonly AttemptOutcome[];
   ranAt?: number;
   bootstrap?: BootstrapOptions;
+}
+
+function gainArmCost(attempts: readonly AttemptOutcome[]): GainArmCostSummary {
+  const totalTokens = attempts.reduce((sum, attempt) => sum + attempt.tokens, 0);
+  const reportedCalls = attempts.map((attempt) => attempt.modelCalls);
+  const hasCompleteCallEvidence = reportedCalls.every((calls) => calls !== undefined);
+  const totalModelCalls = hasCompleteCallEvidence
+    ? reportedCalls.reduce((sum, calls) => sum + calls, 0)
+    : null;
+  return {
+    attempts: attempts.length,
+    totalTokens,
+    meanTokens: attempts.length === 0 ? 0 : totalTokens / attempts.length,
+    totalModelCalls,
+    meanModelCalls: totalModelCalls === null || attempts.length === 0
+      ? null
+      : totalModelCalls / attempts.length,
+    peakPromptTokens: attempts.reduce(
+      (peak, attempt) => Math.max(peak, attempt.peakPromptTokens),
+      0,
+    ),
+    budgetBreaches: attempts.filter((attempt) => attempt.budgetBreach !== null).length,
+    errors: attempts.filter((attempt) => attempt.error !== undefined).length,
+  };
+}
+
+function gainCostSummary(
+  attempts: readonly AttemptOutcome[],
+  perTask: readonly GainTaskScore[],
+  config: BenchRunConfig,
+): GainCostSummary {
+  const expectedPerArm = perTask.length * config.repeats;
+  const taskIds = new Set(perTask.map((task) => task.taskId));
+  const seen = new Set<string>();
+  for (const attempt of attempts) {
+    if (!taskIds.has(attempt.taskId)) {
+      throw new Error(`gain accounting contains unknown task ${attempt.taskId}`);
+    }
+    const expectedVariant = attempt.slot === 'a' ? config.variantA : config.variantB;
+    if (attempt.variantId !== expectedVariant) {
+      throw new Error(`gain accounting slot ${attempt.slot} contains variant ${attempt.variantId}; expected ${expectedVariant}`);
+    }
+    if (attempt.repeat < 0 || attempt.repeat >= config.repeats) {
+      throw new Error(`gain accounting has out-of-range repeat ${attempt.repeat} for ${attempt.taskId}`);
+    }
+    const key = `${attempt.slot}:${attempt.taskId}:${attempt.repeat}`;
+    if (seen.has(key)) throw new Error(`gain accounting repeats attempt ${key}`);
+    seen.add(key);
+  }
+  const stateless = attempts.filter((attempt) => attempt.slot === 'a');
+  const stateful = attempts.filter((attempt) => attempt.slot === 'b');
+  if (stateless.length !== expectedPerArm || stateful.length !== expectedPerArm) {
+    throw new Error(
+      `gain accounting expected ${expectedPerArm} attempt per arm; got ${stateless.length} stateless and ${stateful.length} stateful`,
+    );
+  }
+  return { stateless: gainArmCost(stateless), stateful: gainArmCost(stateful) };
 }
 
 export function buildGainReport(input: BuildGainReportInput): GainReport {
@@ -353,6 +445,7 @@ export function buildGainReport(input: BuildGainReportInput): GainReport {
     configHash: benchConfigHash(input.config),
     sequence: perTask.map((t) => t.taskId),
     perTask,
+    cost: gainCostSummary(input.attempts, perTask, input.config),
     stats,
     calibration: GAIN_CALIBRATION,
     headline: stats.verdict,
@@ -368,6 +461,12 @@ export function renderGainSummary(report: GainReport): string {
   lines.push('');
   lines.push(`Tasks: ${s.tasks} (identical sequence, both arms)` +
     (report.config.repeats > 1 ? ` × ${report.config.repeats} passes; per-task reward is the mean over passes` : ''));
+  lines.push(`  tokens/attempt stateless=${report.cost.stateless.meanTokens.toFixed(0)}` +
+    `  stateful=${report.cost.stateful.meanTokens.toFixed(0)}`);
+  lines.push(`  model calls/attempt stateless=${formatCallMean(report.cost.stateless.meanModelCalls)}` +
+    `  stateful=${formatCallMean(report.cost.stateful.meanModelCalls)}`);
+  lines.push(`  peak prompt tokens stateless=${report.cost.stateless.peakPromptTokens}` +
+    `  stateful=${report.cost.stateful.peakPromptTokens}`);
   lines.push(`  stateful reward  ${(s.statefulReward * 100).toFixed(1)}%`);
   lines.push(`  stateless reward ${(s.statelessReward * 100).toFixed(1)}%`);
   lines.push(`  gain ${fmtPp(s.gain)}  95% CI [${fmtPp(s.ci.lo)}, ${fmtPp(s.ci.hi)}]  p=${s.pValue.toFixed(4)}`);
@@ -381,4 +480,8 @@ export function renderGainSummary(report: GainReport): string {
   lines.push(`VERDICT: ${s.verdict}`);
   lines.push(report.calibration);
   return lines.join('\n');
+}
+
+function formatCallMean(value: number | null): string {
+  return value === null ? 'unreported' : value.toFixed(1);
 }

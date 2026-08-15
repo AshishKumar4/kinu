@@ -109,7 +109,7 @@ const KNOWN_TWINS: readonly string[] = [
  * object rather than a free function — asserted below either way, so this list
  * cannot launder a real twin.
  */
-const SHARED_TRANSPORTS: Readonly<Record<string, string>> = {
+const SHARED_TRANSPORTS = {
   acceptWebhookDelivery: 'acceptWebhookDelivery',
   applyScaffoldDecision: 'applyScaffoldDecision',
   // Three lines each over ONE core store (CompactionStateStore). No duplicated
@@ -165,7 +165,7 @@ const SHARED_TRANSPORTS: Readonly<Record<string, string>> = {
   setShellApprovalMode: 'setShellApprovalMode',
   settlePendingBranches: 'settlePendingBranches',
   wrapToolsForBackground: 'wrapToolsForBackground',
-};
+} satisfies Readonly<Record<string, string>>;
 
 /** The class bodies that constitute each backend's composition surface. */
 const CF_CLASSES = [
@@ -213,9 +213,15 @@ function methodNames(body: string): Set<string> {
   return names;
 }
 
-function scanTwins(): {
-  cf: Set<string>; cli: Set<string>; twins: string[]; cfBodies: string[]; cliBody: string;
-} {
+interface TwinScan {
+  cf: Set<string>;
+  cli: Set<string>;
+  twins: string[];
+  cfBodies: string[];
+  cliBody: string;
+}
+
+function scanTwins(): TwinScan {
   const cf = new Set<string>();
   const cfBodies: string[] = [];
   for (const [file, cls] of CF_CLASSES) {

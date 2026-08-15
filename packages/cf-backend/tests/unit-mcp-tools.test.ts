@@ -7,6 +7,9 @@
 // write surface at all, and an unowned agent is refused before any tool runs.
 import { TEST_CREDENTIAL_ENCRYPTION_KEY } from './helpers/user-do.js';
 import { describe, test, expect } from 'bun:test';
+import * as v from 'valibot';
+import type { JsonObject, JsonValue } from '@proteus/core';
+import type { UserCaller } from '../src/user/workspace-capability.js';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
 
 mockAgentsSdk();
@@ -16,23 +19,23 @@ const USER_ID = '0123456789abcdef0123456789abcdef';
 const SESSION_TOKEN = `ptc_${USER_ID}_abcdefghijklmnopqrstuvwxyz`;
 const ACCESS_TOKEN = `pta_${USER_ID}_abcdefghijklmnopqrstuvwxyz012345`;
 
-interface AgentCall { method: string; args: unknown[]; }
+interface AgentCall { method: string; args: JsonValue[]; }
 
 function mcpEnv() {
   const calls: AgentCall[] = [];
-  const record = (method: string, ...args: unknown[]) => { calls.push({ method, args }); };
+  const record = (method: string, ...args: JsonValue[]) => { calls.push({ method, args }); };
   const userDO = {
-    async verifyCliToken(_caller: unknown, token: string) {
+    async verifyCliToken(_caller: UserCaller, token: string) {
       return token === SESSION_TOKEN
         ? { ok: true, tokenHash: 'hash', user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async verifyAccessToken(_caller: unknown, token: string) {
+    async verifyAccessToken(_caller: UserCaller, token: string) {
       return token === ACCESS_TOKEN
         ? { ok: true, tokenHash: 'ahash', scopes: ['workspace.exec'], user: { id: USER_ID, email: 'a@example.com', displayName: null } }
         : { ok: false, error: 'invalid token' };
     },
-    async hasWorkspace(_caller: unknown, name: string) { return name === 'jarvis'; },
+    async hasWorkspace(_caller: UserCaller, name: string) { return name === 'jarvis'; },
     async ensureWorkspaceCapability() {},
   };
   const agent = {
@@ -45,34 +48,43 @@ function mcpEnv() {
     },
     async listPeersFromMcp() { record('listPeersFromMcp'); return [{ name: 'atlas', displayName: 'Atlas' }]; },
     async getReleaseBoard(limit: number) { record('getReleaseBoard', limit); return { changes: [], bindings: [] }; },
-    async createReleaseChange(input: unknown) { record('createReleaseChange', input); return { id: 'pc_1', status: 'draft', bindingId: 'bind_1' }; },
+    async createReleaseChange(input: JsonObject) { record('createReleaseChange', input); return { id: 'pc_1', status: 'draft', bindingId: 'bind_1' }; },
     async transitionReleaseChange(changeId: string, status: string) { record('transitionReleaseChange', changeId, status); return { id: changeId, status }; },
   };
-  const env = {
+  const bindings = {
     AUTH_DB: {},
     UserDO: { idFromName: (n: string) => n, get: () => userDO },
-    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+    OrchestratorAgent: { idFromName: (n: string) => n, get: () => agent },
+    CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+  };
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, bindings);
+  // SAFETY: handleMcpRequest only reaches the locally constructed auth and
+  // orchestrator namespaces above; every method used by this suite is present.
+  const env = partialEnv as Env;
   return { env, calls };
 }
 
-function toolCall(agentName: string, name: string, args: Record<string, unknown>, token?: string) {
+function toolCall(agentName: string, name: string, args: JsonObject, token?: string) {
+  const headers = new Headers({
+    'content-type': 'application/json',
+    accept: 'application/json, text/event-stream',
+    'mcp-protocol-version': '2025-03-26',
+  });
+  if (token) headers.set('authorization', `Bearer ${token}`);
   return new Request(`https://proteus.example.com/mcp/v1/${agentName}`, {
     method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      'mcp-protocol-version': '2025-03-26',
-      ...(token ? { authorization: `Bearer ${token}` } : {}),
-    },
+    headers,
     body: JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name, arguments: args } }),
   });
 }
 
 /** The MCP result text for a tools/call — pulled out of the SSE body. */
 async function resultText(res: Response | null): Promise<string> {
-  const body = await res!.text();
+  if (!res) throw new Error('Expected the MCP handler to return a response');
+  const body = await res.text();
   const match = /"text":"((?:[^"\\]|\\.)*)"/.exec(body);
-  return match ? JSON.parse(`"${match[1]}"`) : body;
+  return match?.[1] ? v.parse(v.string(), JSON.parse(`"${match[1]}"`)) : body;
 }
 
 describe('MCP write tools → real @callables', () => {

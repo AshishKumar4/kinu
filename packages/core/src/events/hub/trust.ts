@@ -121,47 +121,46 @@ export function deriveEventTrust(d: IngressDescriptor): TrustLevel {
  */
 export function derivePriority(trust: TrustLevel, variant: EventVariant): Priority {
   // Trust → variant → priority. Cells missing in the table are forbidden.
-  const table: Record<TrustLevel, Partial<Record<EventVariant, Priority>>> = {
-    owner: {
-      chat: 'urgent',
-      process_done: 'normal',
-      timer: 'normal',
-      internal: 'normal',
-      reply_request: 'urgent',
-      file_changed: 'background',
-      mcp_chat: 'urgent',
-    },
-    self: {
-      process_done: 'normal',
-      timer: 'normal',
-      file_changed: 'background',
-      internal: 'normal',
-    },
-    authenticated: {
-      webhook: 'normal',
-      timer: 'normal',
-      peer_agent: 'normal',
+  const table = new Map<TrustLevel, ReadonlyMap<EventVariant, Priority>>([
+    ['owner', new Map([
+      ['chat', 'urgent'],
+      ['process_done', 'normal'],
+      ['timer', 'normal'],
+      ['internal', 'normal'],
+      ['reply_request', 'urgent'],
+      ['file_changed', 'background'],
+      ['mcp_chat', 'urgent'],
+    ])],
+    ['self', new Map([
+      ['process_done', 'normal'],
+      ['timer', 'normal'],
+      ['file_changed', 'background'],
+      ['internal', 'normal'],
+    ])],
+    ['authenticated', new Map([
+      ['webhook', 'normal'],
+      ['timer', 'normal'],
+      ['peer_agent', 'normal'],
       // Assignments wake the subordinate promptly (peer-ask class); reports
       // roll into the orchestrator's next turn (mission-inbox class).
-      subordinate_task: 'normal',
-      subordinate_report: 'background',
-      mcp_third_party: 'normal',
-      reply_request: 'normal',
-      internal: 'normal',
-      email: 'normal',
-    },
-    external: {
-      webhook: 'background',
-      peer_agent: 'background',
-      mcp_third_party: 'background',
-      email: 'background',
-    },
-  };
-  const row = table[trust];
-  const prio = row[variant];
+      ['subordinate_task', 'normal'],
+      ['subordinate_report', 'background'],
+      ['mcp_third_party', 'normal'],
+      ['reply_request', 'normal'],
+      ['internal', 'normal'],
+      ['email', 'normal'],
+    ])],
+    ['external', new Map([
+      ['webhook', 'background'],
+      ['peer_agent', 'background'],
+      ['mcp_third_party', 'background'],
+      ['email', 'background'],
+    ])],
+  ]);
+  const prio = table.get(trust)?.get(variant);
   if (!prio) {
     throw new IngressRejectedError(
-      'invalid_combination' as never,
+      'invalid_combination',
       `trust=${trust} + variant=${variant} is not a permitted combination`,
     );
   }

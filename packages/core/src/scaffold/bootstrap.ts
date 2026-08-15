@@ -35,7 +35,7 @@ export async function bootstrapScaffold(rt: AgentRuntime): Promise<void> {
   if (await rt.identity.scaffold.exists()) return;
 
   await rt.identity.scaffold.write(INITIAL_SCAFFOLD_SOURCE);
-  rt.storage.sql`
+  void rt.storage.sql`
     INSERT OR IGNORE INTO scaffold_versions (version, written_at, rationale)
     VALUES (0, ${nowMs()}, ${'initial bootstrap'})
   `;

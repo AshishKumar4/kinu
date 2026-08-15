@@ -17,7 +17,7 @@ import type {
   BenchCorpus, BenchTask, LLMProviderConfig, LongHorizonSpec, PartitionOptions,
   Solver, SolverContext, SolverResult,
 } from '../packages/core/src/index.js';
-import { runAgentWorker, type AgentWorkerOptions } from './bench-solvers.js';
+import { runAgentWorker, runPiWorker, type AgentWorkerOptions } from './bench-solvers.js';
 
 /** The checker's argv. Run inside the sandbox like every other check; the
  *  answer key is not on disk, it is recomputed from the spec the check carries
@@ -34,7 +34,7 @@ const LONGHORIZON_GUARDED = ['scripts', 'packages/core/src'] as const;
 const SpecLineSchema = v.object({
   id: v.pipe(v.string(), v.regex(/^[a-z0-9][a-z0-9-]*$/, 'id must be lowercase kebab-case')),
   title: v.pipe(v.string(), v.minLength(1)),
-  shape: v.picklist(['digest', 'continuation']),
+  mode: v.picklist(['digest', 'continuation']),
   seed: v.pipe(v.number(), v.integer(), v.minValue(0)),
   entries: v.pipe(v.number(), v.integer(), v.minValue(1)),
   filler: v.pipe(v.number(), v.integer(), v.minValue(0)),
@@ -52,6 +52,10 @@ export interface LoadedLongHorizonCorpus {
   path: string;
 }
 
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions = {}): LoadedLongHorizonCorpus {
   const path = join(repoRoot, 'tests', 'bench', 'longhorizon.jsonl');
   const raw = readFileSync(path, 'utf8');
@@ -65,13 +69,13 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
     try {
       parsedJson = JSON.parse(text);
     } catch (err) {
-      throw new Error(`${path}:${i + 1}: not valid JSON — ${(err as Error).message}`);
+      throw new Error(`${path}:${i + 1}: not valid JSON — ${errorMessage(err)}`);
     }
     const parsed = v.safeParse(SpecLineSchema, parsedJson);
     if (!parsed.success) throw new Error(`${path}:${i + 1}: ${parsed.issues.map((x) => x.message).join('; ')}`);
     const line_ = parsed.output;
     const spec: LongHorizonSpec = {
-      shape: line_.shape, seed: line_.seed, entries: line_.entries,
+      mode: line_.mode, seed: line_.seed, entries: line_.entries,
       filler: line_.filler, markers: line_.markers, parts: line_.parts,
     };
 
@@ -89,7 +93,7 @@ export function loadLongHorizonCorpus(repoRoot: string, opts: PartitionOptions =
       // The encoded spec rides in the argv, so it rides in the task hash: a
       // corpus quietly regenerated at a different size changes the manifest.
       checks: [{ id: 'longhorizon-answers', command: [...CHECK_COMMAND, encodeLongHorizonSpec(spec)], timeoutMs: 60_000 }],
-      tags: [line_.shape, ...(line_.tags ?? [])],
+      tags: [line_.mode, ...(line_.tags ?? [])],
     });
   });
 
@@ -124,7 +128,7 @@ export function createLongHorizonOracleSolver(specs: ReadonlyMap<string, LongHor
     description: 'writes the generated answers — must pass every task',
     async solve(ctx: SolverContext): Promise<SolverResult> {
       writeAnswerFile(ctx.sandboxDir, specFor(specs, ctx.task.id));
-      return {};
+      return { modelCalls: 0 };
     },
   };
 }
@@ -145,7 +149,7 @@ export function createLongHorizonNoisySolver(
       if (unitHash(`${label}:${ctx.seed}:${ctx.task.id}:${ctx.repeat}`) < rate) {
         writeAnswerFile(ctx.sandboxDir, specFor(specs, ctx.task.id));
       }
-      return {};
+      return { modelCalls: 0 };
     },
   };
 }
@@ -161,9 +165,36 @@ export interface LongHorizonAgentSolverOptions {
   specs: ReadonlyMap<string, LongHorizonSpec>;
 }
 
+export interface LongHorizonPiSolverOptions {
+  id: 'pi:vanilla' | 'pi:retry';
+  description: string;
+  verifierRetry: boolean;
+  llm: LLMProviderConfig;
+  repoRoot: string;
+  specs: ReadonlyMap<string, LongHorizonSpec>;
+}
+
+export function createLongHorizonPiSolver(opts: LongHorizonPiSolverOptions): Solver {
+  return {
+    id: opts.id,
+    description: opts.description,
+    async solve(ctx: SolverContext): Promise<SolverResult> {
+      const { asks, removeAfterAsk } = buildLongHorizonAsks(specFor(opts.specs, ctx.task.id));
+      return runPiWorker({
+        ctx,
+        llm: opts.llm,
+        repoRoot: opts.repoRoot,
+        asks,
+        removeAfterAsk,
+        verifierRetry: opts.verifierRetry,
+      });
+    },
+  };
+}
+
 /** The real thing: the task's whole ask sequence driven on ONE session, in its
  *  own process. Between asks the worker arms a forced compaction and removes
- *  the part just read — the two halves of what the continuation shape measures. */
+ *  the part just read — the two halves of what the continuation mode measures. */
 export function createLongHorizonAgentSolver(opts: LongHorizonAgentSolverOptions): Solver {
   return {
     id: opts.id,
@@ -179,8 +210,8 @@ export function createLongHorizonAgentSolver(opts: LongHorizonAgentSolverOptions
         asks,
         removeAfterAsk,
         purpose: 'Answer questions about a log corpus that is far larger than one request, and carry what you learn across turns.',
-        ...(opts.sharedHome ? { sharedHome: opts.sharedHome } : {}),
       };
+      if (opts.sharedHome) worker.sharedHome = opts.sharedHome;
       return runAgentWorker(worker);
     },
   };

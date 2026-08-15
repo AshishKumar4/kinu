@@ -1,14 +1,19 @@
 #!/usr/bin/env bun
-// Runnable quality benchmark — the CI/local caller the eval harness never had.
+// Single-shot A/B between two models, judged by a third.
 //
-// Loads the seed corpus, runs runEvalPair (candidate vs baseline single-shot +
-// an LLM judge) over the CURRENT configured model, and emits a structured
-// report (JSON + human summary). Exits non-zero when the aggregate judge score
-// falls below the committed quality floor, so CI can gate on a regression.
+// What this measures, exactly: one `generateText` call per model per case, on
+// the corpus cases a model with no tools can actually answer, scored by an LLM
+// judge. That is the whole claim. It is NOT a measurement of the agent — no
+// tools, no system prompt, no loop — and it is not a substitute for
+// scripts/bench.ts, which runs real agent solvers in isolated sandboxes against
+// this repo's own checks with a sealed split.
 //
-//   bun scripts/eval.ts                          # gate the current model
-//   bun scripts/eval.ts --baseline-model <spec>  # genuine A/B vs a baseline
-//   bun scripts/eval.ts --min-score 0.6 --out out.json
+// It runs only when someone asks for it. It used to run nightly on a schedule
+// with the baseline defaulting to the candidate model, which billed for a model
+// judged against itself; both of those are now refused.
+//
+//   bun scripts/eval.ts --baseline-model <spec>  # required: A/B needs two models
+//   bun scripts/eval.ts --model <spec> --baseline-model <spec> --out out.json
 //
 // Model resolution reuses the CLI's local resolver, so any provider the CLI can
 // reach works (env keys, ~/.proteus config, or the signed-in Cloudflare proxy).
@@ -27,6 +32,7 @@ import type {
   EvalCase, ExplorationStrategy, StrategyContext, StrategyResult, JudgeFn, Verdict,
 } from '../packages/core/src/index.js';
 import { createConfiguredLocalModelResolver } from '../packages/cli/src/local-model-resolver.js';
+import { createTestRuntime } from '@proteus/test-utils';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const DEFAULT_CORPUS = join(REPO_ROOT, 'tests/eval/corpus/seed.jsonl');
@@ -77,24 +83,56 @@ export function parseArgs(argv: string[]): EvalOptions {
   return opts;
 }
 
-const USAGE = `Proteus quality benchmark
+const USAGE = `Proteus single-shot model A/B
 
-Usage: bun scripts/eval.ts [options]
+Usage: bun scripts/eval.ts --baseline-model <spec> [options]
 
   --corpus <path>          JSONL corpus (default: tests/eval/corpus/seed.jsonl)
   --model <spec>           Candidate model (default: PROTEUS_MODEL / resolver default)
-  --baseline-model <spec>  Baseline model for a genuine A/B (default: same as candidate)
+  --baseline-model <spec>  Baseline model. REQUIRED to differ from the candidate:
+                           a model judged against itself is not an A/B.
   --judge-model <spec>     Judge model (default: candidate model)
-  --min-score <0..1>       Quality floor for the gate (default: ${DEFAULT_QUALITY_THRESHOLD})
+  --min-score <0..1>       Quality floor for the gate (default: ${DEFAULT_QUALITY_THRESHOLD},
+                           uncalibrated — no honest run has set it yet)
   --out <path>             Write the structured JSON report here
   -h, --help               Show this help
 
+Cases tagged tool-use or multi-step are excluded and listed: this strategy is a
+single generateText call, so it cannot perform them.
+
 Exit code: 0 when aggregate >= floor, 1 on regression or misconfiguration.`;
+
+/** Capabilities this benchmark does not have. `pinnedSingleShot` is one
+ *  `generateText` call: no tools, no filesystem, no shell, no second turn. A
+ *  case tagged with either of these asks for something the strategy cannot
+ *  physically do, so scoring it measures the judge's tolerance for an apology
+ *  rather than the model. They are excluded and counted, not silently run. */
+const UNRUNNABLE_TAGS: ReadonlySet<string> = new Set(['tool-use', 'multi-step']);
+
+export interface RunnablePartition {
+  runnable: EvalCase[];
+  excluded: EvalCase[];
+}
+
+export function partitionRunnable(cases: readonly EvalCase[]): RunnablePartition {
+  const runnable: EvalCase[] = [];
+  const excluded: EvalCase[] = [];
+  for (const c of cases) {
+    const blocked = c.tags?.some((tag) => UNRUNNABLE_TAGS.has(tag)) ?? false;
+    (blocked ? excluded : runnable).push(c);
+  }
+  return { runnable, excluded };
+}
 
 /** A single-shot strategy pinned to one resolved model. Single-shot is the
  *  harness's declared baseline and the only strategy that runs without a full
  *  DO runtime — the honest, cheap choice for a standalone benchmark. */
-function pinnedSingleShot(id: string, model: LanguageModel): { strategy: ExplorationStrategy; model: LanguageModel } {
+interface PinnedStrategy {
+  strategy: ExplorationStrategy;
+  model: LanguageModel;
+}
+
+function pinnedSingleShot(id: string, model: LanguageModel): PinnedStrategy {
   const strategy: ExplorationStrategy = {
     id,
     advertised: false,
@@ -146,6 +184,10 @@ export interface BenchmarkDeps {
   meta: { modelA?: string; modelB?: string; corpus?: string; ranAt?: number };
 }
 
+function errorMessage<Failure>(error: Failure): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 /** Run the harness + apply the gate. Pure of model resolution + IO, so tests
  *  drive it with stub strategies + a stub judge (no real LLM). */
 export async function runBenchmark(deps: BenchmarkDeps) {
@@ -173,7 +215,7 @@ async function main(): Promise<void> {
   try {
     cases = parseCorpus(readFileSync(opts.corpus, 'utf8'));
   } catch (err) {
-    console.error(`Failed to load corpus ${opts.corpus}: ${(err as Error).message}`);
+    console.error(`Failed to load corpus ${opts.corpus}: ${errorMessage(err)}`);
     process.exit(1);
   }
 
@@ -184,7 +226,7 @@ async function main(): Promise<void> {
   try {
     resolver = createConfiguredLocalModelResolver({ model: opts.model ?? undefined }).resolver;
   } catch (err) {
-    console.error(`Cannot run the benchmark: ${(err as Error).message}`);
+    console.error(`Cannot run the benchmark: ${errorMessage(err)}`);
     process.exit(1);
   }
 
@@ -192,17 +234,50 @@ async function main(): Promise<void> {
   const baselineSpec = resolver.normalizeSpecSync(opts.baselineModel ?? opts.model);
   const judgeSpec = resolver.normalizeSpecSync(opts.judgeModel ?? opts.model);
 
+  // Without a distinct baseline this is one model answering twice and a judge
+  // picking a winner between its own outputs. The paired quantity the report
+  // leads with (regressionDelta = B − A) is then noise around zero, and the
+  // absolute floor is being applied to a self-assessment. Refuse rather than
+  // bill for it — the default used to be exactly this run.
+  if (baselineSpec === candidateSpec) {
+    console.error(
+      `Refusing to run: baseline and candidate are both ${candidateSpec}.\n`
+      + 'A model judged against itself is not an A/B — pass a different '
+      + '--baseline-model (or set vars.EVAL_BASELINE_MODEL) to compare two models.',
+    );
+    process.exit(1);
+  }
+
+  const { runnable, excluded } = partitionRunnable(cases);
+  if (runnable.length === 0) {
+    console.error(`Refusing to run: all ${cases.length} corpus cases need capabilities this single-shot benchmark does not have.`);
+    process.exit(1);
+  }
+
+  console.error(`Running ${runnable.length} cases · candidate=${candidateSpec} · baseline=${baselineSpec} · judge=${judgeSpec}`);
+  if (excluded.length > 0) {
+    console.error(
+      `Excluded ${excluded.length} case(s) needing tools or multiple turns, which this `
+      + `single-shot strategy has neither of: ${excluded.map((c) => c.id).join(', ')}`,
+    );
+  }
+
   const candidate = pinnedSingleShot('candidate', resolver.resolveModel(candidateSpec));
   const baseline = pinnedSingleShot('baseline', resolver.resolveModel(baselineSpec));
   const judge = makeJudge(resolver.resolveModel(judgeSpec));
-
-  console.error(`Running ${cases.length} cases · candidate=${candidateSpec} · baseline=${baselineSpec} · judge=${judgeSpec}`);
+  const benchmarkRuntime = createTestRuntime().rt;
 
   const { report, gate } = await runBenchmark({
-    cases,
+    cases: runnable,
     strategyA: baseline.strategy,
     strategyB: candidate.strategy,
-    buildContext: (c) => ({ task: c.task, rt: null as never, model: candidate.model, budget: { maxOutputTokens: 2048 } }),
+    buildContext: (c) => ({
+      task: c.task,
+      mode: 'build',
+      rt: benchmarkRuntime,
+      model: candidate.model,
+      budget: { maxOutputTokens: 2048 },
+    }),
     judge,
     threshold: opts.threshold,
     meta: { modelA: baselineSpec, modelB: candidateSpec, corpus: opts.corpus },

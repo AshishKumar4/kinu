@@ -1,9 +1,11 @@
 import * as readline from 'node:readline';
-import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
+import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api.js';
 import { listConfiguredAgentRefs, requireAuthConfig } from '../config.js';
 import { resolveAgentTarget, type AgentTarget } from '../agent-target.js';
 import { createAgentClient, type AgentClientFlags } from '../client-factory.js';
 import type { AgentClient, AgentClientEvent } from '../agent-client.js';
+import { decodeJsonValue, JsonValueSchema, parseJsonObject, type JsonObject, type JsonValue } from '@proteus/core';
+import * as v from 'valibot';
 import type { CliSessionOptions } from '../session.js';
 import { chatCommand } from './chat.js';
 import { ensureLocalDaemonRunning } from './daemon.js';
@@ -216,10 +218,11 @@ async function runOneShot(
 }
 
 function sessionOptions(opts: OneShotSessionFlags): CliSessionOptions {
+  const session = v.safeParse(v.string(), opts.session);
   return {
     continue: opts.continue,
     resume: opts.resume === true,
-    session: typeof opts.session === 'string' ? opts.session : undefined,
+    session: session.success ? session.output : undefined,
     sessionDir: opts.sessionDir,
     noSession: opts.noSession === true || opts.session === false,
     name: opts.name,
@@ -251,40 +254,40 @@ async function runRpc(
   target: AgentTarget,
   opts: AgentClientFlags & OneShotSessionFlags,
 ): Promise<void> {
-  const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  const output = (input: { value: unknown }) => process.stdout.write(`${JSON.stringify(decodeJsonValue(input))}\n`);
   const clientOpts = { model: opts.model, baseUrl: opts.baseUrl, auth: opts.auth, ...sessionOptions(opts) };
 
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
     const client = await createAgentClient(target, clientOpts);
-    output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() });
-    const unsubscribe = client.subscribe((event) => output({ type: 'event', event }));
+    output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'cloud', cwd: process.cwd() } });
+    const unsubscribe = client.subscribe((event) => output({ value: { type: 'event', event } }));
     const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
     try {
       for await (const line of rl) {
         if (!line.trim()) continue;
         const cmd = parseRpc(line);
-        if (!cmd.ok) { output({ type: 'response', success: false, error: cmd.error }); continue; }
+        if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
         if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
         if (cmd.value.type !== 'prompt') {
           try {
             const data = await runCloudRpcCommand(auth.origin, auth.token, target.cloudName, cmd.value);
-            output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data });
+            output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data } });
           } catch (err) {
-            output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) });
+            output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) } });
           }
           continue;
         }
         const message = String(cmd.value.message ?? '').trim();
         if (!message) {
-          output({ id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' });
+          output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
           continue;
         }
-        output({ type: 'turn_start', id: cmd.value.id });
+        output({ value: { type: 'turn_start', id: cmd.value.id } });
         const result = await client.send(message, { cwd: process.cwd() });
-        output({ type: 'message_end', role: 'assistant', text: result.text });
-        output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });
-        output({ type: 'turn_end', steps: result.steps });
+        output({ value: { type: 'message_end', role: 'assistant', text: result.text } });
+        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
+        output({ value: { type: 'turn_end', steps: result.steps } });
       }
     } finally {
       unsubscribe();
@@ -295,8 +298,8 @@ async function runRpc(
 
   ensureLocalDaemonRunning();
   const client = await createAgentClient(target, clientOpts);
-  client.subscribe((event) => output({ type: 'event', event }));
-  output({ type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() });
+  client.subscribe((event) => output({ value: { type: 'event', event } }));
+  output({ value: { type: 'session', id: client.cliSession.id, workspace: target.name, backend: 'local', cwd: process.cwd() } });
   // Defer MCP connection and job recovery until the first prompt.
   let connected = false;
   const ensureConnected = async () => {
@@ -310,33 +313,34 @@ async function runRpc(
     for await (const line of rl) {
       if (!line.trim()) continue;
       const cmd = parseRpc(line);
-      if (!cmd.ok) { output({ type: 'response', success: false, error: cmd.error }); continue; }
+      if (!cmd.ok) { output({ value: { type: 'response', success: false, error: cmd.error } }); continue; }
       if (cmd.value.type === 'exit' || cmd.value.type === 'shutdown') break;
       if (cmd.value.type !== 'prompt') {
         try {
           const data = await runLocalRpcCommand(target.localName, cmd.value, client);
-          output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data });
+          output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: true, data } });
         } catch (err) {
-          output({ id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) });
+          output({ value: { id: cmd.value.id, type: 'response', command: cmd.value.type, success: false, error: err instanceof Error ? err.message : String(err) } });
         }
         continue;
       }
       const message = String(cmd.value.message ?? '').trim();
       if (!message) {
-        output({ id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' });
+        output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: false, error: 'message required' } });
         continue;
       }
       await ensureConnected();
       await client.send(message, { cwd: process.cwd() });
-      output({ id: cmd.value.id, type: 'response', command: 'prompt', success: true });
+      output({ value: { id: cmd.value.id, type: 'response', command: 'prompt', success: true } });
     }
   } finally {
     await client.close().catch(() => {});
   }
 }
 
-async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: Record<string, unknown>): Promise<unknown> {
-  const rpc = (method: string, args: unknown[] = []) => callAgentRpc(origin, token, name, method, args);
+async function runCloudRpcCommand(origin: string, token: string, name: string, cmd: JsonObject): Promise<JsonValue> {
+  const rpc = async (method: string, args: JsonValue[] = []): Promise<JsonValue> =>
+    callAgentRpc(origin, token, name, method, JsonValueSchema, args);
   const type = String(cmd.type);
   switch (type) {
     case 'get_state':
@@ -361,11 +365,14 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
         : { content: await rpc('getMemoryContent') };
     }
     case 'events':
-      return rpc('listRecentEvents', [{
-        variant: stringField(cmd, 'variant'),
-        since: numberField(cmd, 'since'),
-        limit: numberField(cmd, 'limit') ?? 50,
-      }]);
+      {
+        const filter: JsonObject = { limit: numberField(cmd, 'limit') ?? 50 };
+        const variant = stringField(cmd, 'variant');
+        const since = numberField(cmd, 'since');
+        if (variant) filter.variant = variant;
+        if (since !== undefined) filter.since = since;
+        return rpc('listRecentEvents', [filter]);
+      }
     case 'timeline':
       return rpc('getRunTimeline', [{ limit: numberField(cmd, 'limit') ?? 100 }]);
     case 'mcts': {
@@ -394,75 +401,79 @@ async function runCloudRpcCommand(origin: string, token: string, name: string, c
     case 'webhook': {
       const label = stringField(cmd, 'label');
       if (!label) throw new Error('label required');
-      return createCloudWebhookTrigger(origin, token, name, {
+      const input: CloudWebhookTriggerInput = {
         label,
         auth_mode: webhookAuthMode(stringField(cmd, 'authMode') ?? stringField(cmd, 'auth_mode')),
-        ...(stringField(cmd, 'secret') ? { secret: stringField(cmd, 'secret') } : {}),
-        ...(stringField(cmd, 'contentType') ? { accepted_content_type: stringField(cmd, 'contentType') } : {}),
-        ...(numberField(cmd, 'rateLimit') ? { rate_limit_per_min: numberField(cmd, 'rateLimit') } : {}),
-      });
+      };
+      const secret = stringField(cmd, 'secret');
+      const contentType = stringField(cmd, 'contentType');
+      const rateLimit = numberField(cmd, 'rateLimit');
+      if (secret) input.secret = secret;
+      if (contentType) input.accepted_content_type = contentType;
+      if (rateLimit) input.rate_limit_per_min = rateLimit;
+      return decodeJsonValue({ value: await createCloudWebhookTrigger(origin, token, name, input) });
     }
     default:
       throw new Error('Unsupported command');
   }
 }
 
-async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, client: AgentClient): Promise<unknown> {
+async function runLocalRpcCommand(name: string, cmd: JsonObject, client: AgentClient): Promise<JsonValue> {
   const type = String(cmd.type);
   switch (type) {
     case 'get_state':
     case 'state':
-      return {
-        ...(getLocalAgentState(name) as Record<string, unknown>),
+      return decodeJsonValue({ value: {
+        ...getLocalAgentState(name),
         sessionId: client.cliSession.id,
         tools: getLocalToolSurface(name),
         model: await client.getModelSpec(),
-      };
+      } });
     case 'status':
-      return getLocalAgentState(name);
+      return decodeJsonValue({ value: getLocalAgentState(name) });
     case 'tools':
-      return client.describeTools();
+      return decodeJsonValue({ value: await client.describeTools() });
     case 'model': {
       const spec = stringField(cmd, 'spec');
-      return spec ? client.setModel(spec) : { spec: await client.getModelSpec() };
+      return decodeJsonValue({ value: spec ? await client.setModel(spec) : { spec: await client.getModelSpec() } });
     }
     case 'triggers':
-      return listLocalTriggers(name);
+      return decodeJsonValue({ value: listLocalTriggers(name) });
     case 'jobs':
-      return client.listJobs(numberField(cmd, 'limit') ?? 20);
+      return decodeJsonValue({ value: await client.listJobs(numberField(cmd, 'limit') ?? 20) });
     case 'memory': {
       const query = stringField(cmd, 'query');
-      return query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) };
+      return decodeJsonValue({ value: query ? searchLocalMemory(name, query, numberField(cmd, 'limit') ?? 10) : { content: readLocalMemory(name) } });
     }
     case 'events':
-      return listLocalEvents(name, {
+      return decodeJsonValue({ value: listLocalEvents(name, {
         variant: stringField(cmd, 'variant'),
         since: numberField(cmd, 'since'),
         limit: numberField(cmd, 'limit') ?? 50,
-      });
+      }) });
     case 'timeline':
       return listLocalTimeline(name, numberField(cmd, 'limit') ?? 100);
     case 'mcts': {
       const nodeId = stringField(cmd, 'nodeId') ?? stringField(cmd, 'id');
-      return nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name);
+      return decodeJsonValue({ value: nodeId ? getLocalMctsNode(name, nodeId) : listLocalMcts(name) });
     }
     case 'heads':
-      return listLocalHeads(name, numberField(cmd, 'limit') ?? 20);
+      return decodeJsonValue({ value: listLocalHeads(name, numberField(cmd, 'limit') ?? 20) });
     case 'gepa': {
       const runId = stringField(cmd, 'runId') ?? stringField(cmd, 'id');
-      return runId ? getLocalGepaRun(name, runId) : listLocalGepaRuns(name, numberField(cmd, 'limit') ?? 20);
+      return decodeJsonValue({ value: runId ? getLocalGepaRun(name, runId) : listLocalGepaRuns(name, numberField(cmd, 'limit') ?? 20) });
     }
     case 'executors':
-      return listLocalExecutors();
+      return decodeJsonValue({ value: listLocalExecutors() });
     case 'exec': {
       const executor = stringField(cmd, 'executor') ?? stringField(cmd, 'executorId');
       const command = stringField(cmd, 'command');
       if (!executor) throw new Error('executor required');
       if (!command) throw new Error('command required');
-      return executeLocalExecutor(name, executor, command);
+      return decodeJsonValue({ value: await executeLocalExecutor(name, executor, command) });
     }
     case 'product':
-      return getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20);
+      return decodeJsonValue({ value: getLocalReleaseBoard(name, numberField(cmd, 'limit') ?? 20) });
     case 'stop':
       client.stop();
       return { interrupted: true, cancelledBackgroundJobs: markLocalBackgroundJobsCancelled(name) };
@@ -471,18 +482,19 @@ async function runLocalRpcCommand(name: string, cmd: Record<string, unknown>, cl
   }
 }
 
-function stringField(cmd: Record<string, unknown>, key: string): string | undefined {
-  const value = cmd[key];
-  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+function stringField(cmd: JsonObject, key: string): string | undefined {
+  const parsed = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), cmd[key]);
+  return parsed.success ? parsed.output : undefined;
 }
 
-function numberField(cmd: Record<string, unknown>, key: string): number | undefined {
+function numberField(cmd: JsonObject, key: string): number | undefined {
   const value = cmd[key];
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string' && value.trim()) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
-  }
+  const number = v.safeParse(v.pipe(v.number(), v.finite()), value);
+  if (number.success) return number.output;
+  const string = v.safeParse(v.pipe(v.string(), v.trim(), v.nonEmpty()), value);
+  if (!string.success) return undefined;
+  const parsed = Number(string.output);
+  if (Number.isFinite(parsed)) return parsed;
   return undefined;
 }
 
@@ -521,7 +533,7 @@ function renderRunEvent(event: AgentClientEvent): void {
 
 function createJsonEventWriter(client: AgentClient): (event: AgentClientEvent) => void {
   let wroteHeader = false;
-  const output = (value: unknown) => process.stdout.write(`${JSON.stringify(value)}\n`);
+  const output = (value: JsonValue) => process.stdout.write(`${JSON.stringify(value)}\n`);
   return (event) => {
     if (!wroteHeader) {
       wroteHeader = true;
@@ -531,27 +543,32 @@ function createJsonEventWriter(client: AgentClient): (event: AgentClientEvent) =
   };
 }
 
-function jsonEvents(event: AgentClientEvent): unknown[] {
+function jsonEvents(event: AgentClientEvent): JsonValue[] {
   switch (event.type) {
-    case 'turn-start':
-      return [{ type: 'turn_start', kind: event.kind, text: event.text, ...(event.event ? { event: event.event } : {}) }];
+    case 'turn-start': {
+      const value: JsonObject = { type: 'turn_start', kind: event.kind, text: event.text };
+      if (event.event) value.event = event.event;
+      return [value];
+    }
     case 'text-delta':
       return [{ type: 'message_delta', role: 'assistant', delta: event.delta }];
     case 'tool-call':
       return [{ type: 'tool_call', toolName: event.toolName, args: event.args }];
     case 'tool-result':
       return [{ type: 'tool_result', toolName: event.toolName, result: event.result }];
-    case 'turn-end':
+    case 'turn-end': {
+      const turnEnd: JsonObject = {
+        type: 'turn_end',
+        steps: event.turn.steps,
+        durationMs: event.turn.durationMs,
+        hadError: event.turn.hadError,
+      };
+      if (event.turn.usage) turnEnd.usage = decodeJsonValue({ value: event.turn.usage });
       return [
         { type: 'message_end', role: 'assistant', text: event.turn.text },
-        {
-          type: 'turn_end',
-          steps: event.turn.steps,
-          durationMs: event.turn.durationMs,
-          hadError: event.turn.hadError,
-          ...(event.turn.usage ? { usage: event.turn.usage } : {}),
-        },
+        turnEnd,
       ];
+    }
     case 'step-finish':
       return [];
     case 'error':
@@ -559,22 +576,27 @@ function jsonEvents(event: AgentClientEvent): unknown[] {
     case 'evolution':
       return [{ type: 'evolution', event: event.event, message: event.message }];
     case 'broadcast':
-      return [{ type: 'broadcast', event: event.event }];
+      return [{ type: 'broadcast', event: decodeJsonValue({ value: event.event }) }];
     // The durable ledger, verbatim and whole: every RunEvent kind travels
     // under one envelope so a consumer reads `event.type` rather than waiting
     // for this switch to learn about the next kind. Enveloped rather than
     // flattened because the ledger's own `turn_start`/`turn_end`/`error` names
     // collide with the presentation events above.
     case 'run-event':
-      return [{ type: 'run_event', event: event.event }];
+      return [{ type: 'run_event', event: decodeJsonValue({ value: event.event }) }];
   }
 }
 
-function parseRpc(line: string): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+type RpcParseResult = { ok: true; value: JsonObject } | { ok: false; error: string };
+
+const RpcCommandSchema = v.objectWithRest({ type: v.string() }, JsonValueSchema);
+
+function parseRpc(line: string): RpcParseResult {
   try {
-    const value = JSON.parse(line) as unknown;
-    if (!value || typeof value !== 'object' || !('type' in value)) return { ok: false, error: 'Command must be an object with type' };
-    return { ok: true, value: value as Record<string, unknown> };
+    const parsed = v.safeParse(RpcCommandSchema, parseJsonObject(line));
+    return parsed.success
+      ? { ok: true, value: parsed.output }
+      : { ok: false, error: 'Command must be an object with type' };
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) };
   }

@@ -20,12 +20,27 @@ describe("writeExecutorFileOp", () => {
    *  optionally throwing, like an environment that went offline. */
   function makeDeps(opts: { throwOn?: RegExp; error?: string } = {}) {
     const written = new Map<string, Uint8Array | string>();
-    const files = {
+    const files: VFS = {
+      readFile: async (path) => {
+        const data = written.get(path);
+        if (data === undefined) throw new Error(`ENOENT: ${path}`);
+        return data;
+      },
       writeFile: async (path: string, data: Uint8Array | string) => {
         if (opts.throwOn?.test(path)) throw new Error(opts.error ?? "environment unavailable");
         written.set(path, data);
       },
-    } as unknown as VFS;
+      readdir: async () => [],
+      stat: async (path) => {
+        const data = written.get(path);
+        if (data === undefined) return null;
+        const size = data instanceof Uint8Array ? data.length : new TextEncoder().encode(data).length;
+        return { size, mtimeMs: 0, isDir: false };
+      },
+      unlink: async (path) => { written.delete(path); },
+      mkdir: async () => undefined,
+      exists: async (path) => written.has(path),
+    };
     const deps = { getProvider: () => ({ files }) };
     return { deps, written };
   }
@@ -87,7 +102,9 @@ describe("writeExecutorFileOp", () => {
     const { deps, written } = makeDeps();
     const big = new Uint8Array(3 * 1024 * 1024);
     expect(await writeExecutorFileOp(deps, "workspace", "/uploads/big.bin", big)).toEqual({ ok: true });
-    expect((written.get("/uploads/big.bin") as Uint8Array).length).toBe(big.length);
+    const stored = written.get("/uploads/big.bin");
+    if (!(stored instanceof Uint8Array)) throw new Error("binary upload was not stored as bytes");
+    expect(stored.length).toBe(big.length);
   });
 });
 

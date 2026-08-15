@@ -8,6 +8,7 @@ import {
   memorySnippetRehydrator,
   createNoopVectorStore,
   type LexicalHit,
+  type LexicalSearchFn,
   type VectorStore,
   type VectorSearchHit,
 } from '../src/index.js';
@@ -56,8 +57,8 @@ describe('hybridSearch', () => {
   });
 
   test('handles lexical failure gracefully', async () => {
-    const failing = async () => { throw new Error('FTS down'); };
-    const out = await hybridSearch('q', failing as never, vectorStore(semanticCorpus));
+    const failing: LexicalSearchFn = async () => { throw new Error('FTS down'); };
+    const out = await hybridSearch('q', failing, vectorStore(semanticCorpus));
     // semantic-only
     expect(out.length).toBeGreaterThan(0);
     for (const h of out) {

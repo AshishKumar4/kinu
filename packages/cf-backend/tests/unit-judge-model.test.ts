@@ -8,6 +8,7 @@
  */
 
 import { describe, test, expect } from 'bun:test';
+import { DEFAULT_WORKERS_AI_MODEL_SPEC } from '@proteus/core';
 import { userCredentialSource } from './helpers/user-credentials.js';
 import { createMockFetch } from '@proteus/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
@@ -43,7 +44,10 @@ describe('resolveJudgeModelSelection', () => {
       reviewSpec: null,
       chatSpec: null, // unset → the workers-ai default, the shipping configuration
     });
-    expect(selection).toEqual({ spec: KIMI, source: 'same-family-fallback' });
+    expect(selection).toEqual({
+      spec: DEFAULT_WORKERS_AI_MODEL_SPEC,
+      source: 'same-family-fallback',
+    });
   });
 
   test('connecting a second vendor moves judging off the agent\'s own model', async () => {
@@ -61,14 +65,14 @@ describe('resolveJudgeModelSelection', () => {
     const selection = await resolveJudgeModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer'),
       reviewSpec: null,
-      chatSpec: KIMI,
+      chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
     expect(selection.spec).toBe('anthropic/claude-opus-4-7');
 
     const withOpenAI = await resolveJudgeModelSelection({
       registry: registryWith('cloudflare.oauth', 'anthropic.bearer', 'openai.bearer'),
       reviewSpec: null,
-      chatSpec: KIMI,
+      chatSpec: DEFAULT_WORKERS_AI_MODEL_SPEC,
     });
     // Registry preference order: openai is offered before anthropic.
     expect(withOpenAI.spec).toBe('openai/gpt-5.5');
@@ -80,7 +84,9 @@ describe('resolveJudgeModelSelection', () => {
       reviewSpec: null,
       chatSpec: 'openai/gpt-5.5',
     });
-    expect(selection.spec).toBe(KIMI); // workers-ai comes first and is a real cross-vendor jump
+    // Workers AI comes first and its native DeepSeek default is a real
+    // cross-vendor jump from GPT.
+    expect(selection.spec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
     expect(selection.source).toBe('cross-family');
   });
 

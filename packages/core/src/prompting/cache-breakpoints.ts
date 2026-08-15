@@ -54,8 +54,8 @@ export const CACHE_RETENTIONS: readonly CacheRetention[] = ['none', 'short', 'lo
 /** The default every caller gets: cache normally, at the provider's own TTL. */
 export const DEFAULT_CACHE_RETENTION: CacheRetention = 'short';
 
-export function isCacheRetention(value: unknown): value is CacheRetention {
-  return typeof value === 'string' && (CACHE_RETENTIONS as readonly string[]).includes(value);
+export function isCacheRetention(value: string | null): value is CacheRetention {
+  return value === 'none' || value === 'short' || value === 'long';
 }
 
 /** How a provider's prompt cache is addressed. Closed union — every provider
@@ -136,17 +136,24 @@ export function resolvePromptCacheStrategy(
   if (retention === 'none') return { kind: 'none' };
   const long = retention === 'long';
   switch (providerId) {
-    case 'anthropic':
-      return { kind: 'anthropic', ...(long ? { ttl: '1h' as const } : {}) };
+    case 'anthropic': {
+      const strategy: Extract<PromptCacheStrategy, { kind: 'anthropic' }> = { kind: 'anthropic' };
+      if (long) strategy.ttl = '1h';
+      return strategy;
+    }
     case 'openai':
-    case 'codex':
-      return { kind: 'openai-cache-key', ...(long ? { ttl: '24h' as const } : {}) };
+    case 'codex': {
+      const strategy: Extract<PromptCacheStrategy, { kind: 'openai-cache-key' }> = { kind: 'openai-cache-key' };
+      if (long) strategy.ttl = '24h';
+      return strategy;
+    }
     case 'openrouter': {
       const markers = ANTHROPIC_MODEL_ID.test(modelId ?? '');
-      return {
+      const strategy: Extract<PromptCacheStrategy, { kind: 'openai-compat' }> = {
         kind: 'openai-compat', bodyNamespace: 'openrouter', markers,
-        ...(long && markers ? { ttl: '1h' as const } : {}),
       };
+      if (long && markers) strategy.ttl = '1h';
+      return strategy;
     }
     case 'my-gateway':
     case 'ai-gateway':
@@ -180,13 +187,13 @@ export function cacheableSystem(system: string, strategy: PromptCacheStrategy): 
 
 /** Replace a message's providerOptions immutably, preserving its role type. */
 function withProviderOptions(message: ModelMessage, providerOptions: ProviderOptions | undefined): ModelMessage {
-  const next = providerOptions && Object.keys(providerOptions).length > 0 ? providerOptions : undefined;
-  switch (message.role) {
-    case 'system':    return { ...message, providerOptions: next };
-    case 'user':      return { ...message, providerOptions: next };
-    case 'assistant': return { ...message, providerOptions: next };
-    case 'tool':      return { ...message, providerOptions: next };
+  const next = { ...message };
+  if (providerOptions && Object.keys(providerOptions).length > 0) {
+    next.providerOptions = providerOptions;
+  } else {
+    delete next.providerOptions;
   }
+  return next;
 }
 
 /** Strip this module's cache markers from a providerOptions bag, preserving
@@ -260,9 +267,9 @@ function mergeMarker(po: ProviderOptions | undefined, ns: 'anthropic' | 'openaiC
  */
 function withCacheMarker(message: ModelMessage, ns: 'anthropic' | 'openaiCompatible', ttl?: '1h'): ModelMessage {
   if (ns === 'openaiCompatible' && message.role === 'user') {
-    const parts = typeof message.content === 'string'
-      ? [{ type: 'text' as const, text: message.content }]
-      : [...message.content];
+    const parts = Array.isArray(message.content)
+      ? [...message.content]
+      : [{ type: 'text' as const, text: message.content }];
     const last = parts[parts.length - 1];
     if (last !== undefined) {
       parts[parts.length - 1] = { ...last, providerOptions: mergeMarker(last.providerOptions, ns, ttl) };
@@ -315,12 +322,11 @@ export function promptCacheOptions(strategy: PromptCacheStrategy, sessionKey: st
   if (!sessionKey) return undefined;
   switch (strategy.kind) {
     case 'openai-cache-key':
-      return {
-        openai: {
-          promptCacheKey: sessionKey,
-          ...(strategy.ttl ? { promptCacheRetention: strategy.ttl } : {}),
-        },
-      };
+      {
+        const openai: NonNullable<ProviderOptions['openai']> = { promptCacheKey: sessionKey };
+        if (strategy.ttl !== undefined) openai.promptCacheRetention = strategy.ttl;
+        return { openai };
+      }
     case 'openai-compat':
       return { [strategy.bodyNamespace]: { prompt_cache_key: sessionKey } };
     case 'anthropic':
@@ -363,11 +369,13 @@ export interface CacheBreakpointPlan extends PromptCachePlan {
  */
 export function promptCachePlan(input: PromptCachePlanInput): PromptCachePlan {
   const strategy = resolvePromptCacheStrategy(input.providerId, input.modelId, input.retention);
-  return {
+  const plan: PromptCachePlan = {
     strategy,
     system: cacheableSystem(input.system, strategy),
-    providerOptions: promptCacheOptions(strategy, input.sessionKey),
   };
+  const providerOptions = promptCacheOptions(strategy, input.sessionKey);
+  if (providerOptions !== undefined) plan.providerOptions = providerOptions;
+  return plan;
 }
 
 /** {@link promptCachePlan} plus the marked message tail, for a loop that hands
@@ -399,8 +407,10 @@ export function markLastToolForAnthropicCache(
 ): void {
   if (retention === 'none') return;
   const keys = Object.keys(tools);
-  if (keys.length === 0) return;
-  const last = tools[keys[keys.length - 1]] as { providerOptions?: Record<string, unknown> };
+  const key = keys.at(-1);
+  if (key === undefined) return;
+  const last = tools[key];
+  if (last === undefined) return;
   last.providerOptions = {
     ...last.providerOptions,
     anthropic: { cacheControl: ephemeral(retention === 'long' ? '1h' : undefined) },

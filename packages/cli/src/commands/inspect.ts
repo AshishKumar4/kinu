@@ -1,12 +1,14 @@
 import {
-  formatScoreInterval, renderAlignmentConvergence, renderCalibrationReport,
-  type AlignmentConvergence, type GepaOptimizationResult,
+  decodeJsonValue, formatScoreInterval, JsonArraySchema, JsonObjectSchema, JsonValueSchema,
+  renderAlignmentConvergence, renderCalibrationReport,
+  type AlignmentConvergence, type GepaOptimizationResult, type JsonObject, type JsonValue, type SearchNode,
 } from '@proteus/core';
+import * as v from 'valibot';
 import { resolveAgentTarget } from '../agent-target.js';
 import { fetchReport } from './label.js';
 import { runLocalGepa } from '../local-agent-client.js';
 import { requireAuthConfig } from '../config.js';
-import { callAgentRpc, createCloudWebhookTrigger } from '../cloud-api.js';
+import { callAgentRpc, createCloudWebhookTrigger, type CloudWebhookTriggerInput } from '../cloud-api.js';
 import { ACCENT, DIM, ERR, OK, printSearchTree, WARN } from '../display.js';
 import {
   executeLocalExecutor,
@@ -24,7 +26,6 @@ import {
   markLocalBackgroundJobsCancelled,
   readLocalMemory,
   searchLocalMemory,
-  type LocalExecutorInfo,
 } from '../local-inspection.js';
 
 interface InspectOpts {
@@ -42,11 +43,52 @@ interface GepaOpts extends InspectOpts {
   metricCalls?: string;
 }
 
+const ScoreIntervalSchema = v.object({ mean: v.number(), lo: v.number(), hi: v.number(), n: v.number() });
+const GepaOptimizationResultSchema: v.GenericSchema<GepaOptimizationResult> = v.object({
+  ok: v.boolean(), error: v.optional(v.string()), runId: v.optional(v.string()), proposed: v.optional(v.boolean()),
+  pendingVersion: v.optional(v.nullable(v.number())), skipReason: v.optional(v.string()),
+  bestScore: v.optional(ScoreIntervalSchema), seedScore: v.optional(ScoreIntervalSchema), iterations: v.optional(v.number()),
+  selection: v.optional(v.object({ heldOutNegatives: v.number(), guards: v.number() })),
+  selectionWarning: v.optional(v.string()),
+});
+const RateIntervalSchema = v.object({
+  per100: v.number(), lowPer100: v.number(), highPer100: v.number(), reliable: v.boolean(),
+});
+const AlignmentTotalsSchema = v.object({
+  turns: v.number(), negatives: v.number(), abandoned: v.number(), executionGraded: v.number(),
+  rate: RateIntervalSchema, firstAt: v.number(), lastAt: v.number(),
+});
+const AlignmentConvergenceSchema: v.GenericSchema<AlignmentConvergence> = v.object({
+  segments: v.array(v.object({ ...AlignmentTotalsSchema.entries, scaffoldVersion: v.nullable(v.number()) })),
+  overall: AlignmentTotalsSchema,
+  trend: v.picklist(['improving', 'worsening', 'flat', 'insufficient']),
+  deltaPer100: v.nullable(v.number()),
+  comparedVersions: v.nullable(v.object({ from: v.nullable(v.number()), to: v.nullable(v.number()) })),
+  note: v.string(),
+});
+const SearchNodeSchema: v.GenericSchema<SearchNode> = v.object({
+  id: v.string(), parent_id: v.nullable(v.string()), root_id: v.nullable(v.string()),
+  task: v.string(), action: v.string(), observation: v.string(),
+  code_used: v.nullable(v.string()), code_language: v.nullable(v.string()),
+  visits: v.number(), value: v.number(), depth: v.number(),
+  status: v.picklist(['open', 'terminal', 'failed', 'pruned']),
+  msg_id: v.nullable(v.string()), branch_agent_key: v.nullable(v.string()), created_at: v.number(),
+});
+interface ExecutorOutput {
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number;
+  error?: string;
+}
+const ExecutorOutputSchema: v.GenericSchema<ExecutorOutput> = v.object({
+  stdout: v.optional(v.string()), stderr: v.optional(v.string()), exitCode: v.optional(v.number()), error: v.optional(v.string()),
+});
+
 export async function stopCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   if (target.mode === 'cloud') {
     const auth = requireAuthConfig();
-    const result = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelCurrentWork');
+    const result = await callAgentRpc(auth.origin, auth.token, target.cloudName, 'cancelCurrentWork', JsonValueSchema);
     if (opts.json) printJson(result);
     else console.log(`${OK('stopped')} ${target.name}`);
     return;
@@ -68,8 +110,8 @@ export async function stopCommand(name: string, opts: InspectOpts = {}): Promise
 export async function stateCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getWorkspaceSnapshot'),
-    local: () => getLocalAgentState(target.localName),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getWorkspaceSnapshot', JsonValueSchema),
+    local: () => decodeJsonValue({ value: getLocalAgentState(target.localName) }),
   });
   printData(data, opts);
 }
@@ -80,17 +122,18 @@ export async function memoryCommand(name: string, queryParts: string[] = [], opt
   const limit = parseLimit(opts.limit, 10);
   const data = await readTarget(target, {
     cloud: async (auth) => query
-      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'searchMemoryHybrid', [query, limit])
-      : { content: await callAgentRpc<string>(auth.origin, auth.token, target.cloudName, 'getMemoryContent') },
+      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'searchMemoryHybrid', JsonValueSchema, [query, limit])
+      : { content: await callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMemoryContent', v.string()) },
     local: () => query
-      ? searchLocalMemory(target.localName, query, limit)
+      ? decodeJsonValue({ value: searchLocalMemory(target.localName, query, limit) })
       : { content: readLocalMemory(target.localName) },
   });
   if (opts.json || query) {
     printData(data, opts);
     return;
   }
-  const content = typeof data === 'object' && data !== null && 'content' in data ? String(data.content ?? '') : '';
+  const memory = v.safeParse(v.object({ content: v.string() }), data);
+  const content = memory.success ? memory.output.content : '';
   console.log(content || DIM('(memory is empty)'));
 }
 
@@ -98,9 +141,12 @@ export async function eventsCommand(name: string, opts: InspectOpts = {}): Promi
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 50);
   const since = opts.since ? parseTime(opts.since) : undefined;
+  const filter: JsonObject = { limit };
+  if (opts.variant) filter.variant = opts.variant;
+  if (since !== undefined) filter.since = since;
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'listRecentEvents', [{ variant: opts.variant, since, limit }]),
-    local: () => listLocalEvents(target.localName, { variant: opts.variant, since, limit }),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'listRecentEvents', JsonValueSchema, [filter]),
+    local: () => decodeJsonValue({ value: listLocalEvents(target.localName, { variant: opts.variant, since, limit }) }),
   });
   printRows(data, opts, formatEventRow);
 }
@@ -109,7 +155,7 @@ export async function timelineCommand(name: string, opts: InspectOpts = {}): Pro
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 100);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getRunTimeline', [{ limit }]),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getRunTimeline', JsonValueSchema, [{ limit }]),
     local: () => listLocalTimeline(target.localName, limit),
   });
   printRows(data, opts, formatTimelineRow);
@@ -119,12 +165,13 @@ export async function mctsCommand(name: string, nodeId: string | undefined, opts
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
     cloud: (auth) => nodeId
-      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsNodeDetail', [nodeId])
-      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsTree'),
-    local: () => nodeId ? getLocalMctsNode(target.localName, nodeId) : listLocalMcts(target.localName),
+      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsNodeDetail', JsonValueSchema, [nodeId])
+      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getMctsTree', JsonValueSchema),
+    local: () => decodeJsonValue({ value: nodeId ? getLocalMctsNode(target.localName, nodeId) : listLocalMcts(target.localName) }),
   });
-  if (!nodeId && !opts.json && Array.isArray(data)) {
-    printSearchTree(data as Parameters<typeof printSearchTree>[0]);
+  const tree = v.safeParse(v.array(SearchNodeSchema), data);
+  if (!nodeId && !opts.json && tree.success) {
+    printSearchTree(tree.output);
     return;
   }
   printData(data, opts);
@@ -134,8 +181,8 @@ export async function headsCommand(name: string, opts: InspectOpts = {}): Promis
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getHeadRuns', [limit]),
-    local: () => listLocalHeads(target.localName, limit),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getHeadRuns', JsonValueSchema, [limit]),
+    local: () => decodeJsonValue({ value: listLocalHeads(target.localName, limit) }),
   });
   printRows(data, opts, formatHeadRow);
 }
@@ -146,9 +193,9 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
     cloud: (auth) => runId
-      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRun', [runId])
-      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRuns', [limit]),
-    local: () => runId ? getLocalGepaRun(target.localName, runId) : listLocalGepaRuns(target.localName, limit),
+      ? callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRun', JsonValueSchema, [runId])
+      : callAgentRpc(auth.origin, auth.token, target.cloudName, 'getGepaRuns', JsonValueSchema, [limit]),
+    local: () => decodeJsonValue({ value: runId ? getLocalGepaRun(target.localName, runId) : listLocalGepaRuns(target.localName, limit) }),
   });
   printRows(data, opts, formatGepaRow);
 }
@@ -157,16 +204,18 @@ export async function gepaCommand(name: string, runId: string | undefined, opts:
  *  The pass is core's; each backend only supplies the surface it runs on. */
 async function runGepaPass(name: string, opts: GepaOpts): Promise<void> {
   const target = resolveAgentTarget(name);
-  const budget = {
-    ...(opts.iterations ? { maxIterations: Number(opts.iterations) } : {}),
-    ...(opts.evalSize ? { evalSize: Number(opts.evalSize) } : {}),
-    ...(opts.metricCalls ? { maxMetricCalls: Number(opts.metricCalls) } : {}),
-  };
+  const budget: Parameters<typeof runLocalGepa>[1] = {};
+  if (opts.iterations) budget.maxIterations = Number(opts.iterations);
+  if (opts.evalSize) budget.evalSize = Number(opts.evalSize);
+  if (opts.metricCalls) budget.maxMetricCalls = Number(opts.metricCalls);
   const result = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'runScaffoldGepaOptimization', [budget]),
+    cloud: (auth) => callAgentRpc(
+      auth.origin, auth.token, target.cloudName, 'runScaffoldGepaOptimization',
+      GepaOptimizationResultSchema, [decodeJsonValue({ value: budget })],
+    ),
     local: () => runLocalGepa(target.localName, budget),
-  }) as GepaOptimizationResult;
-  if (opts.json) return printJson(result);
+  });
+  if (opts.json) return printJson(decodeJsonValue({ value: result }));
   if (!result.ok) {
     console.log(`${ERR('GEPA did not run')} ${result.error ?? ''}`);
     return;
@@ -196,8 +245,8 @@ export async function executorsCommand(
   }
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getExecutors'),
-    local: () => listLocalExecutors(),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getExecutors', JsonValueSchema),
+    local: () => decodeJsonValue({ value: listLocalExecutors() }),
   });
   printRows(data, opts, formatExecutorRow);
 }
@@ -207,22 +256,17 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
   if (!command) throw new Error('command required');
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'executeInExecutor', [executor, command]),
-    local: () => executeLocalExecutor(target.localName, executor, command),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'executeInExecutor', ExecutorOutputSchema, [executor, command]),
+    local: async () => v.parse(ExecutorOutputSchema, await executeLocalExecutor(target.localName, executor, command)),
   });
   if (opts.json) {
-    printJson(data);
+    printJson(decodeJsonValue({ value: data }));
     return;
   }
-  if (typeof data === 'object' && data !== null && 'stdout' in data) {
-    const result = data as { stdout?: unknown; stderr?: unknown; exitCode?: unknown; error?: unknown };
-    if (result.error) console.log(`${ERR('error')} ${String(result.error)}`);
-    if (result.stdout) process.stdout.write(String(result.stdout));
-    if (result.stderr) process.stderr.write(String(result.stderr));
-    if (typeof result.exitCode === 'number' && result.exitCode !== 0) process.exitCode = result.exitCode;
-    return;
-  }
-  printData(data, opts);
+  if (data.error) console.log(`${ERR('error')} ${data.error}`);
+  if (data.stdout) process.stdout.write(data.stdout);
+  if (data.stderr) process.stderr.write(data.stderr);
+  if (data.exitCode !== undefined && data.exitCode !== 0) process.exitCode = data.exitCode;
 }
 
 /** K_align — how often the user had to correct this agent, per 100 graded
@@ -235,15 +279,15 @@ async function runExecutorCommand(name: string, executor: string, commandParts: 
 export async function alignmentCommand(name: string, opts: InspectOpts = {}): Promise<void> {
   const target = resolveAgentTarget(name);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAlignmentConvergence'),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getAlignmentConvergence', AlignmentConvergenceSchema),
     local: () => getLocalAlignment(target.localName),
   });
   const calibration = await fetchReport(target);
   if (opts.json) {
-    printJson({ alignment: data, calibration });
+    printJson(decodeJsonValue({ value: { alignment: data, calibration } }));
     return;
   }
-  console.log(renderAlignmentConvergence(data as AlignmentConvergence));
+  console.log(renderAlignmentConvergence(data));
   console.log('');
   console.log(renderCalibrationReport(calibration));
 }
@@ -252,8 +296,8 @@ export async function releaseCommand(name: string, opts: InspectOpts = {}): Prom
   const target = resolveAgentTarget(name);
   const limit = parseLimit(opts.limit, 20);
   const data = await readTarget(target, {
-    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReleaseBoard', [limit]),
-    local: () => getLocalReleaseBoard(target.localName, limit),
+    cloud: (auth) => callAgentRpc(auth.origin, auth.token, target.cloudName, 'getReleaseBoard', JsonValueSchema, [limit]),
+    local: () => decodeJsonValue({ value: getLocalReleaseBoard(target.localName, limit) }),
   });
   printData(data, opts);
 }
@@ -269,20 +313,21 @@ export async function webhookCommand(name: string, label: string | undefined, op
   if (target.mode !== 'cloud') throw new Error('Webhook triggers require a cloud workspace.');
   const auth = requireAuthConfig();
   const authMode = normalizeWebhookAuthMode(opts.authMode);
-  const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, {
+  const input: CloudWebhookTriggerInput = {
     label,
     auth_mode: authMode,
-    ...(opts.secret ? { secret: opts.secret } : {}),
-    ...(opts.contentType ? { accepted_content_type: opts.contentType } : {}),
-    ...(opts.rateLimit ? { rate_limit_per_min: parsePositiveInt(opts.rateLimit, 'rate limit') } : {}),
-  });
-  printData(created, opts);
+  };
+  if (opts.secret) input.secret = opts.secret;
+  if (opts.contentType) input.accepted_content_type = opts.contentType;
+  if (opts.rateLimit) input.rate_limit_per_min = parsePositiveInt(opts.rateLimit, 'rate limit');
+  const created = await createCloudWebhookTrigger(auth.origin, auth.token, target.cloudName, input);
+  printData(decodeJsonValue({ value: created }), opts);
 }
 
-async function readTarget(target: { mode: 'cloud' | 'local' }, fns: {
-  cloud(auth: { origin: string; token: string }): Promise<unknown> | unknown;
-  local(): Promise<unknown> | unknown;
-}): Promise<unknown> {
+async function readTarget<T>(target: { mode: 'cloud' | 'local' }, fns: {
+  cloud(auth: { origin: string; token: string }): Promise<T> | T;
+  local(): Promise<T> | T;
+}): Promise<T> {
   if (target.mode === 'cloud') return fns.cloud(requireAuthConfig());
   return fns.local();
 }
@@ -311,64 +356,68 @@ function normalizeWebhookAuthMode(value: string | undefined): 'hmac' | 'bearer' 
   throw new Error('--auth-mode must be hmac, bearer, or mtls');
 }
 
-function printData(data: unknown, opts: InspectOpts): void {
+function printData(data: JsonValue, opts: InspectOpts): void {
   if (opts.json) printJson(data);
   else printPretty(data);
 }
 
-function printRows(data: unknown, opts: InspectOpts, format: (item: unknown) => string): void {
-  if (opts.json || !Array.isArray(data)) {
+function printRows(data: JsonValue, opts: InspectOpts, format: (item: JsonValue) => string): void {
+  const rows = v.safeParse(JsonArraySchema, data);
+  if (opts.json || !rows.success) {
     printData(data, opts);
     return;
   }
-  if (data.length === 0) {
+  if (rows.output.length === 0) {
     console.log(DIM('No records.'));
     return;
   }
-  for (const item of data) console.log(format(item));
+  for (const item of rows.output) console.log(format(item));
 }
 
-function printJson(data: unknown): void {
+function printJson(data: JsonValue): void {
   console.log(JSON.stringify(data, null, 2));
 }
 
-function printPretty(data: unknown): void {
-  if (typeof data === 'string') console.log(data);
+function printPretty(data: JsonValue): void {
+  const text = v.safeParse(v.string(), data);
+  if (text.success) console.log(text.output);
   else console.log(JSON.stringify(data, null, 2));
 }
 
-function formatEventRow(item: unknown): string {
-  const row = asRecord(item);
+function formatEventRow(item: JsonValue): string {
+  const row = asRecord({ value: item });
   return `${ACCENT(String(row.id ?? 'event'))} ${String(row.variant ?? '')} ${DIM(String(row.ingress ?? ''))} ${formatDate(row.received_at ?? row.receivedAt)}`;
 }
 
-function formatTimelineRow(item: unknown): string {
-  const row = asRecord(item);
+function formatTimelineRow(item: JsonValue): string {
+  const row = asRecord({ value: item });
   const label = row.label ?? row.message ?? row.kind ?? row.id ?? 'entry';
   return `${formatDate(row.ts ?? row.received_at ?? row.created_at)} ${ACCENT(String(row.kind ?? row.type ?? 'event'))} ${DIM(String(label).slice(0, 120))}`;
 }
 
-function formatHeadRow(item: unknown): string {
-  const row = asRecord(item);
+function formatHeadRow(item: JsonValue): string {
+  const row = asRecord({ value: item });
   return `${ACCENT(String(row.rootId ?? row.id ?? 'head'))} ${String(row.status ?? '')} ${DIM(String(row.task ?? row.rationale ?? '').slice(0, 100))}`;
 }
 
-function formatGepaRow(item: unknown): string {
-  const row = asRecord(item);
+function formatGepaRow(item: JsonValue): string {
+  const row = asRecord({ value: item });
   return `${ACCENT(String(row.runId ?? row.id ?? 'gepa'))} ${String(row.status ?? '')} ${DIM(String(row.target ?? row.stopReason ?? '').slice(0, 100))}`;
 }
 
-function formatExecutorRow(item: unknown): string {
-  const row = asRecord(item) as Partial<LocalExecutorInfo> & Record<string, unknown>;
-  const caps = Array.isArray(row.capabilities) ? row.capabilities.join(', ') : '';
+function formatExecutorRow(item: JsonValue): string {
+  const row = asRecord({ value: item });
+  const capabilities = v.safeParse(v.array(v.string()), row.capabilities);
+  const caps = capabilities.success ? capabilities.output.join(', ') : '';
   return `${ACCENT(String(row.name ?? row.id ?? 'executor'))} ${DIM(String(row.kind ?? ''))} ${String(row.status ?? '')} ${DIM(caps)}`;
 }
 
-function asRecord(value: unknown): Record<string, unknown> {
-  return typeof value === 'object' && value !== null ? value as Record<string, unknown> : {};
+function asRecord(input: { value: JsonValue }): JsonObject {
+  const parsed = v.safeParse(JsonObjectSchema, input.value);
+  return parsed.success ? parsed.output : {};
 }
 
-function formatDate(value: unknown): string {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return DIM('');
-  return DIM(new Date(value).toLocaleString());
+function formatDate(value: JsonValue | undefined): string {
+  const parsed = v.safeParse(v.pipe(v.number(), v.finite()), value);
+  return parsed.success ? DIM(new Date(parsed.output).toLocaleString()) : DIM('');
 }

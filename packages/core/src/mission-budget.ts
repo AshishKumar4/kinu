@@ -42,9 +42,11 @@
  * `context_budget`). The agent can then report, ask the owner, or conclude.
  */
 
+import * as v from 'valibot';
 import type { LLM, RawSqlExec, SqlExecutor } from './types/primitives.js';
 import { BLENDED_USD_PER_1K_TOKENS, estimateTokens, estimateUsdCost } from './llm.js';
 import type { ModelPricing } from './providers/types.js';
+import type { JsonValue } from './utils/json.js';
 
 /** A cap on a label. Either dimension may be omitted; a label with neither is a
  *  pure accounting scope (it meters, it never refuses). */
@@ -79,11 +81,12 @@ interface ProviderUsageReport {
 export function missionCallUsage(usage: ProviderUsageReport | undefined): MissionCallUsage | undefined {
   if (!usage) return undefined;
   const cached = usage.cachedInputTokens ?? 0;
-  return {
+  const result: MissionCallUsage = {
     input: usage.inputTokens ?? 0,
     output: usage.outputTokens ?? 0,
-    ...(cached > 0 ? { cached } : {}),
   };
+  if (cached > 0) result.cached = cached;
+  return result;
 }
 
 /** Where a label's USD figure came from. */
@@ -216,7 +219,7 @@ export class MissionBudgetLedger {
     const existing = this.get(label);
     if (existing) return existing;
     const effectiveParent = parent !== null && parent !== label && this.get(parent) !== null ? parent : null;
-    this.sql`INSERT INTO mission_budget
+    void this.sql`INSERT INTO mission_budget
         (label, parent_label, limit_usd, limit_tokens, spent_tokens, spent_usd, blended_tokens, calls, spawns, created_at, exhausted_at)
       VALUES (${label}, ${effectiveParent}, ${limits.usd ?? null}, ${limits.tokens ?? null}, 0, 0, 0, 0, 0, ${now}, NULL)`;
     return this.get(label)!;
@@ -264,7 +267,7 @@ export class MissionBudgetLedger {
   /** Add spend to a label AND every ancestor — the transitive debit. */
   debit(label: string, delta: MissionDebit): void {
     for (const row of this.chain(label)) {
-      this.sql`UPDATE mission_budget
+      void this.sql`UPDATE mission_budget
         SET spent_tokens = spent_tokens + ${delta.tokens},
             spent_usd = spent_usd + ${delta.usd},
             blended_tokens = blended_tokens + ${delta.blendedTokens},
@@ -276,7 +279,7 @@ export class MissionBudgetLedger {
 
   /** Stamp the moment a label first ran out, so the run event fires once. */
   markExhausted(label: string, now: number): void {
-    this.sql`UPDATE mission_budget SET exhausted_at = ${now}
+    void this.sql`UPDATE mission_budget SET exhausted_at = ${now}
              WHERE label = ${label} AND exhausted_at IS NULL`;
   }
 }
@@ -295,18 +298,18 @@ function provenanceOf(row: MissionRow): MissionSpendProvenance {
 }
 
 function toSnapshot(row: MissionRow): MissionBudgetSnapshot {
+  const limits: MissionBudgetLimits = {};
+  if (row.limitUsd !== null) limits.usd = row.limitUsd;
+  if (row.limitTokens !== null) limits.tokens = row.limitTokens;
+  const remaining: MissionBudgetSnapshot['remaining'] = {};
+  if (row.limitTokens !== null) remaining.tokens = Math.max(0, row.limitTokens - row.tokens);
+  if (row.limitUsd !== null) remaining.usd = Math.max(0, row.limitUsd - row.usd);
   return {
     label: row.label,
     parent: row.parent,
-    limits: {
-      ...(row.limitUsd !== null ? { usd: row.limitUsd } : {}),
-      ...(row.limitTokens !== null ? { tokens: row.limitTokens } : {}),
-    },
+    limits,
     spent: { tokens: row.tokens, usd: row.usd },
-    remaining: {
-      ...(row.limitTokens !== null ? { tokens: Math.max(0, row.limitTokens - row.tokens) } : {}),
-      ...(row.limitUsd !== null ? { usd: Math.max(0, row.limitUsd - row.usd) } : {}),
-    },
+    remaining,
     pricing: provenanceOf(row),
     calls: row.calls,
     spawns: row.spawns,
@@ -563,24 +566,29 @@ export function localMissionScope(
  */
 export const MISSION_LABELS_METADATA_KEY = 'missionLabels';
 
+const MissionLabelsMetadataSchema = v.object({
+  [MISSION_LABELS_METADATA_KEY]: v.optional(v.array(v.pipe(v.string(), v.nonEmpty()))),
+});
+
 /** Mission labels off a turn's metadata bag. Anything malformed reads as
  *  unscoped: a turn must never inherit a budget it cannot name properly. */
-export function readMissionLabels(metadata: unknown): string[] {
-  if (typeof metadata !== 'object' || metadata === null) return [];
-  const raw = (metadata as Record<string, unknown>)[MISSION_LABELS_METADATA_KEY];
-  if (!Array.isArray(raw)) return [];
-  return raw.filter((l): l is string => typeof l === 'string' && l.length > 0);
+export function readMissionLabels<Metadata>(metadata: Metadata): string[] {
+  const parsed = v.safeParse(MissionLabelsMetadataSchema, metadata);
+  return parsed.success ? parsed.output[MISSION_LABELS_METADATA_KEY] ?? [] : [];
 }
 
 /** Read `budget_usd` / `budget_tokens` off an untyped tool input. Returns null
  *  when neither is a usable positive number — the uncapped default. */
 export function readMissionLimits(input: {
-  budget_usd?: unknown; budget_tokens?: unknown;
+  budget_usd?: JsonValue;
+  budget_tokens?: JsonValue;
 }): MissionBudgetLimits | null {
-  const usd = typeof input.budget_usd === 'number' && Number.isFinite(input.budget_usd) && input.budget_usd > 0
-    ? input.budget_usd : undefined;
-  const tokens = typeof input.budget_tokens === 'number' && Number.isFinite(input.budget_tokens) && input.budget_tokens > 0
-    ? Math.floor(input.budget_tokens) : undefined;
+  const parsedUsd = v.safeParse(v.number(), input.budget_usd);
+  const parsedTokens = v.safeParse(v.number(), input.budget_tokens);
+  const usd = parsedUsd.success && Number.isFinite(parsedUsd.output) && parsedUsd.output > 0
+    ? parsedUsd.output : undefined;
+  const tokens = parsedTokens.success && Number.isFinite(parsedTokens.output) && parsedTokens.output > 0
+    ? Math.floor(parsedTokens.output) : undefined;
   if (usd === undefined && tokens === undefined) return null;
-  return { ...(usd !== undefined ? { usd } : {}), ...(tokens !== undefined ? { tokens } : {}) };
+  return { usd, tokens };
 }

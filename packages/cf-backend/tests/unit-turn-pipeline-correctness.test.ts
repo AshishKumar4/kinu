@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { memberBody } from '@proteus/test-utils';
+import { orchestratorHarness } from './helpers/actor-harness.ts';
 
 // The turn pipeline is split across the actor substrate (actor-agent.ts —
 // beforeTurn assembly, the BackendHost, the event-injection machinery) and
@@ -14,6 +16,26 @@ const generateJson = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src
 const takePick = readFileSync(join(import.meta.dir, '..', '..', 'core', 'src', 'read-models', 'evolution-views.ts'), 'utf8');
 
 describe('turn-pipeline correctness wiring', () => {
+  test('the actor prompt contains its loaded SOUL on both prompt-build paths', () => {
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    agent.setObservedSoul('You are Atlas. Preserve the owner\'s exact requirements.');
+
+    const prompt = agent.getSystemPrompt();
+
+    expect(prompt).toContain('You are Atlas. Preserve the owner\'s exact requirements.');
+    const base = actor.slice(
+      actor.indexOf('base = buildSystemPromptSync(this.rt, {'),
+      actor.indexOf('this._cachedSystemPrompt = base;'),
+    );
+    const perTurn = actor.slice(
+      actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
+      actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
+    );
+    expect(base).toContain('soulOverride: this.getSoulText()');
+    expect(perTurn).toContain('soulOverride: this.getSoulText()');
+  });
+
   test('client RPC policy runs before SDK dispatch and defaults to allow', () => {
     const constructor = actor.slice(
       actor.indexOf('constructor(ctx: AgentContext, env: Env)'),
@@ -34,7 +56,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(headRuntime).toContain('sharedParent: parentWorkspaceName');
     expect(headRuntime).not.toContain('sharedParent: orchestrator.name');
     // A recursive split re-uses the ROOT it was given, never its own facet name.
-    expect(exploration).toContain('sharedParent: facet.getSharedParent()');
+    expect(exploration).toContain('sharedParent: this.getSharedParent()');
     // The spawn seam is what turns that into the child facet's persisted parent.
     expect(facetSpawn).toContain('await stub.setSharedParent(identity.sharedParent)');
   });
@@ -44,7 +66,7 @@ describe('turn-pipeline correctness wiring', () => {
     // newest lessons in-turn. The tail is the ONE dynamic-context input behind
     // an await, so it is sourced once at turn assembly and closed over by the
     // per-step snapshot — never rendered into the cacheable prefix.
-    const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages({');
+    const assembleIdx = actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)');
     const sourceIdx = actor.indexOf('this._turnMemoryTail = await readMemoryTail(this.rt.memory)');
     expect(assembleIdx).toBeGreaterThan(-1);
     expect(sourceIdx).toBeGreaterThan(-1);
@@ -74,8 +96,8 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeStep).toContain('composePrepareStep({');
     expect(beforeStep).toContain('dynamic: { ledger: this.dynamicLedger, snapshot: () => this.dynamicContextSnapshot() }');
     const assembleArgs = actor.slice(
-      actor.indexOf('cfg.messages = await assembleTurnMessages({'),
-      actor.indexOf('});', actor.indexOf('cfg.messages = await assembleTurnMessages({')),
+      actor.indexOf('const assembly: Parameters<typeof assembleTurnMessages>[0] = {'),
+      actor.indexOf('cfg.messages = await assembleTurnMessages(assembly)'),
     );
     expect(assembleArgs).not.toContain('ledger:');
   });
@@ -90,7 +112,7 @@ describe('turn-pipeline correctness wiring', () => {
     expect(beforeTurn).toContain('reasoningEffortOptions');
     expect(beforeTurn).toContain('mergeProviderOptions(cacheOptions, reasoningOptions)');
     expect(beforeTurn).toContain('cfg.providerOptions = providerOptions');
-    expect(beforeTurn).toContain('...(providerOptions ? { providerOptions } : {})');
+    expect(beforeTurn).toContain('lastTurnOpts.providerOptions = providerOptions');
   });
 
   test('provider-agnostic auxiliary calls use low effort without implicit output caps', () => {
@@ -213,7 +235,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('activation runs one stale-delivery sweep and schedules the standard drain when it recovers rows', () => {
-    const onStart = source.slice(source.indexOf('async onStart()'), source.indexOf('// ── DO alarm'));
+    const onStart = memberBody(source, 'async onStart()', 'orchestrator.ts');
     expect(onStart).toContain('this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS)');
     expect(onStart).toContain('this.orch.scheduleDrain()');
   });
@@ -228,7 +250,7 @@ describe('turn-pipeline correctness wiring', () => {
       actor.indexOf('async beforeTurn(ctx: TurnContext)'),
       actor.indexOf('beforeStep(ctx: PrepareStepContext)'),
     );
-    const assemble = beforeTurn.indexOf('cfg.messages = await assembleTurnMessages({');
+    const assemble = beforeTurn.indexOf('const assembly: Parameters<typeof assembleTurnMessages>[0] = {');
     expect(assemble).toBeGreaterThan(-1);
     const args = beforeTurn.slice(assemble);
     expect(args).toContain('history: rawMessages');
@@ -264,14 +286,19 @@ describe('turn-pipeline correctness wiring', () => {
   test("the per-turn system prompt carries the turn's mode overlay", () => {
     // The CLI derived a PromptMode from metadata.proteusEvent; cf passed none,
     // so a hosted agent resumed to collect a background job never saw the
-    // background-resume guidance. Both now share core's promptModeForTurnEvent.
+    // background-resume guidance, plus explicit user-selected Plan/Build mode.
+    // Both now share core's promptModeForTurnMetadata.
     const beforeTurn = actor.slice(
-      actor.indexOf('const systemOverride = buildSystemPromptSync(this.rt, {'),
+      actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
       actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
     );
-    expect(beforeTurn).toContain(
-      'mode: promptModeForTurnEvent(this.turnUserMessageEvent(this._activeProgrammaticUserMessage))',
+    expect(beforeTurn).toContain('mode: promptMode');
+    const turnMode = actor.slice(
+      actor.indexOf('protected turnPromptMode(): PromptMode'),
+      actor.indexOf('/** What this turn was started BY:'),
     );
+    expect(turnMode).toContain('promptModeForTurnMetadata(metadata)');
+    expect(turnMode).toContain('this._activeProgrammaticUserMessage\n      ? this._activeProgrammaticUserMessage.metadata');
   });
 
   test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {
@@ -299,12 +326,17 @@ describe('turn-pipeline correctness wiring', () => {
     // dispatched — for EVERY actor, not just the orchestrator.
     const spine = actor.slice(
       actor.indexOf('protected settleCompletedTurn('),
-      actor.indexOf('protected async runShadowEvalSampled'),
+      actor.indexOf('protected get scaffoldControl()'),
     );
     const recordTurn = spine.indexOf('this.orch.recordTurn(turn, this._turnContinuity);');
     const settleCall = spine.indexOf('this.settleEvolutionInBackground();');
     expect(recordTurn).toBeGreaterThan(-1);
     expect(settleCall).toBeGreaterThan(recordTurn);
+    // The promotion gate's trial is queued THROUGH the engine, which holds the
+    // one auto-evolution gate. Calling core's queueTurnShadowTrial from here
+    // instead is how a `--no-auto-evolve` run came to leave trial rows behind.
+    expect(spine).toContain('this.engine.queueShadowTrial(turn,');
+    expect(spine).not.toContain('queueTurnShadowTrial(');
   });
 
   test('pickAlternateTake returns false unless the awaited delivery actually landed', () => {

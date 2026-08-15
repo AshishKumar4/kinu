@@ -9,10 +9,17 @@ import { isParseFailure } from '../src/mcts/evaluation.ts';
 import { createScriptedLLM, createJSONLLM } from '@proteus/test-utils';
 import type { Executor, LLM } from '../src/index.ts';
 
-function exec(verdict: { error?: string } = {}): Executor {
+function exec(verdict: { error?: string } = {}, languages: readonly [string, ...string[]] = ['javascript']): Executor {
   return {
+    languages,
     async execute() { return { result: undefined, ...verdict }; },
-  } as unknown as Executor;
+  };
+}
+
+/** A branch answer: prose with its implementation fenced, the way a branch
+ *  actually replies — the evaluator reads the code back out of it. */
+function withCode(prose: string, code: string, language = 'js'): string {
+  return `${prose}\n\`\`\`${language}\n${code}\n\`\`\``;
 }
 
 /** Judge that always returns the same JSON score and counts/records calls. */
@@ -30,16 +37,14 @@ describe('execution grounding dominates', () => {
     const judge = createJSONLLM({ score: 1.0, rationale: 'looks perfect' });
     const failing = await evaluateWithMultiModelJudging({
       task: 'compute 42',
-      trajectory: 'flawless prose',
-      codeUsed: 'throw new Error("boom")',
+      trajectory: withCode('flawless prose', 'throw new Error("boom")'),
       executor: exec({ error: 'boom' }),
       judge,
       explorer: judge,
     });
     const passing = await evaluateWithMultiModelJudging({
       task: 'compute 42',
-      trajectory: 'modest prose',
-      codeUsed: 'const x = 42;',
+      trajectory: withCode('modest prose', 'const x = 42;'),
       executor: exec(),
       judge,
       explorer: judge,
@@ -52,7 +57,7 @@ describe('execution grounding dominates', () => {
     expect(failing.score).toBeLessThan(passing.score);
   });
 
-  test('code is extracted from the trajectory fence when codeUsed is absent', async () => {
+  test('code is read back out of the trajectory fence', async () => {
     const judge = createJSONLLM({ score: 0.5 });
     const result = await evaluateWithMultiModelJudging({
       task: 'sum a list',
@@ -69,9 +74,8 @@ describe('execution grounding dominates', () => {
     const judge = createJSONLLM({ score: 0.9 });
     const result = await evaluateWithMultiModelJudging({
       task: 'do it',
-      trajectory: 'prose',
-      codeUsed: 'const a = 1;',
-      executor: { async execute() { throw new Error('LOADER down'); } } as unknown as Executor,
+      trajectory: withCode('prose', 'const a = 1;'),
+      executor: { languages: ['javascript'], async execute() { throw new Error('LOADER down'); } },
       judge,
       explorer: judge,
     });
@@ -83,8 +87,9 @@ describe('execution grounding dominates', () => {
   test('judge-generated assertions are appended to the run', async () => {
     const executed: string[] = [];
     const executor: Executor = {
+      languages: ['javascript'],
       async execute(code: string) { executed.push(code); return { result: undefined }; },
-    } as unknown as Executor;
+    };
     // 1st call = assertion generation, then 3 judge samples.
     const judge = createScriptedLLM([
       '```js\nif (add(1, 2) !== 3) throw new Error("add broken");\n```',
@@ -92,8 +97,7 @@ describe('execution grounding dominates', () => {
     ]);
     await evaluateWithMultiModelJudging({
       task: 'verify add works',
-      trajectory: 'use add',
-      codeUsed: 'function add(a, b) { return a + b; }',
+      trajectory: withCode('use add', 'function add(a, b) { return a + b; }'),
       executor,
       judge,
       explorer: judge,
@@ -106,13 +110,13 @@ describe('execution grounding dominates', () => {
   test('UNVERIFIABLE assertion reply falls back to a bare run', async () => {
     const executed: string[] = [];
     const executor: Executor = {
+      languages: ['javascript'],
       async execute(code: string) { executed.push(code); return { result: undefined }; },
-    } as unknown as Executor;
+    };
     const judge = createScriptedLLM(['UNVERIFIABLE', '{"score": 0.5}', '{"score": 0.5}', '{"score": 0.5}']);
     const result = await evaluateWithMultiModelJudging({
       task: 'side-effecting setup',
-      trajectory: 'prose',
-      codeUsed: 'const ready = true;',
+      trajectory: withCode('prose', 'const ready = true;'),
       executor,
       judge,
       explorer: judge,
@@ -173,7 +177,7 @@ describe('judge ensemble — median, parse-failure-robust', () => {
   test('ALL samples failing on a passing-code branch → band floor, still above any failing branch', async () => {
     const judge = createScriptedLLM(['nope', 'nope', 'nope', 'nope']);
     const result = await evaluateWithMultiModelJudging({
-      task: 'do it', trajectory: 'prose', codeUsed: 'const ok = 1;',
+      task: 'do it', trajectory: withCode('prose', 'const ok = 1;'),
       executor: exec(), judge, explorer: judge,
     });
     expect(result.score).toBe(0.6);
@@ -231,7 +235,7 @@ describe('band loophole (WP-A5): prose cannot beat failed-but-attempted code', (
   test('a failed-code branch is never beaten by a prose sibling in the same expansion', async () => {
     const judge = createJSONLLM({ score: 1.0 });
     const failedCode = await evaluateWithMultiModelJudging({
-      task: 'compute 42', trajectory: 'prose', codeUsed: 'throw new Error("boom")',
+      task: 'compute 42', trajectory: withCode('prose', 'throw new Error("boom")'),
       siblings: ['some prose sibling'], siblingsProducedCode: false,
       executor: exec({ error: 'boom' }), judge, explorer: judge,
     });
@@ -258,8 +262,7 @@ describe('judge prompt content', () => {
     const judge = countingJudge('{"score": 0.5}');
     await evaluateWithMultiModelJudging({
       task: 'build the parser',
-      trajectory: 'candidate approach text',
-      codeUsed: 'throw new Error("parse fail")',
+      trajectory: withCode('candidate approach text', 'throw new Error("parse fail")'),
       siblings: ['sibling approach one', 'sibling approach two'],
       executor: exec({ error: 'parse fail' }),
       judge,
@@ -267,7 +270,7 @@ describe('judge prompt content', () => {
       judgeSamples: 1,
       maxLLMCalls: 1, // no assertion call → prompts[0] is the judge prompt
     });
-    const prompt = judge.prompts[0]!;
+    const prompt = judge.prompts[0] ?? '';
     expect(prompt).toContain('build the parser');
     expect(prompt).toContain('candidate approach text');
     expect(prompt).toContain('sibling approach one');
@@ -290,7 +293,7 @@ describe('budget knobs', () => {
   test('maxLLMCalls caps total spend: assertion call + judge samples', async () => {
     const judge = countingJudge('{"score": 0.5}');
     await evaluateWithMultiModelJudging({
-      task: 'analyze', trajectory: 'x', codeUsed: 'const a = 1;',
+      task: 'analyze', trajectory: withCode('x', 'const a = 1;'),
       executor: exec(), judge, explorer: judge,
       judgeSamples: 3, maxLLMCalls: 2,
     });
@@ -302,7 +305,7 @@ describe('budget knobs', () => {
   test('maxLLMCalls=1 on a code branch skips assertions, keeps one judge sample', async () => {
     const judge = countingJudge('{"score": 0.5}');
     const result = await evaluateWithMultiModelJudging({
-      task: 'analyze', trajectory: 'x', codeUsed: 'const a = 1;',
+      task: 'analyze', trajectory: withCode('x', 'const a = 1;'),
       executor: exec(), judge, explorer: judge, maxLLMCalls: 1,
     });
     expect(judge.prompts).toHaveLength(1);
@@ -321,7 +324,60 @@ describe('degenerate inputs', () => {
     expect(judge.prompts).toHaveLength(0);
   });
 
-  test('non-JS code fences stay judge-only (executors are JS sandboxes)', async () => {
+});
+
+describe('grounding follows the executor, not a hardcoded language', () => {
+  test('a Python candidate is EXECUTED when the executor declares python', async () => {
+    const judge = createJSONLLM({ score: 0.5 });
+    const ran: Array<{ code: string; language?: string }> = [];
+    const python: Executor = {
+      languages: ['python'],
+      async execute(code, _providers, opts) {
+        ran.push({ code, language: opts?.language });
+        return code.includes('BROKEN') ? { result: undefined, error: 'boom' } : { result: undefined };
+      },
+    };
+
+    const good = await evaluateWithMultiModelJudging({
+      task: 'sum a list', trajectory: '```python\ndef total(xs): return sum(xs)\n```',
+      executor: python, judge, explorer: judge,
+    });
+    const bad = await evaluateWithMultiModelJudging({
+      task: 'sum a list', trajectory: '```py\nBROKEN\n```',
+      executor: python, judge, explorer: judge,
+    });
+
+    expect(good.grounding).toBe('execution');
+    expect(good.execution?.passed).toBe(true);
+    expect(good.score).toBeGreaterThanOrEqual(0.6);
+    expect(bad.execution?.passed).toBe(false);
+    expect(bad.score).toBeLessThanOrEqual(0.3);
+    // The executor was told which language to run it as — the seam carries it.
+    expect(ran.every((r) => r.language === 'python')).toBe(true);
+  });
+
+  test('differing candidates do not collapse onto one judge-only value', async () => {
+    // The exact production failure: a saturated judge plus no execution
+    // grounding gave every branch the identical prose-band number, so UCT had
+    // nothing to rank on. With the executor able to run them, they separate.
+    const judge = createJSONLLM({ score: 1.0 });
+    const python = exec({}, ['python']);
+    const failing = exec({ error: 'AssertionError' }, ['python']);
+    const scores = [
+      (await evaluateWithMultiModelJudging({
+        task: 't', trajectory: '```python\nok = 1\n```', executor: python, judge, explorer: judge,
+      })).score,
+      (await evaluateWithMultiModelJudging({
+        task: 't', trajectory: '```python\nbad = 1\n```', executor: failing, judge, explorer: judge,
+      })).score,
+      (await evaluateWithMultiModelJudging({
+        task: 't', trajectory: 'I would do it by hand.', executor: python, judge, explorer: judge,
+      })).score,
+    ];
+    expect(new Set(scores).size).toBe(scores.length);
+  });
+
+  test('a language nothing can run is UNRUNNABLE, not prose — it never reads as a 0.75 score', async () => {
     const judge = createJSONLLM({ score: 0.6 });
     const result = await evaluateWithMultiModelJudging({
       task: 'script it',
@@ -330,8 +386,27 @@ describe('degenerate inputs', () => {
       judge,
       explorer: judge,
     });
-    expect(result.grounding).toBe('judge');
-    expect(result.score).toBeCloseTo(0.75 * 0.6, 10);
+    // Not 'judge': the branch DID offer an implementation. Naming the language
+    // is what lets the engine report the search as ungrounded.
+    expect(result.grounding).toBe('unrunnable');
+    expect(result.unrunnableLanguage).toBe('python');
+    expect(result.score).toBeCloseTo(0.3 * 0.6, 10);
+    expect(result.score).not.toBeCloseTo(0.75 * 0.6, 10);
+  });
+
+  test('an unrunnable branch cannot outrank a sibling whose code actually ran', async () => {
+    // The invariant the whole band table exists for. At the old prose cap a
+    // generously-judged unrunnable branch (0.75) beat a passing branch whose
+    // judge was merely middling (0.6 + 0.4·0.3 = 0.72).
+    const unrunnable = await evaluateWithMultiModelJudging({
+      task: 't', trajectory: '```ruby\nputs 1\n```',
+      executor: exec(), judge: createJSONLLM({ score: 1.0 }), explorer: createJSONLLM({ score: 1.0 }),
+    });
+    const passing = await evaluateWithMultiModelJudging({
+      task: 't', trajectory: '```js\nconst x = 1;\n```',
+      executor: exec(), judge: createJSONLLM({ score: 0.3 }), explorer: createJSONLLM({ score: 0.3 }),
+    });
+    expect(unrunnable.score).toBeLessThan(passing.score);
   });
 });
 
@@ -356,19 +431,19 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     const runs: string[] = [];
     return {
       runs,
+      languages: ['javascript'],
       async execute(code: string) {
         runs.push(code);
-        return { result: undefined, ...(byRun[runs.length - 1] ?? {}) };
+        return { result: undefined, ...byRun[runs.length - 1] };
       },
-    } as unknown as Executor & { runs: string[] };
+    };
   }
 
   test('unparseable code lands on the fail-band floor with zero judge samples', async () => {
     const judge = countingJudge('{"score": 0.9}');
     const result = await evaluateWithMultiModelJudging({
       task: 'compute 42',
-      trajectory: 'here you go',
-      codeUsed: 'const x = (',
+      trajectory: withCode('here you go', 'const x = ('),
       executor: exec({ error: 'SyntaxError: Unexpected end of input' }),
       judge,
       explorer: judge,
@@ -386,8 +461,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     const judge = countingJudge('{"score": 0.8}');
     const result = await evaluateWithMultiModelJudging({
       task: 'compute 42',
-      trajectory: 'here you go',
-      codeUsed: 'throw new Error("boom")',
+      trajectory: withCode('here you go', 'throw new Error("boom")'),
       executor: exec({ error: 'boom' }),
       judge,
       explorer: judge,
@@ -407,8 +481,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     const judge = sequencedJudge(['```js\nexpect(\n```', '{"score": 0.5}', '{"score": 0.5}']);
     const result = await evaluateWithMultiModelJudging({
       task: 'compute 42',
-      trajectory: 'here you go',
-      codeUsed: 'const x = 42;',
+      trajectory: withCode('here you go', 'const x = 42;'),
       executor,
       judge,
       explorer: judge,
@@ -430,8 +503,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     const judge = countingJudge('```js\nif (x) {}\n```');
     const result = await evaluateWithMultiModelJudging({
       task: 'compute 42',
-      trajectory: 'here you go',
-      codeUsed: 'const x = (',
+      trajectory: withCode('here you go', 'const x = ('),
       executor,
       judge,
       explorer: judge,
@@ -449,7 +521,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
     const executor = stagedExec([{}]);
     const judge = countingJudge('{"score": 0.5}');
     await evaluateWithMultiModelJudging({
-      task: 'compute 42', trajectory: 'ok', codeUsed: 'const x = 42;',
+      task: 'compute 42', trajectory: withCode('ok', 'const x = 42;'),
       executor, judge, explorer: judge, judgeSamples: 1, maxLLMCalls: 1,
     });
     expect(executor.runs).toHaveLength(1);
@@ -458,7 +530,7 @@ describe('evaluation cascade — a branch that never parsed skips the judge ense
   test('an unrecognised error message falls through to the full judge path', async () => {
     const judge = countingJudge('{"score": 0.4}');
     const result = await evaluateWithMultiModelJudging({
-      task: 'compute 42', trajectory: 'ok', codeUsed: 'const x = 42;',
+      task: 'compute 42', trajectory: withCode('ok', 'const x = 42;'),
       executor: exec({ error: 'ECONNRESET talking to the sandbox' }),
       judge, explorer: judge, judgeSamples: 2, maxLLMCalls: 3,
     });
@@ -503,11 +575,11 @@ describe('a non-responding judge cannot hang the search', () => {
   // `ms`, so the "without the fix it hangs" case fails fast instead of waiting
   // out bun's default timeout. The timer is always cleared.
   async function settlesWithin<T>(p: Promise<T>, ms: number): Promise<T> {
-    let timer: ReturnType<typeof setTimeout>;
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const guard = new Promise<never>((_, reject) => {
       timer = setTimeout(() => reject(new Error(`evaluator did not settle within ${ms}ms`)), ms);
     });
-    try { return await Promise.race([p, guard]); } finally { clearTimeout(timer!); }
+    try { return await Promise.race([p, guard]); } finally { if (timer) clearTimeout(timer); }
   }
 
   test('prose-only branch drops the dead judge and settles instead of hanging', async () => {
@@ -531,8 +603,7 @@ describe('a non-responding judge cannot hang the search', () => {
     const result = await settlesWithin(
       evaluateWithMultiModelJudging({
         task: 'return 42',
-        trajectory: 'here is the code',
-        codeUsed: 'const x = 42;',
+        trajectory: withCode('here is the code', 'const x = 42;'),
         executor: exec(),
         judge: hungJudge,
         explorer: hungJudge,

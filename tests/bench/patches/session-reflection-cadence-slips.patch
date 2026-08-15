@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/orchestrator/agent-orchestrator.ts b/packages/core/src/orchestrator/agent-orchestrator.ts
-index 6a837cf..c60f141 100644
+index 14cb809f..7fccffaf 100644
 --- a/packages/core/src/orchestrator/agent-orchestrator.ts
 +++ b/packages/core/src/orchestrator/agent-orchestrator.ts
-@@ -255,7 +255,7 @@ export class AgentOrchestrator {
+@@ -331,7 +331,7 @@ export class AgentOrchestrator {
+    */
    runDueSessionEvolution(): Promise<void> {
-     if (!this.deps.engine.enabled) return Promise.resolve();
      if (this.sessionEvolution) return this.sessionEvolution;
--    if (this.window.size() < this.reflectionInterval) return Promise.resolve();
-+    if (this.window.size() <= this.reflectionInterval) return Promise.resolve();
-     const claimed = this.window.claim();
-     if (!claimed) return Promise.resolve();
-     const pass = this.deps.engine
+-    const claimed = this.deps.engine.enabled && this.window.size() >= this.reflectionInterval
++    const claimed = this.deps.engine.enabled && this.window.size() > this.reflectionInterval
+       ? this.window.claim()
+       : null;
+     const pass = this.runCadencePass(claimed);

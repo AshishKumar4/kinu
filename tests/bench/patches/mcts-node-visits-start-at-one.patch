@@ -1,11 +1,10 @@
 diff --git a/packages/core/src/mcts/schemas.ts b/packages/core/src/mcts/schemas.ts
-index de6191c..7386088 100644
 --- a/packages/core/src/mcts/schemas.ts
 +++ b/packages/core/src/mcts/schemas.ts
-@@ -21,7 +21,7 @@ export function initSearchTables(execRaw: RawSqlExec): void {
-       action           TEXT NOT NULL DEFAULT '',
+@@ -30,7 +30,7 @@
        observation      TEXT NOT NULL DEFAULT '',
        code_used        TEXT,
+       code_language    TEXT,
 -      visits           INTEGER NOT NULL DEFAULT 0,
 +      visits           INTEGER NOT NULL DEFAULT 1,
        value            REAL NOT NULL DEFAULT 0,

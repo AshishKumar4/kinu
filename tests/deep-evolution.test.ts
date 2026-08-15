@@ -12,21 +12,24 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { generateText, type ToolSet, type StepResult } from 'ai';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
+import * as v from 'valibot';
 
 import {
-  createWorkspace,
   EvolutionEngine,
   buildBuiltinTools,
   initSearchTables,
   initScaffoldTables,
   initCraftScoreTables,
   readSoul,
+  JsonObjectSchema,
+  projectJsonValue,
   type AgentRuntime,
   type LLMProviderConfig,
   type CompletedTurn,
   type EvolutionEvent,
   type ToolCallRecord,
 } from '../packages/core/src/index.js';
+import { createWorkspace } from '../packages/core/src/identity/index.js';
 import { liveModelAuth, announceLiveModelSkip } from '@proteus/test-utils';
 
 // These suites prove behaviour against a real model. Without a token they
@@ -39,7 +42,7 @@ const LLM_CONFIG: LLMProviderConfig = {
   name: 'workers-ai',
   baseURL: process.env.PROTEUS_BASE_URL || process.env.AI_GATEWAY_URL || 'https://gateway.ai.cloudflare.com/v1/f44999d1ddda7012e9a87729eba250f1/proteus-ai-gateway/workers-ai/v1',
   headers: { 'cf-aig-authorization': process.env.PROTEUS_AUTH || process.env.AI_GATEWAY_AUTH || '' },
-  model: '@cf/moonshotai/kimi-k2.6',
+  model: '@cf/deepseek-ai/deepseek-v4-pro-0813',
 };
 
 const TEST_DIR = join(tmpdir(), 'proteus-deep-' + Date.now());
@@ -71,7 +74,7 @@ async function solveProblem(
   problem: Problem,
 ): Promise<{ response: string; turn: CompletedTurn; toolNames: string[] }> {
   const start = Date.now();
-  const soul = readSoul(rt.storage.sql) ?? '';
+  const soul = await readSoul(rt.storage.vfs) ?? '';
   const knowledge = (await rt.memory.read('memory/MEMORY.md'))?.slice(0, 1500) ?? '';
 
   const toolNames: string[] = [];
@@ -89,15 +92,19 @@ async function solveProblem(
       if (step.toolCalls) {
         for (const tc of step.toolCalls) {
           toolNames.push(tc.toolName);
-          toolCallRecords.push({ name: tc.toolName, args: tc.args as Record<string, unknown>, result: null });
+          toolCallRecords.push({
+            name: tc.toolName,
+            args: v.parse(JsonObjectSchema, tc.input),
+            result: null,
+          });
         }
       }
       if (step.toolResults) {
         for (let i = 0; i < step.toolResults.length; i++) {
           const idx = toolCallRecords.length - step.toolResults.length + i;
-          if (toolCallRecords[idx]) {
-            toolCallRecords[idx]!.result = step.toolResults[i]!.result;
-          }
+          const record = toolCallRecords[idx];
+          const toolResult = step.toolResults[i];
+          if (record && toolResult) record.result = projectJsonValue({ value: toolResult.output });
         }
       }
     },
@@ -107,8 +114,8 @@ async function solveProblem(
 
   // Store in DB
   const id = crypto.randomUUID();
-  rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'deep'}, ${'user'}, ${problem.question})`;
-  rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'deep'}, ${id}, ${'assistant'}, ${response})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, role, content) VALUES (${id}, ${'deep'}, ${'user'}, ${problem.question})`;
+  void rt.storage.sql`INSERT INTO messages (id, session_id, parent_id, role, content) VALUES (${crypto.randomUUID()}, ${'deep'}, ${id}, ${'assistant'}, ${response})`;
 
   const turn: CompletedTurn = {
     userMessage: problem.question,
@@ -136,12 +143,12 @@ describe('Deep Evolution — 8 Algorithmic Challenges', () => {
     usedExecuteCode: boolean; toolNames: string[]; responsePreview: string;
   }> = [];
 
-  beforeAll(() => {
+  beforeAll(async () => {
     mkdirSync(TEST_DIR, { recursive: true });
     db = new Database(DB_PATH);
     db.exec('PRAGMA journal_mode = WAL');
 
-    rt = createWorkspace(db, {
+    rt = await createWorkspace(db, {
       name: 'algo-solver',
       purpose: 'An algorithmic problem solver. Always use execute_tools to compute answers. Never guess.',
       llm: LLM_CONFIG,

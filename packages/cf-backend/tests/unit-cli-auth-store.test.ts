@@ -10,13 +10,41 @@ import { createAuthDatabase, makeD1 } from './helpers/d1.js';
 import { Database } from 'bun:sqlite';
 import { RateLimitError } from '../src/cli/auth-store.js';
 import { handleCliRequest } from '../src/cli/routes.js';
+import type { UserCaller } from '../src/user/workspace-capability.js';
+import * as v from 'valibot';
+
+const ErrorResponseSchema = v.object({ error: v.string() });
+
+interface TestNamespace<Stub> {
+  idFromName(name: string): string;
+  get(): Stub;
+}
+
+interface CliAuthTestBindings<Stub> {
+  AUTH_DB: D1Database;
+  UserDO: TestNamespace<Stub>;
+  CREDENTIAL_ENCRYPTION_KEY: string;
+}
+
+function testEnv<Stub>(bindings: CliAuthTestBindings<Stub>): Env {
+  const env: Partial<Env> = {};
+  Object.assign(env, bindings);
+  // SAFETY: CLI auth reads exactly the constructed D1 database, UserDO
+  // namespace, and credential key; every reachable binding is present.
+  return env as Env;
+}
+
+function handled(response: Response | null): Response {
+  if (!response) throw new Error('CLI auth route did not handle the request');
+  return response;
+}
 
 function setupEnv() {
   const db = createAuthDatabase();
   const minted: string[] = [];
   const userDO = {
     async ensureProfile() {},
-    async mintCliToken(_caller: unknown, userId: string, label?: string) {
+    async mintCliToken(_caller: UserCaller, userId: string, label?: string) {
       const token = `ptc_${userId}_testtoken`;
       minted.push(`${label ?? ''}:${token}`);
       return { token, tokenHash: 'hash', expiresAt: Date.now() + 60_000 };
@@ -25,12 +53,12 @@ function setupEnv() {
   return {
     db,
     minted,
-    env: {
+    env: testEnv({
       AUTH_DB: makeD1(db),
       UserDO: {
         idFromName(name: string) { return name; },
         get() { return userDO; },
-      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env,
+      }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY }),
   };
 }
 
@@ -63,6 +91,18 @@ describe('D1-backed CLI auth store', () => {
     expect(second.status).toBe('expired');
     expect(second.message).toContain('already delivered');
     expect(minted).toHaveLength(1);
+  });
+
+  test('the advertised polling cadence remains permitted for the full auth lifetime', async () => {
+    const { env } = setupEnv();
+    const started = await startCliAuth(env, 'https://proteus.example.com', 'https://proteus.example.com', 'Ashish terminal', '127.0.0.1');
+    const remainingMs = Date.parse(started.expiresAt) - Date.now();
+    const requiredPolls = Math.ceil(remainingMs / (started.intervalSeconds * 1_000));
+
+    for (let attempt = 0; attempt < requiredPolls; attempt += 1) {
+      const pending = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
+      expect(pending.status).toBe('pending');
+    }
   });
 });
 
@@ -98,9 +138,11 @@ describe('CLI auth approval replay', () => {
 describe('CLI auth error propagation', () => {
   test('startCliAuth surfaces real DB failures instead of retrying as collisions', async () => {
     const broken = new Database(':memory:'); // no tables at all
-    const env = {
+    const env = testEnv({
       AUTH_DB: makeD1(broken),
-      UserDO: { idFromName: (n: string) => n, get: () => ({}) }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
+      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
     expect(startCliAuth(env, 'https://o.example', 'https://o.example', 't', '127.0.0.1'))
       .rejects.toThrow(/no such table/i);
   });
@@ -130,11 +172,13 @@ describe('CLI auth route status mapping', () => {
   });
 
   test('infra failure during start → 500, not 429', async () => {
-    const env = {
+    const env = testEnv({
       AUTH_DB: makeD1(new Database(':memory:')),
-      UserDO: { idFromName: (n: string) => n, get: () => ({}) }, CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY } as unknown as Env;
-    const res = await handleCliRequest(startRequest(), env);
-    expect(res?.status).toBe(500);
-    expect((await res?.json() as { error: string }).error).toMatch(/no such table/i);
+      UserDO: { idFromName: (n: string) => n, get: () => ({}) },
+      CREDENTIAL_ENCRYPTION_KEY: TEST_CREDENTIAL_ENCRYPTION_KEY,
+    });
+    const res = handled(await handleCliRequest(startRequest(), env));
+    expect(res.status).toBe(500);
+    expect(v.parse(ErrorResponseSchema, await res.json()).error).toMatch(/no such table/i);
   });
 });

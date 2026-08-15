@@ -6,12 +6,12 @@
 import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { memberBody } from '@proteus/test-utils';
 
 describe('auto-GEPA default activation (wiring)', () => {
   test('the tick pins an absent cadence row and records the override note', () => {
     const orchestrator = readFileSync(join(import.meta.dir, '..', 'src', 'orchestrator.ts'), 'utf8');
-    const tick = orchestrator.slice(orchestrator.indexOf('private maybeRunAutoGepa()'));
-    const body = tick.slice(0, tick.indexOf('@callable()'));
+    const body = memberBody(orchestrator, 'private maybeRunAutoGepa()', 'orchestrator.ts');
     expect(body).toContain('this.config.get(AGENT_CONFIG_KEYS.autoGepaEveryNTurns) == null');
     expect(body).toContain('this.config.setAutoGepaEveryNTurns(everyN)');
     expect(body).toContain('evolution_events');

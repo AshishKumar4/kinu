@@ -2,8 +2,8 @@
  * Worker entry point — exports all DO classes and routes agent requests.
  *
  * Routing order (Worker runs first for every non-hashed-asset path):
- *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves sandbox
- *      container previews and nothing else.
+ *   1. Preview host — every host under PREVIEW_HOST_SUFFIX serves an isolated
+ *      Workspace or Sandbox preview and nothing else.
  *   2. /pc/* — PC agent WebSocket tunnel + install endpoint.
  *   3. /login, /auth/*, /logout, /api/auth/* — OAuth/OIDC app auth.
  *   4. / — public landing page when no Proteus session is present.
@@ -39,12 +39,14 @@ import { handleHubRequest } from "./events/routes.js";
 import { handleFilesRequest } from "./files-routes.js";
 import { handleInboundEmail } from "./email/handler.js";
 import { MONITOR_SINGLETON } from "./monitor/monitor-do.js";
-import { handleNimbusPreviewRequest } from "./nimbus-route.js";
+import { handleNimbusPreviewHostRequest } from "./nimbus-route.js";
 import {
   authenticateRequest, AuthError, crossSiteRejection, isPublicPath,
   type AuthIdentity,
 } from "./auth/session.js";
-import { containPreviewResponse, isPreviewHostRequest, previewHostSuffix } from "./lib/preview-origin.js";
+import {
+  containPreviewResponse, isPreviewHostRequest, previewHostSuffix, previewSuffixMetaName,
+} from "./lib/preview-origin.js";
 import { withAppSecurityHeaders } from "./lib/security-headers.js";
 import { withD1Bookmark as withD1BookmarkCookie } from "./auth/d1-store.js";
 import { parseCliAgentConnectTicketUserId } from "./user/user-do.js";
@@ -85,8 +87,16 @@ export {
 /** The SPA and every other static asset, under the app's document policy. */
 async function serveApp(request: Request, env: Env): Promise<Response> {
   const suffix = previewHostSuffix(env);
+  const asset = await env.ASSETS.fetch(request);
+  const configured = suffix && asset.headers.get('content-type')?.includes('text/html')
+    ? new HTMLRewriter().on('head', {
+        element(element) {
+          element.append(`<meta name="${previewSuffixMetaName()}" content="${suffix}">`, { html: true });
+        },
+      }).transform(asset)
+    : asset;
   return withAppSecurityHeaders(
-    await env.ASSETS.fetch(request),
+    configured,
     new URL(request.url),
     suffix ? `https://*.${suffix}` : null,
   );
@@ -166,16 +176,17 @@ async function authenticateCliAgentTicketRequest(
       });
     }
     url.searchParams.delete('ticket');
-    return {
-      identity: {
+    const identity: AuthIdentity = {
         userId: verified.user.id,
         email: verified.user.email,
         displayName: verified.user.displayName,
         sub: 'cli',
         provider: 'cli',
         authTime: Date.now(),
-        ...(verified.scopes ? { cliScopes: verified.scopes } : {}),
-      },
+    };
+    if (verified.scopes) identity.cliScopes = verified.scopes;
+    return {
+      identity,
       request: new Request(url.toString(), request),
     };
   } catch (err) {
@@ -190,12 +201,14 @@ export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext) {
     const url = new URL(request.url);
 
-    // 1. Preview host — sandbox containers, one hostname per exposed port,
-    //    token-gated by that hostname. It is the ONLY thing served there: no
+    // 1. Preview host — Workspace and Sandbox each get one hostname per exposed
+    //    port, capability-gated by that hostname. It is the ONLY thing served there: no
     //    SPA, no login, no OAuth callback, so nothing ever mints a session on
     //    those origins and hostile preview HTML has none to steal
     //    (lib/preview-origin.ts).
     if (isPreviewHostRequest(url, env)) {
+      const nimbus = await handleNimbusPreviewHostRequest(request, env);
+      if (nimbus) return containPreviewResponse(nimbus);
       return servePreviewRequest(request, env);
     }
 
@@ -255,7 +268,8 @@ export default {
       try { identity = await authenticateRequest(request, env); }
       catch (e) {
         if (e instanceof AuthError) return authError(request, e);
-        return new Response(JSON.stringify({ error: (e as Error).message }), {
+        const message = e instanceof Error ? e.message : String(e);
+        return new Response(JSON.stringify({ error: message }), {
           status: 500, headers: { 'content-type': 'application/json' },
         });
       }
@@ -265,12 +279,6 @@ export default {
     //     so a state-changing request must prove the app issued it.
     const crossSite = crossSiteRejection(request);
     if (crossSite) return crossSite;
-
-    // Nimbus previews are container HTML that must be fetched with the owner's
-    // session (the tenant check needs it), so they cannot move to the preview
-    // host — the sandbox CSP is what keeps them out of the app's origin.
-    const nimbusResp = await handleNimbusPreviewRequest(authenticatedRequest, env, identity.userId);
-    if (nimbusResp) return withD1Bookmark(containPreviewResponse(nimbusResp, 'app-host'), identity);
 
     // 9. /api/user/* — user-scoped routes.
     const userResp = await handleUserRequest(authenticatedRequest, env, identity, ctx);

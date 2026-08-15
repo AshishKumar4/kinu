@@ -18,17 +18,28 @@
  */
 
 import { describe, expect, mock, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
-import { HeadCapture, type HeadInput } from '@proteus/core';
+import { Database, type SQLQueryBindings } from 'bun:sqlite';
+import type { AgentContext } from 'agents';
+import {
+  HeadCapture,
+  type HeadId,
+  type HeadInput,
+  type HeadReport,
+  type ParentRpcWrite,
+  type SqlExecRow,
+  type SqlValue,
+} from '@proteus/core';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import * as v from 'valibot';
 
 mockAgentsSdk();
 
 /** The sandbox id the runtime asked for — the observable proof that a head
  *  rides the PARENT workspace's container rather than a fresh one of its own. */
 let requestedSandboxId: string | null = null;
+const lastRequestedSandboxId = (): string | null => requestedSandboxId;
 mock.module('@cloudflare/sandbox', () => ({
-  getSandbox: (_ns: unknown, id: string) => {
+  getSandbox: (_ns: DurableObjectNamespace, id: string) => {
     requestedSandboxId = id;
     return {
       exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -47,26 +58,78 @@ mock.module('@cloudflare/sandbox', () => ({
 
 const { ExplorationAgent } = await import('../src/exploration.ts');
 
-type SqlTag = <T>(strings: TemplateStringsArray, ...values: unknown[]) => T[];
-
-function makeSqlTag(db: Database): SqlTag {
-  return function <T>(strings: TemplateStringsArray, ...values: unknown[]): T[] {
-    const query = strings.reduce((sql, part, i) => sql + part + (i < values.length ? '?' : ''), '');
-    const statement = db.prepare(query);
-    // workerd's SQL binder takes undefined and raw ArrayBuffers (the filesystem binds
-    // file chunks as ArrayBuffer); bun's takes neither.
-    const bound = values.map((v) => {
-      if (v === undefined) return null;
-      if (v instanceof ArrayBuffer) return new Uint8Array(v);
-      return v;
-    });
-    if (/^\s*(SELECT|WITH|PRAGMA)/i.test(query)) return statement.all(...(bound as never[])) as T[];
-    statement.run(...(bound as never[]));
-    return [];
-  } as SqlTag;
+function nativeBindings(values: SqlValue[]): SQLQueryBindings[] {
+  return values.map((value) => value instanceof ArrayBuffer ? new Uint8Array(value) : value);
 }
 
 interface ParentCall { method: string; arg: unknown }
+
+function makeNimbusNamespace(files: Record<string, string>) {
+  const execOptions: Array<{ shellId?: string; shellRoot?: string } | undefined> = [];
+  const directories = new Set(['/home', '/home/user']);
+  const content = new Map(
+    Object.entries(files).map(([path, value]) => [`/home/user/${path}`, value]),
+  );
+  for (const path of content.keys()) {
+    const parts = path.split('/');
+    for (let i = 2; i < parts.length; i++) directories.add(parts.slice(0, i).join('/'));
+  }
+  const list = (path: string) => {
+    const prefix = `${path.replace(/\/$/, '')}/`;
+    const entries = new Map<string, 'file' | 'directory'>();
+    for (const directory of directories) {
+      if (!directory.startsWith(prefix)) continue;
+      const rest = directory.slice(prefix.length);
+      if (rest && !rest.includes('/')) entries.set(rest, 'directory');
+    }
+    for (const file of content.keys()) {
+      if (!file.startsWith(prefix)) continue;
+      const rest = file.slice(prefix.length);
+      if (!rest) continue;
+      const slash = rest.indexOf('/');
+      entries.set(slash < 0 ? rest : rest.slice(0, slash), slash < 0 ? 'file' : 'directory');
+    }
+    return [...entries].map(([name, type]) => ({ name, type }));
+  };
+  const stub = {
+    _rpcReady: async () => ({ ok: true as const, preinstalled: [] }),
+    _rpcReadFile: async (path: string) => content.get(path) ?? null,
+    _rpcReadFileBytes: async (path: string) => {
+      const value = content.get(path);
+      return value === undefined ? null : new TextEncoder().encode(value);
+    },
+    _rpcWriteFile: async (path: string, value: string | Uint8Array) => {
+      content.set(path, v.is(v.string(), value) ? value : new TextDecoder().decode(value));
+    },
+    _rpcReaddir: async (path: string) => list(path),
+    _rpcStat: async (path: string) => directories.has(path)
+      ? { type: 'directory', size: 0, mtime: 0, mode: 0o755 }
+      : content.has(path)
+        ? { type: 'file', size: content.get(path)!.length, mtime: 0, mode: 0o644 }
+        : null,
+    _rpcExists: async (path: string) => directories.has(path) || content.has(path),
+    _rpcMkdir: async (path: string) => { directories.add(path); },
+    _rpcDeleteFile: async (path: string) => { content.delete(path); directories.delete(path); },
+    _rpcExec: async (command: string, options?: { shellId?: string; shellRoot?: string }) => {
+      execOptions.push(options);
+      const match = /^grep -rl (\S+) \.$/.exec(command.trim());
+      const needle = match?.at(1);
+      const hits = needle
+        ? [...content].filter(([, value]) => value.includes(needle))
+          .map(([path]) => path.replace(/^\/home\/user\//, ''))
+        : [];
+      return {
+        command, success: true, stdout: hits.join('\n'), stderr: '',
+        exitCode: 0, duration: 0, timestamp: 0,
+      };
+    },
+  };
+  return {
+    binding: { idFromName: (name: string) => name, get: () => stub },
+    content,
+    execOptions,
+  };
+}
 
 /** A stand-in workspace orchestrator holding the files a head should be able to
  *  read, behind the same RPC methods the real one exposes. */
@@ -76,8 +139,8 @@ function makeParentWorkspace(files: Record<string, string>) {
     async execWorkspaceCommand(command: string) {
       calls.push({ method: 'execWorkspaceCommand', arg: command });
       // Enough of a shell to prove the round trip is one call, not a walk.
-      const m = /^grep -rl (\S+) \.$/.exec(command.trim());
-      const hits = m ? Object.entries(files).filter(([, v]) => v.includes(m[1]!)).map(([k]) => k) : [];
+      const needle = /^grep -rl (\S+) \.$/.exec(command.trim())?.at(1);
+      const hits = needle ? Object.entries(files).filter(([, value]) => value.includes(needle)).map(([key]) => key) : [];
       return { ok: true as const, value: { stdout: hits.join('\n'), stderr: '', exitCode: 0 } };
     },
     async readWorkspaceFile(path: string) {
@@ -93,18 +156,24 @@ function makeParentWorkspace(files: Record<string, string>) {
       const names = new Set<string>();
       for (const key of Object.keys(files)) {
         if (!key.startsWith(prefix)) continue;
-        names.add(key.slice(prefix.length).split('/')[0]!);
+        const name = key.slice(prefix.length).split('/').at(0);
+        if (name) names.add(name);
       }
       return { ok: true as const, value: [...names] };
     },
-    async writeWorkspaceFile(input: { kind: string; path: string; data?: string }) {
+    async writeWorkspaceFile(input: ParentRpcWrite) {
       calls.push({ method: 'writeWorkspaceFile', arg: input });
-      if (input.kind === 'file') files[input.path] = String(input.data);
+      if (input.kind === 'file') {
+        files[input.path] = v.is(v.string(), input.data)
+          ? input.data
+          : new TextDecoder().decode(input.data);
+      }
       return { ok: true as const, value: null };
     },
     async statWorkspaceFile(path: string) {
       calls.push({ method: 'statWorkspaceFile', arg: path });
-      return { ok: true as const, value: files[path] === undefined ? null : { size: files[path]!.length, mtimeMs: 0, isDir: false } };
+      const content = files[path];
+      return { ok: true as const, value: content === undefined ? null : { size: content.length, mtimeMs: 0, isDir: false } };
     },
     async deleteWorkspaceFile(path: string) {
       calls.push({ method: 'deleteWorkspaceFile', arg: path });
@@ -116,28 +185,37 @@ function makeParentWorkspace(files: Record<string, string>) {
 }
 
 interface Facet {
-  setOwner(userId: string, token: string | null): Promise<unknown>;
-  setSharedParent(name: string): Promise<unknown>;
-  initHead(input: HeadInput): Promise<unknown>;
-  runAsHead(): Promise<unknown>;
-  headRuntime(): import('../src/runtime.js').CFRuntime;
-  buildHeadTools(input: HeadInput, capture: HeadCapture): unknown;
+  setOwner(userId: string, token: string | null): Promise<{ ok: true }>;
+  setSharedParent(name: string): Promise<{ ok: true }>;
+  initHead(input: HeadInput): Promise<{ ok: true; id: HeadId }>;
+  runAsHead(): Promise<HeadReport>;
+  headRuntime(capture: HeadCapture): import('../src/runtime.js').CFRuntime;
 }
+
+const HeadRuntimeProbeSchema = v.object({
+  storage: v.object({ vfs: v.object({ writeFile: v.function() }) }),
+  executionRouter: v.object({
+    getProvider: v.function(),
+    listExecutors: v.function(),
+  }),
+});
 
 function makeFacet(parentFiles: Record<string, string> = {}) {
   const db = new Database(':memory:');
   const parent = makeParentWorkspace(parentFiles);
+  const nimbus = makeNimbusNamespace(parentFiles);
   const ctx = {
     id: { toString: () => 'facet-id' },
     storage: {
       sql: {
         // Iterable as well as `toArray`-able: workerd's SqlStorage.exec returns
         // a cursor, and code that spreads one is exercising the real contract.
-        exec: (query: string, ...values: unknown[]) => {
-          const statement = db.prepare(query);
+        exec: (query: string, ...values: SqlValue[]) => {
+          const statement = db.prepare<SqlExecRow, SQLQueryBindings[]>(query);
+          const bound = nativeBindings(values);
           const rows = /^\s*(SELECT|WITH|PRAGMA)/i.test(query)
-            ? (statement.all(...(values as never[])) as Array<Record<string, unknown>>)
-            : ((statement.run(...(values as never[])), []) as Array<Record<string, unknown>>);
+            ? statement.all(...bound)
+            : (statement.run(...bound), []);
           return { toArray: () => rows, [Symbol.iterator]: () => rows[Symbol.iterator]() };
         },
       },
@@ -147,8 +225,9 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
       transactionSync: <T>(callback: () => T): T => db.transaction(callback)(),
     },
   };
-  const env = {
+  const bindings = {
     LOADER: {},
+    NIMBUS_SESSION: nimbus.binding,
     Sandbox: {},
     PREVIEW_HOST_SUFFIX: 'preview.test',
     AI_GATEWAY_URL: 'https://gateway.test',
@@ -156,16 +235,43 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => parent.stub },
     UserDO: { idFromName: (name: string) => name, get: () => ({}) },
   };
-  const facet = new (ExplorationAgent as unknown as new (ctx: unknown, env: unknown) => Facet)(ctx, env);
-  (facet as unknown as { sql: SqlTag }).sql = makeSqlTag(db);
-  (facet as unknown as { name: string }).name = 'head-1';
-  return { facet, parent };
+  const partialContext: Partial<AgentContext> = {};
+  Object.assign(partialContext, ctx);
+  // SAFETY: ExplorationAgent reaches only the constructed identity, SQL, and
+  // transaction members in this harness; each is implemented above.
+  const agentContext = partialContext as AgentContext;
+  const partialEnv: Partial<Env> = {};
+  Object.assign(partialEnv, bindings);
+  // SAFETY: Head runtime construction reaches only the locally constructed
+  // loader, execution namespaces, preview config, and owner namespaces.
+  const testEnv = partialEnv as Env;
+  const concrete = new ExplorationAgent(agentContext, testEnv);
+  const headRuntimeMember = Object.getOwnPropertyDescriptor(
+    ExplorationAgent.prototype,
+    'headRuntime',
+  )?.value;
+  if (!v.is(v.function(), headRuntimeMember)) throw new Error('ExplorationAgent headRuntime seam is missing');
+  Object.defineProperty(concrete, 'name', { value: 'head-1', configurable: true });
+  const facet: Facet = {
+    setOwner: concrete.setOwner.bind(concrete),
+    setSharedParent: concrete.setSharedParent.bind(concrete),
+    initHead: concrete.initHead.bind(concrete),
+    runAsHead: concrete.runAsHead.bind(concrete),
+    headRuntime: (capture): ReturnType<Facet['headRuntime']> => {
+      const runtime = headRuntimeMember.call(concrete, capture);
+      if (!v.is(HeadRuntimeProbeSchema, runtime)) throw new Error('headRuntime returned an invalid runtime');
+      // SAFETY: HeadRuntimeProbeSchema validated the runtime returned by the
+      // private method from the concrete ExplorationAgent instance above.
+      return runtime as ReturnType<Facet['headRuntime']>;
+    },
+  };
+  return { facet, parent, nimbus };
 }
 
 function headInput(): HeadInput {
   return {
     id: 'head-1', rootId: 'root-1', parentId: null, depth: 0,
-    task: 'map the cloned repo', rationale: 'the parser angle',
+    task: 'map the cloned repo', mode: 'build', rationale: 'the parser angle',
     inheritedContext: [],
     budget: { maxDepth: 1, maxWallClockMs: 30_000, spawnedAt: Date.now() },
     mergeStrategy: 'synthesize',
@@ -173,79 +279,78 @@ function headInput(): HeadInput {
 }
 
 describe('a head forks its parent workspace', () => {
-  test("the parent workspace's files are readable through the parent executor", async () => {
+  test("the canonical workspace's files are readable without a parent executor", async () => {
     const { facet, parent } = makeFacet({ 'repo/README.md': '# cloned project' });
+    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('proteus-main');
 
-    const rt = facet.headRuntime();
-    const parentExec = rt.executionRouter!.getProvider('parent')!;
-    const content = await parentExec.tools.readFile.execute('repo/README.md');
+    const rt = facet.headRuntime(new HeadCapture());
+    const workspace = rt.executionRouter!.getProvider('workspace')!;
+    const content = await workspace.tools.readFile.execute('repo/README.md');
 
     expect(content).toBe('# cloned project');
-    expect(parent.calls.map((c) => c.method)).toContain('readWorkspaceFile');
-    expect(rt.executionRouter!.listExecutors().map((e) => e.name)).toContain('parent');
+    expect(parent.calls).toHaveLength(0);
+    expect(rt.executionRouter!.listExecutors().map((e) => e.name)).not.toContain('parent');
   });
 
-  test('the parent workspace directory listing reaches the head', async () => {
+  test('the canonical workspace directory listing reaches the head', async () => {
     const { facet } = makeFacet({ 'repo/src/index.ts': 'x', 'repo/package.json': '{}' });
+    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('proteus-main');
 
-    const parentExec = facet.headRuntime().executionRouter!.getProvider('parent')!;
-    const names = await parentExec.tools.readdir.execute('repo') as string[];
+    const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
+    const names = v.parse(v.array(v.string()), await workspace.tools.readdir.execute('repo'));
     expect(names.sort()).toEqual(['package.json', 'src']);
   });
 
-  test("searching the parent is ONE call into its real shell, not a walk", async () => {
-    // The capability the old /parent mount could not offer: its emulated shell
-    // read the tree one RPC per file. This is a grep, in the parent's own shell.
-    const { facet, parent } = makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
+  test("searching the workspace is one real shell call, not an RPC file walk", async () => {
+    const { facet, parent, nimbus } = makeFacet({ 'repo/a.ts': 'needle here', 'repo/b.ts': 'nothing' });
+    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('proteus-main');
 
-    const parentExec = facet.headRuntime().executionRouter!.getProvider('parent')!;
-    const found = await parentExec.tools.exec.execute('grep -rl needle .');
+    const workspace = facet.headRuntime(new HeadCapture()).executionRouter!.getProvider('workspace')!;
+    const found = await workspace.tools.exec.execute('grep -rl needle .');
 
     expect(String(found)).toContain('repo/a.ts');
-    expect(parent.calls.filter((c) => c.method === 'readWorkspaceFile')).toHaveLength(0);
+    expect(parent.calls).toHaveLength(0);
+    expect(nimbus.execOptions).toContainEqual({ shellId: 'head:head-1', shellRoot: '/home/user' });
   });
 
   test('exec planes are keyed to the PARENT workspace, not the head facet', async () => {
     requestedSandboxId = null;
     const { facet } = makeFacet();
+    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('proteus-main');
 
-    facet.headRuntime();
+    facet.headRuntime(new HeadCapture());
 
     // The container the parent agent works in — `proteus-${workspaceName}` in
     // runtime.ts — and emphatically not `proteus-head-1`.
-    expect(requestedSandboxId as string | null).toBe('proteus-proteus-main');
+    expect(lastRequestedSandboxId()).toBe('proteus-proteus-main');
   });
 
-  test("the head's own filesystem stays private scratch", async () => {
-    const { facet, parent } = makeFacet();
+  test("a head writes the canonical workspace rather than private duplicate bytes", async () => {
+    const { facet, parent, nimbus } = makeFacet();
+    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('proteus-main');
-    const rt = facet.headRuntime();
+    const rt = facet.headRuntime(new HeadCapture());
 
-    await rt.storage.vfs.writeFile('scratch/notes.md', 'private');
+    await rt.storage.vfs.writeFile('shared/notes.md', 'visible');
 
-    expect(await rt.storage.vfs.readFile('scratch/notes.md', { encoding: 'utf8' })).toBe('private');
-    // It is a different filesystem in a different object: the parent is never
-    // even asked, so a sibling cannot see it either.
+    expect(nimbus.content.get('/home/user/shared/notes.md')).toBe('visible');
     expect(parent.calls.map((c) => c.method)).not.toContain('writeWorkspaceFile');
   });
 
-  test("the head's writes to the parent workspace are attributed to that head", async () => {
-    // The cf half of the attribution: a head's view of its parent is its own,
-    // so what it writes there lands in ITS capture and nothing else's.
+  test("the head's direct workspace writes are attributed to that head", async () => {
     const { facet } = makeFacet({ 'repo/parser.ts': 'one\ntwo\n' });
+    await facet.setOwner('user-1', 'pwc_parent');
     await facet.setSharedParent('proteus-main');
     const capture = new HeadCapture();
-    facet.buildHeadTools(headInput(), capture);
-    const rt = facet.headRuntime();
+    const rt = facet.headRuntime(capture);
 
-    const parentExec = rt.executionRouter!.getProvider('parent')!;
-    await parentExec.tools.writeFile.execute('repo/parser.ts', 'one\ntwo\nthree\n');
-    // Its own scratch is a different filesystem and is deliberately unattributed.
-    await rt.storage.vfs.writeFile('notes.md', 'my own thinking\n');
+    const workspace = rt.executionRouter!.getProvider('workspace')!;
+    await workspace.tools.readFile.execute('repo/parser.ts');
+    await workspace.tools.writeFile.execute('repo/parser.ts', 'one\ntwo\nthree\n');
 
     expect(capture.files.snapshot()).toEqual([
       { path: 'repo/parser.ts', status: 'changed', added: 1, removed: 0 },

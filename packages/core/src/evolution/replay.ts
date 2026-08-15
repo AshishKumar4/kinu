@@ -17,12 +17,19 @@
  * curve is queryable over time (read-only RPC + agent.replayEvals helper).
  */
 
+import * as v from 'valibot';
 import type { SqlExecutor, RawSqlExec, LLM } from '../types/primitives.js';
-import { isNegativeOutcome, listTurnOutcomes, type TurnOutcomeRow } from './outcomes.js';
+import {
+  isNegativeOutcome,
+  listTurnOutcomes,
+  TURN_OUTCOMES,
+  type TurnOutcomeRow,
+} from './outcomes.js';
 import { extractJsonObject, jsonObjectOnlyInstruction } from '../prompts/structured.js';
 import { EVIDENCE_BUDGETS, evidenceWindow } from '../prompts/evidence-window.js';
 import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
+import { parseJsonValue } from '../utils/json.js';
 import { scoreInterval, wilsonInterval, type ScoreInterval } from '../utils/stats.js';
 
 /**
@@ -91,6 +98,22 @@ export interface RunReplayEvalOpts {
   now?: number;
 }
 
+const ReplayJudgeSchema = v.object({
+  score: v.number(),
+  note: v.optional(v.string()),
+});
+
+const ReplayInstanceResultSchema: v.GenericSchema<ReplayInstanceResult> = v.object({
+  outcomeId: v.string(),
+  outcome: v.picklist(TURN_OUTCOMES),
+  score: v.number(),
+  note: v.string(),
+});
+
+function errorMessage(input: { error: unknown }): string {
+  return input.error instanceof Error ? input.error.message : String(input.error);
+}
+
 function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
   const head =
     `You are scoring a NEW response to a task the agent has answered before.\n\n` +
@@ -115,13 +138,13 @@ function buildReplayJudgePrompt(row: TurnOutcomeRow, fresh: string): string {
 
 async function judgeReplay(judge: LLM, row: TurnOutcomeRow, fresh: string): Promise<{ score: number; note: string }> {
   const raw = await judge.complete(buildReplayJudgePrompt(row, fresh));
-  const parsed = extractJsonObject(raw) as { score?: unknown; note?: unknown };
-  if (typeof parsed.score !== 'number' || !Number.isFinite(parsed.score)) {
+  const parsed = v.safeParse(ReplayJudgeSchema, extractJsonObject(raw));
+  if (!parsed.success || !Number.isFinite(parsed.output.score)) {
     throw new Error('replay judge returned no numeric score');
   }
   return {
-    score: Math.min(1, Math.max(0, parsed.score)),
-    note: typeof parsed.note === 'string' ? parsed.note : '',
+    score: Math.min(1, Math.max(0, parsed.output.score)),
+    note: parsed.output.note ?? '',
   };
 }
 
@@ -145,14 +168,14 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     try {
       fresh = await opts.runTask(row.userMessage);
     } catch (err) {
-      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `re-run failed: ${(err as Error).message}` });
+      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `re-run failed: ${errorMessage({ error: err })}` });
       continue;
     }
     try {
       const verdict = await judgeReplay(opts.judge, row, fresh);
       results.push({ outcomeId: row.id, outcome: row.outcome, ...verdict });
     } catch (err) {
-      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `judge failed: ${(err as Error).message}` });
+      results.push({ outcomeId: row.id, outcome: row.outcome, score: 0, note: `judge failed: ${errorMessage({ error: err })}` });
     }
   }
 
@@ -170,7 +193,7 @@ export async function runReplayEval(opts: RunReplayEvalOpts): Promise<ReplayEval
     results,
   };
 
-  opts.sql`INSERT INTO replay_evals
+  void opts.sql`INSERT INTO replay_evals
       (id, ran_at, sample_size, accepted_n, negative_n, mean_score, loss, scaffold_version,
        details, score_lo, score_hi)
     VALUES
@@ -193,8 +216,8 @@ export function listReplayEvals(sql: SqlExecutor, limit = 50): ReplayEvalSummary
     return rows.map((r) => {
       let results: ReplayInstanceResult[] = [];
       try {
-        const parsed = JSON.parse(r.details) as unknown;
-        if (Array.isArray(parsed)) results = parsed as ReplayInstanceResult[];
+        const parsed = v.safeParse(v.array(ReplayInstanceResultSchema), parseJsonValue(r.details));
+        if (parsed.success) results = parsed.output;
       } catch { /* malformed details — summary numbers still stand */ }
       // Pre-interval rows carry no bounds; mean and n determine them exactly.
       const interval: ScoreInterval = r.score_lo != null && r.score_hi != null
