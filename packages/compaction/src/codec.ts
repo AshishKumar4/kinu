@@ -37,6 +37,7 @@ import {
   userModelMessageSchema,
 } from 'ai';
 import { fnv1a64, parseJsonObject } from '@proteus/core';
+import * as v from 'valibot';
 import {
   assistantRunsStage,
   contentHashKey,
@@ -612,15 +613,22 @@ function binaryReplacer<Value>(_key: string, value: Value): Value | string {
   return value;
 }
 
+const StringSchema = v.string();
+interface ToolPairMarker {
+  [TOOL_PAIR_HANDLE]: unknown;
+}
+const ToolPairMarkerSchema = v.custom<ToolPairMarker>((input) => {
+  if (!v.is(v.object({}), input)) return false;
+  return TOOL_PAIR_HANDLE in input;
+});
+
 function isString<Value>(value: Value): value is Value & string {
-  return typeof value === 'string';
+  return v.is(StringSchema, value);
 }
 
 function isStoredToolPairHandle<Value>(value: Value): value is Value & StoredToolPairHandle {
-  return value !== null
-    && typeof value === 'object'
-    && TOOL_PAIR_HANDLE in value
-    && value[TOOL_PAIR_HANDLE] === true;
+  const parsed = v.safeParse(ToolPairMarkerSchema, value);
+  return parsed.success && parsed.output[TOOL_PAIR_HANDLE] === true;
 }
 
 function isModelMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {

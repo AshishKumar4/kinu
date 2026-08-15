@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const expectedRules = [
   "anti-slop/no-chained-type-assertions",
@@ -40,10 +40,7 @@ for (const name of expectedRules) {
   assert.equal(severity, "error", `${name} must remain an error`);
 }
 
-assert.deepEqual(config.rules["anti-slop/no-runtime-typeof"], [
-  "error",
-  { allowInTypeGuards: true },
-]);
+assert.equal(config.rules["anti-slop/no-runtime-typeof"], "error");
 assert.deepEqual(config.ignorePatterns, ["node_modules", "dist", "tools/oxlint/anti-slop"]);
 assert.equal(config.options?.denyWarnings, true);
 assert.equal(config.options?.reportUnusedDisableDirectives, "error");
@@ -93,6 +90,7 @@ const forbiddenDirectives: string[] = [];
 for (const filename of listedFiles.stdout.split("\0")) {
   if (
     filename.length === 0 ||
+    !existsSync(filename) ||
     filename.startsWith("tools/oxlint/anti-slop/") ||
     !/\.[cm]?[jt]sx?$/u.test(filename)
   ) {

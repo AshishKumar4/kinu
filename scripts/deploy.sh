@@ -4,12 +4,12 @@
 # Deploying any other way is how production once shipped without the CLI
 # download assets: the site was fine, but /downloads/* answered with the SPA
 # shell and every fresh install died on a checksum mismatch. Nothing here is
-# optional-with-a-flag except SKIP_E2E; the gate below is what makes the
-# difference between "the Worker uploaded" and "the product works".
+# optional. The gate below is what makes the difference between "the Worker
+# uploaded" and "the product works".
 #
 # Deploys the cf-backend Worker (name "proteus") with the @cloudflare/sandbox
 # Sandbox DO + Container binding, the NimbusSession DO, and the local-device
-# executor routes. Pipeline: e2e verification → vite build → CLI source
+# executor routes. Pipeline: strict repository gates → vite build → CLI source
 # archive → wrangler deploy → smoke test.
 #
 # Where the static assets come from (settled by reading wrangler 4.97 source +
@@ -23,19 +23,17 @@
 #   - dist/proteus/assets/ is NOT an assets dir. It is the worker bundle's
 #     code-split chunk output, which wrangler attaches as worker modules.
 #     Writing downloads there publishes nothing.
-# Step 2 asserts this from wrangler's own output rather than trusting it.
+# Step 3 asserts this from wrangler's own output rather than trusting it.
 #
 # Usage:
 #   bun run deploy                           # preferred
 #   bash scripts/deploy.sh
-#   SKIP_E2E=1 bash scripts/deploy.sh        # skip pre-deploy verification
 #   CLOUDFLARE_ACCOUNT_ID=... scripts/deploy.sh
 #
 # Idempotent: safe to re-run. Exits on first failure.
 set -uo pipefail
 
 GREEN='\033[0;32m'
-YELLOW='\033[0;33m'
 RED='\033[0;31m'
 BOLD='\033[1m'
 NC='\033[0m'
@@ -70,13 +68,27 @@ json_field() {
   node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>{try{const v=process.argv[1].split(".").reduce((o,k)=>o?.[k],JSON.parse(s));process.stdout.write(v==null?"":String(v))}catch{}})' "$1"
 }
 
+run_required_gate() {
+  local label="$1"
+  shift
+  echo "Running: $*"
+  if "$@"; then
+    echo -e "${GREEN}✅ $label passed${NC}"
+  else
+    echo -e "${RED}❌ $label failed. The production build and publish steps did not start.${NC}"
+    exit 1
+  fi
+}
+
 echo -e "${BOLD}Proteus Deploy Pipeline${NC}"
 echo "========================"
 echo "Proteus root: $PROTEUS_ROOT"
 echo "Account:      $CLOUDFLARE_ACCOUNT_ID"
 echo "Build sha:    $PROTEUS_SHA"
 if [ -n "$(git -C "$PROTEUS_ROOT" status --porcelain 2>/dev/null)" ]; then
-  echo -e "${YELLOW}Worktree is dirty — the published build stamp ($PROTEUS_SHA) will not describe what shipped.${NC}"
+  echo -e "${RED}Worktree is dirty — build $PROTEUS_SHA would not describe the bytes being published.${NC}"
+  echo "Commit the verified tree before deploying."
+  exit 1
 fi
 echo ""
 
@@ -91,32 +103,44 @@ if ! npx wrangler whoami >/dev/null 2>&1; then
   exit 1
 fi
 
-# ── Step 1: Pre-deploy verification ──────────────────────────────
-echo -e "${BOLD}Step 1: Pre-deploy verification${NC}"
-if [ "${SKIP_E2E:-0}" = "1" ]; then
-  echo -e "${YELLOW}SKIP_E2E=1 — skipping E2E suite${NC}"
-else
-  if bash scripts/e2e-test.sh; then
-    echo ""
-    echo -e "${GREEN}Pre-deploy checks passed.${NC}"
-  else
-    echo ""
-    echo -e "${RED}Pre-deploy checks failed. Fix issues before deploying.${NC}"
-    echo "(Re-run with SKIP_E2E=1 to bypass, e.g. for a doc-only or config-only deploy.)"
-    exit 1
-  fi
-fi
-
-# ── Step 2: Deploy Proteus ───────────────────────────────────────
-echo ""
-echo -e "${BOLD}Step 2: Deploying Proteus${NC}"
-cd "$PROTEUS_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
-
-# Install deps + build static assets.
+# The strict gates need the locked dependency graph, but dependency setup is
+# not a build or publish operation. Do it before verification when a checkout
+# has not been prepared yet; never let deploy update the lockfile.
 if [ ! -d "$PROTEUS_ROOT/node_modules" ]; then
   echo "Installing Proteus dependencies (root node_modules missing)..."
-  (cd "$PROTEUS_ROOT" && bun install) || { echo -e "${RED}bun install failed in Proteus${NC}"; exit 1; }
+  bun install --frozen-lockfile \
+    || { echo -e "${RED}bun install failed in Proteus${NC}"; exit 1; }
 fi
+
+# ── Step 1: Required pre-deploy gates ────────────────────────────
+echo -e "${BOLD}Step 1: Required pre-deploy gates${NC}"
+
+# Keep the commands explicit and unconditional. These are the same strict,
+# credential-free gates used by the repository workflows, plus the complete
+# package test script and both Layergate proofs. No environment variable may
+# skip one when this production deploy path is running.
+run_required_gate "Strict lint and TypeScript" bun run check
+run_required_gate "Production deploy contract" bun test scripts/deploy.test.ts
+run_required_gate "Agent-utils, Core, and compaction suites" bun run test
+run_required_gate "Test-utils suite" bun test --cwd packages/test-utils
+run_required_gate "Cloudflare backend and conformance suite" bun test --cwd packages/cf-backend
+run_required_gate "CLI backend and conformance suite" bun test --cwd packages/cli-backend
+run_required_gate "Full production CLI suite" bun test --cwd packages/cli
+run_required_gate "Evaluation gate logic" bun test scripts/eval.test.ts
+run_required_gate "Benchmark harness guarantees" bun test scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts
+run_required_gate "Secret scanner self-test" bun test scripts/secret-scan.test.ts
+run_required_gate "Secret scan" bun scripts/secret-scan.ts
+run_required_gate "Layergate conformance" bun run layergate
+run_required_gate "Layergate fault-localization matrix" bun run layergate --matrix
+run_required_gate "Lean proofs, consistency, and traceability" bun run verify:lean
+
+echo ""
+echo -e "${GREEN}All required pre-deploy gates passed.${NC}"
+
+# ── Step 2: Build Proteus ────────────────────────────────────────
+echo ""
+echo -e "${BOLD}Step 2: Building Proteus${NC}"
+cd "$PROTEUS_ROOT/packages/cf-backend" || { echo -e "${RED}cannot cd to cf-backend${NC}"; exit 1; }
 
 # Build the client bundle into dist/client (used by wrangler's assets directive).
 if [ -f ./node_modules/.bin/vite ]; then
@@ -141,6 +165,9 @@ for asset in proteus-source.tar.gz proteus-source.tar.gz.sha256 proteus-version.
 done
 echo -e "${GREEN}✅ CLI download assets staged in $PROTEUS_ASSETS_DIR/downloads${NC}"
 
+# ── Step 3: Deploy Proteus ───────────────────────────────────────
+echo ""
+echo -e "${BOLD}Step 3: Deploying Proteus${NC}"
 PROTEUS_DEPLOY_LOG="$(mktemp -t proteus-deploy.XXXXXX.log)"
 echo ""
 echo "Running: npx wrangler deploy (log → $PROTEUS_DEPLOY_LOG)"
@@ -184,9 +211,9 @@ fi
 
 cd "$PROTEUS_ROOT" || exit 1
 
-# ── Step 3: Post-deploy smoke test ───────────────────────────────
+# ── Step 4: Post-deploy smoke test ───────────────────────────────
 echo ""
-echo -e "${BOLD}Step 3: Post-deploy smoke test${NC}"
+echo -e "${BOLD}Step 4: Post-deploy smoke test${NC}"
 echo "Waiting 10s for deployments to propagate..."
 sleep 10
 
@@ -288,7 +315,7 @@ if [ "$SMOKE_FAIL" -ne 0 ]; then
   exit 1
 fi
 
-# ── Step 4: Summary ──────────────────────────────────────────────
+# ── Step 5: Summary ──────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Deploy complete.${NC}"
 echo "================================="

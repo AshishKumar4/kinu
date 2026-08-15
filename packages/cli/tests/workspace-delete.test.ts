@@ -74,6 +74,7 @@ describe('proteus workspace delete', () => {
     const home = workspaceHome('https://proteus.invalid');
     const proc = Bun.spawn([process.execPath, cliBin, 'workspace', 'delete', 'web-agent'], {
       cwd: repoRoot,
+      detached: true,
       env: { ...process.env, PROTEUS_HOME: home, NO_COLOR: '1' },
       stdout: 'pipe',
       stderr: 'pipe',

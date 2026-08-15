@@ -348,10 +348,23 @@ bun run deploy
 
 ### Order of operations
 
-1. **Pre-deploy verification** — runs `scripts/e2e-test.sh`. Skip with
-   `SKIP_E2E=1` for doc-only or config-only deploys.
-2. **Build** — `bun install` (if root `node_modules` missing), `vite build`,
-   then `scripts/build-cli-source-archive.sh` (CLI source tarball, `.sha256`,
+Before step 1, the script verifies Wrangler authentication and, when a checkout
+has no root `node_modules`, installs the locked dependency graph with
+`bun install --frozen-lockfile`. It refuses a dirty checkout so the build SHA in
+`/api/health` always identifies the exact source bytes that were published.
+
+1. **Required pre-deploy gates** — unconditionally runs `bun run check`; the
+   deploy contract test; the root, test-utils, Cloudflare-backend, CLI-backend,
+   and full production CLI suites (including its PTY and composition-conformance
+   coverage); deterministic eval and every credential-free benchmark, inference
+   proxy, Pi-worker, accounting, statistics, and report test; the secret-scanner
+   self-test and scan; Layergate conformance and its fault-localization matrix;
+   and the full Lean proof, consistency, and traceability gate. The costly
+   159-task corpus validation remains a separately preserved provenance run,
+   not a per-deploy check. Any failure exits before Vite, archive generation, or
+   Wrangler. There is no production-deploy skip variable.
+2. **Build** — `vite build`, then `scripts/build-cli-source-archive.sh` (CLI
+   source tarball, `.sha256`,
    `proteus-version.json`). Fails if any of the three is missing from
    `packages/cf-backend/dist/client/downloads/`.
 3. **Deploy** — `npx wrangler deploy`. Verifies the `ProteusSandbox` binding
@@ -401,7 +414,6 @@ the stamp names a commit that does not describe what shipped.
 | Variable | Default | Purpose |
 |----------|---------|---------|
 | `CLOUDFLARE_ACCOUNT_ID` | `f44999d1ddda7012e9a87729eba250f1` | Deploy account |
-| `SKIP_E2E` | `0` | `1` to skip pre-deploy E2E tests |
 
 ### Staging
 

@@ -372,7 +372,7 @@ describe('CloudAgentClient protocol', () => {
     // The fork point is the message BEFORE the picked user message.
     expect(rpc.method).toBe('forkAgent');
     expect(rpc.args).toEqual(['m2']);
-    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { id: 'do-2', name: 'helios-fork-ab12', url: '/agent/helios-fork-ab12', forkPointMs: 2 } });
+    mock.reply({ type: 'rpc', id: rpc.id, success: true, done: true, result: { id: 'do-2', name: 'helios-fork-ab12', url: '/workspace/helios-fork-ab12', forkPointMs: 2 } });
 
     const result = await forkPromise;
     expect(result.label).toBe('agent helios-fork-ab12');

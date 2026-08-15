@@ -102,4 +102,5 @@ user-facing), `AgentRuntime`/`AgentClient`/`AgentTarget` seams,
 the `agent.*` self-improvement tool namespace, per-agent device consent, peer
 messaging ("this agent wants to use your PC" is the actor asking), and
 `AGENTS.md` discovery (a repo convention). The agent remains the thing that
-acts; the workspace is the thing you create, own, and mount environments into.
+acts; the workspace is the thing you create and own, with optional execution
+environments addressed through their own namespaces.

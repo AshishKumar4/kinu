@@ -226,7 +226,128 @@ export function parsePlanReview<Value>(value: Value): PlanReview | null {
 
 /** Where a surfaced failure came from — each source owns (and clears) its own
  *  message so a recovery in one never hides a still-broken other. */
-type ErrorSource = "snapshot" | "roster" | "model" | "memory";
+export type LiveRefreshSource =
+  | "jobs"
+  | "pendingActions"
+  | "mcts"
+  | "memoryContent"
+  | "tools"
+  | "executors"
+  | "views"
+  | "consents"
+  | "consentResolution"
+  | "plan";
+
+export type LiveRefreshErrors = Partial<Record<LiveRefreshSource, string>>;
+
+interface LiveRefreshDescriptor {
+  source: LiveRefreshSource;
+  label: string;
+}
+
+const LIVE_REFRESH_DESCRIPTORS: readonly LiveRefreshDescriptor[] = [
+  { source: "jobs", label: "background jobs" },
+  { source: "pendingActions", label: "pending actions" },
+  { source: "mcts", label: "MCTS" },
+  { source: "memoryContent", label: "memory content" },
+  { source: "tools", label: "tools" },
+  { source: "executors", label: "executors" },
+  { source: "views", label: "agent views" },
+  { source: "consents", label: "device consents" },
+  { source: "consentResolution", label: "device consents" },
+  { source: "plan", label: "active plan" },
+];
+
+type ErrorSource = "snapshot" | "roster" | "model" | "memory" | LiveRefreshSource;
+
+type LiveRefreshReporter = (source: LiveRefreshSource, message: string | null) => void;
+type ConsentResolutionReporter = (consentId: string, message: string | null) => void;
+
+export interface LiveRefreshAdmission {
+  activateActor(actorKey: string): void;
+  admit(actorKey: string, requestKey: string): () => boolean;
+  invalidateActor(actorKey: string): void;
+}
+
+export function createLiveRefreshAdmission(): LiveRefreshAdmission {
+  let activeActor: string | null = null;
+  let actorEpoch = 0;
+  let requestSequence = 0;
+  const latestRequest = new Map<string, number>();
+  const advanceActor = (actorKey: string | null) => {
+    activeActor = actorKey;
+    actorEpoch += 1;
+    latestRequest.clear();
+  };
+  return {
+    activateActor(actorKey) {
+      advanceActor(actorKey);
+    },
+    admit(actorKey, requestKey) {
+      const admittedActor = actorEpoch;
+      if (actorKey !== activeActor) return () => false;
+      const requestId = ++requestSequence;
+      latestRequest.set(requestKey, requestId);
+      return () => actorKey === activeActor
+        && admittedActor === actorEpoch
+        && latestRequest.get(requestKey) === requestId;
+    },
+    invalidateActor(actorKey) {
+      if (actorKey === activeActor) advanceActor(null);
+    },
+  };
+}
+
+export function formatLiveRefreshError(errors: LiveRefreshErrors): string | null {
+  const labels: string[] = [];
+  const reasons: string[] = [];
+  for (const descriptor of LIVE_REFRESH_DESCRIPTORS) {
+    const reason = errors[descriptor.source];
+    if (!reason) continue;
+    if (!labels.includes(descriptor.label)) labels.push(descriptor.label);
+    if (!reasons.includes(reason)) reasons.push(reason);
+  }
+  if (labels.length === 0) return null;
+  return `Couldn't refresh live data for ${formatNaturalList(labels)}. Showing last known data. ${formatNaturalList(reasons)}`;
+}
+
+export async function refreshLiveResource<Value>(
+  source: LiveRefreshSource,
+  read: () => Promise<Value>,
+  apply: (value: Value) => void,
+  report: LiveRefreshReporter,
+  isCurrent: () => boolean,
+): Promise<void> {
+  if (!isCurrent()) return;
+  try {
+    const value = await read();
+    if (!isCurrent()) return;
+    apply(value);
+    report(source, null);
+  } catch (error) {
+    if (!isCurrent()) return;
+    report(source, errorMessage(error));
+  }
+}
+
+export type ConsentDecision = "once" | "always" | "deny";
+
+export function resolvePendingConsent(
+  consentId: string,
+  decision: ConsentDecision,
+  resolve: (id: string, choice: ConsentDecision) => Promise<void>,
+  remove: (id: string) => void,
+  report: ConsentResolutionReporter,
+  isCurrent: () => boolean,
+): Promise<void> {
+  return refreshLiveResource(
+    "consentResolution",
+    () => resolve(consentId, decision),
+    () => remove(consentId),
+    (_source, message) => report(consentId, message),
+    isCurrent,
+  );
+}
 
 /** Initial-load retry backoff. Doubling from 1s, capped so a long outage keeps
  *  a slow heartbeat instead of hammering the DO. */
@@ -286,6 +407,10 @@ export function useProteus(target?: string | ProteusActorAddress) {
     if (subordinate) address.subordinate = subordinate;
     return address;
   }, [workspace, subordinate]);
+  const actorKey = useMemo(
+    () => JSON.stringify([actorAddress.workspace, subordinate ?? null]),
+    [actorAddress.workspace, subordinate],
+  );
   const isSubordinate = subordinate !== undefined;
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>("connecting");
   const [agentStatus, setAgentStatus] = useState<AgentStatus | null>(null);
@@ -297,6 +422,7 @@ export function useProteus(target?: string | ProteusActorAddress) {
   // error, and none of them expire on a timer: an unread failure that quietly
   // vanishes leaves the surfaces it broke looking authoritative.
   const [errors, setErrors] = useState<Partial<Record<ErrorSource, string>>>({});
+  const [consentResolutionErrors, setConsentResolutionErrors] = useState<ReadonlyMap<string, string>>(new Map());
   const setSourceError = useCallback((source: ErrorSource, message: string | null) => {
     setErrors((prev) => {
       if ((prev[source] ?? null) === message) return prev;
@@ -305,7 +431,41 @@ export function useProteus(target?: string | ProteusActorAddress) {
       return next;
     });
   }, []);
-  const error = errors.snapshot ?? errors.roster ?? errors.model ?? errors.memory ?? null;
+  const setConsentResolutionError = useCallback((consentId: string, message: string | null) => {
+    setConsentResolutionErrors((previous) => {
+      if ((previous.get(consentId) ?? null) === message) return previous;
+      const next = new Map(previous);
+      if (message) next.set(consentId, message); else next.delete(consentId);
+      return next;
+    });
+  }, []);
+  const liveRefreshAdmissionRef = useRef<LiveRefreshAdmission | null>(null);
+  if (liveRefreshAdmissionRef.current === null) {
+    liveRefreshAdmissionRef.current = createLiveRefreshAdmission();
+  }
+  const liveRefreshAdmission = liveRefreshAdmissionRef.current;
+  const refreshCurrentLiveResource = useCallback(<Value,>(
+    source: LiveRefreshSource,
+    read: () => Promise<Value>,
+    apply: (value: Value) => void,
+  ) => refreshLiveResource(
+    source,
+    read,
+    apply,
+    setSourceError,
+    liveRefreshAdmission.admit(actorKey, source),
+  ), [actorKey, liveRefreshAdmission, setSourceError]);
+  useEffect(() => {
+    liveRefreshAdmission.activateActor(actorKey);
+    return () => liveRefreshAdmission.invalidateActor(actorKey);
+  }, [actorKey, liveRefreshAdmission]);
+  const primaryError = errors.snapshot ?? errors.roster ?? errors.model ?? errors.memory ?? null;
+  const consentResolutionReasons = [...new Set(consentResolutionErrors.values())];
+  const liveErrors = consentResolutionReasons.length === 0
+    ? errors
+    : { ...errors, consentResolution: formatNaturalList(consentResolutionReasons) };
+  const liveError = formatLiveRefreshError(liveErrors);
+  const error = combineErrorMessages(primaryError, liveError);
   const [executors, setExecutors] = useState<ExecutorInfo[]>([]);
   const [executorOutputs, setExecutorOutputs] = useState<Map<string, ExecutorOutput[]>>(new Map());
   const [lastActiveExecutor, setLastActiveExecutor] = useState<string | null>(null);
@@ -474,63 +634,41 @@ export function useProteus(target?: string | ProteusActorAddress) {
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const label = isSubordinate ? "Subordinate" : "Workspace";
-    (isSubordinate ? loadSubordinateData() : loadAllData())
+    const isCurrent = liveRefreshAdmission.admit(actorKey, "snapshot");
+    (isSubordinate ? loadSubordinateData(isCurrent) : loadAllData(isCurrent))
       .then(() => {
-        if (cancelled) return;
+        if (cancelled || !isCurrent()) return;
         failureStreak.current = 0;
         setSourceError("snapshot", null);
       })
       .catch((err) => {
-        if (cancelled) return;
+        if (cancelled || !isCurrent()) return;
         setSourceError("snapshot", `${label} snapshot failed: ${errorMessage(err)}`);
         const delay = Math.min(RETRY_MAX_MS, RETRY_BASE_MS * 2 ** failureStreak.current);
         failureStreak.current += 1;
         timer = setTimeout(() => setLoadAttempt((a) => a + 1), delay);
       });
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
-  }, [isConnected, isSubordinate, loadAttempt]);
+  }, [actorKey, isConnected, isSubordinate, liveRefreshAdmission, loadAttempt, rpc, subordinate, workspace]);
 
-  const retryLoad = useCallback(() => {
-    failureStreak.current = 0;
-    setSourceError("model", null);
-    setLoadAttempt((a) => a + 1);
-  }, [setSourceError]);
-
-  // Refresh surface data when a turn completes (streaming ends).
-  const wasStreaming = useRef(false);
-  useEffect(() => {
-    if (isSubordinate) return;
-    if (isStreaming) {
-      wasStreaming.current = true;
-    } else if (wasStreaming.current) {
-      wasStreaming.current = false;
-      refreshLiveData();
-    }
-  }, [isStreaming, agent, isSubordinate]);
-
-  // Full surface refresh on a steady 5s cadence. The chat stream already
-  // carries the conversation, so streaming only adds a faster (1s) poll of
-  // the run timeline for near-real-time spans — not all seven RPCs.
-  useEffect(() => {
-    if (!isConnected || isSubordinate) return;
-    const interval = setInterval(refreshLiveData, LIVE_DATA_REFRESH_MS);
-    return () => clearInterval(interval);
-  }, [isConnected, isSubordinate]);
-
-  const refreshBackgroundJobs = useCallback(() => {
-    rpc<BackgroundJob[]>("listBackgroundJobs", [50]).then(setBackgroundJobs).catch(() => {});
-  }, [rpc]);
+  const refreshBackgroundJobs = useCallback(() => refreshCurrentLiveResource(
+    "jobs",
+    () => rpc<BackgroundJob[]>("listBackgroundJobs", [50]),
+    setBackgroundJobs,
+  ), [refreshCurrentLiveResource, rpc]);
 
   // The queue and the changelog's unseen count come from one call: the queue
   // already folds the unseen digest into a row, and the sidebar dot reads the
   // same answer rather than a second poll that could disagree with it.
-  const refreshPendingActions = useCallback(() => {
-    rpc<PendingAction[]>("listPendingActions", []).then((actions) => {
+  const refreshPendingActions = useCallback(() => refreshCurrentLiveResource(
+    "pendingActions",
+    () => rpc<PendingAction[]>("listPendingActions", []),
+    (actions) => {
       setPendingActions(actions);
       const unseen = actions.find((a) => a.kind === "unseen_changes");
       setChangelogUnseen(unseen ? 1 : 0);
-    }).catch(() => {});
-  }, [rpc]);
+    },
+  ), [refreshCurrentLiveResource, rpc]);
 
   // Stable identity: it is an effect dependency in the changelog hook, which
   // re-reads on a timer now — an inline arrow re-armed that effect on every
@@ -543,8 +681,8 @@ export function useProteus(target?: string | ProteusActorAddress) {
   const abortChat = useCallback(() => {
     stop();
     rpc("cancelCurrentWork", [])
-      .then(() => { if (!isSubordinate) refreshBackgroundJobs(); })
-      .catch(() => { if (!isSubordinate) refreshBackgroundJobs(); });
+      .then(() => { if (!isSubordinate) void refreshBackgroundJobs(); })
+      .catch(() => { if (!isSubordinate) void refreshBackgroundJobs(); });
   }, [stop, rpc, refreshBackgroundJobs, isSubordinate]);
 
   // Listen for MCTS progress broadcasts from the server. We attach to the
@@ -573,14 +711,15 @@ export function useProteus(target?: string | ProteusActorAddress) {
             }]);
         } else if (msg.type === "device_consent_resolved") {
           setPendingConsents((prev) => prev.filter((c) => c.consentId !== msg.consentId));
+          setConsentResolutionError(msg.consentId, null);
         } else if (msg.type === "work_cancelled") {
-          refreshBackgroundJobs();
+          void refreshBackgroundJobs();
         } else if (msg.type === "pending_actions_changed") {
           // A command was parked on the owner, or they decided one. The queue
           // is polled, so the server pushes the fact rather than the rows —
           // one re-read keeps the tab badge and the queue the same answer,
           // and updates every open tab, not just the one that clicked.
-          refreshPendingActions();
+          void refreshPendingActions();
         } else if (msg.type === "branch_status") {
           setBranchRuns((prev) => [
             ...prev.filter((b) => b.branchId !== msg.branchId),
@@ -616,12 +755,16 @@ export function useProteus(target?: string | ProteusActorAddress) {
     };
     agent.addEventListener("message", handler);
     return () => agent.removeEventListener("message", handler);
-  }, [agent, refreshBackgroundJobs, refreshPendingActions, setMctsTreeFromRows, isSubordinate]);
+  }, [agent, refreshBackgroundJobs, refreshPendingActions, setConsentResolutionError, setMctsTreeFromRows, isSubordinate]);
 
-  const resolveConsent = useCallback((consentId: string, decision: "once" | "always" | "deny") => {
-    setPendingConsents((prev) => prev.filter((c) => c.consentId !== consentId)); // optimistic
-    rpc("resolveDeviceConsent", [consentId, decision]).catch(() => {});
-  }, [rpc]);
+  const resolveConsent = useCallback((consentId: string, decision: ConsentDecision) => resolvePendingConsent(
+    consentId,
+    decision,
+    (id, choice) => rpc("resolveDeviceConsent", [id, choice]),
+    (id) => setPendingConsents((previous) => previous.filter((consent) => consent.consentId !== id)),
+    setConsentResolutionError,
+    liveRefreshAdmission.admit(actorKey, `consentResolution:${consentId}`),
+  ), [actorKey, liveRefreshAdmission, rpc, setConsentResolutionError]);
 
   const refreshExposedPorts = useCallback(async () => {
     const generation = ++exposedPortsRefreshGeneration.current;
@@ -647,68 +790,114 @@ export function useProteus(target?: string | ProteusActorAddress) {
     });
   }, [rpc]);
 
-  function refreshLiveData() {
-    rpc<MctsRow[]>("getMctsTree", []).then(setMctsTreeFromRows).catch(() => {});
-    rpc<string>("getMemoryContent", []).then((c) => setMemoryContent(c ?? "")).catch(() => {});
-    // Refresh tools so newly-crafted tools appear without reconnecting.
-    rpc<ToolDescResult>("getToolDescriptions", []).then((r) => setTools(mapToolDescriptions(r))).catch(() => {});
-    rpc<ExecutorInfo[]>("getExecutors", []).then(setExecutors).catch(() => {});
-    refreshBackgroundJobs();
-    refreshExposedPorts();
-    rpc<AgentViewSummary[]>("listAgentViews", []).then(setAgentViews).catch(() => {});
-    refreshPendingActions();
-    // Re-hydrate any consent cards still pending after a reload.
-    rpc<PendingConsent[]>("listPendingConsents", []).then(setPendingConsents).catch(() => {});
-    rpc<unknown>("getActivePlanReview", []).then((plan) => setActivePlan(parsePlanReview(plan))).catch(() => {});
-  }
+  const refreshLiveData = useCallback((): Promise<void> => {
+    void refreshExposedPorts();
+    return Promise.all([
+      refreshCurrentLiveResource("mcts", () => rpc<MctsRow[]>("getMctsTree", []), setMctsTreeFromRows),
+      refreshCurrentLiveResource("memoryContent", () => rpc<string>("getMemoryContent", []), setMemoryContent),
+      refreshCurrentLiveResource(
+        "tools",
+        () => rpc<ToolDescResult>("getToolDescriptions", []),
+        (result) => setTools(mapToolDescriptions(result)),
+      ),
+      refreshCurrentLiveResource("executors", () => rpc<ExecutorInfo[]>("getExecutors", []), setExecutors),
+      refreshBackgroundJobs(),
+      refreshCurrentLiveResource("views", () => rpc<AgentViewSummary[]>("listAgentViews", []), setAgentViews),
+      refreshPendingActions(),
+      refreshCurrentLiveResource(
+        "consents",
+        () => rpc<PendingConsent[]>("listPendingConsents", []),
+        setPendingConsents,
+      ),
+      refreshCurrentLiveResource(
+        "plan",
+        () => rpc<unknown>("getActivePlanReview", []),
+        (plan) => setActivePlan(parseActivePlanReview(plan)),
+      ),
+    ]).then(() => {});
+  }, [
+    refreshBackgroundJobs,
+    refreshCurrentLiveResource,
+    refreshExposedPorts,
+    refreshPendingActions,
+    rpc,
+    setMctsTreeFromRows,
+  ]);
+
+  const retryLoad = useCallback(() => {
+    failureStreak.current = 0;
+    setSourceError("model", null);
+    setLoadAttempt((attempt) => attempt + 1);
+    if (!isSubordinate) void refreshLiveData();
+  }, [isSubordinate, refreshLiveData, setSourceError]);
+
+  // Refresh surface data when a turn completes (streaming ends).
+  const wasStreaming = useRef(false);
+  useEffect(() => {
+    if (isSubordinate) return;
+    if (isStreaming) {
+      wasStreaming.current = true;
+    } else if (wasStreaming.current) {
+      wasStreaming.current = false;
+      void refreshLiveData();
+    }
+  }, [isStreaming, isSubordinate, refreshLiveData]);
+
+  // Full surface refresh on a steady 5s cadence. The chat stream already
+  // carries the conversation, so streaming only adds a faster (1s) poll of
+  // the run timeline for near-real-time spans — not every surface RPC.
+  useEffect(() => {
+    if (!isConnected || isSubordinate) return;
+    const interval = setInterval(() => { void refreshLiveData(); }, LIVE_DATA_REFRESH_MS);
+    return () => clearInterval(interval);
+  }, [isConnected, isSubordinate, refreshLiveData]);
 
   // Initial load — ONE round-trip (getWorkspaceSnapshot) instead of 6 + N. The
   // server guards each field independently, so a single failing read degrades
   // that surface only. Live updates continue via refreshLiveData + events.
-  function loadAllData(): Promise<void> {
-    return rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", [])
-      .then(async (snap) => {
-        setAgentStatus(snap.status);
-        if (workspace) touchWorkspace(workspace).catch(() => {});
-        setTools(mapToolDescriptions(snap.tools));
-        setMemoryContent(snap.memoryContent);
-        if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
-        setMctsTreeFromRows(snap.mcts);
-        setExecutors(snap.executors);
-        setLastActiveExecutor(snap.lastActiveExecutor);
-        const outputs = new Map<string, ExecutorOutput[]>();
-        for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
-        setExecutorOutputs(outputs);
-        refreshExposedPorts();
-        refreshPendingActions();
-        setActivePlan(parsePlanReview(await rpc<unknown>("getActivePlanReview", [])));
-      });
+  async function loadAllData(isCurrent: () => boolean): Promise<void> {
+    const snap = await rpc<WorkspaceSnapshot>("getWorkspaceSnapshot", []);
+    if (!isCurrent()) return;
+    setAgentStatus(snap.status);
+    if (workspace) touchWorkspace(workspace).catch(() => {});
+    setTools(mapToolDescriptions(snap.tools));
+    setMemoryContent(snap.memoryContent);
+    if (snap.memoryContent) setMemory(parseMemoryContent(snap.memoryContent));
+    setMctsTreeFromRows(snap.mcts);
+    setExecutors(snap.executors);
+    setLastActiveExecutor(snap.lastActiveExecutor);
+    const outputs = new Map<string, ExecutorOutput[]>();
+    for (const eo of snap.executorOutputs) outputs.set(eo.name, eo.outputs.slice().reverse());
+    setExecutorOutputs(outputs);
+    void refreshExposedPorts();
+    void refreshPendingActions();
+    const plan = await rpc<unknown>("getActivePlanReview", []);
+    if (isCurrent()) setActivePlan(parsePlanReview(plan));
   }
 
-  function loadSubordinateData(): Promise<void> {
-    return rpc<{
+  async function loadSubordinateData(isCurrent: () => boolean): Promise<void> {
+    const snapshot = await rpc<{
       name: string;
       displayName: string;
       role: string;
       mission: string;
       model: string | null;
-    }>("getSubordinateSnapshot", [])
-      .then((snapshot) => {
-        setAgentStatus({
-          id: snapshot.name,
-          name: snapshot.name,
-          displayName: snapshot.displayName,
-          purpose: snapshot.role,
-          soul: snapshot.mission,
-          createdAt: 0,
-          scaffoldVersion: 0,
-          searchNodeCount: 0,
-          craftedToolCount: 0,
-          messageCount: messages.length,
-          model: snapshot.model ?? "",
-          forkLineage: null,
-        });
-      });
+    }>("getSubordinateSnapshot", []);
+    if (!isCurrent()) return;
+    setAgentStatus({
+      id: snapshot.name,
+      name: snapshot.name,
+      displayName: snapshot.displayName,
+      purpose: snapshot.role,
+      soul: snapshot.mission,
+      createdAt: 0,
+      scaffoldVersion: 0,
+      searchNodeCount: 0,
+      craftedToolCount: 0,
+      messageCount: messages.length,
+      model: snapshot.model ?? "",
+      forkLineage: null,
+    });
   }
 
   const refreshSubordinates = useCallback(() => {
@@ -738,22 +927,34 @@ export function useProteus(target?: string | ProteusActorAddress) {
     ++subordinateRefreshGeneration.current;
     setLoadAttempt(0);
     failureStreak.current = 0;
+    wasStreaming.current = false;
+    isFirstOpen.current = true;
+    searchSeq.current += 1;
+    clearTimeout(searchTimer.current);
     setErrors({});
+    setConsentResolutionErrors(new Map());
     setAgentStatus(null);
     setTools([]);
     setMemory([]);
     setMemoryContent("");
     setMctsTree(null);
     mctsFingerprint.current = "";
+    setExecutors([]);
+    setExecutorOutputs(new Map());
+    setLastActiveExecutor(null);
     setPinnedPorts([]);
     setPreviewError(null);
+    setBackgroundJobs([]);
+    setAgentViews([]);
+    setPendingConsents([]);
     setActivePlan(null);
     setPendingActions([]);
+    setChangelogUnseen(0);
+    setBranchRuns([]);
     setChatError(null);
-    if (!isSubordinate) {
-      setSubordinates([]);
-      setSubordinateEvents([]);
-    }
+    setSubordinates([]);
+    setSubordinateEvents([]);
+    setSignalCards([]);
   }, [workspace, subordinate]);
 
   // File attachments ride as data-URL FileUIParts ahead of the text part —
@@ -980,6 +1181,24 @@ function errorMessage<ErrorValue>(err: ErrorValue): string {
   const text = v.safeParse(v.string(), err);
   if (text.success && text.output.trim()) return text.output;
   try { return JSON.stringify(err) || "unknown error"; } catch { return "unknown error"; }
+}
+
+function formatNaturalList(values: readonly string[]): string {
+  if (values.length <= 1) return values[0] ?? "unknown data";
+  if (values.length === 2) return `${values[0]} and ${values[1]}`;
+  return `${values.slice(0, -1).join(", ")}, and ${values.at(-1)}`;
+}
+
+function combineErrorMessages(primary: string | null, live: string | null): string | null {
+  if (!primary) return live;
+  if (!live) return primary;
+  return `${primary} ${live}`;
+}
+
+function parseActivePlanReview<Value>(value: Value): PlanReview | null {
+  const parsed = v.safeParse(v.nullable(PlanReviewSchema), value);
+  if (!parsed.success) throw new Error("Active plan returned an invalid response");
+  return parsed.output;
 }
 
 function parseSubordinateRoster<Value>(value: Value): SubordinateRosterEntry[] | null {

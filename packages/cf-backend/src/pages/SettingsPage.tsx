@@ -361,10 +361,10 @@ export default function SettingsPage() {
 
 // ── Per-agent device file-access tier ────────────────────────────
 
-/** The grant surface for the /pc full-filesystem consent tier — a workspace
+/** The grant surface for the laptop executor's full-filesystem consent tier — a workspace
  *  concern (this agent's tier on your connected device), while device
  *  registration itself is account-level (Account settings → Devices). By
- *  default the /pc mount reaches only the consented folder (connect dir /
+ *  default the laptop file plane reaches only the consented folder (connect dir /
  *  home); this flips THIS agent's tier via setDeviceConsentScope — the same
  *  remembered policy the hub enforces. */
 function DeviceAccessCard({ agentName }: { agentName: string }) {
@@ -402,7 +402,7 @@ function DeviceAccessCard({ agentName }: { agentName: string }) {
   return (
     <Card title="Device access" icon={DesktopTowerIcon}>
       <p className="p-meta p-text-3">
-        How far this workspace's agent may reach on your connected PC (the /pc mount).
+        How far this workspace's agent may reach through the connected laptop executor.
         By default it sees only the folder you consented to when connecting.
       </p>
       {resource.status === "error" && !current ? (

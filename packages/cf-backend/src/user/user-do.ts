@@ -250,8 +250,8 @@ function cleanCliTokenLabel(label?: string): string {
 
 function parseCapabilityList(value: string): string[] {
   try {
-    const parsed = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : [];
+    const parsed = v.safeParse(v.array(v.string()), JSON.parse(value));
+    return parsed.success ? parsed.output : [];
   } catch {
     return [];
   }
@@ -1125,7 +1125,7 @@ export class UserDO extends Agent<Env> {
     return { ok: true };
   }
 
-  /** The /pc mount's path-scope check: does this agent hold the
+  /** The laptop executor's path-scope check: does this agent hold the
    *  full-filesystem tier on the currently connected device? */
   async getDeviceFsConsent(caller: UserCaller, agentName: string): Promise<{ fullFilesystem: boolean }> {
     const resolved = await this.requireTier(caller, 'device.consent');

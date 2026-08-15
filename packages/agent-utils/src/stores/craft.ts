@@ -1,5 +1,6 @@
 import type { SqlExecutor, SqlRow } from "../types";
 import type { CraftedTool, CraftedToolProvider } from "../codemode/builder";
+import * as v from "valibot";
 
 // ---------------------------------------------------------------------------
 // SQLite row type
@@ -15,19 +16,13 @@ type CraftRow = SqlRow<{
 	updated_at: number;
 }>;
 
-function isString<Value>(value: Value): value is Value & string {
-	return typeof value === "string";
-}
-
-function isStringDictionary<Value>(value: Value): value is Value & Record<string, string> {
-	if (value === null || Array.isArray(value) || typeof value !== "object") return false;
-	return Object.values(value).every(isString);
-}
+const StringDictionarySchema = v.record(v.string(), v.string());
 
 function parseParams(params: string): Record<string, string> {
 	const value: unknown = JSON.parse(params);
-	if (!isStringDictionary(value)) throw new Error("crafted tool params must be a string dictionary");
-	return value;
+	return v.parse(StringDictionarySchema, value, {
+		message: "crafted tool params must be a string dictionary",
+	});
 }
 
 function isCraftScope(scope: string): scope is CraftedTool["scope"] {

@@ -250,7 +250,7 @@ function UnavailableMount({ mount, exec }: { mount: MountInfo; exec: ExecutorInf
   );
 }
 
-/** The /pc mount's connect call-to-action. Registration, revocation and
+/** The laptop executor's connect call-to-action. Registration, revocation and
  *  consent live in Account settings → Devices — this only reads status to say
  *  the honest thing (daemon offline vs no device registered) and links there. */
 function PcConnectCta() {

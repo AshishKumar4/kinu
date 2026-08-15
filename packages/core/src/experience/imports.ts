@@ -33,6 +33,7 @@ import { upsertCraftedTool } from '../craft/conflict.js';
 import { createFactsStore } from '../memory/facts.js';
 import { nanoid } from '../utils/nanoid.js';
 import { isoDate, nowMs } from '../utils/date.js';
+import * as v from 'valibot';
 import {
   EXPERIENCE_KINDS,
   misevolutionSourceOf,
@@ -90,7 +91,8 @@ function toImportRow(r: RawImportRow): ImportedExperienceRow | null {
   let turnIds: string[] = [];
   try {
     const parsed: unknown = JSON.parse(r.turn_ids);
-    if (Array.isArray(parsed)) turnIds = parsed.filter((v): v is string => typeof v === 'string');
+    const decoded = v.safeParse(v.array(v.string()), parsed);
+    if (decoded.success) turnIds = decoded.output;
   } catch { /* malformed row — treat as unbound */ }
   return {
     id: r.id, libraryId: r.library_id, kind: r.kind, key: r.key, title: r.title,

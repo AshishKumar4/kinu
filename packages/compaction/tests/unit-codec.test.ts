@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { modelMessageSchema, type ModelMessage } from 'ai';
+import * as v from 'valibot';
 import {
   buildPlan,
   proteusCodec,
@@ -433,7 +434,7 @@ describe('conventions', () => {
 });
 
 function isString<Value>(value: Value): value is Value & string {
-  return typeof value === 'string';
+  return v.is(v.string(), value);
 }
 
 function isMessageGroup<Value>(value: Value): value is Value & ModelMessage[] {

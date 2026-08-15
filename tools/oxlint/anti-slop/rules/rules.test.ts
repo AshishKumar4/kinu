@@ -106,16 +106,16 @@ tester.run("anti-slop/no-reflect-get", noReflectGetRule, {
 
 tester.run("anti-slop/no-runtime-typeof", noRuntimeTypeofRule, {
   valid: [
-    {
-      code: 'function isString(value: unknown): value is string { return typeof value === "string"; }',
-      options: [{ allowInTypeGuards: true }],
-    },
+    "parseWithSchema(value);",
     "function check(Object: new () => Owner, value: Owner) { return value instanceof Object; }",
   ],
   invalid: [
     {
       code: 'function parse(value: unknown): string { if (typeof value !== "string") throw new Error(); return value; }',
-      options: [{ allowInTypeGuards: true }],
+      errors: [{ messageId: "runtimeTypeof" }],
+    },
+    {
+      code: 'function isString(value: unknown): value is string { return typeof value === "string"; }',
       errors: [{ messageId: "runtimeTypeof" }],
     },
     {
@@ -126,10 +126,12 @@ tester.run("anti-slop/no-runtime-typeof", noRuntimeTypeofRule, {
 });
 
 tester.run("anti-slop/no-shape-in-symbol-names", noForbiddenTermInSymbolNamesRule, {
-  valid: ["const reshapeImage = (value: Image) => value;", "interface ShapelessGeometry {}"],
+  valid: ["const resizeImage = (value: Image) => value;", "interface Geometry {}"],
   invalid: [
     { code: "interface UserShape {}", errors: [{ messageId: "forbiddenSymbolName" }] },
     { code: "const payload_shape = {};", errors: [{ messageId: "forbiddenSymbolName" }] },
+    { code: "const reshapeImage = (value: Image) => value;", errors: [{ messageId: "forbiddenSymbolName" }] },
+    { code: "interface ShapelessGeometry {}", errors: [{ messageId: "forbiddenSymbolName" }] },
   ],
 });
 

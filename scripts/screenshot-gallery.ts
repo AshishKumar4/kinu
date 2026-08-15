@@ -64,10 +64,6 @@ function chromePath(): string | undefined {
   return undefined;
 }
 
-function isPngPath<Value>(value: Value): value is Value & `${string}.png` {
-  return typeof value === 'string' && value.endsWith('.png');
-}
-
 async function waitForServer(url: string, timeoutMs = 30_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -110,8 +106,7 @@ async function shoot(
   await page.goto(url, { waitUntil: 'networkidle0' });
   // React renders after the RPC stubs resolve; the mock is async.
   await new Promise((r) => setTimeout(r, 600));
-  const path = join(outDir, `${frame}-${size.name}-${mode}.png`);
-  if (!isPngPath(path)) throw new Error(`screenshot path must end in .png: ${path}`);
+  const path: `${string}.png` = `${join(outDir, `${frame}-${size.name}-${mode}`)}.png`;
   await page.screenshot({ path, fullPage: true });
   await page.close();
   if (failures.length > 0) console.warn(`  ! ${frame}/${mode} console errors:\n    ${failures.join('\n    ')}`);

@@ -389,8 +389,8 @@ function ToolCallPart({ part }: { part: AnyToolPart }) {
         isRunning={part.state === "input-available" || part.state === "input-streaming"}
         isError={partFailed(part)}
         errorText={part.state === "output-error" ? part.errorText : undefined} />
-      {/* Inline preview card — when a tool returns a /_preview/ URL, surface a
-          live iframe under the tool block so the user sees the running app
+      {/* Inline preview card — when an executor returns a preview URL, surface
+          a live iframe under the tool block so the user sees the running app
           inline (also promoted to the Output surface). */}
       {previewUrl && (
         <div className="mt-2 h-64 rounded-md border p-border overflow-hidden">

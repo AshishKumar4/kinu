@@ -19,6 +19,7 @@
 import { SPILL_DIRS, type SqlExecutor, type VFS } from '@proteus/core';
 import type { PlanSnapshot, PlanStore, TranscriptStore } from '@better-compact/core';
 import type { ArchiveIndexStore, ArchiveRange } from './manifest.js';
+import * as v from 'valibot';
 
 const COMPACTION_DIR = SPILL_DIRS.compaction;
 
@@ -107,82 +108,44 @@ function toArchiveRange(row: ArchiveRangeRow): ArchiveRange {
   };
 }
 
-type PlanStage = NonNullable<PlanSnapshot['stages']>[number];
-type RawTailBoundary = NonNullable<PlanSnapshot['rawTailItemBoundary']>;
+const RawTailBoundarySchema = v.object({
+  itemKey: v.string(),
+  side: v.picklist(['before', 'after']),
+});
+const PlanStageSchema = v.object({
+  name: v.string(),
+  label: v.string(),
+  beforeTokens: v.number(),
+  afterTokens: v.number(),
+  clearedTokens: v.number(),
+  changedMessages: v.number(),
+  changedParts: v.number(),
+  status: v.string(),
+});
+const PlanSnapshotSchema: v.GenericSchema<PlanSnapshot> = v.object({
+  sessionId: v.string(),
+  rangeHash: v.string(),
+  contextLimit: v.number(),
+  rawTailStartMessageId: v.string(),
+  rawTailItemBoundary: v.optional(RawTailBoundarySchema),
+  transcriptRelativePath: v.string(),
+  beforeTokens: v.number(),
+  afterPruneTokens: v.number(),
+  overheadTokens: v.optional(v.number()),
+  triggerTokens: v.number(),
+  targetTokens: v.number(),
+  requiresCustomCompaction: v.boolean(),
+  preservedToolCallIds: v.optional(v.array(v.string())),
+  assistantSummaryKeys: v.optional(v.array(v.string())),
+  assistantSummaries: v.optional(v.record(v.string(), v.string())),
+  prefixSummary: v.optional(v.string()),
+  stages: v.optional(v.array(PlanStageSchema)),
+  createdAt: v.number(),
+});
 
-function isString<Value>(value: Value): value is Value & string {
-  return typeof value === 'string';
-}
-
-function isNumber<Value>(value: Value): value is Value & number {
-  return typeof value === 'number';
-}
-
-function isBoolean<Value>(value: Value): value is Value & boolean {
-  return typeof value === 'boolean';
-}
-
-function isStringArray<Value>(value: Value): value is Value & string[] {
-  return Array.isArray(value) && value.every(isString);
-}
-
-function isStringDictionary<Value>(value: Value): value is Value & Record<string, string> {
-  return value !== null
-    && !Array.isArray(value)
-    && typeof value === 'object'
-    && Object.values(value).every(isString);
-}
-
-function isRawTailBoundary<Value>(value: Value): value is Value & RawTailBoundary {
-  return value !== null
-    && typeof value === 'object'
-    && 'itemKey' in value
-    && isString(value.itemKey)
-    && 'side' in value
-    && (value.side === 'before' || value.side === 'after');
-}
-
-function isPlanStage<Value>(value: Value): value is Value & PlanStage {
-  return value !== null
-    && typeof value === 'object'
-    && 'name' in value && isString(value.name)
-    && 'label' in value && isString(value.label)
-    && 'beforeTokens' in value && isNumber(value.beforeTokens)
-    && 'afterTokens' in value && isNumber(value.afterTokens)
-    && 'clearedTokens' in value && isNumber(value.clearedTokens)
-    && 'changedMessages' in value && isNumber(value.changedMessages)
-    && 'changedParts' in value && isNumber(value.changedParts)
-    && 'status' in value && isString(value.status);
-}
-
-function isPlanSnapshot<Value>(value: Value): value is Value & PlanSnapshot {
-  if (value === null || typeof value !== 'object') return false;
-  if (!('sessionId' in value) || !isString(value.sessionId)) return false;
-  if (!('rangeHash' in value) || !isString(value.rangeHash)) return false;
-  if (!('contextLimit' in value) || !isNumber(value.contextLimit)) return false;
-  if (!('rawTailStartMessageId' in value) || !isString(value.rawTailStartMessageId)) return false;
-  if (!('transcriptRelativePath' in value) || !isString(value.transcriptRelativePath)) return false;
-  if (!('beforeTokens' in value) || !isNumber(value.beforeTokens)) return false;
-  if (!('afterPruneTokens' in value) || !isNumber(value.afterPruneTokens)) return false;
-  if (!('triggerTokens' in value) || !isNumber(value.triggerTokens)) return false;
-  if (!('targetTokens' in value) || !isNumber(value.targetTokens)) return false;
-  if (!('requiresCustomCompaction' in value) || !isBoolean(value.requiresCustomCompaction)) return false;
-  if (!('createdAt' in value) || !isNumber(value.createdAt)) return false;
-  if ('rawTailItemBoundary' in value && value.rawTailItemBoundary !== undefined
-      && !isRawTailBoundary(value.rawTailItemBoundary)) return false;
-  if ('overheadTokens' in value && value.overheadTokens !== undefined
-      && !isNumber(value.overheadTokens)) return false;
-  if ('preservedToolCallIds' in value && value.preservedToolCallIds !== undefined
-      && !isStringArray(value.preservedToolCallIds)) return false;
-  if ('assistantSummaryKeys' in value && value.assistantSummaryKeys !== undefined
-      && !isStringArray(value.assistantSummaryKeys)) return false;
-  if ('assistantSummaries' in value && value.assistantSummaries !== undefined
-      && !isStringDictionary(value.assistantSummaries)) return false;
-  if ('prefixSummary' in value && value.prefixSummary !== undefined
-      && !isString(value.prefixSummary)) return false;
-  if ('stages' in value && value.stages !== undefined
-      && (!Array.isArray(value.stages) || !value.stages.every(isPlanStage))) return false;
-  return true;
+function parsePlanSnapshot(input: { value: unknown }): PlanSnapshot | null {
+  const parsed = v.safeParse(PlanSnapshotSchema, input.value);
+  return parsed.success ? parsed.output : null;
 }
 
 export function createCompactionStateStore(sql: SqlExecutor): CompactionStateStore {
@@ -195,7 +158,7 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
         if (!json) return null;
         try {
           const parsed: unknown = JSON.parse(json);
-          return isPlanSnapshot(parsed) ? parsed : null;
+          return parsePlanSnapshot({ value: parsed });
         } catch {
           return null;
         }
@@ -230,9 +193,9 @@ export function createCompactionStateStore(sql: SqlExecutor): CompactionStateSto
         WHERE session_key = ${sessionKey} LIMIT 1`;
       const row = rows[0];
       const tokens = row?.last_prompt_tokens;
-      if (!isNumber(tokens) || tokens <= 0) return null;
+      if (tokens == null || tokens <= 0) return null;
       const measuredAt = row?.measured_at_length;
-      if (isNumber(measuredAt) && historyLength < measuredAt) return null;
+      if (measuredAt != null && historyLength < measuredAt) return null;
       return tokens;
     },
     savePromptTokens(sessionKey, tokens, historyLength) {

@@ -112,7 +112,7 @@ I wanted model choice to be flexible without forcing anyone into a single vendor
 
 | Document | Description |
 |----------|-------------|
-| [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (mounts, identity, sessions), agents = actors inside it |
+| [Workspaces](docs/WORKSPACES.md) | The object model: workspace = container (file plane, identity, sessions), agents = actors inside it |
 | [Architecture](docs/ARCHITECTURE.md) | System design, message flow, package structure, Think lifecycle |
 | [Evolution](docs/EVOLUTION.md) | 3-timescale self-evolution, CraftStore lifecycle, scaffold mutation |
 | [MCTS](docs/MCTS.md) | Monte Carlo Tree Search, UCT formula, branch isolation, convergence |

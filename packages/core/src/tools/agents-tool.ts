@@ -43,7 +43,12 @@ import type { AgentRuntime } from '../types/agent-runtime.js';
 import type { MergeStrategy } from '../heads/types.js';
 import type { WorkMode } from '../prompting/surface.js';
 import { nanoid } from '../utils/nanoid.js';
-import { JsonObjectSchema, parseJsonObject, type JsonObject, type JsonValue } from '../utils/json.js';
+import {
+  JsonObjectSchema,
+  parseJsonObject,
+  type JsonObject,
+  type JsonValue,
+} from '../utils/json.js';
 
 // ── Team (subordinate agents) deps contract ─────────────────────────────────
 // The deps implementation rides the workspace DO's facet substrate: spawn =
@@ -328,8 +333,19 @@ export interface AgentsToolInput {
   keep_history?: boolean;
 }
 
-function isMergeableOption<T>(value: T): value is T & object {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+interface MergeableOption {
+  [key: string]: BuiltinStrategyOptions[keyof BuiltinStrategyOptions];
+}
+
+const MergeableOptionSchema = v.custom<MergeableOption>(
+  (input) => !Array.isArray(input) && v.is(v.object({}), input),
+);
+
+function mergeableOption(
+  value: BuiltinStrategyOptions[keyof BuiltinStrategyOptions],
+): MergeableOption | undefined {
+  const parsed = v.safeParse(MergeableOptionSchema, value);
+  return parsed.success ? parsed.output : undefined;
 }
 
 interface HeadsOptionOverlay {
@@ -471,10 +487,12 @@ async function runFork(
     : new Map(Object.entries(defaults ?? {}));
   for (const [key, value] of Object.entries(callerOpts)) {
     const existing = options.get(key);
+    const existingObject = mergeableOption(existing);
+    const valueObject = mergeableOption(value);
     options.set(
       key,
-      isMergeableOption(existing) && isMergeableOption(value)
-        ? Object.assign({}, existing, value)
+      existingObject && valueObject
+        ? Object.assign({}, existingObject, valueObject)
         : value,
     );
   }
@@ -484,7 +502,8 @@ async function runFork(
   if (input.forks) {
     const headsOptions: HeadsOptionOverlay = {};
     const existingHeads = options.get('heads');
-    if (isMergeableOption(existingHeads)) Object.assign(headsOptions, existingHeads);
+    const existingHeadsObject = mergeableOption(existingHeads);
+    if (existingHeadsObject) Object.assign(headsOptions, existingHeadsObject);
     Object.assign(headsOptions, { heads: input.forks });
     if (input.merge_strategy) Object.assign(headsOptions, { mergeStrategy: input.merge_strategy });
     options.set('heads', headsOptions);

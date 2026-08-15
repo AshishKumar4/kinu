@@ -705,7 +705,7 @@ function Controls() {
         <input className="w-full px-3 py-1.5 rounded-md border p-border p-card text-sm font-mono focus:outline-none focus:ring-1 focus:ring-[var(--c-accent)]" placeholder="raw input (fork modal style)" />
         <textarea rows={2} className="block w-full resize-y rounded-md border p-border p-bg px-3 py-3 text-sm leading-7 p-text outline-none placeholder:p-text-3 transition-all focus:border-[var(--c-accent)] focus:ring-2 focus:ring-[var(--c-accent-subtle)]" placeholder="mission textarea (home page style)" />
       </div>
-      <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent uses think(strategy:'mcts') to investigate subproblems." />
+      <EmptyState icon={<BrainIcon size={32} />} title="No exploration trees yet" hint="Exploration trees appear when the agent forks with settle:'mcts' to investigate subproblems." />
     </div>
   );
 }
@@ -966,7 +966,7 @@ function LandingV2() {
           {[
             ["p-dot-accent", "Turn: fix SAVE20 coupon", "48.0s"],
             ["p-dot-neutral", "sandbox: bun test packages/checkout", "14.2s"],
-            ["p-dot-info", "think(mcts): bisect migration", "12 nodes"],
+            ["p-dot-info", "agents(fork/mcts): bisect migration", "12 nodes"],
             ["p-dot-success", "deploy: staging green", "checks passed"],
           ].map(([dot, label, meta]) => (
             <div key={label} className="flex items-center gap-2.5 py-1">

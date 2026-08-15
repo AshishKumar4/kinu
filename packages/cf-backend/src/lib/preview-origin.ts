@@ -167,7 +167,7 @@ export function isPreviewUrl(value: string, configuredSuffix: string | null = br
 /**
  * Pull a preview URL out of a tool result. Outputs are usually strings (e.g.
  * `https://8080-proteus-app-p8080_ab12cd34.example.com/`) but can also be
- * objects with a `url` field (exposeSandboxPort returns `{url}`).
+ * objects with a `url` field.
  *
  * The text being scanned is agent-writable — a command's stdout is a tool result
  * too — so candidates are parsed and checked against `isPreviewUrl` rather than

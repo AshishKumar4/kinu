@@ -305,6 +305,29 @@ describe('agents tool — fork dispatch', () => {
     expect(strategyOption(observedOpts, 'heads')).toEqual({ controller, count: 5 });
   });
 
+  test('an array option replaces a strategy bag instead of becoming numeric object keys', async () => {
+    const reg = createStrategyRegistry();
+    let observedOpts: StrategyContext['options'] | undefined;
+    reg.register({
+      id: FORK_STRATEGY_ID,
+      async explore(ctx) {
+        observedOpts = ctx.options;
+        return { strategy: FORK_STRATEGY_ID, best: { text: '', score: 1, source: '' }, all: [], cost: { durationMs: 0 } };
+      },
+    });
+    const { rt } = createTestRuntime();
+    const t = agentsTool({
+      fork: {
+        registry: reg, rt, model: testModel,
+        defaultOptions: () => ({ heads: { controller: { __infra: true } } }),
+      },
+    });
+
+    await t.execute({ action: 'fork', task: 't', options: { heads: ['one', 'two'] } });
+
+    expect(strategyOption(observedOpts, 'heads')).toEqual(['one', 'two']);
+  });
+
   test('folds typed forks / merge_strategy input into options.heads', async () => {
     const reg = createStrategyRegistry();
     let observedOpts: StrategyContext['options'] | undefined;

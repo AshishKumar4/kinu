@@ -55,6 +55,7 @@
 
 import { tool, jsonSchema } from 'ai';
 import type { ToolSet } from 'ai';
+import * as v from 'valibot';
 import type { AgentRuntime } from '../types/agent-runtime.js';
 import {
   BUILTIN_TOOL_DESCRIPTIONS, memoryToolSpec, renderToolSchemaDescription,
@@ -776,9 +777,8 @@ function webErrorResult(err: Error | string) {
 function isExecutableToolEntry(
   input: { value: unknown },
 ): input is { value: ExecutableToolEntry } {
-  return input.value !== null
-    && typeof input.value === 'object'
-    && 'inputSchema' in input.value
-    && 'execute' in input.value
-    && typeof input.value.execute === 'function';
+  return v.is(v.object({
+    inputSchema: v.unknown(),
+    execute: v.function(),
+  }), input.value);
 }

@@ -11,7 +11,14 @@
 import { describe, test, expect } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { PATTERNS, applyIgnores, parseIgnoreFile, scanText, suppresses } from './secret-scan.js';
+import {
+  PATTERNS,
+  applyIgnores,
+  parseIgnoreFile,
+  scanText,
+  selectScanCandidates,
+  suppresses,
+} from './secret-scan.js';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -133,4 +140,12 @@ test('the committed .secretscanignore suppresses the redactor fixture it names',
 test('this file contains no literal secret shape of its own', () => {
   const self = readFileSync(join(REPO_ROOT, 'scripts', 'secret-scan.test.ts'), 'utf8');
   expect(scanText('scripts/secret-scan.test.ts', self)).toEqual([]);
+});
+
+test('tracked deletions are not read while extant scannable files remain admitted', () => {
+  const existing = new Set(['src/current.ts', 'docs/current.md']);
+  expect(selectScanCandidates(
+    ['src/current.ts', 'scripts/deleted.sh', 'docs/current.md', 'dist/ignored.bin', ''],
+    (file) => existing.has(file),
+  )).toEqual(['src/current.ts', 'docs/current.md']);
 });

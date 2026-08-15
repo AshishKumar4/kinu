@@ -77,6 +77,18 @@ _isolation = importlib.util.module_from_spec(_SPEC)
 _SPEC.loader.exec_module(_isolation)
 assert_throwaway_home = _isolation.assert_throwaway_home
 
+_MODEL_ENDPOINT_PATH = Path(__file__).resolve().parents[3] / "bench" / "model_endpoint.py"
+_MODEL_ENDPOINT_SPEC = importlib.util.spec_from_file_location(
+    "proteus_bench_model_endpoint", _MODEL_ENDPOINT_PATH
+)
+if _MODEL_ENDPOINT_SPEC is None or _MODEL_ENDPOINT_SPEC.loader is None:
+    raise ImportError(f"Cannot load benchmark model defaults from {_MODEL_ENDPOINT_PATH}")
+_model_endpoint = importlib.util.module_from_spec(_MODEL_ENDPOINT_SPEC)
+_MODEL_ENDPOINT_SPEC.loader.exec_module(_model_endpoint)
+DEFAULT_PROTEUS_AI_BASE_URL = _model_endpoint.DEFAULT_PROTEUS_AI_BASE_URL
+DEFAULT_WORKERS_AI_MODEL_ID = _model_endpoint.DEFAULT_WORKERS_AI_MODEL_ID
+resolve_bearer_token = _model_endpoint.resolve_bearer_token
+
 _WORKSPACE_NAME = "clbench"
 
 _DEFAULT_PURPOSE = (
@@ -106,30 +118,18 @@ def _resolve_repo_root(explicit: Optional[str]) -> Path:
     return root
 
 
-def _resolve_api_key(provider: str, api_key_env: Optional[str]) -> str:
+def _resolve_api_key(provider: str, base_url: str, api_key_env: Optional[str]) -> str:
     """Read the provider key from the environment, else the Proteus config.
 
     Never accepted as a system param and never passed on argv — a benchmark
     config is a committed file and a command line is world-readable.
     """
-    env_name = api_key_env or f"{provider.upper()}_API_KEY"
-    key = os.environ.get(env_name, "").strip()
-    if key:
-        return key
-
-    config_path = Path.home() / ".proteus" / "config.json"
-    if config_path.is_file():
-        try:
-            config = json.loads(config_path.read_text(encoding="utf-8"))
-            key = str(config.get("providers", {}).get(provider, {}).get("apiKey", ""))
-        except (json.JSONDecodeError, OSError, AttributeError) as exc:
-            raise ValueError(f"Could not read {config_path}: {exc}") from exc
-    if not key:
-        raise ValueError(
-            f"No API key for provider '{provider}'. Set ${env_name}, or add "
-            f"providers.{provider}.apiKey to {config_path}."
-        )
-    return key
+    return resolve_bearer_token(
+        base_url,
+        provider,
+        api_key_env=api_key_env,
+        environ=os.environ,
+    )
 
 
 @register_system("proteus")
@@ -138,9 +138,9 @@ class ProteusSystem(ContinualLearningSystem):
 
     def __init__(
         self,
-        model: str = "deepseek/deepseek-v4-flash",
-        base_url: str = "https://openrouter.ai/api/v1",
-        provider: str = "openrouter",
+        model: str = DEFAULT_WORKERS_AI_MODEL_ID,
+        base_url: str = DEFAULT_PROTEUS_AI_BASE_URL,
+        provider: str = "workers-ai",
         name: str = "proteus",
         timeout: int = 900,
         auto_evolve: bool = True,
@@ -172,7 +172,7 @@ class ProteusSystem(ContinualLearningSystem):
         self._purpose = purpose
         self._bun = bun
         self._repo_root = _resolve_repo_root(repo_root)
-        self._auth_header = f"Bearer {_resolve_api_key(provider, api_key_env)}"
+        self._auth_header = f"Bearer {_resolve_api_key(provider, base_url, api_key_env)}"
 
         self._root = Path(create_run_workspace("proteus_bench"))
         self._workspace_ready = False

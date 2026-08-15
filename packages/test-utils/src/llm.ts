@@ -1,6 +1,7 @@
 // LLM fixtures — scripted responses without hitting an actual model.
 import type { JsonValue, LLM } from '@proteus/core';
 import type { LanguageModel, ToolExecutionOptions } from 'ai';
+import * as v from 'valibot';
 
 /** A scripted LLM that returns the next answer in `responses` on each call.
  *  Tracks all prompts seen so tests can assert what was asked. */
@@ -48,7 +49,8 @@ export function createEchoLLM(): LLM {
 /** An LLM that returns canned JSON, with retries on schema mismatch. Pair
  *  with structured-output tests (auto-judge, curriculum, sleep-time, eval). */
 export function createJSONLLM(payload: JsonValue): LLM {
-  const json = isString(payload) ? payload : JSON.stringify(payload);
+  const stringPayload = v.safeParse(v.string(), payload);
+  const json = stringPayload.success ? stringPayload.output : JSON.stringify(payload);
   return {
     async *stream() { yield json; },
     async complete() { return json; },
@@ -88,10 +90,6 @@ const DEFAULT_TOOL_OPTIONS: ToolExecutionOptions = {
   toolCallId: 'test-tool-call',
   messages: [],
 };
-
-function isString<Value>(value: Value): value is Value & string {
-  return typeof value === 'string';
-}
 
 export function toolExecute<Args, Result>(
   entry: ExecutableTool<Args, Result>,

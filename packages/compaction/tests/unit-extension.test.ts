@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import type { ModelMessage } from 'ai';
+import * as v from 'valibot';
 import { CONTEXT_CHECKPOINT_PREFIX, type TransformContext } from '@proteus/core';
 import {
   createCompactionExtension,
@@ -612,5 +613,5 @@ describe('summaries', () => {
 });
 
 function isString<Value>(value: Value): value is Value & string {
-  return typeof value === 'string';
+  return v.is(v.string(), value);
 }

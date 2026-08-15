@@ -435,7 +435,7 @@ export function buildTakeContinuationPrompt(set: AlternateTakeSet, chosen: Alter
   );
 }
 
-/** Record the comparable heads of a completed think({strategy:'heads'}) run as
+/** Record the comparable heads of a completed fork with heads settlement as
  *  an unclaimed Alternate-Takes set — claimed against the turn at turn end,
  *  exactly like an MCTS capture. Only grounded scores are a real preference
  *  signal, so emit nothing when ungrounded. Shared by both backends. */

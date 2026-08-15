@@ -9,7 +9,7 @@ export interface JsonObject {
 export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
 
 export function isJsonObject(value: JsonValue): value is JsonObject {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+  return !Array.isArray(value) && v.is(JsonObjectSchema, value);
 }
 
 export const JsonValueSchema: v.GenericSchema<JsonValue> = v.lazy(() => v.union([

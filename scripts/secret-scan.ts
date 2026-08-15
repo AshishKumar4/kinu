@@ -146,7 +146,16 @@ export function applyIgnores(findings: readonly Finding[], entries: readonly Ign
 function trackedFiles(): string[] {
   const proc = Bun.spawnSync(['git', 'ls-files', '-z'], { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' });
   if (proc.exitCode !== 0) throw new Error(`git ls-files failed: ${proc.stderr.toString()}`);
-  return proc.stdout.toString().split('\0').filter((f) => f && SCANNED.test(f));
+  return selectScanCandidates(proc.stdout.toString().split('\0'), (file) =>
+    existsSync(join(REPO_ROOT, file))
+  );
+}
+
+export function selectScanCandidates(
+  files: readonly string[],
+  exists: (file: string) => boolean,
+): string[] {
+  return files.filter((file) => file.length > 0 && SCANNED.test(file) && exists(file));
 }
 
 function main(): void {

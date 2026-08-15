@@ -1,27 +1,5 @@
 import { defineRule } from "@oxlint/plugins";
-
 import type { ESTree, Scope, SourceCode } from "@oxlint/plugins";
-
-type RuntimeFunction = ESTree.ArrowFunctionExpression | ESTree.Function;
-
-function isRuntimeFunction(node: ESTree.Node): node is RuntimeFunction {
-  return (
-    node.type === "ArrowFunctionExpression" ||
-    node.type === "FunctionDeclaration" ||
-    node.type === "FunctionExpression"
-  );
-}
-
-function isInsideTypeGuard(node: ESTree.Node): boolean {
-  let current: ESTree.Node | null = node.parent;
-  while (current !== null && current.type !== "Program") {
-    if (isRuntimeFunction(current)) {
-      return current.returnType?.typeAnnotation.type === "TSTypePredicate";
-    }
-    current = current.parent;
-  }
-  return false;
-}
 
 function isGlobalObjectConstructor(
   sourceCode: SourceCode,
@@ -52,16 +30,6 @@ export const noRuntimeTypeofRule = defineRule({
       objectInstanceof:
         "`instanceof Object` is not a substitute for boundary parsing: it rejects null and primitives but establishes no object contract.",
     },
-    schema: [
-      {
-        type: "object",
-        properties: {
-          allowInTypeGuards: { type: "boolean" },
-        },
-        additionalProperties: false,
-      },
-    ],
-    defaultOptions: [{ allowInTypeGuards: false }],
   },
   createOnce(context) {
     return {
@@ -74,16 +42,7 @@ export const noRuntimeTypeofRule = defineRule({
         }
       },
       UnaryExpression(node) {
-        const option = context.options?.[0];
-        const allowInTypeGuards =
-          typeof option === "object" &&
-          option !== null &&
-          !Array.isArray(option) &&
-          option.allowInTypeGuards === true;
-        if (
-          node.operator === "typeof" &&
-          (!allowInTypeGuards || !isInsideTypeGuard(node))
-        ) {
+        if (node.operator === "typeof") {
           context.report({ node, messageId: "runtimeTypeof" });
         }
       },

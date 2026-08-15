@@ -4,9 +4,9 @@
  *
  * Two tiers:
  *   'all_local_actions' — the base grant: the agent may run device actions
- *     (exec/read/write/…). File-plane access through the /pc mount is scoped
+ *     (exec/read/write/…). Laptop file access is scoped
  *     to the consented subtree (the device connect dir / home).
- *   'full_filesystem'   — the stronger tier: additionally lifts the /pc
+ *   'full_filesystem'   — the stronger tier: additionally lifts the laptop
  *     subtree scope so absolute paths outside the consented directory are
  *     reachable. Implies the base grant. Never the default.
  *

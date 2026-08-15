@@ -1268,7 +1268,10 @@ export class LocalAgentSession implements BackendHost {
   private nextScheduledTriggerAt(): number | null {
     const upcoming = this.triggerRegistry.list({ state: 'active' })
       .map((t) => t.next_fire_at)
-      .filter((t): t is number => typeof t === 'number')
+      .flatMap((value) => {
+        const parsed = v.safeParse(v.number(), value);
+        return parsed.success ? [parsed.output] : [];
+      })
       .sort((a, b) => a - b)[0];
     return upcoming ?? null;
   }

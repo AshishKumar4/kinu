@@ -470,11 +470,12 @@ a local fake provider: V0 exposes the four native coding tools, V1 makes one
 verifier-driven retry, both preserve explicit request auth, and both report
 wire usage through the shared meter.
 
-A fresh full `bench validate` against the final source is still required before
-the live experiment. Live-model evidence remains pending for the
-Pi-versus-Proteus stability pilot and matched comparison, and for the
-`agent`-versus-`agent-evolving` run. The Proteus gain and its difference from Pi
-therefore remain unmeasured.
+A fresh full `bench validate` against the exact final source is mandatory before
+each live experiment; the immutable run artifact, source manifest, and commit
+identify whether that prerequisite was met for a particular tree. Live-model
+evidence remains pending for the Pi-versus-Proteus stability pilot and matched
+comparison, and for the `agent`-versus-`agent-evolving` run. The Proteus gain and
+its difference from Pi therefore remain unmeasured.
 
 At a dispersion of 0.20, the current 69-task sealed split resolves roughly
 15pp. Reaching 10pp on the seal alone would need about 157 sealed tasks. The
@@ -523,14 +524,15 @@ verifier. DeepSWE and Terminal-Bench are the two corpora it has been pointed at.
 ```bash
 export PATH="$HOME/.local/bin:$PATH"          # harbor
 export PYTHONPATH="$PWD"                      # so harbor can import bench.harbor
-export OPENROUTER_API_KEY=$(python3 -c "import json;print(json.load(open('$HOME/.proteus/config.json'))['providers']['openrouter']['apiKey'])")
+# Mint once from a fresh interactive sign-in, then load it from your secret store.
+# proteus tokens create --name harbor --scopes ai.proxy
+export PROTEUS_TOKEN=pta_…
 
 harbor run \
   --agent bench.harbor.proteus_agent:ProteusAgent \
   --path ./deep-swe -i <task-name> \
-  -m deepseek/deepseek-v4-flash \
   --ak evolve=false \
-  --allow-agent-host openrouter.ai \
+  --allow-agent-host proteus.ashishkumarsingh.com \
   --jobs-dir /tmp/harbor-jobs -n 1 -y
 ```
 
@@ -542,9 +544,12 @@ flips internally.
 
 Other kwargs: `workspace` (workspace name, default `harbor`), `mission` (the
 workspace's opening mission), `proteus_repo` (which checkout to build from).
-Model access comes from `PROTEUS_BASE_URL` (default OpenRouter),
-`OPENROUTER_API_KEY`/`OPENAI_API_KEY` (or a complete `PROTEUS_AUTH` header), and
-`-m` for the model id as the endpoint's provider names it.
+The default model is native Workers AI
+`@cf/deepseek-ai/deepseek-v4-pro-0813`, reached through Proteus's signed-in
+`/api/user/ai/v1` proxy with `PROTEUS_TOKEN` (or the session from `proteus
+auth`). A long-lived access token needs the `ai.proxy` scope. A direct
+Cloudflare endpoint uses `CLOUDFLARE_API_TOKEN`; explicit BYO runs can still set
+`PROTEUS_BASE_URL`, `PROTEUS_AUTH`, and `-m` together.
 
 ### Isolation, and where the key goes
 

@@ -48,11 +48,23 @@ clbench setup database_exploration   # ~800 MB from Hugging Face, free
 
 ## Credentials
 
-The adapter reads the model key at runtime and never takes it as a parameter, so
-nothing secret lands in a committed config or on a command line. It looks in
-`$OPENROUTER_API_KEY` (or `$<PROVIDER>_API_KEY`, or whatever `api_key_env`
-names), then falls back to `providers.<provider>.apiKey` in
-`~/.proteus/config.json`.
+The default is native Workers AI DeepSeek V4 Pro 0813 through Proteus's
+signed-in `/api/user/ai/v1` proxy. The adapter reads `$PROTEUS_TOKEN` first,
+then the session written by `proteus auth` in `~/.proteus/config.json`. For a
+long benchmark, mint a scoped token and keep it in the run environment:
+
+```bash
+proteus tokens create --name clbench --scopes ai.proxy
+export PROTEUS_TOKEN=pta_…
+```
+
+The credential is read at runtime and never accepted as a system parameter, so
+it does not land in a committed config or on a command line. A direct Workers
+AI endpoint can be selected explicitly with `base_url` set to
+`https://api.cloudflare.com/client/v4/accounts/<account-id>/ai/v1`; that path
+reads `$CLOUDFLARE_API_TOKEN`. Explicit BYO comparisons remain available by
+setting `model`, `base_url`, and `provider` together; known providers read their
+own key, while a custom endpoint must name its exact `api_key_env`.
 
 Every run gets a throwaway `PROTEUS_HOME`, so your own workspaces are never
 opened, mutated, or measured. That home goes through `bench/isolation.py`, the
@@ -122,8 +134,5 @@ benchmark environment is reached through the returned action. The built-in
 Token usage comes from the CLI's `turn_end` event and is reported to CL-Bench as
 a `UsageEvent` per turn, which prices it through litellm. When litellm has no
 rate for the model, CL-Bench records `pricing_error` and leaves `cost_usd` null;
-the token counts are still exact. Cross-check real spend against the provider:
-
-```bash
-curl -s https://openrouter.ai/api/v1/key -H "Authorization: Bearer $OPENROUTER_API_KEY"
-```
+the token counts are still exact. The Cloudflare dashboard remains authoritative
+for the account's Workers AI entitlement and billing.
