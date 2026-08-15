@@ -92,6 +92,18 @@ describe('D1-backed CLI auth store', () => {
     expect(second.message).toContain('already delivered');
     expect(minted).toHaveLength(1);
   });
+
+  test('the advertised polling cadence remains permitted for the full auth lifetime', async () => {
+    const { env } = setupEnv();
+    const started = await startCliAuth(env, 'https://proteus.example.com', 'https://proteus.example.com', 'Ashish terminal', '127.0.0.1');
+    const remainingMs = Date.parse(started.expiresAt) - Date.now();
+    const requiredPolls = Math.ceil(remainingMs / (started.intervalSeconds * 1_000));
+
+    for (let attempt = 0; attempt < requiredPolls; attempt += 1) {
+      const pending = await pollCliAuth(env, started.deviceToken, '127.0.0.1');
+      expect(pending.status).toBe('pending');
+    }
+  });
 });
 
 describe('CLI auth approval replay', () => {

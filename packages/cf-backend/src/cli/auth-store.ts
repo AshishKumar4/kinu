@@ -24,7 +24,7 @@ export class CliAuthCodeError extends Error {
 
 const AUTH_TTL_MS = 10 * 60 * 1000;
 const CLEANUP_RETENTION_MS = 10 * 60 * 1000;
-const POLL_INTERVAL_SECONDS = 2;
+const POLL_INTERVAL_SECONDS = 5;
 const RATE_WINDOW_MS = 10 * 60 * 1000;
 
 export interface CliAuthStartResult {
