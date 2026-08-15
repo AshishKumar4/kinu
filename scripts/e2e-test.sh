@@ -132,9 +132,10 @@ REGISTRY_TOOLS=$(bun -e "$REGISTRY_PROBE" 2>/dev/null | tail -n 1)
 # backends build forks from one source instead of a per-backend copy — that
 # hoist is what fixed local forks running over an empty in-memory world, so
 # the guard asserts the shared location, not the old cf-local one.
-CF_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cf-backend/src/actor-agent.ts 2>/dev/null | wc -l)
-CLI_USES_FACTORY=$(grep -lE 'buildBuiltinTools\(\{' packages/cli-backend/src/local-session.ts 2>/dev/null | wc -l)
-HEADS_SHARED=$(grep -lE 'buildBuiltinTools\(\{' packages/core/src/heads/head-tools.ts 2>/dev/null | wc -l)
+SHARED_FACTORY_CALL='const [A-Za-z_$][A-Za-z0-9_$]* = buildBuiltinTools\('
+CF_USES_FACTORY=$(grep -lE "$SHARED_FACTORY_CALL" packages/cf-backend/src/actor-agent.ts 2>/dev/null | wc -l)
+CLI_USES_FACTORY=$(grep -lE "$SHARED_FACTORY_CALL" packages/cli-backend/src/local-session.ts 2>/dev/null | wc -l)
+HEADS_SHARED=$(grep -lE "$SHARED_FACTORY_CALL" packages/core/src/heads/head-tools.ts 2>/dev/null | wc -l)
 LEGACY_FACTORY=$(grep -rlE 'buildAgentTools\(' packages/*/src 2>/dev/null | wc -l)
 if [ "$REGISTRY_TOOLS" = "$EXPECTED_TOOLS" ] && [ "$CF_USES_FACTORY" -eq 1 ] && [ "$CLI_USES_FACTORY" -eq 1 ] && [ "$HEADS_SHARED" -eq 1 ] && [ "$LEGACY_FACTORY" -eq 0 ]; then
   # The count is read back from the probe rather than written here: the exact
