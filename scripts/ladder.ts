@@ -81,7 +81,7 @@ export const LADDER: readonly Gate[] = [
     run: 'bun run check',
     tier: 'commit',
     seconds: 6.8,
-    catches: 'type errors and the 15 anti-slop rules across all 8 projects. The largest '
+    catches: 'type errors and the 21 anti-slop rules across all 11 projects. The largest '
       + 'defect class by volume and the only total one — every file, every line.',
     blind: 'everything about behaviour. A well-typed call to the wrong function passes.',
   },
