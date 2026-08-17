@@ -87,6 +87,9 @@ async function main(): Promise<void> {
     fetch: async () => ({ url: '', title: '', markdown: '', retrievedAt: '' }),
   };
 
+  // One journal for both: the controller writes each head's spawn and report to
+  // it, and the runtime writes each head's steps to it as they land.
+  const journal = new HeadJournal(makeSql(db));
   const headRuntime = createCLIHeadRuntime({
     model: resolveChatModel(analyst),
     parentRuntime: rt,
@@ -99,6 +102,7 @@ async function main(): Promise<void> {
     webSearch: noWeb,
     codemodeExtras: () => [],
     governor: () => governor,
+    journal: () => journal,
     // The execution-grounded evaluator the MCTS engine uses, so each fork's
     // outcome is a real number and the merge is the median of k samples.
     grounding: { executor: rt.executor, explorer: rt.llm },
@@ -107,7 +111,7 @@ async function main(): Promise<void> {
   let error: string | undefined;
   let merge: MergeResult | null = null;
   try {
-    merge = await new HeadController(headRuntime, new HeadJournal(makeSql(db))).run({
+    merge = await new HeadController(headRuntime, journal).run({
       parentHeadId: null,
       mode: 'build',
       inheritedContext: [],

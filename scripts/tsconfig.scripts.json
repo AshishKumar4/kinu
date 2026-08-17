@@ -1,5 +1,6 @@
 {
-  "//": "Typecheck for the standalone scripts that gate CI. scripts/ is a folder of runnable scripts, not a package: the ones that are not ES modules declare the same top-level names and would collide if compiled as one program, so this lists the files rather than globbing the folder.",
+  "//": "Typecheck for the standalone scripts that gate CI. Every .ts here is included by default, because the previous hand-maintained file list silently excluded whatever nobody remembered to add — schema-drift.ts and all five gate files were never typechecked at all, and three real type errors were sitting in one of them. `moduleDetection: force` is what makes globbing safe: scripts/ is a folder of runnable programs, not a package, and the ones with no import or export would otherwise share one global scope and collide on their top-level names.",
+  "excluded": "These five have PRE-EXISTING type errors and are excluded so the glob can land without breaking `bun run check` (deploy gate 1). This list is debt: it only shrinks, and a new script can never join it by accident. eval.ts:166,199 + eval.test.ts:74,75,77 — core exports two different JudgeFn/ShadowTrialVerdict shapes from eval/types and scaffold/shadow. layergate.ts:49 — Fault<PipelineSubjects> vs Fault<MergedSubjects> variance in the compaction-ladder substitution. cli-test-runner.ts:134 — one call passes 2 arguments to a 1-argument function. schema-drift.ts:99 — TS7053 implicit any from a string index.",
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
@@ -7,13 +8,23 @@
     "declarationMap": false,
     "sourceMap": false,
     "rootDir": "..",
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "types": [
+      "bun",
+      "node"
+    ],
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "jsxImportSource": "@opentui/react"
   },
   "include": [
-    "bench.ts", "bench.test.ts", "bench-corpus.ts", "bench-sandbox.ts", "bench-solvers.ts",
-    "bench-agent-worker.ts", "bench-pi-worker.ts", "bench-panel-worker.ts",
-    "bench-worker-protocol.ts", "bench-inference-proxy.ts", "bench-inference-proxy.test.ts", "bench-pi-worker.test.ts",
-    "bench-pilot.ts", "bench-validation.ts", "bench-longhorizon.ts", "bench-longhorizon-check.ts",
-    "secret-scan.ts", "secret-scan.test.ts"
+    "**/*.ts"
+  ],
+  "exclude": [
+    "eval.ts",
+    "eval.test.ts",
+    "layergate.ts",
+    "cli-test-runner.ts",
+    "schema-drift.ts"
   ]
 }

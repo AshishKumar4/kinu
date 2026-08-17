@@ -17,6 +17,7 @@ const BENCH_GATE_FILES = [
 ] as const;
 
 const REQUIRED_GATES = [
+  "bun scripts/preflight.ts",
   "bun run check",
   "bun test scripts/deploy.test.ts",
   "bun run test",
@@ -28,6 +29,16 @@ const REQUIRED_GATES = [
   `bun test ${BENCH_GATE_FILES.join(" ")}`,
   "bun test scripts/secret-scan.test.ts",
   "bun scripts/secret-scan.ts",
+  "bun scripts/schema-drift.ts",
+  "bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts",
+  "bun test scripts/ladder.test.ts",
+  "bun run gate:dead-code",
+  "bun run gate:duplication",
+  "bun run gate:do-init",
+  "bun run gate:reachability",
+  "bun run gate:platform",
+  "bun test --cwd packages/pc-agent",
+  "bun test ./tests/",
   "bun run layergate",
   "bun run layergate --matrix",
   "bun run verify:lean",

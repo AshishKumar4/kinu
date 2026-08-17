@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Push tier: the commit tier plus 3,105 shared-spine tests, the Cloudflare
+# composition root, and the gates whose cost only makes sense once — dead code,
+# secret scan, schema drift, and every gate's own self-test. ~62s declared.
+#
+# Why the secret scan is HERE and not later: push is the last tier at which a
+# leaked credential is still recoverable without a rotation.
+#
+# Why packages/cli and packages/cli-backend are NOT here: 92s and 41s. Together
+# they are more than twice this whole tier for 17% of its tests, and pushing is
+# something you do many times a day. They run in CI, which is where a two-minute
+# suite belongs.
+#
+# NEVER --no-verify. The push tier is a proven subset of the CI tier
+# (scripts/ladder.test.ts asserts it by claimed files), so bypassing it cannot
+# let anything through — it only moves the same failure to CI.
+
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 1
+exec bun scripts/ladder.ts --tier=push

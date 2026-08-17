@@ -76,4 +76,13 @@ done
 
 cd "$TREE"
 bun test packages/*/tests/workspace-resolution.test.ts >/dev/null
+
+# The commit and push tiers are hooks, and a hook nobody installs is a hook that
+# does not exist — `core.hooksPath` defaults to the untracked, sample-only
+# `.git/hooks`, which is how both tiers came to be decorative. The value written
+# is relative and worktrees share this config, so this covers every checkout at
+# once; it is repeated here because a fresh worktree is exactly where nobody
+# remembers to run it.
+bun scripts/ladder.ts --install-hooks
+
 echo "Worktree ready: @proteus/* resolves inside $TREE"

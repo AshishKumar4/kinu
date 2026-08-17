@@ -1,0 +1,278 @@
+/**
+ * The gate that guards the gates.
+ *
+ * Three of this repo's gates have reported green over something they never
+ * looked at: a sabotage check the injected comment happened to satisfy, an
+ * import walk that goes vacuous under an unrelated change, and a conformance
+ * gate that flagged a missing table on one backend while tolerating the
+ * identical absence on the other. The ladder is a fourth opportunity to do
+ * that — a tier list is exactly the kind of thing that reads as complete while
+ * claiming nothing — so every assertion here starts by proving its own
+ * denominator is not zero.
+ *
+ * What this file does NOT do: prove that any individual gate can fail. That is
+ * each gate's own self-test (`scripts/gates.test.ts` is the model) plus a seeded
+ * red→green run that nobody has automated yet. This file proves WIRING only,
+ * and the difference matters, because "the ladder is green" has to mean
+ * something narrower than "the gates work".
+ */
+
+import { describe, expect, test } from 'bun:test';
+import { readFileSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+import {
+  CI_EXEMPT, HOOKS_DIR, LADDER, TIERS, claims, deployGates, gatesFor, packageScripts,
+  trackedTestFiles,
+} from './ladder.ts';
+
+const root = resolve(import.meta.dir, '..');
+const tracked = trackedTestFiles();
+const deploy = deployGates();
+
+/** Test files that deliberately run under no `bun test` tier, with the runner
+ *  that does claim them. `tools/oxlint/anti-slop/**` needs Node's raw transfer
+ *  for oxlint's RuleTester and ERRORS under bun, so it runs through
+ *  `bun run test:anti-slop` (node --experimental-strip-types) inside
+ *  `bun run lint`, which is deploy gate 1. Excluding it from bun's discovery is
+ *  honest only because this list is asserted; an unasserted exclusion is how
+ *  coverage disappears. */
+const NON_BUN_RUNNERS = {
+  'tools/oxlint/anti-slop/gate.test.ts':
+    'bun run test:anti-slop — oxlint RuleTester requires Node raw transfer and throws under bun',
+};
+
+describe('the ladder measures something', () => {
+  test('deploy.sh parses to a non-empty gate list', () => {
+    // A parser that silently matches no `run_required_gate` lines would make
+    // every parity assertion below vacuously true. That is the exact shape of
+    // unit-layergate.test.ts:70's import walk, and of assertEventSequence.
+    expect(deploy.length).toBeGreaterThan(10);
+  });
+
+  test('git reports a non-empty set of test files', () => {
+    expect(tracked.length).toBeGreaterThan(300);
+  });
+
+  test('every tier has gates, and every gate resolves to something runnable', () => {
+    const scripts = new Set(Object.keys(packageScripts()));
+    const unrunnable: string[] = [];
+    for (const gate of gatesFor('deploy', deploy)) {
+      const words = gate.run.split(/\s+/);
+      if (words[0] === 'bun' && words[1] === 'run' && !scripts.has(words[2] ?? '')) {
+        unrunnable.push(`${gate.run} — no package.json script named "${words[2] ?? ''}"`);
+      }
+    }
+    expect(unrunnable).toEqual([]);
+    for (const tier of TIERS) expect(gatesFor(tier, deploy).length).toBeGreaterThan(0);
+  });
+
+  test('claims() resolves the invocation forms this repo uses', () => {
+    // The resolver decides both assertions below, so a resolver that returns
+    // nothing would make both of them pass over an empty set.
+    expect(claims('bun test --cwd packages/core', tracked).length).toBeGreaterThan(100);
+    expect(claims('bun test scripts/deploy.test.ts', tracked)).toEqual(['scripts/deploy.test.ts']);
+    expect(claims('bun test ./tests/', tracked).length).toBe(4);
+    expect(claims('bun test scripts/bench*.test.ts', tracked).length).toBe(3);
+    // `bun run test` fans out through package.json into three package suites.
+    expect(claims('bun run test', tracked).length).toBeGreaterThan(200);
+    // An unrecognised form claims NOTHING rather than being assumed to claim
+    // everything — an optimistic resolver would recreate the defect this file
+    // exists to prevent.
+    expect(claims('wrangler deploy', tracked)).toEqual([]);
+  });
+});
+
+describe('the ladder is monotone — commit ⊆ push ⊆ ci ⊆ deploy', () => {
+  test('no tier claims a test file that a later tier does not', () => {
+    // A gate at an early tier and not a later one means the later tier is the
+    // WEAKER one, which is how a green deploy came to be compatible with a red
+    // local run. Compared by claimed files rather than command text, so a gate
+    // that gains an argument does not read as a hole.
+    const claimedAt = TIERS.map((tier) => ({
+      tier,
+      files: new Set(gatesFor(tier, deploy).flatMap((gate) => claims(gate.run, tracked))),
+    }));
+    const regressions: string[] = [];
+    for (const [index, lower] of claimedAt.entries()) {
+      const higher = claimedAt[index + 1];
+      if (higher === undefined) continue;
+      for (const file of lower.files) {
+        if (!higher.files.has(file)) regressions.push(`${file} runs at ${lower.tier} but not at ${higher.tier}`);
+      }
+    }
+    expect(regressions).toEqual([]);
+  });
+
+  test('every gate declared here is covered at deploy', () => {
+    // A gate that runs at commit and not at deploy would make the deploy path
+    // the weaker one. Test gates are compared by the files they claim, so
+    // `bun test scripts/bench*.test.ts` at CI is satisfied by deploy.sh's wider
+    // `scripts/bench*.test.ts packages/core/tests/unit-bench*.test.ts` line;
+    // non-test gates have no files to compare and must match by command.
+    const atDeploy = new Set(deploy);
+    const filesAtDeploy = new Set(deploy.flatMap((run) => claims(run, tracked)));
+    const orphans: string[] = [];
+    for (const gate of LADDER) {
+      if (atDeploy.has(gate.run)) continue;
+      const files = claims(gate.run, tracked);
+      if (files.length === 0) {
+        orphans.push(`${gate.run} (tier ${gate.tier}) runs no test file and is in no deploy.sh gate line`);
+        continue;
+      }
+      const missing = files.filter((file) => !filesAtDeploy.has(file));
+      if (missing.length > 0) {
+        orphans.push(`${gate.run} (tier ${gate.tier}) claims ${String(missing.length)} file(s) no deploy gate runs, e.g. ${missing[0] ?? ''}`);
+      }
+    }
+    expect(orphans).toEqual([]);
+  });
+});
+
+describe('CI is not a silent subset of deploy', () => {
+  test('every deploy gate is covered by the CI tier or carries a written exemption', () => {
+    // This is the whole point. On 2026-08-17 ci.yml claimed 339 of 400 test
+    // files and deploy.sh claimed 395, and nothing anywhere said so — a green
+    // badge was meaningfully weaker than a green local run and the delta was
+    // invisible. After this assertion the delta can only ever be a decision
+    // someone wrote down.
+    const ci = gatesFor('ci', deploy);
+    const atCi = new Set(ci.map((gate) => gate.run));
+    const filesAtCi = new Set(ci.flatMap((gate) => claims(gate.run, tracked)));
+    const undeclared: string[] = [];
+    for (const run of deploy) {
+      if (atCi.has(run) || Object.hasOwn(CI_EXEMPT, run)) continue;
+      const files = claims(run, tracked);
+      const missing = files.filter((file) => !filesAtCi.has(file));
+      if (files.length === 0 || missing.length > 0) {
+        undeclared.push(
+          `${run} — runs at deploy only, with no reason recorded in CI_EXEMPT`
+          + (missing.length > 0 ? ` (${String(missing.length)} unclaimed file(s), e.g. ${missing[0] ?? ''})` : ''),
+        );
+      }
+    }
+    expect(undeclared).toEqual([]);
+  });
+
+  test('every exemption names a gate deploy.sh actually runs', () => {
+    // A stale exemption is worse than a missing one: it reads as a considered
+    // decision about a gate that no longer exists, and it silently excuses the
+    // next gate that happens to be spelled the same way.
+    const runs = new Set(deploy);
+    const stale = Object.keys(CI_EXEMPT).filter((run) => !runs.has(run));
+    expect(stale).toEqual([]);
+  });
+
+  test('ci.yml delegates to the ladder instead of keeping its own list', () => {
+    // Three lists is worse than two. CI must not be able to enumerate suites
+    // independently, because that is how it came to skip five packages.
+    const workflow = readFileSync(resolve(root, '.github/workflows/ci.yml'), 'utf8');
+    expect(workflow).toContain('scripts/ladder.ts --tier=ci');
+    const enumerated = workflow
+      .split('\n')
+      .filter((line) => /^\s*run:\s*bun (test|run (test|layergate|check|gate:))/.test(line));
+    expect(enumerated).toEqual([]);
+  });
+});
+
+describe('every test file is claimed by some runner', () => {
+  test('the CI tier plus the declared non-bun runners cover all of them', () => {
+    // The failure this prevents: a suite that exists, passes when someone runs
+    // it by hand, and is in no pipeline. That was true of packages/compaction
+    // (95 tests), agent-utils (12), pc-agent (6), 41 of 42 cli files and the
+    // whole root tests/ directory, all of which a green CI badge covered for.
+    const covered = new Set(gatesFor('ci', deploy).flatMap((gate) => claims(gate.run, tracked)));
+    const unclaimed = tracked
+      .filter((path) => !covered.has(path) && !Object.hasOwn(NON_BUN_RUNNERS, path))
+      .map((path) => `${path} — no tier runs this file`);
+    expect(unclaimed).toEqual([]);
+  });
+
+  test('every declared non-bun runner still names a real file', () => {
+    const files = new Set(tracked);
+    const stale = Object.keys(NON_BUN_RUNNERS).filter((path) => !files.has(path));
+    expect(stale).toEqual([]);
+  });
+
+  test('bun does not discover the files it cannot run', () => {
+    // The other half of the same contract: tools/oxlint/anti-slop errors under
+    // bun (oxlint's RuleTester needs Node raw transfer), and the gitignored
+    // external/ reference clones drag 2,521 foreign test files into a bare
+    // `bun test`. Before this, the root command never terminated — 900s+, and
+    // any real root-level regression was buried. So bunfig excludes both, and
+    // the exclusion is asserted rather than assumed.
+    const bunfig = readFileSync(resolve(root, 'bunfig.toml'), 'utf8');
+    expect(bunfig).toContain('pathIgnorePatterns');
+    expect(bunfig).toContain('**/external/**');
+    expect(bunfig).toContain('tools/oxlint/anti-slop/**');
+  });
+});
+
+describe('cost, so a tier that stops being run is a decision and not a drift', () => {
+  test('the commit tier stays inside its budget', () => {
+    // A hook slow enough to tempt `--no-verify` is a design failure, and
+    // "never --no-verify" is a standing rule, so the budget is part of the
+    // contract rather than an aspiration. 12s is affordable only because
+    // TypeScript 7 took the 8-project typecheck from 64.9s to 6.9s.
+    const cost = gatesFor('commit', deploy).reduce((sum, gate) => sum + gate.seconds, 0);
+    expect(cost).toBeLessThan(15);
+  });
+
+  test('the push tier stays inside a minute and a half', () => {
+    const cost = gatesFor('push', deploy).reduce((sum, gate) => sum + gate.seconds, 0);
+    expect(cost).toBeLessThan(90);
+  });
+
+  test('every declared gate carries a measured cost and a named blind spot', () => {
+    const vague = LADDER
+      .filter((gate) => gate.seconds <= 0 || gate.blind.length < 20 || gate.catches.length < 20)
+      .map((gate) => gate.run);
+    expect(vague).toEqual([]);
+  });
+});
+
+describe('the hooks run the tiers they claim to', () => {
+  // A hook that names a tier it does not run is the "correct, wired, dead"
+  // shape applied to the ladder itself: it reads as enforcement in review and
+  // enforces nothing. Two of these files existing is not evidence that either
+  // one invokes anything.
+  const HOOKS = {
+    'pre-commit': 'bun scripts/ladder.ts --tier=commit',
+    'pre-push': 'bun scripts/ladder.ts --tier=push',
+  };
+
+  test('each hook exists, is executable, and invokes its tier', () => {
+    for (const [name, invocation] of Object.entries(HOOKS)) {
+      const path = resolve(root, HOOKS_DIR, name);
+      expect(statSync(path).mode & 0o111).toBeGreaterThan(0);
+      expect(readFileSync(path, 'utf8')).toContain(invocation);
+    }
+  });
+
+  test('the installer writes a RELATIVE hooks path', () => {
+    // The value git had was an absolute path to the main checkout's empty
+    // `.git/hooks`, so all 42 worktrees resolved to one directory with no hooks
+    // in it and both cheap tiers were decorative. A relative value is resolved
+    // against each working tree's own root, and worktrees SHARE this config, so
+    // relative is what makes one invocation cover every checkout. An absolute
+    // path here would silently un-gate 41 of them, which is why the shape is
+    // asserted and not just documented.
+    expect(HOOKS_DIR.startsWith('/')).toBe(false);
+    expect(readFileSync(resolve(root, 'scripts/ladder.ts'), 'utf8'))
+      .toContain("'git', 'config', 'core.hooksPath', HOOKS_DIR");
+    // And something has to run it on a tree nobody has prepared.
+    expect(readFileSync(resolve(root, 'scripts/setup-worktree.sh'), 'utf8'))
+      .toContain('ladder.ts --install-hooks');
+  });
+
+  test('no hook invokes a gate directly', () => {
+    // The moment a hook runs its own command, the ladder has a fifth list and
+    // the subset property that makes "never --no-verify" honest stops holding.
+    for (const name of Object.keys(HOOKS)) {
+      const body = readFileSync(resolve(root, '.githooks', name), 'utf8')
+        .split('\n')
+        .filter((line) => !line.trimStart().startsWith('#'));
+      const direct = body.filter((line) => /\b(bun (test|run)|tsc|oxlint)\b/.test(line));
+      expect(direct).toEqual([]);
+    }
+  });
+});

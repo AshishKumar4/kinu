@@ -2,4 +2,21 @@
 linker = "hoisted"
 
 [test]
-preload = "./scripts/test-preload.ts"
+preload = ["./scripts/test-preload.ts"]
+
+# What `bun test` at the repo root must NOT walk into.
+#
+# Before this, the most obvious command anyone types — a newcomer, or an agent
+# reaching for the broadest check it knows — did not terminate. Measured
+# 2026-08-17: killed at 900s having produced 339 failures and 206 errors, none
+# of them ours. Bun does not honour .gitignore, so the gitignored external/
+# reference clones contributed 2,521 foreign test files against our 400, and any
+# real root-level regression was buried in the wall. With these two patterns the
+# same command is 4,988 tests across 444 files in 185s.
+#
+# tools/oxlint/anti-slop is ours and DOES run — under Node, via
+# `bun run test:anti-slop`, because oxlint's RuleTester needs Node's raw
+# transfer and throws under bun. Both exclusions are asserted by
+# scripts/ladder.test.ts, which also proves every excluded file is claimed by
+# some other runner. An exclusion nobody asserts is how coverage disappears.
+pathIgnorePatterns = ["**/external/**", "tools/oxlint/anti-slop/**"]
