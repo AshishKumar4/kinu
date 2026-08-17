@@ -10,6 +10,7 @@
 import { describe, test, expect } from 'bun:test';
 import {
   forkWorkspaceStorage, readForkLineage, readSoul, writeSoul, sessionTreeAncestry,
+  snapshotWorkspaceForFork, writeForkSnapshot,
 } from '../src/index.js';
 import { createTestWorkspace as fresh, SDK_SESSION_DDL, type TestWorkspace } from './helpers.js';
 
@@ -528,5 +529,152 @@ describe('forkWorkspaceStorage', () => {
     await expect(forkWorkspaceStorage(src.sql, src.vfs, tgt.sql, tgt.vfs, {
       untilMessageId: 'm1', targetWorkspaceId: 'T', targetWorkspaceName: 'forked',
     })).rejects.toThrow(/agent_config/);
+  });
+});
+
+/** Populate `assistant_messages` the way the SDK's session provider does,
+ *  mirroring rows that already exist in `messages`: same id, same parent edge,
+ *  and a serialized UIMessage whose text parts flatten to the plain row's
+ *  content. That identity is what the CF turn mirror establishes, and it is what
+ *  makes eliding the plain text lossless. */
+function seedPaneTranscript(
+  src: TestWorkspace,
+  rows: Array<{ id: string; role: string; content: string; parent_id: string | null }>,
+) {
+  src.execRaw(SDK_SESSION_DDL);
+  for (const r of rows) {
+    const ui = JSON.stringify({ id: r.id, role: r.role, parts: [{ type: 'text', text: r.content }] });
+    void src.sql`INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+      VALUES (${r.id}, ${''}, ${r.parent_id}, ${r.role}, ${ui}, ${'1970-01-01 00:00:01'})`;
+  }
+}
+
+describe('fork snapshot payload', () => {
+  test('the transcript crosses once, not once per table, and still lands intact', async () => {
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    const TURNS = 200;
+    const rows = Array.from({ length: TURNS }, (_, i) => ({
+      id: `m${i}`,
+      role: i % 2 === 0 ? 'user' : 'assistant',
+      content: `turn ${i} ${'z'.repeat(400)}`,
+      parent_id: i === 0 ? null : `m${i - 1}`,
+      created_at: 1000 + i,
+    }));
+    await seedSource(src, { identity: { id: 'S', name: 'src' }, purpose: 'p', messages: rows });
+    seedPaneTranscript(src, rows);
+
+    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, `m${TURNS - 1}`);
+
+    // Denominator: the rich transcript IS carried, in full, and so is every
+    // plain row. The saving is not "carry less", it is "stop carrying the same
+    // conversation twice".
+    expect(snapshot.assistantMessages.length).toBe(TURNS);
+    expect(snapshot.messages.length).toBe(TURNS);
+    // Every plain row's text is elided because the rich row under the same id
+    // carries it. Measured against a real long session, the two copies were
+    // 14.4 MiB and 20.5 MiB — 34.9 MiB of one conversation against a 32 MiB
+    // serialized-argument ceiling.
+    expect(snapshot.messages.reduce((n, m) => n + (m.content?.length ?? 0), 0)).toBe(0);
+    // Root first, edges intact: the chain the write side rebuilds against.
+    expect(snapshot.messages.map((m) => m.id)).toEqual(rows.map((r) => r.id));
+    expect(snapshot.messages.map((m) => m.parent_id)).toEqual(rows.map((r) => r.parent_id));
+
+    // ...and the plain table still lands byte-identical, reconstructed at the
+    // write side by the same projection the turn mirror applies.
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+    const landed = tgt.sql<{ id: string; content: string }>`
+      SELECT id, content FROM messages WHERE role != 'system' ORDER BY rowid`;
+    expect(landed.map((r) => r.id)).toEqual(rows.map((r) => r.id));
+    expect(landed.map((r) => r.content)).toEqual(rows.map((r) => r.content));
+  });
+
+  test('a chain with no pane store carries its own text', async () => {
+    // The CLI has one store, so there is no twin to elide against and nothing
+    // may be dropped. This is the other half of the elision contract: `content`
+    // is null EXACTLY when the rich row under that id is carried.
+    const src = fresh();
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [
+        { id: 'm1', role: 'user', content: 'first', created_at: 1000 },
+        { id: 'm2', role: 'assistant', content: 'second', created_at: 1100 },
+      ],
+    });
+
+    const snapshot = await snapshotWorkspaceForFork(src.sql, src.vfs, 'm2');
+
+    expect(snapshot.assistantMessages).toEqual([]);
+    expect(snapshot.messages.map((m) => m.content)).toEqual(['first', 'second']);
+
+    await writeForkSnapshot(tgt.sql, tgt.vfs, snapshot, { workspaceId: 'T', workspaceName: 'forked' });
+    const landed = tgt.sql<{ content: string }>`
+      SELECT content FROM messages WHERE role != 'system' ORDER BY rowid`;
+    expect(landed.map((r) => r.content)).toEqual(['first', 'second']);
+  });
+
+  test('an elided row with no carried twin is refused, not landed empty', async () => {
+    // The failure this rules out is a fork whose transcript is present but
+    // blank. A snapshot that arrives with a hole says so.
+    const tgt = fresh();
+    await seedTargetBootstrap(tgt);
+    await expect(writeForkSnapshot(tgt.sql, tgt.vfs, {
+      source: { workspaceId: 'S', workspaceName: 'src' },
+      cut: { messageId: 'm1', createdAtMs: 1000 },
+      messages: [{ id: 'm1', parent_id: null, role: 'user', content: null, created_at: 1000 }],
+      assistantMessages: [],
+      files: [],
+      memoryChunks: [],
+      craftedTools: [],
+      agentConfig: [],
+    }, { workspaceId: 'T', workspaceName: 'forked' }))
+      .rejects.toThrow(/elided the text of message "m1"/);
+  });
+
+  test('a transcript over the snapshot budget is refused before a row is materialized', async () => {
+    const src = fresh();
+    const CHUNK = 'x'.repeat(1_000_000);
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: Array.from({ length: 18 }, (_, i) => ({
+        id: `m${i}`, role: 'user', content: CHUNK, created_at: 1000 + i,
+      })),
+    });
+
+    // The platform refuses a serialized argument over 32 MiB. Refusing here
+    // instead means the source isolate never builds the ~35 MiB of live objects
+    // it could not have sent, and the message says which component is at fault
+    // and what the owner can do about it.
+    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm17'))
+      .rejects.toThrow(/over the \d+-byte budget/);
+    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm17'))
+      .rejects.toThrow(/Largest component: transcript at \d+ bytes/);
+  });
+
+  test('memory files over what the transcript left of the budget are refused by path', async () => {
+    const src = fresh();
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: Array.from({ length: 16 }, (_, i) => ({
+        id: `m${i}`, role: 'user', content: 'x'.repeat(1_000_000), created_at: 1000 + i,
+      })),
+    });
+    await src.vfs.mkdir('memory', { recursive: true });
+    await src.vfs.writeFile('memory/huge.md', 'y'.repeat(1_500_000));
+
+    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm15'))
+      .rejects.toThrow(/files exceed the remaining \d+-byte budget at "memory\/huge\.md"/);
+  });
+
+  test('a transcript inside the budget is not refused', async () => {
+    const src = fresh();
+    await seedSource(src, {
+      identity: { id: 'S', name: 'src' }, purpose: 'p',
+      messages: [{ id: 'm1', role: 'user', content: 'x'.repeat(1_000_000), created_at: 1000 }],
+    });
+    await expect(snapshotWorkspaceForFork(src.sql, src.vfs, 'm1')).resolves.toBeDefined();
   });
 });

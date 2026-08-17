@@ -27,6 +27,7 @@ import { JsonValueSchema, type JsonValue } from '../src/utils/json.js';
 import { createInlineMemory, type AgentDatabase } from '../src/identity/inline-primitives.js';
 import { createWorkspace, nextWorkspaceGeneration } from '../src/vfs/nimbus-workspace.js';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
+import { walkWorkspaceTextFiles } from '../src/read-models/workspace-diff.js';
 
 /** One in-memory workspace database with the three SQL handles onto it. */
 export interface TestWorkspace {
@@ -468,4 +469,14 @@ export function createMockSession(): import('../src/mcts/record-node.js').Sessio
       return result;
     },
   };
+}
+
+/** Collect the workspace text-file walk into a map. Production never does this
+ *  — holding every body at once is the defect `walkWorkspaceTextFiles` exists
+ *  to prevent — but a test asserting the walk's admission policy wants the
+ *  whole result in one place. */
+export async function collectWorkspaceTextFiles(rt: AgentRuntime): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  await walkWorkspaceTextFiles(rt, (path, content) => { out[path] = content; });
+  return out;
 }

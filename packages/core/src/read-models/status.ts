@@ -9,7 +9,6 @@
  */
 
 import type { AgentConfigStore } from '../config/store.js';
-import * as v from 'valibot';
 import { readForkLineage, type ForkLineageRow } from '../identity/fork.js';
 import { readSoul, summarizeSoul } from '../identity/soul.js';
 import { BUILTIN_TOOLS } from '../tools/registry.js';
@@ -17,15 +16,7 @@ import type { CraftStore } from '../types/agent-runtime.js';
 import type { VFS, SqlExecutor } from '../types/primitives.js';
 import type { CraftedTool } from '../types/craft.js';
 import type { ReasoningEffort } from '../strategy/effort.js';
-import { tolerate } from '../obs/index.js';
-import { parseJsonValue } from '../utils/json.js';
-
-const UiMessageSchema = v.object({
-  parts: v.optional(v.array(v.object({
-    type: v.string(),
-    text: v.optional(v.string()),
-  }))),
-});
+import { uiMessageText } from '../utils/ui-message.js';
 
 /** Widest transcript page a surface may ask for. */
 const MAX_HISTORY_LIMIT = 200;
@@ -79,19 +70,6 @@ export interface AgentStatusDeps {
   readonly fallbackMessageCount: number;
 }
 
-/** Flatten a stored UIMessage-JSON content string to plain text.
- *  `assistant_messages` rows hold the serialized UI message and `messages` rows
- *  hold plain text; both reach this, so text that is not JSON is a value here
- *  and nothing else is. */
-export function uiMessageText(content: string): string {
-  const decoded = tolerate(() => parseJsonValue(content), 'malformed-input');
-  if (decoded === undefined) return content;
-  const parsed = v.safeParse(UiMessageSchema, decoded);
-  if (!parsed.success || !parsed.output.parts) return content;
-  return parsed.output.parts
-    .flatMap((part) => part.type === 'text' && part.text !== undefined ? [part.text] : [])
-    .join('');
-}
 
 function normalizeUiRole(role: string): 'user' | 'assistant' | 'system' | null {
   return role === 'user' || role === 'assistant' || role === 'system' ? role : null;

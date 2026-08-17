@@ -1252,12 +1252,12 @@ export type { RunTimelineDeps, TimelineKind, TimelineSpan } from './read-models/
 export { getRunEvents, getRunSummaries, listRuns } from './read-models/runs.js';
 export type { RunListEntry, RunSummary } from './read-models/runs.js';
 export {
-  captureWorkspaceBaseline, getExecutorDiff, getWorkspaceDiff, readWorkspaceFiles,
-  initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  getExecutorDiff, getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
+  walkWorkspaceTextFiles,
 } from './read-models/workspace-diff.js';
 export type { ExecutorDiffResult, WorkspaceDiffResult } from './read-models/workspace-diff.js';
 export {
-  computeWorkspaceDiff, diffLines, parseGitDiff, MAX_LINES_PER_FILE,
+  computeWorkspaceDiff, diffLines, fileDiff, parseGitDiff, MAX_LINES_PER_FILE,
 } from './vfs/diff.js';
 export type { DiffLine, FileDiff, FileStatus, LineDiff } from './vfs/diff.js';
 export {
@@ -1278,8 +1278,9 @@ export type {
 export { listForkRuns, readForkRun } from './read-models/fork-runs.js';
 export type { ForkRunSummary, ForkRunStatus, ForkSettle } from './read-models/fork-runs.js';
 export { buildPendingActions } from './read-models/pending-actions.js';
+export { getAgentStatus, getChatHistory, getToolList } from './read-models/status.js';
+export { uiMessageText } from './utils/ui-message.js';
 export type { PendingAction, PendingActionKind, PendingActionInputs } from './read-models/pending-actions.js';
-export { getAgentStatus, getChatHistory, getToolList, uiMessageText } from './read-models/status.js';
 export type {
   AgentStatus, AgentStatusDeps, ChatHistoryEntry, ToolListEntry,
 } from './read-models/status.js';

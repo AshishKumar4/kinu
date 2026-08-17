@@ -12,8 +12,11 @@ import { copyLabel, useCopy } from "@/hooks/use-copy";
 
 /** Render a sequence of diff lines (add/del/ctx) red/green — shared by the
  *  scaffold-version diff (Self) and the workspace change-set (Output).
- *  `truncated` marks a body the parser bounded, so a partial hunk never reads
- *  as the whole file. */
+ *  `truncated` marks a bounded body, so a partial hunk never reads as the whole
+ *  file. Two shapes reach here: a body clipped at {@link MAX_LINES_PER_FILE},
+ *  and an EMPTY body for a file too long to align at all — they must not say
+ *  the same thing, because "truncated at 1000 lines" over nothing reads as a
+ *  rendering bug. */
 export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?: boolean }) {
   return (
     <pre className="text-[11px] font-mono leading-relaxed overflow-x-auto max-h-[360px] overflow-y-auto m-0">
@@ -24,7 +27,9 @@ export function DiffLines({ lines, truncated }: { lines: DiffLine[]; truncated?:
       ))}
       {truncated && (
         <div className="p-text-3 px-3 italic">
-          … diff truncated at {MAX_LINES_PER_FILE} lines. The +/− totals above cover the whole file.
+          {lines.length === 0
+            ? `File is over ${MAX_LINES_PER_FILE} lines — too long to diff line by line. The +/− totals above count every line.`
+            : `… diff truncated at ${MAX_LINES_PER_FILE} lines. The +/− totals above cover the whole file.`}
         </div>
       )}
     </pre>

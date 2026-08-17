@@ -12,7 +12,7 @@ import { Database } from 'bun:sqlite';
 import { jsonSchema, tool, type ToolSet } from 'ai';
 
 import {
-  createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
+  collectWorkspaceTextFiles, createTestRuntime, createWorkspaceBundle, makeExecRaw, makeSql, makeSqlExec,
 } from './helpers.js';
 import { BackgroundJobStore, initBackgroundJobsTable } from '../src/jobs/store.js';
 import { RunEventRecorder, initRunEventTables } from '../src/events/recorder.js';
@@ -20,9 +20,10 @@ import { createAgentConfigStore } from '../src/config/store.js';
 import { initWorkspaceSchema } from '../src/identity/workspace-schema.js';
 import { getRunTimeline } from '../src/read-models/timeline.js';
 import { getRunEvents, getRunSummaries, listRuns } from '../src/read-models/runs.js';
-import { getAgentStatus, getChatHistory, getToolList, uiMessageText } from '../src/read-models/status.js';
+import { getAgentStatus, getChatHistory, getToolList } from '../src/read-models/status.js';
+import { uiMessageText } from '../src/utils/ui-message.js';
 import {
-  getWorkspaceDiff, initWorkspaceBaselineTable, readWorkspaceFiles, resetWorkspaceBaseline,
+  getWorkspaceDiff, initWorkspaceBaselineTable, resetWorkspaceBaseline,
 } from '../src/read-models/workspace-diff.js';
 import { getExecutorFiles, readExecutorFile, writeExecutorFileOp } from '../src/read-models/files.js';
 import type { VFS } from '../src/types/primitives.js';
@@ -273,7 +274,7 @@ describe('workspace change-set', () => {
     const { rt, db } = createTestRuntime();
     await rt.storage.vfs.writeFile('text.txt', 'readable');
     await rt.storage.vfs.writeFile('blob.bin', `has nul`);
-    const files = await readWorkspaceFiles(rt);
+    const files = await collectWorkspaceTextFiles(rt);
     expect(files['text.txt']).toBe('readable');
     expect(files['blob.bin']).toBeUndefined();
     db.close();

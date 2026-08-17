@@ -49,6 +49,11 @@ export interface SqlExec {
 /** One dynamically queried SQLite row in the portable value vocabulary. */
 export type SqlExecRow = Record<string, SqlValue>;
 
+/** What {@link VFS.stat} answers for a path that exists. Named because a
+ *  consumer holding one needs the type, and `ReturnType<typeof vfs.stat>`
+ *  couples it to the method rather than to the contract. */
+export interface VfsEntryStat { size: number; mtimeMs: number; isDir: boolean }
+
 /**
  * VFS interface — the workspace filesystem implements it, and so does each
  * executor's own file view. `stat` names its time field `mtimeMs` (the Node
@@ -63,7 +68,7 @@ export interface VFS {
   readFile(path: string, opts?: { encoding?: string }): Promise<Uint8Array | string>;
   writeFile(path: string, data: string | Uint8Array): Promise<void>;
   readdir(path: string): Promise<string[]>;
-  stat(path: string): Promise<{ size: number; mtimeMs: number; isDir: boolean } | null>;
+  stat(path: string): Promise<VfsEntryStat | null>;
   unlink(path: string): Promise<void>;
   mkdir(path: string, opts?: { recursive?: boolean }): Promise<void>;
   exists(path: string): Promise<boolean>;
