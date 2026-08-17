@@ -10,8 +10,7 @@
 //      with a stored `<id>.bearer` key resolves through the openai-compat
 //      wire path. Static providers stay authoritative for their ids.
 //
-// Ordering is also the preference order for `defaultSpec()`:
-//   workers-ai → my-gateway → ai-gateway → codex → openai → anthropic → openrouter → openai-compat → catalog
+// Registration order is the listing order the model picker shows.
 //
 // Auth flows through the UserDO stub passed in opts.userDO — getAuth /
 // hasCredential are thin wrappers over its RPCs. No credential material ever
@@ -68,11 +67,11 @@ export interface AgentProviderRegistry {
   registry: ProviderRegistry;
   deps: ProviderDeps;
   resolveModel(spec: string): LanguageModel;
-  /** Sync — handles BC forms (bare `@cf/...`, bare modelId). */
+  /** The one spec resolver. Empty input is the platform default, never a
+   *  survey of which BYO credential happens to be stored: the native Workers
+   *  AI model is what a user who has chosen nothing runs on. Also handles the
+   *  BC forms (bare `@cf/...`, bare modelId). */
   normalizeSpecSync(specOrNull?: string | null): string;
-  /** Async — like `normalizeSpecSync` but cred-aware (picks the highest-
-   *  preference available provider when input is empty). */
-  resolveSpec(specOrNull?: string | null): Promise<string>;
 }
 
 async function resolveCaller(source: UserCredentialSource): Promise<UserCaller> {
@@ -131,21 +130,21 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     fetch: opts.fetch,
   };
 
-  // Sync model construction does not mean sync credential access: providers
-  // that need user credentials resolve them inside custom fetch wrappers.
-  // workers-ai resolves the user's Cloudflare OAuth credential through the
-  // UserDO stub — without a stub every request is a guaranteed 401, so the
-  // sync default must skip it and fall back to the env-bound ai-gateway.
-  function syncDefaultProvider(): string {
+  // Model construction is sync, but credential access is not: providers that
+  // need user credentials resolve them inside custom fetch wrappers. workers-ai
+  // resolves the user's Cloudflare OAuth credential through the UserDO stub —
+  // without a stub every request is a guaranteed 401, so the default falls back
+  // to the env-bound ai-gateway, which serves the same native model.
+  function defaultProvider(): string {
     if (source && registry.get('workers-ai')) return 'workers-ai';
     if (opts.env.AI_GATEWAY_URL && opts.env.AI_GATEWAY_AUTH) return 'ai-gateway';
-    throw new Error('No sync-resolvable provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');
+    throw new Error('No default provider available (need a UserDO credential stub for workers-ai, or AI_GATEWAY_URL + AI_GATEWAY_AUTH).');
   }
-  function syncDefaultModelId(provider: string): string {
-    const fallback = registry.get('workers-ai')?.defaultModel ?? '';
-    if (!fallback) throw new Error('workers-ai provider missing defaultModel.');
-    if (provider === 'ai-gateway') return `workers-ai/${fallback}`;
-    return registry.get(provider)?.defaultModel ?? fallback;
+  function defaultModelIdFor(provider: string): string {
+    const native = registry.get('workers-ai')?.defaultModel ?? '';
+    if (!native) throw new Error('workers-ai provider missing defaultModel.');
+    if (provider === 'ai-gateway') return `workers-ai/${native}`;
+    return registry.get(provider)?.defaultModel ?? native;
   }
 
   return {
@@ -159,8 +158,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
     normalizeSpecSync(specOrNull): string {
       const s = (specOrNull ?? '').trim();
       if (!s) {
-        const p = syncDefaultProvider();
-        return `${p}/${syncDefaultModelId(p)}`;
+        const provider = defaultProvider();
+        return `${provider}/${defaultModelIdFor(provider)}`;
       }
       if (s.startsWith('@cf/')) return `workers-ai/${s}`;
       if (s.includes('/')) {
@@ -172,28 +171,8 @@ export function createAgentProviderRegistry(opts: AgentProviderDeps): AgentProvi
         if (first === 'workers-ai') return s;   // canonical form pre-existed
         throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
       }
-      // Bare model id — wrap with the sync default provider.
-      return `${syncDefaultProvider()}/${s}`;
-    },
-
-    async resolveSpec(specOrNull): Promise<string> {
-      const s = (specOrNull ?? '').trim();
-      if (!s) {
-        const def = await registry.defaultSpec(deps);
-        if (def) return def;
-        const p = syncDefaultProvider();
-        return `${p}/${syncDefaultModelId(p)}`;
-      }
-      if (s.startsWith('@cf/')) return `workers-ai/${s}`;
-      if (s.includes('/')) {
-        const first = s.slice(0, s.indexOf('/'));
-        if (registry.canResolve(first)) return s;
-        if (first === 'workers-ai') return s;
-        throw new Error(`Unknown provider in model spec ${JSON.stringify(s)}.`);
-      }
-      const def = await registry.defaultSpec(deps);
-      const provider = def ? def.slice(0, def.indexOf('/')) : syncDefaultProvider();
-      return `${provider}/${s}`;
+      // Bare model id — wrap with the default provider.
+      return `${defaultProvider()}/${s}`;
     },
   };
 }

@@ -24,7 +24,7 @@ const SSE_POLL_MS = 500;
 const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const SSE_HEARTBEAT_MS = 15_000;
 const ALLOWED_TYPES = [
-  'run_start', 'turn_start', 'text_delta', 'tool_call_start', 'tool_call_end',
+  'run_start', 'turn_start', 'tool_call_start', 'tool_call_end',
   'step_finish', 'head_split', 'head_merge', 'scaffold_promotion',
   'scaffold_rollback', 'memory_write', 'fiber_recovered', 'error',
   'turn_end', 'run_end',

@@ -4,6 +4,7 @@
  * is synthesized server-side), so these fetches are bare.
  */
 import { JsonObjectSchema, type Credential } from '@proteus/core';
+import { tolerateAsync } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 export interface UserProfile {
@@ -106,6 +107,13 @@ export interface PollResult {
   error?: string;
 }
 
+/** The server's `{error}` detail for a failed response, or '' when the body is
+ *  not a JSON error envelope. */
+async function errorDetail(res: Response): Promise<string> {
+  const parsed = v.safeParse(ErrorBodySchema, await tolerateAsync(() => res.json(), 'malformed-input'));
+  return parsed.success ? parsed.output.error ?? '' : '';
+}
+
 async function api<Schema extends v.GenericSchema, Body>(
   schema: Schema, method: string, path: string, body?: Body,
 ): Promise<v.InferOutput<Schema>> {
@@ -114,11 +122,7 @@ async function api<Schema extends v.GenericSchema, Body>(
     headers: { 'content-type': 'application/json' },
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    let detail = '';
-    try { detail = v.parse(ErrorBodySchema, await res.json()).error ?? ''; } catch { /* nop */ }
-    throw new Error(`${method} /api/user${path} → ${res.status} ${detail}`);
-  }
+  if (!res.ok) throw new Error(`${method} /api/user${path} → ${res.status} ${await errorDetail(res)}`);
   return v.parse(schema, await res.json());
 }
 
@@ -247,6 +251,25 @@ export const listProviderCatalog = () =>
     envVar: v.optional(v.string()), connected: v.boolean(),
   })), 'GET', '/providers/catalog');
 
+// ── Cloudflare account (which account serves Workers AI) ───────────
+export interface CloudflareAccountSummary {
+  id: string;
+  name: string;
+}
+export interface CloudflareAccountStatus {
+  connected: boolean;
+  selectedId: string | null;
+  accounts: CloudflareAccountSummary[];
+}
+export const listCloudflareAccounts = () =>
+  api(v.object({
+    connected: v.boolean(), selectedId: v.nullable(v.string()),
+    accounts: v.array(v.object({ id: v.string(), name: v.string() })),
+  }), 'GET', '/cloudflare/accounts');
+export const selectCloudflareAccount = (id: string) =>
+  api(OkSchema, 'PUT', '/cloudflare/account', { id })
+    .then((r) => { invalidateModelsCache(); return r; });
+
 // ── Cloudflare AI Gateway (the user's own gateway) ─────────────────
 export interface CloudflareGatewaySummary {
   id: string;
@@ -362,9 +385,7 @@ async function agentApi<Schema extends v.GenericSchema, Body>(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
   if (!res.ok) {
-    let detail = '';
-    try { detail = v.parse(ErrorBodySchema, await res.json()).error ?? ''; } catch { /* nop */ }
-    throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${detail}`);
+    throw new Error(`${method} /api/workspaces/${agentName}${path} → ${res.status} ${await errorDetail(res)}`);
   }
   return v.parse(schema, await res.json());
 }

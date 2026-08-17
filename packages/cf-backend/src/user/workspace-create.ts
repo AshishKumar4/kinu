@@ -57,7 +57,7 @@ export async function createCloudWorkspaceForUser(
   const menu = await listAvailableModels(env, userId, caller);
   const model = pickInitialModel(input.model ?? await userDO.getConfig(caller, 'default_model'), menu.models);
   if (!model) {
-    throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, then create the workspace again.');
+    throw new Error('Cloudflare Workers AI is not connected. Reconnect Cloudflare with Workers AI permissions, or choose a default model in your user settings, then create the workspace again.');
   }
 
   const identity = createInitialCloudAgentIdentity(input, purpose);
@@ -189,9 +189,10 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
     env.OrchestratorAgent.idFromName(agentName),
   ) as DurableObjectStub<OrchestratorAgent>;
   const claim = await orchestrator.claimOwner(userId);
-  // Before anything else touches it: a new workspace runs its first turn (a
-  // peer's task, an auto-title, an inbound email) without ever being opened,
-  // and every one of those needs its identity to reach the owner's UserDO.
+  // Before anything else touches it: a new workspace runs its first turn (its
+  // own genesis turn, a peer's task, an auto-title, an inbound email) without
+  // ever being opened, and every one of those needs its identity to reach the
+  // owner's UserDO.
   await userDO.ensureWorkspaceCapability(agentName, claim.capabilityHash);
   await orchestrator.setProvisionalDisplayName(displayName);
   await orchestrator.setSoul(renderSoulMarkdown({ name: displayName, mission }));
@@ -201,11 +202,17 @@ async function initializeOrchestrator(input: InitializeOrchestratorInput): Promi
   await orchestrator.resetWorkspaceBaseline();
   if (model) await orchestrator.setModel(model);
   if (reasoningEffort) await orchestrator.setReasoningEffort(reasoningEffort);
+  // The agent takes the first turn. Last, so the soul, model and effort it runs
+  // under are all already durable — and the mission it reads is the one the row
+  // holds, not a second copy passed down this call.
+  await orchestrator.beginGenesisTurn();
 }
 
-function pickInitialModel(defaultModel: string | null, models: ModelMenuEntry[]): string | null {
+/** The model a new workspace starts on. An explicit choice wins; with none, the
+ *  native Workers AI default is the only automatic answer. Falling through to
+ *  whatever model happened to be first in the menu silently put new workspaces
+ *  on a paid BYO provider. */
+export function pickInitialModel(defaultModel: string | null, models: ModelMenuEntry[]): string | null {
   if (defaultModel && models.some((model) => model.spec === defaultModel)) return defaultModel;
-  return models.find((model) => model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC)?.spec
-    ?? models[0]?.spec
-    ?? null;
+  return models.find((model) => model.spec === DEFAULT_WORKERS_AI_MODEL_SPEC)?.spec ?? null;
 }

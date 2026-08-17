@@ -26,7 +26,9 @@
  * The edge worker verifies the connect ticket, resolves the bearer's scopes,
  * and forwards them on a worker-set header (never trusted from the client).
  * The DO persists them as a connection tag — tags ride the WebSocket
- * attachment, so the restriction survives DO hibernation — and rejects
+ * attachment, so the restriction survives DO hibernation
+ * (`websocket.hibernation_state`, which is why an in-memory allowlist would
+ * silently widen to full access on wake) — and rejects
  * out-of-scope `{type:'rpc'}` frames before the agents-SDK dispatcher sees
  * them.
  */
@@ -81,6 +83,7 @@ export const AGENT_RPC_ACCESS = {
   getGepaRun: 'workspace.read',
   getGepaRuns: 'workspace.read',
   getForkRun: 'workspace.read',
+  getExplorationCanvas: 'workspace.read',
   getHeadRun: 'workspace.read',
   getHeadRuns: 'workspace.read',
   getMctsNodeDetail: 'workspace.read',
@@ -168,6 +171,7 @@ export const AGENT_RPC_ACCESS = {
   getScaffoldDiff: 'interactive',
   getShadowVerdict: 'interactive',
   getShellApprovalMode: 'interactive',
+  getShellApprovalGrants: 'interactive',
   listAlternateTakes: 'interactive',
   listCurriculumTasks: 'interactive',
   // The needs-you queue. Interactive because it is an aggregate, and an
@@ -187,6 +191,7 @@ export const AGENT_RPC_ACCESS = {
   restoreFileCheckpoint: 'interactive',
   retryBackgroundJob: 'interactive',
   revertChangelogEntry: 'interactive',
+  revokeShellApprovalGrants: 'interactive',
   runOutcomeEnsemble: 'interactive',
   runScaffoldGepaOptimization: 'interactive',
   setAlwaysActiveSkills: 'interactive',

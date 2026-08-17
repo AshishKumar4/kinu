@@ -2,13 +2,13 @@
 // keyed by the stable Proteus userId resolved by the D1 auth store.
 // Idempotent — safe to call on every DO boot.
 
-import { initExperienceLibraryTables, initReleaseTables, type SqlExec } from '@proteus/core';
+import { initExperienceLibraryTables, initReleaseTables, reconcileColumns, type SqlExec } from '@proteus/core';
 import { initAccessTokenTable } from '../cli/access-token-store.js';
 import { initWorkspaceCapabilityTables } from './workspace-capability.js';
 
 /** One-shot migration ledger version. Bump it when adding a migration that
  *  must run exactly once (anything destructive or shape-changing); the
- *  idempotent CREATE/ensureColumn statements below need no version. */
+ *  idempotent CREATE + reconcileColumns statements below need no version. */
 const USER_SCHEMA_VERSION = 1;
 
 export function initUserTables(sql: SqlExec): void {
@@ -150,7 +150,7 @@ export function initUserTables(sql: SqlExec): void {
   // connecting is never re-linked, and one that stopped connecting stops being
   // a live credential. NULL on rows that predate the column — stamped on their
   // next verification rather than locked out.
-  ensureColumn(sql, 'user_devices', 'expires_at', 'INTEGER');
+  reconcileColumns((ddl) => { sql.exec(ddl); }, 'user_devices', ['expires_at INTEGER']);
 
   // CLI bearer tokens minted by the browser device-code approval flow. Tokens
   // include the UserDO id as a routing hint, but only their SHA-256 hash is
@@ -188,9 +188,11 @@ export function initUserTables(sql: SqlExec): void {
       PRIMARY KEY (agent_name, device_id)
     )
   `);
-  ensureColumn(sql, 'device_consent', 'scope', "TEXT NOT NULL DEFAULT 'all_local_actions'");
-  ensureColumn(sql, 'device_consent', 'last_method', 'TEXT');
-  ensureColumn(sql, 'device_consent', 'last_summary', 'TEXT');
+  reconcileColumns((ddl) => { sql.exec(ddl); }, 'device_consent', [
+    "scope TEXT NOT NULL DEFAULT 'all_local_actions'",
+    'last_method TEXT',
+    'last_summary TEXT',
+  ]);
 
   // Short-lived, single-use WebSocket tickets for device daemon reconnects.
   // The daemon exchanges its long-lived local device token over HTTPS, then
@@ -245,11 +247,6 @@ function schemaVersion(sql: SqlExec): number {
   return Number.isInteger(version) && version > 0 ? version : 0;
 }
 
-function ensureColumn(sql: SqlExec, table: string, column: string, ddl: string): void {
-  const rows = sql.exec(`PRAGMA table_info(${table})`).toArray();
-  if (rows.some((r) => r.name === column)) return;
-  sql.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${ddl}`);
-}
 
 /** v1 (one-shot): pre-release builds stored raw tokens or lacked the hash
  *  column. Those rows cannot be safely migrated in a Worker SQLite boot hook,

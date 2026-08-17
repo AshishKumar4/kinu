@@ -156,7 +156,7 @@ function deriveKey(secret: string): Promise<{ keyId: string; key: CryptoKey }> {
   return pending;
 }
 
-function utf8(value: string): Uint8Array {
+function utf8(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
 
@@ -166,7 +166,7 @@ function base64url(bytes: Uint8Array): string {
   return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function unbase64url(value: string): Uint8Array {
+function unbase64url(value: string): Uint8Array<ArrayBuffer> {
   const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/'));
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);

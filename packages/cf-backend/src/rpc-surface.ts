@@ -2,8 +2,9 @@
  * The Durable Object RPC boundary — what a stub-holder can actually reach.
  *
  * Cloudflare resolves `stub.foo(...)` by looking `foo` up on the receiver's
- * PROTOTYPE CHAIN. Three consequences, each verified against real workerd
- * (1.20260601.1, via miniflare, one DO calling another):
+ * PROTOTYPE CHAIN — `rpc.prototype_chain` in the platform catalog. Three
+ * consequences, each verified against real workerd (1.20260601.1, via
+ * miniflare, one DO calling another):
  *
  *   1. TypeScript `private` is erased at compile time, so a `private` method is
  *      an ordinary prototype method and IS callable over RPC. Every
@@ -226,6 +227,7 @@ const USER_DO_METHODS = [
   'listAIGateways',
   'listAccessTokens',
   'listCliTokens',
+  'listCloudflareAccounts',
   'listConfig',
   'listConnectedProviders',
   'listCredentials',
@@ -249,6 +251,7 @@ const USER_DO_METHODS = [
   'revokeDevice',
   'searchExperience',
   'selectAIGateway',
+  'selectCloudflareAccount',
   'setConfig',
   'setCredential',
   'setDeviceConsentScope',
@@ -324,6 +327,7 @@ const ORCHESTRATOR_METHODS = [
   'acceptEmailDelivery',
   'acceptWebhookDelivery',
   'awaitDeviceConsent',
+  'beginGenesisTurn',
   'claimOwner',
   'createDurableWebhook',
   'getEmailIngress',

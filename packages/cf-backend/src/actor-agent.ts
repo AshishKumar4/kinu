@@ -55,7 +55,8 @@ import {
   type WebSearchProvider,
   buildSystemPromptSync,
   currentDateForPrompt,
-  promptModeForTurnMetadata,
+  turnProvenanceForMetadata,
+  workModeForTurnMetadata,
   DynamicContextLedger, turnLocalContextMessage, agentDynamicContext, observeSystemPromptHash,
   listRecoveryFindings,
   type DynamicContext, type MissingCapability,
@@ -71,7 +72,7 @@ import {
   type AgentsToolAction,
   type AgentsToolDeps,
   type BuiltinToolName,
-  type PromptMode,
+  type TurnProvenance,
   type PromptModelContext,
   type WorkMode,
   ACTIVE_TOOLS,
@@ -98,7 +99,7 @@ import {
   BackgroundJobStore, BackgroundJobRunner, BACKGROUND_POLICY, type SessionSurface,
   TaskListStore,
   wrapToolsForBackground, resumeForkBackgroundJob,
-  MctsSearchStore, readLatestSearchTree, type MCTSProgressEvent,
+  MctsSearchStore, readSearchTree, type MCTSProgressEvent,
   // EventsHub primitives (spec §1)
   EventLog,
   // Skills + per-turn surface (core turn-surface)
@@ -114,7 +115,7 @@ import {
   type ParentRpcWrite,
   // Subordinate teams + cross-workspace peers + the report spine
   type TeamToolDeps, type PeersToolDeps, type ReportToolDeps,
-  readSoul,
+  readSoul, bootstrapScaffold,
   parseModelSpec, catalogModelInfo,
   // Model-capability attachment sanitization (the PDF-400 fix)
   type MediaModality,
@@ -122,6 +123,9 @@ import {
   ModelCatalogSession,
   // Shared turn-context assembly — the SAME ordering runChat runs on the CLI
   assembleTurnMessages,
+  // The tool-call pairing invariant — applied wherever messages reach the model
+  // WITHOUT going through assembleTurnMessages (the scaffold replay below).
+  settleUnpairedToolCalls,
   // AGENTS.md (agents.md standard) — cloud workspace discovery
   collectWorkspaceAgentsMd,
   mergeProviderOptions, reasoningEffortOptions, REASONING_EFFORT_FOR_STAGE,
@@ -386,11 +390,13 @@ export abstract class ActorAgent extends Think<Env> {
    *  only ever travels parent -> facet, so nothing name-addressable can be
    *  asked for another workspace's secret. */
   protected async workspaceCapabilityToken(): Promise<string | null> {
-    try {
-      this.ensureCapabilityTable();
-      const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
-      return rows[0]?.token || null;
-    } catch { return null; }
+    // A plain read. It used to create the table it selects from and swallow
+    // every failure as `null`, which is what made a missing `workspace_capability`
+    // read as "this workspace holds no token" — indistinguishable from the truth,
+    // and the reason nobody noticed the table had no owner. The schema path owns
+    // it now (`ensureCapabilitySchema`), so a failure here is a real failure.
+    const rows = this.sql<{ token: string }>`SELECT token FROM workspace_capability LIMIT 1`;
+    return rows[0]?.token || null;
   }
 
   /** The hash of the token this workspace holds, or null when it holds none.
@@ -405,19 +411,36 @@ export abstract class ActorAgent extends Think<Env> {
    *  workspace. Worker-side DO RPC only — deliberately not `@callable`. */
   async installWorkspaceCapability(token: string): Promise<{ ok: true }> {
     if (!token) throw new Error('capability token required');
-    this.ensureCapabilityTable();
+    // A native DO RPC does not route through partyserver, so it can land before
+    // `onStart` has run — the same race `OrchestratorAgent.claimOwner` handles
+    // this way. Flag-gated, so it is a no-op once the activation is initialized.
+    this.ensureSchema();
     void this.sql`INSERT INTO workspace_capability (id, token) VALUES (1, ${token})
              ON CONFLICT(id) DO UPDATE SET token = excluded.token`;
     this.invalidateModelCaches();
     return { ok: true };
   }
 
-  private ensureCapabilityTable(): void {
+  /** Create every table this actor activation needs, before anything reads one.
+   *  Each root declares the planes it alone carries; this is the shared step
+   *  each of them calls. Flag-gated per activation by the root's `_schemaReady`.
+   *
+   *  `workspace_capability` earns its place here the hard way: it used to be
+   *  created lazily by `workspaceCapabilityToken()`, i.e. by a READ performing
+   *  DDL, and its only reliable creator turned out to be `onStart`'s scaffold
+   *  probe failing on its way into the workspace filesystem. A table that exists
+   *  because an unrelated call threw is a table with no owner. */
+  protected ensureCapabilitySchema(): void {
     this.ctx.storage.sql.exec(`CREATE TABLE IF NOT EXISTS workspace_capability (
       id    INTEGER PRIMARY KEY CHECK (id = 1),
       token TEXT NOT NULL
     )`);
   }
+
+  /** Every table this root carries, created before any read. Declared here
+   *  because `installWorkspaceCapability` — a native DO RPC reachable before
+   *  `onStart` — has to be able to demand it. */
+  protected abstract ensureSchema(): void;
 
   /** Tool deps only this actor class wires. Structural absence is the gating
    *  mechanism (the same way staffing is absent on the CLI backend): an actor
@@ -835,9 +858,20 @@ export abstract class ActorAgent extends Think<Env> {
         // — the parity a delegating candidate needs to be judged on the
         // scaffold delta rather than on a context handicap. Without one (a
         // preview, a GEPA rollout) the task is all there is.
+        //
+        // The replay goes straight to streamText rather than through
+        // assembleTurnMessages, so the pairing invariant is applied here: a
+        // context captured from a turn that was interrupted between a tool call
+        // and its result would make streamText throw before the request left
+        // the isolate, failing the shadow trial for a reason that has nothing
+        // to do with the scaffold being judged. The CLI's replay reaches the
+        // invariant through runChat (cli-backend local-session.ts); this is the
+        // other half of that one path.
         defaultInference: () => projectDefaultInference(streamText({
           model: this.getModel(),
-          messages: context && context.length > 0 ? [...context] : [{ role: 'user', content: task }],
+          messages: context && context.length > 0
+            ? settleUnpairedToolCalls(context) ?? [...context]
+            : [{ role: 'user', content: task }],
           tools: this.getRawTools(),
           stopWhen: stepCountIs(this.maxSteps),
           ...effortFor('scaffold_mutation'),
@@ -1086,6 +1120,35 @@ export abstract class ActorAgent extends Think<Env> {
     return this._taskList;
   }
 
+  /** The scaffold is the program a turn executes (core reads it in
+   *  scaffold/executor.ts), so its existence is a precondition of RUNNING A
+   *  TURN — deliberately not of activating the Durable Object.
+   *
+   *  It must never be awaited from `onStart()`: partyserver runs `onStart` inside
+   *  `ctx.blockConcurrencyWhile`, which `fetch`, `webSocketMessage`,
+   *  `webSocketClose` and `alarm` all await, and the hosted file plane is a
+   *  SECOND Durable Object. Awaiting it there stalls every request on this
+   *  object — pure `@callable` reads included — for as long as that object takes
+   *  to answer, and the Workers runtime cancels the block and resets the object
+   *  at 30s (`do.block_concurrency.cancel_ms`). Measured: a bare `SELECT` took
+   *  25212ms behind a filesystem object busy for 25s, against 266ms with the same
+   *  object busy and a clean `onStart`.
+   *
+   *  Owner-gated because the hosted file plane is owner-namespaced, and latched
+   *  per activation like `_schemaReady`: once this activation has seen the
+   *  scaffold, later turns re-probe nothing. Protected for the same reason
+   *  `_cachedSoulText` is: a harness with no filesystem declares the two
+   *  file-backed turn preconditions satisfied rather than faking a filesystem. */
+  protected _scaffoldReady = false;
+  protected async ensureOwnedScaffold(): Promise<void> {
+    if (this._scaffoldReady || !this.getOwnerUserId()) return;
+    if (!(await this.rt.identity.scaffold.exists())) {
+      await bootstrapScaffold(this.rt);
+      console.log('[proteus] Bootstrapped initial scaffold');
+    }
+    this._scaffoldReady = true;
+  }
+
   // Durable MCTS search checkpoints — the resume record a fork(settle=mcts)
   // evicted mid-search continues from (B6). One per DO; keyed by search root id.
   private _mctsSearchStore: MctsSearchStore | null = null;
@@ -1095,32 +1158,35 @@ export abstract class ActorAgent extends Think<Env> {
   }
 
   /**
-   * Push the search tree to every connected client, after each MCTS iteration.
-   * The ONE broadcast both producers use — the lifetime evolution cycle and an
-   * agent-initiated `agents` fork (see getAgentsToolDeps). It used to hang off
-   * the orchestrator and be reachable only from the first of those, so a
-   * search an operator started emitted nothing and its tree sat still for as
-   * long as it ran.
+   * Push ONE search's tree to every connected client, after each of its MCTS
+   * iterations. The one broadcast both producers use — the lifetime evolution
+   * cycle and an agent-initiated `agents` fork (see getAgentsToolDeps). It used
+   * to hang off the orchestrator and be reachable only from the first of those,
+   * so a search an operator started emitted nothing and its tree sat still for
+   * as long as it ran.
    *
-   * Same scoped projection as getMctsTree: the tree in progress IS the latest
-   * one, and pushing every settled search's rows made the client render
-   * whichever root it picked out of the pile.
+   * Scoped by the `rootId` the event carries, NOT by "which tree was written to
+   * most recently". A workspace runs concurrent searches — two detached
+   * `settle:'mcts'` forks — and the latest-tree read made every event a coin
+   * flip between them: one search's iteration shipped the other's nodes under
+   * its own phase and budget, and a backpropagation (visits change, no insert,
+   * so never "latest") was suppressed by the shared fingerprint as a no-change.
    *
    * Several events fire per iteration and each carries the WHOLE tree —
-   * observations and proposed code included — so an unchanged tree is skipped
-   * rather than re-serialized and fanned out. The receiver discards an
-   * identical payload on the same key anyway (use-proteus's fingerprint), so
-   * nothing downstream can tell the difference except the bytes it did not pay
-   * for.
+   * observations and proposed code included — so a tree that has not changed
+   * SINCE ITS OWN last push is skipped rather than re-serialized and fanned out.
+   * The fingerprint is therefore per search: one search going quiet must not
+   * mask another that is growing.
    */
-  broadcastMctsProgress(phase: string, iteration?: number, budget?: number): void {
+  broadcastMctsProgress(rootId: string, phase: string, iteration?: number, budget?: number): void {
     try {
-      const nodes = readLatestSearchTree(this.boundSql);
+      const nodes = readSearchTree(this.boundSql, rootId);
+      if (nodes.length === 0) return;
       const fingerprint = nodes.map((n) => `${n.id}:${n.visits}:${n.value}:${n.status}`).join('|');
-      if (fingerprint === this._lastMctsFingerprint) return;
-      this._lastMctsFingerprint = fingerprint;
+      if (fingerprint === this._lastMctsFingerprint.get(rootId)) return;
+      this._lastMctsFingerprint.set(rootId, fingerprint);
       this.broadcast(JSON.stringify({
-        type: 'mcts-progress', phase, iteration, budget,
+        type: 'mcts-progress', rootId, phase, iteration, budget,
         nodeCount: nodes.length, nodes,
       }));
     } catch (err) {
@@ -1128,15 +1194,16 @@ export abstract class ActorAgent extends Think<Env> {
     }
   }
 
-  /** The tree last pushed. Per activation, which is the right lifetime: a
-   *  reconnecting client is served by the surface's own poll, not by a resend. */
-  private _lastMctsFingerprint = '';
+  /** The tree last pushed, per search. Per activation, which is the right
+   *  lifetime: a reconnecting client is served by the surface's own poll, not by
+   *  a resend. */
+  private readonly _lastMctsFingerprint = new Map<string, string>();
 
   /** One MCTS progress event → the broadcast, whichever producer raised it. */
   protected onMctsProgress(event: MCTSProgressEvent): void {
     const phase = event.type === 'phase' ? event.phase : event.type;
     const budget = event.type === 'branch-failed' ? undefined : event.remainingBudget;
-    this.broadcastMctsProgress(phase, event.iteration, budget);
+    this.broadcastMctsProgress(event.rootId, phase, event.iteration, budget);
   }
   // The backend-agnostic background-job lifecycle (detach → settle → wake +
   // cancel + evict-recovery), running over the durable fiber (rt.schedule.fiber)
@@ -1193,9 +1260,8 @@ export abstract class ActorAgent extends Think<Env> {
    *  staffing/peer halves ride this actor's profile (actorToolDeps). Rebuilt
    *  with the toolset (getRawTools), so the fork model refreshes exactly
    *  when the toolset does. */
-  private getAgentsToolDeps(mode: PromptMode | WorkMode): AgentsToolDeps {
+  private getAgentsToolDeps(workMode: WorkMode): AgentsToolDeps {
     const actorDeps = this.actorToolDeps();
-    const workMode: WorkMode = mode === 'plan' ? 'plan' : 'build';
     const deps: AgentsToolDeps = {
       mode: workMode,
       fork: buildStrategyForkDeps({
@@ -1392,14 +1458,14 @@ export abstract class ActorAgent extends Think<Env> {
         memory: this.rt.memory, vectorStore: this.rt.vectorStore,
         facts: this.facts, sql: this.rt.storage.sql,
       })),
-      createTasksCodemodeProvider(this.taskList),
+      createTasksCodemodeProvider(this.taskList, this.config),
     ];
   }
 
   /** Build (or return cached) this DO's execute_tools tool. Construction (see
    *  execute-tools.ts) is once per DO lifetime; crafted tools saved mid-turn
    *  still become callable because the executor re-reads craftStore per call. */
-  private getExecuteToolsTool(mode: PromptMode, profileKey: string): ReturnType<typeof createExecuteToolsTool> {
+  private getExecuteToolsTool(mode: WorkMode, profileKey: string): ReturnType<typeof createExecuteToolsTool> {
     const key = `${mode === 'plan' ? 'plan' : 'default'}:${profileKey}`;
     if (!this._craftExecTools.has(key)) {
       this._craftExecTools.set(key, createExecuteToolsTool({
@@ -1615,7 +1681,10 @@ export abstract class ActorAgent extends Think<Env> {
     const actorDeps = this.actorToolDeps();
     const availableTools = actorActiveTools(actorDeps);
     const agentsActions = actorAgentsActions(actorDeps);
-    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}\u0000${agentsActions.join(',')}`;
+    // The stance is durable agent state, the same class as the soul and the
+    // model — so it belongs in the cacheable base AND in its cache key.
+    const stance = this.config.getStance();
+    const key = `${this.getSoulText()}\u0000${execKey}\u0000${model.provider ?? ''}/${model.id ?? ''}\u0000${availableTools.join(',')}\u0000${agentsActions.join(',')}\u0000${stance}`;
     let base: string;
     if (this._cachedSystemPrompt && this._cachedSystemPromptKey === key) {
       base = this._cachedSystemPrompt;
@@ -1637,6 +1706,7 @@ export abstract class ActorAgent extends Think<Env> {
         rlmAvailable: true,
         backend: 'cf',
         model,
+        stance,
       });
       this._cachedSystemPrompt = base;
       this._cachedSystemPromptKey = key;
@@ -1691,7 +1761,7 @@ export abstract class ActorAgent extends Think<Env> {
    *  getTools, which adds the background wrap) and by internal eval side-streams
    *  that must run tools to completion inline (never auto-background). */
   protected getRawTools(): ToolSet {
-    return this.getRawToolsForWorkMode(this.turnPromptMode() === 'plan' ? 'plan' : 'build');
+    return this.getRawToolsForWorkMode(this.turnWorkMode());
   }
 
   protected getRawToolsForWorkMode(mode: WorkMode): ToolSet {
@@ -2026,7 +2096,9 @@ export abstract class ActorAgent extends Think<Env> {
   // ACTIVE_TOOLS is sourced from @proteus/core/tools/registry (single truth).
 
   async beforeTurn(ctx: TurnContext): Promise<TurnConfig | void> {
-    // The soul is a file; load it where there is a promise to await.
+    // The scaffold and the soul are both files this turn is about to read, and
+    // this is the first place with a promise to await them on.
+    await this.ensureOwnedScaffold();
     if (this._cachedSoulText === null) await this.refreshSoulText();
     // Per-turn accounting reset + the turn's mission scope, together: what the
     // turn is allowed to spend is part of what the turn is.
@@ -2072,7 +2144,7 @@ export abstract class ActorAgent extends Think<Env> {
     // ladder renders only the actions this profile supports — then
     // restricted to the active skills' allowed union (core turn-surface).
     const turnActorDeps = this.actorToolDeps();
-    const promptMode = this.turnPromptMode();
+    const workMode = this.turnWorkMode();
     let activeTools: BuiltinToolName[] = actorActiveTools(turnActorDeps);
     const { available: availableSkills, activeSkills: activeSetForPrompt } = await resolveTurnSkills({
       vfs: this.getSkillsVfs(),
@@ -2097,7 +2169,7 @@ export abstract class ActorAgent extends Think<Env> {
     // strip them out. Builtin names + MCP `mcp_<server>_<name>` keys are
     // disjoint by construction (assertion above).
     const mcpToolNames = Object.keys(mcpTools);
-    const planToolNames = promptMode === 'plan' && turnActorDeps.submitPlan ? ['submit_plan'] : [];
+    const planToolNames = workMode === 'plan' && turnActorDeps.submitPlan ? ['submit_plan'] : [];
     const effectiveActiveTools = [...activeTools, ...planToolNames, ...mcpToolNames];
     const effectiveTools = mcpToolNames.length > 0 ? mcpTools : undefined;
 
@@ -2141,8 +2213,10 @@ export abstract class ActorAgent extends Think<Env> {
       agentsActions: actorAgentsActions(turnActorDeps),
       externalTools: mcpToolNames.map((name) => ({ name, source: 'mcp' as const })),
       backend: 'cf',
-      mode: promptMode,
-      planSubmissionAvailable: promptMode === 'plan' && turnActorDeps.submitPlan !== undefined,
+      workMode,
+      provenance: this.turnProvenance(),
+      stance: this.config.getStance(),
+      planSubmissionAvailable: workMode === 'plan' && turnActorDeps.submitPlan !== undefined,
       model,
       currentDate: currentDateForPrompt(),
     };
@@ -2363,13 +2437,25 @@ export abstract class ActorAgent extends Think<Env> {
     return v.is(v.string(), parsed.output.proteusEvent) ? parsed.output.proteusEvent : null;
   }
 
-  /** Plan/Build is explicit user intent on the driving message; autonomous
-   * event mode remains the established proteusEvent fallback. */
-  protected turnPromptMode(): PromptMode {
-    const metadata = this._activeProgrammaticUserMessage
-      ? this._activeProgrammaticUserMessage.metadata
-      : this.turnUserMetadata();
-    return promptModeForTurnMetadata(metadata);
+  /** What the turn may do. Plan is explicit user intent on the driving
+   * message; everything else is ordinary unconstrained work. */
+  protected turnWorkMode(): WorkMode {
+    return workModeForTurnMetadata(this.turnDrivingMetadata());
+  }
+
+  /** Why the turn is running — read from the event alone, never from the work
+   * mode stamped beside it. */
+  protected turnProvenance(): TurnProvenance {
+    return turnProvenanceForMetadata(this.turnDrivingMetadata());
+  }
+
+  /** The metadata of the message driving this turn: the active programmatic
+   * message when one drove it, else the last durable user message. Parsed at
+   * this boundary so both axes read one already-narrowed shape. */
+  private turnDrivingMetadata(): JsonObject | undefined {
+    if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();
+    const parsed = v.safeParse(JsonObjectSchema, this._activeProgrammaticUserMessage.metadata);
+    return parsed.success ? parsed.output : undefined;
   }
 
   /** What this turn was started BY: the metadata on the message that drives it
@@ -2428,7 +2514,7 @@ export abstract class ActorAgent extends Think<Env> {
   private wrapToolsForBackground(raw: ToolSet): ToolSet {
     return wrapToolsForBackground(raw, {
       jobRunner: this.jobRunner,
-      mode: () => this.turnPromptMode() === 'plan' ? 'plan' : 'build',
+      mode: () => this.turnWorkMode(),
       trackController: (controller) => {
         this._activeToolControllers.add(controller);
         return () => this._activeToolControllers.delete(controller);

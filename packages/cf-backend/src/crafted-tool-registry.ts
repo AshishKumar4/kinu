@@ -24,7 +24,7 @@
  * a re-read per execute keeps visibility live.
  */
 
-import { DynamicWorkerExecutor } from '@cloudflare/codemode';
+import { DynamicWorkerExecutor, normalizeCode } from '@cloudflare/codemode';
 import { craftFailureMarker, filterByEffectiveScore, explainNativeToolReferenceError } from '@proteus/core';
 import type { CraftStore, SqlExecutor } from '@proteus/core';
 
@@ -87,14 +87,29 @@ function attributedBody(name: string, code: string): string {
 }
 
 /**
- * Splice the preamble into the LLM's async arrow.
- * Regex matches the head of `async (...) => { ... }` (whitespace-tolerant).
- * If the LLM's code doesn't match that shape, the preamble is dropped
- * silently.
+ * Wrap the model's code so the crafted-tool preamble is ALWAYS in its lexical
+ * scope.
+ *
+ * This used to be a regex splice into the head of `async (...) => {` against
+ * the model's raw code, and its own docstring conceded that "if the LLM's code
+ * doesn't match that shape, the preamble is dropped silently". A bare statement
+ * body never matches — and a bare statement body is exactly what
+ * BUILTIN_TOOL_SPECS.execute_tools.example teaches, and what codemode itself
+ * wraps for you (normalizeCode, called later inside DynamicWorkerExecutor).
+ * So on every such call the whole crafted-tool surface was undefined, with no
+ * error naming why: the one capability that makes a tool crafted in step 1
+ * callable in step 2 failed in the case our own worked example trains for.
+ *
+ * Normalizing first and wrapping instead of splicing removes the shape
+ * dependency entirely. DWE declares each provider namespace as a `const` in
+ * the scope that encloses the evaluated arrow, so the inner arrow still closes
+ * over `workspace`, `memory`, `agents` and the rest, and now over `tools` too.
+ * DWE re-normalizes this wrapper, which is already codemode's canonical shape,
+ * so that pass is a no-op.
  */
 export function injectPreamble(code: string, preamble: string): string {
   if (!preamble) return code;
-  return code.replace(/^(\s*async\s*\([^)]*\)\s*=>\s*\{)/, `$1\n  ${preamble}`);
+  return `async () => {\n  ${preamble}return await (${normalizeCode(code)})();\n}`;
 }
 
 /**

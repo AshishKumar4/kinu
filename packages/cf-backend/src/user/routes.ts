@@ -25,6 +25,8 @@
  *   GET    /api/user/models                        — union of available models
  *   GET    /api/user/providers                     — connected provider summary
  *   GET    /api/user/providers/catalog             — connectable providers (BYO key)
+ *   GET    /api/user/cloudflare/accounts           — accounts this login can see + selection
+ *   PUT    /api/user/cloudflare/account            — pick which account serves Workers AI
  *   GET    /api/user/cloudflare/gateways           — the user's AI Gateways + selection
  *   PUT    /api/user/cloudflare/gateway            — select an AI Gateway (or null)
  *   GET    /api/user/mcp/servers                   — list configured MCP servers
@@ -233,6 +235,19 @@ export async function handleUserRequest(
   }
   if (path === '/models' && method === 'GET') {
     return json(await listAvailableModels(env, identity.userId, await ownerCaller(env)));
+  }
+
+  // ── Cloudflare account (which account serves Workers AI) ────────────
+  if (path === '/cloudflare/accounts' && method === 'GET') {
+    return json(await stub.listCloudflareAccounts(await ownerCaller(env)));
+  }
+  if (path === '/cloudflare/account' && method === 'PUT') {
+    const body = await safeJson(request, v.object({ id: v.string() }));
+    if (!body) return err(400, 'id (string) required');
+    try { await stub.selectCloudflareAccount(await ownerCaller(env), body.id); }
+    catch (e) { return err(400, e instanceof Error ? e.message : String(e)); }
+    notifyWorkspacesCredentialsChanged(env, stub, ctx);
+    return json({ ok: true });
   }
 
   // ── Cloudflare AI Gateway (the user's own gateway) ──────────────────

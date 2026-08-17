@@ -80,11 +80,23 @@ export interface ToolInfo {
 	/** Where the tool came from: shipped with the agent, or crafted by it. */
 	learned: boolean;
 	/**
-	 * How the model reaches it — a tool definition in the turn's ToolSet
-	 * (`native`), or only from inside an `execute_tools` program (`codemode`).
-	 * Derived by the orchestrator from the assembled surface, never declared.
+	 * How the model reaches it, as the registry DECLARES it (`TOOL_REACH`):
+	 * `native` = a tool definition in the turn's ToolSet, `codemode` = only from
+	 * inside an `execute_tools` program, `both` = both, over one dispatcher.
+	 *
+	 * This used to be derived as `nativeNames.has(name) ? "native" : "codemode"`,
+	 * a binary with no way to say "neither" — so the one deps-gated builtin
+	 * (`report`) read "code mode" on an orchestrator, which has it on no surface
+	 * at all. A crafted tool has no registry row and is codemode by construction.
 	 */
-	exposure: "native" | "codemode";
+	exposure: "native" | "codemode" | "both";
+	/**
+	 * Whether THIS agent actually wires it. Reach is what the capability is;
+	 * this is what this actor has. `report` is declared `both` and is wired only
+	 * on a subordinate — the orchestrator IS the report sink — so its row is
+	 * honestly `both` + `wired: false` rather than silently mislabelled.
+	 */
+	wired: boolean;
 	qualityScore: number;
 	usageCount: number;
 }

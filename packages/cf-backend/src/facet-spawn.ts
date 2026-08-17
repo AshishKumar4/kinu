@@ -59,7 +59,7 @@ async function seedExplorationIdentity(
  *  Storage survives — head and branch ids are unique per run, so nothing
  *  addresses the evicted facet again. */
 export function abortExplorationFacet(host: FacetHost, id: string): void {
-  try { host.abortSubAgent(ExplorationAgent, id); } catch { /* already gone */ }
+  host.abortSubAgent(ExplorationAgent, id);
 }
 
 /** MCTS branch: a one-shot rollout facet. */
@@ -101,8 +101,14 @@ export async function spawnHeadFacet(
     id: input.id,
     run: () => stub.runAsHead(),
     abort: async (reason) => {
-      try { await stub.abortHead(reason); } catch { /* facet already gone */ }
-      abortExplorationFacet(host, input.id);
+      // Eviction is unconditional: it is strictly stronger than abortHead,
+      // whose flags live only in the instance this then discards. A failed
+      // notify must not skip the teardown, nor be discarded.
+      try {
+        await stub.abortHead(reason);
+      } finally {
+        abortExplorationFacet(host, input.id);
+      }
     },
   };
 }

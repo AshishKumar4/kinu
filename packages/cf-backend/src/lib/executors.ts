@@ -5,6 +5,8 @@
  * here so the vocabulary never drifts across tabs.
  */
 
+import type { ExecutorCapability } from "@proteus/core";
+
 /** Live executor row as reported by the orchestrator's getExecutors RPC. */
 export interface ExecutorInfo {
   name: string;
@@ -35,6 +37,45 @@ export const EXECUTOR_LABELS = {
 
 export function executorLabel(name: string): string {
   return Object.entries(EXECUTOR_LABELS).find(([key]) => key === name)?.[1] ?? name;
+}
+
+/**
+ * What each declared capability MEANS, for the one question this vocabulary
+ * answers: can I do this job here, or do I need a different environment?
+ *
+ * The ids themselves are the contract — `ExecutorProvider.capabilities`, now
+ * also rendered into the agent's own execution-status block — so this is
+ * strictly the reading of them, and every id in EXECUTOR_CAPABILITIES has one.
+ * A raw strip of `fs_shared net_inbound process_signal` is data the reader has
+ * to already know to use; that is what made it look like decoration.
+ */
+export const CAPABILITY_LABELS = {
+  javascript:     "Runs JavaScript",
+  typescript:     "Runs TypeScript",
+  python:         "Runs Python",
+  native_binary:  "Runs compiled binaries",
+  shell:          "Real POSIX shell",
+  npm:            "Installs npm packages",
+  git:            "git",
+  docker:         "Docker",
+  fs_shared:      "Files shared with the agent",
+  fs_owned:       "Its own private files",
+  net_outbound:   "Reaches the internet",
+  net_inbound:    "Can serve a port you can open",
+  process_spawn:  "Starts background processes",
+  process_long:   "Keeps them running between turns",
+  process_signal: "Can signal and stop them",
+  gpu:            "GPU",
+} satisfies Record<ExecutorCapability, string>;
+
+/** Capability ids arrive over RPC as plain strings; only a declared one has a
+ *  reading, and an unknown one is shown as it came rather than dropped. */
+function isCapability(value: string): value is ExecutorCapability {
+  return Object.hasOwn(CAPABILITY_LABELS, value);
+}
+
+export function capabilityLabel(capability: string): string {
+  return isCapability(capability) ? CAPABILITY_LABELS[capability] : capability;
 }
 
 export const EXECUTOR_ORDER = ["laptop", "sandbox", "workspace", "parent"];

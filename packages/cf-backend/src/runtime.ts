@@ -303,6 +303,10 @@ export function createCFRuntime(
   // this policy — see ShellApprovalPolicy's own doc on live reads.
   const approvalPolicy: ShellApprovalPolicy = {
     mode: () => memoryConfig.getShellApprovalMode(),
+    // Standing grants, same live read as the mode: an 'always' the owner gave
+    // in the needs-you queue takes effect on the very next command.
+    granted: (grant) => memoryConfig.getShellApprovalGrants()
+      .some((g) => g.rule === grant.rule && g.executor === grant.executor),
     get deferrals() { return hooks.deferrals?.(); },
   };
   // The workspace shell is the authoritative Nimbus session's shell, over the

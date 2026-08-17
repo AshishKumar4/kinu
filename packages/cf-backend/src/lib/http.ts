@@ -1,6 +1,7 @@
 // Shared HTTP helpers for cf-backend route modules — one home instead of a
 // per-route-file clone of json/err/safeJson/escapeHtml.
 import { projectJsonValue } from '@proteus/core';
+import { tolerateAsync } from '@proteus/core/obs';
 import * as v from 'valibot';
 
 export function json<Body>(body: Body, init: ResponseInit = {}): Response {
@@ -17,12 +18,8 @@ export async function safeJson<Schema extends v.GenericSchema>(
   request: Request,
   schema: Schema,
 ): Promise<v.InferOutput<Schema> | null> {
-  try {
-    const parsed = v.safeParse(schema, await request.json());
-    return parsed.success ? parsed.output : null;
-  } catch {
-    return null;
-  }
+  const parsed = v.safeParse(schema, await tolerateAsync(() => request.json(), 'malformed-input'));
+  return parsed.success ? parsed.output : null;
 }
 
 export function escapeHtml(value: string): string {
