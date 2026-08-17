@@ -13,14 +13,10 @@
 // real JWT in any test file would have passed it.
 import { readFileSync, existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { isTextSource, trackedFiles } from './sources.ts';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 const IGNORE_FILE = '.secretscanignore';
-
-/** Files worth scanning: source, config, docs, and the formats a key is
- *  normally pasted into. One set for every pattern — a private key is no less
- *  committed for being in a .md than in a .ts. */
-const SCANNED = /\.(ts|tsx|js|jsx|mjs|cjs|json|jsonc|md|ya?ml|toml|sh|env|pem|key)$/;
 
 export interface SecretPattern {
   id: string;
@@ -188,37 +184,20 @@ export function applyIgnores(findings: readonly Finding[], entries: readonly Ign
   return { findings: kept, unused: entries.filter((e) => !used.has(e)) };
 }
 
-/** Tracked files PLUS new files not covered by `.gitignore`.
- *
- *  `git ls-files -z` alone is tracked-only, so a brand-new file carrying a
- *  credential passed this gate until the commit that introduced it — after
- *  which the secret is already in history and the gate fires too late to
- *  matter. `--others --exclude-standard` closes that window while still
- *  honouring `.gitignore`, which is what keeps the `external/` reference
- *  clones (they contain Cloudflare-internal source) out of the scan. */
-function scannableFiles(): string[] {
-  const proc = Bun.spawnSync(
-    ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-    { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' },
-  );
-  if (proc.exitCode !== 0) throw new Error(`git ls-files failed: ${proc.stderr.toString()}`);
-  return selectScanCandidates(proc.stdout.toString().split('\0'), (file) =>
-    existsSync(join(REPO_ROOT, file))
-  );
-}
-
-export function selectScanCandidates(
-  files: readonly string[],
-  exists: (file: string) => boolean,
-): string[] {
-  return files.filter((file) => file.length > 0 && SCANNED.test(file) && exists(file));
-}
-
 function main(): void {
   const ignorePath = join(REPO_ROOT, IGNORE_FILE);
   const entries = existsSync(ignorePath) ? parseIgnoreFile(readFileSync(ignorePath, 'utf8')) : [];
 
-  const files = scannableFiles().filter((f) => f !== IGNORE_FILE && f !== relative(REPO_ROOT, import.meta.path));
+  // From the one enumeration. This gate is where "tracked-only is not the
+  // governed set" was first paid for: a brand-new file carrying a credential
+  // passed until the commit that introduced it, after which the secret is
+  // already in history and the scan fires too late to matter. The widening that
+  // fixed it — tracked PLUS new files `.gitignore` does not cover, minus
+  // anything gone from disk — is `trackedFiles()` now, so every other gate
+  // inherits it instead of each one relearning it.
+  const self = relative(REPO_ROOT, import.meta.path);
+  const files = trackedFiles()
+    .filter((f) => isTextSource(f) && f !== IGNORE_FILE && f !== self);
   const raw: Finding[] = [];
   for (const file of files) raw.push(...scanText(file, readFileSync(join(REPO_ROOT, file), 'utf8')));
   const { findings, unused } = applyIgnores(raw, entries);

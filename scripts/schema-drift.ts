@@ -16,8 +16,7 @@
  * list, because a list is the thing that drifts.
  */
 
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { isProductSource, readMatching } from './sources.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -34,11 +33,20 @@ const COLUMN_RE = /^([a-z_][a-z0-9_]*)\s+(TEXT|INTEGER|REAL|BLOB)/;
  *
  *  fork_lineage: the columns were RENAMED, not added, so the values live in
  *  the old columns and ADD COLUMN cannot recover them — adoptLegacyForkLineage
- *  in core identity/schema.ts moves the row instead. */
+ *  in core identity/schema.ts moves the row instead.
+ *
+ *  traces: `created_at` is WRITTEN BY NOBODY AND READ BY NOBODY. Both of this
+ *  repo's `traces` tables (cf-backend exploration.ts, cli-backend
+ *  branch-worker.ts) insert `(step, text)` and select `text ORDER BY step` and
+ *  nothing else, so a branch DB created before the column still satisfies every
+ *  statement issued against it. Surfaced only once this gate stopped enumerating
+ *  with `git ls-files 'packages/*'`-style pathspecs: `branch-worker.ts` sits
+ *  directly in a `src/`, which the old `**` glob could not match. */
 const HANDLED_ELSEWHERE = {
   user_devices: true,
   user_cli_tokens: true,
   fork_lineage: true,
+  traces: true,
 } satisfies Record<string, true>;
 
 export interface Violation {
@@ -169,11 +177,14 @@ function assertEveryCallSiteParsed(sources: Map<string, string>): void {
 }
 
 export function findSchemaDrift(): Violation[] {
-  const files = git(['ls-files', 'packages/*/src/**/*.ts']).split('\n').filter(Boolean);
-  const sources = new Map<string, string>();
-  // Working tree, not HEAD: the gate must fail on the change being made, not
-  // on the change already committed.
-  for (const file of files) sources.set(file, readFileSync(join(root, file), 'utf8'));
+  // Working tree, not HEAD: the gate must fail on the change being made, not on
+  // the change already committed. `readMatching` reads the working tree, and it
+  // is the ONLY enumeration — this line was
+  // `git ls-files 'packages/*/src/**/*.ts'`, whose `**/` requires at least one
+  // intervening directory, so it matched 454 of 616 product files and every file
+  // sitting directly in a `src/` was invisible. `actor-agent.ts` among them: the
+  // largest DDL surface in the repo, in a gate reporting drift-free over it.
+  const sources = readMatching(isProductSource);
 
   assertEveryCallSiteParsed(sources);
   const backfilled = backfilledColumns(sources);

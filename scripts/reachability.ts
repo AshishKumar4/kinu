@@ -42,7 +42,7 @@
  */
 
 
-import { reconcile, report, writeLock } from './gate-ratchet.ts';
+import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
 import { readSources, readTests } from './sources.ts';
 import {
   classMembers, declaredName, decoratorNames, memberCalleeName, parse, stringArguments, walk,
@@ -176,18 +176,25 @@ export function describe(entry: Unreachable): string {
 }
 
 if (import.meta.main) {
-  const { declared, unreachable } = findUnreachable(readSources(), readTests());
-  // Zero declared RPCs is not "nothing is dead", it is "the matcher is broken".
-  // The ratchet catches this today because seven locked keys would stop
-  // reproducing, but it stops catching it the moment the lock is emptied by a
-  // real cleanup — which is exactly when the gate is most trusted.
-  if (declared.length === 0) {
-    console.error('reachability: found 0 @callable methods — the decorator matcher is not matching');
-    process.exit(1);
-  }
+  const sources = readSources();
+  const tests = readTests();
+  const { declared, unreachable } = findUnreachable(sources, tests);
+
+  // UPSTREAM OF BOTH WRITE PATHS, and covering all three denominators rather than
+  // one. This was a bespoke `declared.length === 0` check sitting between the two
+  // publications: it caught a broken decorator matcher and nothing else, so an
+  // empty test corpus — which turns every RPC into "no caller anywhere" — and an
+  // empty source corpus past the matcher were both invisible. The ratchet hides it
+  // particularly well, because a lock of zero findings reads as a clean tree.
+  const measured = assertMeasured('reachability', [
+    ['product source files', sources.size],
+    ['test files searched for callers', tests.size],
+    ['@callable RPCs declared', declared.length],
+  ]);
+
   if (process.argv.includes('--lock')) {
     const count = writeLock(unreachable.map(keyOf), LOCK);
-    console.log(`reachability: locked ${count} unreachable of ${declared.length} declared RPC(s)`);
+    console.log(`reachability: locked ${count} unreachable over ${measured}`);
   } else {
     const detail = new Map(unreachable.map((e) => [keyOf(e), describe(e)]));
     process.exit(report(
@@ -195,7 +202,7 @@ if (import.meta.main) {
       reconcile(unreachable.map(keyOf), LOCK),
       detail,
       'bun scripts/reachability.ts --lock',
-      `${declared.length} @callable RPCs checked`,
+      measured,
     ));
   }
 }

@@ -16,7 +16,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 
-import { TEST_FILE } from "./rules/no-ambient-git-in-tests.ts";
+import { isParseable, isTestFile, trackedFiles } from "../../../scripts/sources.ts";
 
 const repoRoot = process.cwd();
 
@@ -124,11 +124,16 @@ const ignorePatterns: readonly string[] = config.ignorePatterns ?? [];
  *       once it started matching everything under `tests/` — `tests/bench/patches/` is data.
  *    30 files inside `.oxlintrc.json`'s own `ignorePatterns`, which is this plugin's directory.
  *       Read from the config rather than hardcoded, so the two cannot drift apart. That blind
- *       spot is where THIS FILE lives, and it holds five bare `git` spawns of its own
- *       (`gate.test.ts` `git ls-files`, and the `git show`/`git ls-files` calls below): the rule
- *       cannot govern its own gate, and the count must not pretend otherwise.
+ *       spot is where THIS FILE lives, and it holds bare `git` spawns of its own (the
+ *       `git show` calls below): the rule cannot govern its own gate, and the count must not
+ *       pretend otherwise.
  *
  * Reported as a partition that has to add up, so a fourth category cannot appear silently.
+ *
+ * The enumeration and both predicates come from `scripts/sources.ts`. This held a `git ls-files`
+ * of its own — tracked-only, so a brand-new test file was outside the count while being inside
+ * the lint — and its own `/\.[cm]?[jt]sx?$/`. `isTestFile` is the rule's whole pattern and
+ * `isParseable` is what oxc can read, so all three sets are the ones every other gate divides by.
  */
 function corpus(): {
   readonly counted: number;
@@ -137,17 +142,8 @@ function corpus(): {
   readonly ignoredByConfig: number;
   readonly remedyExports: readonly string[];
 } {
-  const tracked = spawnSync("git", ["ls-files"], {
-    cwd: repoRoot,
-    encoding: "utf8",
-    maxBuffer: 64 * 1024 * 1024,
-  });
-  assert.equal(tracked.status, 0, "git ls-files failed; the corpus cannot be counted");
-  // The rule's OWN pattern, imported rather than restated. A copy here would be free to drift
-  // narrower than the rule, and then this count would certify a population the rule does not
-  // govern — the same defect, one level up, and the one that already hid three sites in scripts/.
-  const counted = tracked.stdout.split("\n").filter((file) => TEST_FILE.test(file));
-  const parsable = counted.filter((file) => /\.[cm]?[jt]sx?$/.test(file));
+  const counted = trackedFiles().filter(isTestFile);
+  const parsable = counted.filter(isParseable);
   const ignored = parsable.filter((file) =>
     ignorePatterns.some((pattern) => file === pattern || file.startsWith(`${pattern}/`)),
   );

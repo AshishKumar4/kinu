@@ -68,6 +68,7 @@ import { readFileSync } from 'node:fs';
 import * as v from 'valibot';
 
 import { assertMeasured, reconcile, report, writeLock } from './gate-ratchet.ts';
+import { isProductSource, isTestScaffold } from './sources.ts';
 import {
   declarationOf, declaredBindings, declaredName, exportedLocalNames, importedNames,
   isReExport, parse,
@@ -76,11 +77,12 @@ import {
 const root = new URL('..', import.meta.url).pathname;
 const LOCK = `${root}scripts/dead-code.lock.json`;
 
-const SOURCE_RE = /^packages\/[^/]+\/src\/.+\.tsx?$/;
-const TEST_SCAFFOLD_RE = /^packages\/test-utils\//;
-
+/** knip's candidates, narrowed to what this gate governs. Both halves are named
+ *  imports: this file carried a byte-identical second copy of `PRODUCT_SOURCE`
+ *  and its own `packages/test-utils/` prefix, so its scope could drift from
+ *  every other gate's without anything going red. */
 export const inScope = (file: string): boolean =>
-  SOURCE_RE.test(file) && !TEST_SCAFFOLD_RE.test(file);
+  isProductSource(file) && !isTestScaffold(file);
 
 export type DeadClass = 'test-only' | 'unreferenced';
 

@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
 import antiSlopPlugin from "./index.ts";
+import { trackedFiles } from "../../../scripts/sources.ts";
 
 type VendoredFile = {
   readonly upstream?: string;
@@ -35,20 +36,22 @@ function digest(path: string): string {
   return createHash("sha256").update(readFileSync(path)).digest("hex");
 }
 
+/**
+ * Every vendored file, from the ONE enumeration.
+ *
+ * This walked the plugin directory itself. That is the shape whose whole purpose
+ * is to notice an undeclared file, run over a corpus that could disagree with
+ * what git — and therefore `.gitignore`, and therefore every other gate — sees:
+ * a stale build artefact or an editor swap file arrived as an undeclared vendored
+ * source, and a file `.gitignore` covers was declared drift-free while being
+ * outside the manifest's reach.
+ */
 function vendoredPaths(): readonly string[] {
-  const found: string[] = [];
-  const walk = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        walk(absolute);
-        continue;
-      }
-      found.push(relative(pluginRoot, absolute).split(sep).join("/"));
-    }
-  };
-  walk(pluginRoot);
-  return found.sort();
+  const prefix = `${relative(process.cwd(), pluginRoot).split(sep).join('/')}/`;
+  return trackedFiles()
+    .filter((file) => file.startsWith(prefix))
+    .map((file) => file.slice(prefix.length))
+    .sort();
 }
 
 /**

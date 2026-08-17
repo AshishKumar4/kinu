@@ -37,6 +37,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet.ts';
+import { isRunnableSuite, trackedFiles } from './sources.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 /** Where the tracked hooks live, RELATIVE so git resolves it against each
@@ -504,13 +505,20 @@ export function gatesFor(tier: Tier, deploy: readonly string[]): Gate[] {
   ];
 }
 
-const TEST_FILE = /\.test\.(ts|tsx|js)$/;
-
-/** Every test file git tracks. The denominator every reachability claim divides
- *  by; `ladder.test.ts` fails if it is empty. */
+/**
+ * Every file a test runner would execute, from the one enumeration.
+ *
+ * This held its own `/\.test\.(ts|tsx|js)$/` and its own `git ls-files` spawn
+ * with an unchecked exit code — a third spelling of a pattern the lint rule
+ * owns, over a corpus that silently became empty if git failed. It counted 474
+ * files while `no-ambient-git-in-tests` governed 661, so the ladder's
+ * monotonicity and orphan assertions could not see an eval suite at all.
+ * `isRunnableSuite` is the rule's own basename arm: narrower than the rule on
+ * purpose, because `bun test` executes suffixed files and never the helpers
+ * beside them, and narrower by IMPORT rather than by a private copy.
+ */
 export function trackedTestFiles(): string[] {
-  const listed = Bun.spawnSync(['git', 'ls-files'], { cwd: root, stdout: 'pipe' });
-  return listed.stdout.toString().split('\n').filter((path) => TEST_FILE.test(path));
+  return trackedFiles().filter(isRunnableSuite);
 }
 
 /** The npm script bodies, so a `bun run <key>` gate resolves to what it runs
@@ -563,7 +571,7 @@ export function claims(command: string, tracked: readonly string[]): string[] {
     return [...new Set(body.split('&&').flatMap((part) => claims(part.trim(), tracked)))];
   }
   if (words[0] === 'node') {
-    return words.filter((word) => TEST_FILE.test(word) && tracked.includes(word));
+    return words.filter((word) => isRunnableSuite(word) && tracked.includes(word));
   }
   // `vitest run --root R <dir>/` — the workerd layer. Resolved from the command
   // text like every other form, so its files are monotonicity- and

@@ -68,7 +68,7 @@ import { dirname, join, normalize } from 'node:path';
 import * as v from 'valibot';
 
 import { assertMeasured, finding, reconcile, report, writeLock } from './gate-ratchet.ts';
-import { readSources } from './sources.ts';
+import { isParseable, readSources } from './sources.ts';
 import {
   declarationOf, declaredName, identifierText, isOptionalMember, moduleSpecifiers, parse,
   type SyntaxNode, walk,
@@ -428,8 +428,6 @@ type Local =
   | { readonly kind: 'missing' }
   | { readonly kind: 'external' };
 
-const SOURCE_EXTENSION = /\.[jt]sx?$/;
-
 function resolveLocal(
   from: string,
   spec: string,
@@ -450,7 +448,7 @@ function resolveLocal(
     if (known.has(candidate)) return { kind: 'file', file: candidate };
   }
   const extension = base.slice(base.lastIndexOf('/') + 1).includes('.');
-  return extension && !SOURCE_EXTENSION.test(base) ? { kind: 'asset' } : { kind: 'missing' };
+  return extension && !isParseable(base) ? { kind: 'asset' } : { kind: 'missing' };
 }
 
 interface Graph {

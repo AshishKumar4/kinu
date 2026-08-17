@@ -35,10 +35,10 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { readdirSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import * as v from 'valibot';
 import { assertMeasured, finding } from './gate-ratchet.ts';
+import { isRunnableSuite, trackedFiles } from './sources.ts';
 
 const root = new URL('..', import.meta.url).pathname;
 
@@ -51,29 +51,38 @@ const root = new URL('..', import.meta.url).pathname;
  * A Map because the lookup key is a path discovered at runtime, and because the
  * gate iterates the keys to report stale entries.
  */
-export const UNTYPECHECKED_TEST_DIRS = new Map<string, string>();
-
-/** Directories never walked: not ours, or not source. */
-const SKIP_DIRS = new Set([
-  'node_modules', '.git', 'dist', 'external', '.claude',
-  'terminal-bench-2.0', 'terminal-bench-2.1', 'bench-artifacts',
+export const UNTYPECHECKED_TEST_DIRS = new Map<string, string>([
+  [
+    'packages/pc-agent/tests',
+    'the package is plain JavaScript — `src/index.js` and `tests/daemon.test.js` are the '
+    + 'only two files in it and there is no tsconfig to point `tsc -p` at. `bun run check` '
+    + 'covers the source with `node --check packages/pc-agent/src/index.js`, and the suite '
+    + 'is executed by `bun test packages/pc-agent/` at the push tier and at deploy. This '
+    + 'directory was invisible to this gate until its walk stopped matching `.test.ts` only.',
+  ],
 ]);
 
-/** Directories containing at least one `*.test.ts`, repo-relative. */
-export function testDirectories(from = root): string[] {
-  const found = new Set<string>();
-  const walk = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isDirectory()) {
-        if (SKIP_DIRS.has(entry.name)) continue;
-        walk(join(dir, entry.name));
-      } else if (entry.name.endsWith('.test.ts') || entry.name.endsWith('.test.tsx')) {
-        found.add(relative(from, dir) || '.');
-      }
-    }
-  };
-  walk(from);
-  return [...found].sort();
+/**
+ * Directories holding at least one file a test runner executes, repo-relative.
+ *
+ * This walked the filesystem behind its own `SKIP_DIRS` set and matched
+ * `.test.ts` / `.test.tsx` only, so it found 17 directories where the governed
+ * set holds 18: `packages/pc-agent/tests` contains `daemon.test.js`, a suite
+ * `bun test packages/pc-agent/` runs and this gate could not see, and neither
+ * could it have seen an `.eval.ts` or a `.spec.ts`. `isRunnableSuite` is the
+ * `no-ambient-git-in-tests` rule's own basename arm, and `trackedFiles` makes
+ * `SKIP_DIRS` unnecessary — `.gitignore` already excludes `node_modules`,
+ * `dist`, `external` and `bench-artifacts`, so the exclusion list cannot drift
+ * apart from the ignore file that really governs them.
+ */
+export function testDirectories(): string[] {
+  const dirs = new Set<string>();
+  for (const file of trackedFiles()) {
+    if (!isRunnableSuite(file)) continue;
+    const cut = file.lastIndexOf('/');
+    dirs.add(cut === -1 ? '.' : file.slice(0, cut));
+  }
+  return [...dirs].sort();
 }
 
 /**

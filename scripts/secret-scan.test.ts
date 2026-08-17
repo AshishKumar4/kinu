@@ -16,9 +16,9 @@ import {
   applyIgnores,
   parseIgnoreFile,
   scanText,
-  selectScanCandidates,
   suppresses,
 } from './secret-scan.js';
+import { isTextSource, trackedFiles } from './sources.ts';
 
 const REPO_ROOT = join(import.meta.dir, '..');
 
@@ -142,10 +142,21 @@ test('this file contains no literal secret shape of its own', () => {
   expect(scanText('scripts/secret-scan.test.ts', self)).toEqual([]);
 });
 
-test('tracked deletions are not read while extant scannable files remain admitted', () => {
-  const existing = new Set(['src/current.ts', 'docs/current.md']);
-  expect(selectScanCandidates(
-    ['src/current.ts', 'scripts/deleted.sh', 'docs/current.md', 'dist/ignored.bin', ''],
-    (file) => existing.has(file),
-  )).toEqual(['src/current.ts', 'docs/current.md']);
+test('the scanned set is the enumerated set narrowed by content type, nothing else', () => {
+  // Deletion filtering moved INTO the enumerator, where every gate inherits it,
+  // so what is left here is the one narrowing this gate owns: which extensions a
+  // human writes text into. Both halves are asserted, because a predicate that
+  // admitted everything and one that admitted nothing look identical downstream.
+  expect(['src/current.ts', 'docs/current.md', 'infra/main.tf.json', 'id_rsa.pem', 'a.sh']
+    .filter(isTextSource))
+    .toEqual(['src/current.ts', 'docs/current.md', 'infra/main.tf.json', 'id_rsa.pem', 'a.sh']);
+  expect(['dist/ignored.bin', 'ui/logo.png', 'notes', 'Makefile'].filter(isTextSource)).toEqual([]);
+
+  // The corpus this gate actually runs on: every file the enumerator lists that
+  // holds human-written text, and it must not be empty — an enumeration that
+  // fails quietly reports a clean tree, which is what a secret scan being green
+  // would then mean.
+  const scanned = trackedFiles().filter(isTextSource);
+  expect(scanned.length).toBeGreaterThan(500);
+  expect(scanned).toContain('scripts/secret-scan.test.ts');
 });

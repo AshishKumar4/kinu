@@ -9,8 +9,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+
+import { readSources } from "../../../scripts/sources.ts";
 
 const repoRoot = process.cwd();
 
@@ -183,36 +185,25 @@ for (const { rule } of cases) {
 }
 
 /**
- * The live denominator. `catch` occurrences under `packages/*\/src`, counted from source text: the
- * rules are worth running only over a corpus that contains failure handling at all, and a corpus
- * that has silently gone to zero (a moved source root, a changed glob) must fail loudly rather
- * than report a clean lint.
+ * The live denominator. `catch` occurrences in product source, from the ONE
+ * enumeration: the rules are worth running only over a corpus that contains
+ * failure handling at all, and a corpus that has silently gone to zero must fail
+ * loudly rather than report a clean lint.
+ *
+ * `readSources()` and not a walk of its own. The hand-rolled version skipped
+ * `node_modules` by name and selected `.ts` / `.tsx` by name, which is
+ * `isProductSource` spelled a second time — and it differed: it counted colocated
+ * `*.test.ts` and `.d.ts` files that `readSources` excludes, so this gate's
+ * denominator described a different population from the one every other gate
+ * measures. Its own docstring already said "a moved source root, a changed glob"
+ * was the hazard; the fix is to stop having a second glob.
  */
 function countCatchOccurrences(): { readonly files: number; readonly occurrences: number } {
   let files = 0;
   let occurrences = 0;
-  const walk = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "node_modules") walk(absolute);
-        continue;
-      }
-      if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".tsx")) continue;
-      files += 1;
-      occurrences += readFileSync(absolute, "utf8").match(/\bcatch\b/gu)?.length ?? 0;
-    }
-  };
-  for (const pkg of readdirSync(join(repoRoot, "packages"), { withFileTypes: true })) {
-    if (!pkg.isDirectory()) continue;
-    const source = join(repoRoot, "packages", pkg.name, "src");
-    try {
-      walk(source);
-    } catch (error) {
-      const absent =
-        typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
-      if (!absent) throw error;
-    }
+  for (const [, text] of readSources()) {
+    files += 1;
+    occurrences += text.match(/\bcatch\b/gu)?.length ?? 0;
   }
   return { files, occurrences };
 }
