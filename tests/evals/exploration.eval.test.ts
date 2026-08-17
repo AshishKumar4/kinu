@@ -176,6 +176,17 @@ describe('Exploration evals — MCTS reached, ranked, and readable', () => {
 
   liveTest('VISIBLE: every settle mode wrote where the Exploration reader reads', () => {
     const score = scoreSettleVisibility(rt.storage.sql);
+
+    // PRECONDITION, before any visibility number is printed or asserted: both
+    // write stores must EXIST. Measured live — a workspace built here had
+    // `search_nodes` but no `head_journal`, and the unguarded scorer died with a
+    // raw SQLiteError mid-eval. A thrown error is not a measurement, and "0 of 0
+    // roots invisible" over a table that is not there is worse: it is a pass.
+    for (const half of score.stores) {
+      console.log(`    ${half.settle} (${half.store}): present=${String(half.present)}`);
+      expect(half.present).toBe(true);
+    }
+
     for (const half of score.stores) {
       console.log(`    ${half.settle} (${half.store}): ${String(half.rootsVisible)}/`
         + `${String(half.rootsWritten)} roots visible`);

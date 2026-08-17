@@ -182,7 +182,7 @@ describe('scoreSettleVisibility — every settle mode writes where the reader re
     expect(score.invisibleRoots).toEqual(['search-a']);
     const competed = score.stores.find((half) => half.store === 'search_nodes');
     expect(competed).toEqual({
-      settle: 'competed', store: 'search_nodes',
+      settle: 'competed', store: 'search_nodes', present: true,
       rootsWritten: 1, rootsVisible: 0, invisibleRoots: ['search-a'],
     });
     store.close();

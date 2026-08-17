@@ -119,17 +119,12 @@ describe('Delegation evals — conversion over eligible turns', () => {
     const completedTurns = scores.reduce((n, s) => n + s.completedTurns, 0);
     const toolCalls = scores.reduce((n, s) => n + s.toolCalls, 0);
 
-    for (const [index, score] of scores.entries()) {
-      const start = score.arms.find((arm) => arm.trigger === 'turn_start_no_delegation');
-      console.log(`    ask ${String(index)}: eligible ${String(start?.eligible ?? 0)}, `
-        + `converted ${String(start?.converted ?? 0)}, forked ${String(score.forkedRuns)}, `
-        + `heads ${String(score.headsOpened)}`);
-    }
-    console.log(`    DELEGATION RATE: ${String(converted)}/${String(eligible)} eligible turns `
-      + `converted (${eligible === 0 ? 'n/a' : String(Math.round((converted / eligible) * 100))}%)`);
-    console.log(`    forks that actually opened heads: ${String(forkedRuns)} run(s), `
-      + `${String(headsOpened)} head(s)`);
-    console.log(`    precondition — tool calls across the eligible turns: ${String(toolCalls)}`);
+    // Preconditions FIRST, and no rate is printed before they hold. A check
+    // that fails must not publish a number: an inert run that logged
+    // "DELEGATION RATE: 0/3 (0%)" and then went red leaves that 0% in the
+    // transcript, where it reads as a measurement and outlives the failure.
+    console.log(`    precondition — settled turns ${String(completedTurns)}, `
+      + `eligible ${String(eligible)}, tool calls ${String(toolCalls)}`);
 
     // Every turn closed. Rows are written on settle, so a turn killed by a
     // timeout contributes to neither numerator nor denominator — and a run where
@@ -153,6 +148,18 @@ describe('Delegation evals — conversion over eligible turns', () => {
     // only one of them is about delegation, so a zero here fails the eval
     // rather than being published as a rate.
     expect(toolCalls).toBeGreaterThan(0);
+
+    // Only now is the rate a number worth printing.
+    for (const [index, score] of scores.entries()) {
+      const start = score.arms.find((arm) => arm.trigger === 'turn_start_no_delegation');
+      console.log(`    ask ${String(index)}: eligible ${String(start?.eligible ?? 0)}, `
+        + `converted ${String(start?.converted ?? 0)}, forked ${String(score.forkedRuns)}, `
+        + `heads ${String(score.headsOpened)}`);
+    }
+    console.log(`    DELEGATION RATE: ${String(converted)}/${String(eligible)} eligible turns `
+      + `converted (${eligible === 0 ? 'n/a' : String(Math.round((converted / eligible) * 100))}%)`);
+    console.log(`    forks that actually opened heads: ${String(forkedRuns)} run(s), `
+      + `${String(headsOpened)} head(s)`);
 
     // The rate itself is the finding, not the gate. Bounds only.
     expect(converted).toBeGreaterThanOrEqual(0);

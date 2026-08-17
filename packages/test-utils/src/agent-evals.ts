@@ -21,7 +21,7 @@
  *      green assertion in a live suite is known to be capable of being red.
  */
 import {
-  listForkRuns, STEER_BRANCH_RUN_ID_PREFIX,
+  listForkRuns, STEER_BRANCH_RUN_ID_PREFIX, tableExists,
   type ForkRunSummary, type SqlExecutor,
 } from '@proteus/core';
 
@@ -110,6 +110,18 @@ export interface SettleStoreScore {
   readonly settle: ForkRunSummary['settle'];
   /** The table the strategy writes. Named so a failure says where to look. */
   readonly store: string;
+  /**
+   * The table exists in this store.
+   *
+   * Reported rather than assumed, because a query against a missing table
+   * THROWS, and a thrown SQLiteError is not a measurement — it is
+   * indistinguishable from a broken scorer. Measured live: a workspace built by
+   * `createWorkspace` has `search_nodes` but not `head_journal`, and the
+   * unguarded version died mid-eval. Treating a missing table as zero roots is
+   * WORSE, because "0 of 0 roots invisible" is then a pass over a table that is
+   * not there.
+   */
+  readonly present: boolean;
   /** Distinct run roots present in the write store — this store's denominator. */
   readonly rootsWritten: number;
   /** Of those, roots the reader returns. */
@@ -152,18 +164,22 @@ export function scoreSettleVisibility(
   read: (sql: SqlExecutor, limit: number) => readonly ForkRunSummary[] = listForkRuns,
 ): SettleVisibilityScore {
   const notSteerBranch = `${STEER_BRANCH_RUN_ID_PREFIX}%`;
+  const mergedPresent = tableExists(sql, 'head_journal');
+  const competedPresent = tableExists(sql, 'search_nodes');
   const written = [
     {
       settle: 'merged' as const,
       store: 'head_journal',
-      roots: sql<{ root: string }>`
+      present: mergedPresent,
+      roots: !mergedPresent ? [] : sql<{ root: string }>`
         SELECT DISTINCT root_id AS root FROM head_journal
         WHERE root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
     },
     {
       settle: 'competed' as const,
       store: 'search_nodes',
-      roots: sql<{ root: string }>`
+      present: competedPresent,
+      roots: !competedPresent ? [] : sql<{ root: string }>`
         SELECT DISTINCT root_id AS root FROM search_nodes
         WHERE root_id IS NOT NULL AND root_id NOT LIKE ${notSteerBranch}`.map((r) => r.root),
     },
@@ -172,13 +188,17 @@ export function scoreSettleVisibility(
   const rootsWritten = written.reduce((total, half) => total + half.roots.length, 0);
   // Ask for more than was written: `listForkRuns` slices AFTER merging its two
   // halves, so the reader's own window must not be mistaken for a missing row.
-  const visible = new Set(read(sql, rootsWritten + 1).map((run) => run.id));
+  // The reader queries BOTH stores, so it only runs when both exist.
+  const visible = new Set(
+    mergedPresent && competedPresent ? read(sql, rootsWritten + 1).map((run) => run.id) : [],
+  );
 
-  const stores = written.map<SettleStoreScore>(({ settle, store, roots }) => {
+  const stores = written.map<SettleStoreScore>(({ settle, store, present, roots }) => {
     const invisibleRoots = roots.filter((root) => !visible.has(root));
     return {
       settle,
       store,
+      present,
       rootsWritten: roots.length,
       rootsVisible: roots.length - invisibleRoots.length,
       invisibleRoots,
