@@ -784,7 +784,10 @@ describe('LocalAgentSession — shadow-git checkpoint wiring', () => {
   test('the checkpoint surface degrades honestly when no engine is configured', async () => {
     const { rt, session } = setup();
     rt.checkpoints = undefined;
-    expect(await session.listFileCheckpoints()).toEqual([]);
+    expect(await session.listFileCheckpoints()).toEqual({
+      availability: { available: false, reason: 'checkpoints are not configured for this session' },
+      entries: [],
+    });
     expect(await session.checkpointStatus()).toEqual({
       available: false, reason: 'checkpoints are not configured for this session',
     });
@@ -1997,6 +2000,81 @@ describe('LocalAgentSession.steer — mid-turn steering (Hermes steer-drain)', (
     await session.end();
   });
 
+  test('an interrupted turn leaves a history the next turn can be assembled from', async () => {
+    // The owner's 2026-08-16 report: he interrupted a turn mid-tool-call and the
+    // session stopped being usable — every later attempt died with
+    // `AI_MissingToolResultsError: Tool result is missing for tool call …`,
+    // thrown by the AI SDK's own prompt assembly before any request goes out.
+    // Call #1 announces a tool call and then withholds its step boundary, which
+    // is exactly the window Ctrl+C lands in.
+    const usage = { inputTokens: 5, outputTokens: 7, totalTokens: 12 };
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const prompts: PromptMessage[][] = [];
+    let calls = 0;
+    const model = new TestLanguageModelV2({
+      provider: 'fake',
+      modelId: 'fake-model',
+      doStream: async (options) => {
+        prompts.push(options.prompt);
+        calls += 1;
+        if (calls === 1) {
+          return {
+            stream: new ReadableStream({
+              async start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({
+                  type: 'tool-call', toolCallId: 'call_ed15d29f352a4735e6b01b5', toolName: 'fact',
+                  input: JSON.stringify({ action: 'recall', key: 'probe' }),
+                });
+                await gate;
+                controller.enqueue({ type: 'finish', finishReason: 'tool-calls', usage });
+                controller.close();
+              },
+            }),
+            response: { headers: {} },
+          };
+        }
+        return {
+          stream: new ReadableStream({
+            start(controller) {
+              controller.enqueue({ type: 'stream-start', warnings: [] });
+              controller.enqueue({ type: 'text-start', id: '0' });
+              controller.enqueue({ type: 'text-delta', id: '0', delta: 'still here' });
+              controller.enqueue({ type: 'text-end', id: '0' });
+              controller.enqueue({ type: 'finish', finishReason: 'stop', usage });
+              controller.close();
+            },
+          }),
+          response: { headers: {} },
+        };
+      },
+    });
+
+    const { session, events } = setup('unused', model);
+    const turn = session.send('check the repo');
+    await waitFor(() => events.some((e) => e.type === 'tool-call'));
+    session.interrupt();
+    release();
+    await turn;
+    // The interruption is recorded as one: the turn did not finish.
+    expect(events.some((e) => e.type === 'error')).toBe(true);
+
+    // The next turn is the assertion. Before the fix, `streamText` threw on
+    // assembly and this model was never called a second time.
+    const before = prompts.length;
+    await session.send('what did you find?');
+    expect(prompts.length).toBeGreaterThan(before);
+
+    // And the interrupted call carries a terminal result, so the model reads the
+    // interruption instead of a call that appears never to have happened.
+    const last = prompts.at(-1) ?? [];
+    const results = last.flatMap((message) => message.role === 'tool'
+      ? message.content.filter((part) => part.type === 'tool-result') : []);
+    expect(results.map((r) => r.toolCallId)).toContain('call_ed15d29f352a4735e6b01b5');
+    await session.end();
+  });
+
   test('a mid-stream failure keeps drained steers in the live context for the next turn', async () => {
     // Call #1 streams a tool call (steer drains at its step boundary), then
     // call #2 — which HAS seen the steer — dies mid-stream.
@@ -2947,5 +3025,62 @@ describe('LocalAgentSession — the one-shot completion gate', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ converted: false });
     await session.end();
+  });
+});
+
+// The two axes, proven on the prompt the model is ACTUALLY handed — not on the
+// builder in isolation, and not on a source grep. `systemCapturingModel` reads
+// the role:'system' entry off the LanguageModelV2 call.
+describe('LocalAgentSession — provenance and stance reach the model', () => {
+  test('a background-job wake carries the resume guidance even though it also carries a work mode', async () => {
+    // jobs/runner.ts stamps BOTH proteusEvent and proteusMode on the wake, and
+    // `background_jobs.work_mode` is never null. Under the old single-`mode`
+    // precedence the work mode won and this guidance — written to stop the
+    // agent re-doing or polling work that already settled — never reached a
+    // model on the real wake path.
+    let system = '';
+    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }));
+    await session.enqueueTurn({
+      text: 'job bgjob-1 finished',
+      metadata: { proteusEvent: 'background_job', proteusMode: 'build' },
+    });
+    expect(system).toContain('Background-resume mode');
+    expect(system).toContain('fetch the referenced job result first');
+    await session.end();
+  });
+
+  test('an ordinary turn carries neither overlay, and no Turn mode line', async () => {
+    let system = '';
+    const { session } = setup('ok', systemCapturingModel('ok', (s) => { system = s; }));
+    await session.send('do it');
+    expect(system).not.toContain('Background-resume mode');
+    // Auto is the absence of constraint: it announces nothing, so an Auto turn
+    // and a chat turn share the same cacheable prefix.
+    expect(system).not.toContain('Turn mode');
+    await session.end();
+  });
+
+  test('a stance the agent sets through `tasks` is in the next turn\'s system prompt', async () => {
+    // Durable across sessions, because that is what a stance is: the second
+    // session builds its prompt from the same workspace config the first
+    // session's tool call wrote.
+    const { db, rt } = workspaceRuntime();
+    const events: SessionEvent[] = [];
+    const setter = new LocalAgentSession({
+      rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
+      model: toolSequenceModel([{ name: 'tasks', input: { action: 'mode', stance: 'research' } }]),
+    });
+    await setter.send('work carefully from here');
+    await setter.end();
+
+    let system = '';
+    const next = new LocalAgentSession({
+      rt, db, noAutoEvolve: true, onEvent: (e) => events.push(e),
+      model: systemCapturingModel('ok', (s) => { system = s; }),
+    });
+    await next.send('carry on');
+    expect(system).toContain('Research stance:');
+    expect(system).toContain('name the file and line each claim rests on');
+    await next.end();
   });
 });

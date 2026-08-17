@@ -88,6 +88,12 @@ export interface LocalCloudSession {
   sessionAffinity?: string;
 }
 
+/** The provider ids the signed-in worker fronts — the native Cloudflare path.
+ *  One list so the CLI's endpoint/credential seam and this registry agree on
+ *  which specs belong to the account rather than to a local BYO credential. */
+export const CLOUD_PROXY_PROVIDER_IDS = ['workers-ai', 'my-gateway'] as const;
+export type CloudProxyProviderId = typeof CLOUD_PROXY_PROVIDER_IDS[number];
+
 /** The worker's signed-in OpenAI-compatible inference proxy. */
 export function cloudProxyBaseURL(origin: string): string {
   return `${origin.replace(/\/+$/, '')}/api/user/ai/v1`;
@@ -630,7 +636,7 @@ function createCloudProxyProvider(opts: {
 
 /** Honest placeholder when the user is not signed in: the providers stay
  *  visible in /model with the exact step that unlocks them. */
-function createSignedOutCloudProvider(id: 'workers-ai' | 'my-gateway', label: string): ModelProvider {
+function createSignedOutCloudProvider(id: CloudProxyProviderId, label: string): ModelProvider {
   const reason = 'Sign in with `proteus auth` to use your Cloudflare AI for local agents.';
   return {
     id,

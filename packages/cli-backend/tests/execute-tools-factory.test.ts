@@ -61,7 +61,10 @@ describe('createNodeExecuteToolFactory — console capture + implicit return', (
     const out = await makeTool()({ code: 'return await run({ runtime: "sandbox", command: "ls" });' });
     expect(out.error).toContain('run is not defined');
     expect(out.error).toContain('"run" is a native Proteus tool, not a codemode member');
-    expect(out.error).toContain('workspace.exec(...)');
+    // Where the capability actually is now comes from TOOL_REACH, so the
+    // pointer is the namespace rather than one hand-picked member — and it is
+    // right for all eight native tools instead of only `run`.
+    expect(out.error).toContain('through the `workspace` namespace');
   });
 
   test('an unrelated ReferenceError for a name that is not a native tool stays a bare message', async () => {
@@ -135,6 +138,38 @@ describe('createNodeExecuteToolFactory — a failing host call can never kill th
     const built = factory({ craftedTools: () => ({}), providers: [], loader: {} });
     expect(built.description).toContain('canonical durable workspace');
     expect(built.description).toContain('`run` with runtime "workspace"');
+  });
+
+  test('every wired namespace is DECLARED to the model, not just bound', async () => {
+    // The defect this locks: the description was BUILTIN_TOOL_DESCRIPTIONS
+    // .execute_tools alone, and adaptExecutorProvider collected each provider's
+    // `types` without ever reading one. So the CLI model was handed
+    // `memory.*`, `tasks.*`, `agents.*`, `web.*` and `llm.*` as live callables
+    // and told about none of them — a whole reachable surface it could not
+    // discover. Both a capability provider and an executor provider are
+    // included here because the two arrive by different routes.
+    const factory = createNodeExecuteToolFactory({
+      extraProviders: [{
+        name: 'memory',
+        types: 'export declare const memory: {\n  save(content: string): Promise<unknown>;\n};\n',
+        tools: { save: { description: 'save a note', execute: async () => 'ok' } },
+      }],
+    });
+    const built = factory({
+      craftedTools: () => ({}),
+      providers: [{
+        name: 'workspace',
+        types: 'export declare const workspace: {\n  readdir(path: string): Promise<string[]>;\n};\n',
+        tools: { readdir: { description: 'list a directory', execute: async () => [] } },
+      }],
+      loader: {},
+    });
+    expect(built.description).toContain('export declare const memory: {');
+    expect(built.description).toContain('save(content: string)');
+    expect(built.description).toContain('export declare const workspace: {');
+    expect(built.description).toContain('Namespaces bound in this sandbox:');
+    // And the registry doctrine is still there — this added a half, not replaced one.
+    expect(built.description).toContain('canonical durable workspace');
   });
 });
 

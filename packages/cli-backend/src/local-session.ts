@@ -29,9 +29,10 @@ import type {
   ShellApprovalRequest, ShellApprovalOutcome, RequestShellApproval,
   AgentsForkDeps, AgentsToolDeps,
   IngressDescriptor, ProteusEvent, EventVariant, MissingCapability,
-  RunEvent, RunEventInput, RunEventQuery,
+  RunEvent, RunEventInput, RunEventQuery, StepLike,
   ReleaseStore, ReleaseToolDeps, BuiltinToolName,
-  FileCheckpoints, FileCheckpointEntry, FileRestorePlan, FileRestoreResult, CheckpointAvailability,
+  FileCheckpoints, FileCheckpointListing, FileRestorePlan, FileRestoreResult,
+  CheckpointAvailability,
   WorkMode,
 } from '@proteus/core';
 import {
@@ -52,12 +53,13 @@ import {
   createFactsStore, readMemoryTail,
   listProposedTasks, updateProposedTaskStatus,
   buildStrategyForkDeps, agentsActionsFor,
-  HeadController, HeadJournal,
+  HeadController, HeadJournal, reconcileInterruptedForks,
   skillsVfsOver, resolveTurnSkills, filterToolSetBySkills, renderFactsForTurn,
   recordGroundedHeadsTake, inheritedContextFromHistory, headPhaseRunEvent,
   ModelCatalogSession,
   BUILTIN_TOOL_NAMES, isMcpToolKey,
-  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt, promptModeForTurnMetadata,
+  buildBuiltinTools, withClampedToolResults, buildSystemPromptSync, currentDateForPrompt,
+  turnProvenanceForMetadata, workModeForTurnMetadata,
   createChatModel, runChat, resolveMaxSteps, estimateTokens,
   parseModelSpec, agentAffinityKey,
   OVERFLOW_RETRY_EVENT,
@@ -103,6 +105,7 @@ import {
   // ── Read models: the same implementations the cloud backend's RPCs call ──
   cancelBackgroundJob, jobResult, listBackgroundJobs,
   getAlwaysActiveSkills, getReasoningEffort, getShellApprovalMode, getStoredModelSpec,
+  getShellApprovalGrants, revokeShellApprovalGrants, gatedGrants, type ApprovalGrant,
   setAlwaysActiveSkills, setModel, setReasoningEffort, setShellApprovalMode,
   getEvolutionChangelog, markChangelogSeen, pickAlternateTake, proposeCurriculumTasks,
   type EvolutionChangelogView,
@@ -113,7 +116,7 @@ import { discoverAgentsMd } from './agents-md.js';
 import { createNodeCraftedExecute } from './craft-executor.js';
 import { createNodeExecuteToolFactory } from './execute-tools-factory.js';
 import { createCLIHeadRuntime } from './head-runtime.js';
-import { detectOrphanedFibers } from './fiber.js';
+import { detectOrphanedFibers, type OrphanedFiber } from './fiber.js';
 import { connectMcpServers, type McpServerConfig } from './mcp.js';
 import type { LocalModelResolver } from './model-resolver.js';
 
@@ -170,8 +173,9 @@ type PromptCacheIdentity = NonNullable<ChatOptions['cache']>;
  * Per-message AGGREGATE cap on raw attachment bytes inlined into a chat message
  * as data-URL file parts, for agents running on THIS backend.
  *
- * The cloud backend's cap (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) is a
- * Durable Object row limit, and a local session has no such limit: messages go
+ * The cloud backend's cap (CLOUD_MAX_INLINE_ATTACHMENT_BYTES, 1 MiB) exists
+ * because of `do.sqlite.row_bytes`, and a local session has no such limit:
+ * messages go
  * into bun:sqlite, which stores a blob far larger than any attachment worth
  * inlining. What does bind here is the provider request — an inlined part is
  * base64 (4/3 × raw) inside a JSON body that is re-sent on EVERY later turn of
@@ -492,6 +496,7 @@ export class LocalAgentSession implements BackendHost {
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
+      journal: () => this.headJournal,
     };
     // Per-fork models only mean something where a resolver exists; a static
     // model session has one model and every fork inherits it, as before.
@@ -599,10 +604,15 @@ export class LocalAgentSession implements BackendHost {
   getAlwaysActiveSkills(): string[] { return getAlwaysActiveSkills(this.config).names; }
   setAlwaysActiveSkills(names: ReadonlyArray<string>): void { setAlwaysActiveSkills(this.config, names); }
 
-  /** Shadow-git file checkpoints (newest first) for /undo. Empty when git is
-   *  unavailable — checkpointStatus() carries the honest reason. */
-  listFileCheckpoints(limit?: number): Promise<FileCheckpointEntry[]> {
-    return this.rt.checkpoints?.list(limit) ?? Promise.resolve([]);
+  /**
+   * Shadow-git file checkpoints (newest first) with the store's reachability, so
+   * a caller cannot read an empty list as "this turn changed nothing" — the
+   * store may simply not be configured, or git may be missing.
+   */
+  async listFileCheckpoints(limit?: number): Promise<FileCheckpointListing> {
+    const availability = await this.checkpointStatus();
+    if (!availability.available || !this.rt.checkpoints) return { availability, entries: [] };
+    return { availability, entries: await this.rt.checkpoints.list(limit) };
   }
 
   async planFileRestore(dir: string, id: string): Promise<FileRestorePlan> {
@@ -631,6 +641,17 @@ export class LocalAgentSession implements BackendHost {
     return setShellApprovalMode({ config: this.config, onChanged: () => this.rebuildToolSurface() }, mode);
   }
 
+  /** Every rule the owner has said "always" to, and where. The revoke list. */
+  getShellApprovalGrants(): { grants: ApprovalGrant[] } {
+    return getShellApprovalGrants(this.config);
+  }
+
+  /** Take a standing grant back. Read live by the gate, so the next command
+   *  of that kind asks again — no rebuild, no restart. */
+  revokeShellApprovalGrants(grants: ApprovalGrant[]): { ok: boolean; grants: ApprovalGrant[] } {
+    return revokeShellApprovalGrants(this.config, grants);
+  }
+
   /** Install the interactive approval channel for gated shell commands, or
    *  null to remove it. Surfaces that own a live user (ACP) set this; without
    *  one, 'strict' keeps rejecting gate hits with its explanatory message.
@@ -650,14 +671,23 @@ export class LocalAgentSession implements BackendHost {
     };
   }
 
-  /** `allow_always`/`deny_always` also carry the user's intent to change the
-   *  session's standing shell approval mode — that side effect belongs to
-   *  the session (which owns setShellApprovalMode), not to the gate itself. */
+  /**
+   * `allow_always` is remembered here rather than in the gate, because the
+   * session owns the config store the grant lives in.
+   *
+   * It used to switch the whole agent to `allow_all` — one click on one
+   * `sudo` prompt and every gated command everywhere, on the owner's laptop
+   * included, ran unasked for the rest of the session. Now it grants exactly
+   * the rules that were asked about, on the executor they were asked about
+   * (safety/approval-gate.ts's ApprovalGrant), which is what the button says
+   * it does. Revocable from the same config plane that reads it.
+   */
   private wrapShellApprovalHandler(handler: ShellApprovalHandler): RequestShellApproval {
     return async (req) => {
       const outcome = await handler(req) ?? null;
-      if (outcome === 'allow_always') this.setShellApprovalMode('allow_all');
-      else if (outcome === 'deny_always') this.setShellApprovalMode('deny_all');
+      if (outcome === 'allow_always') {
+        this.config.grantShellApproval(gatedGrants(req.review, req.executor));
+      }
       return outcome;
     };
   }
@@ -800,7 +830,7 @@ export class LocalAgentSession implements BackendHost {
     return listBackgroundJobs(this.jobs, limit);
   }
 
-  cancelBackgroundJob(jobId: string): { ok: boolean } {
+  async cancelBackgroundJob(jobId: string): Promise<{ ok: boolean }> {
     return cancelBackgroundJob(this.jobRunner, jobId);
   }
 
@@ -920,7 +950,7 @@ export class LocalAgentSession implements BackendHost {
    *  backs the reactor + background-job wake. Self-starts the pump when idle so
    *  a job that settles mid-idle wakes the agent immediately. */
   enqueueTurn(input: ProgrammaticTurn): Promise<EnqueueTurnResult> {
-    if (promptModeForTurnMetadata(input.metadata) === 'plan') {
+    if (workModeForTurnMetadata(input.metadata) === 'plan') {
       return Promise.reject(new Error(
         'Plan review is available in the hosted workspace UI; this local session has no review surface.',
       ));
@@ -1181,20 +1211,33 @@ export class LocalAgentSession implements BackendHost {
   }
 
   /**
-   * Recover background jobs orphaned by a previous CLI exit (durable detach).
+   * Recover the work a previous CLI exit interrupted: the fork journal, then
+   * the background-job registry.
    *
-   * Two passes, because the fiber rows and the job registry each know something
-   * the other does not. An interrupted bg:* fiber row says its job's executor
-   * died AFTER settling, which is the only way a lost wake can be re-delivered
-   * (DO onFiberRecovered parity); the registry says which jobs are still
-   * `running` at all, including the ones whose fiber row did not survive. Stale
-   * fiber rows from the prior run are cleared as they are read — a resume runs
-   * in a NEW fiber row, so this never deletes it.
+   * Forks first, and before anything can resume one. `head_journal.status =
+   * 'running'` means "spawned, no report recorded", and nothing carries a head
+   * across a process exit — so at this instant every such row is stale, and
+   * left alone it feeds "N of M heads running" into the dynamic-context block
+   * of every model step forever. reconcileInterruptedForks settles them and
+   * tells the agent through the one signal seam.
+   *
+   * Then two passes over the jobs, because the fiber rows and the job registry
+   * each know something the other does not. An interrupted bg:* fiber row says
+   * its job's executor died AFTER settling, which is the only way a lost wake
+   * can be re-delivered (DO onFiberRecovered parity); the registry says which
+   * jobs are still `running` at all, including the ones whose fiber row did
+   * not survive. Stale fiber rows from the prior run are cleared as they are
+   * read — a resume runs in a NEW fiber row, so this never deletes it.
    *
    * Call once at startup: no fibers are live yet, so every row is an orphan.
    */
   async recoverBackgroundJobs(): Promise<void> {
-    let orphans: ReturnType<typeof detectOrphanedFibers> = [];
+    await reconcileInterruptedForks({
+      journal: this.headJournal,
+      signals: this.orch.signals,
+      logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
+    });
+    let orphans: OrphanedFiber[] = [];
     try { orphans = detectOrphanedFibers(this.rt.storage.sql); } catch { /* no fibers table yet */ }
     for (const o of orphans) {
       if (o.name.startsWith('bg:')) {
@@ -1395,8 +1438,7 @@ export class LocalAgentSession implements BackendHost {
   private async processTurn(item: QueueItem): Promise<void> {
     const parsedEvent = v.safeParse(v.string(), item.metadata?.proteusEvent);
     const event = parsedEvent.success ? parsedEvent.output : undefined;
-    const promptMode = promptModeForTurnMetadata(item.metadata);
-    this.turnWorkMode = promptMode === 'plan' ? 'plan' : 'build';
+    this.turnWorkMode = workModeForTurnMetadata(item.metadata);
     this.emit({ type: 'turn-start', kind: item.kind, text: item.text, event });
 
     const startedAt = Date.now();
@@ -1486,7 +1528,9 @@ export class LocalAgentSession implements BackendHost {
       rlmAvailable: this.modelResolver !== null,
       externalTools,
       backend: 'cli-local',
-      mode: promptModeForTurnMetadata(item.metadata),
+      workMode: this.turnWorkMode,
+      provenance: turnProvenanceForMetadata(item.metadata),
+      stance: this.config.getStance(),
       planSubmissionAvailable: false,
       model: { id: this.effectiveModelSpec() },
       cwd: this.cwd,
@@ -1651,13 +1695,22 @@ export class LocalAgentSession implements BackendHost {
             this.emit({ type: 'tool-result', toolName: ev.toolName, toolCallId: ev.toolCallId, result: ev.result, success: ev.success });
             break;
           }
-          case 'step-finish':
-            this.orch.acc.recordStep(
-              ev.inputTokens !== undefined || ev.outputTokens !== undefined || ev.cachedInputTokens !== undefined
-                ? { usage: { inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedInputTokens: ev.cachedInputTokens } }
-                : {},
-            );
+          case 'step-finish': {
+            // The step's cumulative response array goes to the shared
+            // accumulator, which takes the per-step delta and appends it to the
+            // run's durable log — the moment the step finished, before the next
+            // request is issued. Without this the turn's model output first
+            // reaches disk at `persist()` below, so a kill at step 12 left
+            // twelve steps of work nowhere.
+            const step: StepLike = { response: { messages: ev.responseMessages } };
+            if (ev.inputTokens !== undefined || ev.outputTokens !== undefined || ev.cachedInputTokens !== undefined) {
+              step.usage = {
+                inputTokens: ev.inputTokens, outputTokens: ev.outputTokens, cachedInputTokens: ev.cachedInputTokens,
+              };
+            }
+            this.orch.acc.recordStep(step);
             break;
+          }
           // Only the scaffold seam yields this: a failure the turn survived
           // (a scaffold sub-step, or a scaffold run that died after streaming).
           // Surface it and flag the turn, but let the stream finish.
@@ -1957,7 +2010,6 @@ export class LocalAgentSession implements BackendHost {
       modelContext: { id: this.effectiveModelSpec(), contextWindow: this.sessionContextWindow() },
       system: buildSystemPromptSync(this.rt, {
         backend: 'cli-local',
-        mode: 'chat',
         model: { id: this.effectiveModelSpec() },
         currentDate: currentDateForPrompt(),
       }),
@@ -2051,7 +2103,6 @@ export class LocalAgentSession implements BackendHost {
     const memoryTail = await readMemoryTail(this.rt.memory);
     const systemPrompt = buildSystemPromptSync(this.rt, {
       backend: 'cli-local',
-      mode: 'chat',
       model: { id: this.effectiveModelSpec() },
       currentDate: currentDateForPrompt(),
     });
@@ -2325,6 +2376,7 @@ export class LocalAgentSession implements BackendHost {
       codemodeExtras: () => this.headCodemodeExtras(),
       grounding: this.buildHeadGrounding(),
       governor: () => this.budget,
+      journal: () => this.headJournal,
     });
     this.headController = new HeadController(this._headRuntime, this.headJournal);
 
@@ -2359,7 +2411,7 @@ export class LocalAgentSession implements BackendHost {
           createMemoryCodemodeProvider(() => ({
             memory: this.rt.memory, facts: this.factsStore, sql: this.rt.storage.sql,
           })),
-          createTasksCodemodeProvider(this.taskList),
+          createTasksCodemodeProvider(this.taskList, this.config),
           // `release.*` — left the native surface for codemode-only reach
           // (tools/release-codemode.ts); deps read live so a rebind lands
           // without rebuilding this toolset.

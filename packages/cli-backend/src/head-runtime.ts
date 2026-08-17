@@ -65,6 +65,11 @@ export interface CLIHeadRuntimeDeps {
    *  that carries labels, so an unbudgeted run never reads the table. Read per
    *  head, because the runtime is built before the governor exists. */
   governor: () => MissionGovernor;
+  /** The session's head journal — where a head's finished steps land as they
+   *  happen. A local head runs in the same process as the journal, so this is a
+   *  direct write where the cf backend has to cross a facet boundary for it.
+   *  Read per head, for the same reason the governor is. */
+  journal: () => HeadJournal;
 }
 
 /** Per-head abort flag — flipped by SpawnedHead.abort (a caller-requested
@@ -169,6 +174,7 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       split: (request) => runLocalSplit(db, request, input, deps),
     });
     const mission = localMissionScope(deps.governor(), input.missionLabels ?? []);
+    const journal = deps.journal();
     const inferenceOptions: Parameters<typeof runHeadInference>[1] = {
       model: headModel(input, deps), tools, capture,
       workspaceLayout: 'private-scratch',
@@ -177,6 +183,9 @@ async function runLocalHead(input: HeadInput, deps: CLIHeadRuntimeDeps, flag: Ab
       maxSteps: resolveMaxSteps(process.env.PROTEUS_MAX_STEPS),
       isAborted: () => flag.aborted,
       abortReason: () => flag.reason,
+      // Each finished step into the session's journal as it lands — the only
+      // thing that can say what a head is doing before it reports.
+      reportStep: (seq, step) => journal.appendStep(input.id, seq, step),
     };
     if (mission) inferenceOptions.mission = mission;
     return await runHeadInference(input, inferenceOptions);

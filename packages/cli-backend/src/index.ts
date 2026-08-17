@@ -21,7 +21,7 @@ export {
   type ShellApprovalHandler,
 } from './local-session.js';
 export {
-  createLocalModelResolver, cloudProxyBaseURL,
+  createLocalModelResolver, cloudProxyBaseURL, CLOUD_PROXY_PROVIDER_IDS,
   type LocalModelResolver, type LocalModelResolverConfig, type LocalCloudSession,
   type LocalProviderCredentials, type LocalOpenAICompatCredential,
 } from './model-resolver.js';
