@@ -26,6 +26,7 @@ import { MockLanguageModelV3 } from 'ai/test';
 import {
   decodeJsonValue,
   FORK_STRATEGY_ID,
+  BUILTIN_TOOL_DESCRIPTIONS,
   createAgentsCodemodeProvider,
   createProviderRegistry,
   createStrategyRegistry,
@@ -79,7 +80,6 @@ function providerRegistry(): AgentProviderRegistry {
     },
     resolveModel: () => model,
     normalizeSpecSync: (spec?: string | null) => spec ?? 'test/model',
-    resolveSpec: async (spec?: string | null) => spec ?? 'test/model',
   };
 }
 
@@ -164,6 +164,51 @@ function fullDeps(): AgentsToolDeps {
   };
 }
 
+// ── The execute_tools docstring itself ──────────────────────────────────────
+// This tool's description used to be @cloudflare/codemode's DEFAULT_DESCRIPTION:
+// createExecuteToolsTool passed none, so the model received "Execute code to
+// achieve a goal." and NOTHING from BUILTIN_TOOL_SPECS.execute_tools — no
+// Use-when, no Avoid-when, no workspace doctrine, no Returns — plus a worked
+// example calling `codemode.searchWeb(...)`, the exact shape
+// craftedDispatcherEntry is written to throw on. Both halves are asserted here
+// because both were absent from any test: the registry's doctrine, and the
+// namespace declarations it wraps.
+
+describe('the execute_tools docstring the model receives', () => {
+  test('carries the registry doctrine, not the vendor default', () => {
+    const description = executeToolsDescription();
+    expect(description).toContain(BUILTIN_TOOL_DESCRIPTIONS.execute_tools);
+    expect(description).toContain('Use when:');
+    expect(description).toContain('Avoid when:');
+    expect(description).toContain('Returns:');
+    // The workspace doctrine — the sentence that tells the model `workspace.*`
+    // and the `file` tool address the same bytes.
+    expect(description).toContain('canonical durable workspace');
+    expect(description).not.toContain('Execute code to achieve a goal.');
+    // The vendor's example named a member Proteus makes throw.
+    expect(description).not.toContain('codemode.searchWeb');
+  });
+
+  test('states what the sandbox is without constraining the code shape', () => {
+    // The shape is deliberately unconstrained now that injectPreamble reaches
+    // every shape; the two facts that remain are runtime facts.
+    const description = executeToolsDescription();
+    expect(description).toContain('JavaScript isolate');
+    expect(description).toContain('Type annotations, interfaces and generics do not parse');
+  });
+
+  test('web.* is declared with its real positional signature', () => {
+    // Without an explicit `types`, codemode generates `search: (input:
+    // SearchInput) => Promise<SearchOutput>` from an absent input schema — an
+    // object-argument signature, while the implementation reads String(args[0]).
+    const description = executeToolsDescription();
+    expect(description).toContain('export declare const web: {');
+    expect(description).toContain('search(query: string, opts?: { limit?: number })');
+    expect(description).toContain('fetch(url: string)');
+    expect(description).not.toContain('type SearchInput = unknown');
+  });
+});
+
 // ── What the model is told it can call ─────────────────────────────────────
 
 describe('agents.* in the cf codemode tool', () => {
@@ -201,7 +246,7 @@ describe('agents.* in the cf codemode tool', () => {
 describe('agents.fork called back from an in-flight sandbox call', () => {
   const headReport: HeadReport = {
     id: 'head-1', status: 'completed', summary: 'done', evidence: [], decisions: [],
-    artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], steps: [],
+    artifactRefs: [], fileChanges: [], childHeadIds: [], toolCalls: [], stepCount: 0,
     tokenUsage: { input: 1, output: 1, total: 2 }, wallClockMs: 1,
   };
 

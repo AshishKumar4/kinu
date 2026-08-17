@@ -6,6 +6,7 @@
 // the shape of the code, not in any value a behaviour test could observe:
 // a subclass that simply *omits* super.alarm() is a well-formed program.
 import { describe, expect, test } from 'bun:test';
+import { memberBody } from '@proteus/test-utils';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -125,10 +126,10 @@ describe('the Proteus timer rides the SDK scheduler', () => {
   });
 
   test('the stale sweep runs before the SDK reads due rows, and spares recurring rows', () => {
-    const onStart = orchestrator.slice(
-      orchestrator.indexOf('async onStart()'),
-      orchestrator.indexOf('async _proteusTimerTick()'),
-    );
+    // `memberBody`, not `indexOf` + slice: anchored on a literal signature, a
+    // slice silently becomes `slice(-1, …)` the day the method's signature
+    // changes, and a wiring test that matches nothing passes.
+    const onStart = memberBody(orchestrator, 'onStart(): void', 'orchestrator.ts');
     expect(onStart).toContain('this.sweepUnrunnableSchedules()');
     const sweep = orchestrator.slice(
       orchestrator.indexOf('private sweepUnrunnableSchedules('),

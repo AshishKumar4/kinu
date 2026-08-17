@@ -26,7 +26,7 @@ const headReport: HeadReport = {
   fileChanges: [],
   childHeadIds: [],
   toolCalls: [],
-  steps: [],
+  stepCount: 0,
   tokenUsage: { input: 1, output: 1, total: 2 },
   wallClockMs: 1,
 };

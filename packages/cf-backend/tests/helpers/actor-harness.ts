@@ -26,13 +26,19 @@ mockAgentsSdk();
 const { OrchestratorAgent } = await import('../../src/orchestrator.js');
 const { SubordinateAgent } = await import('../../src/subordinate-agent.js');
 
+/** The two turn preconditions that read the workspace filesystem. This harness
+ *  has none (`env.NIMBUS_SESSION` is inert), so it declares them satisfied
+ *  instead of faking a filesystem: the soul via `setObservedSoul`, the scaffold
+ *  via `declareScaffoldPresent`. */
 class HarnessOrchestratorAgent extends OrchestratorAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
   setObservedSoul(text: string): void { this._cachedSoulText = text; }
+  declareScaffoldPresent(): void { this._scaffoldReady = true; }
 }
 
 class HarnessSubordinateAgent extends SubordinateAgent {
   observeRawTools(): ToolSet { return this.getRawTools(); }
+  declareScaffoldPresent(): void { this._scaffoldReady = true; }
 }
 
 export interface ActorHarness<T> {
@@ -127,13 +133,13 @@ function instantiate<T extends object>(Actor: new (ctx: AgentContext, env: Env) 
 function ensureActorSchema(
   agent: InstanceType<typeof OrchestratorAgent> | InstanceType<typeof SubordinateAgent>,
 ): void {
-  // Think wraps `onStart` with asynchronous SDK initialization. Invoke the
-  // production overrides directly: both create their complete schema before
-  // their first await, which is the lifecycle behavior this harness observes.
+  // `onStart` is synchronous on every Proteus Durable Object (it runs inside
+  // `blockConcurrencyWhile`), so the production override can simply be called:
+  // its whole schema is in place when it returns.
   if (agent instanceof OrchestratorAgent) {
-    void OrchestratorAgent.prototype.onStart.call(agent);
+    OrchestratorAgent.prototype.onStart.call(agent);
   } else {
-    void SubordinateAgent.prototype.onStart.call(agent);
+    SubordinateAgent.prototype.onStart.call(agent);
   }
 }
 
@@ -144,6 +150,7 @@ export function orchestratorHarness(): ActorHarness<HarnessOrchestratorAgent> {
   harness.db.prepare(
     "UPDATE workspace_identity SET owner_user_id = 'harness-owner' WHERE id = 'harness-actor'",
   ).run();
+  harness.agent.declareScaffoldPresent();
   return harness;
 }
 
@@ -164,5 +171,6 @@ export function subordinateHarness(): ActorHarness<HarnessSubordinateAgent> {
        (id, name, display_name, role, mission, parent_workspace, owner_user_id)
      VALUES (1, 'harness-sub', 'Harness Sub', 'specialist', 'observe conformance', 'harness-parent', 'harness-owner')`,
   ).run();
+  harness.agent.declareScaffoldPresent();
   return harness;
 }

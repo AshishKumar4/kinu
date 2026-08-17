@@ -3,6 +3,11 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { memberBody } from '@proteus/test-utils';
 import { orchestratorHarness } from './helpers/actor-harness.ts';
+import type { UIMessage } from 'ai';
+import * as v from 'valibot';
+
+const TasksToolProbeSchema = v.object({ execute: v.function() });
+const StanceResultSchema = v.object({ stance: v.string() });
 
 // The turn pipeline is split across the actor substrate (actor-agent.ts —
 // beforeTurn assembly, the BackendHost, the event-injection machinery) and
@@ -193,6 +198,45 @@ describe('turn-pipeline correctness wiring', () => {
     expect(actor).not.toContain('reenqueue');
   });
 
+  test('an INTERRUPTED turn still projects the session tree into `messages`', async () => {
+    // The bug the operator hit: he forked from a message the chat pane was
+    // showing and got `fork point not found`. `messages` was written by a
+    // turn-end summary that ran only on the completed path, so an interrupted
+    // turn left the pane and the fork substrate disagreeing. This asserts the
+    // BEHAVIOUR, not the source text — delete the `reconcileSessionTree` call in
+    // `onChatResponse` and this goes red.
+    const harness = orchestratorHarness();
+    harness.db.exec(`CREATE TABLE IF NOT EXISTS assistant_messages (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL DEFAULT '', parent_id TEXT,
+      role TEXT NOT NULL, content TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+    const append = harness.db.prepare(
+      `INSERT INTO assistant_messages (id, session_id, parent_id, role, content, created_at)
+       VALUES (?, '', ?, ?, ?, '2026-08-16 22:05:00')`,
+    );
+    append.run('u-live', null, 'user', JSON.stringify({
+      id: 'u-live', role: 'user', parts: [{ type: 'text', text: 'do the thing' }],
+    }));
+    append.run('a-live', 'u-live', 'assistant', JSON.stringify({
+      id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
+    }));
+
+    const message: UIMessage = {
+      id: 'a-live', role: 'assistant', parts: [{ type: 'text', text: 'partial answer' }],
+    };
+    await harness.agent.onChatResponse({
+      message, requestId: 'req-interrupted', continuation: false, status: 'aborted',
+    });
+
+    const rows = harness.db.prepare<{ id: string; parent_id: string | null; content: string }, []>(
+      `SELECT id, parent_id, content FROM messages WHERE session_id = 'default' ORDER BY rowid`,
+    ).all();
+    expect(rows.map((r) => r.id)).toEqual(['u-live', 'a-live']);
+    expect(rows[1]!.parent_id).toBe('u-live');
+    // Flattened for search and the evolution outcome join, not the raw UI JSON.
+    expect(rows[1]!.content).toBe('partial answer');
+  });
+
   test('programmatic turns succeed only after Think completes the turn and keep their own drain identity', () => {
     const host = actor.slice(
       actor.indexOf('protected get host(): BackendHost'),
@@ -235,7 +279,7 @@ describe('turn-pipeline correctness wiring', () => {
   });
 
   test('activation runs one stale-delivery sweep and schedules the standard drain when it recovers rows', () => {
-    const onStart = memberBody(source, 'async onStart()', 'orchestrator.ts');
+    const onStart = memberBody(source, 'onStart(): void', 'orchestrator.ts');
     expect(onStart).toContain('this.eventLog.unbindStale(STALE_EVENT_DELIVERY_MS)');
     expect(onStart).toContain('this.orch.scheduleDrain()');
   });
@@ -283,22 +327,39 @@ describe('turn-pipeline correctness wiring', () => {
     expect(closeArgs).toContain('craft: this.orch.craft.snapshot()');
   });
 
-  test("the per-turn system prompt carries the turn's mode overlay", () => {
-    // The CLI derived a PromptMode from metadata.proteusEvent; cf passed none,
-    // so a hosted agent resumed to collect a background job never saw the
-    // background-resume guidance, plus explicit user-selected Plan/Build mode.
-    // Both now share core's promptModeForTurnMetadata.
+  test("the per-turn system prompt carries all three of the turn's axes", () => {
+    // Permission, provenance and stance are three independent facts and cf
+    // must pass all three: forcing them through one `mode` is what kept the
+    // background-resume overlay off every real wake (jobs/runner.ts stamps
+    // proteusEvent AND proteusMode, and the work mode used to win).
     const beforeTurn = actor.slice(
       actor.indexOf('const promptOptions: NonNullable<Parameters<typeof buildSystemPromptSync>[1]> = {'),
       actor.indexOf('this.recordSystemPromptHash(systemOverride)'),
     );
-    expect(beforeTurn).toContain('mode: promptMode');
+    expect(beforeTurn).toContain('workMode,');
+    expect(beforeTurn).toContain('provenance: this.turnProvenance()');
+    expect(beforeTurn).toContain('stance: this.config.getStance()');
     const turnMode = actor.slice(
-      actor.indexOf('protected turnPromptMode(): PromptMode'),
+      actor.indexOf('protected turnWorkMode(): WorkMode'),
       actor.indexOf('/** What this turn was started BY:'),
     );
-    expect(turnMode).toContain('promptModeForTurnMetadata(metadata)');
-    expect(turnMode).toContain('this._activeProgrammaticUserMessage\n      ? this._activeProgrammaticUserMessage.metadata');
+    expect(turnMode).toContain('workModeForTurnMetadata(this.turnDrivingMetadata())');
+    expect(turnMode).toContain('turnProvenanceForMetadata(this.turnDrivingMetadata())');
+    expect(turnMode).toContain('if (!this._activeProgrammaticUserMessage) return this.turnUserMetadata();');
+  });
+
+  test('the stance the agent set is in the prompt the DO actually builds', async () => {
+    // Not a source grep: the real prompt, off the real config store, through
+    // the real cache key. Cutting `stance` out of either buildSystemPromptSync
+    // call in actor-agent.ts fails this.
+    const harness = orchestratorHarness();
+    const agent = harness.agent;
+    expect(agent.getSystemPrompt()).not.toContain('Audit stance:');
+
+    const tasks = v.parse(TasksToolProbeSchema, agent.getTools().tasks);
+    const result = v.parse(StanceResultSchema, await tasks.execute({ action: 'mode', stance: 'audit' }));
+    expect(result.stance).toBe('audit');
+    expect(agent.getSystemPrompt()).toContain('Audit stance:');
   });
 
   test('the DO holds a keepAlive heartbeat until BOTH evolution lanes settle', () => {

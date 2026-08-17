@@ -72,6 +72,8 @@ const GATED_CALLS: GatedCall[] = [
 
   { capability: 'ai_gateway.admin', name: 'listAIGateways', run: (u, c) => u.listAIGateways(c) },
   { capability: 'ai_gateway.admin', name: 'selectAIGateway', run: (u, c) => u.selectAIGateway(c, null) },
+  { capability: 'ai_gateway.admin', name: 'listCloudflareAccounts', run: (u, c) => u.listCloudflareAccounts(c) },
+  { capability: 'ai_gateway.admin', name: 'selectCloudflareAccount', run: (u, c) => u.selectCloudflareAccount(c, 'aaa111aaa111aaa111aaa111aaa111aa') },
 
   { capability: 'mcp.tools', name: 'userMcp_updatedAt', run: (u, c) => u.userMcp_updatedAt(c) },
   { capability: 'mcp.tools', name: 'userMcp_toolDescriptors', run: (u, c) => u.userMcp_toolDescriptors(c) },

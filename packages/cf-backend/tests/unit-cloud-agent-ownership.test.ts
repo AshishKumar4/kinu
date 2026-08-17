@@ -89,6 +89,10 @@ describe('cloud agent ownership safety', () => {
       async setAutoDisplayName(displayName: string) {
         calls.push(`auto-title:${displayName}`);
       },
+      async beginGenesisTurn() {
+        calls.push('genesis');
+        return { started: true };
+      },
     };
     const env = testEnv({
       UserDO: {
@@ -109,16 +113,20 @@ describe('cloud agent ownership safety', () => {
         suggestDisplayName: async () => 'React Hello World',
       });
 
-      // The slug is the DO name and the URL — permanent, and chosen before any
-      // title exists. So it is the id's memorable pair and carries none of the
-      // mission; the mission shows up in the display name, which titling then
-      // upgrades.
-      expect(entry.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
-      expect(entry.name).not.toContain('hello');
+      // The slug is the DO name and the URL — permanent. It carries the
+      // mission's own words plus an id suffix, so the address says what the
+      // workspace is for; the memorable adjective-noun pair is only for a
+      // mission with no usable words. The owner reported that pair four times
+      // between 2026-07-13 and 2026-08-16 while this assertion demanded it.
+      expect(entry.name).toMatch(/^build-a-hello-world-app-[0-9a-f]{8}$/);
       expect(entry.displayName).toBe('Build a hello world app in react');
       expect(calls).toContain(`claim:${USER_ID}`);
       expect(calls).toContain('provisional-title:Build a hello world app in react');
       expect(calls).toContain('soul');
+      // The agent takes the first turn itself — after the soul, model and
+      // effort are durable, and without the owner having to reprompt.
+      expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('soul'));
+      expect(calls.indexOf('genesis')).toBeGreaterThan(calls.indexOf('model:@cf/deepseek-ai/deepseek-v4-pro-0813'));
       expect(background).toHaveLength(1);
       await Promise.all(background);
       expect(calls).toContain('auto-title:React Hello World');
@@ -131,7 +139,10 @@ describe('cloud agent ownership safety', () => {
         {},
         { waitUntil: (promise) => background.push(promise) },
       );
-      expect(purposeless.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{4}$/);
+      // Nothing to name it after, so the memorable pair — its only remaining
+      // job. The suffix is 8 hex, not 4: at 4 it shared digits with the two
+      // words and the whole namespace held 65,536 addresses.
+      expect(purposeless.name).toMatch(/^[a-z]+-[a-z]+-[0-9a-f]{8}$/);
       expect(purposeless.displayName).toMatch(/^[A-Z][a-z]+ [A-Z][a-z]+$/);
       expect(purposeless.displayName).not.toBe(purposeless.name);
       expect(background).toHaveLength(1);
@@ -285,6 +296,10 @@ describe('cloud agent ownership safety', () => {
       async setSoul() { calls.push('soul'); },
       async setModel() { calls.push('model'); },
       async resetWorkspaceBaseline() { calls.push('baseline'); return { ok: true as const }; },
+      // Named, no mission: the DO's own gate (workspaceGenesisSignal) declines a
+      // first turn on a placeholder mission. The call still happens — the wire
+      // is unconditional and the decision is not the worker's to make.
+      async beginGenesisTurn() { calls.push('genesis'); return { started: false }; },
     };
     const env = testEnv({
       UserDO: { idFromName: (n: string) => n, get: () => userDO },
@@ -308,7 +323,7 @@ describe('cloud agent ownership safety', () => {
     // before any of that, not on first visit.
     expect(calls).toEqual([
       'register:jarvis', `claim:${USER_ID}`, 'ensure:jarvis:none',
-      'provisional-title', 'soul', 'baseline', 'model',
+      'provisional-title', 'soul', 'baseline', 'model', 'genesis',
     ]);
   });
 

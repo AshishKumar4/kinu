@@ -16,7 +16,7 @@ const ToolSetProbeSchema = v.record(v.string(), v.object({
   description: v.optional(v.string()),
   execute: v.optional(v.function()),
 }));
-const PromptModeSchema = v.picklist(['chat', 'plan', 'build']);
+const WorkModeSchema = v.picklist(['plan', 'build']);
 const PlanStoreProbeSchema = v.object({ markHandoffAccepted: v.function() });
 
 function prototypeMethod(agent: HarnessAgent, name: string) {
@@ -36,8 +36,8 @@ function rawTools(agent: HarnessAgent) {
   return v.parse(ToolSetProbeSchema, prototypeMethod(agent, 'getRawTools').call(agent));
 }
 
-function turnPromptMode(agent: HarnessAgent) {
-  return v.parse(PromptModeSchema, prototypeMethod(agent, 'turnPromptMode').call(agent));
+function turnWorkMode(agent: HarnessAgent) {
+  return v.parse(WorkModeSchema, prototypeMethod(agent, 'turnWorkMode').call(agent));
 }
 
 async function executeTool(
@@ -204,11 +204,11 @@ describe('Plan mode tool lifecycle', () => {
       plan: { status: 'approved', handoffAccepted: false },
     });
     setMode(agent, 'build');
-    expect(turnPromptMode(agent)).toBe('plan');
+    expect(turnWorkMode(agent)).toBe('plan');
     setActorField(agent, '_activeProgrammaticUserMessage', {
       metadata: { proteusEvent: 'plan_approved', proteusMode: 'build' },
     });
-    expect(turnPromptMode(agent)).toBe('build');
+    expect(turnWorkMode(agent)).toBe('build');
     setActorField(agent, '_activeProgrammaticUserMessage', null);
     expect(await agent.decidePlanReview(plan.id, 1, 'approve')).toMatchObject({
       ok: true, queued: true, plan: { status: 'approved', handoffAccepted: true },

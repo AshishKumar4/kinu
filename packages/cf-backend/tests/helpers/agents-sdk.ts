@@ -39,6 +39,12 @@ export function mockAgentsSdk(): void {
           });
         }
       }
+      /** The SDK's DO heartbeat. Production uses it for work that outlives the
+       *  call that started it (the drain timer, the genesis turn), so the stand-in
+       *  runs the body — without it those paths throw here and are untestable. */
+      async keepAliveWhile<Result>(fn: () => Promise<Result>): Promise<Result> {
+        return fn();
+      }
     },
     /** The real decorator only attaches RPC metadata. */
     callable: () => <Method>(method: Method): Method => method,
@@ -55,6 +61,9 @@ export function mockAgentsSdk(): void {
     isPlatformTransientError: () => false,
     getAgentByName: async (namespace: DurableObjectNamespace, name: string) =>
       namespace.get(namespace.idFromName(name)),
+    /** The Worker entry's transport for `/agents/*`. Returning undefined is the
+     *  SDK's "not my path" answer, which drops the request to the SPA fallback. */
+    routeAgentRequest: async (): Promise<Response | undefined> => undefined,
   }));
   // UserDO imports these at module load; the real ones reach `cloudflare:*`.
   // No test exercises the live MCP client — the per-user MCP surface is covered

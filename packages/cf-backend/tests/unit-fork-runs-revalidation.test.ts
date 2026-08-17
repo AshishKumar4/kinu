@@ -40,13 +40,13 @@ function headRun(over: Partial<HeadRunView> = {}): HeadRunView {
         id: 'head-0', task: 'try X', rationale: 'r', status: 'completed',
         summary: 'X works', errorMessage: null,
         tokenInput: 10, tokenOutput: 5, wallClockMs: 100,
-        toolCalls: [], decisions: [], steps: [],
+        spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
       },
       {
         id: 'head-1', task: 'try Y', rationale: 'r', status: 'errored',
         summary: null, errorMessage: 'Y blew up',
         tokenInput: 3, tokenOutput: 0, wallClockMs: 20,
-        toolCalls: [], decisions: [], steps: [],
+        spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
       },
     ],
     merge: { narrative: 'X, with Y’s guard rail', headCount: 2, totalTokens: 18 },
@@ -103,23 +103,47 @@ describe('fork revalidation policy', () => {
     expect(hasActiveForkWork(true, [])).toBe(true);
   });
 
-  test('the embedded and full-page explorers share the same live resource', () => {
+  test('the canvas and the full-page explorer read the resources they claim to', () => {
     const source = (path: string) => readFileSync(join(import.meta.dir, '..', path), 'utf8');
     const embedded = source('src/components/surfaces/ExplorationSurface.tsx');
     const fullPage = source('src/pages/MCTSExplorer.tsx');
     const workSurface = source('src/components/surfaces/WorkSurface.tsx');
 
-    expect(embedded).toContain('useLiveForkRuns(rpc, isStreaming, backgroundJobs)');
+    // The embedded surface draws EVERY tree, so it reads the canvas projection —
+    // one request carrying the runs, their dispatch parameters and every tree's
+    // rows. The full page drills into one run and needs only the list.
+    expect(embedded).toContain('useExplorationCanvas(rpc, isStreaming, backgroundJobs, liveTrees)');
+    expect(embedded).not.toContain('useLiveForkRuns(');
     expect(fullPage).toMatch(/useLiveForkRuns\(\s*state\.rpc,\s*state\.isStreaming,\s*state\.backgroundJobs,?\s*\)/);
     expect(workSurface).toContain('backgroundJobs={props.backgroundJobs}');
+
+    // Live trees are keyed by search on both paths: one slot let two concurrent
+    // searches overwrite each other's tree.
+    expect(workSurface).toContain('liveTrees={props.mctsTrees}');
+    expect(fullPage).toContain('state.mctsTrees.get(run.id) ?? null');
+
     expect(embedded).toContain('<LoadFailure what="fresh fork runs"');
-    expect(embedded).toContain('<LoadFailure what="the latest fork tree"');
     expect(fullPage).toContain('<LoadFailure what="fresh fork runs"');
     expect(fullPage).toContain('<LoadFailure what="the latest fork tree"');
     expect(embedded).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
     expect(fullPage).not.toContain('rpc<ForkRunSummary[]>("listForkRuns"');
-    expect(embedded).toContain('rpc<HeadRunView | null>("getHeadRun", [run.id])');
     expect(fullPage).toContain('useExactForkRun(state.rpc, runId, hasActiveWork)');
+  });
+
+  test('selecting a branch opens it rather than filling a side panel', () => {
+    const embedded = readFileSync(
+      join(import.meta.dir, '..', 'src/components/surfaces/ExplorationSurface.tsx'), 'utf8',
+    );
+    // A branch click sets the opened branch, and the opened branch REPLACES the
+    // canvas — the traversal the owner asked for, not a metadata card beside it.
+    expect(embedded).toContain('onOpenBranch(node.id)');
+    expect(embedded).toContain('<ForkBranchView');
+    expect(embedded).toContain(': <ForkCanvas');
+    // The pane the branch view replaced is gone, not left beside it.
+    expect(embedded).not.toContain('BranchInspector');
+    // A branch's live trace is the journal's, read while the run is live.
+    expect(embedded).toContain('rpc<HeadRunView | null>("getHeadRun", [run.id])');
+    expect(embedded).toContain('{head && <HeadTrace head={head} />}');
   });
 });
 
@@ -177,7 +201,7 @@ describe('a merge is a tree of depth 1', () => {
       status: 'running',
       heads: [{
         id: 'h', task: 't', rationale: 'r', status: 'running', summary: null, errorMessage: null,
-        tokenInput: 0, tokenOutput: 0, wallClockMs: 0, toolCalls: [], decisions: [], steps: [],
+        tokenInput: 0, tokenOutput: 0, wallClockMs: 0, spawnedAt: 0, lastStepAt: null, decisions: [], steps: [],
       }],
     }));
     expect(tree.status).toBe('running');

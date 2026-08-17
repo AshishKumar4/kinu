@@ -10,6 +10,8 @@ import {
 } from '@proteus/core';
 import { createTestRuntime } from '@proteus/test-utils';
 import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import { pickInitialModel } from '../src/user/workspace-create.ts';
+import type { ModelMenuEntry } from '../src/user/available-models.js';
 import type { CredentialSummary } from '../src/user/user-do.js';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
@@ -76,28 +78,33 @@ describe('AgentProviderRegistry composition', () => {
     expect(() => reg.normalizeSpecSync('Not A Provider/model')).toThrow(/Unknown provider/);
   });
 
-  test('async resolveSpec — picks workers-ai when Cloudflare OAuth has an account base URL', async () => {
-    const reg = createAgentProviderRegistry({
-      env: {},
-      userDO: fakeUserDOStub(
-        { 'cloudflare.oauth': { Authorization: 'Bearer cf-user-token' } },
-        { 'cloudflare.oauth': 'https://api.cloudflare.com/client/v4/accounts/abc123abc123abc1/ai/v1' },
-      ),
-    });
-    const spec = await reg.resolveSpec(null);
-    expect(spec).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
-  });
-
-  test('async resolveSpec — picks first available provider via cred-aware ordering', async () => {
-    // Only codex creds available; workers-ai binding absent.
+  // The owner runs on the native Workers AI model precisely because it is the
+  // one he does not pay per-token for. There used to be a second, async spec
+  // resolver that surveyed which BYO credential happened to be stored and
+  // preferred it whenever Cloudflare was not connected; it had no production
+  // caller and it contradicted this. There is now one resolver.
+  test('an unchosen model is the native default, not whichever BYO credential is stored', () => {
     const reg = createAgentProviderRegistry({
       env: {},
       userDO: fakeUserDOStub({
         'codex.oauth': { Authorization: 'Bearer codex-token', originator: 'codex_cli_rs' },
+        'openai.bearer': { Authorization: 'Bearer sk-test' },
       }),
     });
-    const spec = await reg.resolveSpec(null);
-    expect(spec).toBe('codex/gpt-5.5');
+    expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  });
+
+  test('an explicit BYO choice still wins over the native default', () => {
+    const reg = createAgentProviderRegistry({
+      env: {},
+      userDO: fakeUserDOStub({ 'codex.oauth': { Authorization: 'Bearer codex-token', originator: 'codex_cli_rs' } }),
+    });
+    expect(reg.normalizeSpecSync('codex/gpt-5.5')).toBe('codex/gpt-5.5');
+  });
+
+  test('the registry exposes exactly one spec resolver', () => {
+    const reg = createAgentProviderRegistry({ env: {}, userDO: fakeUserDOStub() });
+    expect(Object.keys(reg).sort()).toEqual(['deps', 'normalizeSpecSync', 'registry', 'resolveModel']);
   });
 
   test('null userDO → user credential providers unavailable', async () => {
@@ -113,10 +120,10 @@ describe('AgentProviderRegistry composition', () => {
   });
 });
 
-describe('sync default provider with a null UserDO stub (inline-branch context)', () => {
+describe('default provider with a null UserDO stub (inline-branch context)', () => {
   // Regression: workers-ai is credential-gated through UserDO; with a null
-  // stub its requests are guaranteed 401s, so the sync default must fall
-  // back to the env-bound ai-gateway instead of picking workers-ai.
+  // stub its requests are guaranteed 401s, so the default must fall back to
+  // the env-bound ai-gateway — which serves the same native model.
   test('falls back to ai-gateway when env-bound gateway is configured', () => {
     const reg = createAgentProviderRegistry({
       env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
@@ -126,9 +133,9 @@ describe('sync default provider with a null UserDO stub (inline-branch context)'
       .toBe(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
   });
 
-  test('throws loudly when no sync-usable provider exists', () => {
+  test('throws loudly when no usable provider exists', () => {
     const reg = createAgentProviderRegistry({ env: {}, userDO: null });
-    expect(() => reg.normalizeSpecSync(null)).toThrow(/No sync-resolvable provider/);
+    expect(() => reg.normalizeSpecSync(null)).toThrow(/No default provider available/);
   });
 
   test('explicit workers-ai specs still pass through unchanged', () => {
@@ -165,5 +172,33 @@ describe('default-agent prompt model context', () => {
     expect(actor).toContain('private promptModelContext()');
     expect(actor.match(/model: this\.promptModelContext\(\)|const model = this\.promptModelContext\(\)/g)?.length).toBe(2);
     expect(actor).not.toContain('model: { id: modelId ?? undefined }');
+  });
+});
+
+describe('the model a new workspace starts on', () => {
+  const native: ModelMenuEntry = {
+    spec: DEFAULT_WORKERS_AI_MODEL_SPEC, label: 'DeepSeek V4 Pro 0813', provider: 'workers-ai',
+  };
+  const byo: ModelMenuEntry = { spec: 'openai/gpt-5.5', label: 'GPT-5.5', provider: 'openai' };
+
+  test('no configured default → the native Workers AI model', () => {
+    expect(pickInitialModel(null, [native, byo])).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  });
+
+  test('the native model is chosen even when a BYO provider lists first', () => {
+    expect(pickInitialModel(null, [byo, native])).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
+  });
+
+  test('a configured default wins when the account can serve it', () => {
+    expect(pickInitialModel('openai/gpt-5.5', [native, byo])).toBe('openai/gpt-5.5');
+  });
+
+  // Regression: this used to fall through to `models[0]`, so a user who signed
+  // in with Google and pasted one API key had every new workspace silently
+  // created on that paid provider. No native model available and nothing
+  // chosen is now an error the caller reports, not a guess.
+  test('no native model and no choice resolves to nothing rather than a BYO guess', () => {
+    expect(pickInitialModel(null, [byo])).toBeNull();
+    expect(pickInitialModel('workers-ai/@cf/meta/llama-4', [byo])).toBeNull();
   });
 });

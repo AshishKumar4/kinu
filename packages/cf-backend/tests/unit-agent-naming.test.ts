@@ -62,10 +62,12 @@ describe("workspace titling wiring (OrchestratorAgent)", () => {
   const orchestrator = readFileSync(join(import.meta.dir, "../src/orchestrator.ts"), "utf8");
 
   test("opening a legacy workspace titles it from SOUL.md without blocking boot", () => {
-    const onStart = orchestrator.slice(
-      orchestrator.indexOf("async onStart()"),
-      orchestrator.indexOf("async _proteusTimerTick()"),
-    );
+    // Bounded by a REGEX, and the match is asserted: anchored on the literal
+    // "async onStart()" this slice silently became `slice(-1, …)` the day the
+    // method turned synchronous, and a wiring test that matches nothing passes.
+    const body = /\n  (?:async )?onStart\(\)[\s\S]*?\n  \}\n/.exec(orchestrator);
+    expect(body).not.toBeNull();
+    const onStart = body![0];
     expect(onStart).toContain("if (this.getOwnerUserId() && isPlaceholderWorkspaceTitle(this.config.getDisplayName(), this.name))");
     expect(onStart).toContain("void readSoul(this.rt.storage.vfs)");
     expect(onStart).toContain(".catch((error) =>");
