@@ -40,6 +40,7 @@ export {
 export {
   reconcileInterruptedForks, forkInterruptedWake,
   FORK_INTERRUPTED_SIGNAL, FORK_INTERRUPTED_REASON,
+  type RunEventLedger,
 } from './reconcile.js';
 export { MergeOutputSchema, DecisionSchema, type MergeOutput } from './merge-schema.js';
 export {

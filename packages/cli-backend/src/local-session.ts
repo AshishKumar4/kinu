@@ -1249,6 +1249,7 @@ export class LocalAgentSession implements BackendHost {
     await reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.orch.signals,
+      runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.emit({ type: 'evolution', event, message: detail ?? '' }),
     });
     const orphans = detectOrphanedFibers(this.rt.storage.sql);

@@ -16,6 +16,19 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
 
 ### Added
 
+- An interrupted fork now closes its own span in the durable run-event ledger.
+  `head_split` went in at dispatch and `head_merge` when the split settled, but
+  a fork killed by a process exit, a Durable Object eviction or an operator
+  cancel reached the first and never the second — so `run_events` kept a split
+  with no outcome, which is byte-for-byte what a fork still in flight looks
+  like. The Timeline rendered a "Heads split" span nothing ever closed, and a
+  delegation-cost query counted the spend against no result it could see. The
+  start-of-life reconciliation that already settles the journal and wakes the
+  agent now also appends `head_abandoned` (carrying `abandoned` against
+  `headCount`) to the run that carried the split — the same retraction the
+  head roster gets, on the other plane that had gone quiet. A fork whose split
+  was never recorded is skipped rather than attributed to an unrelated turn.
+
 - The step clock gained a knowledge channel: when a tool keeps failing (the
   same streak the mechanical steer fires on) and a **changed** call of that
   tool then runs clean, the runtime records the pairing as a durable
@@ -58,6 +71,15 @@ deploy time, so an installed CLI reads `0.2.0+abc1234`; the changelog tracks the
   and the chat model where it does not.
 
 ### Changed
+
+- The reason recorded on a head retired by that reconciliation no longer names
+  a mechanism it cannot know. It read `settled at start of life, having
+  outlived the activation that spawned it`, which asserts a head that ran past
+  its owner — false for the operator cancel, and phrased like a thrown runtime
+  error rather than the bookkeeping entry it is; it was reported as a crash on
+  that basis. It now states only the two things observed: the head was spawned,
+  never reported, and was retired when a later activation found nothing left
+  that could run it.
 
 - **The box you type into when you create a workspace is its MISSION, and only
   that.** It seeds SOUL.md and names the workspace, as it always did — and it is

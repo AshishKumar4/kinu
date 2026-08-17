@@ -25,7 +25,7 @@ const SSE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const SSE_HEARTBEAT_MS = 15_000;
 const ALLOWED_TYPES = [
   'run_start', 'turn_start', 'tool_call_end',
-  'step_finish', 'head_split', 'head_merge', 'scaffold_promotion',
+  'step_finish', 'head_split', 'head_merge', 'head_abandoned', 'scaffold_promotion',
   'scaffold_rollback', 'memory_write', 'fiber_recovered', 'error',
   'turn_end', 'run_end',
 ] as const satisfies readonly RunEventType[];

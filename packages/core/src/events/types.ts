@@ -43,6 +43,7 @@ export type RunEventType =
   | 'step_finish'
   | 'head_split'
   | 'head_merge'
+  | 'head_abandoned'
   | 'scaffold_promotion'
   | 'scaffold_rollback'
   | 'memory_write'
@@ -153,6 +154,18 @@ export type RunEvent =
        *  splits, not by argument. Empty on the deterministic empty-split and
        *  merge-fallback paths, which never reach a model. */
       blindSpots: string[] })
+  /** A split that never settled — retired at the start of a later activation
+   *  because nothing was left to run it (heads/reconcile.ts).
+   *
+   *  The terminal counterpart to `head_split` on the path where `head_merge`
+   *  never arrives. Without it the ledger held a split with no outcome, which is
+   *  byte-for-byte what a fork still in flight looks like: the Timeline rendered
+   *  a "Heads split" span nothing closed, and a delegation-productivity query
+   *  counted the spend against no result it could see. `abandoned` against
+   *  `headCount` is how much of the split was still unreported when it died —
+   *  the rest had already returned, and their reports stand. */
+  | (RunEventBase & { type: 'head_abandoned'; rootId: string; headCount: number;
+      abandoned: number; rationale: string; reason: string })
   | (RunEventBase & { type: 'scaffold_promotion'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'scaffold_rollback'; fromVersion: number; toVersion: number })
   | (RunEventBase & { type: 'memory_write'; path: string; bytes: number })

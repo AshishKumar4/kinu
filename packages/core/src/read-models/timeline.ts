@@ -105,6 +105,11 @@ export function runEventToSpan(e: RunEvent): TimelineSpan {
       return { ...base, kind: 'head-split', label: 'Heads split', detail: e.rationale, data: { rootId: e.rootId, headIds: e.headIds }, refId: e.rootId };
     case 'head_merge':
       return { ...base, kind: 'head-merge', label: `Heads merged (${e.headCount})`, detail: e.mergedNarrative?.slice(0, 200), refId: e.rootId };
+    case 'head_abandoned':
+      return {
+        ...base, kind: 'abort', label: `Heads abandoned (${e.abandoned} of ${e.headCount})`,
+        detail: e.rationale || e.reason, refId: e.rootId,
+      };
     case 'scaffold_promotion':
       return { ...base, kind: 'scaffold', label: `Scaffold promoted v${e.fromVersion} → v${e.toVersion}` };
     case 'scaffold_rollback':

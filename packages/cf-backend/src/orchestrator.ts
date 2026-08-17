@@ -1583,6 +1583,7 @@ export class OrchestratorAgent extends ActorAgent {
     void reconcileInterruptedForks({
       journal: this.headJournal,
       signals: this.orch.signals,
+      runEvents: this.eventRecorder,
       logActivity: (event, detail) => this.logActivity(event, detail),
     }).catch((err) => {
       console.warn('[proteus] fork journal reconciliation failed:', err instanceof Error ? err.message : String(err));
