@@ -810,6 +810,8 @@ export {
   type ExecutorLifecycleStatus, type ExecutorStatus,
   type ExecutorInfo, type ExecutionRouter, type InlineExecutorDeps, type ResourceLimits,
   formatExecResult, isFailingResultText, type ExecOutcome, STDOUT_LABEL, STDERR_LABEL, NO_OUTPUT,
+  TurnEscalationLedger, ESCALATION_OUTCOMES,
+  type EscalationDecision, type EscalationOutcome, type EscalationSnapshot,
   createParentExecutor, createParentWorkspaceVfs, sandboxFiles, nimbusSessionFiles, deviceFiles,
   type ParentWorkspaceHandle, type ParentExecResult, type DeviceFileConsent,
   type ParentRpcResult, type ParentRpcWrite, type ParentRpcError,

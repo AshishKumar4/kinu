@@ -16,6 +16,7 @@ import type { EgressInjectionResult } from '../src/user/egress-vault.js';
 import type { OutboundHandlerContext } from '@cloudflare/containers';
 import type { ProteusEgressParams } from '../src/egress/outbound.js';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { jsrpcStub } from './helpers/jsrpc-stub.js';
 
 // `outbound.ts` imports `getAgentByName` from `agents`, whose module graph
 // reaches `cloudflare:email`. One shared mock, then dynamic imports — the same
@@ -48,13 +49,17 @@ const PARAMS: ProteusEgressParams = {
   workspaceName: 'proteus-main', ownerUserId: 'user-1', bindings: [BINDING],
 };
 
-/** An `Env` whose UserDO answers the one vault call, and nothing else. */
+/** An `Env` whose UserDO answers the one vault call, and nothing else.
+ *
+ *  `get` returns a `jsrpcStub`, not an object literal: the real binding returns a
+ *  Proxy whose methods are not own enumerable properties, and a literal double
+ *  hid a production TypeError in this exact handler behind a passing test. */
 function fakeEnv(resolve: () => EgressInjectionResult): Env {
   const view: Partial<Env> = {};
   Object.assign(view, {
     UserDO: {
       idFromName: (name: string) => name,
-      get: () => ({ resolveEgressInjection: async () => resolve() }),
+      get: () => jsrpcStub({ resolveEgressInjection: async () => resolve() }),
     },
     CREDENTIAL_ENCRYPTION_KEY: 'a-test-credential-encryption-key-0123456789',
   });
@@ -282,5 +287,48 @@ describe('the posture the whole design rests on', () => {
       `${root}../../node_modules/@cloudflare/containers/dist/lib/container.js`, 'utf8',
     );
     expect(bundle).toContain('interceptHttps = false');
+  });
+});
+
+// A JSRPC stub is a Proxy: its methods come from a `get` trap, so they are not
+// own enumerable properties and `Object.assign`/spread copy NOTHING off it.
+//
+// Three sites did that and were measured throwing on production
+// (`resolveEgressInjection`, `listEgressSecrets`, `acceptContainerEvent`); the
+// fourth, `runtime.ts`'s `rootView`, is the same pattern and was never observed
+// firing, which is exactly why it needs a check rather than a story. The
+// behavioural test above covers the egress handler; this covers the class.
+describe('a stub is used, never copied', () => {
+  test('the double is faithful in the way that matters: copying it loses everything', () => {
+    // The premise, asserted rather than described. If a future runtime made
+    // spreading a stub work, this fails and the doubles above stop being
+    // evidence about production.
+    const stub = jsrpcStub({ method: () => 'value' });
+    expect(Object.keys({ ...stub })).toEqual([]);
+    // ...while the stub itself answers, so the double is not merely broken.
+    expect(stub.method()).toBe('value');
+  });
+
+  test('no source copies a stub into a narrowed view', () => {
+    // `Object.assign(view, <expr>.get(...))` and the `getAgentByName` form. The
+    // narrow interface is right; copying to obtain it is what fails.
+    const copiesAStub = /Object\.assign\(\s*\w+\s*,\s*(?:await\s+)?[\w.]*(?:\.get\(|getAgentByName)/;
+    for (const file of ['src/egress/outbound.ts', 'src/runtime.ts']) {
+      expect(read(file)).not.toMatch(copiesAStub);
+    }
+  });
+
+  test('that detector can fail — it fires on each shape it governs', () => {
+    // A pattern that cannot report a violation governs nothing. Both real
+    // spellings, from the bodies this replaced.
+    const copiesAStub = /Object\.assign\(\s*\w+\s*,\s*(?:await\s+)?[\w.]*(?:\.get\(|getAgentByName)/;
+    expect('Object.assign(vaultView, env.UserDO.get(env.UserDO.idFromName(id)));')
+      .toMatch(copiesAStub);
+    expect('Object.assign(agentView, await getAgentByName(env.OrchestratorAgent, name));')
+      .toMatch(copiesAStub);
+    // ...and does NOT fire on the legitimate literal-object assign that remains
+    // in runtime.ts, whose members really are own enumerable properties.
+    expect('Object.assign(namespaceView, { idFromName: (n) => n });')
+      .not.toMatch(copiesAStub);
   });
 });

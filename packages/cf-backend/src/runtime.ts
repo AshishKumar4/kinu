@@ -179,16 +179,16 @@ async function listOwnerEgressVault(
   env: Env, actor: ActorRuntimeIdentity,
 ): Promise<EgressSecretBinding[]> {
   try {
-    const vaultView: Partial<EgressVaultClient> = {};
     const userId = actor.ownerUserId();
     if (!userId) return [];
-    Object.assign(vaultView, env.UserDO.get(env.UserDO.idFromName(userId)));
-    // SAFETY: the compiler guarantees this name is a real UserDO method — it is
-    // declared public there and listed in USER_DO_METHODS, whose
-    // `as const satisfies readonly (keyof UserDO)[]` contract fails the build on
-    // a typo, so `sealRpcSurface` leaves it reachable on the stub.
-    // unit-egress-vault.test.ts asserts it is on USER_DO_RPC_SURFACE.
-    const vault = vaultView as EgressVaultClient;
+    // The stub is USED, never COPIED. `Object.assign` transfers own enumerable
+    // properties, and a JSRPC stub's methods live behind a Proxy rather than on
+    // the object, so copying one yields `{}` and every call on it is undefined.
+    // Measured on production as `vaultView.listEgressSecrets is not a function`,
+    // which this `catch` then swallowed into an empty vault — so the container
+    // silently lost every injectable secret. The narrow interface still limits
+    // what this call site may reach; it is the copy that was wrong, not the type.
+    const vault: EgressVaultClient = env.UserDO.get(env.UserDO.idFromName(userId));
     return [...await vault.listEgressSecrets(await ownerCaller(env))];
   } catch (err) {
     console.warn("[proteus] egress vault unreadable, no secret is injectable:", errorMessage(err));
@@ -216,14 +216,14 @@ async function userCallerFor(actor: ActorRuntimeIdentity): Promise<UserCaller> {
 async function fetchRootApprovalPolicy(
   env: Env, workspaceName: string,
 ): Promise<{ mode: ShellApprovalMode; grants: readonly ApprovalGrant[] }> {
-  const rootView: Partial<RootApprovalClient> = {};
-  Object.assign(rootView, env.OrchestratorAgent.get(env.OrchestratorAgent.idFromName(workspaceName)));
-  // SAFETY: checked by construction and pinned by a test. Both names are keys of
-  // AGENT_RPC_ACCESS (cli/rpc-gate.ts), and ORCHESTRATOR_RPC_SURFACE is built by
+  // Used, not copied — see `listOwnerEgressVault`. Both names are keys of
+  // AGENT_RPC_ACCESS (cli/rpc-gate.ts) and ORCHESTRATOR_RPC_SURFACE is built by
   // spreading `Object.keys(AGENT_RPC_ACCESS)`, so their reachability is a
   // consequence of that spread rather than a second list that could drift.
   // unit-facet-grant-inheritance.test.ts asserts both are on the surface.
-  const root = rootView as RootApprovalClient;
+  const root: RootApprovalClient = env.OrchestratorAgent.get(
+    env.OrchestratorAgent.idFromName(workspaceName),
+  );
   const [mode, grants] = await Promise.all([
     root.getShellApprovalMode(), root.getShellApprovalGrants(),
   ]);

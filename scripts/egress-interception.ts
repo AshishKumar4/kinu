@@ -43,13 +43,25 @@
  *    a static `allowedHosts`/`deniedHosts` on a container class, so totality
  *    does not rest on the ordering of somebody else's switch.
  *
- * 5. DNS. NOT closed, and deliberately reported as open. DNS leaves even with
- *    `enableInternet = false`, restricted to Cloudflare's resolvers. Arbitrary
- *    destinations are impossible; arbitrary NAMES are not, so the labels of a
- *    query are a low-bandwidth channel outward. It cannot carry a secret the
- *    container does not have, which is the whole point of the placeholder
- *    design. This gate prints it every run so it stays a known residual rather
- *    than a forgotten one.
+ * 5. DNS. Previously reported here as an open residual — "DNS leaves, to
+ *    Cloudflare's resolvers, so query LABELS are a low-bandwidth channel
+ *    outward". MEASURED FALSE on the deployed worker (0.2.0+28bc79307), inside a
+ *    real ProteusSandbox container reached through `executeInExecutor`:
+ *
+ *      raw UDP/53 to 1.1.1.1, 8.8.8.8 and 2606:4700:4700::1111 — no reply
+ *      raw TCP/53 to 1.1.1.1                                   — timeout
+ *      every name resolves to the SAME private ULA, fd00::119:1,
+ *        including `<random>.invalidtld-nothing-here`, a TLD that cannot exist
+ *
+ *    A public resolver cannot return an fd00::/8 address, and cannot answer a
+ *    nonexistent TLD at all, so those answers were not resolved on the internet:
+ *    the platform synthesizes them locally to route 80/443 into the interception
+ *    layer. Nothing reaches a resolver, so query labels carry nothing outward.
+ *
+ *    Kept as a printed line rather than deleted, because it is the load-bearing
+ *    claim the placeholder design rests on and it is a property of the PLATFORM,
+ *    not of this code — a future change could restore the residual without any
+ *    diff here. It is re-measurable by the probe recorded above.
  *
  * ## Denominator
  *
@@ -284,9 +296,10 @@ if (import.meta.main) {
     console.log('egress-interception: NOTE — @cloudflare/containers no longer defaults '
       + 'interceptHttps to false. Update the comments in proteus-sandbox.ts and this gate.');
   }
-  console.log('egress-interception: KNOWN RESIDUAL — DNS leaves the container even with '
-    + 'enableInternet=false, to Cloudflare resolvers only. Arbitrary destinations are impossible; '
-    + 'arbitrary query NAMES are not, so it is a low-bandwidth outward channel. It cannot carry a '
-    + 'secret the container never holds.');
+  console.log('egress-interception: DNS RESIDUAL — MEASURED CLOSED on the deployed container '
+    + '(0.2.0+28bc79307): raw UDP/53 and TCP/53 to public resolvers get no reply, and every name '
+    + 'resolves to the same private ULA fd00::119:1 including a TLD that cannot exist, so nothing '
+    + 'reaches a resolver and query labels carry nothing outward. This is a PLATFORM property, not '
+    + 'a property of this code: it can regress with no diff here. Re-measure, do not assume.');
   process.exit(0);
 }

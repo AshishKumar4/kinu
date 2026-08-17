@@ -76,7 +76,8 @@ import type { CraftedToolExecute, CraftedToolExecuteFn } from './crafted-executo
 import { filterByEffectiveScore } from '../craft/ema.js';
 import { craftInvocationError } from '../craft/in-episode.js';
 import { DEFAULT_CONFIG } from '../config.js';
-import { formatExecResult } from '../execution/exec-result.js';
+import { formatExecResult, isFailingResultText } from '../execution/exec-result.js';
+import { TurnEscalationLedger } from '../execution/escalation.js';
 import { createAgentsTool, type AgentsToolDeps } from './agents-tool.js';
 import { createMemoryDispatcher, type MemoryToolInput } from './memory-tool.js';
 import { createTasksDispatcher, type TasksToolInput } from './tasks-tool.js';
@@ -193,6 +194,11 @@ export interface BuiltinToolDeps {
    *  caller that omits it (a fork's own toolset, tests) gets a fresh one, so
    *  the policy is per-root by construction. */
   contextBudget?: TurnContextBudget;
+  /** The turn's escalation decisions — which provisioned environments `run` was
+   *  sent to instead of the workspace shell, the model's stated reason, and the
+   *  outcome. Same ownership rule as fileLedger/contextBudget: backends pass
+   *  their TurnAccumulator's, and a caller that omits it gets a fresh one. */
+  escalations?: TurnEscalationLedger;
 }
 
 // The Team/Peers deps contracts (and the reserved peer-reply topic) live with
@@ -338,6 +344,9 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // A toolset built without a budget still budgets — a fresh one, scoped to
   // whatever root owns this toolset. Never absent, so there is one policy.
   const budget = deps.contextBudget ?? new TurnContextBudget();
+  // Same per-turn ownership as the budget: the turn's escalation decisions, so
+  // `run` can record WHY it left the workspace shell at the moment it decides.
+  const escalations = deps.escalations ?? new TurnEscalationLedger();
   // Same per-turn ownership as the budget: each hand-rolled-write shape gets
   // its note once, on the call that earned it (run-file-steer.ts).
   const fileToolSteer = createFileToolSteer();
@@ -428,7 +437,7 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
   // somewhere else.
   tools.run = tool({
     description: BUILTIN_TOOL_DESCRIPTIONS.run,
-    inputSchema: jsonSchema<{ command: string; runtime?: string }>({
+    inputSchema: jsonSchema<{ command: string; runtime?: string; why?: string }>({
       type: 'object',
       properties: {
         command: { type: 'string', description: 'Shell command to run' },
@@ -440,10 +449,15 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
             'workspace is this agent\'s own shell over its own file plane, and the default only when runtime is omitted; the execution-status block says what that shell is on this backend and what it can run. ' +
             'Every other value names a registered environment; the live prompt states which files it addresses and any provisioning or consent semantics. Choose that runtime explicitly when the work lives there.',
         },
+        why: {
+          type: 'string',
+          description:
+            'Required when runtime is anything other than workspace: one short clause saying what that environment gives you that the workspace shell does not (a long-running process, an inbound port, real parallelism, resources). Recorded durably against the outcome, so it is how escalations get evaluated later — not a formality.',
+        },
       },
       required: ['command'],
     }),
-    execute: async (args: { command: string; runtime?: string }, options?: ToolExecutionOptions) => {
+    execute: async (args: { command: string; runtime?: string; why?: string }, options?: ToolExecutionOptions) => {
       const signal = options?.abortSignal;
       // No gate here — the approval ladder (reviewCommand / shellApprovalMode
       // / the interactive channel) lives at the execution seam this tool
@@ -471,8 +485,16 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
         if (!shell) return 'Error: no workspace shell available in this runtime.';
         return clamp(formatExecResult(await shell.exec(args.command, signal ? { signal } : undefined)));
       }
+      // Everything below this line is an ESCALATION: the work is leaving this
+      // agent's own shell for an environment that must be provisioned, costs a
+      // cold start, and shares a hard `max_instances` ceiling with every other
+      // concurrent turn. Each exit path records the decision with the model's
+      // stated reason — a REFUSED escalation is as informative as a successful
+      // one, since "the runtime was never there" and "the command failed" are
+      // different findings that a single failure count would merge.
       const provider = router?.getProvider(runtimeKey);
       if (!provider) {
+        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
         // Caller asked for a runtime that hasn't been provisioned. Return a
         // structured-but-readable error — the UI watches for this and surfaces
         // the install card. Do NOT silently fall back to workspace; that
@@ -490,13 +512,23 @@ export function buildBuiltinTools(deps: BuiltinToolDeps): ToolSet {
       }
       const execTool = provider.tools.exec;
       if (!execTool) {
+        escalations.observe({ runtime: runtimeKey, reason: args.why, outcome: 'refused' });
         return JSON.stringify({
           error: 'runtime_does_not_support_exec',
           runtime: runtimeKey,
           message: `Runtime "${runtimeKey}" is provisioned but does not expose shell exec.`,
         });
       }
-      return clamp(String(await execTool.execute(args.command, signal ? { signal } : undefined)));
+      const result = String(await execTool.execute(args.command, signal ? { signal } : undefined));
+      // The ONE failure predicate (exec-result.ts). A non-zero exit comes back
+      // as an ordinary successful result prefixed `Error (exit N)`, so reading
+      // the transport discriminator here would score every failed command a win.
+      escalations.observe({
+        runtime: runtimeKey,
+        reason: args.why,
+        outcome: isFailingResultText(result) ? 'failed' : 'ok',
+      });
+      return clamp(result);
     },
   });
 

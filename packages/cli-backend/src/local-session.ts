@@ -1419,6 +1419,7 @@ export class LocalAgentSession implements BackendHost {
       usage: this.orch.acc.reportedUsage(),
       context: this.orch.acc.context,
       files: this.orch.acc.files,
+      escalations: this.orch.acc.escalations,
       steering: this.orch.steering.snapshot(),
       completionGate: this.completionGate.take(),
       craft: this.orch.craft.snapshot(),
@@ -2404,6 +2405,7 @@ export class LocalAgentSession implements BackendHost {
       // Same ownership for the read-before-edit state and the per-edit outcome
       // counters the `file` tool writes.
       fileLedger: this.orch.acc.files,
+      escalations: this.orch.acc.escalations,
       craftedToolExecute: createNodeCraftedExecute(),
         createExecuteTool: createNodeExecuteToolFactory({
           extraProviders: [

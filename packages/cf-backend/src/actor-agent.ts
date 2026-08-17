@@ -620,6 +620,7 @@ export abstract class ActorAgent extends Think<Env> {
         usage: this.acc.usage,
         context: this.acc.context,
         files: this.acc.files,
+        escalations: this.acc.escalations,
         steering: this.orch.steering.snapshot(),
         craft: this.orch.craft.snapshot(),
         recoveries: this.orch.recoverySnapshot(),
@@ -1815,6 +1816,10 @@ export abstract class ActorAgent extends Think<Env> {
         // counters ride the accumulator, so the cached toolset sees the turn's
         // ledger and the reset rides the turn's own accounting.
         fileLedger: this.acc.files,
+        // Same turn-scoped ownership as fileLedger: the `run` dispatch records
+        // each escalation decision here, and the settle spine above writes the
+        // durable row.
+        escalations: this.acc.escalations,
         // The unified `agents` delegation tool — fork substrate (heads / mcts
         // settle) is universal; staff/ask/send actions appear only when this
         // actor's profile wires the team/peers transports. Owner resolution

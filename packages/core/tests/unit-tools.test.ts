@@ -48,6 +48,8 @@ import {
   type ReleaseSource,
   type ReleaseToolDeps,
   type TeamToolDeps,
+  type AgentRuntime,
+  TurnEscalationLedger,
 } from '../src/index.js';
 
 interface RecordedReleaseCheck {
@@ -103,9 +105,13 @@ const nodeExecFactory: CreateExecuteToolFactory = (opts) => {
   });
 };
 
-function tools(rt: ReturnType<typeof createTestRuntime>['rt']) {
+function tools(
+  rt: AgentRuntime,
+  escalations: TurnEscalationLedger = new TurnEscalationLedger(),
+) {
   return buildBuiltinTools({
     rt,
+    escalations,
     craftedToolExecute: nodeCraftedExecute,
     createExecuteTool: nodeExecFactory,
     codemodeLoader: { __test: true },
@@ -480,6 +486,32 @@ describe('Agent tools (canonical surface — skills/agents/web conditional)', ()
       expect(parsed.runtime).toBe(runtime);
       expect(parsed.message.length).toBeGreaterThan(0);
     }
+  });
+
+  test('escalating records the decision and the stated reason; staying in the workspace records nothing', async () => {
+    // The wiring, not the ledger: `run` must call the ledger AT the dispatch, or
+    // the durable `execution_escalation` row is a feature that is declared and
+    // emitted by nothing — the exact defect this codebase keeps finding.
+    const { rt } = createTestRuntime();
+    const escalations = new TurnEscalationLedger();
+    const t = tools(rt, escalations);
+    const tool = {
+      execute: toolExecute<{ command: string; runtime?: string; why?: string }, string>(t.run),
+    };
+
+    // Unprovisioned here, so this is the `refused` branch — which is itself the
+    // finding "the runtime was never there", not a failed command.
+    await tool.execute({ command: 'echo hi', runtime: 'sandbox', why: 'needs an inbound port' });
+    expect(escalations.snapshot().escalations).toEqual([
+      { runtime: 'sandbox', reason: 'needs an inbound port', outcome: 'refused', count: 1 },
+    ]);
+
+    // The workspace shell is the DEFAULT, not an escalation: running there — and
+    // naming it explicitly — must leave the ledger exactly as it was.
+    const before = escalations.snapshot().escalations;
+    await tool.execute({ command: 'echo hi' });
+    await tool.execute({ command: 'echo hi', runtime: 'workspace' });
+    expect(escalations.snapshot().escalations).toEqual(before);
   });
 
   test('gated run commands return an error the MODEL can act on', async () => {

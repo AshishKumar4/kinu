@@ -18,6 +18,7 @@ import type { TurnFileLedger } from '../tools/file-ledger.js';
 import type {
   CompletionGateRecord, CraftCycleRecord, ExecutionRecoveryRecord, RunEventInput, TurnSteeringRecord,
 } from '../events/types.js';
+import type { TurnEscalationLedger } from '../execution/escalation.js';
 import type { CompletedTurn } from '../evolution/types.js';
 import { usageReported, type Usage } from '../usage.js';
 import type { TurnAccumulator } from './turn-accumulator.js';
@@ -91,6 +92,9 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
    *  no failure streak broke — no row, `turn_end` being the denominator here
    *  too. */
   recoveries?: ExecutionRecoveryRecord | null | undefined;
+  /** The turn's escalations (acc.escalations). A turn that never left its own
+   *  shell writes no row — `turn_end` is the denominator here too. */
+  escalations?: TurnEscalationLedger | undefined;
 }): void {
   try {
     if (opts.context?.active) {
@@ -103,6 +107,9 @@ export function closeTurnRun(recorder: TurnRunRecorder, runId: string, opts: {
     if (opts.completionGate) recorder.emit(runId, { type: 'completion_gate', ...opts.completionGate });
     if (opts.craft) recorder.emit(runId, { type: 'craft_cycle', ...opts.craft });
     if (opts.recoveries) recorder.emit(runId, { type: 'execution_recovery', ...opts.recoveries });
+    if (opts.escalations?.active) {
+      recorder.emit(runId, { type: 'execution_escalation', ...opts.escalations.snapshot() });
+    }
     const turnEnd: Extract<RunEventInput, { type: 'turn_end' }> = {
       type: 'turn_end',
       turnIndex: opts.turnIndex,

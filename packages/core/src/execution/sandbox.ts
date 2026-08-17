@@ -92,6 +92,14 @@ const TRANSIENT_MARKERS = [
   'internal error in durable object storage caused object to be reset',
   // 0.8.11 SDK started classifying this as transient; cover us either way:
   'http error! status: 500',
+  // The per-second container START rate limit, returned as 429 by
+  // `containerFetch` (@cloudflare/containers/dist/lib/container.js:9 defines the
+  // text, :58 the predicate, :870 the response). A rate limit is transient by
+  // definition, and it was the one admission refusal NOT listed here — so a
+  // burst of parallel escalations surfaced it to the model as a hard failure
+  // while the concurrency ceiling beside it ('no container instance', 503) was
+  // retried. Both are admission control, so both belong here.
+  'too many containers per second',
 ];
 
 function errorMessage(input: { error: unknown }): string {

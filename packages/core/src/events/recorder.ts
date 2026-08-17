@@ -17,6 +17,7 @@ import type { RawSqlExec, SqlExecutor } from '../types/primitives.js';
 import type { RunEvent, RunEventInput, RunEventType } from './types.js';
 import { JsonObjectSchema, JsonValueSchema } from '../utils/json.js';
 import { UsageSchema } from '../usage.js';
+import { ESCALATION_OUTCOMES } from '../execution/escalation.js';
 
 /** A stored model message, validated by the AI SDK's OWN schema rather than a
  *  hand-written copy of its part unions — the same predicate the compaction
@@ -94,6 +95,12 @@ const RunEventSchema = v.variant('type', [
     raised: v.number(), dropped: v.array(v.string()) }),
   v.object({ ...BaseFields, type: v.literal('execution_recovery'), recoveries: v.array(v.object({
     tool: v.string(), failures: v.number(), failedSignature: v.string(),
+  })) }),
+  v.object({ ...BaseFields, type: v.literal('execution_escalation'), escalations: v.array(v.object({
+    runtime: v.string(), reason: v.nullable(v.string()),
+    // The picklist IS the exported constant, so an outcome a producer can write
+    // is never one this parser would reject.
+    outcome: v.picklist(ESCALATION_OUTCOMES), count: v.number(),
   })) }),
   v.object({ ...BaseFields, type: v.literal('budget_exhausted'),
     seam: v.picklist(['model_call', 'spawn']), label: v.string(), scope: v.string(),

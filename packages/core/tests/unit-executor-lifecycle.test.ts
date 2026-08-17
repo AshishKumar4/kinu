@@ -260,4 +260,25 @@ describe("sandbox transient error classification", () => {
       new Error("Internal error in Durable Object storage caused object to be reset."),
     )).toBe(true);
   });
+
+  // Admission control has TWO refusals and they arrive as different statuses.
+  // Both are the platform saying "not now", so both must be retryable; the rate
+  // limit was missing, so a burst of parallel escalations reached the model as a
+  // hard failure while the ceiling beside it was quietly retried. Texts are the
+  // SDK's own (@cloudflare/containers/dist/lib/container.js:9 and :868).
+  test("classifies both container admission refusals as retryable", () => {
+    expect(isSandboxTransientError(new Error(
+      'There is no Container instance available at this time.\n'
+      + 'This is likely because you have reached your max concurrent instance count',
+    ))).toBe(true);
+    expect(isSandboxTransientError(
+      new Error('you are requesting too many containers per second'),
+    )).toBe(true);
+  });
+
+  test("a real fault is NOT retryable, so the classifier can say no", () => {
+    // A predicate that answered true for everything would make the two above
+    // meaningless.
+    expect(isSandboxTransientError(new Error('command not found: nope'))).toBe(false);
+  });
 });

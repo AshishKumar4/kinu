@@ -14,6 +14,7 @@ import type { ContextBudgetSnapshot } from '../context-budget.js';
 import type { JsonObject, JsonValue } from '../utils/json.js';
 import type { ContextComposition } from '../context-meter.js';
 import type { FileEditSnapshot } from '../tools/file-ledger.js';
+import type { EscalationSnapshot } from '../execution/escalation.js';
 import type { MissionBudgetRefusal } from '../mission-budget.js';
 import type { HeadFileChangeSet } from '../heads/types.js';
 import type { Usage } from '../usage.js';
@@ -52,6 +53,7 @@ export type RunEventType =
   | 'completion_gate'
   | 'craft_cycle'
   | 'execution_recovery'
+  | 'execution_escalation'
   | 'budget_exhausted'
   | 'fiber_recovered'
   | 'error'
@@ -217,6 +219,13 @@ export type RunEvent =
          *  again in a later turn is the direct falsifier that the finding
          *  did not take. */
         failedSignature: string }> })
+  /** The turn escalated: it ran work in a provisioned environment rather than
+   *  its own shell, and this is why and how that turned out. Written once per
+   *  turn by the settle spine, with `turn_end` as the denominator, so "did
+   *  escalating help" is answerable from the log alone. The shape is the
+   *  ledger's own (execution/escalation.ts) rather than a second declaration —
+   *  same composition as `context_budget` and `file_edit`. */
+  | (RunEventBase & { type: 'execution_escalation' } & EscalationSnapshot)
   /** A mission budget ran out and a host seam declined the work. Written once
    *  per label by the governor (mission-budget.ts), so the durable trail says
    *  which cap stopped which run rather than leaving an unexplained short turn. */

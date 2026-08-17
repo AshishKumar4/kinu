@@ -18,6 +18,7 @@ import { TurnContextBudget, citesSpillAddress } from '../context-budget.js';
 import { TurnContextMeter } from '../context-meter.js';
 import type { RunEventInput } from '../events/types.js';
 import { TurnFileLedger } from '../tools/file-ledger.js';
+import { TurnEscalationLedger } from '../execution/escalation.js';
 import { priceCall, type MissionGovernor } from '../mission-budget.js';
 import { USAGE_FIELDS, addUsage, usageReported, usageTotal, type Usage } from '../usage.js';
 import * as v from 'valibot';
@@ -94,6 +95,12 @@ export class TurnAccumulator {
    *  toolset so an edit can refuse to run blind, and read at turn end for the
    *  durable `file_edit` row. Reset with the rest of the turn. */
   readonly files = new TurnFileLedger();
+  /** Which provisioned environments the turn reached for instead of its own
+   *  shell, why, and how each turned out. Handed to the toolset so the `run`
+   *  dispatch can record the decision at the moment it is made, and read at turn
+   *  end for the durable `execution_escalation` row. Reset with the rest of the
+   *  turn. */
+  readonly escalations = new TurnEscalationLedger();
   /** What each of the turn's requests was made of. Handed to the step pipeline
    *  (the one holder of the final composed array) and drained here, so a
    *  measurement is always reported against the usage of the very request it
@@ -135,6 +142,7 @@ export class TurnAccumulator {
     this.startedAt = now;
     this.context.reset();
     this.files.reset();
+    this.escalations.reset();
     this.composition.reset();
     this.craftUsed.clear();
     this.durableMessages = 0;
