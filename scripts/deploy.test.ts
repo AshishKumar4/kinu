@@ -48,6 +48,7 @@ const REQUIRED_GATES = [
   "bun run gate:typecheck-coverage",
   "bun run gate:skip-ratchet",
   "bun run gate:set-equality",
+  "bun run gate:install-scripts",
   "bun test packages/pc-agent/",
   "bun test ./tests/",
   "bun run test:eval",

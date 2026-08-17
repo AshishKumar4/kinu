@@ -42,7 +42,8 @@
     "ladder": "bun scripts/ladder.ts",
     "smoke:workspace": "bun run --cwd packages/cf-backend smoke:workspace",
     "verify:lean": "bash scripts/verify-lean.sh",
-    "bench": "bun scripts/bench.ts"
+    "bench": "bun scripts/bench.ts",
+    "gate:install-scripts": "bun scripts/install-scripts-gate.ts"
   },
   "knip": {
     "ignoreExportsUsedInFile": true,

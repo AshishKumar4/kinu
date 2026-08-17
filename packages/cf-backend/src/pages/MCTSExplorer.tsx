@@ -7,7 +7,7 @@
  * row anyway. Drill-down, not a second rendering: the tree, its loader and the
  * adapters are the surface's own, imported rather than re-implemented.
  */
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { useParams, useSearchParams, Link } from "react-router-dom";
 import { Button, Loader } from "@cloudflare/kumo";
 import { ArrowLeftIcon, GitForkIcon, TreeStructureIcon } from "@phosphor-icons/react";
@@ -20,20 +20,47 @@ import { LoadFailure } from "@/components/ui/LoadFailure";
 import { useProteus } from "@/hooks/use-proteus";
 import type { ForkRunSummary } from "@proteus/core";
 
+/**
+ * Measure the element that is ACTUALLY mounted.
+ *
+ * This was a `useRef` here plus a `ResizeObserver` in a `[]` effect — but the
+ * ref is attached inside `ExplorerBody`, which mounts only once the run has
+ * LOADED. So on mount the observer bound the loading-placeholder div, that div
+ * unmounted moments later, and no callback ever fired again: `dims` froze at
+ * whatever the placeholder measured mid-layout. Measured as height 0, the tree
+ * rendered at zero height — a blank canvas under a header and a footer that both
+ * showed correct data, which is exactly how Expand failed in production.
+ *
+ * A callback ref cannot go stale that way: it fires with the real node on every
+ * mount and with `null` on unmount, so the observer follows the element instead
+ * of a snapshot of it taken before the element existed.
+ */
+function useElementSize() {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  const observer = useRef<ResizeObserver | null>(null);
+  const attach = useCallback((el: HTMLDivElement | null): void => {
+    observer.current?.disconnect();
+    observer.current = null;
+    if (el === null) return;
+    const measure = (): void => setSize({ w: el.clientWidth, h: el.clientHeight });
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    observer.current = ro;
+    measure();
+  }, []);
+  useEffect(() => () => {
+    observer.current?.disconnect();
+    observer.current = null;
+  }, []);
+  return { attach, size };
+}
+
 export default function MCTSExplorer() {
   const { agentId } = useParams();
   const [params] = useSearchParams();
   const runId = params.get("run");
   const state = useProteus(agentId);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [dims, setDims] = useState({ w: 1200, h: 700 });
-
-  useEffect(() => {
-    const el = containerRef.current; if (!el) return;
-    const ro = new ResizeObserver(() => setDims({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el); setDims({ w: el.clientWidth, h: el.clientHeight });
-    return () => ro.disconnect();
-  }, []);
+  const { attach, size: dims } = useElementSize();
 
   const { resource, reload, runs, hasActiveWork } = useLiveForkRuns(
     state.rpc,
@@ -61,10 +88,10 @@ export default function MCTSExplorer() {
         <LoadFailure what="fresh fork runs" message={selectionResource.message} onRetry={reloadSelection} className="px-5 py-2 border-b p-border" />
       )}
       {run ? (
-        <ExplorerBody key={run.id} run={run} state={state} containerRef={containerRef} dims={dims}
+        <ExplorerBody key={run.id} run={run} state={state} attach={attach} dims={dims}
           hasActiveWork={hasActiveWork} />
       ) : (
-        <div ref={containerRef} className="flex-1 relative overflow-hidden p-surface">
+        <div ref={attach} className="flex-1 relative overflow-hidden p-surface">
           {selectionResource.status === "error" ? (
             <LoadFailure what="the fork runs" message={selectionResource.message} onRetry={reloadSelection} />
           ) : selectionResource.status === "loading" ? (
@@ -88,11 +115,11 @@ export default function MCTSExplorer() {
 }
 
 function ExplorerBody({
-  run, state, containerRef, dims, hasActiveWork,
+  run, state, attach, dims, hasActiveWork,
 }: {
   run: ForkRunSummary;
   state: ReturnType<typeof useProteus>;
-  containerRef: React.RefObject<HTMLDivElement | null>;
+  attach: (el: HTMLDivElement | null) => void;
   dims: { w: number; h: number };
   hasActiveWork: boolean;
 }) {
@@ -109,7 +136,7 @@ function ExplorerBody({
 
   return (
     <>
-      <div ref={containerRef} className="flex-1 relative overflow-hidden p-surface">
+      <div ref={attach} className="flex-1 relative overflow-hidden p-surface">
         {tree && resource.status === "error" && (
           <LoadFailure what="the latest fork tree" message={resource.message} onRetry={reload}
             className="absolute z-10 left-4 right-4 top-4 p-surface border p-border rounded-md px-3 py-2" />
@@ -127,9 +154,17 @@ function ExplorerBody({
                 hint="The run stopped before its first branch was recorded." />
             </div>
           )
-        ) : dims.w > 0 && (
+        ) : dims.w > 0 && dims.h > 0 ? (
           <ForkTree root={tree} width={dims.w} height={dims.h}
             onNodeClick={(node) => setSelectedId(node.id)} selectedNode={selected} />
+        ) : (
+          // A zero measurement must never render as nothing. `dims.w > 0 &&` alone
+          // produced a blank canvas under a correct header and footer, which read
+          // as "the tree is empty" rather than "we have not measured yet" — the
+          // whole reason the Expand view looked broken instead of loading.
+          <div className="h-full flex items-center justify-center">
+            <div className="flex items-center gap-2 text-sm p-text-2"><Loader size="sm" />Sizing canvas…</div>
+          </div>
         )}
       </div>
       <div className="flex items-center justify-between px-5 py-2.5 border-t p-border">

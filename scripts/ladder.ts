@@ -171,6 +171,25 @@ export const LADDER: readonly Gate[] = [
       + 'never parses.',
   },
   {
+    run: 'bun run gate:install-scripts',
+    tier: 'commit',
+    seconds: 0.2,
+    catches: 'a third-party dependency lifecycle script executing on every `bun install` without '
+      + 'a recorded reason. Nine installed dependencies declare `preinstall`/`install`/'
+      + '`postinstall`; bun blocks five; FOUR EXECUTE — esbuild, workerd, puppeteer, sharp — and '
+      + 'the first two fetch a binary and run it (`fetch(`, `https.get`, `execFileSync` in their '
+      + 'install.js). Nothing in this repository authorised that: `trustedDependencies` is absent, '
+      + "so the allowlist doing the work is bun's own, compiled into bun and able to widen in a "
+      + 'patch release. This gate subtracts `bun pm untrusted` from the declared set to learn what '
+      + 'actually runs, and fails when that set is not exactly the allowlist — so a new dependency '
+      + 'arriving with a hook, or a `trustedDependencies` entry appearing, is a deliberate edit '
+      + 'with a stated reason rather than a default drifting underneath us.',
+    blind: 'whether an allowed script is SAFE. It cannot judge that and does not pretend to; it '
+      + 'only forces the set to be a decision. Also blind to what a script does at runtime, to '
+      + 'transitive `bun.lock` integrity, and to CVEs — `bun pm scan` is the tool for the last '
+      + 'and is not yet wired anywhere.',
+  },
+  {
     run: 'bun run gate:skip-ratchet',
     tier: 'commit',
     seconds: 0.3,
