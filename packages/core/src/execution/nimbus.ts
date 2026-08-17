@@ -508,6 +508,7 @@ export function createNimbusExecutor(opts: NimbusExecutorOpts = {}): ExecutorPro
   return {
     name: 'nimbus',
     files: box ? nimbusSessionFiles(box) : undefined,
+    homeDir: async () => root,
     kind: 'nimbus',
     // JavaScript/TypeScript, the shell, npm and git are built into the session
     // worker itself. Interpreter runtimes are not: they install from the

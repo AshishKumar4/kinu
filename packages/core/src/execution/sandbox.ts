@@ -458,6 +458,7 @@ declare namespace sandbox {
     name: 'sandbox',
     kind: 'sandbox',
     files: handle ? sandboxFiles(handle) : undefined,
+    homeDir: async () => WORKSPACE_BACKUP_DIR,
     capabilities: new Set(capabilities),
     isAvailable: () => connected,
     getStatus: () => ({

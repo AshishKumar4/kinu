@@ -25,23 +25,36 @@ export interface ExecutorProviderSurface {
   positionalArgs?: boolean;
 }
 
-export type ExecutorCapability =
-  | 'javascript'
-  | 'typescript'
-  | 'python'
-  | 'native_binary'
-  | 'shell'
-  | 'npm'
-  | 'git'
-  | 'docker'
-  | 'fs_shared'
-  | 'fs_owned'
-  | 'net_outbound'
-  | 'net_inbound'
-  | 'process_spawn'
-  | 'process_long'
-  | 'process_signal'
-  | 'gpu';
+/**
+ * Every capability an environment can declare, in the order anything that
+ * renders a set must render it: what code runs, then what tooling exists, then
+ * what the filesystem and network reach, then what processes may do.
+ *
+ * A value, not just a union, because the order is load-bearing. The declared
+ * set is a `Set` built from a live session's enumeration, so rendering it in
+ * iteration order re-fingerprints the dynamic-context block on an ordering
+ * change that means nothing, and appends a block per step.
+ */
+export const EXECUTOR_CAPABILITIES = [
+  'javascript',
+  'typescript',
+  'python',
+  'native_binary',
+  'shell',
+  'npm',
+  'git',
+  'docker',
+  'fs_shared',
+  'fs_owned',
+  'net_outbound',
+  'net_inbound',
+  'process_spawn',
+  'process_long',
+  'process_signal',
+  'gpu',
+] as const;
+
+export type ExecutorCapability = (typeof EXECUTOR_CAPABILITIES)[number];
 
 export type ExecutorKind = 'workspace' | 'nimbus' | 'sandbox' | 'laptop' | 'parent';
 
@@ -104,6 +117,18 @@ export interface ExecutorProvider {
    * has no mount table.
    */
   readonly files?: VFS;
+
+  /**
+   * The absolute directory this environment's relative paths resolve against —
+   * where its shell starts, and where the file browser opens.
+   *
+   * Asked, never guessed: a remote machine is the only thing that knows its own
+   * home, so this is a call rather than a field and implementations cache it.
+   * The alternative the file browser shipped with was a literal `'.'` reported
+   * for every environment, which turned "go up one level" into path arithmetic
+   * on a token no host could resolve.
+   */
+  homeDir(): Promise<string>;
 
   /** Declared capabilities — immutable after construction */
   readonly capabilities: ReadonlySet<ExecutorCapability>;
