@@ -154,6 +154,7 @@ run_required_gate "Tracing wired end to end" bun scripts/tracing-gate.ts
 # `--radius` undefined at `:root` is itself unguarded.
 run_required_gate "Gate self-tests" bun test scripts/gates.test.ts scripts/reachability.test.ts scripts/do-init-gate.test.ts scripts/platform-catalog.test.ts scripts/policy-drift.test.ts
 run_required_gate "Skip ratchet and typecheck coverage self-tests" bun test scripts/skip-ratchet.test.ts scripts/typecheck-coverage.test.ts
+run_required_gate "Set-equality gate self-tests" bun test scripts/gate-set-equality.test.ts
 run_required_gate "UI gate self-tests" bun test scripts/chat-and-files-ux.test.ts scripts/computed-style.test.ts
 run_required_gate "Gate ladder wiring" bun test scripts/ladder.test.ts
 run_required_gate "Dead code" bun run gate:dead-code
@@ -166,6 +167,7 @@ run_required_gate "Platform fact catalog" bun run gate:platform
 run_required_gate "Egress interception totality" bun run gate:egress-interception
 run_required_gate "Typecheck coverage" bun run gate:typecheck-coverage
 run_required_gate "Declared skip ratchet" bun run gate:skip-ratchet
+run_required_gate "Measured set equals governed set" bun run gate:set-equality
 run_required_gate "Local-device daemon suite" bun test packages/pc-agent/
 run_required_gate "Root end-to-end lifecycle suites" bun test ./tests/
 run_required_gate "Behavioural evals" bun run test:eval

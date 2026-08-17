@@ -84,13 +84,31 @@ export type AuthResolver = (
   opts?: { forceRefresh?: boolean },
 ) => Promise<AuthResolution | null>;
 
+/** One AI Gateway universal request, as the Workers AI binding accepts it. */
+export interface GatewayRunRequest {
+  provider: string;
+  endpoint: string;
+  headers: Record<string, string>;
+  query: unknown;
+}
+
+/** Cloudflare's Workers AI binding (`env.AI`), structurally — the one call a
+ *  platform-billed transport makes on it. Core never invokes it; the type exists
+ *  so a Cloudflare provider can reach `deps.env.AI` without an assertion, and so
+ *  the compiler checks the runtime `Ai` against this shape wherever an env is
+ *  built. */
+export interface WorkersAIBinding {
+  gateway(id: string): {
+    run(data: GatewayRunRequest, options?: { signal?: AbortSignal }): Promise<Response>;
+  };
+}
+
 /** The fields any provider may read from the Worker env. All optional —
  *  providers narrow at the read site. Structurally compatible with
  *  wrangler-generated `Env` types. */
 export interface ProviderEnv {
-  AI?: unknown;
+  AI?: WorkersAIBinding;
   AI_GATEWAY_URL?: string;
-  AI_GATEWAY_AUTH?: string;
 }
 
 export interface ProviderDeps {

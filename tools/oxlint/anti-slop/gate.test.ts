@@ -1,9 +1,8 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
 
 import antiSlopPlugin from "./index.ts";
+import { isParseable, isRunnableSuite, trackedFiles } from "../../../scripts/sources.ts";
 
 const expectedRules = [
   "anti-slop/no-ambient-git-in-tests",
@@ -47,16 +46,19 @@ assert.deepEqual(
 // .oxlintrc entry is registered and silently off; a rule with no suite is untested. Each set is
 // asserted non-empty so an empty glob cannot report perfect agreement.
 const pluginDirectory = "tools/oxlint/anti-slop";
-const ruleEntries = readdirSync(join(pluginDirectory, "rules"));
+const ruleEntries = trackedFiles()
+  .filter((file) => file.startsWith(`${pluginDirectory}/rules/`))
+  .map((file) => file.slice(`${pluginDirectory}/rules/`.length));
 const ruleFiles = ruleEntries
-  .filter((entry) => entry.endsWith(".ts") && !entry.endsWith(".test.ts"))
+  .filter((entry) => isParseable(entry) && !isRunnableSuite(entry))
   .map((entry) => `anti-slop/${entry.slice(0, -".ts".length)}`)
   .sort();
 const registeredRules = Object.keys(antiSlopPlugin.rules ?? {})
   .map((rule) => `anti-slop/${rule}`)
   .sort();
 const testedRules = expectedRules.filter((name) =>
-  ruleEntries.some((entry) => entry.startsWith(`${name.slice("anti-slop/".length)}.`) && entry.endsWith(".test.ts")),
+  ruleEntries.some((entry) =>
+    entry.startsWith(`${name.slice("anti-slop/".length)}.`) && isRunnableSuite(entry)),
 );
 
 assert.ok(ruleFiles.length > 0, "no rule source files found");
@@ -121,28 +123,23 @@ assert.equal(
   false,
 );
 
-const listedFiles = spawnSync(
-  "git",
-  ["ls-files", "--cached", "--others", "--exclude-standard", "-z"],
-  { encoding: "utf8" },
-);
-assert.equal(listedFiles.status, 0, listedFiles.stderr);
+// From the ONE enumeration. This was `git ls-files --cached --others
+// --exclude-standard -z` plus a local `existsSync` filter and a local
+// `/\.[cm]?[jt]sx?$/` — three things `scripts/sources.ts` already does for every
+// gate, spelled a second time here where they were free to drift from it.
 const forbiddenDirectives: string[] = [];
-for (const filename of listedFiles.stdout.split("\0")) {
-  if (
-    filename.length === 0 ||
-    !existsSync(filename) ||
-    filename.startsWith("tools/oxlint/anti-slop/") ||
-    !/\.[cm]?[jt]sx?$/u.test(filename)
-  ) {
-    continue;
-  }
+for (const filename of trackedFiles()) {
+  if (filename.startsWith(`${pluginDirectory}/`) || !isParseable(filename)) continue;
   for (const [index, line] of readFileSync(filename, "utf8").split("\n").entries()) {
     if (isForbiddenLintDirective(line)) {
       forbiddenDirectives.push(`${filename}:${index + 1}:${line.trim()}`);
     }
   }
 }
+assert.ok(
+  forbiddenDirectives.length > 0 || trackedFiles().filter(isParseable).length > 100,
+  "no parseable file was read at all, so finding zero suppressions means nothing",
+);
 assert.deepEqual(
   forbiddenDirectives,
   [],

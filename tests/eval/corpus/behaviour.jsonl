@@ -1,0 +1,26 @@
+# Behavioural eval corpus — tasks that HAND OVER AN ENVIRONMENT.
+#
+# Additive to seed.jsonl, which stays exactly as it is. seed.jsonl is a 12-task
+# judged A/B over answer quality; most of its cases ("What is 17 * 23?") need no
+# tools at all, and a task that needs no tools cannot exercise a single mechanism
+# this tier measures.
+#
+# That is not a guess about task design. CL-Bench's first live run had 500 steps
+# available and used ONE, with every turn recorded "ungraded | 0 tool calls",
+# because its format asks for one structured action and never hands over an
+# environment handle. A corpus like that grades nothing, and the resulting
+# mean_gain of -0.2 looked like a measurement.
+#
+# So every case here is an IMPERATIVE (never a question — the turn-start
+# delegation predicate refuses any ask ending in ? or !) that requires reading or
+# writing real files in a real workspace. Tags are load-bearing:
+#   workspace   the harness seeds a small source tree before the turn
+#   multipart   genuinely independent halves, so delegating is correct not a trick
+#   edit        the task cannot be completed without a successful file edit
+#   failure     the first obvious command fails, so recovery is on the path
+{"id":"ws-inventory","task":"List every .ts file under src/ in this workspace and write the count to report.txt.","tags":["workspace","edit"]}
+{"id":"ws-edit-rename","task":"In src/greet.ts, rename the exported function from greet to welcome and update the call in src/main.ts so the program still runs.","tags":["workspace","edit"]}
+{"id":"ws-find-todo","task":"Find every TODO comment under src/ and write one line per TODO to todos.txt in the form path:line.","tags":["workspace","edit"]}
+{"id":"ws-split-audit","task":"Do two independent things: write the total line count of src/ to lines.txt, and separately write the list of exported symbol names in src/ to exports.txt.","tags":["workspace","multipart","edit"]}
+{"id":"ws-fix-broken","task":"Run the test in src/broken.test.ts, then fix src/broken.ts so it passes.","tags":["workspace","edit","failure"]}
+{"id":"ws-recover-cmd","task":"Determine the number of lines in src/main.ts and append it to report.txt, using whatever tool works.","tags":["workspace","edit","failure"]}

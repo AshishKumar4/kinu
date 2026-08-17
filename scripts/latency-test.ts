@@ -3,9 +3,11 @@
  * Latency baseline test — measures time-to-first-chunk for the platform default
  * via the AI Gateway directly, bypassing all Proteus/Think/DO overhead.
  *
- * Usage: bun scripts/latency-test.ts
+ * Usage: AI_GATEWAY_AUTH='Bearer <token>' bun scripts/latency-test.ts
  *
- * Reads AI_GATEWAY_URL and AI_GATEWAY_AUTH from packages/cf-backend/.dev.vars
+ * Reads AI_GATEWAY_URL from packages/cf-backend/.dev.vars. The token is this
+ * script's own: it speaks raw HTTPS, so it cannot use the Workers AI binding the
+ * Worker itself reaches the gateway through. Proteus needs no such token.
  */
 
 import { readFileSync } from "fs";
@@ -22,12 +24,12 @@ for (const line of devVars.split("\n")) {
 }
 
 const GATEWAY_URL = vars.AI_GATEWAY_URL;
-const GATEWAY_AUTH = vars.AI_GATEWAY_AUTH;
+const GATEWAY_AUTH = process.env.AI_GATEWAY_AUTH ?? vars.AI_GATEWAY_AUTH;
 const MODEL = "@cf/deepseek-ai/deepseek-v4-pro-0813";
 const FAST_MODEL = "@cf/meta/llama-4-scout-17b-16e-instruct";
 
 if (!GATEWAY_URL || !GATEWAY_AUTH) {
-  console.error("Missing AI_GATEWAY_URL or AI_GATEWAY_AUTH in packages/cf-backend/.dev.vars");
+  console.error("Need AI_GATEWAY_URL in packages/cf-backend/.dev.vars and AI_GATEWAY_AUTH in the environment");
   process.exit(1);
 }
 

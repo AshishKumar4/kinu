@@ -130,10 +130,6 @@
   //   openssl rand -base64 32 | npx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
   // Rotation uses CREDENTIAL_ENCRYPTION_KEY_PREVIOUS — see docs/DEPLOYMENT.md.
   //
-  // AI_GATEWAY_AUTH is a Wrangler secret — set via:
-  //   echo "<your-token>" | npx wrangler secret put AI_GATEWAY_AUTH
-  // For local dev, add to .dev.vars:
-  //   AI_GATEWAY_AUTH=Bearer <your-token>
   // PREVIEW_HOST_SUFFIX is the zone Workspace and Sandbox previews are served
   // under. Each exposed port gets its own capability hostname: the Sandbox SDK
   // mints its host shape and Proteus binds Nimbus ports to their session
@@ -208,9 +204,12 @@
   // docs/EMAIL-INGRESS.md. Until then the binding is inert: inbound mail
   // never arrives and outbound sends skip quietly.
   "send_email": [{ "name": "EMAIL" }],
-  // Workers AI binding — used for platform-side embeddings. Chat model calls
-  // use the logged-in user's Cloudflare OAuth credential so Workers AI usage
-  // bills to that user's Cloudflare account/quota.
+  // Workers AI binding. Serves platform-side work billed to THIS account:
+  // embeddings, HTML→markdown, and the `ai-gateway` provider's chat transport
+  // (providers/gateway-binding-fetch.ts) — binding calls are pre-authenticated
+  // in-account, which is why that provider needs no API token. A signed-in
+  // user's own chat calls deliberately do NOT ride this binding: they carry that
+  // user's Cloudflare OAuth credential so the usage bills to their account.
   "ai": { "binding": "AI" },
   // R2 bucket for sandbox /workspace snapshots (squashfs archives), written and
   // read by ProteusSandbox. Bucket: `wrangler r2 bucket create proteus-backups`

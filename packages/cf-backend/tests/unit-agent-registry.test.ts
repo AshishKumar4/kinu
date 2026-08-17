@@ -9,10 +9,11 @@ import {
   parseModelSpec,
 } from '@proteus/core';
 import { createTestRuntime } from '@proteus/test-utils';
-import { createAgentProviderRegistry } from '../src/providers/agent-registry.ts';
+import { createAgentProviderRegistry, type AgentProviderRegistry } from '../src/providers/agent-registry.ts';
 import { pickInitialModel } from '../src/user/workspace-create.ts';
 import type { ModelMenuEntry } from '../src/user/available-models.js';
 import type { CredentialSummary } from '../src/user/user-do.js';
+import { platformGatewayEnv, stubAiBinding, TEST_GATEWAY_URL } from './helpers/platform-gateway.js';
 
 /** Minimal in-memory UserDO stub satisfying the methods agent-registry calls. */
 function fakeUserDOStub(
@@ -62,9 +63,9 @@ describe('AgentProviderRegistry composition', () => {
     expect(reg.normalizeSpecSync('')).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
   });
 
-  test('normalizeSpecSync — workers-ai remains the sync default even when env ai-gateway is configured', () => {
+  test('normalizeSpecSync — workers-ai remains the sync default even when the platform gateway is configured', () => {
     const reg = createAgentProviderRegistry({
-      env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
+      env: platformGatewayEnv(),
       userDO: fakeUserDOStub(),
     });
     expect(reg.normalizeSpecSync(null)).toBe(DEFAULT_WORKERS_AI_MODEL_SPEC);
@@ -124,13 +125,43 @@ describe('default provider with a null UserDO stub (inline-branch context)', () 
   // Regression: workers-ai is credential-gated through UserDO; with a null
   // stub its requests are guaranteed 401s, so the default must fall back to
   // the env-bound ai-gateway — which serves the same native model.
-  test('falls back to ai-gateway when env-bound gateway is configured', () => {
+  test('falls back to ai-gateway when the platform gateway is usable', () => {
     const reg = createAgentProviderRegistry({
-      env: { AI_GATEWAY_URL: 'https://gw', AI_GATEWAY_AUTH: 'Bearer x' },
+      env: platformGatewayEnv(),
       userDO: null,
     });
     expect(reg.normalizeSpecSync(null))
       .toBe(`ai-gateway/${DEFAULT_WORKERS_AI_MODEL_SPEC}`);
+  });
+
+  // The registry's sync default and the provider's own isAvailable() must agree:
+  // a default naming ai-gateway when createModel() would throw is the exact
+  // "measured set ≠ governed set" defect. Each half alone must fail.
+  test('a gateway URL without the AI binding is not a usable default', () => {
+    const reg = createAgentProviderRegistry({
+      env: { AI_GATEWAY_URL: TEST_GATEWAY_URL },
+      userDO: null,
+    });
+    expect(() => reg.normalizeSpecSync(null)).toThrow(/Workers AI binding \(env\.AI\) missing/);
+  });
+
+  test('the AI binding without a parseable gateway URL is not a usable default', () => {
+    const reg = createAgentProviderRegistry({
+      env: { AI_GATEWAY_URL: 'https://gw', AI: stubAiBinding().binding },
+      userDO: null,
+    });
+    expect(() => reg.normalizeSpecSync(null)).toThrow(/AI_GATEWAY_URL is not an AI Gateway URL/);
+  });
+
+  test('registry default and provider availability answer the same question', async () => {
+    const usable = createAgentProviderRegistry({ env: platformGatewayEnv(), userDO: null });
+    const unusable = createAgentProviderRegistry({ env: { AI_GATEWAY_URL: TEST_GATEWAY_URL }, userDO: null });
+    const availability = async (reg: AgentProviderRegistry) =>
+      (await reg.registry.listProviders(reg.deps)).find((p) => p.id === 'ai-gateway')?.available;
+    expect(await availability(usable)).toBe(true);
+    expect(usable.normalizeSpecSync(null)).toStartWith('ai-gateway/');
+    expect(await availability(unusable)).toBe(false);
+    expect(() => unusable.normalizeSpecSync(null)).toThrow();
   });
 
   test('throws loudly when no usable provider exists', () => {

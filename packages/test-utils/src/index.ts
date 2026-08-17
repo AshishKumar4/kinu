@@ -12,3 +12,5 @@ export * from './agent-evals.js';
 export * from './facts.js';
 export * from './source.js';
 export * from './git.js';
+export * from './eval-compare.js';
+export * from './eval-run.js';

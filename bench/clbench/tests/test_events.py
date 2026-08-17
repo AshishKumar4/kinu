@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -20,6 +22,9 @@ _SPEC = importlib.util.spec_from_file_location(
 )
 assert _SPEC and _SPEC.loader
 events = importlib.util.module_from_spec(_SPEC)
+# Registered before execution because @dataclass resolves its own module to read
+# annotations, the same reason test_corpus.py does it.
+sys.modules[_SPEC.name] = events
 _SPEC.loader.exec_module(events)
 
 assistant_text = events.assistant_text
@@ -198,10 +203,6 @@ class RunEvents(unittest.TestCase):
         self.assertEqual(run_events([{"type": "run_event", "event": "not-an-object"}]), [])
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class ActivityVersusEvolutionTest(unittest.TestCase):
     """The activity channel is not the evolution channel.
 
@@ -251,3 +252,55 @@ class ActivityVersusEvolutionTest(unittest.TestCase):
         ])
         self.assertEqual(activity, [])
         self.assertEqual(evolution, [])
+
+
+class ReadGrading(unittest.TestCase):
+    """Whether the turn was graded, and the difference between 0 and unknown.
+
+    A benchmark container holds nobody to ask, so ``executionGraded`` is the
+    only count that can be non-zero. Reading ``turns`` instead would report
+    every headless trial as ungraded, which is the shape of the finding this
+    field exists to test for.
+    """
+
+    def write(self, payload: object) -> Path:
+        path = Path(self.enterContext(tempfile.TemporaryDirectory())) / "alignment.json"
+        path.write_text(payload if isinstance(payload, str) else json.dumps(payload))
+        return path
+
+    def test_an_execution_graded_turn_is_read_from_the_ledger(self) -> None:
+        # Verbatim shape of `proteus alignment <ws> --json` on a live flash turn
+        # that edited a file and ran its own verifier: two graded turns, no user.
+        grading = events.read_grading(self.write({
+            "alignment": {"overall": {"turns": 0, "negatives": 0, "abandoned": 0,
+                                      "executionGraded": 2}},
+            "calibration": {"universe": 0},
+        }))
+        assert grading is not None
+        self.assertEqual(grading.execution_graded, 2)
+        self.assertEqual(grading.user_graded, 0)
+        self.assertEqual(grading.as_dict(),
+                         {"user_graded": 0, "execution_graded": 2, "abandoned": 0})
+
+    def test_an_inert_arm_reads_as_zero_and_is_not_missing(self) -> None:
+        grading = events.read_grading(self.write({
+            "alignment": {"overall": {"turns": 0, "abandoned": 0, "executionGraded": 0}},
+        }))
+        self.assertIsNotNone(grading)
+        assert grading is not None
+        self.assertEqual(grading.execution_graded, 0)
+
+    def test_a_probe_that_left_nothing_readable_is_none_and_not_zero(self) -> None:
+        # Each of these is a probe failure, and none of them may look like an
+        # arm that ran and graded nothing: a broken measurement reading as a
+        # healthy inert arm is how an unmeasured claim gets published.
+        self.assertIsNone(events.read_grading(Path("/nonexistent/alignment.json")))
+        self.assertIsNone(events.read_grading(self.write('{"alignment":{"over')))
+        self.assertIsNone(events.read_grading(self.write({"alignment": {}})))
+        self.assertIsNone(events.read_grading(self.write({"alignment": {"overall": {}}})))
+        self.assertIsNone(events.read_grading(self.write(
+            {"alignment": {"overall": {"turns": 0, "abandoned": 0, "executionGraded": None}}})))
+
+
+if __name__ == "__main__":
+    unittest.main()

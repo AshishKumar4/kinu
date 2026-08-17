@@ -1,0 +1,988 @@
+{
+  "schema": 1,
+  "runId": "flash-a",
+  "createdAt": "2026-08-17T17:28:46.651Z",
+  "gitSha": "f26d3ae8b21ac17d1f872c2e2e101a23a5de57ab",
+  "gitDirty": true,
+  "tier": "flash",
+  "modelId": "@cf/deepseek-ai/deepseek-v4-flash-0731",
+  "repeats": 2,
+  "seed": 1,
+  "arm": {
+    "evolution": true,
+    "settle": "none",
+    "tools": [
+      "execute_tools",
+      "run",
+      "file",
+      "agents",
+      "memory",
+      "tasks",
+      "web",
+      "report"
+    ]
+  },
+  "declaredTasks": [
+    "ws-recover-cmd",
+    "ws-fix-broken",
+    "ws-split-audit",
+    "ws-find-todo",
+    "ws-edit-rename",
+    "ws-inventory",
+    "tool-001"
+  ],
+  "executedTasks": [
+    "ws-recover-cmd",
+    "ws-fix-broken",
+    "ws-split-audit",
+    "ws-find-todo",
+    "ws-edit-rename",
+    "ws-inventory",
+    "tool-001"
+  ],
+  "observations": [
+    {
+      "taskId": "ws-recover-cmd",
+      "repetition": 1,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 2,
+          "passed": 2,
+          "rate": 1,
+          "detail": "2/2 tool calls returned; run×2"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 2,
+      "tokensIn": 47769,
+      "tokensOut": 264,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-fix-broken",
+      "repetition": 1,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 2,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/2 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 2,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/2 steers converted (long_turn_no_delegation×1, turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 39,
+          "passed": 30,
+          "rate": 0.7692307692307693,
+          "detail": "30/39 tool calls returned; run×29, execute_tools×6, file×4"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 39,
+      "tokensIn": 974533,
+      "tokensOut": 20557,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-split-audit",
+      "repetition": 1,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 eligible turns delegated; 1 runs opened 2 heads over 2 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 6,
+          "passed": 6,
+          "rate": 1,
+          "detail": "6/6 tool calls returned; run×4, execute_tools×1, agents×1"
+        }
+      ],
+      "turns": 2,
+      "toolCalls": 6,
+      "tokensIn": 147746,
+      "tokensOut": 4592,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-find-todo",
+      "repetition": 1,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 10,
+          "passed": 9,
+          "rate": 0.9,
+          "detail": "9/10 tool calls returned; run×8, file×2"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 10,
+      "tokensIn": 193520,
+      "tokensOut": 3122,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-edit-rename",
+      "repetition": 1,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 2,
+          "passed": 2,
+          "rate": 1,
+          "detail": "2/2 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 13,
+          "passed": 9,
+          "rate": 0.6923076923076923,
+          "detail": "9/13 tool calls returned; run×9, file×4"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 13,
+      "tokensIn": 189683,
+      "tokensOut": 2564,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-inventory",
+      "repetition": 1,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 4,
+          "passed": 4,
+          "rate": 1,
+          "detail": "4/4 tool calls returned; run×3, file×1"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 4,
+      "tokensIn": 82553,
+      "tokensOut": 1458,
+      "ms": 0
+    },
+    {
+      "taskId": "tool-001",
+      "repetition": 0,
+      "outcome": "inert",
+      "reason": "0 turns, 12 tool calls"
+    },
+    {
+      "taskId": "ws-recover-cmd",
+      "repetition": 0,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 5,
+          "passed": 5,
+          "rate": 1,
+          "detail": "5/5 tool calls returned; run×3, file×2"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 5,
+      "tokensIn": 100915,
+      "tokensOut": 1857,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-fix-broken",
+      "repetition": 0,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 17,
+          "passed": 14,
+          "rate": 0.8235294117647058,
+          "detail": "14/17 tool calls returned; run×13, file×4"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 17,
+      "tokensIn": 300998,
+      "tokensOut": 7465,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-split-audit",
+      "repetition": 0,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 eligible turns delegated; 1 runs opened 2 heads over 2 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 9,
+          "passed": 7,
+          "rate": 0.7777777777777778,
+          "detail": "7/9 tool calls returned; run×6, file×1, agents×1, execute_tools×1"
+        }
+      ],
+      "turns": 2,
+      "toolCalls": 9,
+      "tokensIn": 232417,
+      "tokensOut": 13304,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-find-todo",
+      "repetition": 0,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 7,
+          "passed": 7,
+          "rate": 1,
+          "detail": "7/7 tool calls returned; run×5, file×2"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 7,
+      "tokensIn": 135480,
+      "tokensOut": 1934,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-edit-rename",
+      "repetition": 0,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 2,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/2 steers converted (repeated_failure×1, turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 2,
+          "passed": 2,
+          "rate": 1,
+          "detail": "2/2 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 1,
+          "passed": 1,
+          "rate": 1,
+          "detail": "1/1 recovery findings held (0 signatures failed again later), 3 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 12,
+          "passed": 8,
+          "rate": 0.6666666666666666,
+          "detail": "8/12 tool calls returned; file×6, run×6"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 12,
+      "tokensIn": 170083,
+      "tokensOut": 1999,
+      "ms": 0
+    },
+    {
+      "taskId": "ws-inventory",
+      "repetition": 0,
+      "outcome": "scored",
+      "scores": [
+        {
+          "name": "delegation_conversion",
+          "asserts": "a delegation steer converted on a turn that was eligible to delegate",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 eligible turns delegated; 0 runs opened 0 heads over 1 completed turns"
+        },
+        {
+          "name": "steering_conversion",
+          "asserts": "a mechanical steer converted: the model did what the steer asked",
+          "eligible": 1,
+          "passed": 0,
+          "rate": 0,
+          "detail": "0/1 steers converted (turn_start_no_delegation×1)"
+        },
+        {
+          "name": "craft_reuse",
+          "asserts": "the agent crafted a tool mid-episode and then reused it",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 crafted tools reused, 0 crafted-tool invocations across 0 crafting turns"
+        },
+        {
+          "name": "edit_landing",
+          "asserts": "attempted file edits applied rather than failing to match",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 edits applied, 0 paths abandoned"
+        },
+        {
+          "name": "recovery_durability",
+          "asserts": "a broken failure streak stayed broken — the finding took",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 recovery findings held (0 signatures failed again later), 0 consecutive failures absorbed"
+        },
+        {
+          "name": "completion_honesty",
+          "asserts": "the run finished on an honest claim — the gate found no work left",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0/0 gated runs ended on an honest completion claim (0 were forced back to work)"
+        },
+        {
+          "name": "spill_retrieval",
+          "asserts": "the agent read back bulk output the budget spilled to an address",
+          "eligible": 0,
+          "passed": 0,
+          "rate": null,
+          "detail": "0 follow-ups against 0 readable spills, 0 chars withheld from the root"
+        },
+        {
+          "name": "tool_outcomes",
+          "asserts": "tool calls returned AND the command they ran did not fail",
+          "eligible": 2,
+          "passed": 2,
+          "rate": 1,
+          "detail": "2/2 tool calls returned; run×1, file×1"
+        }
+      ],
+      "turns": 1,
+      "toolCalls": 2,
+      "tokensIn": 48205,
+      "tokensOut": 680,
+      "ms": 0
+    }
+  ],
+  "admissibility": {
+    "admissible": true,
+    "scored": 12,
+    "inert": 1,
+    "gradedTurns": 14,
+    "toolCalls": 126,
+    "mechanismsExercised": [
+      "delegation_conversion",
+      "edit_landing",
+      "recovery_durability",
+      "steering_conversion",
+      "tool_outcomes"
+    ],
+    "mechanismsAbsent": [
+      "craft_reuse",
+      "completion_honesty",
+      "spill_retrieval"
+    ],
+    "failures": []
+  },
+  "spend": {
+    "calls": 138,
+    "tokensIn": 2623902,
+    "tokensOut": 59796
+  }
+}

@@ -30,6 +30,7 @@ import {
   type SqlValue,
 } from '@proteus/core';
 import { mockAgentsSdk } from './helpers/agents-sdk.js';
+import { platformGatewayEnv } from './helpers/platform-gateway.js';
 import * as v from 'valibot';
 
 mockAgentsSdk();
@@ -253,8 +254,7 @@ function makeFacet(parentFiles: Record<string, string> = {}) {
     NIMBUS_SESSION: nimbus.binding,
     Sandbox: {},
     PREVIEW_HOST_SUFFIX: 'preview.test',
-    AI_GATEWAY_URL: 'https://gateway.test',
-    AI_GATEWAY_AUTH: 'token',
+    ...platformGatewayEnv(),
     OrchestratorAgent: { idFromName: (name: string) => name, get: () => parent.stub },
     UserDO: { idFromName: (name: string) => name, get: () => ({}) },
   };

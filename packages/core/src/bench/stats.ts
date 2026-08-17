@@ -238,10 +238,14 @@ export interface PairedBinaryStats {
    *  normal-approximation MDE is unreliable here — say so rather than quote it
    *  as though it were tight. */
   smallSample: boolean;
-  /** Smallest p this many pairs could ever produce. */
+  /** Smallest p this many DIFFERING pairs could ever produce: 2^(1-discordant).
+   *  The denominator is `discordant`, not `pairs`, because that is the set the
+   *  exact test is computed over — a task both arms agreed on contributes
+   *  nothing to it. */
   floorPValue: number;
-  /** False when floorPValue > alpha: no outcome on this split can be
-   *  significant, so the split cannot accept or reject on evidence. */
+  /** False when floorPValue > alpha: no outcome on this split could have been
+   *  significant, whatever the effect, so the split cannot accept or reject on
+   *  evidence. A large `pairs` does not make this true; only differing pairs do. */
   canReachSignificance: boolean;
   /** Pairs that would be needed to resolve the observed effect. */
   pairsNeededForObserved: number;
@@ -352,14 +356,23 @@ export function pairedBinaryComparison(
   const pairsNeededForObserved = requiredPairs(effect, { dispersion, alpha, power });
 
   const smallSample = discordant > 0 && discordant < 10;
-  const floor = floorPValue(pairs);
-  const canReachSignificance = pairs > 0 && floor <= alpha;
+  // The floor belongs to the set the p-value is actually computed over, which is
+  // `discordant` — `binomialTwoSidedP(onlyB, discordant)` above. Reading it off
+  // `pairs` was the same defect computeGain was hardened for: 40 tasks of which
+  // 2 differed reported canReachSignificance=true while the smallest p that
+  // design can produce is 0.5. A large task count is an upper bound on the
+  // decidable set, never the decidable set.
+  const floor = floorPValue(discordant);
+  const canReachSignificance = discordant > 0 && floor <= alpha;
 
   let verdict: string;
   if (pairs === 0) verdict = 'no pairs ran — nothing to conclude';
   else if (discordant === 0) verdict = `variants never disagreed on ${pairs} tasks — this corpus cannot separate them`;
   else if (!canReachSignificance) {
-    verdict = `${pairs} pairs can never reach p ≤ ${alpha} (the best possible p here is ${floor.toFixed(4)}) — this split cannot establish any effect; it needs at least ${minimumPairsForSignificance(alpha)} tasks`;
+    verdict = `UNDECIDABLE: ${discordant} of ${pairs} task(s) differed between the arms, and the smallest p `
+      + `that many differing pairs can produce is ${floor.toFixed(4)} > alpha ${alpha} — no outcome here `
+      + `could have established an effect. It needs at least ${minimumPairsForSignificance(alpha)} `
+      + 'DIFFERING pairs, which more tasks make possible but do not guarantee';
   }
   else if (significant && resolvable) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) and above the design's resolution (${fmtPp(mde)})`;
   else if (significant) verdict = `effect ${fmtPp(effect)} is significant (p=${pValue.toFixed(4)}) but below the design's 80%-power threshold of ${fmtPp(mde)} — suggestive, not established; ${pairsNeededForObserved} pairs would settle it`;

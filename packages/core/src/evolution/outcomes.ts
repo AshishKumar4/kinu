@@ -28,6 +28,7 @@ import { nanoid } from '../utils/nanoid.js';
 import { nowMs } from '../utils/date.js';
 import { parseJsonValue, projectJsonValue, JsonObjectSchema, type JsonValue } from '../utils/json.js';
 import { tolerate } from '../obs/index.js';
+import { isFailingResultText } from '../execution/exec-result.js';
 import { delegationFeatures, renderDelegationFeatures } from './delegation-features.js';
 
 /** Every outcome kind, in the ledger's canonical order. The one list — the
@@ -163,32 +164,54 @@ export type ExecutionVerdict = 'succeeded' | 'failed';
  * turns no user will ever grade (a one-shot `proteus exec`, a reactor or job
  * wake). Deterministic: no model is asked, and nothing the model WROTE is read.
  *
- * The evidence is the tool-execution record the turn already carries — the
- * same `hadError` flag the accumulator raises when a tool call fails or the
- * stream dies. What changes here is that it is read SYMMETRICALLY. It used to
- * be consulted only when it said "something broke", so a headless ledger could
- * record that a turn went wrong and could never record that one went right:
- * evolution had a punishment channel and no reward channel, and every
- * downstream estimate (craft EMA and retirement, GEPA's split, the archive's
- * real-outcome priors) inherited that pessimism.
+ * The evidence is the tool-execution record the turn already carries, read
+ * SYMMETRICALLY: it used to be consulted only when it said "something broke",
+ * so a headless ledger could record that a turn went wrong and could never
+ * record that one went right, and every downstream estimate (craft EMA and
+ * retirement, GEPA's split, the archive's real-outcome priors) inherited that
+ * pessimism.
  *
  *   • no non-lookup tool call → null. The turn never acted on the world, so
  *     the world returned no verdict, and an ungraded turn is recorded as
  *     ungraded rather than as a success.
- *   • the turn errored → 'failed'.
+ *   • the transport or the stream died (`hadError`) → 'failed'.
+ *   • the turn's LAST acting call came back a failure → 'failed'.
  *   • otherwise → 'succeeded'.
  *
- * It is a PROXY and is priced as one (EXECUTION_QUALITY) and sourced as one
+ * `hadError` alone is not the question, and reading only it is what made this
+ * a fake reward. The accumulator raises that flag from the transport
+ * discriminator (`success === false`), and the `run` tool catches a non-zero
+ * exit and hands it back as an ordinary successful result whose text begins
+ * `Error (exit N)`. So a turn whose single command exited 3 arrived here
+ * flagless and was graded `accepted` at quality 0.70 — evolution paid a reward
+ * for a command that failed. The call cards and the model's own steering hints
+ * already read that text; `isFailingResultText` is that same one definition.
+ *
+ * The LAST acting call decides, not any of them, because an intermediate
+ * failure the turn went on to fix is the system working: run the suite, see it
+ * red, edit, run it green. Grading that turn `corrected` would punish a
+ * successful repair, which is the same mistake in the opposite direction (and
+ * the recovery clock in recovery.ts already reads a broken failure streak the
+ * same way).
+ *
+ * It remains a PROXY, priced as one (EXECUTION_QUALITY) and sourced as one
  * (`source: 'execution'`): it says the agent's own actions against the world
  * completed, not that the task was solved the way the user wanted. Its worth is
  * that the model cannot write it — it is produced by the tools and the runtime,
- * so no amount of confident prose moves it.
+ * so no amount of confident prose moves it. Where a task carries its own
+ * verification command, running that command IS how ground truth enters this
+ * record, which is the whole reason the last call has to be read honestly.
  */
 export function executionVerdict(
   turn: Pick<CompletedTurn, 'hadError' | 'toolCalls'>,
 ): ExecutionVerdict | null {
-  if (!turn.toolCalls.some((call) => !isPureLookupCall(call))) return null;
-  return turn.hadError ? 'failed' : 'succeeded';
+  const acting = turn.toolCalls.filter((call) => !isPureLookupCall(call));
+  const last = acting[acting.length - 1];
+  if (last === undefined) return null;
+  if (turn.hadError) return 'failed';
+  const result = last.result ?? '';
+  const text = v.is(v.string(), result) ? result : JSON.stringify(result);
+  return isFailingResultText(text) ? 'failed' : 'succeeded';
 }
 
 /** The ledger outcome an execution verdict records as. */

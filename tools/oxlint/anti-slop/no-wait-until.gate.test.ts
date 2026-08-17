@@ -9,8 +9,10 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
+
+import { readSources } from "../../../scripts/sources.ts";
 
 const repoRoot = process.cwd();
 
@@ -158,20 +160,20 @@ function durableObjectCorpus(): {
     ),
   ];
 
-  const sources: string[] = [];
-  const walk = (directory: string): void => {
-    for (const entry of readdirSync(directory, { withFileTypes: true })) {
-      const absolute = join(directory, entry.name);
-      if (entry.isDirectory()) {
-        if (entry.name !== "node_modules") walk(absolute);
-        continue;
-      }
-      if (entry.name.endsWith(".ts") || entry.name.endsWith(".tsx")) {
-        sources.push(readFileSync(absolute, "utf8"));
-      }
-    }
-  };
-  walk(join(repoRoot, "packages/cf-backend/src"));
+  // The deployed worker's own source, from the ONE enumeration. This walked
+  // `packages/cf-backend/src` with its own `node_modules` skip and its own
+  // `.ts`/`.tsx` filter — a hardcoded scan root, which is the exact shape that
+  // let three git spawns hide in `scripts/` from a gate scoped to `packages`.
+  // Filtering the shared list keeps the scope while making it impossible for this
+  // set to be wider than the enumeration or to disagree with `.gitignore`.
+  const WORKER = "packages/cf-backend/src/";
+  const sources = [...readSources()]
+    .filter(([file]) => file.startsWith(WORKER))
+    .map(([, text]) => text);
+  assert.ok(
+    sources.length > 0,
+    `no source found under ${WORKER}; a facet scan over an empty corpus finds no facets and passes`,
+  );
 
   // Facet classes, named where they are instantiated. Deliberately the call sites and not an
   // `extends Agent` scan: a base class or a test double also matches that shape, while a name passed

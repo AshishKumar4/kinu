@@ -37,10 +37,10 @@ bun install
 ```bash
 cd packages/cf-backend
 
-# Create .dev.vars with your AI Gateway credentials
+# Create .dev.vars. The platform AI Gateway needs NO token: its transport is the
+# Workers AI binding, which is pre-authenticated inside your own account.
 cat > .dev.vars << EOF
 AI_GATEWAY_URL=https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1
-AI_GATEWAY_AUTH=Bearer <your-token>
 CREDENTIAL_ENCRYPTION_KEY=$(openssl rand -base64 32)
 EOF
 
@@ -50,10 +50,11 @@ bun run dev
 
 Open http://localhost:5173 in your browser. The Vite cloudflare() plugin runs real Durable Objects locally via Miniflare.
 
-Those gateway keys get you the platform AI Gateway fallback provider. For the
-primary path — models billed to the signed-in user's own Cloudflare account —
-you also need `CLOUDFLARE_OAUTH_CLIENT_ID` and `CLOUDFLARE_OAUTH_CLIENT_SECRET`
-in `.dev.vars`, or `DEV_USER_EMAIL` to skip auth entirely for headless work.
+That URL gets you the platform AI Gateway provider, billed to the account the
+Worker runs in. For the primary path — models billed to the signed-in user's own
+Cloudflare account — you also need `CLOUDFLARE_OAUTH_CLIENT_ID` and
+`CLOUDFLARE_OAUTH_CLIENT_SECRET` in `.dev.vars`, or `DEV_USER_EMAIL` to skip auth
+entirely for headless work.
 
 ### CLI
 
@@ -94,8 +95,7 @@ cd packages/cf-backend
 # answer. Keep a copy: losing it means every user reconnects every provider.
 openssl rand -base64 32 | bunx wrangler secret put CREDENTIAL_ENCRYPTION_KEY
 
-# Set the AI Gateway auth token as a Wrangler secret (encrypted, never in code)
-printf 'Bearer <your-token>' | bunx wrangler secret put AI_GATEWAY_AUTH
+# No AI Gateway token: the platform gateway rides the Workers AI binding.
 
 # OAuth providers appear only when both id and secret are configured.
 # Client ids can live in wrangler vars; client secrets must be Wrangler secrets.
@@ -203,24 +203,31 @@ The production client id and token auth method are non-secret vars in
 
 ## Model Providers
 
-Web agents run chat models through the **logged-in user's own Cloudflare
-account**: the Cloudflare OAuth credential (scopes above) powers Workers AI
-calls billed to that user, and the `my-gateway` provider routes third-party
-models (`my-gateway/<provider>/<model>`) through the user's own AI Gateway —
-paid by the gateway's stored BYOK provider keys or the account's Unified
-Billing credits. The platform-level AI Gateway
-(`AI_GATEWAY_URL` + `AI_GATEWAY_AUTH`) is the env-configured fallback
-provider, and the `AI` binding serves platform-side embeddings. Users can
-also attach their own OpenAI / Anthropic / OpenRouter / ChatGPT-Codex
-credentials per account.
+Who pays, per provider — this is the property the provider split exists for:
+
+| Provider | Credential | Billed to |
+| --- | --- | --- |
+| `workers-ai` | the signed-in user's Cloudflare OAuth token | **that user's** Cloudflare account |
+| `my-gateway/<provider>/<model>` | the same OAuth token, against the user's own AI Gateway | **that user's** BYOK provider keys or Unified Billing credits |
+| `ai-gateway` (platform) | none — the `AI` binding, pre-authenticated in-account | **the account this Worker runs in** |
+| `openai` / `anthropic` / `openrouter` / `codex` / `openai-compat` | the user's own stored key | **that user's** provider account |
+
+So user chat rides the user's credential over HTTPS on purpose. The platform
+`ai-gateway` provider is the deploy-time fallback used when no user credential is
+reachable, plus the path platform-side work (embeddings, judges, evals, benches)
+takes; its transport is the Workers AI binding, so it needs no API token and its
+spend lands where it always did. Moving `workers-ai` or `my-gateway` onto the
+binding would silently move every user's model spend onto the platform account —
+don't.
 
 To set up the platform AI Gateway:
 
 1. Go to [Cloudflare Dashboard > AI > AI Gateway](https://dash.cloudflare.com/?to=/:account/ai/ai-gateway)
-2. Create a new gateway (e.g., `proteus-ai-gateway`)
-3. Copy the gateway URL: `https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1`
-4. Create an API token with Workers AI permissions
-5. Set the token as `AI_GATEWAY_AUTH` secret (see above)
+2. Create a new gateway (e.g., `proteus-ai-gateway`) **in the same account as the Worker** — the binding resolves gateway names in-account only
+3. Set `AI_GATEWAY_URL` in wrangler vars to `https://gateway.ai.cloudflare.com/v1/<account-id>/<gateway-name>/workers-ai/v1`
+
+No API token is required. The Worker reaches the gateway through the `AI`
+binding, which is pre-authenticated inside its own account.
 
 ### The provider registry
 
@@ -280,8 +287,8 @@ exhausted budget returns the original response rather than throwing.
 |----------|-------|-------------|
 | `CREDENTIAL_ENCRYPTION_KEY` | Wrangler secret | **Required.** Root secret for the user plane: encrypts `user_credentials` at rest and derives the owner capability. Without it no signed-in surface works. |
 | `CREDENTIAL_ENCRYPTION_KEY_PREVIOUS` | Wrangler secret | Retired encryption keys (comma-separated), read-only, for a rotation window |
-| `AI_GATEWAY_URL` | wrangler.jsonc `vars` | AI Gateway endpoint URL |
-| `AI_GATEWAY_AUTH` | Wrangler secret | `Bearer <token>` (NEVER in code) |
+| `AI_GATEWAY_URL` | wrangler.jsonc `vars` | Platform AI Gateway endpoint, in the Worker's own account. Names the gateway, upstream provider and endpoint prefix the `AI` binding transport addresses. No token needed. |
+| `AI` | wrangler.jsonc `ai` binding | Workers AI. Serves the platform `ai-gateway` provider's transport, semantic-memory embeddings and HTML→markdown, all billed to the Worker's account. |
 | `AUTH_DB` | D1 binding | Browser OAuth sessions and identities |
 | `PREVIEW_HOST_SUFFIX` | wrangler.jsonc `vars` | Zone Workspace and Sandbox previews are served under, one capability hostname per exposed port. Requires a proxied wildcard DNS record on that zone plus a `*.<zone>/*` route; the wrangler.jsonc comment has both steps. Every host under it except the app's own serves previews and nothing else. Empty means previews are unavailable. |
 | `CLI_PUBLIC_ORIGIN` | wrangler.jsonc `vars` | Origin embedded in installer/setup commands |

@@ -17,6 +17,7 @@ export type {
 
 export {
   initRunEventTables,
+  parseStoredRunEvent,
   RunEventRecorder,
   type RunEventListener,
   type RunEventQuery,

@@ -1,13 +1,13 @@
 diff --git a/packages/core/src/bench/report.ts b/packages/core/src/bench/report.ts
-index c4a59b1..b157a74 100644
+index 34d5d7886..daf4c38bf 100644
 --- a/packages/core/src/bench/report.ts
 +++ b/packages/core/src/bench/report.ts
-@@ -89,7 +89,7 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
-   if (!sealed) return { accept: false, reason: 'no held-out measurement — dev-split results alone never justify keeping a variant' };
-   const s = sealed.stats;
-   if (s.pairs === 0) return { accept: false, reason: 'held-out split was empty' };
+@@ -119,7 +119,7 @@ export function decideBenchOutcome(sealed: SealedScorecard | null): BenchDecisio
+   // quantity. The task count is an upper bound on what can decide; the differing
+   // pairs are what decides.
+   if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };
 -  if (!s.canReachSignificance) {
 +  if (s.canReachSignificance) {
-     return { accept: false, reason: `the held-out split has only ${s.pairs} tasks — no result on it can reach p ≤ ${s.alpha} (best possible ${s.floorPValue.toFixed(4)}), so it cannot accept anything; grow the corpus` };
+     return { accept: false, reason: `only ${s.discordant} of ${s.pairs} held-out tasks differed between the variants — the smallest p that many differing pairs can produce is ${s.floorPValue.toFixed(4)} > ${s.alpha}, so no outcome here could have accepted anything` };
    }
-   if (s.discordant === 0) return { accept: false, reason: `variants never disagreed on ${s.pairs} held-out tasks — no evidence either way` };
+   if (s.effect <= 0) return { accept: false, reason: `held-out effect ${fmtPp(s.effect)} is not an improvement` };

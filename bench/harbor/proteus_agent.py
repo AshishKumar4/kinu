@@ -46,7 +46,7 @@ from harbor.utils.env import parse_bool_env_value
 
 from bench.harbor.build import REPO_ROOT, build_proteus_binary
 from bench.harbor.corpus import CorpusIdentity, resolve_for_trial
-from bench.harbor.trajectory import build_trajectory, read_events
+from bench.harbor.trajectory import build_trajectory, read_events, read_grading
 from bench.isolation import assert_throwaway_home
 from bench.model_endpoint import (
     DEFAULT_PROTEUS_AI_BASE_URL,
@@ -65,6 +65,10 @@ ENV_PATH = INSTALL_ROOT / "proteus.env"
 LOG_NAME = "proteus.jsonl"
 STDERR_LOG_NAME = "proteus-stderr.txt"
 CREATE_LOG_NAME = "proteus-create.txt"
+#: The turn_outcomes read taken after the turn. A benchmark cannot ask a person
+#: whether the turn was any good, so whether the turn was GRADED AT ALL is the
+#: measurement that decides if this trial's arm state means anything.
+ALIGNMENT_NAME = "proteus-alignment.json"
 
 DEFAULT_BASE_URL = DEFAULT_PROTEUS_AI_BASE_URL
 DEFAULT_WORKSPACE = "harbor"
@@ -250,15 +254,52 @@ class ProteusAgent(BaseInstalledAgent):
         # torn JSON line silently drops a step from the trajectory. Model and
         # turn errors arrive on stdout as `{"type":"error"}`, so Harbor's error
         # classification still sees them.
-        await self.exec_as_agent(
-            environment,
-            command=self._with_run_env(
-                f"{INSTALL_PATH} exec --workspace {workspace} --json {evolve_flag}"
-                f"-- {shlex.quote(instruction)} "
-                f"</dev/null 2>{EnvironmentPaths.agent_dir / STDERR_LOG_NAME} "
-                f"| tee {EnvironmentPaths.agent_dir / LOG_NAME}"
-            ),
-        )
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=self._with_run_env(
+                    f"{INSTALL_PATH} exec --workspace {workspace} --json {evolve_flag}"
+                    f"-- {shlex.quote(instruction)} "
+                    f"</dev/null 2>{EnvironmentPaths.agent_dir / STDERR_LOG_NAME} "
+                    f"| tee {EnvironmentPaths.agent_dir / LOG_NAME}"
+                ),
+            )
+        finally:
+            # Read the turn_outcomes ledger the turn just wrote, before the
+            # container is destroyed with it. An arm's `evolve` kwarg says what
+            # was CONFIGURED; this says whether the machinery reached a verdict on
+            # the turn at all, which is the difference between a contrast and an
+            # inert one.
+            #
+            # In `finally` because Harbor runs the whole of `run()` under
+            # `asyncio.wait_for` (harbor/trial/trial.py:450-462), so an
+            # agent-phase timeout cancels everything sequenced after the turn.
+            # That lost the probe on exactly the trials that most need
+            # explaining: `make-doom-for-mips` timed out in both arms and neither
+            # could say whether its turn had been graded. A `finally` await runs
+            # to completion and the TimeoutError still reaches Harbor unchanged,
+            # measured on this asyncio version rather than assumed.
+            await self._probe_grading(environment, workspace)
+
+    async def _probe_grading(self, environment: BaseEnvironment, workspace: str) -> None:
+        """Ask the workspace how many of its turns were graded.
+
+        Failures are recorded rather than raised: an unreadable probe becomes
+        `turn_grading: null` downstream, which reports missing evidence. Raising
+        here would replace Harbor's own agent error with this one and lose the
+        reason the trial ended.
+        """
+        try:
+            await self.exec_as_agent(
+                environment,
+                command=self._with_run_env(
+                    f"{INSTALL_PATH} alignment {workspace} --json "
+                    f"</dev/null 2>>{EnvironmentPaths.agent_dir / STDERR_LOG_NAME} "
+                    f"| tee {EnvironmentPaths.agent_dir / ALIGNMENT_NAME}"
+                ),
+            )
+        except Exception as exc:  # noqa: BLE001 - recorded as missing evidence
+            self.logger.warning(f"grading probe failed, evidence will read as missing: {exc}")
 
     @override
     def populate_context_post_run(self, context: AgentContext) -> None:
@@ -289,6 +330,19 @@ class ProteusAgent(BaseInstalledAgent):
         except OSError as exc:
             self.logger.debug(f"Failed to write Proteus trajectory: {exc}")
 
+        grading = read_grading(self.logs_dir / ALIGNMENT_NAME)
+        if grading is None:
+            self.logger.warning(
+                f"grading: UNREADABLE — no parseable {ALIGNMENT_NAME}. This trial "
+                "cannot say whether its turn was graded, so it cannot support a "
+                "claim about its arm's mechanism."
+            )
+        else:
+            self.logger.info(
+                f"grading: {grading.execution_graded} execution-graded, "
+                f"{grading.user_graded} user-graded, {grading.abandoned} abandoned"
+            )
+
         if summary.usage is not None:
             context.n_input_tokens = summary.usage["input"]
             context.n_cache_tokens = summary.usage["cached"]
@@ -311,5 +365,13 @@ class ProteusAgent(BaseInstalledAgent):
             "activity_events": summary.activity_events,
             "evolution_events": summary.evolution_events,
             "evolution_fired": len(summary.evolution_events) > 0,
+            # How many turns reached a verdict, from turn_outcomes rather than
+            # from any event's wording. `null` is missing evidence — the probe
+            # left nothing readable — and is deliberately not three zeros, which
+            # is what a live but inert arm looks like.
+            "turn_grading": grading.as_dict() if grading else None,
+            "turns_completed": sum(
+                1 for e in summary.evolution_events if e["event"] == "turn_complete"
+            ),
             "run_events": summary.run_events,
         }

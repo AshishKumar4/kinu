@@ -21,6 +21,7 @@ import type { ToolSet } from 'ai';
 import type { SqlExecRow, SqlValue } from '@proteus/core';
 import * as v from 'valibot';
 import { mockAgentsSdk } from './agents-sdk.js';
+import { platformGatewayEnv } from './platform-gateway.js';
 
 mockAgentsSdk();
 
@@ -157,8 +158,9 @@ function makeEnv(): Env {
     PROTEUS_MAX_STEPS: '10',
     LOADER: { get: () => { throw new Error('harness LOADER: codemode is not executable under bun'); } },
     NIMBUS_SESSION: emptyWorkspaceSession(),
-    AI_GATEWAY_URL: 'https://gateway.invalid/v1',
-    AI_GATEWAY_AUTH: 'harness-token',
+    // The platform gateway is the harness's model provider: a parseable gateway
+    // URL plus a recording AI binding, since the transport is the binding now.
+    ...platformGatewayEnv(),
     UserDO: {
       idFromName: (n: string) => ({ toString: () => n }),
       get: () => new Proxy({}, {

@@ -44,28 +44,36 @@ const GIT_SPAWNERS: ReadonlySet<string> = new Set([
 	"spawnSync",
 ]);
 
+/** The basename arm: a `.test.` / `.eval.` / `.spec.` segment. What a test
+ *  RUNNER selects, which is strictly less than what this rule governs. */
+export const TEST_SUFFIX = /\.(test|eval|spec)\.[cm]?[jt]sx?$/;
+
+/** The directory arm: a whole `tests/`, `test/` or `__tests__/` path component,
+ *  so `src/contests/run.ts` and `src/latest/x.ts` are not tests. */
+export const TEST_DIRECTORY = /(^|\/)(tests?|__tests__)\//;
+
 /**
- * What counts as test code. Two independent shapes, because either alone leaves
- * a hole:
- *
- *   a `.test.` / `.eval.` / `.spec.` segment in the basename, and
- *   anything under a `tests/`, `test/` or `__tests__/` directory.
+ * What counts as test code. Both arms, because either alone leaves a hole, and
+ * COMPOSED from the two above rather than spelled a third time.
  *
  * `.eval.` is here before a single eval file exists, on report from two peers
  * building that tier: `vitest-evals` suites are conventionally `*.eval.ts` under
- * their own config so they do not run on every `bun test`, and agent evals
- * copy fixtures into an isolated worktree PER TASK — which is a git spawn, in a
- * file a `.test.` pattern would never have looked at.
+ * their own config so they do not run on every `bun test`, and agent evals copy
+ * fixtures into an isolated worktree PER TASK — which is a git spawn, in a file
+ * a `.test.` pattern would never have looked at. The directory arm matters on
+ * its own: a package's own `tests/helpers/` holds repo-building code with no test
+ * suffix at all.
  *
  * The first version of this rule matched `.test.` only, and its gate scanned
  * `packages` while `bun run lint` scanned the repo. That gap held three real
  * sites. The durable form of that lesson is not "check your denominator" but:
  * THE SET A GATE MEASURES AND THE SET IT GOVERNS MUST BE THE SAME SET, AND THAT
- * EQUALITY HAS TO BE THE ASSERTION. Widening here, and widening the gate's live
- * scan to `.`, is that equality — so a directory convention nobody has adopted
- * yet cannot open the hole again.
+ * EQUALITY HAS TO BE THE ASSERTION. Widening here, widening the gate's live scan
+ * to `.`, and naming the arms so a narrower consumer imports one instead of
+ * copying it, are all that same equality. `scripts/gate-set-equality.ts` is what
+ * now enforces it across every gate rather than in this file alone.
  */
-export const TEST_FILE = /(^|\/)(tests?|__tests__)\/|\.(test|eval|spec)\.[cm]?[jt]sx?$/;
+export const TEST_FILE = new RegExp(`${TEST_DIRECTORY.source}|${TEST_SUFFIX.source}`);
 
 /** The first argument's literal program name, for the three shapes a spawn takes
  *  it in: `spawn("git", […])`, `spawn(["git", …])` and Bun's single-object

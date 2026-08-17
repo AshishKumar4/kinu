@@ -282,7 +282,12 @@ describe('parseCommon — repeats and the validation retry budget', () => {
 });
 
 describe('artifact retention — a scored run leaves evidence or it does not run', () => {
+  // `bench-artifacts/` is gitignored, so a fresh checkout or worktree does not
+  // have one and every test below died on mkdtemp before it asserted anything.
+  // Creating it is what the harness itself does; the tests may not assume an
+  // operator ran a benchmark here first.
   const durableDir = (prefix: string): string => {
+    mkdirSync(join(REPO_ROOT, ARTIFACT_DIRNAME), { recursive: true });
     const dir = mkdtempSync(join(REPO_ROOT, ARTIFACT_DIRNAME, prefix));
     scratch.push(dir);
     return dir;

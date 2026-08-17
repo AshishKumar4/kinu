@@ -153,6 +153,19 @@ export function literalText(node: SyntaxNode): string | undefined {
   return literalString(raw) ?? raw.raw ?? undefined;
 }
 
+/** A regex literal's PATTERN, without its flags — decoded the same way
+ *  `literalString` decodes a string, because `RegExpLiteral` and `NumericLiteral`
+ *  are both `type: "Literal"` and differ only in what they carry. Flags are
+ *  deliberately dropped: a caller asking what a pattern selects must not be
+ *  handed a `/g` regex whose `.test` is stateful. */
+const RegexValued = v.object({ regex: v.object({ pattern: v.string() }) });
+
+export function regexPattern(node: SyntaxNode): string | undefined {
+  if (node.raw.type !== 'Literal') return undefined;
+  const decoded = v.safeParse(RegexValued, node.raw);
+  return decoded.success ? decoded.output.regex.pattern : undefined;
+}
+
 /** The value of a string literal, including a template with nothing
  *  interpolated — the test for "this argument is a name being passed", which is
  *  narrower than "this is a literal": `42` has text and is not a string. */

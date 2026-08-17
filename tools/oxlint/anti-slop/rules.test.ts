@@ -1,11 +1,19 @@
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 
-const rulesDirectory = join(import.meta.dirname, "rules");
-const suites = readdirSync(rulesDirectory)
-  .filter((entry) => entry.endsWith(".test.ts"))
+import { isRunnableSuite, trackedFiles } from "../../../scripts/sources.ts";
+
+const RULES = "tools/oxlint/anti-slop/rules/";
+const rulesDirectory = join(process.cwd(), RULES);
+
+// From the ONE enumeration, filtered — not a `readdirSync` of its own. A second
+// walk is a second answer to "which rule suites exist", and this one would have
+// counted a stray editor temp file or a build artefact as a suite while the lint
+// that governs the directory ignores both.
+const suites = trackedFiles()
+  .filter((file) => file.startsWith(RULES) && isRunnableSuite(file))
+  .map((file) => file.slice(RULES.length))
   .sort();
 
 assert.ok(

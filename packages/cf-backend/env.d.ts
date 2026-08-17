@@ -1,14 +1,11 @@
 // Generated from wrangler.jsonc bindings.
 //
-// Note on AI binding: we prefer the Workers AI direct binding (env.AI) when
-// available, and fall back to the AI Gateway (OpenAI-compatible HTTP) when
-// not. The binding is OPTIONAL — to enable it, add this block to wrangler.jsonc:
-//
-//   "ai": { "binding": "AI" }
-//
-// and Wrangler will inject the Ai runtime object. Without the binding, code
-// paths guard with `if (env.AI && typeof env.AI !== "string") { ... }` and
-// transparently fall through to the gateway (AI_GATEWAY_URL + AI_GATEWAY_AUTH).
+// Note on the AI binding: env.AI serves platform-side work billed to the
+// Worker's own account — embeddings, HTML→markdown, and the `ai-gateway`
+// provider's chat transport, which is pre-authenticated in-account and so needs
+// no API token. It is declared OPTIONAL because a deployment can omit the
+// binding; the providers that need it report themselves unavailable rather than
+// guessing (providers/ai-gateway.ts `resolvePlatformGateway`).
 import type { OrchestratorAgent } from "./src/orchestrator.js";
 import type { ProteusSandbox } from "./src/proteus-sandbox.js";
 import type { UserDO } from "./src/user/user-do.js";
@@ -22,7 +19,8 @@ import type { VectorizeIndex as ProteusVectorizeIndex } from "@proteus/core";
 // type, so we declare it in the global scope explicitly.
 declare global {
   interface Env {
-    /** Workers AI direct binding. OPTIONAL — fallback is the AI Gateway. */
+    /** Workers AI binding. Absent ⇒ the `ai-gateway` provider and semantic
+     *  memory's embedder report unavailable; nothing silently degrades. */
     AI?: Ai;
     /** Optional semantic-memory index. Without it, memory remains FTS-only. */
     MEMORY_VECTORS?: ProteusVectorizeIndex;
@@ -56,7 +54,6 @@ declare global {
     BACKUP_BUCKET_NAME?: string;
     CLOUDFLARE_R2_ACCOUNT_ID?: string;
     AI_GATEWAY_URL: string;
-    AI_GATEWAY_AUTH: string;
     /** Zone isolated previews are served under, one capability hostname per
      *  exposed Workspace or Sandbox port. Empty disables previews. */
     PREVIEW_HOST_SUFFIX: string;

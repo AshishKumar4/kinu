@@ -111,10 +111,10 @@ import type { RecoveryFinding } from '../evolution/recovery.js';
 import { fnv1a64 } from '../prompting/volatile-context.js';
 import {
   isJsonObject,
-  parseJsonValue,
   type JsonObject,
   type JsonValue,
 } from '../utils/json.js';
+import { isFailingResultText } from '../execution/exec-result.js';
 
 /** Identical calls answered identically before the turn is told it is looping.
  *  Three is the first count that is a loop rather than a retry: one repeat is a
@@ -161,8 +161,6 @@ export const STEPS_WITHOUT_PROGRESS_BEFORE_STEER = 12;
 /** How much of a repeated call's arguments the steer quotes back. Enough to
  *  name a command; never a whole `execute_tools` program. */
 const ARGS_ECHO_MAX_CHARS = 200;
-
-const ErrorResultSchema = v.object({ error: v.string() });
 
 /** The tool the delegation steers name — the whole delegation ladder is one tool. */
 const DELEGATION_TOOL: BuiltinToolName = 'agents';
@@ -266,28 +264,13 @@ function freshAsk(messages: readonly ModelMessage[]): boolean {
  *
  * The harness discriminator (`success`) is necessary but not sufficient: the
  * `run` tool catches a non-zero exit and RETURNS it as a normal result string
- * (`Error (exit 2)…` — execution/exec-result.ts), which is exactly the case
- * that motivated this whole mechanism. So the text shapes the toolset actually
- * emits count too: the `Error` prefix every built-in failure uses, and the
- * structured `{ error: … }` payloads the unprovisioned-runtime paths return.
- * Nothing else is guessed at — a result that merely mentions the word "error"
- * somewhere in its output is not a failure.
+ * (`Error (exit 2)…`), which is exactly the case that motivated this whole
+ * mechanism. Reading that text is `isFailingResultText`, which lives next to
+ * the renderer that writes the prefix — one definition, shared with the call
+ * cards and with evolution's execution verdict.
  */
 export function isFailingToolResult(ctx: ToolResultContext): boolean {
-  if (!ctx.success) return true;
-  const text = ctx.result.trimStart();
-  if (/^Error\b/.test(text)) return true;
-  if (!text.startsWith('{')) return false;
-  try {
-    return v.safeParse(ErrorResultSchema, parseJsonValue(text)).success;
-  } catch {
-    // The seam hands over a BOUNDED prefix of the result (chat.ts and the cf
-    // afterToolCall both cut at 1000 chars), so a long failure payload arrives
-    // as JSON that cannot parse. The discriminator is still legible at the
-    // head — a leading `error` key with a string value — and reading it there
-    // is what keeps a verbose failure from being counted as a success.
-    return /^\{\s*"error"\s*:\s*"/.test(text);
-  }
+  return !ctx.success || isFailingResultText(ctx.result);
 }
 
 /** One tool called one way. Hashed rather than stored: an `execute_tools`

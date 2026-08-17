@@ -52,9 +52,24 @@ const TrialSchema = v.object({
     n_cache_tokens: v.optional(v.nullable(FiniteCount)),
     metadata: v.optional(v.nullable(v.object({
       tool_calls: v.optional(v.number()),
-      // The adapter's activity channel, not evolution — see the note in
-      // bench/harbor/trajectory.py. Counted, never read as proof.
+      // Named, because "did the mechanism act" is the question an arm's own
+      // configuration cannot answer. This is the FILTERED subset — only names in
+      // EVOLUTION_EVENTS (bench/clbench/proteus/events.py) reach it, split from
+      // the whole activity channel at bench/harbor/trajectory.py:203-210. The
+      // unsplit field is what recorded 7 "evolution events" on an evolve=false
+      // trial in 2026-08-10's 2.1 job; every one of them was `bg_job_started`.
       evolution_events: v.optional(v.array(v.unknown())),
+      activity_events: v.optional(v.array(v.unknown())),
+      // How many turns reached a verdict, from the turn_outcomes ledger. `null`
+      // is a probe that left nothing readable and is NOT three zeros: an arm
+      // that graded nothing and a measurement that never ran are different
+      // findings, and only one of them is about the arm.
+      turn_grading: v.optional(v.nullable(v.object({
+        user_graded: FiniteCount,
+        execution_graded: FiniteCount,
+        abandoned: FiniteCount,
+      }))),
+      turns_completed: v.optional(v.number()),
     }))),
   })),
   verifier_result: v.nullable(v.object({
@@ -74,13 +89,29 @@ export interface ExternalTrial {
   /** Whether the run's distinctive mechanism was live, read from the arm's own
    *  recorded kwargs rather than assumed. */
   evolve: boolean | null;
-  /** How many evolution events the agent actually emitted. An arm that claims
-   *  evolve=true and reports zero is a finding, not a detail. */
+  /** How many EVOLUTION events the agent emitted, the filtered subset. An arm
+   *  that claims evolve=true and reports zero is a finding, not a detail. */
   evolutionEvents: number | null;
+  /** Everything on the activity channel, which is a busy-ness count and not
+   *  evidence about evolution. Reported so nobody has to reach for the one
+   *  above when they wanted this one. */
+  activityEvents: number | null;
+  /** Turns the ENVIRONMENT graded, from the turn_outcomes ledger. `null` is a
+   *  probe that left nothing readable, never a zero. */
+  executionGradedTurns: number | null;
+  /** Turns that completed at all — the denominator the count above needs. */
+  turnsCompleted: number | null;
   toolCalls: number | null;
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  /** Whether the trial reported any usage at all. A turn killed by the agent
+   *  timeout emits no `turn_end`, so it carries no usage — and those are the
+   *  most expensive trials in the run. The counts above read 0 for them, which
+   *  is why this flag exists: the arm's total is a LOWER BOUND whenever this is
+   *  false anywhere, and the harness says so rather than passing the sum off as
+   *  the spend. Same rule the gain report already applies to model calls. */
+  usageReported: boolean;
   errored: boolean;
 }
 
@@ -115,10 +146,15 @@ export function readHarborJob(dir: string): ExternalArm {
       model: parsed.config.agent.model_name ?? null,
       evolve: parsed.config.agent.kwargs?.evolve ?? null,
       evolutionEvents: events === undefined ? null : events.length,
+      activityEvents: meta?.activity_events === undefined ? null : meta.activity_events.length,
+      executionGradedTurns: meta?.turn_grading?.execution_graded ?? null,
+      turnsCompleted: meta?.turns_completed ?? null,
       toolCalls: meta?.tool_calls ?? null,
       inputTokens: parsed.agent_result?.n_input_tokens ?? 0,
       outputTokens: parsed.agent_result?.n_output_tokens ?? 0,
       cachedTokens: parsed.agent_result?.n_cache_tokens ?? 0,
+      usageReported: (parsed.agent_result?.n_input_tokens ?? null) !== null
+        || (parsed.agent_result?.n_output_tokens ?? null) !== null,
       errored: parsed.exception_info !== null && parsed.exception_info !== undefined,
     });
   }
@@ -138,11 +174,34 @@ export interface ArmSpend {
   evolveFlags: (boolean | null)[];
   totalEvolutionEvents: number | null;
   errored: number;
+  /** Trials on which the mechanism was OBSERVED to act, over trials that could
+   *  have reported. Configured state is `evolveFlags`; this is what happened. */
+  trialsWithEvolution: number;
+  /** Turns the environment graded, and the turns it had to grade. `null` on
+   *  either side is missing evidence — the probe left nothing readable — and is
+   *  reported as missing rather than converted to zero, the same rule the
+   *  harness already applies to model-call counts. */
+  executionGradedTurns: number | null;
+  turnsCompleted: number | null;
+  /** Trials whose grading probe produced no readable answer. */
+  gradingUnreported: number;
+  /** Trials that reported no usage at all — a turn the agent timeout killed
+   *  emits no `turn_end`. While this is non-zero the token totals above are a
+   *  LOWER BOUND, and they under-report exactly the longest trials. */
+  spendUnreported: number;
 }
 
 export function armSpend(arm: ExternalArm): ArmSpend {
   const sum = (pick: (t: ExternalTrial) => number) => arm.trials.reduce((n, t) => n + pick(t), 0);
   const events = arm.trials.map((t) => t.evolutionEvents);
+  const graded = arm.trials.map((t) => t.executionGradedTurns);
+  const completed = arm.trials.map((t) => t.turnsCompleted);
+  // `every === null` means no trial reported at all, which is missing evidence.
+  // Summing over a mix reports what was measured and `gradingUnreported` says
+  // how much of the arm the sum does not cover.
+  const total = (xs: readonly (number | null)[]) => (xs.every((n) => n === null)
+    ? null
+    : xs.reduce<number>((n, x) => n + (x ?? 0), 0));
   return {
     trials: arm.trials.length,
     inputTokens: sum((t) => t.inputTokens),
@@ -151,10 +210,13 @@ export function armSpend(arm: ExternalArm): ArmSpend {
     billableTokens: sum((t) => Math.max(0, t.inputTokens - t.cachedTokens) + t.outputTokens),
     models: [...new Set(arm.trials.map((t) => t.model ?? 'unknown'))].sort(),
     evolveFlags: [...new Set(arm.trials.map((t) => t.evolve))],
-    totalEvolutionEvents: events.every((n) => n === null)
-      ? null
-      : events.reduce<number>((total, e) => total + (e ?? 0), 0),
+    totalEvolutionEvents: total(events),
     errored: arm.trials.filter((t) => t.errored).length,
+    trialsWithEvolution: arm.trials.filter((t) => (t.evolutionEvents ?? 0) > 0).length,
+    executionGradedTurns: total(graded),
+    turnsCompleted: total(completed),
+    gradingUnreported: arm.trials.filter((t) => t.executionGradedTurns === null).length,
+    spendUnreported: arm.trials.filter((t) => !t.usageReported).length,
   };
 }
 
@@ -212,6 +274,105 @@ export function flipAccounting(paired: readonly PairedTask[]) {
   };
 }
 
+/** How far apart two arms' billable spend may be before the contrast is
+ *  measuring provisioning rather than the mechanism. Symmetric on purpose: 1.5x
+ *  in either direction is the same confound. */
+const SPEND_RATIO_TOLERANCE = 1.5;
+
+export interface AdmissibilityCondition {
+  name: string;
+  met: boolean;
+  /** What was actually observed, whether or not it cleared the bar. */
+  detail: string;
+}
+
+export interface Admissibility {
+  admissible: boolean;
+  conditions: AdmissibilityCondition[];
+}
+
+/**
+ * Whether this pair of arms can carry a claim at all — asked BEFORE any effect
+ * is reported, and answered from what the trials observed rather than from what
+ * they were configured with.
+ *
+ * Both prior Terminal-Bench runs were configured `evolve=false` in both arms and
+ * later read as a comparison of evolution. Nothing in the pipeline objected,
+ * because the pipeline only ever saw a pass rate. The rule this encodes is that
+ * a check must measure the set it governs, must be able to fail loudly, must not
+ * publish a number when it fails, and must sit upstream of everything that
+ * publishes — which is why the caller consults this before printing an effect
+ * and not alongside it.
+ *
+ * `candidateEvolves` is the arm state the caller is claiming to compare. A pair
+ * where neither arm was supposed to evolve is a legitimate replication and is
+ * held to the mirror-image bar.
+ */
+export function admissibility(
+  a: ExternalArm, b: ExternalArm, paired: readonly PairedTask[],
+): Admissibility {
+  const spendA = armSpend(a);
+  const spendB = armSpend(b);
+  const candidateEvolves = spendB.evolveFlags.length === 1 && spendB.evolveFlags[0] === true;
+  const ratio = spendA.billableTokens === 0 ? null : spendB.billableTokens / spendA.billableTokens;
+  const mismatched = paired.filter((p) => p.sameChecksum === false).map((p) => p.taskId);
+  const gradedB = spendB.executionGradedTurns;
+
+  const conditions: AdmissibilityCondition[] = [
+    {
+      name: 'each arm ran one arm state',
+      met: spendA.evolveFlags.length === 1 && spendB.evolveFlags.length === 1,
+      detail: `A=${spendA.evolveFlags.join('/')}  B=${spendB.evolveFlags.join('/')}`,
+    },
+    {
+      name: 'the two arms differ in that state',
+      met: spendA.evolveFlags.length === 1 && spendB.evolveFlags.length === 1
+        && spendA.evolveFlags[0] !== spendB.evolveFlags[0],
+      detail: spendA.evolveFlags[0] === spendB.evolveFlags[0]
+        ? `both arms ran evolve=${String(spendA.evolveFlags[0])} — this is a replication, not a contrast`
+        : `evolve ${String(spendA.evolveFlags[0])} vs ${String(spendB.evolveFlags[0])}`,
+    },
+    {
+      name: 'the candidate mechanism was OBSERVED to act',
+      met: candidateEvolves
+        ? spendB.trialsWithEvolution * 2 >= spendB.trials
+        : spendB.trialsWithEvolution === 0,
+      detail: `${spendB.trialsWithEvolution}/${spendB.trials} candidate trial(s) emitted an evolution event`
+        + `${candidateEvolves ? ' (needs a majority)' : ' (evolve=false, needs none)'}`,
+    },
+    {
+      name: 'the baseline mechanism stayed off',
+      met: spendA.evolveFlags[0] === true || spendA.trialsWithEvolution === 0,
+      detail: `${spendA.trialsWithEvolution}/${spendA.trials} baseline trial(s) emitted an evolution event`,
+    },
+    {
+      name: 'the candidate turns were GRADED',
+      met: gradedB !== null && gradedB > 0,
+      detail: gradedB === null
+        ? `unreported — ${spendB.gradingUnreported}/${spendB.trials} candidate trial(s) left no readable `
+          + 'grading probe, so this arm cannot say whether its turns were graded'
+        : `${gradedB} execution-graded turn(s) over ${spendB.turnsCompleted ?? 'unreported'} completed`
+          + `${spendB.gradingUnreported > 0 ? `, ${spendB.gradingUnreported} trial(s) unreported` : ''}`,
+    },
+    {
+      name: 'both arms scored the identical task',
+      met: mismatched.length === 0,
+      detail: mismatched.length === 0
+        ? `${paired.length} paired task(s), no checksum mismatch`
+        : `${mismatched.length} task(s) differ between the arms: ${mismatched.join(', ')}`,
+    },
+    {
+      name: 'the arms spent comparably',
+      met: ratio !== null && ratio <= SPEND_RATIO_TOLERANCE && ratio >= 1 / SPEND_RATIO_TOLERANCE,
+      detail: ratio === null
+        ? 'the baseline arm billed 0 tokens, so no ratio exists'
+        : `B/A = ${ratio.toFixed(3)} on billable tokens (tolerance `
+          + `${(1 / SPEND_RATIO_TOLERANCE).toFixed(3)}–${SPEND_RATIO_TOLERANCE.toFixed(3)})`,
+    },
+  ];
+  return { admissible: conditions.every((c) => c.met), conditions };
+}
+
 function retain(
   command: string,
   arms: readonly ExternalArm[],
@@ -252,7 +413,23 @@ function describeSpend(label: string, spend: ArmSpend): string {
     + `out=${spend.outputTokens.toLocaleString().padStart(9)}  `
     + `evolve=${spend.evolveFlags.map((f) => String(f)).join('/')}  `
     + `evolutionEvents=${spend.totalEvolutionEvents ?? 'not recorded'}  `
-    + `errors=${spend.errored}  models=${spend.models.join(',')}`;
+    + `firedOn=${spend.trialsWithEvolution}/${spend.trials}  `
+    + `gradedTurns=${spend.executionGradedTurns ?? 'unreported'}/`
+    + `${spend.turnsCompleted ?? 'unreported'}  `
+    + `errors=${spend.errored}  models=${spend.models.join(',')}`
+    + (spend.spendUnreported > 0
+      ? `\n${' '.repeat(30)}LOWER BOUND: ${spend.spendUnreported}/${spend.trials} trial(s) reported no usage `
+        + '(no turn_end — the agent timeout killed the turn), so these totals omit them entirely'
+      : '');
+}
+
+function describeAdmissibility(verdict: Admissibility): void {
+  console.log(verdict.admissible
+    ? 'ADMISSIBLE — the arms differ in the mechanism, the mechanism acted, and the turns were graded.'
+    : 'INADMISSIBLE — this pair of arms cannot carry a claim about the mechanism.');
+  for (const c of verdict.conditions) {
+    console.log(`  ${c.met ? 'ok  ' : 'NO  '}${c.name.padEnd(42)} ${c.detail}`);
+  }
 }
 
 function cmdCompare(args: Map<string, string>): number {
@@ -272,12 +449,14 @@ function cmdCompare(args: Map<string, string>): number {
   const spendA = armSpend(a);
   const spendB = armSpend(b);
   const spendRatio = spendA.billableTokens === 0 ? null : spendB.billableTokens / spendA.billableTokens;
+  const verdict = admissibility(a, b, paired);
 
   const report = {
     kind: 'external-paired-comparison',
     armA: { id: a.id, dir: a.dir, spend: spendA },
     armB: { id: b.id, dir: b.dir, spend: spendB },
     spendRatio,
+    admissibility: verdict,
     paired,
     unpaired: { onlyA, onlyB },
     flips,
@@ -300,12 +479,27 @@ function cmdCompare(args: Map<string, string>): number {
     console.log(`  ${mark} ${p.taskId.padEnd(34)} A=${p.a} B=${p.b}  ${same}`);
   }
   console.log('');
+  describeAdmissibility(verdict);
+  console.log('');
   console.log(`flips over all shared tasks:  ${flips.overAllShared.flips}/${flips.overAllShared.of} = ${(flips.overAllShared.rate * 100).toFixed(1)}%`);
   console.log(flips.overSameChecksum === null
     ? 'flips over same-checksum tasks: no task carried the same checksum in both arms'
     : `flips over same-checksum tasks: ${flips.overSameChecksum.flips}/${flips.overSameChecksum.of} = ${(flips.overSameChecksum.rate * 100).toFixed(1)}%`);
   console.log('');
+  // The effect is printed only behind the gate. Every per-task reward is in the
+  // retained artifact either way — withholding evidence would be worse than
+  // publishing a bad headline — but an inadmissible pair must not hand a reader
+  // a number to quote, because that is exactly how 5/10 over two evolve=false
+  // arms became a sentence about self-evolution.
+  if (!verdict.admissible) {
+    console.log('effect: WITHHELD. A contrast that failed admissibility has no effect to report — the');
+    console.log('failing condition above is the result. Per-task rewards are retained in full.');
+    console.log(`retained: ${dir}`);
+    return 1;
+  }
   console.log(`effect (B − A): ${fmtPp(stats.effect)}  CI [${fmtPp(stats.ci.lo)}, ${fmtPp(stats.ci.hi)}]  p=${stats.pValue.toFixed(4)}`);
+  console.log(`differing pairs: ${stats.discordant}/${stats.pairs}  `
+    + `floor p=${stats.floorPValue.toExponential(4)}  canReachSignificance=${stats.canReachSignificance}`);
   console.log(`resolution: mde=${fmtPp(stats.mde)} ratio=${stats.resolutionRatio.toFixed(2)} resolvable=${stats.resolvable}`);
   console.log(`verdict: ${stats.verdict}`);
   console.log(`retained: ${dir}`);
